@@ -1,0 +1,58 @@
+# Versutus Optimization Loop — Feature Phase (Pass 4+)
+
+You are executing a **feature implementation pass** after completing 3 Android UI optimization passes.
+
+## Before you start
+
+1. Read `scripts/optimization-loop/status.json` — confirm `phase` is `"features"` and `featurePhase.status` is `"active"`.
+2. Read `scripts/optimization-loop/features-backlog.json` — full prioritized feature list.
+3. Read relevant source docs for the feature you select:
+   - `docs/openclaw-gateway-followup.md`
+   - `docs/gateway-detection-connection-loop-plan.md`
+   - `scripts/ui-overhaul/HANDOFF.md`
+4. Read `AGENTS.md`.
+
+## Mission
+
+**Plan and implement one high-impact feature** that moves Versutus toward luxury enterprise-grade UX with seamless, user-friendly experiences.
+
+### Feature selection rules
+
+1. Pick the **highest-priority incomplete** feature from `features-backlog.json`:
+   - Order: P1 first, then P2, then P3
+   - Skip any feature whose `id` is already in `featurePhase.completedFeatures`
+2. If the current feature is too large for one 30-minute pass, **scope a vertical slice** that delivers user-visible value and note remainder in status notes.
+3. Set `featurePhase.currentFeatureId` to the chosen id before implementing.
+
+### Implementation standards
+
+- **Luxury UI**: deep black, champagne gold, compact density, haptics, exact verbs, structured error cards.
+- **Android native**: use `.android.tsx` splits and Compose/M3 where you touch UI.
+- **Enterprise grade**: clear state, recovery paths, no silent failures, confirmation for destructive ops.
+- **Minimal scope**: one feature (or one tracer-bullet slice) per pass — depth over breadth.
+
+### Workflow
+
+1. **Plan** — 3–5 bullet implementation plan for the selected feature; note acceptance criteria from backlog.
+2. **Implement** — code changes only required for this feature; match existing patterns.
+3. **Validate** — `npx tsc --noEmit`; run targeted smoke if feature touches gateway commands (`npm run smoke:gateway-commands` only if gateway likely up).
+4. **Update status** in `scripts/optimization-loop/status.json`:
+   - Append feature `id` to `featurePhase.completedFeatures` if acceptance criteria met (or note partial in notes)
+   - Clear or update `featurePhase.currentFeatureId`
+   - Increment `currentPass` and `totalRuns`
+   - Set `lastRunAt`, `lastRunExitCode`, `lastRunPrompt` → `"prompt-features.txt"`
+5. If all P1 features complete, continue with P2/P3 — loop never stops.
+
+### If blocked
+
+- Document blocker in status `notes` with cause/target/next action.
+- Implement the next backlog feature instead if current is blocked on environment.
+- Do not skip validation.
+
+### Success criteria
+
+- One measurable user-facing improvement shipped.
+- tsc clean.
+- status.json reflects completed or partial feature with honest notes.
+
+Implement to completion for this pass.

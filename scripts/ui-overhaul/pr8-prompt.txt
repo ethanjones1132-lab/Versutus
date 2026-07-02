@@ -1,0 +1,11 @@
+Implement PR8 of the Versutus UI overhaul to completion. Read the plan and scripts/ui-overhaul/status.json.
+
+PR8 scope — brand assets + motion polish:
+- src/components/animated-icon.tsx + .web.tsx — Versutus palette splash dissolve (not Expo blue)
+- src/lib/motion/presets.ts + hooks.ts — centralized motion presets
+- Add expo-haptics for copy/send feedback
+- Update app.json splash to #08080A, android adaptiveIcon background
+- Remove remaining expo template copy/assets references
+- Final pass: zero hardcoded #208AEF anywhere in src/
+
+Luxury-grade polish pass across the app. Run TypeScript check. Mark all PRs complete in status.json.

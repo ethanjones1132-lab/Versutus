@@ -1,0 +1,12 @@
+Implement PR2 of the Versutus UI overhaul to completion. Read the plan at C:\Users\ethan\.grok\sessions\C%3A%5CUsers%5Cethan\019ee6fe-3f3f-7023-9a89-ec399e6b75cb\plan.md and verify PR1 (tokens, fonts, dark theme) is in place.
+
+PR2 scope — build platform-adaptive ui/ primitives with luxury-grade quality as the baseline:
+- src/components/ui/GlassSurface.{ios,android,web}.tsx + index
+- src/components/ui/Button.{ios,android,web}.tsx + index
+- src/components/ui/Text.tsx
+- src/components/ui/TextField.{ios,android,web}.tsx + index
+- src/components/ui/Card.tsx
+- src/components/ui/Screen.tsx
+- src/components/ui/ScreenHeader.tsx
+
+Use @expo/ui/swift-ui on iOS, @expo/ui/jetpack-compose on Android, Reanimated + CSS glass on web. Wire everything to src/constants/tokens.ts. Do not touch gateway business logic. Run TypeScript check when done. Mark PR2 complete in scripts/ui-overhaul/status.json.

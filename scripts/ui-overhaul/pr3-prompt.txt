@@ -1,0 +1,11 @@
+Implement PR3 of the Versutus UI overhaul to completion. Read the plan and scripts/ui-overhaul/status.json for prior PR status.
+
+PR3 scope — NativeTabs migration with luxury native shell:
+- Replace src/app/(tabs)/_layout.tsx with NativeTabs from expo-router/unstable-native-tabs
+- Tabs: Home (house.fill), Chat (bubble.left.and.bubble.right.fill), Tools (terminal.fill)
+- blurEffect systemChromeMaterialDark, dark backgroundColor, SF Symbols / Material icons
+- Hide tab screen headers; use custom in-screen headers
+- Delete dead template files: src/components/app-tabs.tsx, src/components/app-tabs.web.tsx
+- Use tokens from src/constants/tokens.ts throughout
+
+Luxury-grade native tab bar is the baseline. Test-compatible on all platforms with fallbacks. Run TypeScript check. Update status.json.

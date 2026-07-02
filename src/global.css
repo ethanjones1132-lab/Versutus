@@ -1,9 +1,20 @@
 :root {
   --font-display:
-    Spline Sans, Inter, ui-sans-serif, system-ui, sans-serif, Apple Color Emoji, Segoe UI Emoji,
-    Segoe UI Symbol, Noto Color Emoji;
+    'Instrument Sans', Spline Sans, Inter, ui-sans-serif, system-ui, sans-serif, Apple Color Emoji,
+    Segoe UI Emoji, Segoe UI Symbol, Noto Color Emoji;
   --font-mono:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
-  --font-rounded: 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif;
+    'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono,
+    Courier New, monospace;
+  --font-rounded: 'Instrument Sans', 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo,
+    'MS PGothic', sans-serif;
   --font-serif: Georgia, 'Times New Roman', serif;
+
+  --color-background: #030304;
+  --color-background-elevated: #0a0908;
+  --color-accent: #d6b76a;
+  --color-accent-warm: #f0d690;
+  --color-text-primary: #f7f1e3;
+  --color-text-secondary: #b8ae9a;
+  --color-glass: rgba(14, 12, 10, 0.78);
+  --color-glass-border: rgba(229, 198, 126, 0.18);
 }

@@ -1,0 +1,8 @@
+Implement PR7 of the Versutus UI overhaul to completion. Read the plan and scripts/ui-overhaul/status.json.
+
+PR7 scope — Terminal + Settings/Add:
+- src/app/(tabs)/terminal.tsx — dark inset terminal pane, glass command chips, segmented Shell|Gateway RPC|Agent modes, collapsible bottom sheet for logs
+- src/app/gateway/settings.tsx — native Form/Section on iOS, LazyColumn/ListItem on Android
+- src/app/gateway/add.tsx — BottomSheet on mobile, native TextFields, DisclosureGroup for advanced options
+
+Luxury-grade tools and settings surfaces. No gateway logic changes. Run TypeScript check. Update status.json.

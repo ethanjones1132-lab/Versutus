@@ -1,0 +1,54 @@
+# Versutus Optimization Loop — Android UI Pass 2 (Interactions)
+
+You are executing **Pass 2 of 3** in the Versutus Android native UI optimization loop.
+
+## Before you start
+
+1. Read `scripts/optimization-loop/status.json` — confirm `currentPass` is 2 and pass1 is completed.
+2. Read `docs/ui-polish-loop-plan.md` (Loop 2 section) and `scripts/ui-overhaul/phase-3-plan.md`.
+3. Review pass 1 changes (git diff or read modified Android files).
+
+## Mission
+
+Plan and implement **behavioral polish** for Android native UI — haptics, motion, compact density, exact verbs, native affordances.
+
+### Pass 2 goals (Android-first)
+
+- **Chat native elevation** — create or refine `src/app/(tabs)/chat.android.tsx`:
+  - Token-driven asymmetric bubbles, native composer density
+  - Pairing sheet via BaseSheet or M3 bottom sheet
+  - Haptics on send/stop, suggestion taps, sheet actions
+  - Streaming indicator with Reanimated motion presets
+- **Terminal native elevation** — create or refine `src/app/(tabs)/terminal.android.tsx`:
+  - Inset terminal pane, M3 chips (`command-chip.android.tsx`, `mode-picker.android.tsx`)
+  - Wire TerminalModePicker, GatewayCommandPanel, CommandLogSheet with luxury styling
+- **Interactions audit**:
+  - `expo-haptics`: impactAsync(Light) on taps, notificationAsync on success/error/confirm
+  - Motion tokens for sheet open, list item enter, state transitions
+  - Exact verbs: "Apply model", "Dismiss", "Reconnect gateway", "Approve device" — scan labels you touch
+- **Sheets on Android**: ConfirmationSheet, ModelPickerSheet, SessionSelectorSheet, PairingSheet — consistent headers, compact rows, error format (Cause / Affected / Next)
+
+### Strict constraints
+
+- Do **not** modify gateway-provider business logic unless UI type fix required.
+- Preserve all chat send/receive/history and slash-command execution paths.
+- Focus Android; web/iOS only if required for type parity.
+
+### Workflow
+
+1. Audit interactions and missing haptics on Android chat/terminal/sheets.
+2. Plan max 5 high-impact tasks; implement in priority order.
+3. Run `npx tsc --noEmit`.
+4. Update `scripts/optimization-loop/status.json`:
+   - `androidUiPasses.pass2.status` → `"completed"` + `completedAt`
+   - `currentPass` → `3`
+   - `lastRunAt`, `lastRunExitCode`, `lastRunPrompt` → `"prompt-android-pass-2.txt"`
+   - Increment `totalRuns`
+
+### Success criteria
+
+- Chat and Terminal feel action-first and luxurious on Android.
+- Haptics intentional on major actions.
+- tsc clean; pass 2 marked complete in status.json.
+
+Implement to completion.

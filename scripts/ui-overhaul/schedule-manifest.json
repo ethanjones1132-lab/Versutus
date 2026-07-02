@@ -1,0 +1,45 @@
+﻿{
+    "initialDelayMinutes":  30,
+    "createdAt":  "2026-06-20T20:31:23.2729294-04:00",
+    "jobs":  [
+                 {
+                     "scheduledAt":  "2026-06-20T21:01:23.2729294-04:00",
+                     "pr":  "PR4",
+                     "delayMinutes":  30,
+                     "promptFile":  "pr4-prompt.txt"
+                 },
+                 {
+                     "scheduledAt":  "2026-06-20T21:31:23.2729294-04:00",
+                     "pr":  "PR5",
+                     "delayMinutes":  60,
+                     "promptFile":  "pr5-prompt.txt"
+                 },
+                 {
+                     "scheduledAt":  "2026-06-20T22:01:23.2729294-04:00",
+                     "pr":  "PR6",
+                     "delayMinutes":  90,
+                     "promptFile":  "pr6-prompt.txt"
+                 },
+                 {
+                     "scheduledAt":  "2026-06-20T22:31:23.2729294-04:00",
+                     "pr":  "PR7",
+                     "delayMinutes":  120,
+                     "promptFile":  "pr7-prompt.txt"
+                 },
+                 {
+                     "scheduledAt":  "2026-06-20T23:01:23.2729294-04:00",
+                     "pr":  "PR8",
+                     "delayMinutes":  150,
+                     "promptFile":  "pr8-prompt.txt"
+                 }
+             ],
+    "grokCommand":  "C:\\Users\\ethan\\.grok\\bin\\grok.exe --prompt-file \u003cprompt\u003e --cwd C:\\Users\\ethan\\Versutus --yolo --output-format plain",
+    "prNumbers":  [
+                      4,
+                      5,
+                      6,
+                      7,
+                      8
+                  ],
+    "intervalMinutes":  30
+}

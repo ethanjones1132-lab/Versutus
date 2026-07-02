@@ -1,0 +1,54 @@
+# Versutus Optimization Loop — Android UI Pass 1 (Foundation)
+
+You are executing **Pass 1 of 3** in the Versutus Android native UI optimization loop.
+
+## Before you start
+
+1. Read `scripts/optimization-loop/status.json` — confirm `phase` is `android-ui` and `currentPass` is 1.
+2. Read `docs/ui-polish-loop-plan.md` (Loop 1 section) and `scripts/ui-overhaul/phase-3-plan.md`.
+3. Read `AGENTS.md` and Expo SDK 56 docs before writing native Android UI code.
+4. Read existing Android splits: `src/app/onboarding.android.tsx`, `src/app/(tabs)/index.android.tsx`, `src/components/ui/*.android.tsx`.
+
+## Mission
+
+Plan and implement the **highest-quality** Android native UI foundation pass. Focus on structural consistency and native Compose surface language — not feature additions.
+
+### Pass 1 goals (Android-first)
+
+- **One surface language**: Compose `LazyColumn` / M3 patterns on Android; eliminate Compose-header + RN-card seams.
+- **Token integrity**: `useTokens()` everywhere you touch; no stray hardcoded colors.
+- **Screen elevation** (priority order):
+  1. `onboarding.android.tsx` — single hero card, validated TextField, stepped connection timeline
+  2. `(tabs)/index.android.tsx` — hero status card, floating settings FAB, collapsible discovery/troubleshooting
+  3. Shared components used on Android home/onboarding: `home-status-card`, `pairing-panel`, `connection-badge`, `gateway-card`
+- **Luxury design system**: deep black surfaces (#030304, #0A0908), champagne gold accents (#D6B76A, #F0D690), restrained glass, compact density.
+- **BaseSheet**: verify animation and backdrop behavior on Android; fix if broken.
+
+### Strict constraints
+
+- Do **not** modify business logic in `src/context/gateway-provider.tsx` unless fixing a UI-induced type error.
+- Prefer `.android.tsx` platform splits over Platform.OS branches in shared files.
+- Every change must serve Android native quality — no drive-by refactors.
+
+### Workflow
+
+1. **Audit** — read Android screen files, grep for hardcoded colors, hybrid seams, missing haptics.
+2. **Plan** — write a short prioritized task list (max 5 items) in a comment at top of your work or in status notes.
+3. **Implement** — highest-impact items first; luxury-grade motion and glass on every touched surface.
+4. **Validate** — run `npx tsc --noEmit` from project root.
+5. **Update status** — edit `scripts/optimization-loop/status.json`:
+   - Set `androidUiPasses.pass1.status` to `"completed"`
+   - Set `androidUiPasses.pass1.completedAt` to ISO timestamp
+   - Set `currentPass` to `2`
+   - Set `lastRunAt`, `lastRunExitCode` (0 if tsc passed), `lastRunPrompt` to `"prompt-android-pass-1.txt"`
+   - Increment `totalRuns`
+   - If `startedAt` is null, set it to now
+
+### Success criteria
+
+- Onboarding and Home Android screens feel intentionally designed in one session.
+- No obvious hybrid RN/Compose seams on screens you touched.
+- `npx tsc --noEmit` passes.
+- status.json updated for pass 1 complete, pass 2 queued.
+
+Implement to completion. Do not stop at planning only.

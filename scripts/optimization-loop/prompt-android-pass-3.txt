@@ -1,0 +1,59 @@
+# Versutus Optimization Loop — Android UI Pass 3 (Final Polish & Parity)
+
+You are executing **Pass 3 of 3** in the Versutus Android native UI optimization loop.
+
+## Before you start
+
+1. Read `scripts/optimization-loop/status.json` — confirm `currentPass` is 3 and passes 1–2 completed.
+2. Read `docs/ui-polish-loop-plan.md` (Loop 3 section) and `scripts/ui-overhaul/phase-3-plan.md`.
+3. Read Android files: `settings.android.tsx`, `add.android.tsx`, all `*.android.tsx` in project.
+
+## Mission
+
+Final Android native refinement — settings/add screens, edge cases, performance, full luxury audit. After this pass, unlock the feature phase.
+
+### Pass 3 goals
+
+- **Settings Android** (`src/app/gateway/settings.android.tsx`):
+  - Full Compose `LazyColumn` journey, token integrity, M3 list items
+  - Device identity display, gateway repair affordances if UI exists
+  - Fix any web-import crashes (no `@expo/ui/jetpack-compose` leaking to web)
+- **Add gateway Android** (`src/app/gateway/add.android.tsx`):
+  - Compose form, expandable advanced section, validation feedback
+- **Edge cases**:
+  - Empty states in pickers/selectors
+  - Long content scroll in sheets
+  - No-gateway / pairing / failed connection flows on Home and Chat
+  - Structured error cards everywhere (cause, affected target, next action)
+- **Performance**:
+  - Memoize FlatList renderItem in pickers
+  - removeClippedSubviews where safe on Android lists
+- **Full luxury audit** (grep):
+  - No `#208AEF` or old blue remnants
+  - No hardcoded spacing/colors outside tokens
+  - GlassSurface fallbacks consistent across `.android.tsx`
+
+### Exit criteria (phase-3-plan)
+
+3-minute mental walkthrough: onboarding → home → chat → terminal → settings → add — no hybrid seams, consistent dark luxury palette.
+
+### Workflow
+
+1. Audit all Android screens against exit criteria.
+2. Implement highest-impact gaps (max 6 items).
+3. Run `npx tsc --noEmit`.
+4. Update `scripts/optimization-loop/status.json`:
+   - `androidUiPasses.pass3.status` → `"completed"` + `completedAt`
+   - `phase` → `"features"`
+   - `featurePhase.status` → `"active"`
+   - `currentPass` → `4`
+   - `lastRunPrompt` → `"prompt-android-pass-3.txt"`
+   - Increment `totalRuns`
+
+### Success criteria
+
+- All 3 Android UI passes complete.
+- Feature phase unlocked in status.json.
+- tsc clean.
+
+Implement to completion. This is the last UI-only pass before roadmap features.

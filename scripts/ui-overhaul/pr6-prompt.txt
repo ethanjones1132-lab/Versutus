@@ -1,0 +1,11 @@
+Implement PR6 of the Versutus UI overhaul to completion. Read the plan and scripts/ui-overhaul/status.json.
+
+PR6 scope — Chat screen overhaul (highest UX complexity):
+- src/app/(tabs)/chat.tsx — asymmetric glass bubbles (user=accent tint, assistant=neutral glass)
+- Reanimated streaming typing indicator (three-dot wave)
+- Floating glass composer pinned above tab bar; send morphs to stop when streaming
+- ContentUnavailableView empty state on iOS
+- Pairing as slide-down glass sheet, not inline block
+- Message enter animations SlideInRight/SlideInLeft
+
+Luxury-grade chat UX. Preserve all gateway send/receive logic. Run TypeScript check. Update status.json.

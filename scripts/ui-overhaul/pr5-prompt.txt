@@ -1,0 +1,7 @@
+Implement PR5 of the Versutus UI overhaul to completion. Read the plan and scripts/ui-overhaul/status.json.
+
+PR5 scope — Home + Onboarding screen overhauls:
+- src/app/(tabs)/index.tsx — ScreenHeader with settings icon, HomeStatusCard hero, collapsible glass troubleshooting/discovery panels, subtle GradientMesh background
+- src/app/onboarding.tsx — full-screen branded Versutus wordmark + tagline over glass, single focused TextField with live validation, stepped connection timeline with withAnimation transitions
+
+Remove hardcoded #208AEF; use tokens only. Luxury-grade first-run experience. Run TypeScript check. Update status.json.

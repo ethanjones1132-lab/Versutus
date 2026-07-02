@@ -1,0 +1,10 @@
+Implement PR4 of the Versutus UI overhaul to completion. Read the plan and scripts/ui-overhaul/status.json.
+
+PR4 scope — rebuild shared components using ui/ primitives:
+- src/components/connection-badge.tsx — Reanimated pulsing dot, glass pill, gold accent for pairing
+- src/components/home-status-card.tsx — hero glass card, connection phase stepper, native Button CTA
+- src/components/pairing-panel.tsx — numbered steps, haptics on copy, gold urgency border
+- src/components/gateway-card.tsx — SwipeActions delete on iOS, glass row, active glow ring
+- src/components/discovered-gateway-row.tsx — discovery scan animation
+
+Luxury-grade glass surfaces and motion on every component. No gateway-provider changes. Run TypeScript check. Update status.json.
