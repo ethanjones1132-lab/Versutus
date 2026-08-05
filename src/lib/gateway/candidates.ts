@@ -13,6 +13,8 @@ export function friendlyPcName(input: string): string {
   return short.charAt(0).toUpperCase() + short.slice(1);
 }
 
+const HERMES_PORT = 8642;
+
 export function buildGatewayCandidates(options: {
   tailscaleHost?: string;
   configuredHosts?: string[];
@@ -38,7 +40,6 @@ export function buildGatewayCandidates(options: {
 
   if (options.lastSuccessfulUrl) push(options.lastSuccessfulUrl);
 
-  // Prioritize fresh discovered right after last success for faster automatic connect
   for (const gateway of options.discovered ?? []) {
     push(gateway.url);
   }
@@ -56,7 +57,7 @@ export function buildGatewayCandidates(options: {
 
   if (options.includeLocalFallbacks !== false) {
     for (const fallbackHost of localFallbackHosts(options.platform)) {
-      push(`ws://${fallbackHost}:18789`);
+      push(`http://${fallbackHost}:${HERMES_PORT}`);
     }
   }
 
@@ -67,20 +68,19 @@ export function buildGatewayCandidates(options: {
     if (!candidateHost) return;
 
     if (isTailnetHost(candidateHost) || isTailscaleIp(candidateHost)) {
-      push(`wss://${candidateHost}:443`);
-      push(`ws://${candidateHost}:18789`);
+      push(`https://${candidateHost}:${HERMES_PORT}`);
+      push(`http://${candidateHost}:${HERMES_PORT}`);
       return;
     }
 
     if (isPrivateOrLanHost(candidateHost)) {
-      push(`ws://${candidateHost}:18789`);
-      push(`wss://${candidateHost}:443`);
+      push(`http://${candidateHost}:${HERMES_PORT}`);
       return;
     }
 
     if (candidateHost.includes('.')) {
-      push(`wss://${candidateHost}:443`);
-      push(`ws://${candidateHost}:18789`);
+      push(`https://${candidateHost}:${HERMES_PORT}`);
+      push(`http://${candidateHost}:${HERMES_PORT}`);
     }
   }
 }

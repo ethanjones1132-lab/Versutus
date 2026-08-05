@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 
-import { wsToHttpBase } from '@/lib/gateway/url';
+import { httpToWsBase } from '@/lib/gateway/url';
 
 export type TerminalSession = {
   sid: string;
@@ -69,7 +69,7 @@ export async function openTerminalSession(
   gatewayWsUrl: string,
   handlers: TerminalHandlers,
 ): Promise<TerminalSession> {
-  const httpBase = wsToHttpBase(gatewayWsUrl);
+  const httpBase = httpToWsBase(gatewayWsUrl).replace(/^wss:/, "https://").replace(/^ws:/, "http://");
   const streamUrl = `${httpBase}/better-gateway/terminal/stream`;
   let sid = '';
   const setSid = (value: string) => {
@@ -156,7 +156,7 @@ export async function openTerminalSession(
 }
 
 export async function sendTerminalInput(gatewayWsUrl: string, sid: string, data: string): Promise<void> {
-  const httpBase = wsToHttpBase(gatewayWsUrl);
+  const httpBase = httpToWsBase(gatewayWsUrl).replace(/^wss:/, "https://").replace(/^ws:/, "http://");
   const response = await fetch(`${httpBase}/better-gateway/terminal/input`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -171,7 +171,7 @@ export async function resizeTerminal(
   cols: number,
   rows: number,
 ): Promise<void> {
-  const httpBase = wsToHttpBase(gatewayWsUrl);
+  const httpBase = httpToWsBase(gatewayWsUrl).replace(/^wss:/, "https://").replace(/^ws:/, "http://");
   await fetch(`${httpBase}/better-gateway/terminal/resize`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

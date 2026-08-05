@@ -41,6 +41,7 @@
     "@types/react": "~19.2.2",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~56.0.4",
+    "tsx": "^4.23.8",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -51,6 +52,7 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "smoke:gateway-commands": "node ./scripts/smoke-gateway-commands.mjs",
+    "smoke:portal": "tsx ./scripts/smoke-portal.mts",
     "build:android:preview": "eas build --profile preview --platform android",
     "build:android:preview:local": "eas build --profile preview --platform android --local"
   },

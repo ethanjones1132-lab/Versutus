@@ -2,69 +2,52 @@ export type ProbeResult =
   | { ok: true; url: string; latencyMs: number }
   | { ok: false; url: string; error: string; code?: 'timeout' | 'connect-failed' | 'closed' | 'unreachable' };
 
+/**
+ * Probe a Hermes gateway by hitting the /health endpoint.
+ * Hermes uses HTTP (not WebSocket), default port 8642.
+ */
 export async function probeGatewayUrl(url: string, timeoutMs = 7000): Promise<ProbeResult> {
   const started = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  return new Promise((resolve) => {
-    let settled = false;
-    let socket: WebSocket | null = null;
+  try {
+    // Normalize URL to HTTP
+    const baseUrl = url
+      .replace(/^wss:\/\//i, 'https://')
+      .replace(/^ws:\/\//i, 'http://')
+      .replace(/\/+$/, '');
+    const healthUrl = `${baseUrl}/health`;
 
-    const finish = (result: ProbeResult) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try {
-        socket?.close();
-      } catch {
-        // ignore
-      }
-      resolve(result);
-    };
+    const response = await fetch(healthUrl, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
 
-    const timer = setTimeout(() => {
-      finish({ ok: false, url, error: 'Timed out waiting for gateway', code: 'timeout' });
-    }, timeoutMs);
-
-    try {
-      socket = new WebSocket(url);
-    } catch (error) {
-      finish({
-        ok: false,
-        url,
-        error: error instanceof Error ? error.message : String(error),
-        code: 'connect-failed',
-      });
-      return;
+    if (response.ok) {
+      return { ok: true, url: baseUrl, latencyMs: Date.now() - started };
     }
-
-    socket.onopen = () => {
-      finish({ ok: true, url, latencyMs: Date.now() - started });
+    return {
+      ok: false,
+      url: baseUrl,
+      error: `Gateway returned HTTP ${response.status}`,
+      code: 'connect-failed',
     };
-
-    socket.onmessage = (event) => {
-      try {
-        const frame = JSON.parse(String(event.data)) as {
-          type?: string;
-          event?: string;
-        };
-        if (frame.type === 'event' && frame.event === 'connect.challenge') {
-          finish({ ok: true, url, latencyMs: Date.now() - started });
-        }
-      } catch {
-        // ignore malformed frames
-      }
+  } catch (error) {
+    clearTimeout(timer);
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return { ok: false, url, error: 'Timed out waiting for gateway', code: 'timeout' };
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      url,
+      error: message,
+      code: message.includes('connect') || message.includes('Network') ? 'connect-failed' : 'unreachable',
     };
-
-    socket.onerror = () => {
-      finish({ ok: false, url, error: 'Could not open connection to gateway', code: 'connect-failed' });
-    };
-
-    socket.onclose = () => {
-      if (!settled) {
-        finish({ ok: false, url, error: 'Connection closed before handshake', code: 'closed' });
-      }
-    };
-  });
+  }
 }
 
 export async function probeGatewayCandidates(
@@ -81,9 +64,7 @@ export async function probeGatewayCandidates(
 }
 
 /**
- * Probe a small number of high-priority URLs in parallel (limited concurrency).
- * Returns the first successful result, or null if none succeed quickly.
- * Used to speed up automatic detection without hammering many candidates.
+ * Probe a small number of high-priority URLs in parallel.
  */
 export async function probeHighPriorityCandidates(
   urls: string[],
@@ -92,14 +73,14 @@ export async function probeHighPriorityCandidates(
 ): Promise<ProbeResult | null> {
   if (urls.length === 0) return null;
 
-  const top = urls.slice(0, 3); // limited parallel for UX speed
+  const top = urls.slice(0, 3);
 
   const results = await Promise.allSettled(
     top.map(async (url) => {
       onProgress?.(describeProbeTarget(url));
       const res = await probeGatewayUrl(url, timeoutMs);
       return { url, res };
-    })
+    }),
   );
 
   for (const settled of results) {
@@ -115,7 +96,7 @@ function describeProbeTarget(url: string): string {
   try {
     const parsed = new URL(url);
     const host = parsed.hostname;
-    const port = parsed.port || (parsed.protocol === 'wss:' ? '443' : '18789');
+    const port = parsed.port || '8642';
     if (host.endsWith('.ts.net')) return `Trying ${host} over Tailscale…`;
     if (host.startsWith('100.')) return `Trying ${host} on your tailnet…`;
     if (host === '127.0.0.1' || host === 'localhost') return `Trying local gateway at ${port}…`;

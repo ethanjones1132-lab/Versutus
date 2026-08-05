@@ -5,6 +5,8 @@ import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } fr
 import { Button, Card, Screen, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { requestGatewayAccess, type AccessRequestResult } from '@/lib/portal/access';
+import { identifyGateway, type GatewayIdentity } from '@/lib/portal/identify';
 
 export default function AddGatewayScreen() {
   const router = useRouter();
@@ -16,17 +18,51 @@ export default function AddGatewayScreen() {
   const [sessionKey, setSessionKey] = useState('agent:main:main');
   const [agentId, setAgentId] = useState('main');
   const [saving, setSaving] = useState(false);
+  const [identified, setIdentified] = useState<GatewayIdentity | null>(null);
+  const [accessNote, setAccessNote] = useState<string | null>(null);
+  const [accessStatus, setAccessStatus] = useState<AccessRequestResult['status'] | null>(null);
 
   async function handleSave() {
     setSaving(true);
+    setAccessNote(null);
+    setAccessStatus(null);
     try {
+      // 1. Identify the gateway regardless of origin (manifest → fingerprints).
+      const identity = await identifyGateway({ baseUrl: url });
+      setIdentified(identity);
+
+      // 2. Request access through the kind-appropriate handshake.
+      if (identity.kind === 'openclaw' || identity.kind === 'custom') {
+        const result = await requestGatewayAccess({ baseUrl: url, identity, token: token || undefined });
+        setAccessStatus(result.status);
+        if (result.status === 'granted' && result.token) setToken(result.token);
+        if (result.status === 'pending-approval') setAccessNote(result.hint ?? 'Approval requested — approve this device on the gateway.');
+        if (result.status === 'denied') {
+          setAccessNote(result.reason);
+          setSaving(false);
+          return;
+        }
+        if (result.status === 'token-required') {
+          setAccessNote(result.hint ?? 'This gateway requires a token.');
+          setShowAdvanced(true);
+          setSaving(false);
+          return;
+        }
+      } else if (identity.auth.requiresToken && !token.trim()) {
+        setAccessNote('This gateway requires an access token — paste it below to connect.');
+        setShowAdvanced(true);
+        setSaving(false);
+        return;
+      }
+
+      // 3. Save the identified profile and connect through the kind's adapter.
       const discoverySource = url.includes('.ts.net') || url.startsWith('wss://') ? 'tailscale' : 'manual';
       const gateway = await addGateway({
         name,
         url,
+        kind: identity.kind,
         token: token || undefined,
         sessionKey: showAdvanced ? sessionKey : undefined,
-        agentId: showAdvanced ? agentId : undefined,
         discoverySource,
       });
       await connectGateway(gateway);
@@ -36,6 +72,13 @@ export default function AddGatewayScreen() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function handleUrlChange(text: string) {
+    setUrl(text);
+    setIdentified(null);
+    setAccessNote(null);
+    setAccessStatus(null);
   }
 
   return (
@@ -53,10 +96,34 @@ export default function AddGatewayScreen() {
           <Field
             label="Gateway URL"
             value={url}
-            onChangeText={setUrl}
-            placeholder="wss://yourpc.tailnet.ts.net:443"
+            onChangeText={handleUrlChange}
+            placeholder="http://yourpc.tailnet.ts.net:8642 or ws://host:8642/openclaw"
             autoCapitalize="none"
           />
+
+          {identified ? (
+            <View style={styles.identified}>
+              <Text variant="caption" color="accent">
+                Identified: {identified.kindLabel}
+                {identified.version ? ` v${identified.version}` : ''}
+                {identified.auth.schemes.length > 0
+                  ? ` · ${identified.auth.schemes.join(' / ')} auth`
+                  : ''}
+                {identified.source === 'manifest' ? ' · manifest' : ''}
+              </Text>
+              {identified.capabilities && identified.capabilities.length > 0 ? (
+                <Text variant="caption" color="secondary">
+                  {identified.capabilities.join(' · ')}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+
+          {accessNote ? (
+            <Text variant="caption" color={accessStatus === 'denied' ? 'accentWarm' : 'secondary'}>
+              {accessNote}
+            </Text>
+          ) : null}
 
           <AdvancedOptions
             expanded={showAdvanced}
@@ -161,6 +228,9 @@ const styles = StyleSheet.create({
   },
   field: {
     gap: Spacing.one,
+  },
+  identified: {
+    gap: Spacing.half,
   },
   advanced: {
     gap: Spacing.two,

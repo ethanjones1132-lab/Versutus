@@ -56,7 +56,6 @@ export default function AddGatewayScreen() {
         url,
         token: token || undefined,
         sessionKey: showAdvanced ? sessionKey : undefined,
-        agentId: showAdvanced ? agentId : undefined,
         discoverySource,
       });
       await connectGateway(gateway);

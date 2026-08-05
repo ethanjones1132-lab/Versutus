@@ -53,30 +53,28 @@ export { normalizeGatewayUrl } from '@/lib/gateway/url';
 export function createGatewayProfile(input: {
   name: string;
   url: string;
+  kind?: GatewayProfile['kind'];
   token?: string;
   bootstrapToken?: string;
   tlsFingerprint?: string;
   sessionKey?: string;
+  sessionId?: string;
   agentId?: string;
   discoverySource?: GatewayProfile['discoverySource'];
 }): GatewayProfile {
   const discoverySource =
     input.discoverySource ??
-    (input.url.includes('.ts.net') || input.url.startsWith('wss://') ? 'tailscale' : 'manual');
+    (input.url.includes('.ts.net') || input.url.startsWith('https://') ? 'tailscale' : 'manual');
 
   return {
     id: `gw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: input.name.trim() || 'My Gateway',
-    url: normalizeGatewayUrl(input.url, {
-      preferTls: discoverySource === 'tailscale' || input.url.startsWith('wss://'),
-      tlsFingerprint: input.tlsFingerprint,
-    }),
+    url: normalizeGatewayUrl(input.url),
+    kind: input.kind,
     token: input.token?.trim() || undefined,
-    bootstrapToken: input.bootstrapToken?.trim() || undefined,
-    tlsFingerprint: input.tlsFingerprint?.trim() || undefined,
-    sessionKey: input.sessionKey?.trim() || 'agent:main:main',
-    agentId: input.agentId?.trim() || 'main',
-    discoverySource,
     createdAt: Date.now(),
+    sessionKey: input.sessionKey?.trim(),
+    sessionId: input.sessionId?.trim(),
+    discoverySource,
   };
 }

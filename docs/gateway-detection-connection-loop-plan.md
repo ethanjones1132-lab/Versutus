@@ -1,5 +1,7 @@
 # Versutus Gateway Detection & Connection Audit + Improvement Loop
 
+> **SUPERSEDED (2026-08-05):** The "type detection is theory only — DO NOT IMPLEMENT" rule below is retired. Product direction is now the **portal**: Versutus identifies gateways (Hermes / OpenClaw / custom) and requests access regardless of origin. See `docs/portal-architecture.md` — the identification cascade ships in `src/lib/portal/identify.ts`. The connection-loop work below still applies to the Hermes path.
+
 **Objective**: Iteratively audit and improve the *existing* gateway detection and connection architecture to make it as automatic, reliable, and user-friendly as possible — **without** implementing new "what is running on the gateway" type detection.
 
 **Strict Rule**: Gateway type/intent detection (OpenClaw vs Hermes agent vs other) is in **theory stage only**. All improvements must work strictly within the current mDNS + candidate + probe + client architecture. No new fingerprinting, no `/health` type inference in this work, no auto-applying "OpenClaw settings" based on detected kind.

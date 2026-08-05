@@ -17,46 +17,41 @@ export function isTailnetHost(host: string): boolean {
   return host.toLowerCase().replace(/\.$/, '').endsWith('.ts.net');
 }
 
-export function shouldUseTlsForHost(host: string, gatewayTls?: boolean): boolean {
-  if (gatewayTls) return true;
-  if (isTailnetHost(host)) return true;
-  if (isPrivateOrLanHost(host)) return false;
-  return true;
+export function shouldUseTlsForHost(_host: string): boolean {
+  // Hermes API server typically runs plain HTTP on LAN/tailnet.
+  // TLS is handled by Tailscale Serve or a reverse proxy if needed.
+  return false;
 }
 
-export function wsToHttpBase(wsUrl: string): string {
-  const parsed = new URL(wsUrl);
-  const protocol = parsed.protocol === 'wss:' ? 'https:' : 'http:';
-  const port = parsed.port || (parsed.protocol === 'wss:' ? '443' : '18789');
-  return `${protocol}//${parsed.hostname}:${port}`;
-}
-
+/**
+ * Normalize a gateway URL to an HTTP base URL.
+ * Hermes API server uses HTTP (not WebSocket), default port 8642.
+ */
 export function normalizeGatewayUrl(
   input: string,
-  options?: { preferTls?: boolean; tlsFingerprint?: string },
+  _options?: { preferTls?: boolean; tlsFingerprint?: string },
 ): string {
   const trimmed = input.trim();
   if (!trimmed) throw new Error('Gateway URL is required');
 
-  const explicitWss = /^wss:\/\//i.test(trimmed) || /^https:\/\//i.test(trimmed);
-  const explicitWs = /^ws:\/\//i.test(trimmed) || /^http:\/\//i.test(trimmed);
-  const withScheme = explicitWss || explicitWs ? trimmed : `http://${trimmed}`;
+  const hasScheme = /^https?:\/\//i.test(trimmed);
+  const withScheme = hasScheme ? trimmed : `http://${trimmed}`;
   const parsed = new URL(withScheme);
   const host = parsed.hostname;
 
-  let useTls = explicitWss || Boolean(options?.preferTls) || isTailnetHost(host);
-  if (explicitWs && isPrivateOrLanHost(host) && !options?.preferTls) {
-    useTls = false;
-  }
-  if (!explicitWss && !explicitWs && shouldUseTlsForHost(host)) {
-    useTls = true;
-  }
+  const port = parsed.port || '8642';
 
-  const protocol = useTls ? 'wss:' : 'ws:';
-  const port = parsed.port || (useTls ? '443' : '18789');
+  // Strip trailing slash
+  return `${parsed.protocol}//${host}:${port}`;
+}
 
-  void options?.tlsFingerprint;
-  return `${protocol}//${host}:${port}`;
+/**
+ * Convert an HTTP base URL to a WebSocket URL (for SSE fallback or future WebSocket features).
+ */
+export function httpToWsBase(httpUrl: string): string {
+  const parsed = new URL(httpUrl);
+  const protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${parsed.host}`;
 }
 
 export function buildGatewayUrlFromBeacon(params: {
@@ -66,13 +61,12 @@ export function buildGatewayUrlFromBeacon(params: {
   preferTailnetDns?: boolean;
 }): { url: string; tlsFingerprint?: string; displayName?: string } {
   const txt = params.txt ?? {};
-  const gatewayTls = txt.gatewayTls === '1';
   const tlsFingerprint = txt.gatewayTlsSha256?.trim() || undefined;
   const tailnetDns = txt.tailnetDns?.trim();
   const displayName = txt.displayName?.trim();
 
   let host = params.host.replace(/\.$/, '');
-  const port = params.port || Number(txt.gatewayPort) || 18789;
+  const port = params.port || Number(txt.gatewayPort) || 8642;
 
   if (params.preferTailnetDns !== false && tailnetDns) {
     if (host.startsWith('100.') || isTailnetHost(host) || !isPrivateOrLanHost(host)) {
@@ -80,11 +74,7 @@ export function buildGatewayUrlFromBeacon(params: {
     }
   }
 
-  const useTls = shouldUseTlsForHost(host, gatewayTls);
-  const url = normalizeGatewayUrl(`${useTls ? 'wss' : 'ws'}://${host}:${port}`, {
-    preferTls: useTls,
-    tlsFingerprint,
-  });
+  const url = normalizeGatewayUrl(`http://${host}:${port}`);
 
   return { url, tlsFingerprint, displayName };
 }

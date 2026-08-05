@@ -1,25 +1,119 @@
+// ─── Hermes Gateway API Types ─────────────────────────────────────
+// The Hermes API server exposes an OpenAI-compatible HTTP REST API
+// with Bearer token auth (default port 8642).
+
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'pairing';
+
+/**
+ * Gateway kinds the portal can identify and connect to.
+ * 'custom' = a gateway serving the Open Gateway Manifest with its own kind id.
+ */
+export type GatewayKind = 'hermes' | 'openclaw' | 'custom' | 'unknown';
 
 export type GatewayProfile = {
   id: string;
   name: string;
+  /** Base URL of the gateway, e.g. http://host:8642 */
   url: string;
+  /** Kind identified by the portal (hermes/openclaw/custom/unknown) */
+  kind?: GatewayKind;
+  /** Bearer token for API_SERVER_KEY auth */
   token?: string;
+  /** OpenClaw bootstrap/setup token (one-time pairing secret) */
   bootstrapToken?: string;
-  tlsFingerprint?: string;
-  sessionKey: string;
-  agentId: string;
+  /** Session key for scoping long-term memory (optional) */
+  sessionKey?: string;
+  /** Optional session ID for continuity */
+  sessionId?: string;
   createdAt: number;
-  discoverySource?: 'local' | 'wide-area' | 'manual' | 'tailscale';
+  discoverySource?: 'local' | 'wide-area' | 'manual' | 'tailscale' | 'relay' | 'deep-link';
 };
 
-export type StoredDeviceIdentity = {
-  version: 1;
-  deviceId: string;
-  publicKeyB64Url: string;
-  privateKeyB64Url: string;
-  createdAtMs: number;
+// ─── Health ───────────────────────────────────────────────────────
+
+export type HealthResponse = {
+  status: string;
+  platform: string;
+  version: string;
 };
+
+// ─── Capabilities ──────────────────────────────────────────────────
+
+export type GatewayCapabilities = {
+  object: string;
+  platform: string;
+  model: string;
+  auth: { type: string; required: boolean };
+  runtime: {
+    mode: string;
+    tool_execution: string;
+    split_runtime: boolean;
+    description: string;
+  };
+  features: Record<string, boolean | string>;
+  endpoints: Record<string, { method: string; path: string }>;
+};
+
+// ─── Models ────────────────────────────────────────────────────────
+
+export type ModelInfo = {
+  id: string;
+  object: string;
+  created?: number;
+  owned_by?: string;
+};
+
+export type ModelsResponse = {
+  object: string;
+  data: ModelInfo[];
+};
+
+// ─── Sessions ──────────────────────────────────────────────────────
+
+export type HermesSession = {
+  id: string;
+  source: string;
+  user_id: string | null;
+  model: string | null;
+  title: string | null;
+  started_at: number;
+  ended_at: number | null;
+  end_reason: string | null;
+  message_count: number;
+  tool_call_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  estimated_cost_usd: number | null;
+  actual_cost_usd: number | null;
+  api_call_count: number;
+  parent_session_id: string | null;
+  last_active: number;
+  preview: string | null;
+  has_system_prompt: boolean;
+  has_model_config: boolean;
+};
+
+export type SessionsResponse = {
+  object: string;
+  data: HermesSession[];
+};
+
+export type SessionMessage = {
+  id?: string;
+  role: string;
+  content: string | Array<{ type?: string; text?: string }>;
+  timestamp?: number;
+};
+
+export type SessionMessagesResponse = {
+  object: string;
+  data: SessionMessage[];
+};
+
+// ─── Chat ──────────────────────────────────────────────────────────
 
 export type ChatMessage = {
   id: string;
@@ -37,6 +131,61 @@ export type ChatMessage = {
   };
 };
 
+export type ChatCompletionResponse = {
+  id: string;
+  object: string;
+  created: number;
+  model: string;
+  choices: Array<{
+    index: number;
+    message: { role: string; content: string };
+    finish_reason: string;
+  }>;
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+};
+
+// ─── Runs (async agent tasks) ─────────────────────────────────────
+
+export type RunResponse = {
+  run_id: string;
+  status: string;
+  session_id?: string;
+};
+
+export type RunStatus = {
+  run_id: string;
+  status: string;
+  result?: string;
+  error?: string;
+  events?: RunEvent[];
+};
+
+export type RunEvent = {
+  type: string;
+  data?: Record<string, unknown>;
+  timestamp?: number;
+};
+
+// ─── Skills / Toolsets ─────────────────────────────────────────────
+
+export type SkillInfo = {
+  name: string;
+  description: string;
+  version?: string;
+  tags?: string[];
+};
+
+export type ToolsetInfo = {
+  name: string;
+  tools: string[];
+};
+
+// ─── Gateway Hello (kept for compat with UI components) ────────────
+
 export type GatewayHelloOk = {
   type: 'hello-ok';
   protocol: number;
@@ -48,6 +197,8 @@ export type GatewayHelloOk = {
   };
 };
 
+// ─── Pairing (Hermes uses simple API key, no pairing) ─────────────
+
 export type PairingDetails = {
   reason?: 'not-paired' | 'role-upgrade' | 'scope-upgrade' | 'metadata-upgrade';
   requestId?: string;
@@ -58,30 +209,7 @@ export type PairingDetails = {
   approvedScopes?: string[];
 };
 
-export type GatewayFrame =
-  | { type: 'event'; event: string; payload?: unknown; seq?: number }
-  | {
-      type: 'res';
-      id: string;
-      ok: boolean;
-      payload?: unknown;
-      error?: { code?: string; message?: string; details?: { code?: string } & Record<string, unknown> };
-    };
-
-export type ChatEventPayload = {
-  runId?: string;
-  sessionKey?: string;
-  state?: 'delta' | 'final' | 'error' | 'started';
-  deltaText?: string;
-  errorMessage?: string;
-  message?: {
-    role?: string;
-    content?: string | Array<{ type?: string; text?: string }>;
-    timestamp?: number;
-  };
-};
-
-// --- Command Center Types (Phase 1 foundation) ---
+// ─── Command Center Types ──────────────────────────────────────────
 
 export type CommandVerification = 'verified' | 'unverified' | 'experimental' | 'blocked';
 
@@ -107,29 +235,24 @@ export type GatewayFeatureFamily =
   | 'Voice'
   | 'Other';
 
-export type GatewayConfirmationSpec = {
-  title: string;
-  risk: 'low' | 'medium' | 'high';
-  requiresScope?: string;
-};
+export type GatewayCommandDanger = 'safe' | 'write' | 'destructive';
 
 export type GatewayCommand = {
   id: string;
-  slash: string;
-  family: GatewayFeatureFamily;
+  label: string;
+  group: GatewayFeatureFamily;
+  transport: 'rpc' | 'agent' | 'http';
   method?: string;
+  httpMethod?: string;
+  httpPath?: string;
   params?: Record<string, unknown>;
-  requiredScope?: string;
-  danger: 'safe' | 'write' | 'destructive';
-  verification: CommandVerification;
-  supportsPreview: boolean;
-  confirmation?: GatewayConfirmationSpec;
-  formatter?: (result: unknown) => { text: string; title?: string; raw?: string };
-  label?: string;
-  description?: string;
-  aliases?: string[];
-  transport?: 'rpc' | 'agent';
   agentCommand?: string;
+  requiredScope?: string;
+  danger: GatewayCommandDanger;
+  slash?: string;
+  description?: string;
+  usage?: string;
+  aliases?: string[];
 };
 
 export type GatewayMethodAvailability = {
@@ -166,7 +289,7 @@ export type CommandTranscriptEntry = {
   raw?: string;
   createdAt: number;
   durationMs?: number;
-  ephemeral?: boolean; // true for local-only until gateway persistence
+  ephemeral?: boolean;
 };
 
 export type GatewayActionPreview = {
@@ -177,5 +300,3 @@ export type GatewayActionPreview = {
   applyCommand: string;
   affectedTarget?: string;
 };
-
-// Note: Import GatewayCapabilityGroup and Slash* directly from their modules to avoid cycles.
