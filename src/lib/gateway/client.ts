@@ -1,5 +1,7 @@
 import { Platform } from 'react-native';
 
+import { METHOD_TO_ROUTE, resolveRoute } from '@/lib/gateway/rpc-routes';
+
 import type {
   ChatCompletionResponse,
   ChatMessage,
@@ -136,6 +138,9 @@ export class HermesGatewayClient {
     };
     if (this.profile.token) {
       h['Authorization'] = `Bearer ${this.profile.token}`;
+    }
+    if (this.profile.sessionKey) {
+      h['X-Hermes-Session-Key'] = this.profile.sessionKey;
     }
     return h;
   }
@@ -459,9 +464,16 @@ export class HermesGatewayClient {
    * This allows existing slash commands to work without full rewrites.
    */
   async rpcRequest<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-    const route = METHOD_TO_ROUTE[method];
-    if (!route) throw new Error(`Unknown method: ${method}`);
-    return this.request<T>(route.method, route.path, params);
+    const resolved = resolveRoute(method, params);
+    if (!resolved) {
+      const supported = Object.keys(METHOD_TO_ROUTE).length;
+      throw new Error(
+        `${method} is not supported by this gateway. ` +
+          `The Hermes API server exposes ${supported} RPC-compatible methods.`,
+      );
+    }
+    const { route, path, body } = resolved;
+    return this.request<T>(route.method, path, route.method === 'GET' ? undefined : body);
   }
 
   // ─── Health monitoring ────────────────────────────────────────
@@ -525,20 +537,3 @@ export class HermesGatewayClient {
     this.callbacks.onStatus?.(status, detail);
   }
 }
-
-// ─── Method-to-route mapping for legacy slash commands ──────────
-
-type Route = { method: string; path: string };
-
-const METHOD_TO_ROUTE: Record<string, Route> = {
-  'health': { method: 'GET', path: '/health' },
-  'status': { method: 'GET', path: '/health/detailed' },
-  'models.list': { method: 'GET', path: '/v1/models' },
-  'sessions.list': { method: 'GET', path: '/api/sessions' },
-  'session.get': { method: 'GET', path: '/api/sessions/{sessionId}' },
-  'session.messages': { method: 'GET', path: '/api/sessions/{sessionId}/messages' },
-  'skills.list': { method: 'GET', path: '/v1/skills' },
-  'skills.status': { method: 'GET', path: '/v1/skills' },
-  'tools.list': { method: 'GET', path: '/v1/toolsets' },
-  'capabilities': { method: 'GET', path: '/v1/capabilities' },
-};

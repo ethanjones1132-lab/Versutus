@@ -14,6 +14,8 @@ import {
   normalizeOpenClawSession,
   toOpenClawWsUrl,
 } from '../src/lib/portal/openclaw-mapping';
+import { METHOD_TO_ROUTE, resolveRoute } from '../src/lib/gateway/rpc-routes';
+import { buildCapabilitySnapshot } from '../src/lib/gateway/dashboard';
 
 const servers: Server[] = [];
 let failures = 0;
@@ -187,6 +189,55 @@ async function main() {
     normalizeOpenClawModel({ model: 'deepseek-r1' })?.id === 'deepseek-r1',
     normalizeOpenClawModel({ model: 'deepseek-r1' }),
   );
+
+  console.log('\n[hermes rpc route map]');
+  const sessionMessages = resolveRoute('session.messages', { sessionId: 's-42', limit: 80 });
+  check(
+    'path placeholder interpolated + query built',
+    sessionMessages?.path === '/api/sessions/s-42/messages?limit=80',
+    sessionMessages?.path,
+  );
+  const sessionGet = resolveRoute('session.get', { sessionId: 's-7' });
+  check('session.get interpolated', sessionGet?.path === '/api/sessions/s-7', sessionGet?.path);
+  check(
+    'cron.list → jobs api',
+    resolveRoute('cron.list')?.path === '/api/jobs',
+    resolveRoute('cron.list')?.path,
+  );
+  check(
+    'model.options → rich inventory',
+    resolveRoute('model.options')?.path === '/api/model/options',
+    resolveRoute('model.options')?.path,
+  );
+  check(
+    'diagnostics.full → health/detailed',
+    resolveRoute('diagnostics.full')?.path === '/health/detailed',
+    resolveRoute('diagnostics.full')?.path,
+  );
+  check('unknown method → null', resolveRoute('config.patch') === null);
+  check('route count grew', Object.keys(METHOD_TO_ROUTE).length >= 17, Object.keys(METHOD_TO_ROUTE).length);
+
+  console.log('\n[capability snapshot with live features]');
+  const noFeatures = buildCapabilitySnapshot('connected', { type: 'hello-ok', protocol: 1, server: {} });
+  check('no scopes + no features → warming', noFeatures.status === 'warming', noFeatures.status);
+  const withFeatures = buildCapabilitySnapshot(
+    'connected',
+    { type: 'hello-ok', protocol: 1, server: {} },
+    undefined,
+    Date.now(),
+    {
+      object: 'hermes.api_server.capabilities',
+      platform: 'hermes-agent',
+      model: 'hermes-agent',
+      auth: { type: 'bearer', required: true },
+      runtime: { mode: 'agent', tool_execution: 'local', split_runtime: false, description: 'x' },
+      features: { chat_completions: true, responses_api: true, run_submission: true, run_stop: true },
+      endpoints: {},
+    },
+  );
+  const chatGroup = withFeatures.groups.find((group) => group.id === 'chat');
+  check('chat group ready from features', chatGroup?.status === 'ready', chatGroup);
+  check('overall fresh from features', withFeatures.status === 'fresh', withFeatures.status);
 
   console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
   process.exitCode = failures === 0 ? 0 : 1;

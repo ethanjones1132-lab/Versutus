@@ -11,6 +11,13 @@ function withOpenClawDiscovery(config) {
     if (!existing.includes(BONJOUR_SERVICE)) {
       config.modResults.NSBonjourServices = [...existing, BONJOUR_SERVICE];
     }
+    // Gateways are reached over plain HTTP on LAN/tailnet — ATS must allow it.
+    // (Private portal tool; scoped exceptions cannot cover wildcard ts.net hosts.)
+    config.modResults.NSAppTransportSecurity = {
+      ...(config.modResults.NSAppTransportSecurity ?? {}),
+      NSAllowsArbitraryLoads: true,
+      NSAllowsLocalNetworking: true,
+    };
     return config;
   });
 

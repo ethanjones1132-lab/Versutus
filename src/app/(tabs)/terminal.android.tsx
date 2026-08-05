@@ -86,7 +86,7 @@ export default function TerminalScreen() {
           appendOutput(`\n[exit ${code}]\n`);
           setTerminalConnected(false);
         },
-      });
+      }, activeGateway.token);
       sessionRef.current = session;
       setTerminalConnected(true);
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -114,7 +114,7 @@ export default function TerminalScreen() {
     const payload = input.endsWith('\n') ? input : `${input}\n`;
     setInput('');
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    await sendTerminalInput(gateway.url, session.sid, payload);
+    await sendTerminalInput(gateway.url, session.sid, payload, gateway.token);
   }, [activeGateway, input]);
 
   const runGatewayCommand = useCallback(

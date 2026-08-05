@@ -6,6 +6,7 @@ import { GatewayDiscoveryScanner } from '@/lib/discovery/scanner';
 import { buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/lib/gateway/candidates';
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
 import { createMessageId, extractMessageText, historyToChatMessages } from '@/lib/gateway/messages';
+import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { categorizeProbeError, probeGatewayCandidates, probeGatewayUrl, probeHighPriorityCandidates } from '@/lib/gateway/probe';
 import { isSlashCommandInput } from '@/lib/gateway/slash-commands';
 import { GATEWAY_COMMANDS } from '@/lib/gateway/dashboard';
@@ -32,7 +33,7 @@ import {
   loadTranscripts,
   updateTranscript,
 } from '@/lib/gateway/transcript';
-import type { CommandTranscriptEntry, GatewayCapabilitySnapshot } from '@/lib/gateway/types';
+import type { CommandTranscriptEntry, GatewayCapabilities, GatewayCapabilitySnapshot } from '@/lib/gateway/types';
 import { buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
 
 export type ConnectionPhase =
@@ -73,10 +74,12 @@ type GatewayContextValue = {
     tlsFingerprint?: string;
     sessionKey?: string;
     sessionId?: string;
+    agentId?: string;
     discoverySource?: GatewayProfile['discoverySource'];
   }) => Promise<GatewayProfile>;
   gatewayRequest: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
-  runAgentCommand: (command: string) => Promise<void>;
+  runAgentCommand: (command: string, options?: { onDelta?: (delta: string) => void }) => Promise<string>;
+  liveCapabilities: GatewayCapabilities | null;
   deleteGateway: (id: string) => Promise<void>;
   connectGateway: (gateway: GatewayProfile) => Promise<void>;
   disconnectGateway: () => void;
@@ -203,8 +206,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [isCommandRunning, setIsCommandRunning] = useState(false);
   const [runningCommandLabel, setRunningCommandLabel] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
-  const [deviceId] = useState<string | null>(null);
-  const [pairingDetails] = useState<PairingDetails | null>(null);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [pairingDetails, setPairingDetails] = useState<PairingDetails | null>(null);
+  const [liveCapabilities, setLiveCapabilities] = useState<GatewayCapabilities | null>(null);
   const [settings, setSettings] = useState<AppSettings>({ autoConnect: true, onboardingComplete: false });
   const settingsRef = useRef<AppSettings>({ autoConnect: true, onboardingComplete: false });
   useEffect(() => {
@@ -254,6 +258,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         const sessions = await client.getSessions(5);
         if (sessions.length > 0) {
           sessionId = sessions[0].id;
+        } else if (client.createSession) {
+          const created = await client.createSession();
+          sessionId = created.id;
         }
       }
 
@@ -345,6 +352,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         onHello: (hello) => {
           setActiveHello(hello as GatewayHelloOk);
         },
+        onPairingRequired: (details) => {
+          setPairingDetails(details as PairingDetails);
+        },
         onHealthCheck: (_healthy) => {
           void reloadHistoryFor(gateway);
         },
@@ -353,6 +363,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       clientRef.current = client;
       setConnectionPhase('connecting');
       await client.connect();
+      // Live capability catalog (Hermes /v1/capabilities, OpenClaw capabilities).
+      void client.getCapabilities().then(setLiveCapabilities).catch(() => undefined);
     },
     [reloadHistoryFor],
   );
@@ -394,6 +406,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         name: appSettings.pcName ?? discoveredMatch?.name ?? friendlyPcName(appSettings.tailscaleHost ?? 'Gateway'),
         url,
         token,
+        kind:
+          discoveredMatch && (discoveredMatch.kind === 'openclaw' || discoveredMatch.txt.transport === 'ws')
+            ? 'openclaw'
+            : undefined,
         discoverySource:
           url.includes('.ts.net') || url.startsWith('https://')
             ? 'tailscale'
@@ -427,6 +443,26 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
       try {
         const discovered = await discoverForProbe();
+
+        // Kind-flagged beacons (OpenClaw over WS) skip HTTP probing entirely.
+        const wsBeacon = discovered.find(
+          (gateway) => gateway.kind === 'openclaw' || gateway.txt.transport === 'ws',
+        );
+        if (wsBeacon) {
+          setProbeMessage(`Connecting to ${wsBeacon.name}…`);
+          const profile = createGatewayProfile({
+            name: wsBeacon.name,
+            url: wsBeacon.url,
+            kind: 'openclaw',
+            discoverySource: 'local',
+          });
+          const next = await upsertGateway(profile);
+          setGateways(next);
+          await saveAppSettings({ lastSuccessfulUrl: profile.url });
+          setSettings((prev) => ({ ...prev, lastSuccessfulUrl: profile.url }));
+          await connectGateway(profile);
+          return;
+        }
 
         if (activeId) {
           const saved = currentGateways.find((item) => item.id === activeId);
@@ -533,6 +569,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setSettings(loadedSettings);
       setGateways(loadedGateways);
 
+      // Device identity powers pairing/access requests — surface it once.
+      void loadOrCreateDeviceIdentity()
+        .then((identity) => setDeviceId(identity.deviceId))
+        .catch(() => undefined);
+
       const active = activeId ? (loadedGateways.find((item) => item.id === activeId) ?? null) : null;
       setActiveGateway(active);
 
@@ -572,9 +613,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [bootstrap]);
 
   useEffect(() => {
-    const snap = buildCapabilitySnapshot(status, activeHello);
+    const snap = buildCapabilitySnapshot(status, activeHello, GATEWAY_COMMANDS, Date.now(), liveCapabilities);
     setCapabilitySnapshot(snap);
-  }, [status, activeHello]);
+  }, [status, activeHello, liveCapabilities]);
 
   const addGateway = useCallback(
     async (input: {
@@ -586,6 +627,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       tlsFingerprint?: string;
       sessionKey?: string;
       sessionId?: string;
+      agentId?: string;
       discoverySource?: GatewayProfile['discoverySource'];
     }) => {
       const profile = createGatewayProfile(input);
@@ -606,7 +648,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   );
 
   const runAgentCommand = useCallback(
-    async (command: string) => {
+    async (command: string, options?: { onDelta?: (delta: string) => void }) => {
       const gateway = activeGateway;
       const client = clientRef.current;
       const trimmed = command.trim();
@@ -614,14 +656,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Connect to a gateway first');
       }
 
-      // Use the streaming chat endpoint
+      // Use the streaming chat endpoint; surface deltas when asked.
       const runId = createMessageId('cmd');
       activeRunIdRef.current = runId;
 
+      let fullText = '';
       const messages = [{ role: 'user', content: trimmed }];
-      await client.streamChat(messages, () => {}, {
-        sessionId: sessionIdRef.current,
-      });
+      await client.streamChat(
+        messages,
+        (delta) => {
+          fullText += delta;
+          options?.onDelta?.(delta);
+        },
+        {
+          sessionId: sessionIdRef.current,
+          model: gateway.model,
+        },
+      );
+      return fullText;
     },
     [activeGateway, status],
   );
@@ -745,10 +797,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }]);
 
       try {
-        // Build conversation context from existing messages
+        // Build bounded conversation context: last 20 real turns, no command payloads.
         const conversationMessages = [
           ...messages
-            .filter((m) => m.role === 'user' || m.role === 'assistant')
+            .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.command && m.text.trim())
+            .slice(-20)
             .map((m) => ({ role: m.role, content: m.text })),
           { role: 'user', content: trimmed },
         ];
@@ -773,6 +826,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           },
           {
             sessionId: sessionIdRef.current,
+            model: gateway.model,
             signal: abortController.signal,
           },
         );
@@ -864,12 +918,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         const client = clientRef.current;
         if (!client || status !== 'connected') throw new Error('Gateway not connected');
 
-        // Execute gateway slash command
+        // Execute gateway slash command — stream agent-transport output live.
+        let streamedText = '';
         const { executeGatewaySlashCommand } = await import('@/lib/gateway/slash-commands');
         const response = await executeGatewaySlashCommand(trimmed, {
           hello: activeHello,
           gatewayRequest,
           runAgentCommand,
+          onAgentDelta: (delta) => {
+            streamedText += delta;
+            updateLocalMessage(commandMessageId, {
+              text: streamedText,
+              command: { input: trimmed, title: commandLabel, status: 'running', ephemeral: true },
+            });
+          },
         });
         const duration = Date.now() - commandStartTimeRef.current;
         updateLocalMessage(commandMessageId, {
@@ -956,20 +1018,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setIsSending(false);
     activeRunIdRef.current = null;
 
-    // Abort the fetch controller
+    // Abort the fetch controller — this stops the local stream; the adapter
+    // (OpenClaw) additionally issues session.abort via the signal listener.
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
-    }
-
-    // Stop any run if we have a run ID
-    const client = clientRef.current;
-    if (client && activeRunIdRef.current) {
-      try {
-        await client.stopRun(activeRunIdRef.current);
-      } catch {
-        // best-effort
-      }
     }
 
     // Remove streaming placeholders
@@ -1105,13 +1158,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const client = clientRef.current;
       if (client && status === 'connected') {
         await client.healthCheck();
+        void client.getCapabilities().then(setLiveCapabilities).catch(() => undefined);
       }
-      const snap = buildCapabilitySnapshot(status, activeHello);
+      const snap = buildCapabilitySnapshot(status, activeHello, GATEWAY_COMMANDS, Date.now(), liveCapabilities);
       setCapabilitySnapshot({ ...snap, checkedAt: Date.now() });
     } catch {
       // ignore
     }
-  }, [activeGateway, status, activeHello]);
+  }, [activeGateway, status, activeHello, liveCapabilities]);
 
   const confirmPendingAction = useCallback(() => {
     if (!pendingConfirmation || !activeGateway) {
@@ -1130,10 +1184,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setPendingConfirmation(null);
   }, []);
 
-  const selectModel = useCallback((modelId: string) => {
-    closeModelPicker();
-    void sendMessage(`/model set ${modelId}`);
-  }, [closeModelPicker, sendMessage]);
+  const selectModel = useCallback(
+    (modelId: string) => {
+      closeModelPicker();
+      if (activeGateway?.kind === 'openclaw') {
+        // OpenClaw: model is gateway config — run the config command.
+        void sendChatInput(`/model set ${modelId}`);
+        return;
+      }
+      // Hermes: per-request model override (API server honors model per request).
+      if (!activeGateway) return;
+      const updated = { ...activeGateway, model: modelId };
+      setActiveGateway(updated);
+      void upsertGateway(updated).then(setGateways);
+    },
+    [activeGateway, closeModelPicker, sendChatInput],
+  );
 
   const selectSession = useCallback((sessionId: string) => {
     closeSessionSelector();
@@ -1174,6 +1240,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       reloadHistory,
       gatewayRequest,
       runAgentCommand,
+      liveCapabilities,
       setupFromPcAddress,
       retryAutoConnect,
       completeOnboarding,
@@ -1208,6 +1275,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       modelPicker, openModelPicker, closeModelPicker, selectModel, modelCatalog, sessionSelector,
       openSessionSelector, closeSessionSelector, selectSession, sessionList, currentSessionId,
+      liveCapabilities,
     ],
   );
 

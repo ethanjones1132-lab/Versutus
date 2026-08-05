@@ -1,5 +1,3 @@
-import { Platform } from 'react-native';
-
 import { httpToWsBase } from '@/lib/gateway/url';
 
 export type TerminalSession = {
@@ -65,9 +63,16 @@ function handleSseEvent(
   handlers.onOutput(decodeBase64Utf8(evt.data));
 }
 
+function authHeaders(token?: string): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return headers;
+}
+
 export async function openTerminalSession(
   gatewayWsUrl: string,
   handlers: TerminalHandlers,
+  token?: string,
 ): Promise<TerminalSession> {
   const httpBase = httpToWsBase(gatewayWsUrl).replace(/^wss:/, "https://").replace(/^ws:/, "http://");
   const streamUrl = `${httpBase}/better-gateway/terminal/stream`;
@@ -76,39 +81,11 @@ export async function openTerminalSession(
     sid = value;
   };
 
-  if (Platform.OS === 'web') {
-    const source = new EventSource(streamUrl);
-
-    source.addEventListener('session', (event) => {
-      handleSseEvent({ event: 'session', data: (event as MessageEvent).data }, handlers, setSid);
-    });
-    source.addEventListener('error', (event) => {
-      if (event instanceof MessageEvent) {
-        handleSseEvent({ event: 'error', data: event.data }, handlers, setSid);
-      } else {
-        handlers.onError('Terminal stream disconnected');
-      }
-    });
-    source.addEventListener('exit', (event) => {
-      handleSseEvent({ event: 'exit', data: (event as MessageEvent).data }, handlers, setSid);
-    });
-    source.onmessage = (event) => {
-      handleSseEvent({ data: event.data }, handlers, setSid);
-    };
-
-    for (let i = 0; i < 50 && !sid; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    if (!sid) throw new Error('Terminal session id not received');
-
-    return {
-      sid,
-      close: () => source.close(),
-    };
-  }
-
   const controller = new AbortController();
-  const response = await fetch(streamUrl, { signal: controller.signal });
+  const response = await fetch(streamUrl, {
+    headers: authHeaders(token),
+    signal: controller.signal,
+  });
   if (!response.ok) throw new Error(`Terminal stream failed (${response.status})`);
 
   const reader = response.body?.getReader();
@@ -155,11 +132,16 @@ export async function openTerminalSession(
   };
 }
 
-export async function sendTerminalInput(gatewayWsUrl: string, sid: string, data: string): Promise<void> {
+export async function sendTerminalInput(
+  gatewayWsUrl: string,
+  sid: string,
+  data: string,
+  token?: string,
+): Promise<void> {
   const httpBase = httpToWsBase(gatewayWsUrl).replace(/^wss:/, "https://").replace(/^ws:/, "http://");
   const response = await fetch(`${httpBase}/better-gateway/terminal/input`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(token),
     body: JSON.stringify({ sid, data }),
   });
   if (!response.ok) throw new Error(`Terminal input failed (${response.status})`);
@@ -170,11 +152,12 @@ export async function resizeTerminal(
   sid: string,
   cols: number,
   rows: number,
+  token?: string,
 ): Promise<void> {
   const httpBase = httpToWsBase(gatewayWsUrl).replace(/^wss:/, "https://").replace(/^ws:/, "http://");
   await fetch(`${httpBase}/better-gateway/terminal/resize`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(token),
     body: JSON.stringify({ sid, cols, rows }),
   });
 }

@@ -7,6 +7,7 @@ import { HermesGatewayClient, type GatewayClientCallbacks } from '@/lib/gateway/
 import { OpenClawAdapterClient } from '@/lib/portal/openclaw-adapter';
 import type {
   ConnectionStatus,
+  GatewayCapabilities,
   GatewayKind,
   GatewayProfile,
   HealthResponse,
@@ -32,7 +33,9 @@ export interface PortalClient {
     options?: { model?: string; sessionId?: string; signal?: AbortSignal },
   ): Promise<string>;
   getModels(): Promise<ModelInfo[]>;
+  getCapabilities(): Promise<GatewayCapabilities>;
   getSessions(limit?: number): Promise<HermesSession[]>;
+  createSession?(title?: string): Promise<HermesSession>;
   getSessionMessages(sessionId: string, limit?: number): Promise<SessionMessage[]>;
   stopRun(runId: string): Promise<void>;
 }

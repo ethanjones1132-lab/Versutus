@@ -723,13 +723,23 @@ export function buildCapabilityGroups(
 }
 
 // Phase 2: Live Capability Snapshot
+// Feature keys advertised by Hermes /v1/capabilities that map onto
+// dashboard groups (authoritative when the hello carries no scopes).
+const FEATURE_GROUP_MAP: Record<string, string> = {
+  chat: 'chat_completions',
+  agent: 'run_submission',
+  approvals: 'run_approval',
+};
+
 export function buildCapabilitySnapshot(
   status: ConnectionStatus,
   hello: GatewayHelloOk | null,
   commands: GatewayCommand[] = GATEWAY_COMMANDS,
   lastProbeAt: number = Date.now(),
+  capabilities: import('@/lib/gateway/types').GatewayCapabilities | null = null,
 ): import('@/lib/gateway/types').GatewayCapabilitySnapshot {
   const scopes = hello?.auth?.scopes ?? [];
+  const features = capabilities?.features ?? null;
   const connected = status === 'connected';
   const now = Date.now();
   const isStale = now - lastProbeAt > 30000; // 30s stale threshold
@@ -760,6 +770,8 @@ export function buildCapabilitySnapshot(
 
   if (!connected) {
     overallStatus = 'offline';
+  } else if (features) {
+    overallStatus = isStale ? 'stale' : 'fresh';
   } else if (scopes.length === 0) {
     overallStatus = 'warming';
   } else {
@@ -780,6 +792,10 @@ export function buildCapabilitySnapshot(
 
     if (!connected) {
       gstatus = 'offline';
+    } else if (features && FEATURE_GROUP_MAP[group.id]) {
+      // Authoritative feature signal from the gateway's live catalog.
+      const enabled = features[FEATURE_GROUP_MAP[group.id]] === true;
+      gstatus = enabled ? 'ready' : 'unsupported';
     } else if (scopes.length === 0) {
       gstatus = 'warming';
     } else {

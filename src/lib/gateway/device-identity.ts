@@ -9,7 +9,7 @@ export type StoredDeviceIdentity = {
   privateKeyB64Url: string;
   createdAtMs: number;
 };
-import { keyValueStorage } from '@/lib/storage/key-value';
+import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
 
 const DEVICE_IDENTITY_KEY = 'versutus:device-identity';
 
@@ -45,7 +45,7 @@ async function createIdentity(): Promise<StoredDeviceIdentity> {
 }
 
 export async function loadOrCreateDeviceIdentity(): Promise<StoredDeviceIdentity> {
-  const raw = await keyValueStorage.getItem(DEVICE_IDENTITY_KEY);
+  const raw = await secureKeyValueStorage.getItem(DEVICE_IDENTITY_KEY);
   if (raw) {
     try {
       const parsed = JSON.parse(raw) as StoredDeviceIdentity;
@@ -66,7 +66,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<StoredDeviceIdentity
         if (matches) {
           if (derivedId !== parsed.deviceId) {
             const repaired = { ...parsed, deviceId: derivedId };
-            await keyValueStorage.setItem(DEVICE_IDENTITY_KEY, JSON.stringify(repaired));
+            await secureKeyValueStorage.setItem(DEVICE_IDENTITY_KEY, JSON.stringify(repaired));
             return repaired;
           }
           return parsed;
@@ -78,7 +78,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<StoredDeviceIdentity
   }
 
   const identity = await createIdentity();
-  await keyValueStorage.setItem(DEVICE_IDENTITY_KEY, JSON.stringify(identity));
+  await secureKeyValueStorage.setItem(DEVICE_IDENTITY_KEY, JSON.stringify(identity));
   return identity;
 }
 

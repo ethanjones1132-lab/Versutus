@@ -25,7 +25,12 @@ export type SlashCommandResult = {
 type SlashCommandContext = {
   hello: GatewayHelloOk | null;
   gatewayRequest: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
-  runAgentCommand: (command: string) => Promise<void>;
+  runAgentCommand: (
+    command: string,
+    options?: { onDelta?: (delta: string) => void },
+  ) => Promise<string>;
+  /** Stream agent-command output into the running command bubble. */
+  onAgentDelta?: (delta: string) => void;
 };
 
 type ConfigSnapshot = {
@@ -271,8 +276,10 @@ async function runCommand(
   }
 
   if (command.transport === 'agent') {
-    await context.runAgentCommand(command.agentCommand ?? command.label);
-    return textResult(summarizeCommandResult(command, {}), command.slash ?? command.label);
+    const text = await context.runAgentCommand(command.agentCommand ?? command.label, {
+      onDelta: context.onAgentDelta,
+    });
+    return textResult(text || summarizeCommandResult(command, {}), command.slash ?? command.label);
   }
 
   if (!command.method) return textResult(`${command.label}: missing RPC method`, command.slash ?? command.label);

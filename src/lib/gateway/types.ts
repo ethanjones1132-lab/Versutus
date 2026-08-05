@@ -25,6 +25,10 @@ export type GatewayProfile = {
   sessionKey?: string;
   /** Optional session ID for continuity */
   sessionId?: string;
+  /** Target agent on the gateway (OpenClaw chat.send targeting) */
+  agentId?: string;
+  /** Per-request model override (Hermes-native model selection) */
+  model?: string;
   createdAt: number;
   discoverySource?: 'local' | 'wide-area' | 'manual' | 'tailscale' | 'relay' | 'deep-link';
 };

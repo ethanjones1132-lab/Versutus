@@ -1,5 +1,5 @@
 import { normalizeGatewayUrl } from '@/lib/gateway/url';
-import { keyValueStorage } from '@/lib/storage/key-value';
+import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
 
 import type { GatewayProfile } from '@/lib/gateway/types';
 
@@ -7,7 +7,7 @@ const GATEWAYS_KEY = 'versutus:gateways';
 const ACTIVE_GATEWAY_KEY = 'versutus:active-gateway';
 
 export async function loadGateways(): Promise<GatewayProfile[]> {
-  const raw = await keyValueStorage.getItem(GATEWAYS_KEY);
+  const raw = await secureKeyValueStorage.getItem(GATEWAYS_KEY);
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as GatewayProfile[];
@@ -18,7 +18,7 @@ export async function loadGateways(): Promise<GatewayProfile[]> {
 }
 
 export async function saveGateways(gateways: GatewayProfile[]): Promise<void> {
-  await keyValueStorage.setItem(GATEWAYS_KEY, JSON.stringify(gateways));
+  await secureKeyValueStorage.setItem(GATEWAYS_KEY, JSON.stringify(gateways));
 }
 
 export async function upsertGateway(gateway: GatewayProfile): Promise<GatewayProfile[]> {
@@ -37,15 +37,15 @@ export async function removeGateway(id: string): Promise<GatewayProfile[]> {
 }
 
 export async function loadActiveGatewayId(): Promise<string | null> {
-  return keyValueStorage.getItem(ACTIVE_GATEWAY_KEY);
+  return secureKeyValueStorage.getItem(ACTIVE_GATEWAY_KEY);
 }
 
 export async function saveActiveGatewayId(id: string | null): Promise<void> {
   if (!id) {
-    await keyValueStorage.removeItem(ACTIVE_GATEWAY_KEY);
+    await secureKeyValueStorage.removeItem(ACTIVE_GATEWAY_KEY);
     return;
   }
-  await keyValueStorage.setItem(ACTIVE_GATEWAY_KEY, id);
+  await secureKeyValueStorage.setItem(ACTIVE_GATEWAY_KEY, id);
 }
 
 export { normalizeGatewayUrl } from '@/lib/gateway/url';
@@ -75,6 +75,7 @@ export function createGatewayProfile(input: {
     createdAt: Date.now(),
     sessionKey: input.sessionKey?.trim(),
     sessionId: input.sessionId?.trim(),
+    agentId: input.agentId?.trim() || undefined,
     discoverySource,
   };
 }

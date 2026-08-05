@@ -13,6 +13,7 @@ import {
 } from '@/lib/portal/openclaw-mapping';
 import type {
   ConnectionStatus,
+  GatewayCapabilities,
   GatewayProfile,
   HealthResponse,
   HermesSession,
@@ -27,17 +28,21 @@ type PendingChat = {
   reject: (error: Error) => void;
   fullText: string;
   sessionId?: string;
+  runId?: string;
+  detach?: () => void;
 };
 
 export class OpenClawAdapterClient implements PortalClient {
   private readonly inner: OpenClawGatewayClient;
   private readonly sessionKey?: string;
+  private readonly agentId?: string;
   private pendingChat: PendingChat | null = null;
   private helloVersion?: string;
   private currentSessionId?: string;
 
   constructor(profile: GatewayProfile, callbacks: PortalClientCallbacks = {}) {
     this.sessionKey = profile.sessionKey;
+    this.agentId = profile.agentId;
     this.currentSessionId = profile.sessionId;
     this.inner = new OpenClawGatewayClient(
       { ...profile, url: toOpenClawWsUrl(profile.url) },
@@ -116,6 +121,22 @@ export class OpenClawAdapterClient implements PortalClient {
     }
   }
 
+  async getCapabilities(): Promise<GatewayCapabilities> {
+    const result = (await this.inner.request<unknown>('capabilities')) as
+      | GatewayCapabilities
+      | null
+      | undefined;
+    if (result) return result;
+    throw new Error('Gateway did not return capabilities');
+  }
+
+  async createSession(title?: string): Promise<HermesSession> {
+    const result = await this.inner.request<unknown>('sessions.create', title ? { title } : {});
+    const session = normalizeOpenClawSession(result);
+    if (!session) throw new Error('Gateway did not return the created session');
+    return session;
+  }
+
   async getSessionMessages(sessionId: string, limit = 50): Promise<SessionMessage[]> {
     try {
       const result = (await this.inner.request<unknown>('session.messages', { sessionId, limit })) as unknown[];
@@ -154,11 +175,14 @@ export class OpenClawAdapterClient implements PortalClient {
         void this.abortChat(sessionId);
         reject(new Error('Chat aborted'));
       };
+      const detach = () => options?.signal?.removeEventListener('abort', onAbort);
       options?.signal?.addEventListener('abort', onAbort, { once: true });
+      pending.detach = detach;
 
       void this.inner
         .request('chat.send', {
           sessionKey: this.sessionKey,
+          agentId: this.agentId,
           sessionId,
           message: text,
           idempotencyKey: `run-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
@@ -166,7 +190,7 @@ export class OpenClawAdapterClient implements PortalClient {
         })
         .catch((error: unknown) => {
           if (this.pendingChat === pending) this.pendingChat = null;
-          options?.signal?.removeEventListener('abort', onAbort);
+          detach();
           reject(error instanceof Error ? error : new Error(String(error)));
         });
     });
@@ -177,24 +201,37 @@ export class OpenClawAdapterClient implements PortalClient {
     await this.abortChat(this.currentSessionId);
   }
 
-  private handleChatEvent(payload: { deltaText?: string; text?: string; state?: string; error?: string }) {
+  private handleChatEvent(payload: {
+    deltaText?: string;
+    text?: string;
+    state?: string;
+    errorMessage?: string;
+    error?: string;
+    runId?: string;
+    message?: { content?: unknown };
+  }) {
     const pending = this.pendingChat;
     if (!pending) return;
+    // OpenClaw correlates events by runId; ignore stragglers from prior runs.
+    if (payload.runId && pending.runId && payload.runId !== pending.runId) return;
 
-    if (payload.state === 'delta' && payload.deltaText) {
-      pending.fullText += payload.deltaText;
-      pending.onDelta(payload.deltaText);
+    const chunk = payload.deltaText ?? extractMessageText(payload.message?.content);
+    if (payload.state === 'delta' && chunk) {
+      pending.fullText += chunk;
+      pending.onDelta(chunk);
       return;
     }
-    if (payload.state === 'final' || (payload.text && payload.state === undefined)) {
+    if (payload.state === 'final') {
       this.pendingChat = null;
-      const full = pending.fullText || payload.text || '';
+      pending.detach?.();
+      const full = pending.fullText || chunk || '';
       pending.resolve(full);
       return;
     }
     if (payload.state === 'error') {
       this.pendingChat = null;
-      pending.reject(new Error(payload.error ?? 'Chat failed on gateway'));
+      pending.detach?.();
+      pending.reject(new Error(payload.errorMessage ?? payload.error ?? 'Chat failed on gateway'));
     }
   }
 

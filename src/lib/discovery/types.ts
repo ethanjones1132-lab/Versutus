@@ -7,6 +7,8 @@ export type DiscoveredGateway = {
   tlsFingerprint?: string;
   tailnetDns?: string;
   transport?: string;
+  /** Gateway kind advertised in the beacon TXT (hermes/openclaw/custom). */
+  kind?: string;
   source: 'local' | 'wide-area' | 'manual';
   txt: Record<string, string>;
   lastSeenAt: number;

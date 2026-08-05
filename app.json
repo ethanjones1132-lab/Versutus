@@ -28,6 +28,14 @@
       "expo-router",
       "./plugins/with-openclaw-discovery.js",
       [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#08080A",

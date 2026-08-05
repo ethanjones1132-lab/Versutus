@@ -131,8 +131,9 @@ Provider dispatch (`gateway-provider.tsx` picks the client by `profile.kind`) is
   - `src/lib/portal/adapters.ts` — kind → client registry
   - `src/lib/gateway/openclaw-client.ts` + `openclaw-types.ts` — WS v4 client salvaged from git HEAD (was being deleted by the Hermes-HTTP migration)
   - `GatewayProfile.kind` persistence; add-gateway flow identifies before saving, requests access, shows the identified kind
-- [ ] **Phase B: Provider dispatch + unified connect**
-  - `attachClient` selects adapter by `profile.kind`; OpenClaw compat shim (chat via WS events) so openclaw/custom profiles connect end-to-end; pairing sheet wired for `pending-approval`
+- [x] **Phase B: Provider dispatch + unified connect**
+  - `attachClient` selects adapter by `profile.kind` (`createClientForKind`); OpenClaw adapter (`openclaw-adapter.ts`) presents the Hermes-shaped `PortalClient` surface; chat streams via the verified OpenClaw event dialect; auto-connect connects kind-flagged WS beacons directly
+  - 2026-08-05 audit pass landed alongside: cleartext/ATS build config, SecureStore for secrets, live capability catalog, per-request model override, terminal auth, agentId targeting, session creation, bounded context, pairing wiring
 - [ ] **Phase C: Remote enablers**
   - Push notifications (expo-notifications): run-complete, approval-requested, gateway-down
   - Run-approval native sheet (`resolveApproval` already client-ready)

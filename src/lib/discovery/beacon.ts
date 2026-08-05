@@ -56,6 +56,7 @@ export function beaconFromZeroconfService(
     tlsFingerprint,
     tailnetDns: txt.tailnetDns,
     transport: txt.transport,
+    kind: txt.kind ?? txt.gatewayKind,
     source,
     txt,
     lastSeenAt: Date.now(),

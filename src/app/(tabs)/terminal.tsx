@@ -76,7 +76,7 @@ export default function TerminalScreen() {
           appendOutput(`\n[exit ${code}]\n`);
           setTerminalConnected(false);
         },
-      });
+      }, activeGateway.token);
       sessionRef.current = session;
       setTerminalConnected(true);
     } catch (error) {
@@ -100,7 +100,7 @@ export default function TerminalScreen() {
     if (!session || !gateway || !input) return;
     const payload = input.endsWith('\n') ? input : `${input}\n`;
     setInput('');
-    await sendTerminalInput(gateway.url, session.sid, payload);
+    await sendTerminalInput(gateway.url, session.sid, payload, gateway.token);
   }, [activeGateway, input]);
 
   const runGatewayCommand = useCallback(

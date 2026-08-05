@@ -110,18 +110,18 @@ export async function identifyGateway(options: IdentifyGatewayOptions): Promise<
     if (manifest) return identityFromManifest(manifest, baseUrl);
   }
 
-  const remaining = Math.max(1500, timeoutMs - (Date.now() - started));
+  const remaining = () => Math.max(1500, timeoutMs - (Date.now() - started));
 
   // 3. Hermes fingerprint: /health + /v1/capabilities.
-  const hermes = await probeHermes(baseUrl, Math.min(5000, remaining));
+  const hermes = await probeHermes(baseUrl, Math.min(5000, remaining()));
   if (hermes) return hermes;
 
   // 4. OpenClaw fingerprint: bounded WS probe expecting connect.challenge.
-  const openclaw = await probeOpenClaw(baseUrl, Math.min(6000, remaining));
+  const openclaw = await probeOpenClaw(baseUrl, Math.min(6000, remaining()));
   if (openclaw) return openclaw;
 
   // 5. Unknown — but record whether HTTP answers at all.
-  const httpAlive = await probeHttpAlive(baseUrl, 3000);
+  const httpAlive = await probeHttpAlive(baseUrl, Math.min(3000, remaining()));
   return {
     kind: 'unknown',
     kindLabel: 'Unknown gateway',
