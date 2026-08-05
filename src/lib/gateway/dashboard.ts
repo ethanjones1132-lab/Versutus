@@ -796,6 +796,9 @@ export function buildCapabilitySnapshot(
       // Authoritative feature signal from the gateway's live catalog.
       const enabled = features[FEATURE_GROUP_MAP[group.id]] === true;
       gstatus = enabled ? 'ready' : 'unsupported';
+    } else if (group.id === 'sessions' && capabilities?.endpoints && Object.keys(capabilities.endpoints).some((key) => key.startsWith('session_'))) {
+      // Sessions API advertised via endpoints.session_* entries.
+      gstatus = 'ready';
     } else if (scopes.length === 0) {
       gstatus = 'warming';
     } else {

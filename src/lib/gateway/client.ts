@@ -1,6 +1,6 @@
 import { Platform } from 'react-native';
 
-import { METHOD_TO_ROUTE, resolveRoute } from '@/lib/gateway/rpc-routes';
+import { METHOD_GUIDANCE, METHOD_TO_ROUTE, resolveRoute } from '@/lib/gateway/rpc-routes';
 
 import type {
   ChatCompletionResponse,
@@ -467,9 +467,11 @@ export class HermesGatewayClient {
     const resolved = resolveRoute(method, params);
     if (!resolved) {
       const supported = Object.keys(METHOD_TO_ROUTE).length;
+      const guidance = METHOD_GUIDANCE[method];
       throw new Error(
         `${method} is not supported by this gateway. ` +
-          `The Hermes API server exposes ${supported} RPC-compatible methods.`,
+          `The Hermes API server exposes ${supported} RPC-compatible methods.` +
+          (guidance ? ` ${guidance}` : ''),
       );
     }
     const { route, path, body } = resolved;

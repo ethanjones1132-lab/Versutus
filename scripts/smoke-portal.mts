@@ -14,7 +14,7 @@ import {
   normalizeOpenClawSession,
   toOpenClawWsUrl,
 } from '../src/lib/portal/openclaw-mapping';
-import { METHOD_TO_ROUTE, resolveRoute } from '../src/lib/gateway/rpc-routes';
+import { METHOD_GUIDANCE, METHOD_TO_ROUTE, resolveRoute } from '../src/lib/gateway/rpc-routes';
 import { buildCapabilitySnapshot } from '../src/lib/gateway/dashboard';
 
 const servers: Server[] = [];
@@ -215,7 +215,39 @@ async function main() {
     resolveRoute('diagnostics.full')?.path,
   );
   check('unknown method → null', resolveRoute('config.patch') === null);
-  check('route count grew', Object.keys(METHOD_TO_ROUTE).length >= 17, Object.keys(METHOD_TO_ROUTE).length);
+  check('route count grew', Object.keys(METHOD_TO_ROUTE).length >= 23, Object.keys(METHOD_TO_ROUTE).length);
+  check(
+    'session.fork route',
+    resolveRoute('session.fork', { sessionId: 's-1' })?.path === '/api/sessions/s-1/fork',
+    resolveRoute('session.fork', { sessionId: 's-1' })?.path,
+  );
+  const jobsRun = resolveRoute('jobs.run', { jobId: 'j-9' });
+  check(
+    'jobs.run route + body-less POST',
+    jobsRun?.route.method === 'POST' && jobsRun?.path === '/api/jobs/j-9/run',
+    jobsRun,
+  );
+  check(
+    'responses.get route',
+    resolveRoute('responses.get', { responseId: 'resp-1' })?.path === '/v1/responses/resp-1',
+    resolveRoute('responses.get', { responseId: 'resp-1' })?.path,
+  );
+  check(
+    'guidance present for config.get',
+    (METHOD_GUIDANCE['config.get'] ?? '').includes('config.yaml'),
+    METHOD_GUIDANCE['config.get'],
+  );
+  check(
+    'guidance present for channels.status',
+    (METHOD_GUIDANCE['channels.status'] ?? '').includes('no remote channel admin'),
+    METHOD_GUIDANCE['channels.status'],
+  );
+  check(
+    'guidance present for session.abort',
+    (METHOD_GUIDANCE['session.abort'] ?? '').includes('stop button'),
+    METHOD_GUIDANCE['session.abort'],
+  );
+  check('guidance covers every unmapped registry method', Object.keys(METHOD_GUIDANCE).length >= 40, Object.keys(METHOD_GUIDANCE).length);
 
   console.log('\n[capability snapshot with live features]');
   const noFeatures = buildCapabilitySnapshot('connected', { type: 'hello-ok', protocol: 1, server: {} });
@@ -238,6 +270,23 @@ async function main() {
   const chatGroup = withFeatures.groups.find((group) => group.id === 'chat');
   check('chat group ready from features', chatGroup?.status === 'ready', chatGroup);
   check('overall fresh from features', withFeatures.status === 'fresh', withFeatures.status);
+  const withSessionsEndpoint = buildCapabilitySnapshot(
+    'connected',
+    { type: 'hello-ok', protocol: 1, server: {} },
+    undefined,
+    Date.now(),
+    {
+      object: 'hermes.api_server.capabilities',
+      platform: 'hermes-agent',
+      model: 'hermes-agent',
+      auth: { type: 'bearer', required: true },
+      runtime: { mode: 'agent', tool_execution: 'local', split_runtime: false, description: 'x' },
+      features: {},
+      endpoints: { session_chat_stream: { method: 'POST', path: '/api/sessions/{id}/chat/stream' } },
+    },
+  );
+  const sessionsGroup = withSessionsEndpoint.groups.find((group) => group.id === 'sessions');
+  check('sessions group ready from endpoints.session_*', sessionsGroup?.status === 'ready', sessionsGroup);
 
   console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
   process.exitCode = failures === 0 ? 0 : 1;
