@@ -1,5 +1,4 @@
 import * as Haptics from 'expo-haptics';
-import { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/ui';
@@ -19,15 +18,9 @@ export function CommandLogSheet({
   onClose: () => void;
 }) {
   const tokens = useTokens();
-  const [mounted, setMounted] = useState(visible);
-
-  useEffect(() => {
-    if (visible) setMounted(true);
-  }, [visible]);
 
   const handleClose = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setMounted(false);
     onClose();
   };
 
@@ -35,11 +28,10 @@ export function CommandLogSheet({
 
   return (
     <Modal
-      visible={mounted}
+      visible={visible}
       transparent
       animationType="slide"
       onRequestClose={() => {
-        setMounted(false);
         onClose();
       }}>
       <View style={styles.backdrop}>
@@ -79,7 +71,11 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.45)',
   },
   backdropTouch: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
   sheet: {
     borderTopLeftRadius: Radius.xl,
