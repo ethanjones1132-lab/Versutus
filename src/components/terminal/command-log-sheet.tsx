@@ -1,16 +1,13 @@
 import * as Haptics from 'expo-haptics';
-import {
-  BottomSheet,
-  BottomSheetScrollView,
-  BottomSheetView,
-  type BottomSheetMethods,
-} from '@expo/ui/community/bottom-sheet';
-import { useEffect, useRef } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
+
+// Pure-RN bottom sheet (Modal) — replaces the @expo/ui native bottom
+// sheet, which crashed native builds under the New Architecture.
 
 export function CommandLogSheet({
   visible,
@@ -22,64 +19,76 @@ export function CommandLogSheet({
   onClose: () => void;
 }) {
   const tokens = useTokens();
-  const sheetRef = useRef<BottomSheetMethods>(null);
+  const [mounted, setMounted] = useState(visible);
 
   useEffect(() => {
-    if (visible && log) {
-      sheetRef.current?.present();
-      return;
-    }
-    sheetRef.current?.dismiss();
-  }, [log, visible]);
+    if (visible) setMounted(true);
+  }, [visible]);
 
   const handleClose = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setMounted(false);
     onClose();
   };
 
   if (!log) return null;
 
   return (
-    <BottomSheet
-      ref={sheetRef}
-      index={0}
-      snapPoints={['35%', '70%']}
-      enablePanDownToClose
-      onClose={handleClose}
-      backgroundStyle={[
-        styles.sheetBackground,
-        {
-          backgroundColor: tokens.backgroundElevated,
-        },
-      ]}
-      handleIndicatorStyle={{ backgroundColor: tokens.borderStrong }}>
-      <BottomSheetView style={styles.sheetContent}>
-        <View style={styles.header}>
-          <Text variant="caption" color="secondary">Command output</Text>
-          <Pressable onPress={handleClose} hitSlop={12}>
-            <Text variant="caption" color="tertiary">Dismiss</Text>
-          </Pressable>
+    <Modal
+      visible={mounted}
+      transparent
+      animationType="slide"
+      onRequestClose={() => {
+        setMounted(false);
+        onClose();
+      }}>
+      <View style={styles.backdrop}>
+        <Pressable style={styles.backdropTouch} onPress={() => void handleClose()} />
+        <View
+          style={[
+            styles.sheet,
+            {
+              backgroundColor: tokens.backgroundElevated,
+            },
+          ]}>
+          <View style={styles.header}>
+            <Text variant="caption" color="secondary">
+              Command output
+            </Text>
+            <Pressable onPress={() => void handleClose()} hitSlop={12}>
+              <Text variant="caption" color="tertiary">
+                Dismiss
+              </Text>
+            </Pressable>
+          </View>
+          <ScrollView contentContainerStyle={styles.logScroll}>
+            <Text variant="mono" style={styles.logText}>
+              {log}
+            </Text>
+          </ScrollView>
         </View>
-        <BottomSheetScrollView contentContainerStyle={styles.logScroll}>
-          <Text variant="mono" style={styles.logText}>
-            {log}
-          </Text>
-        </BottomSheetScrollView>
-      </BottomSheetView>
-    </BottomSheet>
+      </View>
+    </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  sheetBackground: {
+  backdrop: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+  },
+  backdropTouch: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  sheet: {
     borderTopLeftRadius: Radius.xl,
     borderTopRightRadius: Radius.xl,
-  },
-  sheetContent: {
-    flex: 1,
     paddingHorizontal: Spacing.four,
     paddingBottom: Spacing.four,
+    paddingTop: Spacing.two,
     gap: Spacing.two,
+    maxHeight: '75%',
   },
   header: {
     flexDirection: 'row',
