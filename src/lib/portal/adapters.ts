@@ -38,6 +38,10 @@ export interface PortalClient {
   createSession?(title?: string): Promise<HermesSession>;
   getSessionMessages(sessionId: string, limit?: number): Promise<SessionMessage[]>;
   stopRun(runId: string): Promise<void>;
+  /** Pause automatic reconnect (e.g. app backgrounded). */
+  suspendReconnect(): void;
+  /** Resume automatic reconnect; attempts immediately if not connected. */
+  resumeReconnect(): void;
 }
 
 /** Callbacks accepted by every adapter (params kept loose on purpose). */

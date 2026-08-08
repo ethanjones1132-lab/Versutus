@@ -1,8 +1,8 @@
 import Constants from 'expo-constants';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
-import { GatewayDiscoveryScanner } from '@/lib/discovery/scanner';
+import { GatewayDiscoveryScanner, isNativeDiscoveryAvailable } from '@/lib/discovery/scanner';
 import { buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/lib/gateway/candidates';
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
 import { createMessageId, extractMessageText, historyToChatMessages } from '@/lib/gateway/messages';
@@ -171,6 +171,7 @@ function configuredGatewayHosts(): string[] {
 }
 
 async function discoverForProbe(timeoutMs = 4200): Promise<import('@/lib/discovery/types').DiscoveredGateway[]> {
+  if (!isNativeDiscoveryAvailable()) return [];
   const scanner = getDiscoveryScanner();
   return new Promise((resolve) => {
     let latest: import('@/lib/discovery/types').DiscoveredGateway[] = [];
@@ -1118,6 +1119,51 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     scheduleAutoRetryRef.current = scheduleAutoRetry;
   }, [scheduleAutoRetry]);
+
+  // Fast-path recovery to the last-known gateway — skips the discovery/probe
+  // ceremony when we already know the endpoint. Falls back to the full
+  // auto-connect loop only when the fast path cannot reach it.
+  const reconnectLastKnownGateway = useCallback(async () => {
+    const active = activeGatewayRef.current;
+    if (!active) {
+      void retryAutoConnect();
+      return;
+    }
+    if (active.kind === 'openclaw') {
+      await connectGateway(active);
+      return;
+    }
+    const probe = await probeGatewayUrl(active.url, 3500);
+    if (probe.ok) {
+      await connectGateway(active);
+      return;
+    }
+    void retryAutoConnect();
+  }, [connectGateway, retryAutoConnect]);
+
+  // Foreground/background lifecycle: pause reconnection while backgrounded
+  // (timers are throttled anyway), heal fast on return to foreground.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') {
+        clientRef.current?.suspendReconnect();
+        if (autoRetryTimerRef.current) {
+          clearTimeout(autoRetryTimerRef.current);
+          autoRetryTimerRef.current = null;
+        }
+        return;
+      }
+
+      const client = clientRef.current;
+      if (client?.connectionStatus === 'reconnecting') {
+        client.resumeReconnect();
+        return;
+      }
+      if (connectionPhaseRef.current === 'connected') return;
+      void reconnectLastKnownGateway();
+    });
+    return () => subscription.remove();
+  }, [reconnectLastKnownGateway]);
 
   const completeOnboarding = useCallback(async () => {
     const next = await saveAppSettings({ onboardingComplete: true });

@@ -23,7 +23,6 @@ export type GatewayClientCallbacks = {
 const CLIENT_ID = 'openclaw-android';
 const CLIENT_MODE = 'ui';
 const SCOPES = ['operator.read', 'operator.write'];
-const MAX_RECONNECT_ATTEMPTS = 12;
 
 function randomId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -66,6 +65,7 @@ export class OpenClawGatewayClient {
   private connectSent = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectSuspended = false;
   private challengeTimer: ReturnType<typeof setTimeout> | null = null;
   private connectUsedStoredDeviceToken = false;
   private staleTokenRetryUsed = false;
@@ -106,7 +106,28 @@ export class OpenClawGatewayClient {
     this.socket?.close();
     this.socket = null;
     this.staleTokenRetryUsed = false;
+    this.reconnectSuspended = false;
     this.setStatus('disconnected');
+  }
+
+  /**
+   * Pause automatic reconnect (e.g. app backgrounded). The connection itself
+   * is left alone; recovery happens on resumeReconnect()/foreground.
+   */
+  suspendReconnect() {
+    this.reconnectSuspended = true;
+    this.clearReconnectTimer();
+    this.clearChallengeTimer();
+  }
+
+  /**
+   * Resume automatic reconnect and, if not connected, attempt immediately.
+   */
+  resumeReconnect() {
+    this.reconnectSuspended = false;
+    if (!this.closed && this.status !== 'connected') {
+      this.connect();
+    }
   }
 
   async request<T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs = 30000): Promise<T> {
@@ -322,17 +343,13 @@ export class OpenClawGatewayClient {
   }
 
   private scheduleReconnect(reason: string) {
-    if (this.closed) return;
-    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      this.setStatus('disconnected', reason);
-      return;
-    }
+    if (this.closed || this.reconnectSuspended) return;
     this.reconnectAttempts += 1;
     const delay = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 15000);
     this.setStatus('reconnecting', `${reason} · retry in ${Math.round(delay / 1000)}s`);
     this.clearReconnectTimer();
     this.reconnectTimer = setTimeout(() => {
-      if (!this.closed) this.openSocket();
+      if (!this.closed && !this.reconnectSuspended) this.openSocket();
     }, delay);
   }
 

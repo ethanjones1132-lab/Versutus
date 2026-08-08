@@ -28,7 +28,6 @@ export type GatewayClientCallbacks = {
   onHealthCheck?: (healthy: boolean, info?: HealthResponse) => void;
 };
 
-const MAX_RETRIES = 3;
 const DEFAULT_TIMEOUT_MS = 30000;
 const LONG_TIMEOUT_MS = 120000;
 
@@ -55,6 +54,7 @@ export class HermesGatewayClient {
   private closed = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
+  private reconnectSuspended = false;
   private healthTimer: ReturnType<typeof setInterval> | null = null;
   private status: ConnectionStatus = 'disconnected';
   private detail = '';
@@ -123,11 +123,31 @@ export class HermesGatewayClient {
     this.clearReconnectTimer();
     this.stopHealthMonitoring();
     this.abortAllRuns();
+    this.reconnectSuspended = false;
     // Restore session id onto profile before clearing
     if (this.currentSessionId) {
       this.profile.sessionId = this.currentSessionId;
     }
     this.setStatus('disconnected');
+  }
+
+  /**
+   * Pause automatic reconnect (e.g. app backgrounded). The connection itself
+   * is left alone; recovery happens on resumeReconnect()/foreground.
+   */
+  suspendReconnect() {
+    this.reconnectSuspended = true;
+    this.clearReconnectTimer();
+  }
+
+  /**
+   * Resume automatic reconnect and, if not connected, attempt immediately.
+   */
+  resumeReconnect() {
+    this.reconnectSuspended = false;
+    if (!this.closed && this.status !== 'connected') {
+      void this.connect();
+    }
   }
 
   // ─── HTTP helpers ─────────────────────────────────────────────
@@ -503,17 +523,13 @@ export class HermesGatewayClient {
   // ─── Reconnection ─────────────────────────────────────────────
 
   private scheduleReconnect(reason: string) {
-    if (this.closed) return;
-    if (this.reconnectAttempts >= 5) {
-      this.setStatus('disconnected', reason);
-      return;
-    }
+    if (this.closed || this.reconnectSuspended) return;
     this.reconnectAttempts += 1;
     const delay = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 15000);
     this.setStatus('reconnecting', `${reason} · retry in ${Math.round(delay / 1000)}s`);
     this.clearReconnectTimer();
     this.reconnectTimer = setTimeout(() => {
-      if (!this.closed) void this.connect();
+      if (!this.closed && !this.reconnectSuspended) void this.connect();
     }, delay);
   }
 

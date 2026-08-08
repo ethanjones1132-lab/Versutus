@@ -85,6 +85,14 @@ export class OpenClawAdapterClient implements PortalClient {
     this.inner.disconnect();
   }
 
+  suspendReconnect() {
+    this.inner.suspendReconnect();
+  }
+
+  resumeReconnect() {
+    this.inner.resumeReconnect();
+  }
+
   async healthCheck(): Promise<HealthResponse | null> {
     if (this.inner.connectionStatus !== 'connected') return null;
     return { status: 'ok', platform: 'openclaw', version: this.helloVersion ?? 'unknown' };
