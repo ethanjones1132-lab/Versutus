@@ -9,7 +9,8 @@ import { createMessageId, extractMessageText, historyToChatMessages } from '@/li
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { categorizeProbeError, probeGatewayCandidates, probeGatewayUrl, probeHighPriorityCandidates } from '@/lib/gateway/probe';
 import { isSlashCommandInput } from '@/lib/gateway/slash-commands';
-import { GATEWAY_COMMANDS } from '@/lib/gateway/dashboard';
+import { GATEWAY_COMMANDS, type GatewayCommand } from '@/lib/gateway/dashboard';
+import { loadRecentCommands, pushRecentCommand } from '@/lib/gateway/recents';
 import { executeRun, type RunCapableClient } from '@/lib/gateway/runs';
 import { notifyApprovalRequired, notifyGatewayDown, notifyRunComplete } from '@/lib/notifications/local';
 import type { GatewayActionPreview } from '@/lib/gateway/types';
@@ -94,6 +95,7 @@ type GatewayContextValue = {
   completeOnboarding: () => Promise<void>;
   setAutoConnect: (enabled: boolean) => Promise<void>;
   transcripts: CommandTranscriptEntry[];
+  recentCommands: string[];
   retryCommand: (entry: Partial<CommandTranscriptEntry> & { input: string }) => void;
   cancelCommand: (id: string) => void;
   capabilitySnapshot: GatewayCapabilitySnapshot;
@@ -144,6 +146,100 @@ function gatewayHostForDisplay(url: string): string {
   } catch {
     return url;
   }
+}
+
+function tryParseJsonObject(text: string): Record<string, unknown> | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function lookupPath(root: Record<string, unknown> | null | undefined, path: string): unknown {
+  if (!root) return undefined;
+  let node: unknown = root;
+  for (const part of path.split('.')) {
+    if (node && typeof node === 'object') {
+      node = (node as Record<string, unknown>)[part];
+    } else {
+      return undefined;
+    }
+  }
+  return node;
+}
+
+function safeStringify(value: unknown): string {
+  if (value === undefined) return '(unset)';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+async function buildActionPreview(
+  input: string,
+  command: GatewayCommand | null,
+  label: string,
+  gatewayRequest: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>,
+): Promise<GatewayActionPreview> {
+  const risk: 'medium' | 'high' = command?.danger === 'destructive' ? 'high' : 'medium';
+  const base: GatewayActionPreview = {
+    title: command?.label ?? label,
+    risk,
+    applyCommand: input,
+    summary: `This will perform a ${command?.danger ?? 'write'} action on the gateway.`,
+  };
+  const tokens = input.trim().toLowerCase().split(/\s+/);
+
+  if (tokens[0] === '/config' && tokens[1] === 'patch') {
+    const patchText = input.trim().slice('/config patch'.length).trim();
+    const patch = tryParseJsonObject(patchText);
+    if (patch) {
+      const keys = Object.keys(patch);
+      let current: Record<string, unknown> | null = null;
+      try {
+        current = await gatewayRequest<Record<string, unknown>>('config.get', {});
+      } catch {
+        current = null;
+      }
+      const diff = keys.map((key) => ({
+        label: key,
+        before: safeStringify(lookupPath(current, key)),
+        after: safeStringify(patch[key]),
+      }));
+      return {
+        ...base,
+        summary: `This will write ${keys.length} config ${keys.length === 1 ? 'key' : 'keys'} to the gateway.`,
+        diff,
+      };
+    }
+  }
+
+  if (tokens[0] === '/channel' && (tokens[1] === 'stop' || tokens[1] === 'logout')) {
+    const target = input.trim().split(/\s+/).slice(2).join(' ') || 'channel';
+    return {
+      ...base,
+      title: `${command?.label ?? 'Channel action'}${target !== 'channel' ? ` · ${target}` : ''}`,
+      summary:
+        tokens[1] === 'logout'
+          ? `This will log out the ${target} account on the gateway. Ongoing sessions will be signed out.`
+          : `This will stop the ${target} on the gateway. Ongoing channel sessions will be interrupted.`,
+      affectedTarget: target,
+    };
+  }
+
+  return {
+    ...base,
+    summary: `This will perform a ${command?.danger ?? 'write'} action on the gateway.`,
+  };
 }
 
 function findMatchingCommand(input: string) {
@@ -250,6 +346,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [sessionSelector, setSessionSelector] = useState<{ visible: boolean }>({ visible: false });
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
   const confirmationBypassRef = useRef(false);
+  const [recentCommands, setRecentCommands] = useState<string[]>([]);
   const [pendingRunApproval, setPendingRunApproval] = useState<{ runId: string; prompt: string } | null>(null);
   const runApprovalResolverRef = useRef<((approved: boolean, feedback?: string) => void) | null>(null);
   const runAbortControllerRef = useRef<AbortController | null>(null);
@@ -985,18 +1082,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         !confirmationBypassRef.current;
 
       if (needsConfirmation) {
-        const previewSummary = `This will perform a ${matchingCmd.danger} action on the gateway.`;
-        const preview: GatewayActionPreview = {
-          title: matchingCmd.label || commandLabel,
-          summary: previewSummary,
-          risk: matchingCmd.danger === 'destructive' ? 'high' : 'medium',
-          applyCommand: trimmed,
-        };
+        const preview = await buildActionPreview(trimmed, matchingCmd ?? null, commandLabel, gatewayRequest);
         setPendingConfirmation(preview);
         return;
       }
 
       commandStartTimeRef.current = Date.now();
+      if (activeGateway) {
+        void pushRecentCommand(activeGateway.id, trimmed).then(setRecentCommands);
+      }
       const commandMessageId = appendLocalMessage('assistant', `Running ${commandLabel}...`, {
         input: trimmed,
         title: commandLabel,
@@ -1226,6 +1320,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     scheduleAutoRetryRef.current = scheduleAutoRetry;
   }, [scheduleAutoRetry]);
 
+  useEffect(() => {
+    const gatewayId = activeGateway?.id;
+    if (!gatewayId) return;
+    let cancelled = false;
+    void loadRecentCommands(gatewayId).then((commands) => {
+      if (!cancelled) setRecentCommands(commands);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeGateway?.id]);
+
   // Fast-path recovery to the last-known gateway — skips the discovery/probe
   // ceremony when we already know the endpoint. Falls back to the full
   // auto-connect loop only when the fast path cannot reach it.
@@ -1393,6 +1499,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       completeOnboarding,
       setAutoConnect,
       transcripts,
+      recentCommands,
       retryCommand,
       cancelCommand,
       capabilitySnapshot,
@@ -1421,7 +1528,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendMessage, sendChatInput, stopStreaming, reloadHistory,
       gatewayRequest, runAgentCommand, setupFromPcAddress, retryAutoConnect, completeOnboarding,
-      setAutoConnect, transcripts, retryCommand, cancelCommand, capabilitySnapshot,
+      setAutoConnect, transcripts, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval, runTask, modelPicker, openModelPicker, closeModelPicker,
       selectModel, modelCatalog, sessionSelector,

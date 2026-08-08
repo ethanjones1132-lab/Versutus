@@ -67,6 +67,7 @@ export default function ChatScreen() {
     currentSessionId,
     pendingRunApproval,
     resolveRunApproval,
+    recentCommands,
   } = useGateway();
   const [draft, setDraft] = useState('');
   const [dismissedPairingKey, setDismissedPairingKey] = useState<string | null>(null);
@@ -76,7 +77,7 @@ export default function ChatScreen() {
   const isStreaming = isSending || messages.some((message) => message.streaming);
   const showPairingSheet = status === 'pairing' && !!deviceId && dismissedPairingKey !== pairingKey;
   const slashSuggestions = draft.trimStart().startsWith('/')
-    ? getSlashCommandSuggestions(draft, activeHello)
+    ? getSlashCommandSuggestions(draft, activeHello, recentCommands)
     : [];
 
   const handleSend = useCallback(async () => {

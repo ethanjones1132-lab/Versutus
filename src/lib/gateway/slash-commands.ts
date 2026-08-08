@@ -126,8 +126,21 @@ export function isSlashCommandInput(text: string): boolean {
 export function getSlashCommandSuggestions(
   input: string,
   hello: GatewayHelloOk | null,
+  recents: string[] = [],
 ): SlashCommandSuggestion[] {
   const needle = input.trimStart().toLowerCase();
+
+  // Recent commands first — fastest path to what you actually run.
+  const recentSuggestions: SlashCommandSuggestion[] = recents
+    .filter((item) => item.startsWith('/'))
+    .map((value) => ({
+      value,
+      label: value,
+      description: 'Recent command',
+      danger: 'local',
+      family: 'Recent',
+      unavailable: false,
+    }));
 
   // Show all commands, mark unavailable
   const registrySuggestions = GATEWAY_COMMANDS.map((command) => {
@@ -151,7 +164,7 @@ export function getSlashCommandSuggestions(
     unavailable: false,
   }));
 
-  let suggestions = [...localWithMeta, ...registrySuggestions];
+  let suggestions = [...recentSuggestions, ...localWithMeta, ...registrySuggestions];
 
   if (needle) {
     // Simple fuzzy-ish filter: startsWith or includes
@@ -588,22 +601,43 @@ async function runChannelCommand(args: string[], context: SlashCommandContext): 
   if (sub === 'start') {
     if (!name) return textResult('Usage: /channel start <name>', '/channel start');
     const result = await context.gatewayRequest('channel.start', { name }).catch(e => ({ error: String(e) }));
-    return textResult(`Channel ${name} start requested`, `/channel start ${name}`, compactJson(result));
+    return formatChannelResult('start', name, result);
   }
 
   if (sub === 'stop') {
     if (!name) return textResult('Usage: /channel stop <name>', '/channel stop');
     const result = await context.gatewayRequest('channel.stop', { name }).catch(e => ({ error: String(e) }));
-    return textResult(`Channel ${name} stop requested`, `/channel stop ${name}`, compactJson(result));
+    return formatChannelResult('stop', name, result);
   }
 
   if (sub === 'logout') {
     if (!name) return textResult('Usage: /channel logout <name>', '/channel logout');
     const result = await context.gatewayRequest('channel.logout', { name }).catch(e => ({ error: String(e) }));
-    return textResult(`Channel ${name} logout requested`, `/channel logout ${name}`, compactJson(result));
+    return formatChannelResult('logout', name, result);
   }
 
   return textResult('Usage: /channel [status] | start <name> | stop <name> | logout <name>', '/channel');
+}
+
+function formatChannelResult(action: 'start' | 'stop' | 'logout', name: string, result: unknown): SlashCommandResult {
+  if (result && typeof result === 'object' && 'error' in result) {
+    const err = String((result as { error: unknown }).error ?? '');
+    return textResult(
+      `Channel ${name} ${action} failed: ${err}`,
+      `/channel ${action} ${name}`,
+      compactJson(result),
+    );
+  }
+  const record = result as Record<string, unknown> | null | undefined;
+  const status = typeof record?.status === 'string' ? record.status : undefined;
+  const state = typeof record?.state === 'string' ? record.state : undefined;
+  const verb = action === 'start' ? 'started' : action === 'stop' ? 'stopped' : 'logged out';
+  const detail = status ?? state;
+  return textResult(
+    `Channel ${name} ${verb}${detail ? ` · ${detail}` : ''}`,
+    `/channel ${action} ${name}`,
+    compactJson(result),
+  );
 }
 
 async function runApprovalsDevicesCommand(commandName: string, args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
