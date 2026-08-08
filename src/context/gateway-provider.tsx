@@ -217,13 +217,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [isBootstrapped, setIsBootstrapped] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [transcripts, setTranscripts] = useState<CommandTranscriptEntry[]>([]);
-  const [capabilitySnapshot, setCapabilitySnapshot] = useState<GatewayCapabilitySnapshot>(() => ({
-    checkedAt: Date.now(),
-    status: 'offline',
-    groups: [],
-    methods: {},
-    scopes: [],
-  }));
+  const [capabilityCheckedAt, setCapabilityCheckedAt] = useState(() => Date.now());
+  const capabilitySnapshot = useMemo<GatewayCapabilitySnapshot>(
+    () => buildCapabilitySnapshot(status, activeHello, GATEWAY_COMMANDS, capabilityCheckedAt, liveCapabilities),
+    [status, activeHello, liveCapabilities, capabilityCheckedAt],
+  );
   const [pendingConfirmation, setPendingConfirmation] = useState<GatewayActionPreview | null>(null);
   const [modelPicker, setModelPicker] = useState<{
     visible: boolean;
@@ -611,11 +609,6 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     void bootstrap();
     return () => clientRef.current?.disconnect();
   }, [bootstrap]);
-
-  useEffect(() => {
-    const snap = buildCapabilitySnapshot(status, activeHello, GATEWAY_COMMANDS, Date.now(), liveCapabilities);
-    setCapabilitySnapshot(snap);
-  }, [status, activeHello, liveCapabilities]);
 
   const addGateway = useCallback(
     async (input: {
@@ -1121,7 +1114,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
     }, delayMs);
   }, [retryAutoConnect]);
-  scheduleAutoRetryRef.current = scheduleAutoRetry;
+
+  useEffect(() => {
+    scheduleAutoRetryRef.current = scheduleAutoRetry;
+  }, [scheduleAutoRetry]);
 
   const completeOnboarding = useCallback(async () => {
     const next = await saveAppSettings({ onboardingComplete: true });
@@ -1160,12 +1156,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         await client.healthCheck();
         void client.getCapabilities().then(setLiveCapabilities).catch(() => undefined);
       }
-      const snap = buildCapabilitySnapshot(status, activeHello, GATEWAY_COMMANDS, Date.now(), liveCapabilities);
-      setCapabilitySnapshot({ ...snap, checkedAt: Date.now() });
+      setCapabilityCheckedAt(Date.now());
     } catch {
       // ignore
     }
-  }, [activeGateway, status, activeHello, liveCapabilities]);
+  }, [activeGateway, status]);
 
   const confirmPendingAction = useCallback(() => {
     if (!pendingConfirmation || !activeGateway) {

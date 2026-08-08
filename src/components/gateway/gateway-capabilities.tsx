@@ -9,13 +9,12 @@ import type { GatewayCapabilitySnapshot, GatewayCapabilityGroup } from '@/lib/ga
 export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilitySnapshot }) {
   const { groups, checkedAt, status: snapStatus } = snapshot;
   const visible = groups; // show all as per plan
-  const [now, setNow] = useState(checkedAt);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(timer);
-  }, [checkedAt]);
+  }, []);
 
   const staleMinutes = Math.max(0, Math.floor((now - checkedAt) / 60000));
 

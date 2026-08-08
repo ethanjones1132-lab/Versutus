@@ -26,9 +26,12 @@ export function useGatewayReachability({
     [gateways],
   );
 
-  useEffect(() => {
-    let cancelled = false;
-
+  // Initialize results when the gateway set / active / status changes (derived
+  // during render rather than in an effect, per React guidance).
+  const adjustmentKey = `${signature}|${activeGateway?.id ?? ''}|${status}`;
+  const [prevAdjustmentKey, setPrevAdjustmentKey] = useState(adjustmentKey);
+  if (prevAdjustmentKey !== adjustmentKey) {
+    setPrevAdjustmentKey(adjustmentKey);
     setResults((previous) => {
       const next: Record<string, GatewayReachability> = {};
       for (const gateway of gateways) {
@@ -50,6 +53,10 @@ export function useGatewayReachability({
       }
       return next;
     });
+  }
+
+  useEffect(() => {
+    let cancelled = false;
 
     async function probeSavedGateways() {
       const now = Date.now();

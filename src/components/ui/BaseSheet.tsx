@@ -40,10 +40,11 @@ export function BaseSheet({
   const hiddenOffset = position === 'bottom' ? 400 : -400;
   const translateY = useSharedValue(hiddenOffset);
   const [mounted, setMounted] = useState(visible);
-
-  useEffect(() => {
+  const [prevVisible, setPrevVisible] = useState(visible);
+  if (visible !== prevVisible) {
+    setPrevVisible(visible);
     if (visible) setMounted(true);
-  }, [visible]);
+  }
 
   useEffect(() => {
     translateY.value = withTiming(

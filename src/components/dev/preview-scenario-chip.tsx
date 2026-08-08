@@ -25,9 +25,13 @@ export function PreviewScenarioChip({
   return (
     <AnimatedPressable
       onPressIn={() => {
+        // Reanimated shared value — mutable by design, not React state.
+        // eslint-disable-next-line react-hooks/immutability
         scale.value = withSpring(0.94, springSnappy);
       }}
       onPressOut={() => {
+        // Reanimated shared value — mutable by design, not React state.
+        // eslint-disable-next-line react-hooks/immutability
         scale.value = withSpring(1, springSnappy);
       }}
       onPress={() => {

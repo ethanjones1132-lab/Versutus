@@ -41,10 +41,11 @@ export function BaseSheet({
   const translateY = useSharedValue(hiddenOffset);
   const backdropOpacity = useSharedValue(0);
   const [mounted, setMounted] = useState(visible);
-
-  useEffect(() => {
+  const [prevVisible, setPrevVisible] = useState(visible);
+  if (visible !== prevVisible) {
+    setPrevVisible(visible);
     if (visible) setMounted(true);
-  }, [visible]);
+  }
 
   useEffect(() => {
     translateY.value = withTiming(

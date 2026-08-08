@@ -11,10 +11,14 @@ export function usePressScale() {
   }));
 
   const onPressIn = useCallback(() => {
+    // Reanimated shared value — mutable by design, not React state.
+    // eslint-disable-next-line react-hooks/immutability
     scale.value = withTiming(pressScale.pressed, { duration: pressScale.duration });
   }, [scale]);
 
   const onPressOut = useCallback(() => {
+    // Reanimated shared value — mutable by design, not React state.
+    // eslint-disable-next-line react-hooks/immutability
     scale.value = withSpring(pressScale.resting, springSnappy);
   }, [scale]);
 

@@ -159,9 +159,13 @@ export function ChatComposer({
               onPress={() => void handleAction()}
               disabled={isActionDisabled}
               onPressIn={() => {
+                // Reanimated shared value — mutable by design, not React state.
+                // eslint-disable-next-line react-hooks/immutability
                 sendWidth.value = withSpring(isStreaming ? 68 : 52, springSnappy);
               }}
               onPressOut={() => {
+                // Reanimated shared value — mutable by design, not React state.
+                // eslint-disable-next-line react-hooks/immutability
                 sendWidth.value = withSpring(56, springSnappy);
               }}>
               <Text variant="caption" color="inverse">

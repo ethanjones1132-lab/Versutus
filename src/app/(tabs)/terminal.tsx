@@ -86,6 +86,9 @@ export default function TerminalScreen() {
 
   useEffect(() => {
     if (mode === 'shell' && activeGateway && status === 'connected') {
+      // Deliberately reset + open a live session when shell mode becomes active;
+      // state settles via the async session callbacks.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       void startTerminal();
       return () => sessionRef.current?.close();
     }
