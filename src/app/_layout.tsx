@@ -1,6 +1,8 @@
-import { ThemeProvider } from 'expo-router';
+import * as Notifications from 'expo-notifications';
+import { ThemeProvider, useRouter } from 'expo-router';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AppBootstrap } from '@/components/app-bootstrap';
@@ -8,12 +10,25 @@ import { FontProvider } from '@/components/font-provider';
 import { VersutusDarkTheme } from '@/constants/navigation-theme';
 import { GatewayProvider } from '@/context/gateway-provider';
 
+function NotificationRouter() {
+  const router = useRouter();
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(() => {
+      // Approval requests and run events live on the chat surface.
+      router.navigate('/chat');
+    });
+    return () => subscription.remove();
+  }, [router]);
+  return null;
+}
+
 export default function RootLayout() {
   return (
     <FontProvider>
       <GatewayProvider>
         <ThemeProvider value={VersutusDarkTheme}>
           <StatusBar style="light" />
+          <NotificationRouter />
           <AppBootstrap>
             <AnimatedSplashOverlay />
             <Stack

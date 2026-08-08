@@ -42,6 +42,18 @@ export interface PortalClient {
   suspendReconnect(): void;
   /** Resume automatic reconnect; attempts immediately if not connected. */
   resumeReconnect(): void;
+  /** Agentic runs with approval gates — Hermes adapters only. */
+  startRun?(
+    prompt: string,
+    options?: { sessionId?: string; model?: string },
+  ): Promise<{ run_id: string; status: string; session_id?: string }>;
+  getRunStatus?(runId: string): Promise<{ run_id: string; status: string; result?: string; error?: string }>;
+  streamRunEvents?(
+    runId: string,
+    onEvent: (event: { type: string; data?: Record<string, unknown>; timestamp?: number }) => void,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  resolveApproval?(runId: string, approved: boolean, feedback?: string): Promise<void>;
 }
 
 /** Callbacks accepted by every adapter (params kept loose on purpose). */

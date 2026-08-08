@@ -555,6 +555,18 @@ export const GATEWAY_COMMANDS: GatewayCommand[] = [
     description: 'Stop the active agent run',
   },
   {
+    id: 'run-task',
+    label: 'Run task',
+    group: 'Agent',
+    transport: 'rpc',
+    method: 'runs.create',
+    params: {},
+    danger: 'safe',
+    slash: '/run',
+    description: 'Run an agentic task with approval gates',
+    usage: '/run <prompt>',
+  },
+  {
     id: 'session-current',
     label: 'Current session',
     group: 'Sessions',

@@ -10,6 +10,8 @@ import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { categorizeProbeError, probeGatewayCandidates, probeGatewayUrl, probeHighPriorityCandidates } from '@/lib/gateway/probe';
 import { isSlashCommandInput } from '@/lib/gateway/slash-commands';
 import { GATEWAY_COMMANDS } from '@/lib/gateway/dashboard';
+import { executeRun, type RunCapableClient } from '@/lib/gateway/runs';
+import { notifyApprovalRequired, notifyGatewayDown, notifyRunComplete } from '@/lib/notifications/local';
 import type { GatewayActionPreview } from '@/lib/gateway/types';
 import {
   createGatewayProfile,
@@ -99,6 +101,12 @@ type GatewayContextValue = {
   pendingConfirmation: GatewayActionPreview | null;
   confirmPendingAction: () => void;
   cancelPendingConfirmation: () => void;
+  pendingRunApproval: { runId: string; prompt: string } | null;
+  resolveRunApproval: (approved: boolean, feedback?: string) => void;
+  runTask: (
+    prompt: string,
+    onEvent?: (event: { type: string; data?: Record<string, unknown>; timestamp?: number }) => void,
+  ) => Promise<import('@/lib/gateway/runs').RunOutcome>;
   modelPicker: {
     visible: boolean;
     mode: 'default' | 'fallbacks' | 'agent';
@@ -128,6 +136,14 @@ function getDiscoveryScanner() {
 function readCommandLabel(input: string): string {
   const [command, subcommand] = input.trim().split(/\s+/, 2);
   return [command, subcommand && !subcommand.startsWith('{') ? subcommand : undefined].filter(Boolean).join(' ');
+}
+
+function gatewayHostForDisplay(url: string): string {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url;
+  }
 }
 
 function findMatchingCommand(input: string) {
@@ -234,6 +250,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [sessionSelector, setSessionSelector] = useState<{ visible: boolean }>({ visible: false });
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
   const confirmationBypassRef = useRef(false);
+  const [pendingRunApproval, setPendingRunApproval] = useState<{ runId: string; prompt: string } | null>(null);
+  const runApprovalResolverRef = useRef<((approved: boolean, feedback?: string) => void) | null>(null);
+  const runAbortControllerRef = useRef<AbortController | null>(null);
+  const gatewayDownNotifiedRef = useRef(false);
 
   const clientRef = useRef<PortalClient | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
@@ -333,12 +353,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               clearTimeout(autoRetryTimerRef.current);
               autoRetryTimerRef.current = null;
             }
+            gatewayDownNotifiedRef.current = false;
             setConnectionPhase('connected');
             setProbeMessage('');
             setLastError(null);
           } else if (nextStatus === 'connecting' || nextStatus === 'reconnecting') {
             setConnectionPhase('connecting');
             setLastError(null);
+            if (nextStatus === 'reconnecting' && !gatewayDownNotifiedRef.current) {
+              gatewayDownNotifiedRef.current = true;
+              void notifyGatewayDown(gatewayHostForDisplay(gateway.url));
+            }
           } else if (nextStatus === 'disconnected') {
             setConnectionPhase((phase) =>
               phase === 'connecting' || phase === 'connected' ? 'failed' : phase,
@@ -862,6 +887,80 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [activeGateway, isSending, messages, status],
   );
 
+  const resolveRunApproval = useCallback((approved: boolean, feedback?: string) => {
+    runApprovalResolverRef.current?.(approved, feedback);
+    runApprovalResolverRef.current = null;
+    setPendingRunApproval(null);
+  }, []);
+
+  const runTask = useCallback(
+    async (
+      prompt: string,
+      onEvent?: (event: { type: string; data?: Record<string, unknown>; timestamp?: number }) => void,
+    ) => {
+      const client = clientRef.current;
+      const gateway = activeGatewayRef.current;
+      if (
+        !client ||
+        !gateway ||
+        status !== 'connected' ||
+        !client.startRun ||
+        !client.getRunStatus ||
+        !client.streamRunEvents ||
+        !client.resolveApproval
+      ) {
+        throw new Error('This gateway does not support agentic runs (the Hermes run API is required).');
+      }
+      const runCapable = client as unknown as RunCapableClient;
+      const abortController = new AbortController();
+      runAbortControllerRef.current?.abort();
+      runAbortControllerRef.current = abortController;
+
+      try {
+        const outcome = await executeRun(runCapable, prompt, {
+          sessionId: sessionIdRef.current,
+          model: gateway.model,
+          signal: abortController.signal,
+          onEvent: (event) => {
+            onEvent?.({
+              type: event.type,
+              data: event.data,
+              timestamp: event.timestamp,
+            });
+          },
+          onApprovalRequired: (runId) => {
+            setPendingRunApproval({ runId, prompt });
+            void notifyApprovalRequired(prompt);
+            return new Promise<{ approved: boolean; feedback?: string }>((resolve) => {
+              const onAbort = () => {
+                runApprovalResolverRef.current = null;
+                resolve({ approved: false });
+              };
+              runApprovalResolverRef.current = (approved: boolean, feedback?: string) => {
+                abortController.signal.removeEventListener('abort', onAbort);
+                resolve({ approved, feedback });
+              };
+              abortController.signal.addEventListener('abort', onAbort, { once: true });
+            });
+          },
+        });
+
+        if (!outcome.cancelled) {
+          const succeeded = /(complete|succeeded|success|done|finished)/i.test(outcome.status);
+          const summary = (outcome.error ?? outcome.result ?? outcome.status ?? '').slice(0, 120);
+          void notifyRunComplete(
+            succeeded ? 'Run complete' : outcome.status === 'cancelled' ? 'Run cancelled' : 'Run finished',
+            summary || outcome.status,
+          );
+        }
+        return outcome;
+      } finally {
+        runAbortControllerRef.current = null;
+      }
+    },
+    [status],
+  );
+
   const sendChatInput = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
@@ -919,6 +1018,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           hello: activeHello,
           gatewayRequest,
           runAgentCommand,
+          runTask,
           onAgentDelta: (delta) => {
             streamedText += delta;
             updateLocalMessage(commandMessageId, {
@@ -968,6 +1068,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       gatewayRequest,
       isCommandRunning,
       runAgentCommand,
+      runTask,
       sendMessage,
       status,
       updateLocalMessage,
@@ -1017,6 +1118,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
+    }
+    // Abort an in-flight agentic run (denies any pending approval).
+    if (runAbortControllerRef.current) {
+      runAbortControllerRef.current.abort();
+      runAbortControllerRef.current = null;
     }
 
     // Remove streaming placeholders
@@ -1294,6 +1400,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       pendingConfirmation,
       confirmPendingAction,
       cancelPendingConfirmation,
+      pendingRunApproval,
+      resolveRunApproval,
+      runTask,
       modelPicker,
       openModelPicker,
       closeModelPicker,
@@ -1314,7 +1423,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       gatewayRequest, runAgentCommand, setupFromPcAddress, retryAutoConnect, completeOnboarding,
       setAutoConnect, transcripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
-      modelPicker, openModelPicker, closeModelPicker, selectModel, modelCatalog, sessionSelector,
+      pendingRunApproval, resolveRunApproval, runTask, modelPicker, openModelPicker, closeModelPicker,
+      selectModel, modelCatalog, sessionSelector,
       openSessionSelector, closeSessionSelector, selectSession, sessionList, currentSessionId,
       liveCapabilities,
     ],

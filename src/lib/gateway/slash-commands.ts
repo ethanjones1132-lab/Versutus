@@ -5,6 +5,7 @@ import {
   type GatewayCommand,
 } from '@/lib/gateway/dashboard';
 import type { GatewayHelloOk } from '@/lib/gateway/types';
+import type { RunOutcome } from '@/lib/gateway/runs';
 
 export type SlashCommandSuggestion = {
   value: string;
@@ -31,6 +32,11 @@ type SlashCommandContext = {
   ) => Promise<string>;
   /** Stream agent-command output into the running command bubble. */
   onAgentDelta?: (delta: string) => void;
+  /** Agentic run with approval gates (Hermes run API). */
+  runTask?: (
+    prompt: string,
+    onEvent?: (event: { type: string; data?: Record<string, unknown>; timestamp?: number }) => void,
+  ) => Promise<RunOutcome>;
 };
 
 type ConfigSnapshot = {
@@ -188,6 +194,10 @@ export async function executeGatewaySlashCommand(
     return runRawRpc(argText, context);
   }
 
+  if (commandName === '/run') {
+    return runTaskCommand(argText, context);
+  }
+
   if (commandName === '/agent') {
     return runAgentSubcommand(args, context);
   }
@@ -254,6 +264,54 @@ function findCommandBySlash(value: string): GatewayCommand | undefined {
     const slashes = [command.slash, ...(command.aliases ?? [])].filter(Boolean).map((item) => item?.toLowerCase());
     return slashes.includes(value.toLowerCase());
   });
+}
+
+async function runTaskCommand(argText: string, context: SlashCommandContext): Promise<SlashCommandResult> {
+  const prompt = argText.trim();
+  if (!prompt) return textResult('Usage: /run <prompt> — run an agentic task with approval gates', '/run');
+  if (!context.runTask) {
+    return textResult('This gateway does not support agentic runs (the Hermes run API is required).', '/run');
+  }
+
+  const streamed: string[] = [];
+  const outcome = await context.runTask(prompt, (event) => {
+    const line = formatRunEvent(event);
+    if (line) {
+      streamed.push(line);
+      context.onAgentDelta?.(`${line}\n`);
+    }
+  });
+
+  if (outcome.cancelled) {
+    return textResult('Run cancelled', '/run', `Run ${outcome.runId} was cancelled.`);
+  }
+
+  const succeeded = /(complete|succeeded|success|done|finished)/i.test(outcome.status);
+  const decision = outcome.approved === undefined ? '' : outcome.approved ? '· approved' : '· denied';
+  const body = [
+    `Run ${outcome.runId.slice(0, 12)}… ${outcome.status} ${decision}`,
+    outcome.error ? `Error: ${outcome.error}` : '',
+    outcome.result ? `Result: ${outcome.result}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const summary = outcome.result || outcome.error || outcome.status || 'no result';
+  return {
+    text: `${succeeded ? 'Run complete' : `Run ${outcome.status}`}: ${summary}`,
+    title: '/run',
+    raw: [streamed.join('\n'), body].filter(Boolean).join('\n\n'),
+  };
+}
+
+function formatRunEvent(event: { type: string; data?: Record<string, unknown> }): string {
+  if (event.type === 'run.output' || event.type === 'output' || event.type === 'delta') {
+    const content = String(event.data?.content ?? event.data?.text ?? '').trim();
+    return content;
+  }
+  if (event.type === 'run.started' || event.type === 'started') {
+    return `▶ ${String(event.data?.label ?? 'run started')}`;
+  }
+  return '';
 }
 
 async function runRegistryCommand(

@@ -7,6 +7,7 @@ import { ChatEmptyState } from '@/components/chat/chat-empty-state';
 import { MessageBubble } from '@/components/chat/message-bubble';
 import { PairingSheet } from '@/components/chat/pairing-sheet';
 import { ConfirmationSheet } from '@/components/chat/confirmation-sheet';
+import { ApprovalSheet } from '@/components/chat/approval-sheet';
 import { ModelPickerSheet } from '@/components/chat/model-picker-sheet';
 import { SessionSelectorSheet } from '@/components/chat/session-selector-sheet';
 import { ConnectionBadge } from '@/components/connection-badge';
@@ -51,6 +52,8 @@ export default function ChatScreen() {
     selectSession,
     sessionList,
     currentSessionId,
+    pendingRunApproval,
+    resolveRunApproval,
   } = useGateway();
   const [draft, setDraft] = useState('');
   const [dismissedPairingKey, setDismissedPairingKey] = useState<string | null>(null);
@@ -163,6 +166,15 @@ export default function ChatScreen() {
         preview={pendingConfirmation}
         onConfirm={() => void confirmPendingAction()}
         onCancel={() => void cancelPendingConfirmation()}
+      />
+
+      <ApprovalSheet
+        visible={!!pendingRunApproval}
+        runId={pendingRunApproval?.runId}
+        prompt={pendingRunApproval?.prompt}
+        gatewayName={settings.pcName ?? activeGateway.name}
+        onApprove={(feedback) => resolveRunApproval(true, feedback)}
+        onDeny={(feedback) => resolveRunApproval(false, feedback)}
       />
 
       <ModelPickerSheet
