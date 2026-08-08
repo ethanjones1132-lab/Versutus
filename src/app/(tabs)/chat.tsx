@@ -143,9 +143,16 @@ export default function ChatScreen() {
           />
         )}
         ListEmptyComponent={
-          <Text color="secondary" style={styles.emptyMessages}>
-            {status === 'connected' ? 'Say hello to your agent.' : 'Waiting for connection…'}
-          </Text>
+          <View style={styles.emptyWrap}>
+            <Text color="secondary" style={styles.emptyMessages}>
+              {status === 'connected' ? 'Say hello to your agent.' : 'Waiting for connection…'}
+            </Text>
+            {status === 'connected' ? (
+              <Text variant="caption" color="tertiary" style={styles.emptyHint}>
+                Tip: type /help to explore your gateway — /run for agentic tasks.
+              </Text>
+            ) : null}
+          </View>
         }
       />
 
@@ -254,5 +261,13 @@ const styles = StyleSheet.create({
   emptyMessages: {
     textAlign: 'center',
     marginTop: Spacing.six,
+  },
+  emptyWrap: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    gap: Spacing.one,
+  },
+  emptyHint: {
+    textAlign: 'center',
   },
 });

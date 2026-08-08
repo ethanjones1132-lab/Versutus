@@ -102,7 +102,11 @@ export function ConfirmationSheet({
         <PressableScale
           style={[styles.confirmBtn, { backgroundColor: tokens.accentWarm }]}
           onPress={async () => {
-            await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            await Haptics.notificationAsync(
+              preview.risk === 'high'
+                ? Haptics.NotificationFeedbackType.Warning
+                : Haptics.NotificationFeedbackType.Success,
+            );
             onConfirm();
           }}>
           <Text variant="caption" style={{ color: '#111' }}>

@@ -7,6 +7,7 @@
       "priority": "P1",
       "title": "Local command transcript persistence",
       "source": "docs/openclaw-gateway-followup.md",
+      "status": "done",
       "description": "Persist slash-command events locally keyed by gateway/session so history reload does not erase command output. Compact cards with running/complete/error states.",
       "acceptance": ["Command messages survive history reload", "Keyed by gatewayId + sessionId", "tsc clean"]
     },
@@ -15,6 +16,7 @@
       "priority": "P1",
       "title": "Confirmation UI for write/destructive commands",
       "source": "docs/openclaw-gateway-followup.md",
+      "status": "done",
       "description": "Replace --confirm-only flows with luxury ConfirmationSheet previews for channel stop, session abort, config writes, model set, approvals.",
       "acceptance": ["Preview shows diff/summary before apply", "Danger haptics on confirm", "Exact verbs per luxury rules"]
     },
@@ -23,6 +25,7 @@
       "priority": "P1",
       "title": "Live gateway capability catalog",
       "source": "docs/openclaw-gateway-followup.md",
+      "status": "done",
       "description": "Replace static capability counts with live descriptor snapshot: supported, scoped, healthy, unconfigured, experimental groups.",
       "acceptance": ["Home dashboard reflects hello/method descriptors", "Missing scopes visible", "Warmup states distinguished"]
     },
@@ -31,6 +34,7 @@
       "priority": "P1",
       "title": "Gateway connection loop hardening",
       "source": "docs/gateway-detection-connection-loop-plan.md",
+      "status": "done",
       "description": "Improve auto-connect robustness: smarter candidate ordering, clearer phase messages, recovery on token/network flaps, debounced reachability.",
       "acceptance": ["Structured error cards (cause/target/next)", "No probe storms", "tsc clean"]
     },
@@ -39,6 +43,7 @@
       "priority": "P2",
       "title": "Session management commands",
       "source": "docs/openclaw-gateway-followup.md",
+      "status": "partial",
       "description": "Add /session current, get, restore, abort, compact, messages with confirmation sheets and SessionSelector integration.",
       "acceptance": ["/session restore works from Chat", "Confirmation before destructive session ops"]
     },
@@ -47,6 +52,7 @@
       "priority": "P2",
       "title": "Chat screen Android native elevation",
       "source": "scripts/ui-overhaul/phase-3-plan.md",
+      "status": "done",
       "description": "Create chat.android.tsx with M3 composer, native pairing sheet, token-driven bubbles, FAB-quality density.",
       "acceptance": ["chat.android.tsx exists", "No hybrid Compose/RN seams", "Parity with luxury design system"]
     },
@@ -55,6 +61,7 @@
       "priority": "P2",
       "title": "Terminal screen Android native elevation",
       "source": "scripts/ui-overhaul/phase-3-plan.md",
+      "status": "done",
       "description": "Create terminal.android.tsx with inset pane, M3 SegmentedButton mode picker, native command chips.",
       "acceptance": ["terminal.android.tsx exists", "Shell/RPC/Agent modes native", "Command log sheet polished"]
     },
@@ -63,6 +70,7 @@
       "priority": "P2",
       "title": "Slash command history and fuzzy discovery",
       "source": "docs/openclaw-gateway-followup.md",
+      "status": "done",
       "description": "Recent commands, aliases, fuzzy match in composer palette; permission-aware unavailable states in /help.",
       "acceptance": ["Palette shows recent commands", "Fuzzy filter on typing", "/help shows scope gaps"]
     },
@@ -71,6 +79,7 @@
       "priority": "P2",
       "title": "Device auth and pairing repair UX",
       "source": "docs/openclaw-gateway-followup.md",
+      "status": "partial",
       "description": "Show approved scopes/role after pairing, token repair path, /device diagnostics, device identity in Settings.",
       "acceptance": ["Scopes visible post-pair", "Repair without re-setup token when possible"]
     },
@@ -79,6 +88,7 @@
       "priority": "P2",
       "title": "Gateway rename, repair, and stale cleanup",
       "source": "docs/openclaw-gateway-followup.md",
+      "status": "done",
       "description": "Rename/edit gateways from Home, pairing repair action, delete-active clears state cleanly, manual reachability refresh with checkedAt.",
       "acceptance": ["Rename flow on Home", "Delete active disconnects cleanly", "checkedAt on probe results"]
     },
@@ -87,6 +97,7 @@
       "priority": "P3",
       "title": "Channel start/stop/logout with confirmation",
       "source": "docs/openclaw-gateway-followup.md",
+      "status": "done",
       "description": "Implement /channel start|stop|logout with human-readable summaries and Discord/Telegram-specific formatting.",
       "acceptance": ["Channel ops require confirmation sheet", "Status formatting improved"]
     },
@@ -95,6 +106,7 @@
       "priority": "P3",
       "title": "Web NativeTabs graceful fallback",
       "source": "conversation audit",
+      "status": "pending",
       "description": "Add _layout.web.tsx tab fallback so web does not break on NativeTabs; preserve luxury tokens.",
       "acceptance": ["Web tabs render", "No jetpack-compose import on web settings"]
     },
@@ -103,6 +115,7 @@
       "priority": "P3",
       "title": "ESLint and React Compiler cleanup",
       "source": "docs/openclaw-gateway-followup.md",
+      "status": "done",
       "description": "Fix set-state-in-effect, Reanimated shared-value immutability, unused imports without changing behavior.",
       "acceptance": ["npm run lint passes or major warnings resolved"]
     }

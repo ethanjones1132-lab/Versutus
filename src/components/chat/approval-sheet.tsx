@@ -74,7 +74,7 @@ export function ApprovalSheet({
         <PressableScale
           style={[styles.approveBtn, { backgroundColor: tokens.accentWarm }]}
           onPress={async () => {
-            await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
             onApprove(feedback.trim() || undefined);
           }}>
           <Text variant="caption" style={styles.approveLabel}>

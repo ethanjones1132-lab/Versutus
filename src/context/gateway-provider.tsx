@@ -994,6 +994,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     async (
       prompt: string,
       onEvent?: (event: { type: string; data?: Record<string, unknown>; timestamp?: number }) => void,
+      onApprovalWaiting?: () => void,
     ) => {
       const client = clientRef.current;
       const gateway = activeGatewayRef.current;
@@ -1028,6 +1029,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           onApprovalRequired: (runId) => {
             setPendingRunApproval({ runId, prompt });
             void notifyApprovalRequired(prompt);
+            onApprovalWaiting?.();
             return new Promise<{ approved: boolean; feedback?: string }>((resolve) => {
               const onAbort = () => {
                 runApprovalResolverRef.current = null;
@@ -1112,7 +1114,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           hello: activeHello,
           gatewayRequest,
           runAgentCommand,
-          runTask,
+          runTask: (prompt, onEvent) =>
+            runTask(prompt, onEvent, () => {
+              streamedText = `${streamedText}\n⏳ Waiting for your approval…`.trim();
+              updateLocalMessage(commandMessageId, {
+                text: streamedText,
+                command: { input: trimmed, title: commandLabel, status: 'running', ephemeral: true },
+              });
+            }),
           onAgentDelta: (delta) => {
             streamedText += delta;
             updateLocalMessage(commandMessageId, {
