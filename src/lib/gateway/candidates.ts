@@ -68,7 +68,10 @@ export function buildGatewayCandidates(options: {
     if (!candidateHost) return;
 
     if (isTailnetHost(candidateHost) || isTailscaleIp(candidateHost)) {
-      push(`https://${candidateHost}:${HERMES_PORT}`);
+      // Tailscale Serve terminates TLS on the host's standard HTTPS port and
+      // proxies to Hermes' plain HTTP listener on :8642. Do not send TLS to
+      // :8642; that is the backend listener, not the Serve endpoint.
+      push(`https://${candidateHost}`);
       push(`http://${candidateHost}:${HERMES_PORT}`);
       return;
     }
@@ -79,7 +82,9 @@ export function buildGatewayCandidates(options: {
     }
 
     if (candidateHost.includes('.')) {
-      push(`https://${candidateHost}:${HERMES_PORT}`);
+      // Public/tailnet DNS names may be fronted by a TLS reverse proxy on
+      // :443; the direct Hermes fallback remains plain HTTP on :8642.
+      push(`https://${candidateHost}`);
       push(`http://${candidateHost}:${HERMES_PORT}`);
     }
   }

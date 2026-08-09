@@ -39,7 +39,9 @@ export function normalizeGatewayUrl(
   const parsed = new URL(withScheme);
   const host = parsed.hostname;
 
-  const port = parsed.port || '8642';
+  // Hermes listens on plain HTTP :8642. When a host is fronted by Tailscale
+  // Serve or another TLS reverse proxy, HTTPS uses its standard :443 port.
+  const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '8642');
 
   // Strip trailing slash
   return `${parsed.protocol}//${host}:${port}`;

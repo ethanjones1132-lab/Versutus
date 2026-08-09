@@ -16,6 +16,8 @@ import {
 } from '../src/lib/portal/openclaw-mapping';
 import { METHOD_GUIDANCE, METHOD_TO_ROUTE, resolveRoute } from '../src/lib/gateway/rpc-routes';
 import { buildCapabilitySnapshot } from '../src/lib/gateway/dashboard';
+import { buildGatewayCandidates } from '../src/lib/gateway/candidates';
+import { normalizeGatewayUrl } from '../src/lib/gateway/url';
 
 const servers: Server[] = [];
 let failures = 0;
@@ -148,6 +150,27 @@ async function main() {
   const dead = await identifyGateway({ baseUrl: 'http://127.0.0.1:1', timeoutMs: 3000 });
   check('kind = unknown', dead.kind === 'unknown', dead);
   check('no transport hint', dead.transportHint === undefined, dead.transportHint);
+
+  console.log('\n[gateway URL candidates]');
+  const tailnetCandidates = buildGatewayCandidates({
+    tailscaleHost: 'ethanspc.tail3a1a8a.ts.net',
+    platform: 'android',
+  });
+  check(
+    'Tailscale Serve candidate uses HTTPS :443',
+    tailnetCandidates[0] === 'https://ethanspc.tail3a1a8a.ts.net:443',
+    tailnetCandidates,
+  );
+  check(
+    'direct Hermes fallback uses HTTP :8642',
+    tailnetCandidates[1] === 'http://ethanspc.tail3a1a8a.ts.net:8642',
+    tailnetCandidates,
+  );
+  check(
+    'HTTPS URL defaults to :443 while bare host defaults to HTTP :8642',
+    normalizeGatewayUrl('https://gateway.example') === 'https://gateway.example:443' &&
+      normalizeGatewayUrl('gateway.example') === 'http://gateway.example:8642',
+  );
 
   console.log('\n[openclaw mapping]');
   check(
