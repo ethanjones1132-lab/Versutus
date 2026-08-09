@@ -1,6 +1,4 @@
-import { Platform } from 'react-native';
-
-import { keyValueStorage } from '@/lib/storage/key-value';
+import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
 
 type DeviceAuthToken = {
   token: string;
@@ -53,50 +51,12 @@ function parseStore(raw: string | null, deviceId: string): DeviceAuthStore | nul
 }
 
 async function readRawTokenStore(): Promise<string | null> {
-  if (Platform.OS === 'web') {
-    try {
-      return globalThis.localStorage?.getItem(DEVICE_AUTH_TOKEN_KEY) ?? null;
-    } catch {
-      return null;
-    }
-  }
-
-  try {
-    const SecureStore = await import('expo-secure-store');
-    if (await SecureStore.isAvailableAsync()) {
-      return SecureStore.getItemAsync(DEVICE_AUTH_TOKEN_KEY);
-    }
-  } catch {
-    // Fall through to AsyncStorage for dev runtimes where SecureStore is unavailable.
-  }
-
-  return keyValueStorage.getItem(DEVICE_AUTH_TOKEN_KEY);
+  return secureKeyValueStorage.getItem(DEVICE_AUTH_TOKEN_KEY);
 }
 
 async function writeRawTokenStore(value: string | null): Promise<void> {
-  if (Platform.OS === 'web') {
-    try {
-      if (value === null) globalThis.localStorage?.removeItem(DEVICE_AUTH_TOKEN_KEY);
-      else globalThis.localStorage?.setItem(DEVICE_AUTH_TOKEN_KEY, value);
-    } catch {
-      // Ignore browser storage failures; the device can still pair for the current session.
-    }
-    return;
-  }
-
-  try {
-    const SecureStore = await import('expo-secure-store');
-    if (await SecureStore.isAvailableAsync()) {
-      if (value === null) await SecureStore.deleteItemAsync(DEVICE_AUTH_TOKEN_KEY);
-      else await SecureStore.setItemAsync(DEVICE_AUTH_TOKEN_KEY, value);
-      return;
-    }
-  } catch {
-    // Fall through to AsyncStorage for dev runtimes where SecureStore is unavailable.
-  }
-
-  if (value === null) await keyValueStorage.removeItem(DEVICE_AUTH_TOKEN_KEY);
-  else await keyValueStorage.setItem(DEVICE_AUTH_TOKEN_KEY, value);
+  if (value === null) await secureKeyValueStorage.removeItem(DEVICE_AUTH_TOKEN_KEY);
+  else await secureKeyValueStorage.setItem(DEVICE_AUTH_TOKEN_KEY, value);
 }
 
 export async function loadDeviceAuthToken(

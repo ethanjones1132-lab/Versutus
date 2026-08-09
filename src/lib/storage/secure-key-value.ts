@@ -31,13 +31,38 @@ function removeWebValue(key: string): void {
   }
 }
 
+/**
+ * SecureStore only accepts a restricted key alphabet. Keep the logical key
+ * unchanged for the AsyncStorage fallback so values written by older builds
+ * can still be read and migrated.
+ */
+export function toSecureStoreKey(key: string): string {
+  const normalized = key.replace(/[^A-Za-z0-9._-]/g, '_');
+  return normalized || 'versutus';
+}
+
 export const secureKeyValueStorage = {
   async getItem(key: string): Promise<string | null> {
     if (Platform.OS === 'web') return readWebValue(key);
+    const secureKey = toSecureStoreKey(key);
     try {
       const SecureStore = await import('expo-secure-store');
       if (await SecureStore.isAvailableAsync()) {
-        return SecureStore.getItemAsync(key);
+        const value = await SecureStore.getItemAsync(secureKey);
+        if (value !== null) return value;
+
+        // Older builds fell back to AsyncStorage after SecureStore rejected
+        // colon-delimited keys. Migrate that value into the valid key space.
+        const legacyValue = await AsyncStorage.getItem(key);
+        if (legacyValue !== null) {
+          try {
+            await SecureStore.setItemAsync(secureKey, legacyValue);
+            await AsyncStorage.removeItem(key);
+          } catch {
+            // Keep the legacy fallback if migration is unavailable.
+          }
+        }
+        return legacyValue;
       }
     } catch {
       // Fall through to AsyncStorage for dev runtimes.
@@ -50,10 +75,13 @@ export const secureKeyValueStorage = {
       writeWebValue(key, value);
       return;
     }
+    const secureKey = toSecureStoreKey(key);
     try {
       const SecureStore = await import('expo-secure-store');
       if (await SecureStore.isAvailableAsync()) {
-        await SecureStore.setItemAsync(key, value);
+        await SecureStore.setItemAsync(secureKey, value);
+        // Remove a value left by the pre-SecureStore migration fallback.
+        await AsyncStorage.removeItem(key);
         return;
       }
     } catch {
@@ -67,10 +95,12 @@ export const secureKeyValueStorage = {
       removeWebValue(key);
       return;
     }
+    const secureKey = toSecureStoreKey(key);
     try {
       const SecureStore = await import('expo-secure-store');
       if (await SecureStore.isAvailableAsync()) {
-        await SecureStore.deleteItemAsync(key);
+        await SecureStore.deleteItemAsync(secureKey);
+        await AsyncStorage.removeItem(key);
         return;
       }
     } catch {
