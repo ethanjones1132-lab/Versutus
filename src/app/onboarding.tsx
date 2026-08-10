@@ -83,18 +83,18 @@ export default function OnboardingScreen() {
 
             <View style={styles.field}>
               <Text variant="caption" color="secondary">
-                Desktop setup token
+                Desktop API key (API_SERVER_KEY)
               </Text>
               <TextField
                 value={token}
                 onChangeText={setToken}
-                placeholder="Paste token or setup link from your PC"
+                placeholder="Paste API_SERVER_KEY from your PC"
                 autoCapitalize="none"
                 autoCorrect={false}
                 secureTextEntry
               />
               <Text variant="caption" color="tertiary">
-                Required when the desktop gateway has auth enabled.
+                Found in %LOCALAPPDATA%\\hermes\\.env when gateway auth is enabled.
               </Text>
             </View>
 

@@ -298,6 +298,11 @@ async function discoverForProbe(timeoutMs = 4200): Promise<import('@/lib/discove
   });
 }
 
+function isGatewayAuthFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:401|403|invalid api key|unauthorized|authentication required)/i.test(message);
+}
+
 export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [gateways, setGateways] = useState<GatewayProfile[]>([]);
   const [activeGateway, setActiveGateway] = useState<GatewayProfile | null>(null);
@@ -351,6 +356,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const runApprovalResolverRef = useRef<((approved: boolean, feedback?: string) => void) | null>(null);
   const runAbortControllerRef = useRef<AbortController | null>(null);
   const gatewayDownNotifiedRef = useRef(false);
+  const authFailureRef = useRef(false);
 
   const clientRef = useRef<PortalClient | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
@@ -429,6 +435,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const attachClient = useCallback(
     async (gateway: GatewayProfile) => {
+      authFailureRef.current = false;
       const existing = clientRef.current;
       const existingStatus = existing?.connectionStatus;
       if (
@@ -465,7 +472,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             setConnectionPhase((phase) =>
               phase === 'connecting' || phase === 'connected' ? 'failed' : phase,
             );
-            if (activeGatewayRef.current) {
+            if (activeGatewayRef.current && !authFailureRef.current) {
               scheduleAutoRetryRef.current(12000);
             }
           }
@@ -484,8 +491,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       clientRef.current = client;
       setConnectionPhase('connecting');
       await client.connect();
-      // Live capability catalog (Hermes /v1/capabilities, OpenClaw capabilities).
-      void client.getCapabilities().then(setLiveCapabilities).catch(() => undefined);
+      // Validate the Hermes bearer key before declaring onboarding complete.
+      try {
+        const capabilities = await client.getCapabilities();
+        setLiveCapabilities(capabilities);
+      } catch (error) {
+        if (gateway.kind !== 'openclaw' && isGatewayAuthFailure(error)) {
+          authFailureRef.current = true;
+          client.suspendReconnect();
+          client.disconnect();
+          throw new Error('Gateway rejected the API key. Enter API_SERVER_KEY from %LOCALAPPDATA%\\hermes\\.env.');
+        }
+      }
     },
     [reloadHistoryFor],
   );
@@ -713,9 +730,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       void runAutoConnect(loadedSettings, loadedGateways, activeId).catch((error) => {
         setConnectionPhase('failed');
         setNeedsOnboarding(onboardingNeeded);
-        setProbeMessage('Auto-connect failed. Tap retry or check your gateway address.');
+        setProbeMessage(
+          isGatewayAuthFailure(error)
+            ? 'Gateway rejected the API key. Update it from the gateway settings.'
+            : 'Auto-connect failed. Tap retry or check your gateway address.',
+        );
         setLastError(error instanceof Error ? error.message : String(error));
-        scheduleAutoRetryRef.current(18000);
+        if (!isGatewayAuthFailure(error)) scheduleAutoRetryRef.current(18000);
       });
     } catch (error) {
       setIsBootstrapped(true);
