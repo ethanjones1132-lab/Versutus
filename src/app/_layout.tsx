@@ -1,8 +1,10 @@
+import '@/global.css';
+
 import * as Notifications from 'expo-notifications';
-import { ThemeProvider, useRouter } from 'expo-router';
-import { Stack } from 'expo-router';
+import * as Linking from 'expo-linking';
+import { Stack, ThemeProvider, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AppBootstrap } from '@/components/app-bootstrap';
@@ -22,13 +24,40 @@ function NotificationRouter() {
   return null;
 }
 
+function GatewayDeepLinkRouter() {
+  const router = useRouter();
+  const url = Linking.useURL();
+  const handledRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!url || handledRef.current === url) return;
+    const parsed = Linking.parse(url);
+    const path = (parsed.path ?? '').replace(/^\/+/, '');
+    if (path !== 'add' && path !== 'gateway/add') return;
+
+    handledRef.current = url;
+    const query = parsed.queryParams ?? {};
+    const first = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value);
+    const params = Object.fromEntries(
+      Object.entries(query)
+        .map(([key, value]) => [key, first(value)] as const)
+        .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0),
+    );
+
+    router.push({ pathname: '/gateway/add', params });
+  }, [router, url]);
+
+  return null;
+}
+
 export default function RootLayout() {
   return (
     <FontProvider>
       <GatewayProvider>
         <ThemeProvider value={VersutusDarkTheme}>
-          <StatusBar style="light" />
-          <NotificationRouter />
+           <StatusBar style="light" />
+           <NotificationRouter />
+           <GatewayDeepLinkRouter />
           <AppBootstrap>
             <AnimatedSplashOverlay />
             <Stack

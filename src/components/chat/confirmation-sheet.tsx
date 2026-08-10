@@ -1,8 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { StyleSheet, View } from 'react-native';
 
-import { BaseSheet } from '@/components/ui';
-import { PressableScale, Text } from '@/components/ui';
+import { BaseSheet , PressableScale, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { GatewayActionPreview } from '@/lib/gateway/types';

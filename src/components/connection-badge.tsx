@@ -23,7 +23,7 @@ const STATUS_LABELS: Record<ConnectionStatus, string> = {
   disconnected: 'Disconnected',
 };
 
-function statusColor(tokens: Tokens, status: ConnectionStatus): string {
+export function statusColor(tokens: Tokens, status: ConnectionStatus): string {
   switch (status) {
     case 'connected':
       return tokens.statusConnected;
@@ -37,7 +37,7 @@ function statusColor(tokens: Tokens, status: ConnectionStatus): string {
   }
 }
 
-function PulsingDot({ color, active }: { color: string; active: boolean }) {
+export function PulsingDot({ color, active }: { color: string; active: boolean }) {
   const scale = useSharedValue(1);
   const opacity = useSharedValue(1);
 

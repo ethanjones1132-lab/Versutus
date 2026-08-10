@@ -54,7 +54,7 @@
       "reactCompiler": true
     },
     "extra": {
-      "openClawGatewayHosts": [
+      "gatewayHosts": [
         "ethanspc.tail3a1a8a.ts.net"
       ],
       "router": {},

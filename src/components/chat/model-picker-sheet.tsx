@@ -3,7 +3,7 @@ import { useCallback } from 'react';
 import { FlatList, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 
-import { BaseSheet, PressableScale, Text } from '@/components/ui';
+import { Badge, BaseSheet, Button, EmptyState, PressableScale, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { entering } from '@/lib/motion/presets';
 import { useTokens } from '@/hooks/use-tokens';
@@ -17,6 +17,12 @@ type ModelItem = {
   auth?: string;
   usage?: string;
 };
+
+function formatContext(context?: number): string | undefined {
+  if (!context) return undefined;
+  if (context >= 1000) return `${Math.round(context / 1000)}k ctx`;
+  return `${context} ctx`;
+}
 
 export function ModelPickerSheet({
   visible,
@@ -39,65 +45,86 @@ export function ModelPickerSheet({
 }) {
   const tokens = useTokens();
 
-  const renderModelItem = useCallback(({ item }: { item: ModelItem }) => (
-    <Animated.View entering={entering.fadeIn}>
-      <PressableScale
-        style={[
-          styles.modelCard,
-          {
-            backgroundColor: tokens.backgroundInset,
-            borderColor: tokens.glassBorder,
-          },
-        ]}
-        onPress={async () => {
-          await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          onSelect(item.id);
-        }}
-      >
-      <View style={styles.modelHeader}>
-        <Text variant="body" numberOfLines={1}>{item.id}</Text>
-        {item.provider && <Text variant="caption" color="tertiary">({item.provider})</Text>}
-      </View>
-      <View style={styles.modelMeta}>
-        {item.auth && <Text variant="caption">Auth: {item.auth}</Text>}
-        {item.available !== undefined && (
-          <Text variant="caption" color={item.available ? 'accentWarm' : 'tertiary'}>
-            {item.available ? 'Available' : 'Locked'}
-          </Text>
-        )}
-        {item.context && <Text variant="caption">ctx {item.context}</Text>}
-        {item.price !== undefined && <Text variant="caption">${item.price}</Text>}
-      </View>
-      {item.usage && <Text variant="caption" color="tertiary">{item.usage}</Text>}
-      </PressableScale>
-    </Animated.View>
-  ), [onSelect, tokens.backgroundInset, tokens.glassBorder]);
+  const renderModelItem = useCallback(
+    ({ item }: { item: ModelItem }) => {
+      const isCurrent = item.id === currentDefault;
+      const meta = [
+        item.provider,
+        formatContext(item.context),
+        item.price !== undefined ? `$${item.price}` : undefined,
+        item.auth,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
+      return (
+        <Animated.View entering={entering.fadeIn}>
+          <PressableScale
+            style={[
+              styles.modelCard,
+              {
+                backgroundColor: tokens.backgroundInset,
+                borderColor: isCurrent ? tokens.accentWarm : tokens.borderSubtle,
+                opacity: item.available === false ? 0.6 : 1,
+              },
+            ]}
+            disabled={item.available === false}
+            accessibilityRole="button"
+            accessibilityLabel={`Apply model ${item.id}`}
+            onPress={async () => {
+              await Haptics.selectionAsync();
+              onSelect(item.id);
+            }}>
+            <View style={styles.modelHeader}>
+              <Text variant="body" numberOfLines={1} style={styles.modelId}>
+                {item.id}
+              </Text>
+              {isCurrent ? (
+                <Badge label="Current" tone="accent" dot={false} />
+              ) : (
+                <Badge
+                  label={item.available === false ? 'Locked' : 'Available'}
+                  tone={item.available === false ? 'neutral' : 'success'}
+                  dot={false}
+                />
+              )}
+            </View>
+            {meta ? (
+              <Text variant="micro" color="tertiary" numberOfLines={1} style={styles.modelMeta}>
+                {meta}
+              </Text>
+            ) : null}
+            {item.usage ? (
+              <Text variant="micro" color="secondary" numberOfLines={1}>
+                {item.usage}
+              </Text>
+            ) : null}
+          </PressableScale>
+        </Animated.View>
+      );
+    },
+    [currentDefault, onSelect, tokens.backgroundInset, tokens.borderSubtle, tokens.accentWarm],
+  );
 
   if (!visible) return null;
 
-  const title = mode === 'agent' && agentId 
-    ? `Select model for agent: ${agentId}`
-    : mode === 'fallbacks' 
-      ? 'Select fallback models' 
-      : 'Select default model';
+  const title =
+    mode === 'agent' && agentId
+      ? `Model for agent ${agentId}`
+      : mode === 'fallbacks'
+        ? 'Fallback models'
+        : 'Apply model';
 
   return (
-    <BaseSheet
-      visible={visible}
-      eyebrow="MODEL PICKER"
-      title={title}
-      onClose={onClose}
-      closeLabel="Done"
-      position="bottom"
-    >
-      {currentDefault && (
-        <Text color="secondary" style={styles.current}>Current: {currentDefault}</Text>
-      )}
-
+    <BaseSheet visible={visible} eyebrow="MODEL PICKER" title={title} onClose={onClose} closeLabel="Done" position="bottom">
       {models.length === 0 ? (
-        <Text color="tertiary" style={{ padding: Spacing.three }}>
-          No models available. Use /model list or tap Refresh.
-        </Text>
+        <EmptyState
+          icon={{ ios: 'cpu', android: 'memory', web: 'memory' }}
+          title="No models found"
+          description="The gateway has not reported a model catalog yet. Refresh to ask again."
+          actionLabel={onRefresh ? 'Refresh catalog' : undefined}
+          onAction={onRefresh}
+        />
       ) : (
         <FlatList
           data={models}
@@ -108,43 +135,49 @@ export function ModelPickerSheet({
         />
       )}
 
-      {onRefresh && (
-        <PressableScale
-          style={{ alignSelf: 'flex-end', marginTop: Spacing.two }}
+      {onRefresh && models.length > 0 ? (
+        <Button
+          label="Refresh catalog"
+          variant="ghost"
+          size="sm"
           onPress={async () => {
             await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             onRefresh();
-          }}>
-          <Text variant="caption" color="accent">Refresh catalog</Text>
-        </PressableScale>
-      )}
+          }}
+          style={styles.refresh}
+        />
+      ) : null}
     </BaseSheet>
   );
 }
 
 const styles = StyleSheet.create({
-  current: {
-    paddingHorizontal: Spacing.three,
-    paddingBottom: Spacing.two,
-  },
   list: {
-    flex: 1,
-    paddingHorizontal: Spacing.three,
+    flexGrow: 0,
+    paddingHorizontal: Spacing.two,
   },
   modelCard: {
     borderRadius: Radius.md,
     padding: Spacing.two,
     marginBottom: Spacing.two,
     borderWidth: StyleSheet.hairlineWidth,
+    gap: 2,
   },
   modelHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: Spacing.two,
+  },
+  modelId: {
+    flex: 1,
+    minWidth: 0,
   },
   modelMeta: {
-    flexDirection: 'row',
-    gap: Spacing.two,
+    marginTop: 2,
+  },
+  refresh: {
+    alignSelf: 'flex-end',
     marginTop: Spacing.one,
   },
 });

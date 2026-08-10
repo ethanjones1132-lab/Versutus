@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { probeGatewayUrl } from '@/lib/gateway/probe';
 import type {
@@ -20,7 +20,8 @@ export function useGatewayReachability({
   status: ConnectionStatus;
 }) {
   const [results, setResults] = useState<Record<string, GatewayReachability>>({});
-  const [lastProbeAt, setLastProbeAt] = useState<Record<string, number>>({});
+  // Debounce ledger — a ref so probe bookkeeping doesn't retrigger the wave.
+  const lastProbeAtRef = useRef<Record<string, number>>({});
   const signature = useMemo(
     () => gateways.map((gateway) => `${gateway.id}:${gateway.url}`).join('|'),
     [gateways],
@@ -64,11 +65,11 @@ export function useGatewayReachability({
         const active = activeGateway?.id === gateway.id;
         if (cancelled || (active && status === 'connected')) continue;
 
-        const last = lastProbeAt[gateway.id] ?? 0;
+        const last = lastProbeAtRef.current[gateway.id] ?? 0;
         if (now - last < MIN_PROBE_INTERVAL_MS) continue;
 
         setReachability(gateway, 'checking');
-        setLastProbeAt((prev) => ({ ...prev, [gateway.id]: now }));
+        lastProbeAtRef.current = { ...lastProbeAtRef.current, [gateway.id]: now };
 
         const result = await probeGatewayUrl(gateway.url, PROBE_TIMEOUT_MS);
         if (cancelled) return;

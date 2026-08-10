@@ -36,6 +36,7 @@ export interface PortalClient {
   getCapabilities(): Promise<GatewayCapabilities>;
   getSessions(limit?: number): Promise<HermesSession[]>;
   createSession?(title?: string): Promise<HermesSession>;
+  deleteSession?(sessionId: string): Promise<void>;
   getSessionMessages(sessionId: string, limit?: number): Promise<SessionMessage[]>;
   stopRun(runId: string): Promise<void>;
   /** Pause automatic reconnect (e.g. app backgrounded). */

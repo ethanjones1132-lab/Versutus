@@ -19,6 +19,8 @@ export type GatewayProfile = {
   kind?: GatewayKind;
   /** Bearer token for API_SERVER_KEY auth */
   token?: string;
+  /** SHA-256 fingerprint observed from discovery; native fetch does not verify it. */
+  tlsFingerprint?: string;
   /** OpenClaw bootstrap/setup token (one-time pairing secret) */
   bootstrapToken?: string;
   /** Session key for scoping long-term memory (optional) */
@@ -108,7 +110,7 @@ export type SessionsResponse = {
 export type SessionMessage = {
   id?: string;
   role: string;
-  content: string | Array<{ type?: string; text?: string }>;
+  content: string | { type?: string; text?: string }[];
   timestamp?: number;
 };
 
@@ -119,12 +121,24 @@ export type SessionMessagesResponse = {
 
 // ─── Chat ──────────────────────────────────────────────────────────
 
+/** A single tool invocation surfaced during a response (rendered as a card). */
+export type ChatToolCall = {
+  name: string;
+  status?: 'running' | 'complete' | 'error';
+  durationMs?: number;
+  detail?: string;
+};
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant' | 'system';
   text: string;
   timestamp?: number;
   streaming?: boolean;
+  /** True while an offline message waits for the next connected state. */
+  queued?: boolean;
+  /** Tool calls attached to this message, when the stream exposes them. */
+  toolCalls?: ChatToolCall[];
   command?: {
     input?: string;
     title?: string;
@@ -140,11 +154,11 @@ export type ChatCompletionResponse = {
   object: string;
   created: number;
   model: string;
-  choices: Array<{
+  choices: {
     index: number;
     message: { role: string; content: string };
     finish_reason: string;
-  }>;
+  }[];
   usage: {
     prompt_tokens: number;
     completion_tokens: number;
@@ -300,7 +314,7 @@ export type GatewayActionPreview = {
   title: string;
   summary: string;
   risk: 'low' | 'medium' | 'high';
-  diff?: Array<{ label: string; before: string; after: string }>;
+  diff?: { label: string; before: string; after: string }[];
   applyCommand: string;
   affectedTarget?: string;
 };

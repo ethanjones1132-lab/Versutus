@@ -1,67 +1,57 @@
 import { Platform } from 'react-native';
 import { Easing } from 'react-native-reanimated';
 
+/**
+ * Versutus design tokens — dark-only (decision 2026-08-10, see
+ * docs/roadmap-capability-ui-overhaul.md). `Palette` is the single source of
+ * truth. Feature components should consume it via `useTokens()`; primitives
+ * under components/ui may import `Palette` directly.
+ */
 export const Palette = {
+  // Elevation ramp: base → inset (recessed) → elevated (cards) → raised (sheets/heroes)
   background: '#030304',
-  backgroundElevated: '#0A0908',
   backgroundInset: '#070607',
+  backgroundElevated: '#0A0908',
+  backgroundRaised: '#100E0B',
+
+  // Glass tiers
   glass: 'rgba(14, 12, 10, 0.78)',
   glassBorder: 'rgba(229, 198, 126, 0.18)',
   glassHighlight: 'rgba(255, 236, 190, 0.075)',
+  glassHero: 'rgba(22, 18, 14, 0.88)',
+  glassHeroBorder: 'rgba(240, 214, 144, 0.32)',
 
+  // Text
   textPrimary: '#F7F1E3',
   textSecondary: '#B8AE9A',
   textTertiary: '#7F7668',
   textInverse: '#070503',
 
+  // Accent
   accent: '#D6B76A',
   accentMuted: 'rgba(214, 183, 106, 0.18)',
   accentWarm: '#F0D690',
   accentWarmMuted: 'rgba(240, 214, 144, 0.16)',
 
+  // Status
   statusConnected: '#63D7A6',
+  statusConnectedMuted: 'rgba(99, 215, 166, 0.16)',
   statusConnecting: '#D6B76A',
   statusDisconnected: '#E56D6D',
+  statusDisconnectedMuted: 'rgba(229, 109, 109, 0.16)',
   statusPairing: '#F0D690',
 
+  // Borders & scrim
   border: 'rgba(229, 198, 126, 0.12)',
+  borderSubtle: 'rgba(229, 198, 126, 0.08)',
   borderStrong: 'rgba(240, 214, 144, 0.28)',
-} as const;
-
-export const LightPalette = {
-  background: '#F6F1E7',
-  backgroundElevated: '#FFFCF4',
-  backgroundInset: '#EFE6D4',
-  glass: 'rgba(255, 252, 244, 0.84)',
-  glassBorder: 'rgba(95, 68, 23, 0.14)',
-  glassHighlight: 'rgba(255, 255, 255, 0.72)',
-
-  textPrimary: '#17120A',
-  textSecondary: '#5F5546',
-  textTertiary: '#9C8E78',
-  textInverse: '#070503',
-
-  accent: '#9D7225',
-  accentMuted: 'rgba(157, 114, 37, 0.13)',
-  accentWarm: '#C7953B',
-  accentWarmMuted: 'rgba(199, 149, 59, 0.16)',
-
-  statusConnected: '#059669',
-  statusConnecting: '#D97706',
-  statusDisconnected: '#DC2626',
-  statusPairing: '#A67C2E',
-
-  border: 'rgba(0, 0, 0, 0.08)',
-  borderStrong: 'rgba(0, 0, 0, 0.14)',
+  overlay: 'rgba(0, 0, 0, 0.62)',
 } as const;
 
 export type SemanticPalette = {
   [K in keyof typeof Palette]: string;
 };
 export type SemanticColor = keyof SemanticPalette;
-
-/** @deprecated Use SemanticColor — kept for ThemedText/ThemedView migration */
-export type LegacyThemeColor = 'text' | 'background' | 'backgroundElement' | 'backgroundSelected' | 'textSecondary';
 
 export const Spacing = {
   half: 2,
@@ -74,10 +64,12 @@ export const Spacing = {
 } as const;
 
 export const Radius = {
+  xs: 6,
   sm: 8,
   md: 10,
   lg: 14,
   xl: 18,
+  xxl: 24,
   full: 999,
 } as const;
 
@@ -107,6 +99,7 @@ export const Typography = {
   headline: { fontSize: 20, lineHeight: 26, fontWeight: '600' as const, letterSpacing: 0 },
   body: { fontSize: 16, lineHeight: 24, fontWeight: '500' as const, letterSpacing: 0 },
   caption: { fontSize: 13, lineHeight: 18, fontWeight: '500' as const, letterSpacing: 0 },
+  micro: { fontSize: 11, lineHeight: 14, fontWeight: '500' as const, letterSpacing: 0.4 },
   mono: { fontSize: 12, lineHeight: 18, fontWeight: '500' as const },
 } as const;
 
@@ -138,18 +131,3 @@ export const Fonts = Platform.select({
     mono: 'JetBrains Mono, var(--font-mono)',
   },
 });
-
-export function paletteForScheme(scheme: 'light' | 'dark'): SemanticPalette {
-  return scheme === 'light' ? LightPalette : Palette;
-}
-
-/** Maps legacy theme keys to semantic palette for gradual migration */
-export function legacyColorMap(palette: SemanticPalette): Record<LegacyThemeColor, string> {
-  return {
-    text: palette.textPrimary,
-    background: palette.background,
-    backgroundElement: palette.backgroundElevated,
-    backgroundSelected: palette.glassHighlight,
-    textSecondary: palette.textSecondary,
-  };
-}

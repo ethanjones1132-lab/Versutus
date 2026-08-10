@@ -1,21 +1,21 @@
 import { useRouter } from 'expo-router';
-import { useMemo } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
 
 import * as Haptics from 'expo-haptics';
 
-import { Button, Card, Text } from '@/components/ui';
+import { PulsingDot, statusColor } from '@/components/connection-badge';
 import { CompactGatewayList } from '@/components/gateway/compact-gateway-list';
 import { GatewayCapabilities } from '@/components/gateway/gateway-capabilities';
+import { Badge, Button, Card, Icon, StatTile, Text } from '@/components/ui';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
-import { buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
-import type { GatewayCapabilitySnapshot } from '@/lib/gateway/types';
+import { useTokens } from '@/hooks/use-tokens';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
 export function GatewayHomeDashboard() {
   const router = useRouter();
+  const tokens = useTokens();
   const {
     gateways,
     activeGateway,
@@ -28,11 +28,25 @@ export function GatewayHomeDashboard() {
     retryAutoConnect,
     capabilitySnapshot,
     refreshCapabilities,
+    activityRuns,
+    pendingRunApproval,
   } = useGateway();
   const reachability = useGatewayReachability({ gateways, activeGateway, status });
 
   const connected = status === 'connected' && !!activeGateway;
   const activeLabel = activeGateway?.name ?? 'No active gateway';
+  const activeRuns = activityRuns.filter((run) => run.status === 'running' || run.status === 'waiting-approval');
+  const capabilityCount = capabilitySnapshot.groups.filter((group) =>
+    ['available', 'ready', 'fresh'].includes(group.status),
+  ).length;
+  const orbColor = statusColor(tokens, status);
+  const statusLabel = connected
+    ? 'Connected'
+    : status === 'connecting' || status === 'reconnecting'
+      ? 'Connecting'
+      : status === 'pairing'
+        ? 'Needs approval'
+        : 'Disconnected';
 
   function confirmDelete(gateway: GatewayProfile) {
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
@@ -48,26 +62,29 @@ export function GatewayHomeDashboard() {
 
   return (
     <>
-      <Card padding={Spacing.three} style={styles.summaryCard}>
-        <View style={styles.metalRule} />
-        <View style={styles.summaryHeader}>
+      <Card variant="hero" padding={Spacing.four} style={styles.summaryCard}>
+        <View style={styles.heroHeader}>
+          <View style={[styles.orb, { borderColor: tokens.glassHeroBorder }]}>
+            <PulsingDot
+              color={orbColor}
+              active={status === 'connecting' || status === 'reconnecting' || status === 'pairing' || activeRuns.length > 0}
+            />
+          </View>
           <View style={styles.summaryText}>
             <Text variant="caption" style={styles.eyebrow}>
-              OpenClaw gateway
+              Active gateway
             </Text>
             <Text variant="title" numberOfLines={1} style={styles.title}>
               {activeLabel}
             </Text>
             <Text numberOfLines={2} style={styles.onGlassSecondary}>
               {connected
-                ? 'Ready for chat, terminal, and slash commands.'
+                ? 'Ready for chat, tools, runs, and slash commands.'
                 : 'Saved locally. Select a reachable gateway to activate it.'}
             </Text>
           </View>
           <View style={styles.statusText}>
-            <Text variant="caption" color={connected ? 'accentWarm' : 'tertiary'} style={styles.statusLabel}>
-              {connected ? 'Connected' : status === 'connecting' || status === 'reconnecting' ? 'Connecting' : 'Disconnected'}
-            </Text>
+            <Badge label={statusLabel} tone={connected ? 'success' : status === 'pairing' ? 'accent' : 'neutral'} />
             {activeHello?.server?.version && connected ? (
               <Text variant="caption" color="tertiary" numberOfLines={1} style={styles.onGlassTertiary}>
                 v{activeHello.server.version}
@@ -97,6 +114,15 @@ export function GatewayHomeDashboard() {
             style={styles.primaryAction}
           />
           <Button
+            label="Activity"
+            onPress={async () => {
+              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/activity');
+            }}
+            variant="secondary"
+            style={styles.primaryAction}
+          />
+          <Button
             label="Tools"
             onPress={async () => {
               await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -106,17 +132,57 @@ export function GatewayHomeDashboard() {
             variant="secondary"
             style={styles.primaryAction}
           />
-          <Button
-            label="Retry connection"
-            onPress={async () => {
-              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              void retryAutoConnect();
-            }}
-            variant="ghost"
-            style={styles.retryAction}
-          />
         </View>
+        <Button
+          label="Retry connection"
+          onPress={async () => {
+            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            void retryAutoConnect();
+          }}
+          variant="ghost"
+          size="sm"
+          style={styles.retryAction}
+        />
       </Card>
+
+      {pendingRunApproval ? (
+        <Card variant="hero" padding={Spacing.three} style={[styles.approvalCard, { borderColor: tokens.accentWarm }]}>
+          <View style={styles.approvalHeader}>
+            <Icon
+              name={{ ios: 'hand.raised.fill', android: 'pan_tool', web: 'pan_tool' }}
+              size={16}
+              color="accentWarm"
+            />
+            <Text variant="caption" color="accentWarm" style={styles.approvalLabel}>
+              Run needs approval
+            </Text>
+          </View>
+          <Text variant="body" numberOfLines={2}>
+            {pendingRunApproval.prompt}
+          </Text>
+          <Button label="Review approval" variant="secondary" size="sm" onPress={() => router.push('/activity')} />
+        </Card>
+      ) : null}
+
+      <View style={styles.statsGrid}>
+        <StatTile
+          label="Gateways"
+          value={String(gateways.length)}
+          icon={{ ios: 'network', android: 'hub', web: 'hub' }}
+        />
+        <StatTile
+          label="Runs"
+          value={String(activityRuns.length)}
+          sub={activeRuns.length > 0 ? `${activeRuns.length} in flight` : undefined}
+          icon={{ ios: 'bolt', android: 'bolt', web: 'bolt' }}
+        />
+        <StatTile
+          label="Capabilities"
+          value={String(capabilityCount)}
+          sub={capabilitySnapshot.status}
+          icon={{ ios: 'square.grid.2x2', android: 'apps', web: 'apps' }}
+        />
+      </View>
 
       <View style={styles.sectionHeader}>
         <Text variant="caption">Gateways</Text>
@@ -168,15 +234,20 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
     borderColor: Palette.borderStrong,
   },
-  metalRule: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Palette.accentWarm,
-    opacity: 0.55,
-  },
-  summaryHeader: {
+  heroHeader: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: Spacing.three,
+  },
+  orb: {
+    width: 56,
+    height: 56,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    backgroundColor: Palette.backgroundInset,
   },
   summaryText: {
     flex: 1,
@@ -195,20 +266,36 @@ const styles = StyleSheet.create({
     maxWidth: 132,
     gap: Spacing.one,
   },
-  statusLabel: {
-    textTransform: 'uppercase',
-  },
   primaryActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: Spacing.two,
   },
   primaryAction: {
     flex: 1,
+    minWidth: 92,
     minHeight: 44,
   },
   retryAction: {
-    minWidth: 82,
-    minHeight: 44,
+    alignSelf: 'flex-start',
+  },
+  approvalCard: {
+    borderRadius: Radius.xl,
+    borderWidth: StyleSheet.hairlineWidth * 2,
+    gap: Spacing.two,
+  },
+  approvalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  approvalLabel: {
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    gap: Spacing.two,
   },
   sectionHeader: {
     flexDirection: 'row',

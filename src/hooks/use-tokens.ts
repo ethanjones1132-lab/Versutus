@@ -1,31 +1,14 @@
-import { Platform } from 'react-native';
-
-import { legacyColorMap, paletteForScheme, type SemanticPalette } from '@/constants/tokens';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { Palette, type SemanticPalette } from '@/constants/tokens';
 
 export type Tokens = SemanticPalette & {
-  scheme: 'light' | 'dark';
+  scheme: 'dark';
 };
 
-function resolveScheme(raw: ReturnType<typeof useColorScheme>): 'light' | 'dark' {
-  // Brand-first: lock dark until a light luxury surface is intentionally designed and baselined.
-  if (Platform.OS === 'android' || Platform.OS === 'ios' || Platform.OS === 'web') return 'dark';
-  if (raw === 'unspecified' || raw == null) return 'dark';
-  return raw;
-}
-
+/**
+ * Dark-only (decision 2026-08-10): returns the single dark palette.
+ * Kept as a hook so feature components share one consumption contract and a
+ * future light surface can be reintroduced without touching call sites.
+ */
 export function useTokens(): Tokens {
-  const scheme = resolveScheme(useColorScheme());
-  const palette = paletteForScheme(scheme);
-
-  return {
-    scheme,
-    ...palette,
-  };
-}
-
-/** @deprecated Prefer useTokens — returns legacy-shaped colors for existing components */
-export function useLegacyThemeColors() {
-  const tokens = useTokens();
-  return legacyColorMap(tokens);
+  return { scheme: 'dark', ...Palette };
 }

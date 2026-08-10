@@ -3,7 +3,8 @@ import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 
 import { DiscoveredGatewayRow } from '@/components/discovered-gateway-row';
 import { CompactGatewayList } from '@/components/gateway/compact-gateway-list';
-import { Button, Card, Screen, Text } from '@/components/ui';
+import { TransportSecurityCard } from '@/components/gateway/transport-security-card';
+import { Badge, Button, Card, Divider, Icon, Screen, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGatewaySettingsScreen } from '@/hooks/use-gateway-settings-screen';
 import { useTokens } from '@/hooks/use-tokens';
@@ -29,58 +30,112 @@ export default function GatewaySettingsScreen() {
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.row}>
-          <Text variant="caption">Connect automatically on launch</Text>
-          <Switch
-            value={settings.autoConnect}
-            onValueChange={(value) => void setAutoConnect(value)}
-            trackColor={{ true: tokens.accent, false: tokens.border }}
-            thumbColor={tokens.textPrimary}
-          />
+        <View style={styles.heading}>
+          <Text variant="title">Gateway settings</Text>
+          <Text variant="caption" color="secondary">
+            Control discovery, saved profiles, and the device identity used for pairing.
+          </Text>
         </View>
 
+        <Card variant="hero" padding={Spacing.three} style={styles.card}>
+          <View style={styles.sectionHeading}>
+            <View style={styles.sectionTitle}>
+              <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+                Startup
+              </Text>
+              <Text variant="headline">Automatic connection</Text>
+            </View>
+            <Switch
+              value={settings.autoConnect}
+              onValueChange={(value) => void setAutoConnect(value)}
+              trackColor={{ true: tokens.accent, false: tokens.border }}
+              thumbColor={tokens.textPrimary}
+              accessibilityLabel="Connect automatically on launch"
+            />
+          </View>
+          <Text variant="caption" color="secondary">
+            Versutus probes saved profiles, Tailscale, and local discovery when the app opens.
+          </Text>
+        </Card>
+
         {settings.tailscaleHost ? (
-          <Card padding={Spacing.three} style={styles.card}>
-            <Text variant="caption">Your PC</Text>
+          <Card variant="surface" padding={Spacing.three} style={styles.card}>
+            <View style={styles.sectionHeading}>
+              <View style={styles.sectionTitle}>
+                <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+                  Primary route
+                </Text>
+                <Text variant="headline">Your PC</Text>
+              </View>
+              <Badge label="Saved" tone="success" dot={false} />
+            </View>
             <Text color="secondary">{settings.pcName ?? settings.tailscaleHost}</Text>
-            <Text variant="mono" color="secondary">
+            <Text variant="mono" color="tertiary">
               {settings.tailscaleHost}
             </Text>
             <Link href="/onboarding" asChild>
-              <Pressable>
+              <Pressable accessibilityRole="button">
                 <Text variant="link" color="accent">
-                  Update PC or setup token
+                  Update address or API key
                 </Text>
               </Pressable>
             </Link>
           </Card>
         ) : null}
 
-        {deviceId ? (
-          <Text variant="mono" color="tertiary">
-            Device {deviceId.slice(0, 20)}...
-          </Text>
+        {activeGateway ? (
+          <>
+            <TransportSecurityCard url={activeGateway.url} tlsFingerprint={activeGateway.tlsFingerprint} />
+            <Card variant="inset" padding={Spacing.three} style={styles.card}>
+              <View style={styles.sectionHeading}>
+                <View style={styles.sectionTitle}>
+                  <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+                    Device identity
+                  </Text>
+                  <Text variant="headline">This device</Text>
+                </View>
+                <Icon name={{ ios: 'iphone', android: 'smartphone', web: 'smartphone' }} size={18} color="accentWarm" />
+              </View>
+              {deviceId ? (
+                <Text variant="mono" color="secondary">
+                  {deviceId}
+                </Text>
+              ) : (
+                <Text variant="caption" color="tertiary">
+                  Loading device identity…
+                </Text>
+              )}
+              <Text variant="micro" color="tertiary">
+                Used for gateway pairing and access requests. The private key remains in secure storage.
+              </Text>
+            </Card>
+          </>
         ) : null}
 
         <View style={styles.sectionHeader}>
-          <Text variant="caption">Nearby</Text>
-          <Pressable onPress={discovery.rescan}>
-            <Text variant="caption" color="tertiary">
-              {discovery.status === 'scanning' ? 'Scanning...' : 'Rescan'}
+          <View style={styles.sectionTitle}>
+            <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+              Discovery
+            </Text>
+            <Text variant="headline">Nearby gateways</Text>
+          </View>
+          <Pressable onPress={discovery.rescan} accessibilityRole="button">
+            <Text variant="link" color="accent">
+              {discovery.status === 'scanning' ? 'Scanning…' : 'Rescan'}
             </Text>
           </Pressable>
         </View>
 
         {discovery.status === 'unavailable' ? (
-          <Card padding={Spacing.three}>
+          <Card variant="inset" padding={Spacing.three} style={styles.card}>
             <Text color="secondary">
               Local discovery needs a native build. Tailscale auto-connect still works.
             </Text>
           </Card>
         ) : discovery.gateways.length === 0 ? (
-          <Card padding={Spacing.three}>
+          <Card variant="inset" padding={Spacing.three} style={styles.card}>
             <Text color="secondary">
-              {discovery.status === 'scanning' ? 'Scanning local network...' : 'No nearby gateways found.'}
+              {discovery.status === 'scanning' ? 'Scanning the local network…' : 'No nearby gateways found.'}
             </Text>
           </Card>
         ) : (
@@ -94,12 +149,18 @@ export default function GatewaySettingsScreen() {
           ))
         )}
 
+        <Divider />
         <View style={styles.sectionHeader}>
-          <Text variant="caption">Saved gateways</Text>
+          <View style={styles.sectionTitle}>
+            <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+              Profiles
+            </Text>
+            <Text variant="headline">Saved gateways</Text>
+          </View>
           <Link href="/gateway/add" asChild>
-            <Pressable>
+            <Pressable accessibilityRole="button">
               <Text variant="link" color="accent">
-                Add manually
+                Add gateway
               </Text>
             </Pressable>
           </Link>
@@ -115,7 +176,7 @@ export default function GatewaySettingsScreen() {
           onDelete={(gateway) => handleDelete(gateway.id)}
         />
 
-        <Button label="Refresh" variant="ghost" onPress={() => void refreshGateways()} />
+        <Button label="Refresh saved profiles" variant="ghost" size="sm" onPress={() => void refreshGateways()} />
       </ScrollView>
     </Screen>
   );
@@ -126,18 +187,31 @@ const styles = StyleSheet.create({
     padding: Spacing.four,
     gap: Spacing.three,
   },
-  row: {
+  heading: {
+    gap: Spacing.one,
+  },
+  card: {
+    borderRadius: Radius.lg,
+    gap: Spacing.two,
+  },
+  sectionHeading: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  sectionTitle: {
+    flex: 1,
+    gap: Spacing.one,
+  },
+  eyebrow: {
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-  },
-  card: {
-    borderRadius: Radius.lg,
     gap: Spacing.two,
   },
 });

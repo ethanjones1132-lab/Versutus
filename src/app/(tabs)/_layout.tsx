@@ -49,6 +49,15 @@ export default function TabsLayout() {
         />
       </NativeTabs.Trigger>
 
+      <NativeTabs.Trigger name="activity">
+        <NativeTabs.Trigger.Label>Activity</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon
+          sf={{ default: 'bolt', selected: 'bolt.fill' }}
+          md={{ default: 'bolt', selected: 'bolt' }}
+          renderingMode="template"
+        />
+      </NativeTabs.Trigger>
+
       <NativeTabs.Trigger name="terminal">
         <NativeTabs.Trigger.Label>Tools</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon

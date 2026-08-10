@@ -39,9 +39,12 @@
     "react-native-worklets": "0.8.3"
   },
   "devDependencies": {
+    "@types/jest": "29.5.14",
     "@types/react": "~19.2.2",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~56.0.4",
+    "jest": "~29.7.0",
+    "jest-expo": "~56.0.5",
     "tsx": "^4.23.8",
     "typescript": "~6.0.3"
   },
@@ -52,10 +55,17 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
+    "test": "jest --runInBand",
     "smoke:gateway-commands": "node ./scripts/smoke-gateway-commands.mjs",
     "smoke:portal": "tsx ./scripts/smoke-portal.mts",
     "build:android:preview": "eas build --profile preview --platform android",
     "build:android:preview:local": "eas build --profile preview --platform android --local"
   },
-  "private": true
+  "private": true,
+  "jest": {
+    "preset": "jest-expo",
+    "moduleNameMapper": {
+      "^@/(.*)$": "<rootDir>/src/$1"
+    }
+  }
 }

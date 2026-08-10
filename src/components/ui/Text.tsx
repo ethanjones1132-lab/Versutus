@@ -12,6 +12,10 @@ const colorKey = {
   accent: 'accent',
   accentWarm: 'accentWarm',
   inverse: 'textInverse',
+  statusConnected: 'statusConnected',
+  statusConnecting: 'statusConnecting',
+  statusDisconnected: 'statusDisconnected',
+  statusPairing: 'statusPairing',
 } as const;
 
 const variantStyle = {
@@ -20,6 +24,7 @@ const variantStyle = {
   headline: { ...Typography.headline, fontFamily: FontFamily.sansSemiBold },
   body: { ...Typography.body, fontFamily: FontFamily.sans },
   caption: { ...Typography.caption, fontFamily: FontFamily.sans },
+  micro: { ...Typography.micro, fontFamily: FontFamily.sans },
   mono: { ...Typography.mono, fontFamily: FontFamily.mono },
   link: { ...Typography.body, fontFamily: FontFamily.sansSemiBold },
 } as const;

@@ -5,15 +5,26 @@ import { AppState, Platform } from 'react-native';
 import { GatewayDiscoveryScanner, isNativeDiscoveryAvailable } from '@/lib/discovery/scanner';
 import { buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/lib/gateway/candidates';
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
-import { createMessageId, extractMessageText, historyToChatMessages } from '@/lib/gateway/messages';
+import { createMessageId, historyToChatMessages } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { categorizeProbeError, probeGatewayCandidates, probeGatewayUrl, probeHighPriorityCandidates } from '@/lib/gateway/probe';
 import { isSlashCommandInput } from '@/lib/gateway/slash-commands';
 import { GATEWAY_COMMANDS, type GatewayCommand } from '@/lib/gateway/dashboard';
 import { loadRecentCommands, pushRecentCommand } from '@/lib/gateway/recents';
-import { executeRun, type RunCapableClient } from '@/lib/gateway/runs';
+import { ACTIVITY_EVENT_CAP, executeRun, runEventPreview, type ActivityRun, type RunCapableClient } from '@/lib/gateway/runs';
 import { notifyApprovalRequired, notifyGatewayDown, notifyRunComplete } from '@/lib/notifications/local';
-import type { GatewayActionPreview } from '@/lib/gateway/types';
+import type {
+  ChatMessage,
+  CommandTranscriptEntry,
+  ConnectionStatus,
+  GatewayActionPreview,
+  GatewayCapabilities,
+  GatewayCapabilitySnapshot,
+  GatewayHelloOk,
+  GatewayProfile,
+  HermesSession,
+  PairingDetails,
+} from '@/lib/gateway/types';
 import {
   createGatewayProfile,
   loadActiveGatewayId,
@@ -22,21 +33,12 @@ import {
   saveActiveGatewayId,
   upsertGateway,
 } from '@/lib/gateway/storage';
-import type {
-  ChatMessage,
-  ConnectionStatus,
-  GatewayHelloOk,
-  GatewayProfile,
-  HermesSession,
-  PairingDetails,
-} from '@/lib/gateway/types';
 import { loadAppSettings, saveAppSettings, type AppSettings } from '@/lib/settings/app-settings';
 import {
   appendTranscript,
   loadTranscripts,
   updateTranscript,
 } from '@/lib/gateway/transcript';
-import type { CommandTranscriptEntry, GatewayCapabilities, GatewayCapabilitySnapshot } from '@/lib/gateway/types';
 import { buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
 
 export type ConnectionPhase =
@@ -86,8 +88,11 @@ type GatewayContextValue = {
   deleteGateway: (id: string) => Promise<void>;
   connectGateway: (gateway: GatewayProfile) => Promise<void>;
   disconnectGateway: () => void;
-  sendMessage: (text: string) => Promise<void>;
-  sendChatInput: (text: string) => Promise<void>;
+  sendMessage: (text: string, existingMessageId?: string) => Promise<void>;
+  sendChatInput: (
+    text: string,
+    options?: { fromQueue?: boolean; messageId?: string },
+  ) => Promise<void>;
   stopStreaming: () => Promise<void>;
   reloadHistory: () => Promise<void>;
   setupFromPcAddress: (pcAddress: string, token?: string) => Promise<boolean>;
@@ -109,6 +114,10 @@ type GatewayContextValue = {
     prompt: string,
     onEvent?: (event: { type: string; data?: Record<string, unknown>; timestamp?: number }) => void,
   ) => Promise<import('@/lib/gateway/runs').RunOutcome>;
+  /** Runs initiated from this app (newest first), for the Activity surface. */
+  activityRuns: ActivityRun[];
+  /** Stop a running run: aborts the local driver and asks the gateway to stop it. */
+  stopActivityRun: (runId: string) => void;
   modelPicker: {
     visible: boolean;
     mode: 'default' | 'fallbacks' | 'agent';
@@ -124,6 +133,14 @@ type GatewayContextValue = {
   selectSession: (sessionId: string) => void;
   sessionList: any[];
   currentSessionId?: string;
+  /** True while session history is being (re)loaded — drives chat skeletons. */
+  historyLoading: boolean;
+  /** Create a fresh session on the gateway and make it current. */
+  createNewSession: () => Promise<void>;
+  /** Delete a session on the gateway (when the adapter supports it). */
+  deleteSessionById: (sessionId: string) => Promise<void>;
+  /** Remove a message from the local view (not propagated to the gateway). */
+  deleteLocalMessage: (id: string) => void;
 };
 
 const GatewayContext = createContext<GatewayContextValue | null>(null);
@@ -272,7 +289,9 @@ function configuredGatewayHosts(): string[] {
   push(process.env.EXPO_PUBLIC_OPENCLAW_GATEWAY_HOST);
 
   const extra = Constants.expoConfig?.extra as Record<string, unknown> | undefined;
-  const extraHosts = extra?.openClawGatewayHosts;
+  // `openClawGatewayHosts` remains a read-only migration fallback for old
+  // builds/configs; new config uses the gateway-neutral name.
+  const extraHosts = extra?.gatewayHosts ?? extra?.openClawGatewayHosts;
   if (Array.isArray(extraHosts)) {
     for (const host of extraHosts) push(host);
   } else {
@@ -350,9 +369,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [sessionList, setSessionList] = useState<HermesSession[]>([]);
   const [sessionSelector, setSessionSelector] = useState<{ visible: boolean }>({ visible: false });
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const confirmationBypassRef = useRef(false);
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
   const [pendingRunApproval, setPendingRunApproval] = useState<{ runId: string; prompt: string } | null>(null);
+  const [activityRuns, setActivityRuns] = useState<ActivityRun[]>([]);
   const runApprovalResolverRef = useRef<((approved: boolean, feedback?: string) => void) | null>(null);
   const runAbortControllerRef = useRef<AbortController | null>(null);
   const gatewayDownNotifiedRef = useRef(false);
@@ -367,11 +388,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const scheduleAutoRetryRef = useRef<(delayMs?: number) => void>(() => undefined);
   const commandStartTimeRef = useRef<number>(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const offlineQueueRef = useRef<{ id: string; text: string }[]>([]);
+  const flushingOfflineRef = useRef(false);
 
   const reloadHistoryFor = useCallback(async (gateway: GatewayProfile) => {
     const client = clientRef.current;
     if (!client) return;
 
+    setHistoryLoading(true);
     try {
       let sessionId = gateway.sessionId ?? sessionIdRef.current;
 
@@ -430,6 +454,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLastError(null);
     } catch (error) {
       setLastError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setHistoryLoading(false);
     }
   }, []);
 
@@ -815,11 +841,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [activeGateway, status],
   );
 
-  const appendLocalMessage = useCallback((role: ChatMessage['role'], text: string, command?: ChatMessage['command']) => {
+  const appendLocalMessage = useCallback(
+    (
+      role: ChatMessage['role'],
+      text: string,
+      command?: ChatMessage['command'],
+      queued = false,
+    ) => {
     const id = createMessageId(role === 'user' ? 'user' : 'cmd');
     const ts = Date.now();
 
-    const msg: ChatMessage = { id, role, text, timestamp: ts, command };
+    const msg: ChatMessage = { id, role, text, timestamp: ts, command, queued };
     setMessages((prev) => [...prev, msg]);
 
     if (command?.input && activeGateway) {
@@ -842,8 +874,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       });
     }
 
-    return id;
-  }, [activeGateway]);
+      return id;
+    },
+    [activeGateway],
+  );
+
+  const queueOfflineInput = useCallback(
+    (text: string) => {
+      const id = appendLocalMessage('user', text, undefined, true);
+      offlineQueueRef.current.push({ id, text });
+      setLastError(null);
+    },
+    [appendLocalMessage],
+  );
 
   const updateLocalMessage = useCallback((id: string, patch: Partial<ChatMessage>) => {
     setMessages((prev) =>
@@ -905,19 +948,27 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, existingMessageId?: string) => {
       const trimmed = text.trim();
       const gateway = activeGateway;
       const client = clientRef.current;
       if (!trimmed || !gateway || !client || isSending) return;
 
-      const userMessage: ChatMessage = {
-        id: createMessageId('user'),
-        role: 'user',
-        text: trimmed,
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, userMessage]);
+      if (existingMessageId) {
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === existingMessageId ? { ...message, queued: false } : message,
+          ),
+        );
+      } else {
+        const userMessage: ChatMessage = {
+          id: createMessageId('user'),
+          role: 'user',
+          text: trimmed,
+          timestamp: Date.now(),
+        };
+        setMessages((prev) => [...prev, userMessage]);
+      }
       setIsSending(true);
       setLastError(null);
 
@@ -937,7 +988,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // Build bounded conversation context: last 20 real turns, no command payloads.
         const conversationMessages = [
           ...messages
-            .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.command && m.text.trim())
+            .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.command && !m.queued && m.text.trim())
             .slice(-20)
             .map((m) => ({ role: m.role, content: m.text })),
           { role: 'user', content: trimmed },
@@ -1002,7 +1053,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         abortControllerRef.current = null;
       }
     },
-    [activeGateway, isSending, messages, status],
+    [activeGateway, isSending, messages],
   );
 
   const resolveRunApproval = useCallback((approved: boolean, feedback?: string) => {
@@ -1035,12 +1086,41 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       runAbortControllerRef.current?.abort();
       runAbortControllerRef.current = abortController;
 
+      // Activity tracking: a provisional entry keyed by a local id until the
+      // gateway returns the real run id (onStarted re-keys it).
+      const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const startedAt = Date.now();
+      const patchRun = (runId: string, patch: Partial<ActivityRun>) => {
+        setActivityRuns((prev) =>
+          prev.map((run) => (run.id === runId ? { ...run, ...patch } : run)),
+        );
+      };
+      setActivityRuns((prev) => [
+        { id: localId, prompt, status: 'running', startedAt, events: [] },
+        ...prev,
+      ]);
+      const trackedId = { current: localId };
+
       try {
         const outcome = await executeRun(runCapable, prompt, {
           sessionId: sessionIdRef.current,
           model: gateway.model,
           signal: abortController.signal,
+          onStarted: (runId) => {
+            setActivityRuns((prev) =>
+              prev.map((run) => (run.id === trackedId.current ? { ...run, id: runId } : run)),
+            );
+            trackedId.current = runId;
+          },
           onEvent: (event) => {
+            const preview = runEventPreview(event);
+            setActivityRuns((prev) =>
+              prev.map((run) =>
+                run.id === trackedId.current
+                  ? { ...run, events: [...run.events, { type: event.type, preview, timestamp: event.timestamp }].slice(-ACTIVITY_EVENT_CAP) }
+                  : run,
+              ),
+            );
             onEvent?.({
               type: event.type,
               data: event.data,
@@ -1048,6 +1128,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             });
           },
           onApprovalRequired: (runId) => {
+            patchRun(trackedId.current, { status: 'waiting-approval' });
             setPendingRunApproval({ runId, prompt });
             void notifyApprovalRequired(prompt);
             onApprovalWaiting?.();
@@ -1057,6 +1138,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
                 resolve({ approved: false });
               };
               runApprovalResolverRef.current = (approved: boolean, feedback?: string) => {
+                patchRun(trackedId.current, { status: 'running', approved });
                 abortController.signal.removeEventListener('abort', onAbort);
                 resolve({ approved, feedback });
               };
@@ -1065,8 +1147,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           },
         });
 
+        const succeeded = /(complete|succeeded|success|done|finished)/i.test(outcome.status);
+        patchRun(trackedId.current, {
+          status: outcome.cancelled ? 'cancelled' : succeeded ? 'complete' : 'failed',
+          summary: (outcome.error ?? outcome.result ?? outcome.status ?? '').slice(0, 160) || undefined,
+          finishedAt: Date.now(),
+        });
+
         if (!outcome.cancelled) {
-          const succeeded = /(complete|succeeded|success|done|finished)/i.test(outcome.status);
           const summary = (outcome.error ?? outcome.result ?? outcome.status ?? '').slice(0, 120);
           void notifyRunComplete(
             succeeded ? 'Run complete' : outcome.status === 'cancelled' ? 'Run cancelled' : 'Run finished',
@@ -1081,19 +1169,58 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [status],
   );
 
+  const stopActivityRun = useCallback(
+    (runId: string) => {
+      const client = clientRef.current;
+      // Abort the local driver (denies any pending approval, stops the stream).
+      runAbortControllerRef.current?.abort();
+      runAbortControllerRef.current = null;
+      // Ask the gateway to stop the run server-side (best effort).
+      if (client?.stopRun && !runId.startsWith('local-')) {
+        void client.stopRun(runId).catch(() => undefined);
+      }
+      setActivityRuns((prev) =>
+        prev.map((run) =>
+          run.id === runId && (run.status === 'running' || run.status === 'waiting-approval')
+            ? { ...run, status: 'cancelled', finishedAt: Date.now() }
+            : run,
+        ),
+      );
+    },
+    [],
+  );
+
   const sendChatInput = useCallback(
-    async (text: string) => {
+    async (
+      text: string,
+      options?: { fromQueue?: boolean; messageId?: string },
+    ) => {
       const trimmed = text.trim();
       if (!trimmed) return;
+      const fromQueue = options?.fromQueue === true;
+      const client = clientRef.current;
+
+      if (!fromQueue && (!activeGateway || !client || status !== 'connected')) {
+        queueOfflineInput(trimmed);
+        return;
+      }
 
       if (!isSlashCommandInput(trimmed)) {
-        await sendMessage(trimmed);
+        await sendMessage(trimmed, options?.messageId);
         return;
       }
 
       if (isCommandRunning) return;
 
-      appendLocalMessage('user', trimmed);
+      if (options?.messageId) {
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === options.messageId ? { ...message, queued: false } : message,
+          ),
+        );
+      } else {
+        appendLocalMessage('user', trimmed);
+      }
       const commandLabel = readCommandLabel(trimmed);
       const matchingCmd = findMatchingCommand(trimmed);
       const hasConfirmFlag = trimmed.includes('--confirm');
@@ -1196,8 +1323,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       sendMessage,
       status,
       updateLocalMessage,
+      queueOfflineInput,
     ],
   );
+
+  useEffect(() => {
+    if (status !== 'connected' || isSending || isCommandRunning || flushingOfflineRef.current || offlineQueueRef.current.length === 0) return;
+
+    flushingOfflineRef.current = true;
+    const queued = offlineQueueRef.current.splice(0);
+    void (async () => {
+      try {
+        for (const item of queued) {
+          await sendChatInput(item.text, { fromQueue: true, messageId: item.id });
+        }
+      } finally {
+        flushingOfflineRef.current = false;
+      }
+    })();
+  }, [isCommandRunning, isSending, sendChatInput, status]);
 
   const openModelPicker = useCallback(async (mode: 'default' | 'fallbacks' | 'agent', agentId?: string) => {
     try {
@@ -1493,6 +1637,45 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     }
   }, [closeSessionSelector, activeGateway, reloadHistoryFor]);
 
+  const createNewSession = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client?.createSession) return;
+    try {
+      const created = await client.createSession();
+      sessionIdRef.current = created.id;
+      setCurrentSessionId(created.id);
+      setMessages([]);
+      setSessionList((prev) => [created, ...prev]);
+    } catch (error) {
+      setLastError(error instanceof Error ? error.message : String(error));
+    }
+    closeSessionSelector();
+  }, [closeSessionSelector]);
+
+  const deleteSessionById = useCallback(
+    async (sessionId: string) => {
+      const client = clientRef.current;
+      if (!client?.deleteSession) return;
+      try {
+        await client.deleteSession(sessionId);
+        setSessionList((prev) => prev.filter((session) => session.id !== sessionId));
+        if (sessionIdRef.current === sessionId) {
+          sessionIdRef.current = undefined;
+          setCurrentSessionId(undefined);
+          setMessages([]);
+          if (activeGateway) void reloadHistoryFor(activeGateway);
+        }
+      } catch (error) {
+        setLastError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [activeGateway, reloadHistoryFor],
+  );
+
+  const deleteLocalMessage = useCallback((id: string) => {
+    setMessages((prev) => prev.filter((message) => message.id !== id));
+  }, []);
+
   const value = useMemo<GatewayContextValue>(
     () => ({
       gateways,
@@ -1540,6 +1723,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       pendingRunApproval,
       resolveRunApproval,
       runTask,
+      activityRuns,
+      stopActivityRun,
       modelPicker,
       openModelPicker,
       closeModelPicker,
@@ -1551,6 +1736,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       selectSession,
       sessionList,
       currentSessionId,
+      historyLoading,
+      createNewSession,
+      deleteSessionById,
+      deleteLocalMessage,
     }),
     [
       gateways, activeGateway, activeHello, status, statusDetail, connectionPhase, probeMessage,
@@ -1560,9 +1749,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       gatewayRequest, runAgentCommand, setupFromPcAddress, retryAutoConnect, completeOnboarding,
       setAutoConnect, transcripts, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
-      pendingRunApproval, resolveRunApproval, runTask, modelPicker, openModelPicker, closeModelPicker,
+      pendingRunApproval, resolveRunApproval, runTask, activityRuns, stopActivityRun, modelPicker, openModelPicker, closeModelPicker,
       selectModel, modelCatalog, sessionSelector,
       openSessionSelector, closeSessionSelector, selectSession, sessionList, currentSessionId,
+      historyLoading, createNewSession, deleteSessionById, deleteLocalMessage,
       liveCapabilities,
     ],
   );

@@ -1,10 +1,7 @@
-import { Platform } from 'react-native';
-
 import { METHOD_GUIDANCE, METHOD_TO_ROUTE, resolveRoute } from '@/lib/gateway/rpc-routes';
 
 import type {
   ChatCompletionResponse,
-  ChatMessage,
   ConnectionStatus,
   GatewayCapabilities,
   GatewayProfile,
@@ -30,10 +27,6 @@ export type GatewayClientCallbacks = {
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const LONG_TIMEOUT_MS = 120000;
-
-function randomId(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
 
 type PendingRun = {
   runId: string;
@@ -300,7 +293,7 @@ export class HermesGatewayClient {
    * Send a chat message (non-streaming) via OpenAI-compatible endpoint.
    */
   async chatCompletion(
-    messages: Array<{ role: string; content: string }>,
+    messages: { role: string; content: string }[],
     options?: { model?: string; maxTokens?: number; sessionId?: string },
   ): Promise<ChatCompletionResponse> {
     const body: Record<string, unknown> = {
@@ -343,7 +336,7 @@ export class HermesGatewayClient {
    * Stream a chat completion via SSE. Calls onDelta for each text chunk.
    */
   async streamChat(
-    messages: Array<{ role: string; content: string }>,
+    messages: { role: string; content: string }[],
     onDelta: (text: string) => void,
     options?: { model?: string; sessionId?: string; signal?: AbortSignal },
   ): Promise<string> {

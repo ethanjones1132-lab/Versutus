@@ -1,6 +1,7 @@
 import * as ed from '@noble/ed25519';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
+import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
 
 export type StoredDeviceIdentity = {
   version: 1;
@@ -9,7 +10,6 @@ export type StoredDeviceIdentity = {
   privateKeyB64Url: string;
   createdAtMs: number;
 };
-import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
 
 const DEVICE_IDENTITY_KEY = 'versutus:device-identity';
 

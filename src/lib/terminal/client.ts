@@ -19,11 +19,11 @@ function decodeBase64Utf8(base64: string): string {
   return new TextDecoder().decode(bytes);
 }
 
-function parseSseChunk(buffer: string): { events: Array<{ event?: string; data: string }>; rest: string } {
+function parseSseChunk(buffer: string): { events: { event?: string; data: string }[]; rest: string } {
   const parts = buffer.split('\n\n');
   const complete = parts.slice(0, -1);
   const rest = parts[parts.length - 1] ?? '';
-  const events: Array<{ event?: string; data: string }> = [];
+  const events: { event?: string; data: string }[] = [];
 
   for (const part of complete) {
     if (!part.trim() || part.startsWith(':')) continue;

@@ -4,9 +4,21 @@ import type { SFSymbol } from 'sf-symbols-typescript';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'destructive';
 
-export type TextVariant = 'display' | 'title' | 'headline' | 'body' | 'caption' | 'mono' | 'link';
+export type ButtonSize = 'md' | 'sm';
 
-export type TextColor = 'primary' | 'secondary' | 'tertiary' | 'accent' | 'accentWarm' | 'inverse';
+export type TextVariant = 'display' | 'title' | 'headline' | 'body' | 'caption' | 'micro' | 'mono' | 'link';
+
+export type TextColor =
+  | 'primary'
+  | 'secondary'
+  | 'tertiary'
+  | 'accent'
+  | 'accentWarm'
+  | 'inverse'
+  | 'statusConnected'
+  | 'statusConnecting'
+  | 'statusDisconnected'
+  | 'statusPairing';
 
 export type GlassVariant = 'hero' | 'surface' | 'inset' | 'chip';
 
@@ -23,6 +35,7 @@ export type ButtonProps = {
   label: string;
   onPress?: () => void;
   variant?: ButtonVariant;
+  size?: ButtonSize;
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
 };

@@ -27,11 +27,39 @@ export type RunTaskOptions = {
   sessionId?: string;
   model?: string;
   signal?: AbortSignal;
+  /** Called once the gateway accepts the run and returns its id. */
+  onStarted?: (runId: string) => void;
   /** Called for non-approval events (streamed from the gateway). */
   onEvent?: (event: RunEvent) => void;
   /** Called when the gateway requests approval; resolves with the user's decision. */
   onApprovalRequired: (runId: string, prompt: string) => Promise<{ approved: boolean; feedback?: string }>;
 };
+
+/** App-side view of a run for activity surfaces (in-memory, per app session). */
+export type ActivityRun = {
+  id: string;
+  prompt: string;
+  status: 'running' | 'waiting-approval' | 'complete' | 'failed' | 'cancelled';
+  startedAt: number;
+  finishedAt?: number;
+  /** Result or error excerpt. */
+  summary?: string;
+  /** Recent event previews, capped (newest last). */
+  events: { type: string; preview: string; timestamp?: number }[];
+  approved?: boolean;
+};
+
+export const ACTIVITY_EVENT_CAP = 50;
+
+/** Defensive one-line preview of a run event payload. */
+export function runEventPreview(event: RunEvent): string {
+  const data = event.data as Record<string, unknown> | undefined;
+  const candidate =
+    data?.deltaText ?? data?.text ?? data?.message ?? data?.status ?? data?.error ?? data?.errorMessage;
+  const raw = typeof candidate === 'string' && candidate ? candidate : JSON.stringify(data ?? {});
+  const flat = raw.replace(/\s+/g, ' ').trim();
+  return flat.length > 140 ? `${flat.slice(0, 140)}…` : flat;
+}
 
 export function runNeedsApproval(status: string): boolean {
   return /approv/i.test(status);
@@ -56,6 +84,7 @@ export async function executeRun(
     sessionId: options.sessionId,
     model: options.model,
   });
+  options.onStarted?.(runId);
 
   let approved: boolean | undefined;
   let status = safeStatus(await client.getRunStatus(runId));
@@ -77,14 +106,12 @@ export async function executeRun(
 
     if (isTerminalRunStatus(status)) break;
 
-    let sawApprovalEvent = false;
     await client
       .streamRunEvents(
         runId,
         (event) => {
           const eventStatus = String((event.data as Record<string, unknown> | undefined)?.status ?? '');
           if (runNeedsApproval(event.type) || (eventStatus && runNeedsApproval(eventStatus))) {
-            sawApprovalEvent = true;
             return;
           }
           options.onEvent?.(event);

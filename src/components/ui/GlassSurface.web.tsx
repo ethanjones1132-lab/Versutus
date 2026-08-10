@@ -1,7 +1,8 @@
 import { StyleSheet, View, type ViewStyle } from 'react-native';
 
-import { Palette, Radius } from '@/constants/tokens';
+import { Radius } from '@/constants/tokens';
 
+import { glassVariantStyles } from './GlassSurface';
 import type { GlassSurfaceProps } from './types';
 
 const webGlass = {
@@ -12,15 +13,20 @@ const webGlass = {
 export function GlassSurface({
   children,
   style,
+  variant = 'surface',
   radius = Radius.lg,
   padding = 0,
 }: GlassSurfaceProps) {
+  const variantStyle = glassVariantStyles[variant];
+
   return (
     <View
       style={[
         styles.surface,
         webGlass,
         {
+          backgroundColor: variantStyle.backgroundColor,
+          borderColor: variantStyle.borderColor,
           borderRadius: radius,
           padding: padding > 0 ? padding : undefined,
         },
@@ -33,9 +39,7 @@ export function GlassSurface({
 
 const styles = StyleSheet.create({
   surface: {
-    backgroundColor: Palette.glass,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Palette.glassBorder,
     overflow: 'hidden',
   },
 });

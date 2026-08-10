@@ -1,22 +1,34 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
 
+import { TransportSecurityCard } from '@/components/gateway/transport-security-card';
 import { Button, Card, Screen, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { requestGatewayAccess, type AccessRequestResult } from '@/lib/portal/access';
 import { identifyGateway, type GatewayIdentity } from '@/lib/portal/identify';
 
+function firstParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
 export default function AddGatewayScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{
+    url?: string | string[];
+    token?: string | string[];
+    name?: string | string[];
+    sessionKey?: string | string[];
+    agentId?: string | string[];
+  }>();
   const { addGateway, connectGateway } = useGateway();
-  const [name, setName] = useState('Home PC');
-  const [url, setUrl] = useState('');
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [token, setToken] = useState('');
-  const [sessionKey, setSessionKey] = useState('agent:main:main');
-  const [agentId, setAgentId] = useState('main');
+  const [name, setName] = useState(() => firstParam(params.name) ?? 'Home PC');
+  const [url, setUrl] = useState(() => firstParam(params.url) ?? '');
+  const [showAdvanced, setShowAdvanced] = useState(() => Boolean(firstParam(params.agentId)));
+  const [token, setToken] = useState(() => firstParam(params.token) ?? '');
+  const [sessionKey, setSessionKey] = useState(() => firstParam(params.sessionKey) ?? 'agent:main:main');
+  const [agentId, setAgentId] = useState(() => firstParam(params.agentId) ?? 'main');
   const [saving, setSaving] = useState(false);
   const [identified, setIdentified] = useState<GatewayIdentity | null>(null);
   const [accessNote, setAccessNote] = useState<string | null>(null);
@@ -101,6 +113,8 @@ export default function AddGatewayScreen() {
             placeholder="http://yourpc.tailnet.ts.net:8642 or ws://host:8642/openclaw"
             autoCapitalize="none"
           />
+
+          {url.trim() ? <TransportSecurityCard url={url} /> : null}
 
           {identified ? (
             <View style={styles.identified}>

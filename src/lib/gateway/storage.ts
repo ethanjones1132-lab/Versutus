@@ -72,6 +72,7 @@ export function createGatewayProfile(input: {
     url: normalizeGatewayUrl(input.url),
     kind: input.kind,
     token: input.token?.trim() || undefined,
+    tlsFingerprint: input.tlsFingerprint?.trim() || undefined,
     createdAt: Date.now(),
     sessionKey: input.sessionKey?.trim(),
     sessionId: input.sessionId?.trim(),

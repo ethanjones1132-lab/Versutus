@@ -1,9 +1,10 @@
 import * as Haptics from 'expo-haptics';
+import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
-import { Card, PressableScale, Text } from '@/components/ui';
-import { Radius, Spacing } from '@/constants/tokens';
+import { Badge, Card, Chip, Icon, PressableScale, Text } from '@/components/ui';
+import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
 import { springSnappy } from '@/lib/motion/presets';
 import { useTokens } from '@/hooks/use-tokens';
@@ -19,6 +20,11 @@ type ChatComposerProps = {
   onSelectSlashSuggestion?: (value: string) => void;
   isStreaming: boolean;
   canSend: boolean;
+  /** Quick context chips (open the model picker / session selector). */
+  modelLabel?: string;
+  onModelPress?: () => void;
+  sessionLabel?: string;
+  onSessionPress?: () => void;
 };
 
 export function ChatComposer({
@@ -32,8 +38,13 @@ export function ChatComposer({
   onSelectSlashSuggestion,
   isStreaming,
   canSend,
+  modelLabel,
+  onModelPress,
+  sessionLabel,
+  onSessionPress,
 }: ChatComposerProps) {
   const tokens = useTokens();
+  const [focused, setFocused] = useState(false);
   const sendWidth = useSharedValue(56);
 
   const sendAnimatedStyle = useAnimatedStyle(() => ({
@@ -55,77 +66,109 @@ export function ChatComposer({
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={72}>
       <View style={styles.dock}>
-        <View style={styles.actions}>
-          <PressableScale onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            onRefresh();
-          }}>
-            <Text variant="caption" color="secondary" style={styles.utilityAction}>
-              Refresh
-            </Text>
-          </PressableScale>
-          <PressableScale onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            onReconnect();
-          }}>
-            <Text variant="caption" color="secondary" style={styles.utilityAction}>
-              Reconnect gateway
-            </Text>
-          </PressableScale>
+        <View style={styles.utilityRow}>
+          <View style={styles.chipGroup}>
+            {modelLabel && onModelPress ? (
+              <Chip
+                label={modelLabel}
+                icon={{ ios: 'cpu', android: 'memory', web: 'memory' }}
+                onPress={onModelPress}
+                style={styles.contextChip}
+              />
+            ) : null}
+            {sessionLabel && onSessionPress ? (
+              <Chip
+                label={sessionLabel}
+                icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
+                onPress={onSessionPress}
+                style={styles.contextChip}
+              />
+            ) : null}
+          </View>
+          <View style={styles.chipGroup}>
+            <PressableScale
+              onPress={async () => {
+                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                onRefresh();
+              }}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Reload history"
+              style={styles.utilityButton}>
+              <Icon name={{ ios: 'arrow.clockwise', android: 'refresh', web: 'refresh' }} size={15} color="textTertiary" />
+            </PressableScale>
+            <PressableScale
+              onPress={async () => {
+                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                onReconnect();
+              }}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Reconnect gateway"
+              style={styles.utilityButton}>
+              <Icon name={{ ios: 'bolt.horizontal', android: 'cable', web: 'cable' }} size={15} color="textTertiary" />
+            </PressableScale>
+          </View>
         </View>
 
         {slashSuggestions.length > 0 ? (
-          <View style={styles.palette}>
-            <Text variant="caption" color="secondary" style={styles.paletteTitle}>
+          <View
+            style={[
+              styles.palette,
+              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.glassBorder },
+            ]}>
+            <Text variant="micro" color="tertiary" style={styles.paletteTitle}>
               Commands
             </Text>
             <ScrollView
               style={styles.paletteScroll}
               contentContainerStyle={styles.paletteContent}
               nestedScrollEnabled
-              showsVerticalScrollIndicator={false}
-            >
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}>
               {slashSuggestions.map((item) => {
                 const unavailable = item.unavailable;
-                const bg = unavailable
-                  ? tokens.backgroundInset
-                  : item.danger === 'write' || item.danger === 'destructive'
-                    ? tokens.accentWarmMuted
-                    : tokens.backgroundInset;
+                const danger = item.danger === 'write' || item.danger === 'destructive';
                 return (
                   <PressableScale
                     key={item.value}
                     style={[
                       styles.paletteItem,
                       {
-                        backgroundColor: bg,
-                        borderColor: tokens.glassBorder,
-                        opacity: unavailable ? 0.6 : 1,
+                        backgroundColor: tokens.backgroundInset,
+                        borderColor: danger ? tokens.accentWarmMuted : tokens.borderSubtle,
+                        opacity: unavailable ? 0.55 : 1,
                       },
                     ]}
                     disabled={unavailable}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Command ${item.label}`}
                     onPress={async () => {
                       if (!unavailable) {
-                        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        await Haptics.selectionAsync();
                         onSelectSlashSuggestion?.(item.value);
                       }
                     }}>
                     <View style={styles.paletteRow}>
-                      <Text variant="caption" numberOfLines={1} style={{ flex: 1 }}>
+                      <Text variant="caption" numberOfLines={1} style={styles.paletteLabel}>
                         {item.label}
                       </Text>
-                      {item.family && (
-                        <Text variant="caption" color="tertiary" style={styles.familyBadge}>
-                          {item.family}
-                        </Text>
-                      )}
-                      {item.danger && item.danger !== 'safe' && (
-                        <Text variant="caption" style={{ color: tokens.accentWarm, fontSize: 9 }}>
-                          {item.danger === 'destructive' ? '!' : '⚠'}
-                        </Text>
-                      )}
+                      {item.danger === 'destructive' ? (
+                        <Icon
+                          name={{ ios: 'exclamationmark.triangle.fill', android: 'warning', web: 'warning' }}
+                          size={11}
+                          color="statusDisconnected"
+                        />
+                      ) : item.danger === 'write' ? (
+                        <Icon
+                          name={{ ios: 'exclamationmark.triangle', android: 'warning', web: 'warning' }}
+                          size={11}
+                          color="statusConnecting"
+                        />
+                      ) : null}
+                      {item.family ? <Badge label={item.family} dot={false} /> : null}
                     </View>
-                    <Text variant="caption" color="tertiary" numberOfLines={1} style={styles.paletteDesc}>
+                    <Text variant="micro" color="tertiary" numberOfLines={1} style={styles.paletteDesc}>
                       {item.description}
                       {unavailable ? ' (unavailable)' : ''}
                     </Text>
@@ -136,7 +179,12 @@ export function ChatComposer({
           </View>
         ) : null}
 
-        <Card padding={Spacing.two} style={styles.composer}>
+        <Card
+          padding={Spacing.two}
+          style={[
+            styles.composer,
+            { borderColor: focused ? tokens.borderStrong : tokens.glassBorder },
+          ]}>
           <TextInput
             style={[styles.input, { color: tokens.textPrimary }]}
             value={draft}
@@ -145,6 +193,9 @@ export function ChatComposer({
             placeholderTextColor={tokens.textTertiary}
             multiline
             editable={canSend && !isStreaming}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            accessibilityLabel="Message input"
           />
           <Animated.View style={sendAnimatedStyle}>
             <PressableScale
@@ -158,6 +209,8 @@ export function ChatComposer({
               ]}
               onPress={() => void handleAction()}
               disabled={isActionDisabled}
+              accessibilityRole="button"
+              accessibilityLabel={isStreaming ? 'Stop streaming' : 'Send message'}
               onPressIn={() => {
                 // Reanimated shared value — mutable by design, not React state.
                 // eslint-disable-next-line react-hooks/immutability
@@ -168,9 +221,15 @@ export function ChatComposer({
                 // eslint-disable-next-line react-hooks/immutability
                 sendWidth.value = withSpring(56, springSnappy);
               }}>
-              <Text variant="caption" color="inverse">
-                {isStreaming ? 'Stop' : 'Send'}
-              </Text>
+              <Icon
+                name={
+                  isStreaming
+                    ? { ios: 'stop.fill', android: 'stop', web: 'stop' }
+                    : { ios: 'arrow.up', android: 'arrow_upward', web: 'arrow_upward' }
+                }
+                size={16}
+                color="textInverse"
+              />
             </PressableScale>
           </Animated.View>
         </Card>
@@ -182,31 +241,42 @@ export function ChatComposer({
 const styles = StyleSheet.create({
   dock: {
     paddingBottom: Spacing.two,
-    gap: Spacing.one,
+    gap: Spacing.two,
   },
-  actions: {
+  utilityRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.four,
+    minHeight: 24,
   },
-  utilityAction: {
-    textTransform: 'uppercase',
+  chipGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  contextChip: {
+    maxWidth: 132,
+  },
+  utilityButton: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   palette: {
     marginHorizontal: Spacing.four,
-    backgroundColor: 'rgba(0,0,0,0.3)',
     borderRadius: Radius.lg,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(240, 214, 144, 0.15)',
-    maxHeight: 160,
+    maxHeight: 180,
   },
   paletteTitle: {
-    paddingHorizontal: Spacing.two,
-    paddingTop: Spacing.one,
+    paddingHorizontal: Spacing.three - 4,
+    paddingTop: Spacing.two,
     textTransform: 'uppercase',
   },
   paletteScroll: {
-    maxHeight: 130,
+    maxHeight: 150,
   },
   paletteContent: {
     padding: Spacing.one,
@@ -216,22 +286,20 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: Radius.md,
     paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.one,
+    paddingVertical: Spacing.one + 2,
+    gap: 2,
   },
   paletteRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.one,
+    gap: Spacing.two,
   },
-  familyBadge: {
-    fontSize: 9,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    paddingHorizontal: 4,
-    borderRadius: 3,
+  paletteLabel: {
+    flex: 1,
+    fontFamily: FontFamily.sansSemiBold,
   },
   paletteDesc: {
-    fontSize: 11,
-    lineHeight: 13,
+    paddingRight: Spacing.two,
   },
   composer: {
     flexDirection: 'row',
@@ -239,21 +307,22 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     marginHorizontal: Spacing.four,
     borderRadius: Radius.xl,
-    borderColor: 'rgba(240, 214, 144, 0.22)',
   },
   input: {
     flex: 1,
     minHeight: 40,
     maxHeight: 140,
     fontSize: 16,
+    fontFamily: FontFamily.sans,
     paddingHorizontal: Spacing.two,
     paddingVertical: Spacing.one,
   },
   sendButton: {
     borderRadius: Radius.md,
+    minHeight: 40,
     paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
     alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: StyleSheet.hairlineWidth,
   },
   sendDisabled: {

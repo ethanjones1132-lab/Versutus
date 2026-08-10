@@ -1,8 +1,8 @@
 import { StyleSheet, View } from 'react-native';
 
 import { PairingPanel } from '@/components/pairing-panel';
-import { BaseSheet, PressableScale, Text } from '@/components/ui';
-import { Radius, Spacing } from '@/constants/tokens';
+import { BaseSheet } from '@/components/ui';
+import { Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { PairingDetails } from '@/lib/gateway/types';
 
