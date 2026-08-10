@@ -71,13 +71,13 @@ export function GatewayHomeDashboard() {
             />
           </View>
           <View style={styles.summaryText}>
-            <Text variant="caption" style={styles.eyebrow}>
+            <Text variant="caption" numberOfLines={1} style={styles.eyebrow}>
               Active gateway
             </Text>
             <Text variant="title" numberOfLines={1} style={styles.title}>
               {activeLabel}
             </Text>
-            <Text numberOfLines={2} style={styles.onGlassSecondary}>
+            <Text variant="caption" numberOfLines={2} style={styles.onGlassSecondary}>
               {connected
                 ? 'Ready for chat, tools, runs, and slash commands.'
                 : 'Saved locally. Select a reachable gateway to activate it.'}
@@ -89,16 +89,20 @@ export function GatewayHomeDashboard() {
               <Text variant="caption" color="tertiary" numberOfLines={1} style={styles.onGlassTertiary}>
                 v{activeHello.server.version}
               </Text>
-            ) : statusDetail ? (
-              <Text variant="caption" numberOfLines={1} style={styles.onGlassTertiary}>
-                {statusDetail}
-              </Text>
             ) : null}
           </View>
         </View>
 
+        {/* Full width: connection failures name a host and a reason, and the
+            cramped status column truncated them to uselessness. */}
+        {!connected && statusDetail ? (
+          <Text variant="caption" numberOfLines={3} style={styles.onGlassTertiary}>
+            {statusDetail}
+          </Text>
+        ) : null}
+
         {lastError ? (
-          <Text variant="caption" numberOfLines={2} style={styles.onGlassTertiary}>
+          <Text variant="caption" numberOfLines={3} style={styles.onGlassTertiary}>
             {lastError}
           </Text>
         ) : null}
@@ -264,18 +268,23 @@ const styles = StyleSheet.create({
   },
   statusText: {
     alignItems: 'flex-end',
-    maxWidth: 132,
+    flexShrink: 0,
     gap: Spacing.one,
   },
   primaryActions: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    // No wrapping: three equal actions share one row and compress instead.
+    // Wrapping put a full-width button on a second line that overlapped the
+    // retry control beneath it at large system font sizes.
+    alignItems: 'stretch',
     gap: Spacing.two,
   },
   primaryAction: {
-    flex: 1,
-    minWidth: 92,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
     minHeight: 44,
+    paddingHorizontal: Spacing.two,
   },
   retryAction: {
     alignSelf: 'flex-start',

@@ -47,6 +47,11 @@ export function Button({
       <Text
         variant={size === 'sm' ? 'caption' : 'body'}
         color={variantStyles.color}
+        numberOfLines={1}
+        // A button label must stay on one line inside its own box. Unbounded
+        // scaling made labels wrap out of their container and collide with
+        // adjacent controls.
+        maxFontSizeMultiplier={1.3}
         style={styles.label}>
         {label}
       </Text>

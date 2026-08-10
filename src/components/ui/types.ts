@@ -46,6 +46,15 @@ export type TextProps = {
   color?: TextColor;
   style?: StyleProp<TextStyle>;
   numberOfLines?: number;
+  /**
+   * Cap on the OS font-size setting. Defaults are applied per variant; pass a
+   * value only to override. Prose should stay uncapped for accessibility —
+   * this exists for fixed-size chrome (badges, eyebrows, tiles) where an
+   * unbounded multiplier breaks the layout instead of helping the reader.
+   */
+  maxFontSizeMultiplier?: number;
+  /** Shrink to fit rather than wrap. Pair with numberOfLines. */
+  adjustsFontSizeToFit?: boolean;
 };
 
 export type TextFieldValidationState = 'default' | 'valid' | 'invalid';

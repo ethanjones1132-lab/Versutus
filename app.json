@@ -55,7 +55,8 @@
     },
     "extra": {
       "gatewayHosts": [
-        "ethanspc.tail3a1a8a.ts.net"
+        "ethanspc.tail3a1a8a.ts.net",
+        "100.95.137.83"
       ],
       "router": {},
       "eas": {

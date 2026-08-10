@@ -59,6 +59,7 @@ export class HermesGatewayClient {
   private reconnectSuspended = false;
   private healthTimer: ReturnType<typeof setInterval> | null = null;
   private healthFailures = 0;
+  private lastHealthError: string | null = null;
   /** Last time any request came back from the gateway. See recentlyServedUs(). */
   private lastContactAt = 0;
   private status: ConnectionStatus = 'disconnected';
@@ -112,8 +113,9 @@ export class HermesGatewayClient {
     }
 
     if (!health) {
-      this.callbacks.onError?.('Gateway health check failed');
-      this.scheduleReconnect('Gateway did not respond');
+      const reason = this.lastHealthError ?? 'no response';
+      this.callbacks.onError?.(`Could not reach ${this.displayHost}: ${reason}`);
+      this.scheduleReconnect(`No answer from ${this.displayHost}`);
       return;
     }
 
@@ -278,12 +280,30 @@ export class HermesGatewayClient {
 
   // ─── API endpoints ────────────────────────────────────────────
 
-  async healthCheck(timeoutMs = 5000): Promise<HealthResponse | null> {
+  /**
+   * `timeoutMs` is generous on purpose: a phone radio waking from idle can take
+   * seconds to complete its first request, and a false negative here reads as
+   * "gateway down" to the whole app.
+   */
+  async healthCheck(timeoutMs = 8000): Promise<HealthResponse | null> {
     try {
       const result = await this.request<HealthResponse>('GET', '/health', undefined, timeoutMs);
+      this.lastHealthError = null;
       return result;
-    } catch {
+    } catch (error) {
+      // Keep the reason. Reporting a bare "did not respond" leaves the user
+      // with no way to tell a DNS failure from a wrong port or a dead gateway.
+      this.lastHealthError = error instanceof Error ? error.message : String(error);
       return null;
+    }
+  }
+
+  /** Host portion of the gateway URL, for operator-facing status text. */
+  private get displayHost(): string {
+    try {
+      return new URL(this.baseUrl).host || this.baseUrl;
+    } catch {
+      return this.baseUrl;
     }
   }
 
