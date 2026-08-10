@@ -4,7 +4,7 @@ import {
   summarizeCommandResult,
   type GatewayCommand,
 } from '@/lib/gateway/dashboard';
-import type { GatewayHelloOk } from '@/lib/gateway/types';
+import type { GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
 import type { RunOutcome } from '@/lib/gateway/runs';
 
 export type SlashCommandSuggestion = {
@@ -127,6 +127,12 @@ export function getSlashCommandSuggestions(
   input: string,
   hello: GatewayHelloOk | null,
   recents: string[] = [],
+  /**
+   * Live per-command availability from the capability snapshot. Without it the
+   * registry advertises every command, including the many the gateway does not
+   * implement — the user then types commands that can only fail.
+   */
+  methods: Record<string, GatewayMethodAvailability> = {},
 ): SlashCommandSuggestion[] {
   const needle = input.trimStart().toLowerCase();
 
@@ -144,7 +150,8 @@ export function getSlashCommandSuggestions(
 
   // Show all commands, mark unavailable
   const registrySuggestions = GATEWAY_COMMANDS.map((command) => {
-    const available = command.slash && commandAllowed(command, hello);
+    const advertised = methods[command.id]?.available ?? true;
+    const available = command.slash && advertised && commandAllowed(command, hello);
     const fam = (command as any).family ?? (command as any).group ?? 'Other';
     return {
       value: command.slash ?? `/${command.id}`,
@@ -179,8 +186,10 @@ export function getSlashCommandSuggestions(
     suggestions = suggestions.filter(s => !s.value.toLowerCase().startsWith('/rpc'));
   }
 
-  // Dedupe and limit
-  suggestions = dedupeSuggestions(suggestions).slice(0, 12);
+  // Working commands first; unsupported ones stay visible but sink to the end.
+  suggestions = dedupeSuggestions(suggestions)
+    .sort((a, b) => Number(a.unavailable ?? false) - Number(b.unavailable ?? false))
+    .slice(0, 12);
 
   return suggestions;
 }

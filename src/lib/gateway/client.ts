@@ -1,3 +1,4 @@
+import { GatewayHttpError, isAuthRejection } from '@/lib/gateway/errors';
 import { METHOD_GUIDANCE, METHOD_TO_ROUTE, resolveRoute } from '@/lib/gateway/rpc-routes';
 
 import type {
@@ -23,10 +24,18 @@ export type GatewayClientCallbacks = {
   onChatEvent?: (payload: { deltaText?: string; state?: string; text?: string }) => void;
   onError?: (message: string) => void;
   onHealthCheck?: (healthy: boolean, info?: HealthResponse) => void;
+  onCapabilities?: (capabilities: GatewayCapabilities) => void;
 };
 
 const DEFAULT_TIMEOUT_MS = 30000;
 const LONG_TIMEOUT_MS = 120000;
+const HEALTH_INTERVAL_MS = 30000;
+/**
+ * A mobile radio waking up loses a request routinely. Only a run of failures
+ * means the gateway is actually gone — one lost sample must not tear down a
+ * working session, because every tool is gated on `status === 'connected'`.
+ */
+const HEALTH_FAILURE_THRESHOLD = 2;
 
 type PendingRun = {
   runId: string;
@@ -49,6 +58,9 @@ export class HermesGatewayClient {
   private reconnectAttempts = 0;
   private reconnectSuspended = false;
   private healthTimer: ReturnType<typeof setInterval> | null = null;
+  private healthFailures = 0;
+  /** Last time any request came back from the gateway. See recentlyServedUs(). */
+  private lastContactAt = 0;
   private status: ConnectionStatus = 'disconnected';
   private detail = '';
   private currentSessionId: string | undefined;
@@ -80,35 +92,58 @@ export class HermesGatewayClient {
   }
 
   /**
-   * Connect: verify the gateway is reachable via /health.
-   * If healthy, set status to connected and start background health monitoring.
+   * Connect: check reachability via /health, then prove the bearer key with an
+   * authenticated call. Throws on auth rejection so the caller can stop and ask
+   * for a new key; other failures fall through to backoff reconnect.
    */
   async connect() {
     this.closed = false;
     this.clearReconnectTimer();
     this.setStatus('connecting');
 
+    let health: HealthResponse | null;
     try {
-      const health = await this.healthCheck();
-      if (health) {
-        this.reconnectAttempts = 0;
-        this.setStatus('connected');
-        this.callbacks.onHello?.({
-          type: 'hello-ok',
-          protocol: 1,
-          server: { version: health.version },
-        });
-        this.callbacks.onHealthCheck?.(true, health);
-        this.startHealthMonitoring();
-      } else {
-        this.callbacks.onError?.('Gateway health check failed');
-        this.scheduleReconnect('Gateway did not respond');
-      }
+      health = await this.healthCheck();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.callbacks.onError?.(message);
       this.scheduleReconnect(message);
+      return;
     }
+
+    if (!health) {
+      this.callbacks.onError?.('Gateway health check failed');
+      this.scheduleReconnect('Gateway did not respond');
+      return;
+    }
+
+    let capabilities: GatewayCapabilities | null = null;
+    try {
+      capabilities = await this.getCapabilities();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isAuthRejection(error)) {
+        this.suspendReconnect();
+        this.setStatus('disconnected', message);
+        throw new Error(
+          'Gateway rejected the API key. Enter API_SERVER_KEY from %LOCALAPPDATA%\\hermes\\.env.',
+        );
+      }
+      // Capability catalog is optional; a gateway without it is still usable.
+      this.callbacks.onError?.(message);
+    }
+
+    this.reconnectAttempts = 0;
+    this.healthFailures = 0;
+    this.setStatus('connected');
+    this.callbacks.onHello?.({
+      type: 'hello-ok',
+      protocol: 1,
+      server: { version: health.version },
+    });
+    if (capabilities) this.callbacks.onCapabilities?.(capabilities);
+    this.callbacks.onHealthCheck?.(true, health);
+    this.startHealthMonitoring();
   }
 
   disconnect() {
@@ -139,7 +174,7 @@ export class HermesGatewayClient {
   resumeReconnect() {
     this.reconnectSuspended = false;
     if (!this.closed && this.status !== 'connected') {
-      void this.connect();
+      void this.connect().catch(() => undefined);
     }
   }
 
@@ -180,6 +215,8 @@ export class HermesGatewayClient {
         signal: controller.signal,
       });
       clearTimeout(timer);
+      // Any HTTP response proves the gateway is alive, including a rejection.
+      this.lastContactAt = Date.now();
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
@@ -190,7 +227,7 @@ export class HermesGatewayClient {
         } catch {
           errorMsg = errorText || `HTTP ${response.status}`;
         }
-        throw new Error(errorMsg);
+        throw new GatewayHttpError(errorMsg, response.status);
       }
 
       const text = await response.text();
@@ -495,22 +532,45 @@ export class HermesGatewayClient {
 
   private startHealthMonitoring() {
     this.stopHealthMonitoring();
+    this.healthFailures = 0;
     this.healthTimer = setInterval(async () => {
-      if (this.closed) return;
+      if (this.closed || this.reconnectSuspended) return;
       const health = await this.healthCheck();
-      if (!health && this.status === 'connected') {
-        this.setStatus('reconnecting', 'Gateway became unreachable');
-        this.scheduleReconnect('Gateway became unreachable');
-      } else if (health && this.status === 'reconnecting') {
-        this.setStatus('connected');
-        this.reconnectAttempts = 0;
+
+      if (health) {
+        this.healthFailures = 0;
+        if (this.status === 'reconnecting') {
+          // Recovered on our own — drop the queued reconnect so it cannot
+          // re-fire and bounce a healthy connection back through 'connecting'.
+          this.clearReconnectTimer();
+          this.reconnectAttempts = 0;
+          this.setStatus('connected');
+        }
+        return;
       }
-    }, 30000);
+
+      if (this.status !== 'connected') return;
+      // Hermes serves requests on one thread: a slow /api/sessions or
+      // /v1/toolsets stalls /health as well. If the gateway answered anything
+      // else recently it is busy, not gone — dropping here would disable every
+      // tool in the app for no reason.
+      if (this.recentlyServedUs()) return;
+      this.healthFailures += 1;
+      if (this.healthFailures < HEALTH_FAILURE_THRESHOLD) return;
+      this.setStatus('reconnecting', 'Gateway became unreachable');
+      this.scheduleReconnect('Gateway became unreachable');
+    }, HEALTH_INTERVAL_MS);
+  }
+
+  /** True when the gateway answered some request within the last health cycle. */
+  private recentlyServedUs(): boolean {
+    return this.lastContactAt > 0 && Date.now() - this.lastContactAt < HEALTH_INTERVAL_MS;
   }
 
   private stopHealthMonitoring() {
     if (this.healthTimer) clearInterval(this.healthTimer);
     this.healthTimer = null;
+    this.healthFailures = 0;
   }
 
   // ─── Reconnection ─────────────────────────────────────────────
@@ -518,11 +578,15 @@ export class HermesGatewayClient {
   private scheduleReconnect(reason: string) {
     if (this.closed || this.reconnectSuspended) return;
     this.reconnectAttempts += 1;
-    const delay = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 15000);
+    const base = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 15000);
+    // Jitter keeps a fleet of clients from retrying in lockstep after an outage.
+    const delay = base * (0.75 + Math.random() * 0.5);
     this.setStatus('reconnecting', `${reason} · retry in ${Math.round(delay / 1000)}s`);
     this.clearReconnectTimer();
     this.reconnectTimer = setTimeout(() => {
-      if (!this.closed && !this.reconnectSuspended) void this.connect();
+      if (!this.closed && !this.reconnectSuspended) {
+        void this.connect().catch(() => undefined);
+      }
     }, delay);
   }
 

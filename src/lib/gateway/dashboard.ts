@@ -747,14 +747,59 @@ export function buildCapabilityGroups(
   });
 }
 
-// Phase 2: Live Capability Snapshot
-// Feature keys advertised by Hermes /v1/capabilities that map onto
-// dashboard groups (authoritative when the hello carries no scopes).
-const FEATURE_GROUP_MAP: Record<string, string> = {
-  chat: 'chat_completions',
-  agent: 'run_submission',
-  approvals: 'run_approval',
+// ─── Live capability snapshot ──────────────────────────────────────
+// Groups resolve from what the gateway advertises in GET /v1/capabilities:
+// a `features` flag or an `endpoints` key. Verified against hermes-agent
+// 0.18.0 — see __tests__/capability-snapshot-test.ts for the payload.
+//
+// Scopes are deliberately not consulted: the Hermes hello carries no
+// `auth.scopes`, so treating their absence as "warming" pinned most of the
+// dashboard to a permanent pending state.
+
+type CapabilityGroupDef = {
+  id: string;
+  label: string;
+  /** Any of these `features` flags being true makes the group ready. */
+  features?: string[];
+  /** Any of these `endpoints` keys being present makes the group ready. */
+  endpoints?: string[];
+  /** Registry command groups counted toward this capability. */
+  commandGroups?: GatewayCommand['group'][];
 };
+
+const CAPABILITY_GROUP_DEFS: CapabilityGroupDef[] = [
+  { id: 'chat', label: 'Chat', features: ['chat_completions'], endpoints: ['chat_completions'], commandGroups: ['Agent'] },
+  { id: 'agent', label: 'Agent', features: ['run_submission'], endpoints: ['runs'], commandGroups: ['Agent'] },
+  { id: 'sessions', label: 'Sessions', features: ['session_resources'], endpoints: ['sessions'], commandGroups: ['Sessions'] },
+  { id: 'approvals', label: 'Approvals', features: ['run_approval_response'], endpoints: ['run_approval'], commandGroups: ['Approvals'] },
+  { id: 'models', label: 'Models', endpoints: ['models'], commandGroups: ['Models'] },
+  { id: 'skills', label: 'Skills', features: ['skills_api'], endpoints: ['skills'] },
+  { id: 'tools', label: 'Tools', endpoints: ['toolsets'], commandGroups: ['Tools'] },
+  { id: 'diagnostics', label: 'Diagnostics', endpoints: ['health_detailed'], commandGroups: ['Gateway', 'Diagnostics'] },
+  { id: 'terminal', label: 'Terminal', endpoints: ['terminal'] },
+  { id: 'config', label: 'Config', features: ['admin_config_rw'], commandGroups: ['Config'] },
+  { id: 'cron', label: 'Cron', features: ['jobs_admin'] },
+  { id: 'memory', label: 'Memory', features: ['memory_write_api'], commandGroups: ['Memory'] },
+  { id: 'voice', label: 'Voice/Talk', features: ['audio_api', 'realtime_voice'], commandGroups: ['Voice'] },
+  { id: 'channels', label: 'Channels', commandGroups: ['Channels'] },
+  { id: 'plugins', label: 'Plugins', commandGroups: ['Plugins'] },
+  { id: 'logs', label: 'Logs', commandGroups: ['Logs'] },
+  { id: 'devices', label: 'Devices', commandGroups: ['Devices'] },
+  { id: 'environments', label: 'Environments' },
+  { id: 'artifacts', label: 'Artifacts' },
+  { id: 'nodes', label: 'Nodes' },
+];
+
+function groupIsAdvertised(
+  definition: CapabilityGroupDef,
+  capabilities: import('@/lib/gateway/types').GatewayCapabilities,
+): boolean {
+  const features = (capabilities.features ?? {}) as Record<string, unknown>;
+  if (definition.features?.some((flag) => features[flag] === true)) return true;
+
+  const endpoints = (capabilities.endpoints ?? {}) as Record<string, unknown>;
+  return definition.endpoints?.some((key) => endpoints[key] != null) ?? false;
+}
 
 export function buildCapabilitySnapshot(
   status: ConnectionStatus,
@@ -764,99 +809,75 @@ export function buildCapabilitySnapshot(
   capabilities: import('@/lib/gateway/types').GatewayCapabilities | null = null,
 ): import('@/lib/gateway/types').GatewayCapabilitySnapshot {
   const scopes = hello?.auth?.scopes ?? [];
-  const features = capabilities?.features ?? null;
   const connected = status === 'connected';
-  const now = Date.now();
-  const isStale = now - lastProbeAt > 30000; // 30s stale threshold
+  const isStale = Date.now() - lastProbeAt > 30000;
 
-  const groups: import('@/lib/gateway/types').GatewayCapabilityGroup[] = [
-    { id: 'chat', label: 'Chat', status: 'unknown' as any, availableCount: 0, totalCount: 1 },
-    { id: 'agent', label: 'Agent', status: 'unknown' as any, availableCount: 0, totalCount: 3 },
-    { id: 'terminal', label: 'Terminal', status: 'unknown' as any, availableCount: 0, totalCount: 1 },
-    { id: 'sessions', label: 'Sessions', status: 'unknown' as any, availableCount: 0, totalCount: 1 },
-    { id: 'channels', label: 'Channels', status: 'unknown' as any, availableCount: 0, totalCount: 2 },
-    { id: 'approvals', label: 'Approvals', status: 'unknown' as any, availableCount: 0, totalCount: 1 },
-    { id: 'config', label: 'Config', status: 'unknown' as any, availableCount: 0, totalCount: 3 },
-    { id: 'models', label: 'Models', status: 'unknown' as any, availableCount: 0, totalCount: 4 },
-    { id: 'plugins', label: 'Plugins', status: 'unknown' as any, availableCount: 0, totalCount: 2 },
-    { id: 'logs', label: 'Logs', status: 'unknown' as any, availableCount: 0, totalCount: 1 },
-    { id: 'diagnostics', label: 'Diagnostics', status: 'unknown' as any, availableCount: 0, totalCount: 4 },
-    { id: 'cron', label: 'Cron', status: 'unknown' as any, availableCount: 0, totalCount: 1 },
-    { id: 'environments', label: 'Environments', status: 'unknown' as any, availableCount: 0, totalCount: 1 },
-    { id: 'skills', label: 'Skills', status: 'unknown' as any, availableCount: 0, totalCount: 1 },
-    { id: 'artifacts', label: 'Artifacts', status: 'unknown' as any, availableCount: 0, totalCount: 1 },
-    { id: 'tools', label: 'Tools', status: 'unknown' as any, availableCount: 0, totalCount: 2 },
-    { id: 'devices', label: 'Devices', status: 'unknown' as any, availableCount: 0, totalCount: 1 },
-    { id: 'nodes', label: 'Nodes', status: 'unknown' as any, availableCount: 0, totalCount: 1 },
-    { id: 'voice', label: 'Voice/Talk', status: 'unknown' as any, availableCount: 0, totalCount: 2 },
-  ];
+  const groups = CAPABILITY_GROUP_DEFS.map<import('@/lib/gateway/types').GatewayCapabilityGroup>(
+    (definition) => {
+      const groupCommands = definition.commandGroups
+        ? commands.filter((command) => definition.commandGroups!.includes(command.group))
+        : [];
+      const totalCount = groupCommands.length;
 
-  let overallStatus: import('@/lib/gateway/types').GatewayCapabilitySnapshot['status'] = 'offline';
-
-  if (!connected) {
-    overallStatus = 'offline';
-  } else if (features) {
-    overallStatus = isStale ? 'stale' : 'fresh';
-  } else if (scopes.length === 0) {
-    overallStatus = 'warming';
-  } else {
-    overallStatus = isStale ? 'stale' : 'fresh';
-  }
-
-  // Compute per group based on scopes + command registry
-  groups.forEach((group) => {
-    const famCommands = commands.filter((c) => {
-      const fam = (c as any).family || (c as any).group || '';
-      return fam.toLowerCase().includes(group.id) || group.id.includes(fam.toLowerCase());
-    });
-
-    const total = famCommands.length > 0 ? famCommands.length : (group.totalCount || 1);
-    const allowed = famCommands.filter((c) => commandAllowed(c, hello)).length;
-
-    let gstatus: any = 'unknown';
-
-    if (!connected) {
-      gstatus = 'offline';
-    } else if (features && FEATURE_GROUP_MAP[group.id]) {
-      // Authoritative feature signal from the gateway's live catalog.
-      const enabled = features[FEATURE_GROUP_MAP[group.id]] === true;
-      gstatus = enabled ? 'ready' : 'unsupported';
-    } else if (group.id === 'sessions' && capabilities?.endpoints && Object.keys(capabilities.endpoints).some((key) => key.startsWith('session_'))) {
-      // Sessions API advertised via endpoints.session_* entries.
-      gstatus = 'ready';
-    } else if (scopes.length === 0) {
-      gstatus = 'warming';
-    } else {
-      const hasRequired = famCommands.some((c) => !c.requiredScope || commandAllowed(c, hello));
-      if (allowed === 0 && famCommands.length > 0) {
-        gstatus = 'missing-scope';
-      } else if (allowed < total && famCommands.length > 0) {
-        gstatus = 'partial';
-      } else if (hasRequired) {
-        gstatus = 'ready';
-      } else {
-        gstatus = 'unsupported';
+      if (!connected) {
+        return {
+          id: definition.id,
+          label: definition.label,
+          status: 'unavailable',
+          availableCount: 0,
+          totalCount,
+          note: 'Gateway offline',
+        };
       }
-    }
 
-    // Special cases
-    if (group.id === 'voice' || group.id === 'talk') {
-      gstatus = 'experimental';
-    }
+      if (!capabilities) {
+        return {
+          id: definition.id,
+          label: definition.label,
+          status: 'unknown',
+          availableCount: 0,
+          totalCount,
+          note: 'No capability catalog',
+        };
+      }
 
-    group.status = gstatus;
-    group.availableCount = allowed || (gstatus === 'ready' ? total : 0);
-    group.totalCount = total;
-    group.note = gstatus === 'ready' ? undefined : gstatus.replace('-', ' ');
-  });
+      const ready = groupIsAdvertised(definition, capabilities);
+      return {
+        id: definition.id,
+        label: definition.label,
+        status: ready ? 'ready' : 'unsupported',
+        availableCount: ready ? totalCount : 0,
+        totalCount,
+        note: ready ? undefined : 'Not offered by this gateway',
+      };
+    },
+  );
 
-  // Build methods availability from registry
+  let overallStatus: import('@/lib/gateway/types').GatewayCapabilitySnapshot['status'];
+  if (!connected) overallStatus = 'offline';
+  else if (!capabilities) overallStatus = 'warming';
+  else overallStatus = isStale ? 'stale' : 'fresh';
+
+  const advertised = new Set(
+    CAPABILITY_GROUP_DEFS.filter(
+      (definition) => capabilities && groupIsAdvertised(definition, capabilities),
+    ).flatMap((definition) => definition.commandGroups ?? []),
+  );
+
   const methods: Record<string, import('@/lib/gateway/types').GatewayMethodAvailability> = {};
-  commands.forEach((cmd) => {
-    const available = commandAllowed(cmd, hello);
-    methods[cmd.id] = {
+  commands.forEach((command) => {
+    if (!connected) {
+      methods[command.id] = { available: false, reason: 'offline' };
+      return;
+    }
+    if (!capabilities) {
+      methods[command.id] = { available: commandAllowed(command, hello) };
+      return;
+    }
+    const available = advertised.has(command.group) && commandAllowed(command, hello);
+    methods[command.id] = {
       available,
-      reason: available ? undefined : (scopes.length === 0 ? 'warming' : 'missing scope'),
+      reason: available ? undefined : 'not offered by this gateway',
     };
   });
 

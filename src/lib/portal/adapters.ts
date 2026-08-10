@@ -65,6 +65,7 @@ export type PortalClientCallbacks = {
   onChatEvent?: (payload: unknown) => void;
   onError?: (message: string) => void;
   onHealthCheck?: (healthy: boolean, info?: HealthResponse) => void;
+  onCapabilities?: (capabilities: GatewayCapabilities) => void;
 };
 
 export type AdapterDefinition = {

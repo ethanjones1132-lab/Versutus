@@ -51,6 +51,11 @@ export class OpenClawAdapterClient implements PortalClient {
         onHello: (hello) => {
           this.helloVersion = hello.server?.version;
           callbacks.onHello?.(hello);
+          // The Hermes client publishes capabilities from connect(); this
+          // transport has no such step, so fetch once the handshake lands.
+          void this.getCapabilities()
+            .then((capabilities) => callbacks.onCapabilities?.(capabilities))
+            .catch(() => undefined);
         },
         onChatEvent: (payload) => this.handleChatEvent(payload),
       },

@@ -5,7 +5,7 @@ import { AppState, Platform } from 'react-native';
 import { GatewayDiscoveryScanner, isNativeDiscoveryAvailable } from '@/lib/discovery/scanner';
 import { buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/lib/gateway/candidates';
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
-import { createMessageId, historyToChatMessages } from '@/lib/gateway/messages';
+import { createMessageId, historyToChatMessages, pickAppSession } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { categorizeProbeError, probeGatewayCandidates, probeGatewayUrl, probeHighPriorityCandidates } from '@/lib/gateway/probe';
 import { isSlashCommandInput } from '@/lib/gateway/slash-commands';
@@ -380,6 +380,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const authFailureRef = useRef(false);
 
   const clientRef = useRef<PortalClient | null>(null);
+  /**
+   * Bumped on every attach/teardown. Callbacks from a superseded client carry a
+   * stale generation and are ignored, so a torn-down client cannot push status,
+   * schedule a competing retry, or overwrite state for the client that replaced it.
+   */
+  const clientGenerationRef = useRef(0);
+  const historyLoadedForRef = useRef<string | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
   const bootstrapStartedRef = useRef(false);
@@ -395,15 +402,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     const client = clientRef.current;
     if (!client) return;
 
+    historyLoadedForRef.current = gateway.id;
     setHistoryLoading(true);
     try {
       let sessionId = gateway.sessionId ?? sessionIdRef.current;
 
-      // If no session, list sessions and use the most recent or create one
+      // Resume this app's own most recent session, or start a fresh one. The
+      // session selector still lists every session for deliberate switching.
       if (!sessionId) {
-        const sessions = await client.getSessions(5);
-        if (sessions.length > 0) {
-          sessionId = sessions[0].id;
+        const own = pickAppSession(await client.getSessions(20));
+        if (own) {
+          sessionId = own.id;
         } else if (client.createSession) {
           const created = await client.createSession();
           sessionId = created.id;
@@ -473,9 +482,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       ) {
         return;
       }
+      // Supersede the outgoing client so its teardown cannot drive provider state.
+      clientGenerationRef.current += 1;
+      const generation = clientGenerationRef.current;
+      const isCurrent = () => clientGenerationRef.current === generation;
       clientRef.current?.disconnect();
+
       const client = createClientForKind(gateway.kind ?? 'hermes', gateway, {
         onStatus: (nextStatus, detail) => {
+          if (!isCurrent()) return;
           setStatus(nextStatus);
           setStatusDetail(detail ?? '');
           if (nextStatus === 'connected') {
@@ -504,30 +519,34 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           }
         },
         onHello: (hello) => {
-          setActiveHello(hello as GatewayHelloOk);
+          if (isCurrent()) setActiveHello(hello as GatewayHelloOk);
+        },
+        onCapabilities: (capabilities) => {
+          if (isCurrent()) setLiveCapabilities(capabilities as GatewayCapabilities);
         },
         onPairingRequired: (details) => {
-          setPairingDetails(details as PairingDetails);
+          if (isCurrent()) setPairingDetails(details as PairingDetails);
         },
         onHealthCheck: (_healthy) => {
+          // Only on the first connect to this gateway. Reloading on every
+          // reconnect rebuilds the message list underneath the user.
+          if (!isCurrent() || historyLoadedForRef.current === gateway.id) return;
           void reloadHistoryFor(gateway);
         },
-        onError: (message) => setLastError(message),
+        onError: (message) => {
+          if (isCurrent()) setLastError(message);
+        },
       });
       clientRef.current = client;
+      historyLoadedForRef.current = null;
       setConnectionPhase('connecting');
-      await client.connect();
-      // Validate the Hermes bearer key before declaring onboarding complete.
+      // connect() rejects only on auth rejection; unreachable gateways are left
+      // in 'reconnecting' with backoff running.
       try {
-        const capabilities = await client.getCapabilities();
-        setLiveCapabilities(capabilities);
+        await client.connect();
       } catch (error) {
-        if (gateway.kind !== 'openclaw' && isGatewayAuthFailure(error)) {
-          authFailureRef.current = true;
-          client.suspendReconnect();
-          client.disconnect();
-          throw new Error('Gateway rejected the API key. Enter API_SERVER_KEY from %LOCALAPPDATA%\\hermes\\.env.');
-        }
+        if (isGatewayAuthFailure(error)) authFailureRef.current = true;
+        throw error;
       }
     },
     [reloadHistoryFor],
@@ -922,7 +941,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     const next = await removeGateway(id);
     setGateways(next);
     if (activeGateway?.id === id) {
+      clientGenerationRef.current += 1;
+      if (autoRetryTimerRef.current) {
+        clearTimeout(autoRetryTimerRef.current);
+        autoRetryTimerRef.current = null;
+      }
       clientRef.current?.disconnect();
+      clientRef.current = null;
       setActiveGateway(null);
       setActiveHello(null);
       setMessages([]);
@@ -938,9 +963,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [activeGateway, settings, runAutoConnect]);
 
   const disconnectGateway = useCallback(() => {
+    // Supersede first: the client emits 'disconnected' synchronously, and the
+    // stale handler would otherwise queue an auto-retry the user did not ask for.
+    clientGenerationRef.current += 1;
+    if (autoRetryTimerRef.current) {
+      clearTimeout(autoRetryTimerRef.current);
+      autoRetryTimerRef.current = null;
+    }
     clientRef.current?.disconnect();
+    clientRef.current = null;
+    historyLoadedForRef.current = null;
     setActiveGateway(null);
     setActiveHello(null);
+    setStatus('disconnected');
     setMessages([]);
     setIsSending(false);
     setConnectionPhase('idle');
@@ -1541,12 +1576,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
 
       const client = clientRef.current;
-      if (client?.connectionStatus === 'reconnecting') {
+      if (!client) {
+        if (activeGatewayRef.current) void reconnectLastKnownGateway();
+        return;
+      }
+
+      if (client.connectionStatus !== 'connected') {
         client.resumeReconnect();
         return;
       }
-      if (connectionPhaseRef.current === 'connected') return;
-      void reconnectLastKnownGateway();
+
+      // We believe we are connected, but JS timers were frozen while
+      // backgrounded — the last health sample may be arbitrarily old, and the
+      // network may have changed underneath us. Verify before trusting it.
+      void client.healthCheck(6000).then((health) => {
+        if (!health && clientRef.current === client) void reconnectLastKnownGateway();
+      });
     });
     return () => subscription.remove();
   }, [reconnectLastKnownGateway]);
