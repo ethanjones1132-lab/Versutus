@@ -25,7 +25,7 @@ export function buildSignedPayload({ deviceId, clientId, role, scopes, signedAtM
  * signature already seen. Never throws: a malformed key or signature is a
  * verification failure, not a crash.
  */
-export function verifySignedAccessRequest(request, { now = Date.now(), maxSkewMs = 300_000, replayCache } = {}) {
+export function verifySignedAccessRequest(request, { now = Date.now(), maxSkewMs = 300_000 /* 5 min: device/server clock drift tolerance */, replayCache } = {}) {
   const { deviceId, publicKeyB64Url, clientId, role, scopes, signedAtMs, signature } = request;
 
   if (typeof signedAtMs !== 'number' || Math.abs(now - signedAtMs) > maxSkewMs) {
