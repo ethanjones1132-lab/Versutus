@@ -305,11 +305,11 @@ async function main() {
       auth: { type: 'bearer', required: true },
       runtime: { mode: 'agent', tool_execution: 'local', split_runtime: false, description: 'x' },
       features: {},
-      endpoints: { session_chat_stream: { method: 'POST', path: '/api/sessions/{id}/chat/stream' } },
+      endpoints: { sessions: { method: 'GET', path: '/api/sessions' } },
     },
   );
   const sessionsGroup = withSessionsEndpoint.groups.find((group) => group.id === 'sessions');
-  check('sessions group ready from endpoints.session_*', sessionsGroup?.status === 'ready', sessionsGroup);
+  check('sessions group ready from endpoints alone', sessionsGroup?.status === 'ready', sessionsGroup);
 
   console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);
   process.exitCode = failures === 0 ? 0 : 1;
