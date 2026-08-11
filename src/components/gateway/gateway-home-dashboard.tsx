@@ -71,13 +71,13 @@ export function GatewayHomeDashboard() {
             />
           </View>
           <View style={styles.summaryText}>
-            <Text variant="caption" style={styles.eyebrow}>
+            <Text variant="caption" numberOfLines={1} style={styles.eyebrow}>
               Active gateway
             </Text>
             <Text variant="title" numberOfLines={1} style={styles.title}>
               {activeLabel}
             </Text>
-            <Text numberOfLines={2} style={styles.onGlassSecondary}>
+            <Text variant="caption" numberOfLines={2} style={styles.onGlassSecondary}>
               {connected
                 ? 'Ready for chat, tools, runs, and slash commands.'
                 : 'Saved locally. Select a reachable gateway to activate it.'}
@@ -89,16 +89,23 @@ export function GatewayHomeDashboard() {
               <Text variant="caption" color="tertiary" numberOfLines={1} style={styles.onGlassTertiary}>
                 v{activeHello.server.version}
               </Text>
-            ) : statusDetail ? (
-              <Text variant="caption" numberOfLines={1} style={styles.onGlassTertiary}>
-                {statusDetail}
-              </Text>
             ) : null}
           </View>
         </View>
 
+        {/* Full width: connection failures name a host and a reason, and the
+            cramped status column truncated them to uselessness. */}
+        {!connected && statusDetail ? (
+          <Text variant="caption" numberOfLines={3} style={styles.onGlassTertiary}>
+            {statusDetail}
+          </Text>
+        ) : null}
+
         {lastError ? (
-          <Text variant="caption" numberOfLines={2} style={styles.onGlassTertiary}>
+          // Long-pressable and generously clipped: this string is what the user
+          // has to relay when a connection fails, and a truncated cause is
+          // worth nothing.
+          <Text variant="caption" numberOfLines={8} selectable style={styles.onGlassTertiary}>
             {lastError}
           </Text>
         ) : null}
@@ -214,8 +221,9 @@ export function GatewayHomeDashboard() {
         style={{ alignSelf: 'flex-end', marginTop: -Spacing.one }}
       />
 
-      {/* Phase 6: Channel repair cards for degraded states */}
-      {capabilitySnapshot.groups.find(g => g.id === 'channels' && ['stale', 'warming', 'unhealthy', 'partial', 'unknown'].includes(g.status as string)) && (
+      {/* Only for gateways that actually offer channels and report them degraded —
+          on a gateway without channel admin these commands do not exist. */}
+      {capabilitySnapshot.groups.find(g => g.id === 'channels' && ['unhealthy', 'partial'].includes(g.status as string)) && (
         <Card padding={Spacing.two} style={{ marginTop: Spacing.two }}>
           <Text variant="caption" color="accentWarm">Channel Repair</Text>
           <Text color="secondary" style={{ marginTop: Spacing.one }}>
@@ -263,18 +271,23 @@ const styles = StyleSheet.create({
   },
   statusText: {
     alignItems: 'flex-end',
-    maxWidth: 132,
+    flexShrink: 0,
     gap: Spacing.one,
   },
   primaryActions: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    // No wrapping: three equal actions share one row and compress instead.
+    // Wrapping put a full-width button on a second line that overlapped the
+    // retry control beneath it at large system font sizes.
+    alignItems: 'stretch',
     gap: Spacing.two,
   },
   primaryAction: {
-    flex: 1,
-    minWidth: 92,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
     minHeight: 44,
+    paddingHorizontal: Spacing.two,
   },
   retryAction: {
     alignSelf: 'flex-start',

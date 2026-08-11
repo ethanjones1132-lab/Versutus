@@ -1,4 +1,17 @@
-import type { ChatMessage } from '@/lib/gateway/types';
+import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
+
+/** `source` the gateway stamps on sessions created through its HTTP API. */
+export const APP_SESSION_SOURCE = 'api_server';
+
+/**
+ * The newest session this app owns. A gateway also hosts sessions belonging to
+ * other surfaces — the desktop TUI, Discord, cron — and adopting the newest of
+ * those would drop an unrelated conversation into the user's chat.
+ * Sessions arrive newest-first.
+ */
+export function pickAppSession(sessions: HermesSession[]): HermesSession | undefined {
+  return sessions.find((session) => session.source === APP_SESSION_SOURCE);
+}
 
 export function extractMessageText(content: unknown): string {
   if (typeof content === 'string') return content;

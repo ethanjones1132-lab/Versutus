@@ -45,3 +45,7 @@ example
 # generated native folders
 /ios
 /android
+
+# Gate secrets — provider API keys never leave the PC
+gate/.env
+gate/.tokens.json

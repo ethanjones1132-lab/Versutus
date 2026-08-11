@@ -15,7 +15,7 @@ import { GatewayCommandPanel } from '@/components/gateway/gateway-command-panel'
 import { CommandLogSheet } from '@/components/terminal/command-log-sheet';
 import { TerminalModePicker, type TerminalMode } from '@/components/terminal/mode-picker';
 import { TerminalOutput } from '@/components/terminal/terminal-output';
-import { Button, Card, Chip, ErrorCard, Screen, Text } from '@/components/ui';
+import { Button, Card, Chip, EmptyState, ErrorCard, Screen, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
@@ -41,7 +41,12 @@ export function TerminalScreen() {
     retryAutoConnect,
     gatewayRequest,
     runAgentCommand,
+    capabilitySnapshot,
   } = useGateway();
+  // Hermes exposes no terminal endpoint; attempting the stream just 404s and
+  // surfaces as a connection error. Only offer the shell when advertised.
+  const shellSupported =
+    capabilitySnapshot.groups.find((group) => group.id === 'terminal')?.status === 'ready';
   const [mode, setMode] = useState<TerminalMode>('shell');
   const [terminalLines, setTerminalLines] = useState<TerminalLine[]>([]);
   const [commandOutput, setCommandOutput] = useState('');
@@ -60,7 +65,7 @@ export function TerminalScreen() {
   }, []);
 
   const startTerminal = useCallback(async () => {
-    if (!activeGateway || status !== 'connected') return;
+    if (!activeGateway || status !== 'connected' || !shellSupported) return;
     sessionRef.current?.close();
     sessionRef.current = null;
     setTerminalLines([]);
@@ -92,7 +97,7 @@ export function TerminalScreen() {
       setTerminalError(message);
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
-  }, [activeGateway, appendOutput, status]);
+  }, [activeGateway, appendOutput, shellSupported, status]);
 
   const gatewayId = activeGateway?.id ?? null;
 
@@ -106,12 +111,12 @@ export function TerminalScreen() {
   }, [gatewayId, status]);
 
   useEffect(() => {
-    if (gatewayId && status === 'connected' && !sessionRef.current) {
+    if (gatewayId && status === 'connected' && shellSupported && !sessionRef.current) {
       // Deliberately establish the session from the effect when the gateway is
       // ready; callbacks settle the connected state asynchronously.
       void startTerminal();
     }
-  }, [gatewayId, mode, startTerminal, status]);
+  }, [gatewayId, mode, shellSupported, startTerminal, status]);
 
   const sendToTerminal = useCallback(async () => {
     const session = sessionRef.current;
@@ -213,7 +218,7 @@ export function TerminalScreen() {
         <TerminalModePicker mode={mode} onModeChange={setMode} />
       </View>
 
-      {terminalError ? (
+      {terminalError && shellSupported ? (
         <View style={styles.bannerWrap}>
           <ErrorCard
             cause={terminalError}
@@ -225,7 +230,15 @@ export function TerminalScreen() {
         </View>
       ) : null}
 
-      {mode === 'shell' ? (
+      {mode === 'shell' && !shellSupported ? (
+        <View style={styles.commandContent}>
+          <EmptyState
+            icon={{ ios: 'terminal', android: 'terminal', web: 'terminal' }}
+            title="No shell on this gateway"
+            description={`${activeGateway.name} does not offer a terminal endpoint. Use RPC or Agent commands, or open a shell on the gateway host.`}
+          />
+        </View>
+      ) : mode === 'shell' ? (
         <>
           <View
             style={[

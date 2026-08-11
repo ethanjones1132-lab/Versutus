@@ -594,6 +594,24 @@ Still remaining:
 
 ## Latest Validation
 
+> **SUPERSEDED IN PART — 2026-08-10: live gateway path is CONFIRMED WORKING.**
+>
+> First real end-to-end message sent from the phone to Hermes with a streamed response rendered back in Chat. This proves transport, bearer auth, session resolution, candidate/discovery, and SSE delta rendering all working together over the wire.
+>
+> The `0/18 timed out` result below was almost certainly a **shell-environment failure of the smoke harness**, not a product failure. Re-run `npm run smoke:gateway-commands` from an environment matching the working path before trusting its output again.
+>
+> Still unproven, and not to be claimed in a demo:
+>
+> - **Approvals from the phone.** `resolveApproval` exists in the client with no UI wired to it. This remains the P0 killer feature.
+> - **Off-tailnet remote.** No relay, no push, no background SSE — a backgrounded app misses everything.
+> - **Multi-agent.** Still one chat, one session, one agent.
+> - **Tests.** Still zero automated tests; lint still red.
+> - **TLS.** `shouldUseTlsForHost` still returns false, so the bearer token rides plaintext inside the tunnel. WireGuard is doing the encryption, not the app.
+> - **The "pinned" fingerprint label verifies nothing.** Do not show it to a client.
+> - **Docs drift.** README still documents OpenClaw WS v4; the code speaks Hermes HTTP/SSE.
+>
+> Effect: operator demos are now genuinely possible. Before this, a demo would have been mocks.
+
 - Passed: `npx tsc --noEmit`.
 - Passed: `http://localhost:8083/chat` returned HTTP 200 after Phase 3 model-command changes.
 - Failed with existing lint debt: `npm run lint`.

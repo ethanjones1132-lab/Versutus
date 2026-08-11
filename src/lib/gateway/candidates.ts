@@ -67,7 +67,16 @@ export function buildGatewayCandidates(options: {
     const candidateHost = normalizePcAddress(rawHost);
     if (!candidateHost) return;
 
-    if (isTailnetHost(candidateHost) || isTailscaleIp(candidateHost)) {
+    if (isTailscaleIp(candidateHost)) {
+      // A tailnet IP is the DNS-free route: it still rides the encrypted
+      // WireGuard tunnel, and it is the only candidate that works when a device
+      // has not accepted Tailscale DNS. No HTTPS variant — Serve's certificate
+      // is issued for the hostname, so TLS to a bare IP can never validate.
+      push(`http://${candidateHost}:${HERMES_PORT}`);
+      return;
+    }
+
+    if (isTailnetHost(candidateHost)) {
       // Tailscale Serve terminates TLS on the host's standard HTTPS port and
       // proxies to Hermes' plain HTTP listener on :8642. Do not send TLS to
       // :8642; that is the backend listener, not the Serve endpoint.

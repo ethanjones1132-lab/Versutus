@@ -3,7 +3,7 @@ import { StyleSheet, Text as RNText } from 'react-native';
 import { FontFamily, Typography } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 
-import type { TextProps } from './types';
+import type { TextProps, TextVariant } from './types';
 
 const colorKey = {
   primary: 'textPrimary',
@@ -29,12 +29,27 @@ const variantStyle = {
   link: { ...Typography.body, fontFamily: FontFamily.sansSemiBold },
 } as const;
 
+/**
+ * Per-variant caps on the OS font-size setting. Body and title text stays
+ * uncapped so large-text users get the size they asked for; the small chrome
+ * variants are capped because past ~1.4x they stop fitting their containers and
+ * wrap mid-word or overlap neighbouring controls.
+ */
+const variantFontScaleCap: Partial<Record<TextVariant, number>> = {
+  caption: 1.4,
+  micro: 1.3,
+  mono: 1.4,
+};
+
 export function Text({
   children,
   variant = 'body',
   color = 'primary',
   style,
   numberOfLines,
+  maxFontSizeMultiplier,
+  adjustsFontSizeToFit,
+  selectable,
 }: TextProps) {
   const tokens = useTokens();
   const tokenKey = colorKey[color];
@@ -42,6 +57,9 @@ export function Text({
   return (
     <RNText
       numberOfLines={numberOfLines}
+      selectable={selectable}
+      adjustsFontSizeToFit={adjustsFontSizeToFit}
+      maxFontSizeMultiplier={maxFontSizeMultiplier ?? variantFontScaleCap[variant]}
       style={[
         variantStyle[variant],
         { color: tokens[tokenKey] },
