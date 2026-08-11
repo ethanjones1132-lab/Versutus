@@ -34,7 +34,14 @@ import {
   saveActiveGatewayId,
   upsertGateway,
 } from '@/lib/gateway/storage';
-import { fetchGatewayManifest, manifestProviders } from '@/lib/portal/manifest';
+import {
+  fetchGatewayManifest,
+  manifestAuthSchemes,
+  manifestKindLabel,
+  manifestProviders,
+  manifestRequiresToken,
+} from '@/lib/portal/manifest';
+import type { GatewayIdentity } from '@/lib/portal/identify';
 import { loadAppSettings, saveAppSettings, type AppSettings } from '@/lib/settings/app-settings';
 import {
   appendTranscript,
@@ -490,58 +497,82 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const isCurrent = () => clientGenerationRef.current === generation;
       clientRef.current?.disconnect();
 
-      const client = createClientForKind(gateway.kind ?? 'hermes', gateway, {
-        onStatus: (nextStatus, detail) => {
-          if (!isCurrent()) return;
-          setStatus(nextStatus);
-          setStatusDetail(detail ?? '');
-          if (nextStatus === 'connected') {
-            if (autoRetryTimerRef.current) {
-              clearTimeout(autoRetryTimerRef.current);
-              autoRetryTimerRef.current = null;
+      let identityForClient: GatewayIdentity | undefined;
+      if (gateway.kind === 'custom') {
+        const manifest = await fetchGatewayManifest(gateway.url).catch(() => null);
+        if (manifest) {
+          identityForClient = {
+            kind: 'custom',
+            kindLabel: manifestKindLabel(manifest),
+            manifest,
+            auth: {
+              schemes: manifestAuthSchemes(manifest),
+              requiresToken: manifestRequiresToken(manifest),
+              grantPath: manifest.auth?.grantPath,
+            },
+            source: 'manifest',
+            identifiedAt: Date.now(),
+          };
+        }
+      }
+
+      const client = createClientForKind(
+        gateway.kind ?? 'hermes',
+        gateway,
+        {
+          onStatus: (nextStatus, detail) => {
+            if (!isCurrent()) return;
+            setStatus(nextStatus);
+            setStatusDetail(detail ?? '');
+            if (nextStatus === 'connected') {
+              if (autoRetryTimerRef.current) {
+                clearTimeout(autoRetryTimerRef.current);
+                autoRetryTimerRef.current = null;
+              }
+              gatewayDownNotifiedRef.current = false;
+              setConnectionPhase('connected');
+              setProbeMessage('');
+              setLastError(null);
+            } else if (nextStatus === 'connecting' || nextStatus === 'reconnecting') {
+              setConnectionPhase('connecting');
+              // Only a fresh attempt clears the last failure. 'reconnecting' is
+              // reported immediately after onError, so clearing here wiped the
+              // reason before it could ever be shown.
+              if (nextStatus === 'connecting') setLastError(null);
+              if (nextStatus === 'reconnecting' && !gatewayDownNotifiedRef.current) {
+                gatewayDownNotifiedRef.current = true;
+                void notifyGatewayDown(gatewayHostForDisplay(gateway.url));
+              }
+            } else if (nextStatus === 'disconnected') {
+              setConnectionPhase((phase) =>
+                phase === 'connecting' || phase === 'connected' ? 'failed' : phase,
+              );
+              if (activeGatewayRef.current && !authFailureRef.current) {
+                scheduleAutoRetryRef.current(12000);
+              }
             }
-            gatewayDownNotifiedRef.current = false;
-            setConnectionPhase('connected');
-            setProbeMessage('');
-            setLastError(null);
-          } else if (nextStatus === 'connecting' || nextStatus === 'reconnecting') {
-            setConnectionPhase('connecting');
-            // Only a fresh attempt clears the last failure. 'reconnecting' is
-            // reported immediately after onError, so clearing here wiped the
-            // reason before it could ever be shown.
-            if (nextStatus === 'connecting') setLastError(null);
-            if (nextStatus === 'reconnecting' && !gatewayDownNotifiedRef.current) {
-              gatewayDownNotifiedRef.current = true;
-              void notifyGatewayDown(gatewayHostForDisplay(gateway.url));
-            }
-          } else if (nextStatus === 'disconnected') {
-            setConnectionPhase((phase) =>
-              phase === 'connecting' || phase === 'connected' ? 'failed' : phase,
-            );
-            if (activeGatewayRef.current && !authFailureRef.current) {
-              scheduleAutoRetryRef.current(12000);
-            }
-          }
+          },
+          onHello: (hello) => {
+            if (isCurrent()) setActiveHello(hello as GatewayHelloOk);
+          },
+          onCapabilities: (capabilities) => {
+            if (isCurrent()) setLiveCapabilities(capabilities as GatewayCapabilities);
+          },
+          onPairingRequired: (details) => {
+            if (isCurrent()) setPairingDetails(details as PairingDetails);
+          },
+          onHealthCheck: (_healthy) => {
+            // Only on the first connect to this gateway. Reloading on every
+            // reconnect rebuilds the message list underneath the user.
+            if (!isCurrent() || historyLoadedForRef.current === gateway.id) return;
+            void reloadHistoryFor(gateway);
+          },
+          onError: (message) => {
+            if (isCurrent()) setLastError(message);
+          },
         },
-        onHello: (hello) => {
-          if (isCurrent()) setActiveHello(hello as GatewayHelloOk);
-        },
-        onCapabilities: (capabilities) => {
-          if (isCurrent()) setLiveCapabilities(capabilities as GatewayCapabilities);
-        },
-        onPairingRequired: (details) => {
-          if (isCurrent()) setPairingDetails(details as PairingDetails);
-        },
-        onHealthCheck: (_healthy) => {
-          // Only on the first connect to this gateway. Reloading on every
-          // reconnect rebuilds the message list underneath the user.
-          if (!isCurrent() || historyLoadedForRef.current === gateway.id) return;
-          void reloadHistoryFor(gateway);
-        },
-        onError: (message) => {
-          if (isCurrent()) setLastError(message);
-        },
-      });
+        identityForClient,
+      );
       clientRef.current = client;
       historyLoadedForRef.current = null;
       setConnectionPhase('connecting');
