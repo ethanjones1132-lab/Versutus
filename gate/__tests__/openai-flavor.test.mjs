@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildChatRequest, parseDelta } from '../flavors/openai.mjs';
+import { buildChatRequest, parseDelta, parseResponseText } from '../flavors/openai.mjs';
 
 const config = {
   flavor: 'openai',
@@ -46,4 +46,14 @@ test('extracts the text delta from a streaming chunk', () => {
 test('returns empty string for a chunk with no content', () => {
   assert.equal(parseDelta(JSON.stringify({ choices: [{ delta: {} }] })), '');
   assert.equal(parseDelta('not json'), '');
+});
+
+test('extracts the message text from a non-streaming response', () => {
+  const json = { choices: [{ message: { role: 'assistant', content: 'hello there' } }] };
+  assert.equal(parseResponseText(json), 'hello there');
+});
+
+test('returns empty string when the response has no message content', () => {
+  assert.equal(parseResponseText({ choices: [] }), '');
+  assert.equal(parseResponseText({}), '');
 });

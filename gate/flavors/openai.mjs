@@ -65,3 +65,8 @@ export function parseDelta(data) {
     return '';
   }
 }
+
+/** Extract the assistant's text from a non-streaming chat completion. */
+export function parseResponseText(json) {
+  return json?.choices?.[0]?.message?.content ?? '';
+}
