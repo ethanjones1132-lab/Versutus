@@ -504,7 +504,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             setLastError(null);
           } else if (nextStatus === 'connecting' || nextStatus === 'reconnecting') {
             setConnectionPhase('connecting');
-            setLastError(null);
+            // Only a fresh attempt clears the last failure. 'reconnecting' is
+            // reported immediately after onError, so clearing here wiped the
+            // reason before it could ever be shown.
+            if (nextStatus === 'connecting') setLastError(null);
             if (nextStatus === 'reconnecting' && !gatewayDownNotifiedRef.current) {
               gatewayDownNotifiedRef.current = true;
               void notifyGatewayDown(gatewayHostForDisplay(gateway.url));

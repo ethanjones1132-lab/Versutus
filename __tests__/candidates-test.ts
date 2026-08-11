@@ -20,6 +20,21 @@ describe('gateway candidate URLs', () => {
     expect(urls).toContain('http://ethanspc.tail3a1a8a.ts.net:8642');
   });
 
+  test('routes are ordered widest-reach first, LAN last', () => {
+    // Hostname works anywhere DNS resolves; the tailnet IP works anywhere on
+    // the tailnet without DNS; the LAN IP works only at home but needs neither.
+    const urls = buildGatewayCandidates({
+      configuredHosts: ['ethanspc.tail3a1a8a.ts.net', '100.95.137.83', '192.168.4.30'],
+      includeLocalFallbacks: false,
+    });
+    expect(urls).toEqual([
+      'https://ethanspc.tail3a1a8a.ts.net:443',
+      'http://ethanspc.tail3a1a8a.ts.net:8642',
+      'http://100.95.137.83:8642',
+      'http://192.168.4.30:8642',
+    ]);
+  });
+
   test('hostname and IP together give a fallback when DNS is unavailable', () => {
     const urls = buildGatewayCandidates({
       configuredHosts: ['ethanspc.tail3a1a8a.ts.net', '100.95.137.83'],
