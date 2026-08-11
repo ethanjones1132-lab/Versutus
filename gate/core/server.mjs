@@ -7,6 +7,104 @@ import { TokenStore } from './tokens.mjs';
 import { PairingStore } from './pairing.mjs';
 import { DeviceTokenStore } from './device-tokens.mjs';
 import { verifySignedAccessRequest } from './signature.mjs';
+import * as openaiFlavor from '../flavors/openai.mjs';
+import * as anthropicFlavor from '../flavors/anthropic.mjs';
+
+const FLAVOR_MODULES = { openai: openaiFlavor, anthropic: anthropicFlavor };
+
+async function proxyChat(provider, requestBody, res) {
+  const flavorModule = FLAVOR_MODULES[provider.config.flavor];
+  if (!flavorModule) {
+    res.writeHead(501, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: { message: `Chat is not implemented for flavor "${provider.config.flavor}"`, code: 'flavor_not_implemented' },
+    }));
+    return;
+  }
+
+  const wantsStream = requestBody.stream === true;
+  if (wantsStream && provider.config.capabilities?.streaming !== true) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: { message: `Provider "${provider.id}" does not support streaming`, code: 'streaming_unsupported' },
+    }));
+    return;
+  }
+
+  const apiKey = process.env[provider.config.apiKeyEnv] ?? '';
+  let upstreamRequest;
+  try {
+    upstreamRequest = flavorModule.buildChatRequest(provider.config, apiKey, {
+      model: requestBody.model,
+      messages: requestBody.messages ?? [],
+      stream: wantsStream,
+    });
+  } catch (error) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: error.message, code: 'invalid_model' } }));
+    return;
+  }
+
+  let upstreamResponse;
+  try {
+    upstreamResponse = await fetch(upstreamRequest.url, upstreamRequest.init);
+  } catch (error) {
+    res.writeHead(502, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: `Upstream request failed: ${error.message}`, code: 'upstream_unreachable' } }));
+    return;
+  }
+
+  if (!upstreamResponse.ok) {
+    const text = await upstreamResponse.text().catch(() => '');
+    res.writeHead(upstreamResponse.status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: text || 'Upstream rejected the request', code: 'upstream_error' } }));
+    return;
+  }
+
+  if (!wantsStream) {
+    const json = await upstreamResponse.json();
+    const text = flavorModule.parseResponseText(json);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      id: `gate-${Date.now()}`,
+      object: 'chat.completion',
+      choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+    }));
+    return;
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+
+  const reader = upstreamResponse.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') continue;
+        const text = flavorModule.parseDelta(data);
+        if (text) {
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
+        }
+      }
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  res.write('data: [DONE]\n\n');
+  res.end();
+}
 
 /**
  * Create and configure a Versutus Gate HTTP server
@@ -147,7 +245,9 @@ export async function createGate(config = {}) {
       // This allows us to return 404 for unknown routes
       const isKnownAuthenticatedRoute =
         (pathname === '/v1/models' && method === 'GET') ||
-        /^\/p\/[^\/]+\/v1\/models$/.test(pathname);
+        /^\/p\/[^/]+\/v1\/models$/.test(pathname) ||
+        (pathname === '/v1/chat/completions' && method === 'POST') ||
+        /^\/p\/[^/]+\/v1\/chat\/completions$/.test(pathname);
 
       if (!isKnownAuthenticatedRoute) {
         // Unknown route - return 404
@@ -224,6 +324,34 @@ export async function createGate(config = {}) {
           object: 'list',
           data: modelList,
         }));
+        return;
+      }
+
+      // /v1/chat/completions - unscoped chat (resolves provider from model)
+      if (pathname === '/v1/chat/completions' && method === 'POST') {
+        const body = await readJsonBody(req);
+        const provider = providers.find((p) => p.config.models.includes(body?.model));
+        if (!provider) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: `No provider declares model "${body?.model}"`, code: 'unknown_model' } }));
+          return;
+        }
+        await proxyChat(provider, body ?? {}, res);
+        return;
+      }
+
+      // /p/{provider}/v1/chat/completions - scoped chat
+      const scopedChatMatch = pathname.match(/^\/p\/([^/]+)\/v1\/chat\/completions$/);
+      if (scopedChatMatch && method === 'POST') {
+        const providerId = decodeURIComponent(scopedChatMatch[1]);
+        const provider = providers.find((p) => p.id === providerId);
+        if (!provider) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: `Unknown provider "${providerId}"`, code: 'unknown_provider' } }));
+          return;
+        }
+        const body = await readJsonBody(req);
+        await proxyChat(provider, body ?? {}, res);
         return;
       }
     } catch (err) {

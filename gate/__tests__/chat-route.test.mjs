@@ -1,0 +1,151 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createServer } from 'node:http';
+
+import { createGate } from '../core/server.mjs';
+
+async function startStubUpstream({ stream } = {}) {
+  const server = createServer((req, res) => {
+    if (stream) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'Hel' } }] })}\n\n`);
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'lo' } }] })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } else {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'Hello' } }] }));
+    }
+  });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const { port } = server.address();
+  return { server, baseUrl: `http://127.0.0.1:${port}/v1` };
+}
+
+async function gateWithStubProvider(upstreamBaseUrl, capabilities = { chat: true, streaming: true }) {
+  const root = await mkdtemp(join(tmpdir(), 'gate-chat-'));
+  await mkdir(join(root, 'providers', 'stub'), { recursive: true });
+  await writeFile(
+    join(root, 'providers', 'stub', 'provider.mjs'),
+    `
+export const id = 'stub';
+export const label = 'Stub';
+export const config = {
+  flavor: 'openai',
+  baseUrl: '${upstreamBaseUrl}',
+  apiKeyEnv: 'STUB_KEY',
+  models: ['stub-1'],
+  capabilities: ${JSON.stringify(capabilities)},
+};
+`,
+    'utf8',
+  );
+  process.env.STUB_KEY = 'fake-key-for-tests';
+  const gate = await createGate({ root, port: 0 });
+  return gate;
+}
+
+test('non-streaming chat proxies and normalizes the upstream response', async () => {
+  const upstream = await startStubUpstream({ stream: false });
+  const gate = await gateWithStubProvider(upstream.baseUrl);
+  try {
+    const response = await fetch(`http://localhost:${gate.port}/p/stub/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` },
+      body: JSON.stringify({ model: 'stub-1', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.choices[0].message.content, 'Hello');
+  } finally {
+    await gate.close();
+    upstream.server.close();
+  }
+});
+
+test('streaming chat pipes normalized SSE chunks through', async () => {
+  const upstream = await startStubUpstream({ stream: true });
+  const gate = await gateWithStubProvider(upstream.baseUrl);
+  try {
+    const response = await fetch(`http://localhost:${gate.port}/p/stub/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` },
+      body: JSON.stringify({ model: 'stub-1', messages: [{ role: 'user', content: 'hi' }], stream: true }),
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /Hel/);
+    assert.match(text, /lo/);
+    assert.match(text, /\[DONE\]/);
+  } finally {
+    await gate.close();
+    upstream.server.close();
+  }
+});
+
+test('unscoped chat resolves the provider from the requested model', async () => {
+  const upstream = await startStubUpstream({ stream: false });
+  const gate = await gateWithStubProvider(upstream.baseUrl);
+  try {
+    const response = await fetch(`http://localhost:${gate.port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` },
+      body: JSON.stringify({ model: 'stub-1', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(response.status, 200);
+  } finally {
+    await gate.close();
+    upstream.server.close();
+  }
+});
+
+test('rejects an unauthenticated chat request', async () => {
+  const upstream = await startStubUpstream({ stream: false });
+  const gate = await gateWithStubProvider(upstream.baseUrl);
+  try {
+    const response = await fetch(`http://localhost:${gate.port}/p/stub/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'stub-1', messages: [] }),
+    });
+    assert.equal(response.status, 401);
+  } finally {
+    await gate.close();
+    upstream.server.close();
+  }
+});
+
+test('rejects streaming when the provider did not declare it', async () => {
+  const upstream = await startStubUpstream({ stream: true });
+  const gate = await gateWithStubProvider(upstream.baseUrl, { chat: true, streaming: false });
+  try {
+    const response = await fetch(`http://localhost:${gate.port}/p/stub/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` },
+      body: JSON.stringify({ model: 'stub-1', messages: [], stream: true }),
+    });
+    assert.equal(response.status, 400);
+  } finally {
+    await gate.close();
+    upstream.server.close();
+  }
+});
+
+test('returns 404 for a scoped route naming an unknown provider', async () => {
+  const upstream = await startStubUpstream({ stream: false });
+  const gate = await gateWithStubProvider(upstream.baseUrl);
+  try {
+    const response = await fetch(`http://localhost:${gate.port}/p/nope/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` },
+      body: JSON.stringify({ messages: [] }),
+    });
+    assert.equal(response.status, 404);
+  } finally {
+    await gate.close();
+    upstream.server.close();
+  }
+});

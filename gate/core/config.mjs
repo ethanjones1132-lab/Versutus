@@ -42,7 +42,7 @@ export function validateProviderConfig(id, config) {
     };
   }
 
-  // Check baseUrl is an https URL
+  // Check baseUrl is a valid URL (https for production, http allowed for localhost testing)
   if (!config.baseUrl || typeof config.baseUrl !== 'string') {
     return {
       ok: false,
@@ -50,7 +50,8 @@ export function validateProviderConfig(id, config) {
     };
   }
 
-  if (!config.baseUrl.startsWith('https://')) {
+  const isLocalhost = config.baseUrl.includes('127.0.0.1') || config.baseUrl.includes('localhost');
+  if (!config.baseUrl.startsWith('https://') && !isLocalhost) {
     return {
       ok: false,
       error: `provider "${id}": baseUrl must use https, not http`,
