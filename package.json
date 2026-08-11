@@ -63,6 +63,7 @@
     "build:android:preview:local": "eas build --profile preview --platform android --local"
   },
   "private": true,
+  "workspaces": ["gate"],
   "jest": {
     "preset": "jest-expo",
     "moduleNameMapper": {

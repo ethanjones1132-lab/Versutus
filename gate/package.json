@@ -1,0 +1,11 @@
+{
+  "name": "versutus-gate",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "versutus-gate": "./cli.mjs" },
+  "scripts": {
+    "test": "node --test",
+    "start": "node cli.mjs start"
+  }
+}
