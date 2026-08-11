@@ -42,3 +42,33 @@ describe('manifestProviders', () => {
     expect(manifestProviders(manifest)).toEqual([]);
   });
 });
+
+import { identifyGateway } from '@/lib/portal/identify';
+
+describe('identifyGateway carries providers through', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+  });
+
+  test('a manifest with providers surfaces them on the identity', async () => {
+    const manifest = {
+      manifest: 'versutus-gateway/v1',
+      kind: 'versutus-gate',
+      auth: { schemes: ['bearer'] },
+      providers: [
+        { id: 'claude', label: 'Claude', basePath: '/p/claude', models: ['claude-opus-5'], capabilities: { chat: true } },
+      ],
+    };
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify(manifest)),
+      } as unknown as Response),
+    );
+
+    const identity = await identifyGateway({ baseUrl: 'http://gate.test:8760' });
+    expect(identity.providers).toHaveLength(1);
+    expect(identity.providers?.[0].id).toBe('claude');
+  });
+});
