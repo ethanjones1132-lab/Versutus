@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -38,6 +38,7 @@ test('health endpoint is unauthenticated', async () => {
     assert.equal(data.status, 'ok');
   } finally {
     await gate.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -56,6 +57,7 @@ test('manifest endpoint is unauthenticated', async () => {
     assert.ok(Array.isArray(data.providers));
   } finally {
     await gate.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -68,6 +70,7 @@ test('models endpoint requires authentication', async () => {
     assert.equal(response.status, 401);
   } finally {
     await gate.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -87,6 +90,7 @@ test('authenticated models endpoint returns all provider models', async () => {
     assert.ok(modelIds.includes('test-model-2'));
   } finally {
     await gate.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -109,6 +113,7 @@ test('scoped models endpoint returns provider-specific models', async () => {
     assert.ok(modelIds.includes('test-model-2'));
   } finally {
     await gate.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -121,6 +126,7 @@ test('unknown route returns 404', async () => {
     assert.equal(response.status, 404);
   } finally {
     await gate.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 
@@ -137,5 +143,6 @@ test('token store persists under the gate root', async () => {
     assert.equal(gate.token, tokenData.token, 'Gate token should match stored token');
   } finally {
     await gate.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
