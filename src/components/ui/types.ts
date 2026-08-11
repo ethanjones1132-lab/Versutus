@@ -55,6 +55,8 @@ export type TextProps = {
   maxFontSizeMultiplier?: number;
   /** Shrink to fit rather than wrap. Pair with numberOfLines. */
   adjustsFontSizeToFit?: boolean;
+  /** Allow long-press copy — worth it for diagnostics the user must relay. */
+  selectable?: boolean;
 };
 
 export type TextFieldValidationState = 'default' | 'valid' | 'invalid';

@@ -49,6 +49,7 @@ export function Text({
   numberOfLines,
   maxFontSizeMultiplier,
   adjustsFontSizeToFit,
+  selectable,
 }: TextProps) {
   const tokens = useTokens();
   const tokenKey = colorKey[color];
@@ -56,6 +57,7 @@ export function Text({
   return (
     <RNText
       numberOfLines={numberOfLines}
+      selectable={selectable}
       adjustsFontSizeToFit={adjustsFontSizeToFit}
       maxFontSizeMultiplier={maxFontSizeMultiplier ?? variantFontScaleCap[variant]}
       style={[

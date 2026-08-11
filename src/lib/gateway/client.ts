@@ -37,6 +37,17 @@ const HEALTH_INTERVAL_MS = 30000;
  */
 const HEALTH_FAILURE_THRESHOLD = 2;
 
+/**
+ * HTTP header values must be printable ASCII. Android's OkHttp rejects the
+ * whole request — before any network I/O — if a value carries a control
+ * character, so a token pasted with a stray newline fails every authenticated
+ * call while unauthenticated probes to the same host keep succeeding.
+ */
+function sanitizeHeaderValue(value: string | undefined): string {
+  if (!value) return '';
+  return value.replace(/[^\x20-\x7E]/g, '').trim();
+}
+
 type PendingRun = {
   runId: string;
   abortController: AbortController | null;
@@ -186,11 +197,13 @@ export class HermesGatewayClient {
     const h: Record<string, string> = {
       'Content-Type': 'application/json',
     };
-    if (this.profile.token) {
-      h['Authorization'] = `Bearer ${this.profile.token}`;
+    const token = sanitizeHeaderValue(this.profile.token);
+    if (token) {
+      h['Authorization'] = `Bearer ${token}`;
     }
-    if (this.profile.sessionKey) {
-      h['X-Hermes-Session-Key'] = this.profile.sessionKey;
+    const sessionKey = sanitizeHeaderValue(this.profile.sessionKey);
+    if (sessionKey) {
+      h['X-Hermes-Session-Key'] = sessionKey;
     }
     return h;
   }

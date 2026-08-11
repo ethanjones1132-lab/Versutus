@@ -102,7 +102,10 @@ export function GatewayHomeDashboard() {
         ) : null}
 
         {lastError ? (
-          <Text variant="caption" numberOfLines={3} style={styles.onGlassTertiary}>
+          // Long-pressable and generously clipped: this string is what the user
+          // has to relay when a connection fails, and a truncated cause is
+          // worth nothing.
+          <Text variant="caption" numberOfLines={8} selectable style={styles.onGlassTertiary}>
             {lastError}
           </Text>
         ) : null}

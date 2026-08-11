@@ -31,7 +31,13 @@ const UNAUTHORIZED = {
  */
 function mockGateway() {
   const state = { healthUp: true, capabilitiesStatus: 200 };
-  (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+  mockGatewayFetch(state);
+  return state;
+}
+
+/** Installs the fetch mock for `state` and returns it, for header assertions. */
+function mockGatewayFetch(state: { healthUp: boolean; capabilitiesStatus: number }) {
+  const fetchMock = jest.fn((input: unknown, _init?: unknown) => {
     const url = String(input);
     if (url.includes('/health')) {
       return state.healthUp
@@ -47,7 +53,8 @@ function mockGateway() {
     }
     return Promise.resolve(jsonResponse({}));
   });
-  return state;
+  (globalThis as { fetch: unknown }).fetch = fetchMock;
+  return fetchMock;
 }
 
 describe('HermesGatewayClient health monitoring', () => {
@@ -162,6 +169,33 @@ describe('HermesGatewayClient health monitoring', () => {
     await jest.advanceTimersByTimeAsync(30_000);
     await jest.advanceTimersByTimeAsync(30_000);
     expect(client.connectionStatus).toBe('reconnecting');
+
+    client.disconnect();
+  });
+
+  test('a token with stray whitespace still produces a valid header', async () => {
+    // OkHttp rejects the request outright on a control character in a header
+    // value, which fails every authenticated call while unauthenticated probes
+    // to the same host keep working.
+    const fetchMock = mockGatewayFetch(mockGateway());
+    const client = new HermesGatewayClient(
+      { ...PROFILE, token: '  secret-key-value\n' },
+      {},
+    );
+
+    await client.connect();
+
+    const authHeaders = fetchMock.mock.calls
+      .map(([, init]) => (init as RequestInit | undefined)?.headers as Record<string, string>)
+      .filter(Boolean)
+      .map((headers) => headers['Authorization'])
+      .filter(Boolean);
+
+    expect(authHeaders.length).toBeGreaterThan(0);
+    for (const header of authHeaders) {
+      expect(header).toBe('Bearer secret-key-value');
+      expect(header).not.toMatch(/[^\x20-\x7E]/);
+    }
 
     client.disconnect();
   });
