@@ -142,6 +142,10 @@ async function handlePair(args) {
   if (sub === 'open') {
     const minutesIndex = rest.indexOf('--minutes');
     const minutes = minutesIndex >= 0 ? Number(rest[minutesIndex + 1]) : 5;
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      console.error('Error: --minutes must be a positive number');
+      process.exit(1);
+    }
     await pairing.openWindow(minutes * 60_000);
     console.log(`Pairing window open for ${minutes} minute(s). The next device to connect is granted automatically.`);
     return;
@@ -150,12 +154,12 @@ async function handlePair(args) {
   if (sub === 'approve') {
     const requestId = rest[0];
     if (!requestId) {
-      console.error('Usage: node gate/cli.mjs pair approve <requestId>');
+      console.error('Error: Usage: node gate/cli.mjs pair approve <requestId>');
       process.exit(1);
     }
     const entry = await pairing.takePending(requestId);
     if (!entry) {
-      console.error(`No pending request "${requestId}". Run "pair list" to see open requests.`);
+      console.error(`Error: No pending request "${requestId}". Run "pair list" to see open requests.`);
       process.exit(1);
     }
     const token = await deviceTokens.issue(entry.deviceId, { role: entry.role, scopes: entry.scopes });
@@ -166,7 +170,7 @@ async function handlePair(args) {
   if (sub === 'revoke') {
     const deviceId = rest[0];
     if (!deviceId) {
-      console.error('Usage: node gate/cli.mjs pair revoke <deviceId>');
+      console.error('Error: Usage: node gate/cli.mjs pair revoke <deviceId>');
       process.exit(1);
     }
     const found = await deviceTokens.revoke(deviceId);
