@@ -51,3 +51,6 @@ gate/.env
 gate/.tokens.json
 gate/.pairing.json
 gate/.device-tokens.json
+
+# Git worktrees
+.worktrees/
