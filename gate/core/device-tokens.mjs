@@ -7,6 +7,12 @@ import { readFile, writeFile } from 'node:fs/promises';
  * never cached: `cli.mjs pair revoke` runs as a separate process from the
  * long-lived Gate server, so a cache here would keep honoring a revoked
  * token until restart.
+ *
+ * Two known limitations, both acceptable for a Gate bound to 127.0.0.1 with
+ * a single local operator: verify() is not constant-time across devices
+ * (early-return on match), and issue()/revoke() have no lock, so a
+ * concurrent revoke+issue on the same device could race. Neither is
+ * exploitable without network access the pairing flow itself already gates.
  */
 export class DeviceTokenStore {
   constructor(path) {
