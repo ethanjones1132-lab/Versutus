@@ -92,9 +92,9 @@ export function adapterForKind(kind: GatewayKind): AdapterDefinition {
  * Create the client for an identified gateway kind.
  * - hermes / unknown → HermesGatewayClient (HTTP + SSE)
  * - openclaw → OpenClawAdapterClient (WS v4 with a Hermes-shaped surface)
- * - custom → ManifestClient when an identity with a manifest is supplied
- *   (resolves routes from endpoints); falls back to the Hermes-shaped HTTP
- *   adapter when no manifest is available, matching prior behaviour.
+ * - custom → ManifestClient when an identity with usable manifest routes is
+ *   supplied (requires endpoints.health so connect can probe); falls back to
+ *   the Hermes-shaped HTTP adapter when the manifest has no usable routes.
  */
 export function createClientForKind(
   kind: GatewayKind,
@@ -106,7 +106,9 @@ export function createClientForKind(
     case 'openclaw':
       return new OpenClawAdapterClient(profile, callbacks);
     case 'custom':
-      if (identity?.manifest) return new ManifestClient(profile, identity, callbacks);
+      if (identity?.manifest?.endpoints?.health) {
+        return new ManifestClient(profile, identity, callbacks);
+      }
       return new HermesGatewayClient(profile, callbacks as GatewayClientCallbacks);
     case 'hermes':
     case 'unknown':

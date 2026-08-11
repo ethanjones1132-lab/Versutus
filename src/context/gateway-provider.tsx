@@ -499,7 +499,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
       let identityForClient: GatewayIdentity | undefined;
       if (gateway.kind === 'custom') {
-        const manifest = await fetchGatewayManifest(gateway.url).catch(() => null);
+        // Child profiles are materialised under parent.url + basePath and do
+        // not host their own well-known manifest — fetch the parent's.
+        let manifestUrl = gateway.url;
+        if (gateway.parentId) {
+          const known = await loadGateways();
+          const parent = known.find((item) => item.id === gateway.parentId);
+          if (parent) manifestUrl = parent.url;
+        }
+        const manifest = await fetchGatewayManifest(manifestUrl).catch(() => null);
+        // Another attachClient may have superseded us while we awaited.
+        if (!isCurrent()) return;
         if (manifest) {
           identityForClient = {
             kind: 'custom',
@@ -515,6 +525,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           };
         }
       }
+
+      if (!isCurrent()) return;
 
       const client = createClientForKind(
         gateway.kind ?? 'hermes',
@@ -988,7 +1000,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const deleteGateway = useCallback(async (id: string) => {
     const next = await removeGateway(id);
     setGateways(next);
-    if (activeGateway?.id === id) {
+    // Cascade removes child profiles too — tear down if the active gateway
+    // was the deleted parent or one of its children.
+    const activeWasRemoved =
+      activeGateway?.id === id || activeGateway?.parentId === id;
+    if (activeWasRemoved) {
       clientGenerationRef.current += 1;
       if (autoRetryTimerRef.current) {
         clearTimeout(autoRetryTimerRef.current);

@@ -31,7 +31,11 @@ export async function upsertGateway(gateway: GatewayProfile): Promise<GatewayPro
 }
 
 export async function removeGateway(id: string): Promise<GatewayProfile[]> {
-  const gateways = (await loadGateways()).filter((item) => item.id !== id);
+  // Cascade: provider child profiles materialised from a parent gate's
+  // providers[] must not outlive the parent they were synced from.
+  const gateways = (await loadGateways()).filter(
+    (item) => item.id !== id && item.parentId !== id,
+  );
   await saveGateways(gateways);
   return gateways;
 }
