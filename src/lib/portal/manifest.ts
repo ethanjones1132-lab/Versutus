@@ -14,6 +14,30 @@ export type GatewayManifestAuth = {
   challengePath?: string;
 };
 
+export type GatewayManifestProvider = {
+  id: string;
+  label: string;
+  basePath: string;
+  models: string[];
+  capabilities: { chat?: boolean; streaming?: boolean; [key: string]: boolean | undefined };
+};
+
+function isGatewayManifestProvider(value: unknown): value is GatewayManifestProvider {
+  if (!value || typeof value !== 'object') return false;
+  const raw = value as Record<string, unknown>;
+  return (
+    typeof raw.id === 'string' &&
+    raw.id.length > 0 &&
+    typeof raw.label === 'string' &&
+    typeof raw.basePath === 'string' &&
+    raw.basePath.length > 0 &&
+    Array.isArray(raw.models) &&
+    raw.models.every((m) => typeof m === 'string') &&
+    typeof raw.capabilities === 'object' &&
+    raw.capabilities !== null
+  );
+}
+
 export type GatewayManifest = {
   manifest: string;
   /** 'hermes' | 'openclaw' | custom kind id (any other string → 'custom'). */
@@ -37,6 +61,7 @@ export type GatewayManifest = {
     [key: string]: boolean | undefined;
   };
   endpoints?: Record<string, string>;
+  providers?: GatewayManifestProvider[];
 };
 
 export function isGatewayManifest(value: unknown): value is GatewayManifest {
@@ -75,6 +100,16 @@ export function manifestCapabilityList(manifest: GatewayManifest): string[] {
   return Object.entries(caps)
     .filter(([, enabled]) => enabled === true)
     .map(([name]) => name);
+}
+
+/**
+ * Every well-formed provider a gate advertises. A malformed entry is dropped,
+ * not thrown — one bad entry in an otherwise valid manifest shouldn't take
+ * down identification for every other provider.
+ */
+export function manifestProviders(manifest: GatewayManifest): GatewayManifestProvider[] {
+  if (!Array.isArray(manifest.providers)) return [];
+  return manifest.providers.filter(isGatewayManifestProvider);
 }
 
 /**
