@@ -119,3 +119,42 @@ describe('ManifestClient', () => {
     client.disconnect();
   });
 });
+
+describe('ManifestClient.streamChat', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+  });
+
+  test('streams normalized SSE deltas from the manifest-declared chat endpoint', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/v1/chat/completions')) {
+        const body = new ReadableStream({
+          start(controller) {
+            const enc = new TextEncoder();
+            controller.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n'));
+            controller.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"lo"}}]}\n\n'));
+            controller.enqueue(enc.encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        });
+        return Promise.resolve({ ok: true, status: 200, body } as unknown as Response);
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    const chunks: string[] = [];
+    const full = await client.streamChat([{ role: 'user', content: 'hi' }], (t) => chunks.push(t));
+
+    expect(chunks).toEqual(['Hel', 'lo']);
+    expect(full).toBe('Hello');
+  });
+
+  test('throws a named error when the manifest has no chat endpoint', async () => {
+    const identityNoChat: GatewayIdentity = { ...IDENTITY, manifest: { ...IDENTITY.manifest!, endpoints: { health: '/health' } } };
+    const client = new ManifestClient(PROFILE, identityNoChat, {});
+    await expect(client.streamChat([{ role: 'user', content: 'hi' }], () => undefined)).rejects.toThrow(/chat/i);
+  });
+});

@@ -188,6 +188,50 @@ export class ManifestClient {
     };
   }
 
+  async streamChat(
+    messages: { role: string; content: string }[],
+    onDelta: (text: string) => void,
+    options?: { model?: string; sessionId?: string; signal?: AbortSignal },
+  ): Promise<string> {
+    const path = this.requireEndpoint('chat');
+    const body: Record<string, unknown> = { model: options?.model, messages, stream: true };
+
+    const controller = new AbortController();
+    const signal = options?.signal || controller.signal;
+
+    const response = await fetch(`${this.transport.baseUrl}${path}`, {
+      method: 'POST',
+      headers: this.transport.headers,
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      throw new Error(errorText || `HTTP ${response.status}`);
+    }
+
+    let fullText = '';
+    await this.transport.streamSSE(
+      response,
+      (data) => {
+        try {
+          const chunk = JSON.parse(data);
+          const delta = chunk?.choices?.[0]?.delta?.content;
+          if (delta) {
+            fullText += delta;
+            onDelta(delta);
+          }
+        } catch {
+          // ignore malformed chunks — matches HermesGatewayClient's streamChat
+        }
+      },
+      signal,
+    );
+
+    return fullText;
+  }
+
   private setStatus(status: ConnectionStatus, detail = '') {
     this.status = status;
     this.detail = detail;
