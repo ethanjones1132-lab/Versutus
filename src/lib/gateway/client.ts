@@ -1,4 +1,9 @@
-import { GatewayHttpError, isAuthRejection } from '@/lib/gateway/errors';
+import { isAuthRejection } from '@/lib/gateway/errors';
+import { HttpTransport } from '@/lib/gateway/http-transport';
+import {
+  ConnectionMonitor,
+  HEALTH_INTERVAL_MS,
+} from '@/lib/gateway/connection-monitor';
 import { METHOD_GUIDANCE, METHOD_TO_ROUTE, resolveRoute } from '@/lib/gateway/rpc-routes';
 
 import type {
@@ -27,26 +32,7 @@ export type GatewayClientCallbacks = {
   onCapabilities?: (capabilities: GatewayCapabilities) => void;
 };
 
-const DEFAULT_TIMEOUT_MS = 30000;
 const LONG_TIMEOUT_MS = 120000;
-const HEALTH_INTERVAL_MS = 30000;
-/**
- * A mobile radio waking up loses a request routinely. Only a run of failures
- * means the gateway is actually gone — one lost sample must not tear down a
- * working session, because every tool is gated on `status === 'connected'`.
- */
-const HEALTH_FAILURE_THRESHOLD = 2;
-
-/**
- * HTTP header values must be printable ASCII. Android's OkHttp rejects the
- * whole request — before any network I/O — if a value carries a control
- * character, so a token pasted with a stray newline fails every authenticated
- * call while unauthenticated probes to the same host keep succeeding.
- */
-function sanitizeHeaderValue(value: string | undefined): string {
-  if (!value) return '';
-  return value.replace(/[^\x20-\x7E]/g, '').trim();
-}
 
 type PendingRun = {
   runId: string;
@@ -65,23 +51,32 @@ type PendingRun = {
  */
 export class HermesGatewayClient {
   private closed = false;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private reconnectAttempts = 0;
-  private reconnectSuspended = false;
-  private healthTimer: ReturnType<typeof setInterval> | null = null;
-  private healthFailures = 0;
   private lastHealthError: string | null = null;
-  /** Last time any request came back from the gateway. See recentlyServedUs(). */
-  private lastContactAt = 0;
   private status: ConnectionStatus = 'disconnected';
   private detail = '';
   private currentSessionId: string | undefined;
   private readonly pendingRuns = new Map<string, PendingRun>();
+  private transport: HttpTransport;
+  private monitor: ConnectionMonitor;
 
   constructor(
     private profile: GatewayProfile,
     private callbacks: GatewayClientCallbacks = {},
-  ) {}
+  ) {
+    this.transport = new HttpTransport({
+      baseUrl: profile.url,
+      token: profile.token,
+      sessionKey: profile.sessionKey,
+    });
+    this.monitor = new ConnectionMonitor({
+      probe: async () => (await this.healthCheck()) !== null,
+      recentlyServedUs: () =>
+        this.transport.lastContactAt > 0 &&
+        Date.now() - this.transport.lastContactAt < HEALTH_INTERVAL_MS,
+      onStatus: (status, detail) => this.setStatus(status, detail),
+      reconnect: () => this.connect().catch(() => undefined),
+    });
+  }
 
   get connectionStatus(): ConnectionStatus {
     return this.status;
@@ -101,6 +96,11 @@ export class HermesGatewayClient {
 
   updateProfile(profile: GatewayProfile) {
     this.profile = profile;
+    this.transport.update({
+      baseUrl: profile.url,
+      token: profile.token,
+      sessionKey: profile.sessionKey,
+    });
   }
 
   /**
@@ -110,7 +110,6 @@ export class HermesGatewayClient {
    */
   async connect() {
     this.closed = false;
-    this.clearReconnectTimer();
     this.setStatus('connecting');
 
     let health: HealthResponse | null;
@@ -119,14 +118,14 @@ export class HermesGatewayClient {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.callbacks.onError?.(message);
-      this.scheduleReconnect(message);
+      this.monitor.scheduleReconnect(message);
       return;
     }
 
     if (!health) {
       const reason = this.lastHealthError ?? 'no response';
-      this.callbacks.onError?.(`Could not reach ${this.displayHost}: ${reason}`);
-      this.scheduleReconnect(`No answer from ${this.displayHost}`);
+      this.callbacks.onError?.(`Could not reach ${this.transport.displayHost}: ${reason}`);
+      this.monitor.scheduleReconnect(`No answer from ${this.transport.displayHost}`);
       return;
     }
 
@@ -136,7 +135,7 @@ export class HermesGatewayClient {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (isAuthRejection(error)) {
-        this.suspendReconnect();
+        this.monitor.suspend();
         this.setStatus('disconnected', message);
         throw new Error(
           'Gateway rejected the API key. Enter API_SERVER_KEY from %LOCALAPPDATA%\\hermes\\.env.',
@@ -146,8 +145,6 @@ export class HermesGatewayClient {
       this.callbacks.onError?.(message);
     }
 
-    this.reconnectAttempts = 0;
-    this.healthFailures = 0;
     this.setStatus('connected');
     this.callbacks.onHello?.({
       type: 'hello-ok',
@@ -156,15 +153,15 @@ export class HermesGatewayClient {
     });
     if (capabilities) this.callbacks.onCapabilities?.(capabilities);
     this.callbacks.onHealthCheck?.(true, health);
-    this.startHealthMonitoring();
+    this.monitor.noteConnected();
+    this.monitor.start();
   }
 
   disconnect() {
     this.closed = true;
-    this.clearReconnectTimer();
-    this.stopHealthMonitoring();
+    this.monitor.stop();
     this.abortAllRuns();
-    this.reconnectSuspended = false;
+    this.monitor.resume();
     // Restore session id onto profile before clearing
     if (this.currentSessionId) {
       this.profile.sessionId = this.currentSessionId;
@@ -177,119 +174,19 @@ export class HermesGatewayClient {
    * is left alone; recovery happens on resumeReconnect()/foreground.
    */
   suspendReconnect() {
-    this.reconnectSuspended = true;
-    this.clearReconnectTimer();
+    this.monitor.suspend();
   }
 
   /**
    * Resume automatic reconnect and, if not connected, attempt immediately.
    */
   resumeReconnect() {
-    this.reconnectSuspended = false;
+    this.monitor.resume();
     if (!this.closed && this.status !== 'connected') {
       void this.connect().catch(() => undefined);
     }
   }
 
-  // ─── HTTP helpers ─────────────────────────────────────────────
-
-  private get headers(): Record<string, string> {
-    const h: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    const token = sanitizeHeaderValue(this.profile.token);
-    if (token) {
-      h['Authorization'] = `Bearer ${token}`;
-    }
-    const sessionKey = sanitizeHeaderValue(this.profile.sessionKey);
-    if (sessionKey) {
-      h['X-Hermes-Session-Key'] = sessionKey;
-    }
-    return h;
-  }
-
-  private get baseUrl(): string {
-    return this.profile.url.replace(/\/+$/, '');
-  }
-
-  private async request<T>(
-    method: string,
-    path: string,
-    body?: Record<string, unknown>,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
-  ): Promise<T> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const url = `${this.baseUrl}${path}`;
-      const response = await fetch(url, {
-        method,
-        headers: this.headers,
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      // Any HTTP response proves the gateway is alive, including a rejection.
-      this.lastContactAt = Date.now();
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        let errorMsg: string;
-        try {
-          const errorJson = JSON.parse(errorText);
-          errorMsg = errorJson?.error?.message || errorJson?.error || errorText || `HTTP ${response.status}`;
-        } catch {
-          errorMsg = errorText || `HTTP ${response.status}`;
-        }
-        throw new GatewayHttpError(errorMsg, response.status);
-      }
-
-      const text = await response.text();
-      try {
-        return JSON.parse(text) as T;
-      } catch {
-        return text as unknown as T;
-      }
-    } catch (error) {
-      clearTimeout(timer);
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        throw new Error(`Request timed out: ${method} ${path}`);
-      }
-      throw error;
-    }
-  }
-
-  /**
-   * Stream SSE events from a response. Calls onChunk for each SSE data line.
-   */
-  private async streamSSE(
-    response: Response,
-    onChunk: (data: string) => void,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('No response body to stream');
-
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      if (signal?.aborted) break;
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() ?? '';
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          if (data === '[DONE]') return;
-          onChunk(data);
-        }
-      }
-    }
-  }
 
   // ─── API endpoints ────────────────────────────────────────────
 
@@ -300,7 +197,7 @@ export class HermesGatewayClient {
    */
   async healthCheck(timeoutMs = 8000): Promise<HealthResponse | null> {
     try {
-      const result = await this.request<HealthResponse>('GET', '/health', undefined, timeoutMs);
+      const result = await this.transport.request<HealthResponse>('GET', '/health', undefined, timeoutMs);
       this.lastHealthError = null;
       return result;
     } catch (error) {
@@ -311,48 +208,39 @@ export class HermesGatewayClient {
     }
   }
 
-  /** Host portion of the gateway URL, for operator-facing status text. */
-  private get displayHost(): string {
-    try {
-      return new URL(this.baseUrl).host || this.baseUrl;
-    } catch {
-      return this.baseUrl;
-    }
-  }
-
   async getCapabilities(): Promise<GatewayCapabilities> {
-    return this.request<GatewayCapabilities>('GET', '/v1/capabilities');
+    return this.transport.request<GatewayCapabilities>('GET', '/v1/capabilities');
   }
 
   async getModels(): Promise<ModelInfo[]> {
-    const result = await this.request<{ data: ModelInfo[] }>('GET', '/v1/models');
+    const result = await this.transport.request<{ data: ModelInfo[] }>('GET', '/v1/models');
     return result.data;
   }
 
   async getSessions(limit = 20): Promise<HermesSession[]> {
-    const result = await this.request<SessionsResponse>('GET', `/api/sessions?limit=${limit}`);
+    const result = await this.transport.request<SessionsResponse>('GET', `/api/sessions?limit=${limit}`);
     return result.data;
   }
 
   async createSession(title?: string): Promise<HermesSession> {
     const body: Record<string, unknown> = {};
     if (title) body.title = title;
-    const result = await this.request<{ session: HermesSession }>('POST', '/api/sessions', body);
+    const result = await this.transport.request<{ session: HermesSession }>('POST', '/api/sessions', body);
     this.currentSessionId = result.session.id;
     return result.session;
   }
 
   async getSession(sessionId: string): Promise<HermesSession> {
-    const result = await this.request<{ session: HermesSession }>('GET', `/api/sessions/${sessionId}`);
+    const result = await this.transport.request<{ session: HermesSession }>('GET', `/api/sessions/${sessionId}`);
     return result.session;
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    await this.request<void>('DELETE', `/api/sessions/${sessionId}`);
+    await this.transport.request<void>('DELETE', `/api/sessions/${sessionId}`);
   }
 
   async getSessionMessages(sessionId: string, limit = 50): Promise<SessionMessage[]> {
-    const result = await this.request<SessionMessagesResponse>(
+    const result = await this.transport.request<SessionMessagesResponse>(
       'GET',
       `/api/sessions/${sessionId}/messages?limit=${limit}`,
     );
@@ -373,33 +261,18 @@ export class HermesGatewayClient {
     };
     if (options?.maxTokens) body.max_tokens = options.maxTokens;
 
-    const headers: Record<string, string> = { ...this.headers };
+    const extraHeaders: Record<string, string> = {};
     if (options?.sessionId || this.currentSessionId) {
-      headers['X-Hermes-Session-Id'] = options?.sessionId ?? this.currentSessionId!;
+      extraHeaders['X-Hermes-Session-Id'] = options?.sessionId ?? this.currentSessionId!;
     }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), LONG_TIMEOUT_MS);
-
-    try {
-      const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        throw new Error(errorText || `HTTP ${response.status}`);
-      }
-
-      return await response.json() as ChatCompletionResponse;
-    } catch (error) {
-      clearTimeout(timer);
-      throw error;
-    }
+    return this.transport.request<ChatCompletionResponse>(
+      'POST',
+      '/v1/chat/completions',
+      body,
+      LONG_TIMEOUT_MS,
+      extraHeaders,
+    );
   }
 
   /**
@@ -416,16 +289,19 @@ export class HermesGatewayClient {
       stream: true,
     };
 
-    const headers: Record<string, string> = { ...this.headers };
+    const extraHeaders: Record<string, string> = {};
     if (options?.sessionId || this.currentSessionId) {
-      headers['X-Hermes-Session-Id'] = options?.sessionId ?? this.currentSessionId!;
+      extraHeaders['X-Hermes-Session-Id'] = options?.sessionId ?? this.currentSessionId!;
     }
 
-    const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+    const controller = new AbortController();
+    const signal = options?.signal || controller.signal;
+
+    const response = await fetch(`${this.transport.baseUrl}/v1/chat/completions`, {
       method: 'POST',
-      headers,
+      headers: { ...this.transport.headers, ...extraHeaders },
       body: JSON.stringify(body),
-      signal: options?.signal,
+      signal,
     });
 
     if (!response.ok) {
@@ -434,7 +310,7 @@ export class HermesGatewayClient {
     }
 
     let fullText = '';
-    await this.streamSSE(response, (data) => {
+    await this.transport.streamSSE(response, (data) => {
       try {
         const chunk = JSON.parse(data);
         const delta = chunk?.choices?.[0]?.delta?.content;
@@ -445,7 +321,7 @@ export class HermesGatewayClient {
       } catch {
         // ignore malformed chunks
       }
-    }, options?.signal);
+    }, signal);
 
     return fullText;
   }
@@ -464,14 +340,14 @@ export class HermesGatewayClient {
     if (options?.sessionId || this.currentSessionId) {
       body.session_id = options?.sessionId ?? this.currentSessionId;
     }
-    return this.request<RunResponse>('POST', '/v1/runs', body);
+    return this.transport.request<RunResponse>('POST', '/v1/runs', body);
   }
 
   /**
    * Get run status.
    */
   async getRunStatus(runId: string): Promise<RunStatus> {
-    return this.request<RunStatus>('GET', `/v1/runs/${runId}`);
+    return this.transport.request<RunStatus>('GET', `/v1/runs/${runId}`);
   }
 
   /**
@@ -482,8 +358,8 @@ export class HermesGatewayClient {
     onEvent: (event: RunEvent) => void,
     signal?: AbortSignal,
   ): Promise<void> {
-    const response = await fetch(`${this.baseUrl}/v1/runs/${runId}/events`, {
-      headers: this.headers,
+    const response = await fetch(`${this.transport.baseUrl}/v1/runs/${runId}/events`, {
+      headers: this.transport.headers,
       signal,
     });
 
@@ -491,7 +367,7 @@ export class HermesGatewayClient {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    await this.streamSSE(response, (data) => {
+    await this.transport.streamSSE(response, (data) => {
       try {
         const event = JSON.parse(data) as RunEvent;
         onEvent(event);
@@ -505,14 +381,14 @@ export class HermesGatewayClient {
    * Stop a running agent.
    */
   async stopRun(runId: string): Promise<void> {
-    await this.request<void>('POST', `/v1/runs/${runId}/stop`, {});
+    await this.transport.request<void>('POST', `/v1/runs/${runId}/stop`, {});
   }
 
   /**
    * Resolve a pending run approval.
    */
   async resolveApproval(runId: string, approved: boolean, feedback?: string): Promise<void> {
-    await this.request<void>('POST', `/v1/runs/${runId}/approval`, {
+    await this.transport.request<void>('POST', `/v1/runs/${runId}/approval`, {
       approved,
       feedback,
     });
@@ -523,7 +399,7 @@ export class HermesGatewayClient {
    */
   async getSkills(): Promise<unknown[]> {
     try {
-      const result = await this.request<{ data?: unknown[] } | unknown[]>('GET', '/v1/skills');
+      const result = await this.transport.request<{ data?: unknown[] } | unknown[]>('GET', '/v1/skills');
       return Array.isArray(result) ? result : (result as { data?: unknown[] }).data ?? [];
     } catch {
       return [];
@@ -535,7 +411,7 @@ export class HermesGatewayClient {
    */
   async getToolsets(): Promise<unknown[]> {
     try {
-      const result = await this.request<{ data?: unknown[] } | unknown[]>('GET', '/v1/toolsets');
+      const result = await this.transport.request<{ data?: unknown[] } | unknown[]>('GET', '/v1/toolsets');
       return Array.isArray(result) ? result : (result as { data?: unknown[] }).data ?? [];
     } catch {
       return [];
@@ -558,69 +434,7 @@ export class HermesGatewayClient {
       );
     }
     const { route, path, body } = resolved;
-    return this.request<T>(route.method, path, route.method === 'GET' ? undefined : body);
-  }
-
-  // ─── Health monitoring ────────────────────────────────────────
-
-  private startHealthMonitoring() {
-    this.stopHealthMonitoring();
-    this.healthFailures = 0;
-    this.healthTimer = setInterval(async () => {
-      if (this.closed || this.reconnectSuspended) return;
-      const health = await this.healthCheck();
-
-      if (health) {
-        this.healthFailures = 0;
-        if (this.status === 'reconnecting') {
-          // Recovered on our own — drop the queued reconnect so it cannot
-          // re-fire and bounce a healthy connection back through 'connecting'.
-          this.clearReconnectTimer();
-          this.reconnectAttempts = 0;
-          this.setStatus('connected');
-        }
-        return;
-      }
-
-      if (this.status !== 'connected') return;
-      // Hermes serves requests on one thread: a slow /api/sessions or
-      // /v1/toolsets stalls /health as well. If the gateway answered anything
-      // else recently it is busy, not gone — dropping here would disable every
-      // tool in the app for no reason.
-      if (this.recentlyServedUs()) return;
-      this.healthFailures += 1;
-      if (this.healthFailures < HEALTH_FAILURE_THRESHOLD) return;
-      this.setStatus('reconnecting', 'Gateway became unreachable');
-      this.scheduleReconnect('Gateway became unreachable');
-    }, HEALTH_INTERVAL_MS);
-  }
-
-  /** True when the gateway answered some request within the last health cycle. */
-  private recentlyServedUs(): boolean {
-    return this.lastContactAt > 0 && Date.now() - this.lastContactAt < HEALTH_INTERVAL_MS;
-  }
-
-  private stopHealthMonitoring() {
-    if (this.healthTimer) clearInterval(this.healthTimer);
-    this.healthTimer = null;
-    this.healthFailures = 0;
-  }
-
-  // ─── Reconnection ─────────────────────────────────────────────
-
-  private scheduleReconnect(reason: string) {
-    if (this.closed || this.reconnectSuspended) return;
-    this.reconnectAttempts += 1;
-    const base = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 15000);
-    // Jitter keeps a fleet of clients from retrying in lockstep after an outage.
-    const delay = base * (0.75 + Math.random() * 0.5);
-    this.setStatus('reconnecting', `${reason} · retry in ${Math.round(delay / 1000)}s`);
-    this.clearReconnectTimer();
-    this.reconnectTimer = setTimeout(() => {
-      if (!this.closed && !this.reconnectSuspended) {
-        void this.connect().catch(() => undefined);
-      }
-    }, delay);
+    return this.transport.request<T>(route.method, path, route.method === 'GET' ? undefined : body);
   }
 
   // ─── Run management ───────────────────────────────────────────
@@ -633,11 +447,6 @@ export class HermesGatewayClient {
   }
 
   // ─── Utils ────────────────────────────────────────────────────
-
-  private clearReconnectTimer() {
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-  }
 
   private setStatus(status: ConnectionStatus, detail = '') {
     this.status = status;
