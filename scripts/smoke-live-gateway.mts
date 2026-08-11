@@ -149,7 +149,13 @@ async function main() {
       rejected = error instanceof Error ? error : new Error(String(error));
     }
     check('connect() rejects', rejected !== null, rejected?.message ?? 'resolved');
-    check('message names the API key', /api key/i.test(rejected?.message ?? ''));
+    // Hermes says "Invalid API key"; Gate and other kinds may surface
+    // unauthorized / 401 / bearer wording — any auth rejection is enough.
+    check(
+      'message indicates auth rejection',
+      /api key|unauthorized|token|401|403|bearer/i.test(rejected?.message ?? ''),
+      rejected?.message ?? '',
+    );
     check('ends disconnected, not reconnecting', client.connectionStatus === 'disconnected', client.connectionStatus);
     client.disconnect();
   }
