@@ -7,6 +7,11 @@ export const HEALTH_INTERVAL_MS = 30000;
  */
 export const HEALTH_FAILURE_THRESHOLD = 2;
 
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 15000;
+const RECONNECT_JITTER_MIN = 0.75;
+const RECONNECT_JITTER_RANGE = 0.5;
+
 export type ConnectionMonitorCallbacks = {
   /** Resolves true when the gateway answered a health probe. */
   probe: () => Promise<boolean>;
@@ -99,9 +104,9 @@ export class ConnectionMonitor {
   scheduleReconnect(reason: string) {
     if (this.suspended) return;
     this.attempts += 1;
-    const base = Math.min(1000 * 2 ** (this.attempts - 1), 15000);
+    const base = Math.min(RECONNECT_BASE_DELAY_MS * 2 ** (this.attempts - 1), RECONNECT_MAX_DELAY_MS);
     // Jitter keeps a fleet of clients from retrying in lockstep after an outage.
-    const delay = base * (0.75 + Math.random() * 0.5);
+    const delay = base * (RECONNECT_JITTER_MIN + Math.random() * RECONNECT_JITTER_RANGE);
     this.down = true;
     this.callbacks.onStatus('reconnecting', `${reason} · retry in ${Math.round(delay / 1000)}s`);
     this.clearReconnect();
