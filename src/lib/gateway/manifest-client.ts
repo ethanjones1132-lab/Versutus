@@ -2,13 +2,15 @@ import { isAuthRejection } from '@/lib/gateway/errors';
 import { HttpTransport } from '@/lib/gateway/http-transport';
 import { ConnectionMonitor, HEALTH_INTERVAL_MS } from '@/lib/gateway/connection-monitor';
 import type { GatewayIdentity } from '@/lib/portal/identify';
-import type { PortalClientCallbacks } from '@/lib/portal/adapters';
+import type { PortalClient, PortalClientCallbacks } from '@/lib/portal/adapters';
 import type {
   ConnectionStatus,
   GatewayCapabilities,
   GatewayProfile,
   HealthResponse,
+  HermesSession,
   ModelInfo,
+  SessionMessage,
 } from '@/lib/gateway/types';
 
 /**
@@ -19,7 +21,7 @@ import type {
  * specific to it. A capability the manifest doesn't advertise fails with a
  * named error rather than guessing at a path that may not exist.
  */
-export class ManifestClient {
+export class ManifestClient implements PortalClient {
   private closed = false;
   private status: ConnectionStatus = 'disconnected';
   private detail = '';
@@ -230,6 +232,28 @@ export class ManifestClient {
     );
 
     return fullText;
+  }
+
+  async getSessions(_limit?: number): Promise<HermesSession[]> {
+    throw new Error(
+      `${this.identity.kindLabel} does not advertise session management. This gate has no /api/sessions-style endpoint declared in its manifest.`,
+    );
+  }
+
+  async getSessionMessages(_sessionId: string, _limit?: number): Promise<SessionMessage[]> {
+    throw new Error(
+      `${this.identity.kindLabel} does not advertise session management, so message history is unavailable. This gate has no sessions endpoint declared in its manifest.`,
+    );
+  }
+
+  async rpcRequest<T = unknown>(method: string, _params: Record<string, unknown> = {}): Promise<T> {
+    throw new Error(
+      `${method} is not supported by ${this.identity.kindLabel} — it only advertises: ${Object.keys(this.endpoints).join(', ') || 'nothing'}.`,
+    );
+  }
+
+  async stopRun(_runId: string): Promise<void> {
+    throw new Error(`${this.identity.kindLabel} does not advertise run management, so a run cannot be stopped remotely.`);
   }
 
   private setStatus(status: ConnectionStatus, detail = '') {

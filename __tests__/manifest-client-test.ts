@@ -158,3 +158,25 @@ describe('ManifestClient.streamChat', () => {
     await expect(client.streamChat([{ role: 'user', content: 'hi' }], () => undefined)).rejects.toThrow(/chat/i);
   });
 });
+
+describe('ManifestClient — capabilities the manifest does not advertise', () => {
+  test('getSessions names the missing capability rather than guessing a path', async () => {
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    await expect(client.getSessions()).rejects.toThrow(/sessions/i);
+  });
+
+  test('getSessionMessages names the missing capability', async () => {
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    await expect(client.getSessionMessages('s1')).rejects.toThrow(/sessions/i);
+  });
+
+  test('rpcRequest names the missing capability with the method that was requested', async () => {
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    await expect(client.rpcRequest('sessions.list')).rejects.toThrow(/sessions\.list/);
+  });
+
+  test('stopRun names the missing capability', async () => {
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    await expect(client.stopRun('r1')).rejects.toThrow(/run/i);
+  });
+});
