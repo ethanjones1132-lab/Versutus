@@ -1,16 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, mkdtemp } from 'node:fs/promises';
+import { mkdir, writeFile, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createGate } from '../core/server.mjs';
 
-async function testProviderDir() {
+async function testSetup() {
   const root = await mkdtemp(join(tmpdir(), 'gate-server-test-'));
-  await mkdir(join(root, 'test-provider'), { recursive: true });
+  await mkdir(join(root, 'providers', 'test-provider'), { recursive: true });
   await writeFile(
-    join(root, 'test-provider', 'provider.mjs'),
+    join(root, 'providers', 'test-provider', 'provider.mjs'),
     `
 export const id = 'test-provider';
 export const label = 'Test Provider';
@@ -28,8 +28,8 @@ export const config = {
 }
 
 test('health endpoint is unauthenticated', async () => {
-  const providersDir = await testProviderDir();
-  const gate = await createGate({ providersDir, port: 0 });
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
 
   try {
     const response = await fetch(`http://localhost:${gate.port}/health`);
@@ -42,8 +42,8 @@ test('health endpoint is unauthenticated', async () => {
 });
 
 test('manifest endpoint is unauthenticated', async () => {
-  const providersDir = await testProviderDir();
-  const gate = await createGate({ providersDir, port: 0 });
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
 
   try {
     const response = await fetch(
@@ -60,8 +60,8 @@ test('manifest endpoint is unauthenticated', async () => {
 });
 
 test('models endpoint requires authentication', async () => {
-  const providersDir = await testProviderDir();
-  const gate = await createGate({ providersDir, port: 0 });
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
 
   try {
     const response = await fetch(`http://localhost:${gate.port}/v1/models`);
@@ -72,8 +72,8 @@ test('models endpoint requires authentication', async () => {
 });
 
 test('authenticated models endpoint returns all provider models', async () => {
-  const providersDir = await testProviderDir();
-  const gate = await createGate({ providersDir, port: 0 });
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
 
   try {
     const response = await fetch(`http://localhost:${gate.port}/v1/models`, {
@@ -91,8 +91,8 @@ test('authenticated models endpoint returns all provider models', async () => {
 });
 
 test('scoped models endpoint returns provider-specific models', async () => {
-  const providersDir = await testProviderDir();
-  const gate = await createGate({ providersDir, port: 0 });
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
 
   try {
     const response = await fetch(
@@ -113,12 +113,28 @@ test('scoped models endpoint returns provider-specific models', async () => {
 });
 
 test('unknown route returns 404', async () => {
-  const providersDir = await testProviderDir();
-  const gate = await createGate({ providersDir, port: 0 });
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
 
   try {
     const response = await fetch(`http://localhost:${gate.port}/unknown`);
     assert.equal(response.status, 404);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('token store persists under the gate root', async () => {
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
+  const tokenPath = join(root, '.tokens.json');
+
+  try {
+    // Verify token file exists in the gate root directory
+    const tokenContent = await readFile(tokenPath, 'utf-8');
+    const tokenData = JSON.parse(tokenContent);
+    assert.ok(tokenData.token, 'Token file should contain a token');
+    assert.equal(gate.token, tokenData.token, 'Gate token should match stored token');
   } finally {
     await gate.close();
   }

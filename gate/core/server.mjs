@@ -1,6 +1,5 @@
 import { createServer } from 'node:http';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 
 import { loadProviders } from './providers.mjs';
 import { buildManifest } from './manifest.mjs';
@@ -9,7 +8,7 @@ import { TokenStore } from './tokens.mjs';
 /**
  * Create and configure a Versutus Gate HTTP server
  * @param {Object} config
- * @param {string} config.providersDir - Directory containing provider modules
+ * @param {string} config.root - Root directory for the Gate (providers and token store location)
  * @param {number} [config.port=0] - Port to listen on (0 = OS chooses)
  * @param {string} [config.name='Versutus Gate'] - Gateway name
  * @param {string} [config.version] - Gateway version
@@ -17,17 +16,19 @@ import { TokenStore } from './tokens.mjs';
  */
 export async function createGate(config = {}) {
   const {
-    providersDir,
+    root,
     port = 0,
     name = 'Versutus Gate',
     version,
   } = config;
 
+  const providersDir = join(root, 'providers');
+  const tokenPath = join(root, '.tokens.json');
+
   // Load providers from the specified directory
   const { providers } = await loadProviders(providersDir);
 
   // Initialize token store
-  const tokenPath = join(tmpdir(), 'versutus-gate-tokens.json');
   const tokenStore = new TokenStore(tokenPath);
   const token = await tokenStore.ensureToken();
 

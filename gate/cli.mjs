@@ -108,12 +108,11 @@ async function handleAdd(args) {
  */
 async function handleStart() {
   const gateName = process.env.GATE_NAME || 'Versutus Gate';
-  const providersDir = join(__dirname, 'providers');
 
   try {
     console.log(`Starting ${gateName}...`);
     const gate = await createGate({
-      providersDir,
+      root: __dirname,
       port: 8760,
       name: gateName,
     });
