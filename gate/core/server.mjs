@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { loadProviders } from './providers.mjs';
 import { buildManifest } from './manifest.mjs';
 import { TokenStore } from './tokens.mjs';
+import { PairingStore } from './pairing.mjs';
+import { DeviceTokenStore } from './device-tokens.mjs';
+import { verifySignedAccessRequest } from './signature.mjs';
 
 /**
  * Create and configure a Versutus Gate HTTP server
@@ -32,6 +35,10 @@ export async function createGate(config = {}) {
   const tokenStore = new TokenStore(tokenPath);
   const token = await tokenStore.ensureToken();
 
+  const pairing = new PairingStore(join(root, '.pairing.json'));
+  const deviceTokens = new DeviceTokenStore(join(root, '.device-tokens.json'));
+  const replayCache = new Set();
+
   // Build manifest
   const manifest = buildManifest({
     name,
@@ -49,6 +56,16 @@ export async function createGate(config = {}) {
     const pathname = url.pathname;
     const method = req.method;
 
+    async function readJsonBody(req) {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      try {
+        return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      } catch {
+        return null;
+      }
+    }
+
     try {
       // Health endpoint (unauthenticated)
       if (pathname === '/health' && method === 'GET') {
@@ -64,6 +81,65 @@ export async function createGate(config = {}) {
       if (pathname === '/.well-known/gateway.json' && method === 'GET') {
         res.writeHead(200);
         res.end(JSON.stringify(manifest));
+        return;
+      }
+
+      // Pairing/access endpoint (unauthenticated)
+      if (pathname === '/.well-known/gateway/access' && method === 'POST') {
+        const body = await readJsonBody(req);
+        const device = body?.device;
+        if (!body || !device?.id || !device?.publicKey || !body.signature || typeof body.signedAtMs !== 'number') {
+          res.writeHead(400);
+          res.end(JSON.stringify({ status: 'denied', reason: 'Malformed access request.' }));
+          return;
+        }
+
+        const verification = verifySignedAccessRequest(
+          {
+            deviceId: device.id,
+            publicKeyB64Url: device.publicKey,
+            clientId: device.clientId,
+            role: body.role ?? 'operator',
+            scopes: Array.isArray(body.scopes) ? body.scopes : [],
+            signedAtMs: body.signedAtMs,
+            signature: body.signature,
+          },
+          { replayCache },
+        );
+
+        if (!verification.ok) {
+          res.writeHead(403);
+          res.end(JSON.stringify({ status: 'denied', reason: verification.reason }));
+          return;
+        }
+
+        const existing = await deviceTokens.list();
+        const already = existing.find((entry) => entry.deviceId === device.id && !entry.revoked);
+        if (already) {
+          res.writeHead(200);
+          res.end(JSON.stringify({ status: 'granted', token: already.token, role: already.role, scopes: already.scopes }));
+          return;
+        }
+
+        const role = body.role ?? 'operator';
+        const scopes = Array.isArray(body.scopes) ? body.scopes : [];
+
+        if (await pairing.isWindowOpen()) {
+          const grantedToken = await deviceTokens.issue(device.id, { role, scopes });
+          res.writeHead(200);
+          res.end(JSON.stringify({ status: 'granted', token: grantedToken, role, scopes }));
+          return;
+        }
+
+        const requestId = await pairing.addPending({
+          deviceId: device.id,
+          publicKeyB64Url: device.publicKey,
+          clientId: device.clientId,
+          role,
+          scopes,
+        });
+        res.writeHead(202);
+        res.end(JSON.stringify({ status: 'pending', requestId }));
         return;
       }
 
@@ -85,7 +161,7 @@ export async function createGate(config = {}) {
 
       // All authenticated endpoints require authentication
       const authHeader = req.headers.authorization;
-      const isAuthenticated = await tokenStore.verify(authHeader);
+      const isAuthenticated = (await tokenStore.verify(authHeader)) || Boolean(await deviceTokens.verify(authHeader));
 
       if (!isAuthenticated) {
         res.writeHead(401);

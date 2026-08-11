@@ -49,3 +49,5 @@ example
 # Gate secrets — provider API keys never leave the PC
 gate/.env
 gate/.tokens.json
+gate/.pairing.json
+gate/.device-tokens.json
