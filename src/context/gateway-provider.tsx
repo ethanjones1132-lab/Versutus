@@ -12,6 +12,7 @@ import { isSlashCommandInput } from '@/lib/gateway/slash-commands';
 import { GATEWAY_COMMANDS, type GatewayCommand } from '@/lib/gateway/dashboard';
 import { loadRecentCommands, pushRecentCommand } from '@/lib/gateway/recents';
 import { ACTIVITY_EVENT_CAP, executeRun, runEventPreview, type ActivityRun, type RunCapableClient } from '@/lib/gateway/runs';
+import { syncChildProfiles } from '@/lib/gateway/child-sync';
 import { notifyApprovalRequired, notifyGatewayDown, notifyRunComplete } from '@/lib/notifications/local';
 import type {
   ChatMessage,
@@ -33,6 +34,7 @@ import {
   saveActiveGatewayId,
   upsertGateway,
 } from '@/lib/gateway/storage';
+import { fetchGatewayManifest, manifestProviders } from '@/lib/portal/manifest';
 import { loadAppSettings, saveAppSettings, type AppSettings } from '@/lib/settings/app-settings';
 import {
   appendTranscript,
@@ -551,6 +553,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (isGatewayAuthFailure(error)) authFailureRef.current = true;
         throw error;
       }
+
+      // Fetch is cheap and idempotent; only a manifest-serving gate returns
+      // providers[] at all, so this is a no-op against Hermes/OpenClaw.
+      void fetchGatewayManifest(gateway.url)
+        .then((manifest) => {
+          if (!manifest || !isCurrent()) return;
+          return syncChildProfiles(gateway, manifestProviders(manifest));
+        })
+        .then((next) => {
+          if (next && isCurrent()) setGateways(next);
+        })
+        .catch(() => undefined);
     },
     [reloadHistoryFor],
   );
