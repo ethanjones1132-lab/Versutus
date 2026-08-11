@@ -4,6 +4,8 @@ import { mkdir, writeFile, access } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGate } from './core/server.mjs';
+import { PairingStore } from './core/pairing.mjs';
+import { DeviceTokenStore } from './core/device-tokens.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -130,6 +132,65 @@ async function handleStart() {
 }
 
 /**
+ * Handle 'pair' command: manage device pairing and tokens
+ */
+async function handlePair(args) {
+  const [sub, ...rest] = args;
+  const pairing = new PairingStore(join(__dirname, '.pairing.json'));
+  const deviceTokens = new DeviceTokenStore(join(__dirname, '.device-tokens.json'));
+
+  if (sub === 'open') {
+    const minutesIndex = rest.indexOf('--minutes');
+    const minutes = minutesIndex >= 0 ? Number(rest[minutesIndex + 1]) : 5;
+    await pairing.openWindow(minutes * 60_000);
+    console.log(`Pairing window open for ${minutes} minute(s). The next device to connect is granted automatically.`);
+    return;
+  }
+
+  if (sub === 'approve') {
+    const requestId = rest[0];
+    if (!requestId) {
+      console.error('Usage: node gate/cli.mjs pair approve <requestId>');
+      process.exit(1);
+    }
+    const entry = await pairing.takePending(requestId);
+    if (!entry) {
+      console.error(`No pending request "${requestId}". Run "pair list" to see open requests.`);
+      process.exit(1);
+    }
+    const token = await deviceTokens.issue(entry.deviceId, { role: entry.role, scopes: entry.scopes });
+    console.log(`Approved device ${entry.deviceId}. Token: ${token}`);
+    return;
+  }
+
+  if (sub === 'revoke') {
+    const deviceId = rest[0];
+    if (!deviceId) {
+      console.error('Usage: node gate/cli.mjs pair revoke <deviceId>');
+      process.exit(1);
+    }
+    const found = await deviceTokens.revoke(deviceId);
+    console.log(found ? `Revoked device ${deviceId}.` : `No device "${deviceId}" on file.`);
+    return;
+  }
+
+  if (sub === 'list') {
+    const pending = await pairing.listPending();
+    const devices = await deviceTokens.list();
+    console.log('Pending requests:');
+    for (const entry of pending) console.log(`  ${entry.requestId}  device=${entry.deviceId}  role=${entry.role}`);
+    if (pending.length === 0) console.log('  (none)');
+    console.log('Paired devices:');
+    for (const entry of devices) console.log(`  ${entry.deviceId}  role=${entry.role}  ${entry.revoked ? '(revoked)' : ''}`);
+    if (devices.length === 0) console.log('  (none)');
+    return;
+  }
+
+  console.error('Usage: node gate/cli.mjs pair <open|approve|revoke|list>');
+  process.exit(1);
+}
+
+/**
  * Main CLI entry point
  */
 async function main() {
@@ -147,6 +208,13 @@ async function main() {
     console.log('  start');
     console.log('    Start the Gate HTTP server on port 8760');
     console.log('');
+    console.log('  pair <open|approve|revoke|list>');
+    console.log('    Manage device pairing and access tokens');
+    console.log('    open [--minutes N]  Open the pairing window (default 5 minutes)');
+    console.log('    approve <requestId> Approve a pending access request');
+    console.log('    revoke <deviceId>   Revoke a device\'s access token');
+    console.log('    list                List pending requests and paired devices');
+    console.log('');
     console.log('Environment variables:');
     console.log('  GATE_NAME  - Name of the Gate (defaults to "Versutus Gate")');
     console.log('');
@@ -157,6 +225,8 @@ async function main() {
     await handleAdd(args);
   } else if (command === 'start') {
     await handleStart();
+  } else if (command === 'pair') {
+    await handlePair(args);
   } else {
     console.error(`Error: unknown command "${command}"`);
     console.error('Run "node gate/cli.mjs help" for usage');
