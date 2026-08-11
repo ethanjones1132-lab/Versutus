@@ -34,6 +34,18 @@ test('moves a system message out of messages and into the system field', () => {
   assert.deepEqual(body.messages, [{ role: 'user', content: 'hi' }]);
 });
 
+test('joins multiple system messages with a blank line', () => {
+  const request = buildChatRequest(config, 'k', {
+    messages: [
+      { role: 'system', content: 'be terse' },
+      { role: 'system', content: 'use metric units' },
+      { role: 'user', content: 'hi' },
+    ],
+  });
+  const body = JSON.parse(request.init.body);
+  assert.equal(body.system, 'be terse\n\nuse metric units');
+});
+
 test('applies a default max_tokens when none is given', () => {
   const request = buildChatRequest(config, 'k', { messages: [{ role: 'user', content: 'hi' }] });
   assert.equal(JSON.parse(request.init.body).max_tokens, 4096);
