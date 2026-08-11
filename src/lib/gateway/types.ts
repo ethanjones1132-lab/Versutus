@@ -33,6 +33,12 @@ export type GatewayProfile = {
   model?: string;
   createdAt: number;
   discoverySource?: 'local' | 'wide-area' | 'manual' | 'tailscale' | 'relay' | 'deep-link';
+  /**
+   * Set on a profile materialized from a parent gateway's manifest
+   * providers[] entry — see child-sync.ts. Absent on a profile the user
+   * added directly.
+   */
+  parentId?: string;
 };
 
 // ─── Health ───────────────────────────────────────────────────────

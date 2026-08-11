@@ -43,6 +43,21 @@ test('health endpoint is unauthenticated', async () => {
   }
 });
 
+test('scoped provider health mirrors root health for child base URLs', async () => {
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
+
+  try {
+    const response = await fetch(`http://localhost:${gate.port}/p/test-provider/health`);
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    assert.equal(data.status, 'ok');
+  } finally {
+    await gate.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('manifest endpoint is unauthenticated', async () => {
   const root = await testSetup();
   const gate = await createGate({ root, port: 0 });

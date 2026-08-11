@@ -172,8 +172,11 @@ export async function createGate(config = {}) {
     }
 
     try {
-      // Health endpoint (unauthenticated)
-      if (pathname === '/health' && method === 'GET') {
+      // Health endpoint (unauthenticated). Also served under each provider
+      // base path so a child profile whose baseUrl is /p/{id} can probe
+      // relative /health successfully.
+      const healthMatch = pathname === '/health' || /^\/p\/[^/]+\/health$/.test(pathname);
+      if (healthMatch && method === 'GET') {
         res.writeHead(200);
         res.end(JSON.stringify({
           status: 'ok',

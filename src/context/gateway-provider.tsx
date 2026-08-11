@@ -12,6 +12,7 @@ import { isSlashCommandInput } from '@/lib/gateway/slash-commands';
 import { GATEWAY_COMMANDS, type GatewayCommand } from '@/lib/gateway/dashboard';
 import { loadRecentCommands, pushRecentCommand } from '@/lib/gateway/recents';
 import { ACTIVITY_EVENT_CAP, executeRun, runEventPreview, type ActivityRun, type RunCapableClient } from '@/lib/gateway/runs';
+import { syncChildProfiles } from '@/lib/gateway/child-sync';
 import { notifyApprovalRequired, notifyGatewayDown, notifyRunComplete } from '@/lib/notifications/local';
 import type {
   ChatMessage,
@@ -33,6 +34,14 @@ import {
   saveActiveGatewayId,
   upsertGateway,
 } from '@/lib/gateway/storage';
+import {
+  fetchGatewayManifest,
+  manifestAuthSchemes,
+  manifestKindLabel,
+  manifestProviders,
+  manifestRequiresToken,
+} from '@/lib/portal/manifest';
+import type { GatewayIdentity } from '@/lib/portal/identify';
 import { loadAppSettings, saveAppSettings, type AppSettings } from '@/lib/settings/app-settings';
 import {
   appendTranscript,
@@ -488,58 +497,94 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const isCurrent = () => clientGenerationRef.current === generation;
       clientRef.current?.disconnect();
 
-      const client = createClientForKind(gateway.kind ?? 'hermes', gateway, {
-        onStatus: (nextStatus, detail) => {
-          if (!isCurrent()) return;
-          setStatus(nextStatus);
-          setStatusDetail(detail ?? '');
-          if (nextStatus === 'connected') {
-            if (autoRetryTimerRef.current) {
-              clearTimeout(autoRetryTimerRef.current);
-              autoRetryTimerRef.current = null;
+      let identityForClient: GatewayIdentity | undefined;
+      if (gateway.kind === 'custom') {
+        // Child profiles are materialised under parent.url + basePath and do
+        // not host their own well-known manifest — fetch the parent's.
+        let manifestUrl = gateway.url;
+        if (gateway.parentId) {
+          const known = await loadGateways();
+          const parent = known.find((item) => item.id === gateway.parentId);
+          if (parent) manifestUrl = parent.url;
+        }
+        const manifest = await fetchGatewayManifest(manifestUrl).catch(() => null);
+        // Another attachClient may have superseded us while we awaited.
+        if (!isCurrent()) return;
+        if (manifest) {
+          identityForClient = {
+            kind: 'custom',
+            kindLabel: manifestKindLabel(manifest),
+            manifest,
+            auth: {
+              schemes: manifestAuthSchemes(manifest),
+              requiresToken: manifestRequiresToken(manifest),
+              grantPath: manifest.auth?.grantPath,
+            },
+            source: 'manifest',
+            identifiedAt: Date.now(),
+          };
+        }
+      }
+
+      if (!isCurrent()) return;
+
+      const client = createClientForKind(
+        gateway.kind ?? 'hermes',
+        gateway,
+        {
+          onStatus: (nextStatus, detail) => {
+            if (!isCurrent()) return;
+            setStatus(nextStatus);
+            setStatusDetail(detail ?? '');
+            if (nextStatus === 'connected') {
+              if (autoRetryTimerRef.current) {
+                clearTimeout(autoRetryTimerRef.current);
+                autoRetryTimerRef.current = null;
+              }
+              gatewayDownNotifiedRef.current = false;
+              setConnectionPhase('connected');
+              setProbeMessage('');
+              setLastError(null);
+            } else if (nextStatus === 'connecting' || nextStatus === 'reconnecting') {
+              setConnectionPhase('connecting');
+              // Only a fresh attempt clears the last failure. 'reconnecting' is
+              // reported immediately after onError, so clearing here wiped the
+              // reason before it could ever be shown.
+              if (nextStatus === 'connecting') setLastError(null);
+              if (nextStatus === 'reconnecting' && !gatewayDownNotifiedRef.current) {
+                gatewayDownNotifiedRef.current = true;
+                void notifyGatewayDown(gatewayHostForDisplay(gateway.url));
+              }
+            } else if (nextStatus === 'disconnected') {
+              setConnectionPhase((phase) =>
+                phase === 'connecting' || phase === 'connected' ? 'failed' : phase,
+              );
+              if (activeGatewayRef.current && !authFailureRef.current) {
+                scheduleAutoRetryRef.current(12000);
+              }
             }
-            gatewayDownNotifiedRef.current = false;
-            setConnectionPhase('connected');
-            setProbeMessage('');
-            setLastError(null);
-          } else if (nextStatus === 'connecting' || nextStatus === 'reconnecting') {
-            setConnectionPhase('connecting');
-            // Only a fresh attempt clears the last failure. 'reconnecting' is
-            // reported immediately after onError, so clearing here wiped the
-            // reason before it could ever be shown.
-            if (nextStatus === 'connecting') setLastError(null);
-            if (nextStatus === 'reconnecting' && !gatewayDownNotifiedRef.current) {
-              gatewayDownNotifiedRef.current = true;
-              void notifyGatewayDown(gatewayHostForDisplay(gateway.url));
-            }
-          } else if (nextStatus === 'disconnected') {
-            setConnectionPhase((phase) =>
-              phase === 'connecting' || phase === 'connected' ? 'failed' : phase,
-            );
-            if (activeGatewayRef.current && !authFailureRef.current) {
-              scheduleAutoRetryRef.current(12000);
-            }
-          }
+          },
+          onHello: (hello) => {
+            if (isCurrent()) setActiveHello(hello as GatewayHelloOk);
+          },
+          onCapabilities: (capabilities) => {
+            if (isCurrent()) setLiveCapabilities(capabilities as GatewayCapabilities);
+          },
+          onPairingRequired: (details) => {
+            if (isCurrent()) setPairingDetails(details as PairingDetails);
+          },
+          onHealthCheck: (_healthy) => {
+            // Only on the first connect to this gateway. Reloading on every
+            // reconnect rebuilds the message list underneath the user.
+            if (!isCurrent() || historyLoadedForRef.current === gateway.id) return;
+            void reloadHistoryFor(gateway);
+          },
+          onError: (message) => {
+            if (isCurrent()) setLastError(message);
+          },
         },
-        onHello: (hello) => {
-          if (isCurrent()) setActiveHello(hello as GatewayHelloOk);
-        },
-        onCapabilities: (capabilities) => {
-          if (isCurrent()) setLiveCapabilities(capabilities as GatewayCapabilities);
-        },
-        onPairingRequired: (details) => {
-          if (isCurrent()) setPairingDetails(details as PairingDetails);
-        },
-        onHealthCheck: (_healthy) => {
-          // Only on the first connect to this gateway. Reloading on every
-          // reconnect rebuilds the message list underneath the user.
-          if (!isCurrent() || historyLoadedForRef.current === gateway.id) return;
-          void reloadHistoryFor(gateway);
-        },
-        onError: (message) => {
-          if (isCurrent()) setLastError(message);
-        },
-      });
+        identityForClient,
+      );
       clientRef.current = client;
       historyLoadedForRef.current = null;
       setConnectionPhase('connecting');
@@ -551,6 +596,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (isGatewayAuthFailure(error)) authFailureRef.current = true;
         throw error;
       }
+
+      // Fetch is cheap and idempotent; only a manifest-serving gate returns
+      // providers[] at all, so this is a no-op against Hermes/OpenClaw.
+      void fetchGatewayManifest(gateway.url)
+        .then((manifest) => {
+          if (!manifest || !isCurrent()) return;
+          return syncChildProfiles(gateway, manifestProviders(manifest));
+        })
+        .then((next) => {
+          if (next && isCurrent()) setGateways(next);
+        })
+        .catch(() => undefined);
     },
     [reloadHistoryFor],
   );
@@ -943,7 +1000,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const deleteGateway = useCallback(async (id: string) => {
     const next = await removeGateway(id);
     setGateways(next);
-    if (activeGateway?.id === id) {
+    // Cascade removes child profiles too — tear down if the active gateway
+    // was the deleted parent or one of its children.
+    const activeWasRemoved =
+      activeGateway?.id === id || activeGateway?.parentId === id;
+    if (activeWasRemoved) {
       clientGenerationRef.current += 1;
       if (autoRetryTimerRef.current) {
         clearTimeout(autoRetryTimerRef.current);

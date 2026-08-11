@@ -19,6 +19,13 @@ export function buildManifest({ name, version, providers = [] }) {
     manifest: MANIFEST_SPEC,
     kind: GATE_KIND,
     name,
+    transport: { primary: 'http' },
+    endpoints: {
+      health: '/health',
+      models: '/v1/models',
+      chat: '/v1/chat/completions',
+    },
+    capabilities: { chat: true, models: true },
     providers: providers.map((provider) => ({
       id: provider.id,
       label: provider.label,

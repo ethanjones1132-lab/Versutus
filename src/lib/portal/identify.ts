@@ -14,8 +14,10 @@ import {
   manifestAuthSchemes,
   manifestCapabilityList,
   manifestKindLabel,
+  manifestProviders,
   manifestRequiresToken,
   type GatewayManifest,
+  type GatewayManifestProvider,
 } from '@/lib/portal/manifest';
 
 export type GatewayIdentity = {
@@ -35,6 +37,8 @@ export type GatewayIdentity = {
   };
   transportHint?: 'http' | 'ws';
   capabilities?: string[];
+  /** Providers this gate advertises behind one manifest — see manifest.ts. */
+  providers?: GatewayManifestProvider[];
   /** Where the identification came from (for diagnostics/UI). */
   source: 'beacon' | 'manifest' | 'probe-hermes' | 'probe-openclaw' | 'unknown';
   identifiedAt: number;
@@ -74,6 +78,7 @@ function identityFromManifest(manifest: GatewayManifest, baseUrl: string): Gatew
     },
     transportHint: manifest.transport?.primary === 'ws' ? 'ws' : 'http',
     capabilities: manifestCapabilityList(manifest),
+    providers: manifestProviders(manifest),
     source: 'manifest',
     identifiedAt: Date.now(),
   };

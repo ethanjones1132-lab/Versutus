@@ -24,6 +24,17 @@ test('declares the manifest spec version and kind', () => {
   assert.equal(manifest.name, "Ethan's Gate");
 });
 
+test('advertises design-spec transport, endpoints, and capabilities', () => {
+  const manifest = buildManifest({ name: 'Gate', providers });
+  assert.deepEqual(manifest.transport, { primary: 'http' });
+  assert.deepEqual(manifest.endpoints, {
+    health: '/health',
+    models: '/v1/models',
+    chat: '/v1/chat/completions',
+  });
+  assert.deepEqual(manifest.capabilities, { chat: true, models: true });
+});
+
 test('advertises each provider with its base path and capabilities', () => {
   const manifest = buildManifest({ name: 'Gate', providers });
   assert.equal(manifest.providers.length, 1);
