@@ -82,11 +82,18 @@ async function proxyChat(provider, requestBody, res) {
   const reader = upstreamResponse.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  const MAX_BUFFER_BYTES = 1024 * 1024; // 1MB — a single SSE line has no legitimate reason to exceed this
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
+      if (buffer.length > MAX_BUFFER_BYTES) {
+        reader.cancel().catch(() => {});
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'Upstream sent an oversized line without a delimiter', code: 'upstream_error' } }));
+        return;
+      }
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
       for (const line of lines) {
