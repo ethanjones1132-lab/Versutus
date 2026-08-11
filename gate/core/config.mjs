@@ -42,7 +42,9 @@ export function validateProviderConfig(id, config) {
     };
   }
 
-  // Check baseUrl is a valid URL (https for production, http allowed for localhost testing)
+  // Check baseUrl is https, except for the local loopback interface (the
+  // Gate's own manifest documents 127.0.0.1 as the trust boundary for local
+  // testing — see docs/superpowers/specs/2026-08-10-versutus-gate-design.md §9).
   if (!config.baseUrl || typeof config.baseUrl !== 'string') {
     return {
       ok: false,
@@ -50,8 +52,18 @@ export function validateProviderConfig(id, config) {
     };
   }
 
-  const isLocalhost = config.baseUrl.includes('127.0.0.1') || config.baseUrl.includes('localhost');
-  if (!config.baseUrl.startsWith('https://') && !isLocalhost) {
+  let hostname;
+  try {
+    hostname = new URL(config.baseUrl).hostname;
+  } catch {
+    return {
+      ok: false,
+      error: `provider "${id}": baseUrl must be a valid URL`,
+    };
+  }
+
+  const isLoopback = hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+  if (!config.baseUrl.startsWith('https://') && !isLoopback) {
     return {
       ok: false,
       error: `provider "${id}": baseUrl must use https, not http`,
