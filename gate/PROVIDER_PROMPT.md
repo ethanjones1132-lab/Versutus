@@ -95,6 +95,16 @@ Example for Anthropic:
 models: ['claude-3-opus-20240229', 'claude-3-sonnet-20240229']
 ```
 
+#### `capabilities`
+What the provider actually supports. `chat` must be `true`. Set `streaming: true`
+only if the upstream API supports server-sent events for this endpoint — the
+Gate will refuse a streaming request to a provider that didn't declare it.
+
+Example:
+```javascript
+capabilities: { chat: true, streaming: true }
+```
+
 ## Full Example
 
 ### OpenAI Provider
@@ -114,6 +124,7 @@ export const config = {
     'gpt-4',
     'gpt-3.5-turbo',
   ],
+  capabilities: { chat: true, streaming: true },
 };
 ```
 
@@ -144,6 +155,7 @@ export const config = {
     'claude-3-sonnet-20240229',
     'claude-3-haiku-20240307',
   ],
+  capabilities: { chat: true, streaming: true },
 };
 ```
 
@@ -165,6 +177,7 @@ export const config = {
   baseUrl: 'https://my-llm-server.example.com/v1',
   apiKeyEnv: 'CUSTOM_LLM_TOKEN',
   models: ['my-model-1', 'my-model-2'],
+  capabilities: { chat: true, streaming: true },
 };
 ```
 
@@ -210,7 +223,8 @@ The manifest lists all loaded providers and their models:
     {
       "id": "openai-prod",
       "label": "OpenAI Production",
-      "models": ["gpt-4-turbo-preview", "gpt-4", "gpt-3.5-turbo"]
+      "models": ["gpt-4-turbo-preview", "gpt-4", "gpt-3.5-turbo"],
+      "capabilities": { "chat": true, "streaming": true }
     }
   ]
 }

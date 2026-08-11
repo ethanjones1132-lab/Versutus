@@ -28,23 +28,19 @@ function validateFlavor(flavor) {
  * Template for new provider.mjs file
  */
 function getProviderTemplate(id, flavor) {
-  return `/**
- * Provider: ${id}
- * Flavor: ${flavor}
- *
- * Instructions: Fill in the CONFIG object below with your provider details.
- * See PROVIDER_PROMPT.md for detailed instructions.
- */
+  const label = id.charAt(0).toUpperCase() + id.slice(1);
+  return `export const id = '${id}';
+export const label = '${label}';
 
-export const id = '${id}';
-export const label = '${id}';
-
+// ─── CONFIG: edit only inside this block ───────────────
 export const config = {
   flavor: '${flavor}',
   baseUrl: 'https://api.example.com/v1',
   apiKeyEnv: '${id.toUpperCase()}_API_KEY',
-  models: ['model-name-1', 'model-name-2'],
+  models: ['model-id-here'],
+  capabilities: { chat: true, streaming: true },
 };
+// ─── END CONFIG ────────────────────────────────────────
 `;
 }
 
