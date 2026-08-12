@@ -36,6 +36,7 @@ export type GatewayCommand = {
     | 'System'
     | 'Devices'
     | 'Tools'
+    | 'Skills'
     | 'Voice';
   transport: 'rpc' | 'agent';
   method?: string;
@@ -399,15 +400,15 @@ export const GATEWAY_COMMANDS: GatewayCommand[] = [
     description: 'Memory doctor status',
   },
   {
-    id: 'skills',
-    label: 'Skills',
-    group: 'System',
+    id: 'skills-status',
+    label: 'Skills status',
+    group: 'Skills',
     transport: 'rpc',
     method: 'skills.status',
     params: {},
     requiredScope: 'operator.read',
     danger: 'safe',
-    slash: '/skills',
+    slash: '/skills status',
     description: 'Skills runtime status',
   },
   {
@@ -498,7 +499,7 @@ export const GATEWAY_COMMANDS: GatewayCommand[] = [
   {
     id: 'skills',
     label: 'Skills',
-    group: 'System',
+    group: 'Skills',
     transport: 'rpc',
     method: 'skills.list',
     params: {},
@@ -691,10 +692,19 @@ const CAPABILITY_DEFS = [
   { id: 'diagnostics', label: 'Diagnostics', requiredScopes: ['operator.read'], count: 3 },
 ];
 
+/**
+ * Safe RPC quick set for the Tools tab. Prefer commands with a Hermes route
+ * map entry — host-only/guidance methods (channels, config, …) stay out of
+ * the default grid so the tab does not look broken.
+ */
 export function homeQuickCommands(): GatewayCommand[] {
-  return GATEWAY_COMMANDS.filter((command) =>
-    ['health', 'status', 'sessions', 'channels'].includes(command.id),
-  );
+  const preferred = ['health', 'status', 'sessions', 'models', 'skills', 'tools'];
+  const seen = new Set<string>();
+  return GATEWAY_COMMANDS.filter((command) => {
+    if (!preferred.includes(command.id) || seen.has(command.id)) return false;
+    seen.add(command.id);
+    return true;
+  });
 }
 
 export function rpcCommands(): GatewayCommand[] {
@@ -703,6 +713,20 @@ export function rpcCommands(): GatewayCommand[] {
 
 export function agentCommands(): GatewayCommand[] {
   return GATEWAY_COMMANDS.filter((command) => command.transport === 'agent');
+}
+
+/**
+ * Filter a command list to what the live capability snapshot says is
+ * available. When availability is unknown (empty methods map), keep the
+ * original list so OpenClaw/offline tooling still shows something.
+ */
+export function filterExecutableCommands(
+  commands: GatewayCommand[],
+  methods: Record<string, { available: boolean; reason?: string }> = {},
+): GatewayCommand[] {
+  const keys = Object.keys(methods);
+  if (keys.length === 0) return commands;
+  return commands.filter((command) => methods[command.id]?.available !== false);
 }
 
 export function buildCapabilityGroups(
@@ -768,15 +792,53 @@ type CapabilityGroupDef = {
 };
 
 const CAPABILITY_GROUP_DEFS: CapabilityGroupDef[] = [
-  { id: 'chat', label: 'Chat', features: ['chat_completions'], endpoints: ['chat_completions'], commandGroups: ['Agent'] },
-  { id: 'agent', label: 'Agent', features: ['run_submission'], endpoints: ['runs'], commandGroups: ['Agent'] },
-  { id: 'sessions', label: 'Sessions', features: ['session_resources'], endpoints: ['sessions'], commandGroups: ['Sessions'] },
-  { id: 'approvals', label: 'Approvals', features: ['run_approval_response'], endpoints: ['run_approval'], commandGroups: ['Approvals'] },
-  { id: 'models', label: 'Models', endpoints: ['models'], commandGroups: ['Models'] },
-  { id: 'skills', label: 'Skills', features: ['skills_api'], endpoints: ['skills'] },
-  { id: 'tools', label: 'Tools', endpoints: ['toolsets'], commandGroups: ['Tools'] },
-  { id: 'diagnostics', label: 'Diagnostics', endpoints: ['health_detailed'], commandGroups: ['Gateway', 'Diagnostics'] },
-  { id: 'terminal', label: 'Terminal', endpoints: ['terminal'] },
+  // Hermes uses chat_completions / run_submission / …; Gate manifests use
+  // short keys (chat, runs, sessions). Both alias sets must match or Gate
+  // chat falsely shows "unsupported" while streamChat works.
+  {
+    id: 'chat',
+    label: 'Chat',
+    features: ['chat_completions', 'chat'],
+    endpoints: ['chat_completions', 'chat'],
+    commandGroups: ['Agent'],
+  },
+  {
+    id: 'agent',
+    label: 'Agent',
+    features: ['run_submission', 'runs'],
+    endpoints: ['runs'],
+    commandGroups: ['Agent'],
+  },
+  {
+    id: 'sessions',
+    label: 'Sessions',
+    features: ['session_resources', 'sessions'],
+    endpoints: ['sessions'],
+    commandGroups: ['Sessions'],
+  },
+  {
+    id: 'approvals',
+    label: 'Approvals',
+    features: ['run_approval_response', 'approvals'],
+    endpoints: ['run_approval', 'approvals'],
+    commandGroups: ['Approvals'],
+  },
+  { id: 'models', label: 'Models', features: ['models'], endpoints: ['models'], commandGroups: ['Models'] },
+  {
+    id: 'skills',
+    label: 'Skills',
+    features: ['skills_api', 'skills'],
+    endpoints: ['skills'],
+    commandGroups: ['Skills'],
+  },
+  { id: 'tools', label: 'Tools', features: ['tools'], endpoints: ['toolsets', 'tools'], commandGroups: ['Tools'] },
+  {
+    id: 'diagnostics',
+    label: 'Diagnostics',
+    endpoints: ['health_detailed'],
+    commandGroups: ['Gateway', 'Diagnostics'],
+  },
+  { id: 'terminal', label: 'Terminal', features: ['terminal'], endpoints: ['terminal'] },
   { id: 'config', label: 'Config', features: ['admin_config_rw'], commandGroups: ['Config'] },
   { id: 'cron', label: 'Cron', features: ['jobs_admin'] },
   { id: 'memory', label: 'Memory', features: ['memory_write_api'], commandGroups: ['Memory'] },

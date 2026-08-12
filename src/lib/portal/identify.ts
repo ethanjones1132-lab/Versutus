@@ -153,22 +153,54 @@ async function probeHermes(baseUrl: string, timeoutMs: number): Promise<GatewayI
       | null;
     if (!health || typeof health.status !== 'string') return null;
 
-    // Strong Hermes signal: /v1/capabilities with runtime + auth + endpoints.
-    const capsResponse = await fetch(`${baseUrl}/v1/capabilities`, {
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-    });
-    if (!capsResponse.ok) return null;
-    const caps = (await capsResponse.json().catch(() => null)) as
-      | {
-          auth?: { type?: string; required?: boolean };
-          runtime?: { mode?: string; tool_execution?: string; split_runtime?: boolean };
-          endpoints?: Record<string, unknown>;
-        }
-      | null;
-    if (!caps || typeof caps.runtime !== 'object' || caps.runtime === null) return null;
+    const platform = typeof health.platform === 'string' ? health.platform.toLowerCase() : '';
+    // Hermes 0.18 advertises platform on /health. Prefer that over capabilities:
+    // older probe required caps.runtime, which real hermes-agent does not send,
+    // so every Hermes was mis-identified as "unknown".
+    const healthSaysHermes = platform.includes('hermes');
 
-    const requiresToken = caps.auth?.required !== false;
+    // Enrich from /v1/capabilities when available (optional; may require auth).
+    let requiresToken = true;
+    let capsHermes = false;
+    try {
+      const capsResponse = await fetch(`${baseUrl}/v1/capabilities`, {
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+      });
+      if (capsResponse.ok) {
+        const caps = (await capsResponse.json().catch(() => null)) as
+          | {
+              object?: string;
+              platform?: string;
+              auth?: { type?: string; required?: boolean };
+              runtime?: { mode?: string; tool_execution?: string; split_runtime?: boolean };
+              features?: Record<string, unknown>;
+              endpoints?: Record<string, unknown>;
+            }
+          | null;
+        if (caps) {
+          const objectName = typeof caps.object === 'string' ? caps.object.toLowerCase() : '';
+          const capsPlatform = typeof caps.platform === 'string' ? caps.platform.toLowerCase() : '';
+          const hasHermesFeatures =
+            caps.features?.chat_completions === true || caps.features?.run_submission === true;
+          const hasHermesEndpoints =
+            caps.endpoints != null &&
+            (caps.endpoints.chat_completions != null || caps.endpoints.runs != null);
+          capsHermes =
+            (typeof caps.runtime === 'object' && caps.runtime !== null) ||
+            objectName.includes('hermes') ||
+            capsPlatform.includes('hermes') ||
+            hasHermesFeatures ||
+            hasHermesEndpoints;
+          if (caps.auth?.required === false) requiresToken = false;
+        }
+      }
+    } catch {
+      // capabilities optional
+    }
+
+    if (!healthSaysHermes && !capsHermes) return null;
+
     return {
       kind: 'hermes',
       kindLabel: 'Hermes',

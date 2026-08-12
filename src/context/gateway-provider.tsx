@@ -12,6 +12,13 @@ import { isSlashCommandInput } from '@/lib/gateway/slash-commands';
 import { GATEWAY_COMMANDS, type GatewayCommand } from '@/lib/gateway/dashboard';
 import { loadRecentCommands, pushRecentCommand } from '@/lib/gateway/recents';
 import { ACTIVITY_EVENT_CAP, executeRun, runEventPreview, type ActivityRun, type RunCapableClient } from '@/lib/gateway/runs';
+import {
+  loadActivityRuns,
+  loadOfflineQueue,
+  saveActivityRuns,
+  saveOfflineQueue,
+  type OfflineQueueItem,
+} from '@/lib/gateway/session-persistence';
 import { syncChildProfiles } from '@/lib/gateway/child-sync';
 import { notifyApprovalRequired, notifyGatewayDown, notifyRunComplete } from '@/lib/notifications/local';
 import type {
@@ -404,8 +411,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const scheduleAutoRetryRef = useRef<(delayMs?: number) => void>(() => undefined);
   const commandStartTimeRef = useRef<number>(0);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const offlineQueueRef = useRef<{ id: string; text: string }[]>([]);
+  const offlineQueueRef = useRef<OfflineQueueItem[]>([]);
   const flushingOfflineRef = useRef(false);
+
+  const persistOfflineQueue = useCallback(() => {
+    void saveOfflineQueue(offlineQueueRef.current);
+  }, []);
+
+  const patchActivityRuns = useCallback((updater: (prev: ActivityRun[]) => ActivityRun[]) => {
+    setActivityRuns((prev) => {
+      const next = updater(prev);
+      void saveActivityRuns(next);
+      return next;
+    });
+  }, []);
 
   const reloadHistoryFor = useCallback(async (gateway: GatewayProfile) => {
     const client = clientRef.current;
@@ -465,6 +484,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       for (const cm of commandMessages) {
         if (!merged.some((m) => m.id === cm.id)) {
           merged.push(cm);
+        }
+      }
+
+      // Re-surface durable offline outbox items after history reload.
+      const pending = offlineQueueRef.current.filter((item) => item.gatewayId === gateway.id);
+      for (const item of pending) {
+        if (!merged.some((m) => m.id === item.id)) {
+          merged.push({
+            id: item.id,
+            role: 'user',
+            text: item.text,
+            timestamp: item.createdAt,
+            queued: true,
+          });
         }
       }
 
@@ -803,14 +836,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const bootstrap = useCallback(async () => {
     try {
-      const [loadedSettings, loadedGateways, activeId] = await Promise.all([
+      const [loadedSettings, loadedGateways, activeId, restoredQueue, restoredRuns] = await Promise.all([
         loadAppSettings(),
         loadGateways(),
         loadActiveGatewayId(),
+        loadOfflineQueue(),
+        loadActivityRuns(),
       ]);
 
       setSettings(loadedSettings);
       setGateways(loadedGateways);
+      offlineQueueRef.current = restoredQueue;
+      setActivityRuns(restoredRuns);
 
       // Device identity powers pairing/access requests — surface it once.
       void loadOrCreateDeviceIdentity()
@@ -960,11 +997,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const queueOfflineInput = useCallback(
     (text: string) => {
+      const gatewayId = activeGatewayRef.current?.id ?? '';
       const id = appendLocalMessage('user', text, undefined, true);
-      offlineQueueRef.current.push({ id, text });
+      offlineQueueRef.current.push({ id, text, gatewayId, createdAt: Date.now() });
+      persistOfflineQueue();
       setLastError(null);
     },
-    [appendLocalMessage],
+    [appendLocalMessage, persistOfflineQueue],
   );
 
   const updateLocalMessage = useCallback((id: string, patch: Partial<ChatMessage>) => {
@@ -1115,6 +1154,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             sessionId: sessionIdRef.current,
             model: gateway.model,
             signal: abortController.signal,
+            onToolCall: (toolCall) => {
+              setMessages((prev) => {
+                const idx = prev.findIndex((m) => m.id === `run-${runId}`);
+                if (idx < 0) return prev;
+                const copy = [...prev];
+                const existing = copy[idx].toolCalls ?? [];
+                const match = existing.findIndex((item) => item.name === toolCall.name);
+                const nextTools =
+                  match >= 0
+                    ? existing.map((item, i) => (i === match ? { ...item, ...toolCall } : item))
+                    : [...existing, toolCall];
+                copy[idx] = { ...copy[idx], toolCalls: nextTools, streaming: true };
+                return copy;
+              });
+            },
           },
         );
 
@@ -1123,7 +1177,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           const idx = prev.findIndex((m) => m.id === `run-${runId}`);
           if (idx < 0) return prev;
           const copy = [...prev];
-          copy[idx] = { ...copy[idx], streaming: false };
+          const tools = copy[idx].toolCalls?.map((tool) =>
+            tool.status === 'running' ? { ...tool, status: 'complete' as const } : tool,
+          );
+          copy[idx] = { ...copy[idx], streaming: false, toolCalls: tools };
           return copy;
         });
         setLastError(null);
@@ -1190,11 +1247,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const startedAt = Date.now();
       const patchRun = (runId: string, patch: Partial<ActivityRun>) => {
-        setActivityRuns((prev) =>
-          prev.map((run) => (run.id === runId ? { ...run, ...patch } : run)),
-        );
+        patchActivityRuns((prev) => prev.map((run) => (run.id === runId ? { ...run, ...patch } : run)));
       };
-      setActivityRuns((prev) => [
+      patchActivityRuns((prev) => [
         { id: localId, prompt, status: 'running', startedAt, events: [] },
         ...prev,
       ]);
@@ -1206,14 +1261,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           model: gateway.model,
           signal: abortController.signal,
           onStarted: (runId) => {
-            setActivityRuns((prev) =>
+            patchActivityRuns((prev) =>
               prev.map((run) => (run.id === trackedId.current ? { ...run, id: runId } : run)),
             );
             trackedId.current = runId;
           },
           onEvent: (event) => {
             const preview = runEventPreview(event);
-            setActivityRuns((prev) =>
+            patchActivityRuns((prev) =>
               prev.map((run) =>
                 run.id === trackedId.current
                   ? { ...run, events: [...run.events, { type: event.type, preview, timestamp: event.timestamp }].slice(-ACTIVITY_EVENT_CAP) }
@@ -1265,7 +1320,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         runAbortControllerRef.current = null;
       }
     },
-    [status],
+    [patchActivityRuns, status],
   );
 
   const stopActivityRun = useCallback(
@@ -1278,7 +1333,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (client?.stopRun && !runId.startsWith('local-')) {
         void client.stopRun(runId).catch(() => undefined);
       }
-      setActivityRuns((prev) =>
+      patchActivityRuns((prev) =>
         prev.map((run) =>
           run.id === runId && (run.status === 'running' || run.status === 'waiting-approval')
             ? { ...run, status: 'cancelled', finishedAt: Date.now() }
@@ -1286,7 +1341,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         ),
       );
     },
-    [],
+    [patchActivityRuns],
   );
 
   const sendChatInput = useCallback(
@@ -1376,6 +1431,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               command: { input: trimmed, title: commandLabel, status: 'running', ephemeral: true },
             });
           },
+          // Hermes/Gate: /model set updates the profile the same way the picker does.
+          // OpenClaw keeps config.patch via the slash path when setModelOverride is omitted
+          // only if we always pass this — so only wire for non-openclaw kinds.
+          setModelOverride:
+            activeGateway?.kind === 'openclaw'
+              ? undefined
+              : async (modelId) => {
+                  const gateway = activeGatewayRef.current;
+                  if (!gateway) return;
+                  const updated = { ...gateway, model: modelId };
+                  setActiveGateway(updated);
+                  await upsertGateway(updated).then(setGateways);
+                },
         });
         const duration = Date.now() - commandStartTimeRef.current;
         updateLocalMessage(commandMessageId, {
@@ -1427,20 +1495,33 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   );
 
   useEffect(() => {
-    if (status !== 'connected' || isSending || isCommandRunning || flushingOfflineRef.current || offlineQueueRef.current.length === 0) return;
+    if (status !== 'connected' || isSending || isCommandRunning || flushingOfflineRef.current || offlineQueueRef.current.length === 0) {
+      return;
+    }
+
+    const activeId = activeGatewayRef.current?.id;
+    if (!activeId) return;
+
+    // Only flush items destined for the active gateway.
+    const forActive = offlineQueueRef.current.filter((item) => item.gatewayId === activeId || !item.gatewayId);
+    const remainder = offlineQueueRef.current.filter((item) => item.gatewayId && item.gatewayId !== activeId);
+    if (forActive.length === 0) return;
 
     flushingOfflineRef.current = true;
-    const queued = offlineQueueRef.current.splice(0);
+    offlineQueueRef.current = remainder;
+    persistOfflineQueue();
     void (async () => {
       try {
-        for (const item of queued) {
+        for (const item of forActive) {
           await sendChatInput(item.text, { fromQueue: true, messageId: item.id });
         }
+      } catch {
+        // Re-queue anything that did not clear so a kill mid-flush is not data loss.
       } finally {
         flushingOfflineRef.current = false;
       }
     })();
-  }, [isCommandRunning, isSending, sendChatInput, status]);
+  }, [isCommandRunning, isSending, persistOfflineQueue, sendChatInput, status]);
 
   const openModelPicker = useCallback(async (mode: 'default' | 'fallbacks' | 'agent', agentId?: string) => {
     try {
@@ -1781,9 +1862,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [activeGateway, reloadHistoryFor],
   );
 
-  const deleteLocalMessage = useCallback((id: string) => {
-    setMessages((prev) => prev.filter((message) => message.id !== id));
-  }, []);
+  const deleteLocalMessage = useCallback(
+    (id: string) => {
+      setMessages((prev) => prev.filter((message) => message.id !== id));
+      const before = offlineQueueRef.current.length;
+      offlineQueueRef.current = offlineQueueRef.current.filter((item) => item.id !== id);
+      if (offlineQueueRef.current.length !== before) persistOfflineQueue();
+    },
+    [persistOfflineQueue],
+  );
 
   const value = useMemo<GatewayContextValue>(
     () => ({

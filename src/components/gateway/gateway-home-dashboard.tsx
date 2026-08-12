@@ -39,6 +39,8 @@ export function GatewayHomeDashboard() {
   const capabilityCount = capabilitySnapshot.groups.filter((group) =>
     ['available', 'ready', 'fresh'].includes(group.status),
   ).length;
+  const runsSupported =
+    connected && capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'ready';
   const orbColor = statusColor(tokens, status);
   const statusLabel = connected
     ? 'Connected'
@@ -79,7 +81,9 @@ export function GatewayHomeDashboard() {
             </Text>
             <Text variant="caption" numberOfLines={2} style={styles.onGlassSecondary}>
               {connected
-                ? 'Ready for chat, tools, runs, and slash commands.'
+                ? runsSupported
+                  ? 'Ready for chat, slash commands, and agentic runs.'
+                  : 'Ready for chat and the commands this gateway offers.'
                 : 'Saved locally. Select a reachable gateway to activate it.'}
             </Text>
           </View>
@@ -140,16 +144,18 @@ export function GatewayHomeDashboard() {
             style={styles.primaryAction}
           />
         </View>
-        <Button
-          label="Retry connection"
-          onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            void retryAutoConnect();
-          }}
-          variant="ghost"
-          size="sm"
-          style={styles.retryAction}
-        />
+        {!connected ? (
+          <Button
+            label="Retry connection"
+            onPress={async () => {
+              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              void retryAutoConnect();
+            }}
+            variant="ghost"
+            size="sm"
+            style={styles.retryAction}
+          />
+        ) : null}
       </Card>
 
       {pendingRunApproval ? (
@@ -168,6 +174,24 @@ export function GatewayHomeDashboard() {
             {pendingRunApproval.prompt}
           </Text>
           <Button label="Review approval" variant="secondary" size="sm" onPress={() => router.push('/activity')} />
+        </Card>
+      ) : runsSupported && activeRuns.length === 0 ? (
+        <Card padding={Spacing.three} style={styles.runHintCard}>
+          <Text variant="caption" color="accentWarm" style={styles.approvalLabel}>
+            Agentic runs
+          </Text>
+          <Text variant="body" color="secondary">
+            Start a tracked task with approval gates from Activity.
+          </Text>
+          <Button
+            label="Open Activity"
+            variant="secondary"
+            size="sm"
+            onPress={async () => {
+              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/activity');
+            }}
+          />
         </Card>
       ) : null}
 
@@ -295,6 +319,9 @@ const styles = StyleSheet.create({
   approvalCard: {
     borderRadius: Radius.xl,
     borderWidth: StyleSheet.hairlineWidth * 2,
+    gap: Spacing.two,
+  },
+  runHintCard: {
     gap: Spacing.two,
   },
   approvalHeader: {

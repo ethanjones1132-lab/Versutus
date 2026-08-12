@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
-import { Badge, Card, Chip, Icon, PressableScale, Text } from '@/components/ui';
+import { Badge, Card, Icon, PressableScale, Text } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
 import { springSnappy } from '@/lib/motion/presets';
@@ -20,11 +20,6 @@ type ChatComposerProps = {
   onSelectSlashSuggestion?: (value: string) => void;
   isStreaming: boolean;
   canSend: boolean;
-  /** Quick context chips (open the model picker / session selector). */
-  modelLabel?: string;
-  onModelPress?: () => void;
-  sessionLabel?: string;
-  onSessionPress?: () => void;
 };
 
 export function ChatComposer({
@@ -38,10 +33,6 @@ export function ChatComposer({
   onSelectSlashSuggestion,
   isStreaming,
   canSend,
-  modelLabel,
-  onModelPress,
-  sessionLabel,
-  onSessionPress,
 }: ChatComposerProps) {
   const tokens = useTokens();
   const [focused, setFocused] = useState(false);
@@ -62,29 +53,14 @@ export function ChatComposer({
   };
 
   const isActionDisabled = !canSend || (!isStreaming && !draft.trim());
+  // Input stays editable whenever the user can queue or send (including offline).
+  const inputEditable = canSend && !isStreaming;
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={72}>
       <View style={styles.dock}>
         <View style={styles.utilityRow}>
-          <View style={styles.chipGroup}>
-            {modelLabel && onModelPress ? (
-              <Chip
-                label={modelLabel}
-                icon={{ ios: 'cpu', android: 'memory', web: 'memory' }}
-                onPress={onModelPress}
-                style={styles.contextChip}
-              />
-            ) : null}
-            {sessionLabel && onSessionPress ? (
-              <Chip
-                label={sessionLabel}
-                icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
-                onPress={onSessionPress}
-                style={styles.contextChip}
-              />
-            ) : null}
-          </View>
+          <View style={styles.chipGroup} />
           <View style={styles.chipGroup}>
             <PressableScale
               onPress={async () => {
@@ -189,10 +165,10 @@ export function ChatComposer({
             style={[styles.input, { color: tokens.textPrimary }]}
             value={draft}
             onChangeText={onChangeText}
-            placeholder="Message or /command"
+            placeholder={canSend ? 'Message or /command' : 'Connect a gateway to chat'}
             placeholderTextColor={tokens.textTertiary}
             multiline
-            editable={canSend && !isStreaming}
+            editable={inputEditable}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             accessibilityLabel="Message input"

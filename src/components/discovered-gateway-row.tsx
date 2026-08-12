@@ -67,7 +67,7 @@ export function DiscoveredGatewayRow({
         <Text variant="caption" color="tertiary">
           {secure ? 'TLS' : 'LAN'}
           {gateway.tailnetDns ? ` · ${gateway.tailnetDns}` : ''}
-          {gateway.tlsFingerprint ? ' · pinned' : ''}
+          {gateway.tlsFingerprint ? ' · fingerprint seen' : ''}
           {isScanning ? ' · scanning…' : ''}
         </Text>
       </View>

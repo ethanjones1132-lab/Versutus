@@ -31,7 +31,11 @@ export default function HomeScreen() {
 
   return (
     <Screen edges={['bottom']}>
-      <ScreenHeader onTrailingPress={() => router.push('/gateway/settings')} style={styles.header} />
+      <ScreenHeader
+        title="Versutus"
+        subtitle={hasSavedGateway ? 'Command center' : 'Connect your gateway'}
+        onTrailingPress={() => router.push('/gateway/settings')}
+      />
       <ScrollView contentContainerStyle={styles.content}>
         {hasSavedGateway ? (
           <GatewayHomeDashboard />
@@ -54,8 +58,9 @@ export default function HomeScreen() {
             {lastError && connectionPhase === 'failed' ? (
               <GlassCollapsible title="Troubleshooting">
                 <Text color="secondary">
-                  - OpenClaw gateway running on your PC{'\n'}- Tailscale connected on both devices{'\n'}- Gateway
-                  reachable over tailnet (bind=loopback with Tailscale Serve){'\n'}- Approve this phone if prompted
+                  - Hermes (or Gate) listening on the PC{'\n'}- API key matches API_SERVER_KEY (or Gate token)
+                  {'\n'}- Phone and PC on the same Tailscale tailnet{'\n'}- Tailscale Serve / LAN URL reachable from
+                  the phone{'\n'}- If Hermes reports running but nothing answers: restart the gateway on the PC
                 </Text>
                 <Text variant="caption" color="tertiary">
                   {lastError}
@@ -88,10 +93,6 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  header: {
-    justifyContent: 'flex-end',
-    paddingTop: Spacing.one,
-  },
   content: {
     paddingHorizontal: Spacing.four,
     paddingBottom: Spacing.four,

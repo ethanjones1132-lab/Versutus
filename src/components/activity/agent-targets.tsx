@@ -25,14 +25,14 @@ export function AgentTargets({ gateways, activeGatewayId, status, onSelect }: Ag
       <View style={styles.header}>
         <View style={styles.titleGroup}>
           <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
-            Agent targets
+            Gateway targets
           </Text>
           <Text variant="headline">Configured profiles</Text>
         </View>
         <Badge label="Profile-scoped" tone="neutral" dot={false} />
       </View>
       <Text variant="caption" color="tertiary" style={styles.note}>
-        Hermes keeps agents as gateway-side profiles. Add each profile gateway separately to switch targets here.
+        Hermes has no remote agent registry — each saved gateway profile is a target. Add profiles separately to switch here.
       </Text>
       <Divider />
       {gateways.length === 0 ? (

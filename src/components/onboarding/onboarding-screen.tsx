@@ -79,7 +79,15 @@ export function OnboardingScreen() {
                 autoCorrect={false}
                 validationState={fieldState}
               />
-              <Text variant="caption" color={validation.valid ? 'statusConnected' : 'secondary'}>
+              <Text
+                variant="caption"
+                color={
+                  fieldState === 'valid'
+                    ? 'statusConnected'
+                    : fieldState === 'invalid'
+                      ? 'statusDisconnected'
+                      : 'secondary'
+                }>
                 {validation.message}
               </Text>
             </View>

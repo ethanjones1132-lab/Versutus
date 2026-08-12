@@ -16,8 +16,8 @@ function NotificationRouter() {
   const router = useRouter();
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener(() => {
-      // Approval requests and run events live on the chat surface.
-      router.navigate('/chat');
+      // Approvals + live runs are monitored on Activity (chat still has the sheet).
+      router.navigate('/activity');
     });
     return () => subscription.remove();
   }, [router]);

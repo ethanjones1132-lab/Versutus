@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { Palette, Radius } from '@/constants/tokens';
+import { useTokens } from '@/hooks/use-tokens';
 
 import type { TextFieldProps } from './types';
 
@@ -11,11 +12,13 @@ export function TextField({
   value,
   onChangeText,
   placeholder,
+  validationState = 'default',
   multiline,
   editable = true,
   autoCapitalize = 'none',
   style,
 }: TextFieldProps) {
+  const tokens = useTokens();
   const textState = useNativeState(value);
 
   useEffect(() => {
@@ -24,8 +27,30 @@ export function TextField({
     }
   }, [textState, value]);
 
+  const borderColor =
+    validationState === 'valid'
+      ? tokens.statusConnected
+      : validationState === 'invalid'
+        ? tokens.statusDisconnected
+        : tokens.glassBorder;
+
   return (
-    <View style={[styles.host, style]}>
+    <View
+      style={[
+        styles.host,
+        {
+          borderColor,
+          borderWidth: validationState === 'default' ? StyleSheet.hairlineWidth : 1.5,
+        },
+        style,
+      ]}
+      accessibilityLabel={
+        validationState === 'invalid'
+          ? 'Invalid input'
+          : validationState === 'valid'
+            ? 'Valid input'
+            : undefined
+      }>
       <Host matchContents={{ horizontal: true, vertical: true }}>
         <SwiftTextField
           text={textState}
@@ -48,5 +73,7 @@ const styles = StyleSheet.create({
   host: {
     alignSelf: 'stretch',
     opacity: 1,
+    borderRadius: Radius.md,
+    overflow: 'hidden',
   },
 });

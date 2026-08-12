@@ -2,8 +2,8 @@ import * as Haptics from 'expo-haptics';
 import { useState } from 'react';
 import { StyleSheet, TextInput, View } from 'react-native';
 
-import { BaseSheet, PressableScale, Text } from '@/components/ui';
-import { Radius, Spacing } from '@/constants/tokens';
+import { BaseSheet, Button, Text } from '@/components/ui';
+import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 
 export function ApprovalSheet({
@@ -30,16 +30,13 @@ export function ApprovalSheet({
     <BaseSheet
       visible={visible}
       eyebrow="APPROVAL REQUIRED"
-      onClose={onDeny}
+      onClose={() => onDeny(feedback.trim() || undefined)}
       closeLabel="Deny"
-      position="bottom"
-    >
-      <Text variant="title" style={styles.title}>
-        Approve this agent action?
-      </Text>
+      position="bottom">
+      <Text variant="title">Approve this agent action?</Text>
 
       {gatewayName ? (
-        <Text variant="caption" color="tertiary">
+        <Text variant="caption" color="tertiary" style={styles.meta}>
           {gatewayName} · run {runId.slice(0, 12)}…
         </Text>
       ) : null}
@@ -53,7 +50,14 @@ export function ApprovalSheet({
           Feedback (optional)
         </Text>
         <TextInput
-          style={[styles.input, { color: tokens.textPrimary }]}
+          style={[
+            styles.input,
+            {
+              color: tokens.textPrimary,
+              backgroundColor: tokens.backgroundInset,
+              borderColor: tokens.glassBorder,
+            },
+          ]}
           value={feedback}
           onChangeText={setFeedback}
           placeholder="Why this action is safe, or what to change…"
@@ -63,51 +67,48 @@ export function ApprovalSheet({
       </View>
 
       <View style={styles.footer}>
-        <PressableScale
-          style={styles.denyBtn}
+        <Button
+          label="Deny"
+          variant="secondary"
           onPress={async () => {
             await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             onDeny(feedback.trim() || undefined);
-          }}>
-          <Text variant="caption">Deny</Text>
-        </PressableScale>
-        <PressableScale
-          style={[styles.approveBtn, { backgroundColor: tokens.accentWarm }]}
+          }}
+          style={styles.footerButton}
+        />
+        <Button
+          label="Approve"
           onPress={async () => {
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
             onApprove(feedback.trim() || undefined);
-          }}>
-          <Text variant="caption" style={styles.approveLabel}>
-            Approve
-          </Text>
-        </PressableScale>
+          }}
+          style={styles.footerPrimary}
+        />
       </View>
     </BaseSheet>
   );
 }
 
 const styles = StyleSheet.create({
-  title: {
-    color: '#fff',
+  meta: {
+    marginTop: Spacing.one,
   },
   summary: {
-    fontSize: 15,
+    marginTop: Spacing.two,
     lineHeight: 20,
-    marginTop: Spacing.one,
   },
   feedback: {
     gap: Spacing.one,
-    marginTop: Spacing.two,
+    marginTop: Spacing.three,
   },
   input: {
     minHeight: 64,
     maxHeight: 120,
     fontSize: 13,
+    fontFamily: FontFamily.sans,
     padding: Spacing.two,
-    backgroundColor: 'rgba(0,0,0,0.4)',
     borderRadius: Radius.md,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(240,214,144,0.2)',
     textAlignVertical: 'top',
   },
   footer: {
@@ -115,24 +116,11 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     paddingTop: Spacing.three,
     marginTop: Spacing.two,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(240,214,144,0.2)',
   },
-  denyBtn: {
+  footerButton: {
     flex: 1,
-    alignItems: 'center',
-    paddingVertical: Spacing.two,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.2)',
   },
-  approveBtn: {
+  footerPrimary: {
     flex: 2,
-    alignItems: 'center',
-    paddingVertical: Spacing.two,
-    borderRadius: 10,
-  },
-  approveLabel: {
-    color: '#111',
   },
 });

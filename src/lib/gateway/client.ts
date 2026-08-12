@@ -281,7 +281,12 @@ export class HermesGatewayClient {
   async streamChat(
     messages: { role: string; content: string }[],
     onDelta: (text: string) => void,
-    options?: { model?: string; sessionId?: string; signal?: AbortSignal },
+    options?: {
+      model?: string;
+      sessionId?: string;
+      signal?: AbortSignal;
+      onToolCall?: (tool: import('@/lib/gateway/types').ChatToolCall) => void;
+    },
   ): Promise<string> {
     const body: Record<string, unknown> = {
       model: options?.model ?? 'hermes-agent',
@@ -310,13 +315,30 @@ export class HermesGatewayClient {
     }
 
     let fullText = '';
+    // Accumulate partial tool_call name fragments by index (OpenAI stream shape).
+    const toolNames = new Map<number, string>();
     await this.transport.streamSSE(response, (data) => {
       try {
         const chunk = JSON.parse(data);
-        const delta = chunk?.choices?.[0]?.delta?.content;
-        if (delta) {
-          fullText += delta;
-          onDelta(delta);
+        const delta = chunk?.choices?.[0]?.delta;
+        const content = delta?.content;
+        if (content) {
+          fullText += content;
+          onDelta(content);
+        }
+        const toolCalls = delta?.tool_calls;
+        if (Array.isArray(toolCalls) && options?.onToolCall) {
+          for (const call of toolCalls) {
+            const index = typeof call?.index === 'number' ? call.index : 0;
+            const namePart = call?.function?.name;
+            if (typeof namePart === 'string' && namePart) {
+              toolNames.set(index, (toolNames.get(index) ?? '') + namePart);
+              options.onToolCall({
+                name: toolNames.get(index)!,
+                status: 'running',
+              });
+            }
+          }
         }
       } catch {
         // ignore malformed chunks

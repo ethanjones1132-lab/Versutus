@@ -15,6 +15,7 @@ export function TextField({
   value,
   onChangeText,
   placeholder,
+  validationState = 'default',
   secureTextEntry,
   multiline,
   autoCapitalize = 'none',
@@ -25,6 +26,13 @@ export function TextField({
   style,
 }: TextFieldSharedProps) {
   const tokens = useTokens();
+  const borderColor =
+    validationState === 'valid'
+      ? tokens.statusConnected
+      : validationState === 'invalid'
+        ? tokens.statusDisconnected
+        : tokens.glassBorder;
+  const borderWidth = validationState === 'default' ? StyleSheet.hairlineWidth : 1.5;
 
   return (
     <TextInput
@@ -33,7 +41,8 @@ export function TextField({
         {
           color: tokens.textPrimary,
           backgroundColor: tokens.glass,
-          borderColor: tokens.glassBorder,
+          borderColor,
+          borderWidth,
         },
         multiline && styles.multiline,
         style,
@@ -49,6 +58,13 @@ export function TextField({
       editable={editable}
       onSubmitEditing={onSubmitEditing}
       returnKeyType={returnKeyType}
+      accessibilityLabel={
+        validationState === 'invalid'
+          ? 'Invalid input'
+          : validationState === 'valid'
+            ? 'Valid input'
+            : undefined
+      }
     />
   );
 }
@@ -61,7 +77,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 14,
     borderRadius: Radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
   },
   multiline: {
     minHeight: 96,

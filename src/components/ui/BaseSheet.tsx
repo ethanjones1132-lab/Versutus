@@ -1,6 +1,6 @@
 import * as Haptics from 'expo-haptics';
 import { ReactNode, useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
   Easing,
   runOnJS,
@@ -34,7 +34,6 @@ export function BaseSheet({
   closeLabel,
   children,
   position = 'bottom',
-  zIndex = 30,
 }: BaseSheetProps) {
   const tokens = useTokens();
   const hiddenOffset = position === 'bottom' ? 400 : -400;
@@ -77,56 +76,55 @@ export function BaseSheet({
   };
 
   return (
-    <View style={[styles.overlay, { zIndex, pointerEvents: 'box-none' }]}>
-      <PressableScale style={styles.backdrop} onPress={handleBackdrop} />
-      <Animated.View
-        style={[
-          styles.sheet,
-          isBottom ? styles.bottom : styles.top,
-          animatedStyle,
-        ]}
-      >
-        <GlassSurface
-          variant="hero"
-          padding={0}
-          style={[
-            styles.sheetSurface,
-            { borderColor: tokens.accentWarmMuted },
-          ]}
-        >
-          <View style={styles.header}>
-            <Text variant="mono" color="accentWarm" style={styles.eyebrow}>
-              {eyebrow}
-            </Text>
-            {onClose && (
-              <PressableScale onPress={async () => {
-                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                onClose();
-              }} hitSlop={12}>
-                <Text variant="caption" color="tertiary">
-                  {closeLabel || 'Close'}
-                </Text>
-              </PressableScale>
-            )}
-          </View>
+    <Modal visible={mounted} transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
+      <View style={[styles.overlay, isBottom ? styles.overlayBottom : styles.overlayTop]}>
+        <Pressable style={styles.backdrop} onPress={handleBackdrop} accessibilityLabel="Dismiss sheet" />
+        <Animated.View style={[styles.sheet, isBottom ? styles.bottom : styles.top, animatedStyle]}>
+          <GlassSurface
+            variant="hero"
+            padding={0}
+            style={[styles.sheetSurface, { borderColor: tokens.accentWarmMuted }]}>
+            <View style={styles.header}>
+              <Text variant="mono" color="accentWarm" style={styles.eyebrow}>
+                {eyebrow}
+              </Text>
+              {onClose ? (
+                <PressableScale
+                  onPress={async () => {
+                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    onClose();
+                  }}
+                  hitSlop={12}>
+                  <Text variant="caption" color="tertiary">
+                    {closeLabel || 'Close'}
+                  </Text>
+                </PressableScale>
+              ) : null}
+            </View>
 
-          {title && (
-            <Text variant="title" style={styles.title}>
-              {title}
-            </Text>
-          )}
+            {title ? (
+              <Text variant="title" style={styles.title}>
+                {title}
+              </Text>
+            ) : null}
 
-          <View style={styles.content}>{children}</View>
-        </GlassSurface>
-      </Animated.View>
-    </View>
+            <View style={styles.content}>{children}</View>
+          </GlassSurface>
+        </Animated.View>
+      </View>
+    </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   overlay: {
-    ...StyleSheet.absoluteFill,
+    flex: 1,
+  },
+  overlayBottom: {
     justifyContent: 'flex-end',
+  },
+  overlayTop: {
+    justifyContent: 'flex-start',
   },
   backdrop: {
     ...StyleSheet.absoluteFill,
@@ -140,7 +138,6 @@ const styles = StyleSheet.create({
   },
   top: {
     marginTop: Spacing.two,
-    justifyContent: 'flex-start',
   },
   sheetSurface: {
     borderRadius: Radius.xl,

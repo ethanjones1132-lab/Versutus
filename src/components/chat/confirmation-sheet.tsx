@@ -1,8 +1,8 @@
 import * as Haptics from 'expo-haptics';
 import { StyleSheet, View } from 'react-native';
 
-import { BaseSheet , PressableScale, Text } from '@/components/ui';
-import { Spacing } from '@/constants/tokens';
+import { Badge, BaseSheet, Button, Text } from '@/components/ui';
+import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { GatewayActionPreview } from '@/lib/gateway/types';
 
@@ -29,12 +29,8 @@ export function ConfirmationSheet({
 
   if (!visible || !preview) return null;
 
-  const riskColor =
-    preview.risk === 'high'
-      ? tokens.statusDisconnected
-      : preview.risk === 'medium'
-        ? tokens.accentWarm
-        : tokens.statusConnected;
+  const riskTone =
+    preview.risk === 'high' ? 'danger' : preview.risk === 'medium' ? 'warning' : 'success';
 
   return (
     <BaseSheet
@@ -42,64 +38,76 @@ export function ConfirmationSheet({
       eyebrow="CONFIRM ACTION"
       onClose={onCancel}
       closeLabel="Dismiss"
-      position="bottom"
-    >
-      <Text variant="title" style={styles.title}>
-        {preview.title}
-      </Text>
+      position="bottom">
+      <Text variant="title">{preview.title}</Text>
 
       <Text color="secondary" style={styles.summary}>
         {preview.summary}
       </Text>
 
       <View style={styles.riskRow}>
-        <Text variant="caption" color="tertiary">Risk:</Text>
-        <View style={[styles.riskBadge, { backgroundColor: riskColor }]}>
-          <Text variant="caption" style={{ color: '#000' }}>
-            {preview.risk.toUpperCase()}
-          </Text>
-        </View>
+        <Text variant="caption" color="tertiary">
+          Risk
+        </Text>
+        <Badge label={preview.risk.toUpperCase()} tone={riskTone} dot={false} />
       </View>
 
       <View style={styles.section}>
-        <Text variant="caption" color="tertiary">Command</Text>
-        <Text variant="mono" style={styles.command}>
+        <Text variant="caption" color="tertiary">
+          Command
+        </Text>
+        <Text
+          variant="mono"
+          style={[
+            styles.command,
+            { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+          ]}>
           {preview.applyCommand}
         </Text>
       </View>
 
-      {preview.diff && preview.diff.length > 0 && (
+      {preview.diff && preview.diff.length > 0 ? (
         <View style={styles.section}>
-          <Text variant="caption" color="tertiary">Preview</Text>
+          <Text variant="caption" color="tertiary">
+            Preview
+          </Text>
           {preview.diff.map((d, i) => (
-            <View key={i} style={styles.diff}>
-              <Text variant="caption" color="accentWarm">{d.label}</Text>
-              <Text variant="mono" style={styles.diffText}>
+            <View
+              key={i}
+              style={[
+                styles.diff,
+                { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+              ]}>
+              <Text variant="caption" color="accentWarm">
+                {d.label}
+              </Text>
+              <Text variant="mono" color="tertiary" style={styles.diffText}>
                 - {d.before}
               </Text>
-              <Text variant="mono" style={styles.diffText}>
+              <Text variant="mono" color="secondary" style={styles.diffText}>
                 + {d.after}
               </Text>
             </View>
           ))}
         </View>
-      )}
+      ) : null}
 
       <Text variant="caption" color="tertiary" style={styles.note}>
         This action will be executed on the gateway. Use --confirm in chat for advanced bypass.
       </Text>
 
       <View style={styles.footer}>
-        <PressableScale 
-          style={styles.cancelBtn} 
+        <Button
+          label="Cancel"
+          variant="secondary"
           onPress={async () => {
             await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             onCancel();
-          }}>
-          <Text variant="caption">Cancel</Text>
-        </PressableScale>
-        <PressableScale
-          style={[styles.confirmBtn, { backgroundColor: tokens.accentWarm }]}
+          }}
+          style={styles.footerButton}
+        />
+        <Button
+          label={confirmLabelForPreview(preview)}
           onPress={async () => {
             await Haptics.notificationAsync(
               preview.risk === 'high'
@@ -107,79 +115,58 @@ export function ConfirmationSheet({
                 : Haptics.NotificationFeedbackType.Success,
             );
             onConfirm();
-          }}>
-          <Text variant="caption" style={{ color: '#111' }}>
-            {confirmLabelForPreview(preview)}
-          </Text>
-        </PressableScale>
+          }}
+          style={styles.footerPrimary}
+        />
       </View>
     </BaseSheet>
   );
 }
 
 const styles = StyleSheet.create({
-  title: {
-    color: '#fff',
-  },
   summary: {
-    fontSize: 15,
+    marginTop: Spacing.one,
     lineHeight: 20,
   },
   riskRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.one,
-  },
-  riskBadge: {
-    paddingHorizontal: Spacing.one,
-    paddingVertical: 2,
-    borderRadius: 4,
+    marginTop: Spacing.two,
   },
   section: {
     gap: Spacing.one,
-    marginTop: Spacing.one,
+    marginTop: Spacing.two,
   },
   command: {
-    backgroundColor: 'rgba(0,0,0,0.4)',
     padding: Spacing.two,
-    borderRadius: 10,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
     fontSize: 13,
   },
   diff: {
     gap: 2,
-    padding: Spacing.one,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    borderRadius: 8,
+    padding: Spacing.two,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   diffText: {
     fontSize: 12,
-    color: '#aaa',
   },
   note: {
-    fontSize: 11,
-    opacity: 0.7,
-    marginTop: Spacing.one,
+    marginTop: Spacing.two,
+    opacity: 0.8,
   },
   footer: {
     flexDirection: 'row',
     gap: Spacing.two,
     paddingTop: Spacing.three,
     marginTop: Spacing.two,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(240,214,144,0.2)',
   },
-  cancelBtn: {
+  footerButton: {
     flex: 1,
-    alignItems: 'center',
-    paddingVertical: Spacing.two,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.2)',
   },
-  confirmBtn: {
+  footerPrimary: {
     flex: 2,
-    alignItems: 'center',
-    paddingVertical: Spacing.two,
-    borderRadius: 10,
   },
 });

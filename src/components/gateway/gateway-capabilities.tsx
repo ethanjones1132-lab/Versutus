@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Card, Text } from '@/components/ui';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
@@ -8,7 +8,7 @@ import type { GatewayCapabilitySnapshot, GatewayCapabilityGroup } from '@/lib/ga
 
 export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilitySnapshot }) {
   const { groups, checkedAt, status: snapStatus } = snapshot;
-  const visible = groups; // show all as per plan
+  const [showAll, setShowAll] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -16,6 +16,16 @@ export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilityS
     return () => clearInterval(timer);
   }, []);
 
+  const readyGroups = useMemo(
+    () => groups.filter((group) => group.status === 'ready' || group.status === 'available'),
+    [groups],
+  );
+  const otherGroups = useMemo(
+    () => groups.filter((group) => group.status !== 'ready' && group.status !== 'available'),
+    [groups],
+  );
+  const visible = showAll ? groups : readyGroups.length > 0 ? readyGroups : groups.slice(0, 6);
+  const hiddenCount = Math.max(0, groups.length - visible.length);
   const staleMinutes = Math.max(0, Math.floor((now - checkedAt) / 60000));
 
   return (
@@ -24,7 +34,7 @@ export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilityS
         <Text variant="caption" style={styles.onGlassPrimary}>Gateway capabilities</Text>
         <View style={{ alignItems: 'flex-end' }}>
           <Text variant="caption" style={styles.onGlassSecondary}>
-            {groups.filter(g => g.status === 'ready').length}/{groups.length} ready
+            {readyGroups.length}/{groups.length} ready
           </Text>
           <Text variant="caption" color="tertiary" style={{ fontSize: 10 }}>
             {snapStatus} • {staleMinutes}m ago
@@ -36,6 +46,20 @@ export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilityS
           <CapabilityPill key={group.id} group={group} />
         ))}
       </View>
+      {otherGroups.length > 0 ? (
+        <Pressable
+          onPress={() => setShowAll((value) => !value)}
+          accessibilityRole="button"
+          accessibilityLabel={showAll ? 'Hide unsupported capabilities' : 'Show all capabilities'}>
+          <Text variant="caption" color="accentWarm" style={styles.toggle}>
+            {showAll
+              ? 'Hide unsupported'
+              : hiddenCount > 0
+                ? `Show ${hiddenCount} not offered`
+                : 'Show unsupported'}
+          </Text>
+        </Pressable>
+      ) : null}
     </Card>
   );
 }
@@ -86,6 +110,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: Spacing.two,
+  },
+  toggle: {
+    alignSelf: 'flex-start',
+    marginTop: Spacing.one,
   },
   grid: {
     flexDirection: 'row',

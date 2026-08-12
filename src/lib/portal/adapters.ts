@@ -32,7 +32,13 @@ export interface PortalClient {
   streamChat(
     messages: { role: string; content: string }[],
     onDelta: (text: string) => void,
-    options?: { model?: string; sessionId?: string; signal?: AbortSignal },
+    options?: {
+      model?: string;
+      sessionId?: string;
+      signal?: AbortSignal;
+      /** OpenAI-style tool_calls deltas when the gateway emits them. */
+      onToolCall?: (tool: import('@/lib/gateway/types').ChatToolCall) => void;
+    },
   ): Promise<string>;
   getModels(): Promise<ModelInfo[]>;
   getCapabilities(): Promise<GatewayCapabilities>;

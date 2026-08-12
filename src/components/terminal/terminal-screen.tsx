@@ -21,6 +21,7 @@ import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import {
   agentCommands,
+  filterExecutableCommands,
   homeQuickCommands,
   summarizeCommandResult,
   type GatewayCommand,
@@ -47,7 +48,12 @@ export function TerminalScreen() {
   // surfaces as a connection error. Only offer the shell when advertised.
   const shellSupported =
     capabilitySnapshot.groups.find((group) => group.id === 'terminal')?.status === 'ready';
-  const [mode, setMode] = useState<TerminalMode>('shell');
+  // Default to RPC on Hermes-like gateways so Tools doesn't open on a dead shell.
+  // Derive effective mode so unsupported shell never sticks without an effect.
+  const [modePreference, setModePreference] = useState<TerminalMode>('rpc');
+  const mode: TerminalMode =
+    !shellSupported && modePreference === 'shell' ? 'rpc' : modePreference;
+  const setMode = setModePreference;
   const [terminalLines, setTerminalLines] = useState<TerminalLine[]>([]);
   const [commandOutput, setCommandOutput] = useState('');
   const [input, setInput] = useState('');
@@ -111,7 +117,7 @@ export function TerminalScreen() {
   }, [gatewayId, status]);
 
   useEffect(() => {
-    if (gatewayId && status === 'connected' && shellSupported && !sessionRef.current) {
+    if (gatewayId && status === 'connected' && shellSupported && mode === 'shell' && !sessionRef.current) {
       // Deliberately establish the session from the effect when the gateway is
       // ready; callbacks settle the connected state asynchronously.
       void startTerminal();
@@ -183,7 +189,10 @@ export function TerminalScreen() {
     [gatewayRequest, runAgentCommand, status],
   );
 
-  const commandList = mode === 'rpc' ? homeQuickCommands() : mode === 'agent' ? agentCommands() : [];
+  const commandList = filterExecutableCommands(
+    mode === 'rpc' ? homeQuickCommands() : mode === 'agent' ? agentCommands() : [],
+    capabilitySnapshot.methods,
+  );
 
   if (!activeGateway) {
     return (

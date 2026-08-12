@@ -281,11 +281,9 @@ export function ChatScreen() {
         slashSuggestions={slashSuggestions}
         onSelectSlashSuggestion={(value) => setDraft(value)}
         isStreaming={isStreaming}
-        canSend={status === 'connected' && !isCommandRunning}
-        modelLabel={modelLabel}
-        onModelPress={() => openModelPicker('default')}
-        sessionLabel={sessionLabel}
-        onSessionPress={() => void openSessionSelector()}
+        // Allow send while disconnected so the offline outbox can queue; the
+        // provider flushes on reconnect. Block only when no gateway exists.
+        canSend={!!activeGateway && !isCommandRunning}
       />
 
       <ConfirmationSheet
@@ -311,6 +309,13 @@ export function ChatScreen() {
         onReloadHistory={() => void reloadHistory()}
         onNewSession={() => void createNewSession()}
         onDisconnect={disconnectGateway}
+        runsSupported={
+          capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'ready'
+        }
+        onStartRun={() => {
+          setDraft('/run ');
+          setOverflowVisible(false);
+        }}
       />
 
       <MessageActionsSheet

@@ -19,6 +19,9 @@ export type ChatOverflowSheetProps = {
   onReloadHistory: () => void;
   onNewSession: () => void;
   onDisconnect: () => void;
+  /** Prefill composer with /run when the gateway supports agentic runs. */
+  onStartRun?: () => void;
+  runsSupported?: boolean;
 };
 
 /** Chat header overflow: session usage at a glance + session/connection actions. */
@@ -29,6 +32,8 @@ export function ChatOverflowSheet({
   onReloadHistory,
   onNewSession,
   onDisconnect,
+  onStartRun,
+  runsSupported = false,
 }: ChatOverflowSheetProps) {
   if (!visible) return null;
 
@@ -52,6 +57,18 @@ export function ChatOverflowSheet({
       ) : null}
 
       <View style={styles.actions}>
+        {runsSupported && onStartRun ? (
+          <ListRow
+            title="Run task"
+            subtitle="Agentic run with approval gates → Activity"
+            icon={{ ios: 'bolt.fill', android: 'bolt', web: 'bolt' }}
+            chevron={false}
+            onPress={() => {
+              onStartRun();
+              onClose();
+            }}
+          />
+        ) : null}
         <ListRow
           title="Reload history"
           icon={{ ios: 'arrow.clockwise', android: 'refresh', web: 'refresh' }}

@@ -172,8 +172,39 @@ export class ManifestClient implements PortalClient {
     const manifestCaps = this.identity.manifest?.capabilities ?? {};
     const endpointsRecord: Record<string, { method: string; path: string }> = {};
     for (const [name, path] of Object.entries(this.endpoints)) {
-      endpointsRecord[name] = { method: name === 'chat' ? 'POST' : 'GET', path };
+      const method = name === 'chat' || name === 'chat_completions' || name === 'runs' ? 'POST' : 'GET';
+      endpointsRecord[name] = { method, path };
     }
+    // Hermes-shaped aliases so buildCapabilitySnapshot needs no kind branch.
+    // Gate manifests say `chat`; the snapshot historically matched `chat_completions`.
+    if (endpointsRecord.chat && !endpointsRecord.chat_completions) {
+      endpointsRecord.chat_completions = endpointsRecord.chat;
+    }
+    if (endpointsRecord.health && !endpointsRecord.health_detailed) {
+      // health alone is enough for a diagnostics glance on a chat-only gate
+    }
+
+    const features: Record<string, boolean | string> = {};
+    for (const [key, value] of Object.entries(manifestCaps)) {
+      if (typeof value === 'boolean' || typeof value === 'string') {
+        features[key] = value;
+      }
+    }
+    if (features.chat === true && features.chat_completions === undefined) {
+      features.chat_completions = true;
+      features.chat_completions_streaming =
+        features.streaming === true || features.streaming === undefined;
+    }
+    if (features.runs === true && features.run_submission === undefined) {
+      features.run_submission = true;
+    }
+    if (features.sessions === true && features.session_resources === undefined) {
+      features.session_resources = true;
+    }
+    if (features.approvals === true && features.run_approval_response === undefined) {
+      features.run_approval_response = true;
+    }
+
     return {
       object: 'manifest-derived.capabilities',
       platform: this.identity.kindLabel,
@@ -185,7 +216,7 @@ export class ManifestClient implements PortalClient {
         split_runtime: false,
         description: this.identity.name ?? '',
       },
-      features: { ...manifestCaps } as Record<string, boolean | string>,
+      features,
       endpoints: endpointsRecord,
     };
   }
@@ -193,7 +224,12 @@ export class ManifestClient implements PortalClient {
   async streamChat(
     messages: { role: string; content: string }[],
     onDelta: (text: string) => void,
-    options?: { model?: string; sessionId?: string; signal?: AbortSignal },
+    options?: {
+      model?: string;
+      sessionId?: string;
+      signal?: AbortSignal;
+      onToolCall?: (tool: import('@/lib/gateway/types').ChatToolCall) => void;
+    },
   ): Promise<string> {
     const path = this.requireEndpoint('chat');
     const body: Record<string, unknown> = { model: options?.model, messages, stream: true };
@@ -214,15 +250,28 @@ export class ManifestClient implements PortalClient {
     }
 
     let fullText = '';
+    const toolNames = new Map<number, string>();
     await this.transport.streamSSE(
       response,
       (data) => {
         try {
           const chunk = JSON.parse(data);
-          const delta = chunk?.choices?.[0]?.delta?.content;
-          if (delta) {
-            fullText += delta;
-            onDelta(delta);
+          const delta = chunk?.choices?.[0]?.delta;
+          const content = delta?.content;
+          if (content) {
+            fullText += content;
+            onDelta(content);
+          }
+          const toolCalls = delta?.tool_calls;
+          if (Array.isArray(toolCalls) && options?.onToolCall) {
+            for (const call of toolCalls) {
+              const index = typeof call?.index === 'number' ? call.index : 0;
+              const namePart = call?.function?.name;
+              if (typeof namePart === 'string' && namePart) {
+                toolNames.set(index, (toolNames.get(index) ?? '') + namePart);
+                options.onToolCall({ name: toolNames.get(index)!, status: 'running' });
+              }
+            }
           }
         } catch {
           // ignore malformed chunks — matches HermesGatewayClient's streamChat

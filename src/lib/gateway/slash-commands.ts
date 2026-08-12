@@ -37,6 +37,11 @@ type SlashCommandContext = {
     prompt: string,
     onEvent?: (event: { type: string; data?: Record<string, unknown>; timestamp?: number }) => void,
   ) => Promise<RunOutcome>;
+  /**
+   * Per-request model override on the active gateway profile (Hermes / Gate).
+   * Used when the gateway has no remote config REST for `/model set`.
+   */
+  setModelOverride?: (modelId: string) => void | Promise<void>;
 };
 
 type ConfigSnapshot = {
@@ -186,7 +191,20 @@ export function getSlashCommandSuggestions(
     suggestions = suggestions.filter(s => !s.value.toLowerCase().startsWith('/rpc'));
   }
 
-  // Working commands first; unsupported ones stay visible but sink to the end.
+  // When we know live availability, hide host-only / unsupported commands from
+  // the palette by default. Typing a prefix that only matches unavailable ones
+  // still surfaces them (so power users can discover host-side guidance).
+  const hasLiveMethods = Object.keys(methods).length > 0;
+  if (hasLiveMethods) {
+    const availableOnly = suggestions.filter((item) => !item.unavailable);
+    const typedHostOnly =
+      needle.length >= 2 && availableOnly.length === 0 && suggestions.some((item) => item.unavailable);
+    if (!typedHostOnly) {
+      suggestions = availableOnly.length > 0 ? availableOnly : suggestions;
+    }
+  }
+
+  // Working commands first; any remaining unsupported ones sink to the end.
   suggestions = dedupeSuggestions(suggestions)
     .sort((a, b) => Number(a.unavailable ?? false) - Number(b.unavailable ?? false))
     .slice(0, 12);
@@ -406,10 +424,42 @@ async function runModelCommand(args: string[], context: SlashCommandContext): Pr
   if (subcommand === 'set') {
     const modelId = args.slice(1).find((arg) => !arg.startsWith('--'));
     if (!modelId) return textResult('Usage: /model set provider/model-id --confirm', '/model set');
-    const snapshot = await readConfigSnapshot(context);
     const validation = await validateModelId(modelId, context);
     const confirmed = args.includes('--confirm');
     const force = args.includes('--force');
+
+    // Hermes / Gate: no remote config REST. Prefer the same per-request
+    // profile override the model picker uses, instead of config.get/patch.
+    if (context.setModelOverride) {
+      if (!confirmed) {
+        return textResult(
+          [
+            `Set model override to ${modelId}`,
+            validation.state === 'missing'
+              ? 'Not found in the live catalog (you can still force it).'
+              : `Catalog: ${validation.label}`,
+            '',
+            `Confirm: /model set ${modelId} --confirm${validation.state === 'missing' ? ' --force' : ''}`,
+          ].join('\n'),
+          '/model set',
+          compactJson(validation.matched ?? validation.catalog),
+        );
+      }
+      if (validation.state === 'missing' && !force) {
+        return textResult(
+          `Model not found in catalog: ${modelId}\nRun /models or confirm with override:\n/model set ${modelId} --confirm --force`,
+          '/model set',
+          compactJson(validation.catalog),
+        );
+      }
+      await context.setModelOverride(modelId);
+      return textResult(
+        `Model override set to ${modelId}.\nNext chat messages on this gateway use this model (per-request; not host config).`,
+        '/model set',
+      );
+    }
+
+    const snapshot = await readConfigSnapshot(context);
     if (!confirmed) {
       return textResult(formatDefaultModelPreview(snapshot, modelId, validation), '/model set', compactJson(validation.matched ?? validation.catalog));
     }

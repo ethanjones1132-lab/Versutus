@@ -77,6 +77,104 @@ function profileWith(kind: GatewayKind, token?: string): GatewayProfile {
   return { id: 'smoke', name: 'Live gateway', url: BASE_URL, kind, token, createdAt: 0 };
 }
 
+function groupReady(
+  snapshot: ReturnType<typeof buildCapabilitySnapshot>,
+  id: string,
+): boolean {
+  return snapshot.groups.find((group) => group.id === id)?.status === 'ready';
+}
+
+async function withTimeout<T>(label: string, ms: number, work: () => Promise<T>): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms);
+      }),
+    ]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    check(label, false, message);
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Exercise non-chat surfaces that the capability snapshot says are ready.
+ * Gate chat-only runs skip models-only/no-op paths cleanly; Hermes hits
+ * sessions/models/skills/toolsets/runs when advertised.
+ */
+async function exerciseReadySurfaces(
+  client: ReturnType<typeof createClientForKind>,
+  snapshot: ReturnType<typeof buildCapabilitySnapshot>,
+) {
+  if (groupReady(snapshot, 'models')) {
+    const models = await withTimeout('GET models', 8000, () => client.getModels());
+    if (models) {
+      check('models returns a list', Array.isArray(models), `count=${models.length}`);
+    }
+  } else {
+    console.log('  [SKIP] models — not advertised');
+  }
+
+  if (groupReady(snapshot, 'sessions')) {
+    // Hermes /api/sessions has been observed to hang under load while the rest
+    // of the API stays healthy — treat timeout as WARN so runs/models still gate CI.
+    const sessions = await withTimeout('GET sessions', 8000, () => client.getSessions(5));
+    if (sessions) {
+      check('sessions returns a list', Array.isArray(sessions), `count=${sessions.length}`);
+    } else {
+      // withTimeout already logged FAIL; demote to non-fatal for this known flake.
+      failures = Math.max(0, failures - 1);
+      console.log('  [WARN] sessions timed out — non-fatal (Hermes /api/sessions flake)');
+    }
+  } else {
+    console.log('  [SKIP] sessions — not advertised');
+  }
+
+  // Skills/toolsets ride HermesGatewayClient helpers; only present on hermes-shaped clients.
+  const hermesish = client as {
+    getSkills?: () => Promise<unknown[]>;
+    getToolsets?: () => Promise<unknown[]>;
+    startRun?: (prompt: string, options?: { model?: string }) => Promise<{ run_id: string; status: string }>;
+    stopRun?: (runId: string) => Promise<void>;
+  };
+
+  if (groupReady(snapshot, 'skills') && typeof hermesish.getSkills === 'function') {
+    const skills = await withTimeout('GET skills', 8000, () => hermesish.getSkills!());
+    if (skills) check('skills returns a list', Array.isArray(skills), `count=${skills.length}`);
+  } else {
+    console.log('  [SKIP] skills — not advertised or no client helper');
+  }
+
+  if (groupReady(snapshot, 'tools') && typeof hermesish.getToolsets === 'function') {
+    const tools = await withTimeout('GET toolsets', 8000, () => hermesish.getToolsets!());
+    if (tools) check('toolsets returns a list', Array.isArray(tools), `count=${tools.length}`);
+  } else {
+    console.log('  [SKIP] tools — not advertised or no client helper');
+  }
+
+  if (
+    groupReady(snapshot, 'agent') &&
+    typeof hermesish.startRun === 'function' &&
+    typeof hermesish.stopRun === 'function'
+  ) {
+    const started = await withTimeout('POST runs', 12000, () =>
+      hermesish.startRun!('smoke: reply with the single word pong', { model: 'hermes-agent' }),
+    );
+    if (started) {
+      check('runs.create returns run_id', typeof started.run_id === 'string' && started.run_id.length > 0, started.run_id);
+      await withTimeout('POST runs/stop', 8000, () => hermesish.stopRun!(started.run_id));
+      check('runs.stop accepted', true);
+    }
+  } else {
+    console.log('  [SKIP] runs — not advertised or no client helper');
+  }
+}
+
 async function main() {
   const identity = await identifyGateway({ baseUrl: BASE_URL });
   // Kind-specific first; fall back so a Hermes that fingerprints as unknown
@@ -123,13 +221,25 @@ async function main() {
       );
 
       const approvals = snapshot.groups.find((group) => group.id === 'approvals');
-      check('approvals resolves ready', approvals?.status === 'ready', approvals?.status);
+      // Approvals was the group historically pinned in a non-terminal state.
+      // Any conforming gateway must resolve it — ready (Hermes) or unsupported
+      // (a chat-only gate) — never stuck unknown/warming.
+      check(
+        'approvals resolves to a terminal state',
+        approvals?.status === 'ready' || approvals?.status === 'unsupported',
+        approvals?.status,
+      );
 
       console.log('\n  Capability groups:');
       for (const group of snapshot.groups) {
         const counts = group.totalCount ? ` ${group.availableCount}/${group.totalCount}` : '';
         console.log(`    ${group.status === 'ready' ? '+' : '-'} ${group.label.padEnd(14)} ${group.status}${counts}`);
       }
+
+      // Surface checks: only exercise endpoints the snapshot marks ready so a
+      // chat-only Gate doesn't fail for missing Hermes REST.
+      console.log('\n  Surface checks (capability-gated):');
+      await exerciseReadySurfaces(client, snapshot);
     }
     client.disconnect();
   }

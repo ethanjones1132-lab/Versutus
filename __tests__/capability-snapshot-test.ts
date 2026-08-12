@@ -120,6 +120,38 @@ describe('capability snapshot against the live Hermes contract', () => {
   });
 });
 
+/**
+ * Gate manifests use short keys (`chat`, `models`) rather than Hermes'
+ * `chat_completions`. Snapshot matching must accept both or Gate chat
+ * looks dead while streamChat works.
+ */
+const GATE_MANIFEST_CAPABILITIES = {
+  object: 'manifest-derived.capabilities',
+  platform: 'Custom — versutus-gate',
+  features: { chat: true, models: true, streaming: true },
+  endpoints: {
+    health: { method: 'GET', path: '/health' },
+    models: { method: 'GET', path: '/v1/models' },
+    chat: { method: 'POST', path: '/v1/chat/completions' },
+  },
+} as unknown as GatewayCapabilities;
+
+describe('capability snapshot against Gate-style manifests', () => {
+  test('chat is ready when the manifest advertises chat (not chat_completions)', () => {
+    expect(groupById(GATE_MANIFEST_CAPABILITIES, 'chat').status).toBe('ready');
+  });
+
+  test('models is ready from endpoints.models', () => {
+    expect(groupById(GATE_MANIFEST_CAPABILITIES, 'models').status).toBe('ready');
+  });
+
+  test('runs/sessions stay unsupported on a chat-only gate', () => {
+    expect(groupById(GATE_MANIFEST_CAPABILITIES, 'agent').status).toBe('unsupported');
+    expect(groupById(GATE_MANIFEST_CAPABILITIES, 'sessions').status).toBe('unsupported');
+    expect(groupById(GATE_MANIFEST_CAPABILITIES, 'terminal').status).toBe('unsupported');
+  });
+});
+
 describe('slash suggestions follow live capability', () => {
   const snapshot = buildCapabilitySnapshot(
     'connected',
@@ -129,9 +161,15 @@ describe('slash suggestions follow live capability', () => {
     HERMES_CAPABILITIES,
   );
 
-  test('commands the gateway cannot run are marked unavailable', () => {
-    const suggestions = getSlashCommandSuggestions('/channel', null, [], snapshot.methods);
-    const channelCommands = suggestions.filter((item) => item.value.startsWith('/channel'));
+  test('commands the gateway cannot run are hidden unless typed specifically', () => {
+    // Bare "/" palette should not advertise host-only /channel noise.
+    const open = getSlashCommandSuggestions('/', null, [], snapshot.methods);
+    expect(open.every((item) => !item.unavailable || item.family === 'Recent')).toBe(true);
+
+    // Typing a host-only prefix still surfaces guidance-only commands.
+    const channelCommands = getSlashCommandSuggestions('/channel', null, [], snapshot.methods).filter(
+      (item) => item.value.startsWith('/channel'),
+    );
     expect(channelCommands.length).toBeGreaterThan(0);
     expect(channelCommands.every((item) => item.unavailable)).toBe(true);
   });
@@ -142,11 +180,11 @@ describe('slash suggestions follow live capability', () => {
     expect(sessions?.unavailable).toBe(false);
   });
 
-  test('available commands sort ahead of unavailable ones', () => {
+  test('default palette prefers executable commands only', () => {
     const suggestions = getSlashCommandSuggestions('/', null, [], snapshot.methods);
     const firstUnavailable = suggestions.findIndex((item) => item.unavailable);
-    const lastAvailable = suggestions.map((item) => !!item.unavailable).lastIndexOf(false);
-    if (firstUnavailable !== -1) expect(firstUnavailable).toBeGreaterThan(lastAvailable - 1);
+    // With live methods, unavailable should not appear in the default palette.
+    expect(firstUnavailable).toBe(-1);
   });
 
   test('without a snapshot every command is still offered', () => {
