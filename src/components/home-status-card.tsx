@@ -32,7 +32,7 @@ export function HomeStatusCard({
   const isBusy = phase === 'searching' || phase === 'connecting' || status === 'connecting';
   const isConnected = status === 'connected';
   const needsPairing = status === 'pairing';
-  const title = pcName ?? 'Your OpenClaw PC';
+  const title = pcName ?? 'Your gateway PC';
   const message = phaseMessage(phase, probeMessage, statusDetail);
   const activeStep = phaseToStepIndex(phase, status);
   const showStepper = activeStep >= 0 && phase !== 'onboarding' && phase !== 'idle' && phase !== 'booting';
@@ -109,7 +109,7 @@ function phaseMessage(phase: ConnectionPhase, probeMessage?: string, statusDetai
     case 'onboarding':
       return 'Set up your PC to get started.';
     default:
-      return 'Versutus connects to OpenClaw on your PC over Tailscale — automatically when possible.';
+      return 'Versutus connects to Hermes, Gate, or OpenClaw on your PC over Tailscale — automatically when possible.';
   }
 }
 

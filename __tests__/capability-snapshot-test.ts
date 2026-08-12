@@ -1,4 +1,8 @@
-import { buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
+import {
+  buildCapabilitySnapshot,
+  filterExecutableCommands,
+  homeQuickCommands,
+} from '@/lib/gateway/dashboard';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import type { GatewayCapabilities } from '@/lib/gateway/types';
 
@@ -191,5 +195,27 @@ describe('slash suggestions follow live capability', () => {
     const suggestions = getSlashCommandSuggestions('/channel', null, []);
     const channelCommands = suggestions.filter((item) => item.value.startsWith('/channel'));
     expect(channelCommands.some((item) => !item.unavailable)).toBe(true);
+  });
+});
+
+describe('filterExecutableCommands', () => {
+  const snapshot = buildCapabilitySnapshot(
+    'connected',
+    null,
+    undefined,
+    Date.now(),
+    HERMES_CAPABILITIES,
+  );
+
+  test('keeps Hermes-ready quick commands and drops host-only ones', () => {
+    const filtered = filterExecutableCommands(homeQuickCommands(), snapshot.methods);
+    const ids = filtered.map((command) => command.id);
+    expect(ids).toEqual(expect.arrayContaining(['health', 'status', 'sessions', 'models', 'tools']));
+    expect(ids).not.toContain('channels');
+  });
+
+  test('passes the list through when methods map is empty', () => {
+    const quick = homeQuickCommands();
+    expect(filterExecutableCommands(quick, {})).toEqual(quick);
   });
 });

@@ -73,7 +73,7 @@ export default function DevPreviewScreen() {
               {scenario.lastError ? (
                 <GlassCollapsible title="Troubleshooting">
                   <Text color="secondary">
-                    • OpenClaw gateway running on your PC{'\n'}• Tailscale connected on both devices{'\n'}• Gateway
+                    • Hermes or Gate running on your PC{'\n'}• Tailscale connected on both devices{'\n'}• Gateway
                     reachable over tailnet
                   </Text>
                   <Text variant="caption" color="tertiary">

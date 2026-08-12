@@ -84,6 +84,7 @@ Full inventories: dead-function findings D1–D18 and UI findings U01–U28 from
 6. ✅ Wire TextField `validationState` (base + iOS border); onboarding uses valid/invalid colors.
 7. ✅ Delete unused `GatewayCard*` / `GatewayCardInner*` (no consumers).
 8. ✅ Persist offline outbox + activity runs (`session-persistence.ts`); restore on bootstrap; cancel in-flight runs after restart.
+9. ✅ Drop near-duplicate Android forks for `home-status-card` and `glass-collapsible`; Hermes-first empty-state copy.
 
 ### Batch E — Gate product depth (optional / later)
 

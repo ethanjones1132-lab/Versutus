@@ -29,7 +29,7 @@ export function CompactGatewayList({
       <Card padding={Spacing.three} style={styles.emptyCard}>
         <Text variant="caption" style={styles.onGlassPrimary}>No gateways saved</Text>
         <Text variant="caption" style={styles.onGlassSecondary}>
-          Add your first OpenClaw gateway to unlock chat, tools, and commands.
+          Add your first gateway (Hermes, Gate, or OpenClaw) to unlock chat, tools, and commands.
         </Text>
       </Card>
     );
