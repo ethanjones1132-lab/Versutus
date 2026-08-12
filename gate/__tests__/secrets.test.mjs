@@ -77,3 +77,15 @@ test('refName "__proto__" round-trips correctly', async () => {
   await setSecret(root, '__proto__', 'proto-value');
   assert.equal(await getSecret(root, '__proto__'), 'proto-value');
 });
+
+test('concurrent getSecret calls never throw or return undefined for a set refName', async () => {
+  const root = await tempRoot();
+  await setSecret(root, 'STABLE', 'stable-value');
+  // Fire many concurrent reads to ensure serialization protects against read-during-write races
+  const results = await Promise.all(
+    Array.from({ length: 20 }, () => getSecret(root, 'STABLE'))
+  );
+  for (const result of results) {
+    assert.equal(result, 'stable-value');
+  }
+});

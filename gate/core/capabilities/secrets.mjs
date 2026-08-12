@@ -62,12 +62,14 @@ export async function setSecret(root, refName, value) {
 
 /** Decrypt and return a secret value, or undefined if refName was never set. */
 export async function getSecret(root, refName) {
-  const store = await readStore(root);
-  const entry = store[refName];
-  if (!entry) return undefined;
-  const key = await readKey(root); // store non-empty implies key exists — set() always creates it first
-  const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(entry.iv, 'hex'));
-  decipher.setAuthTag(Buffer.from(entry.tag, 'hex'));
-  const decrypted = Buffer.concat([decipher.update(Buffer.from(entry.data, 'hex')), decipher.final()]);
-  return decrypted.toString('utf8');
+  return serialize(async () => {
+    const store = await readStore(root);
+    const entry = store[refName];
+    if (!entry) return undefined;
+    const key = await readKey(root); // store non-empty implies key exists — set() always creates it first
+    const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(entry.iv, 'hex'));
+    decipher.setAuthTag(Buffer.from(entry.tag, 'hex'));
+    const decrypted = Buffer.concat([decipher.update(Buffer.from(entry.data, 'hex')), decipher.final()]);
+    return decrypted.toString('utf8');
+  });
 }
