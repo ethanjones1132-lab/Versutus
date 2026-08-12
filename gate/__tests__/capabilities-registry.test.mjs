@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { loadKinds, loadInstances, describeKinds, resolveManifestInstances } from '../core/capabilities/registry.mjs';
+import { loadKinds, loadInstances, describeKinds, resolveManifestInstances, loadCapabilities } from '../core/capabilities/registry.mjs';
 
 async function kindsDir(entries) {
   const root = await mkdtemp(join(tmpdir(), 'gate-kinds-'));
@@ -189,4 +189,52 @@ test('resolveManifestInstances attaches family and calls toManifestEntry', () =>
   assert.deepEqual(resolved, [
     { id: 'standup', kind: 'cron', label: 'Standup', family: 'cron', manifestEntry: { id: 'standup' } },
   ]);
+});
+
+test('loadKinds gracefully handles a nonexistent directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gate-kinds-'));
+  const nonexistentPath = join(root, 'does-not-exist');
+
+  const { kinds, skipped } = await loadKinds(nonexistentPath);
+
+  assert.equal(kinds.size, 0);
+  assert.deepEqual(skipped, []);
+});
+
+test('loadInstances gracefully handles a nonexistent directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gate-registry-'));
+  const nonexistentPath = join(root, 'does-not-exist');
+
+  const { instances, skipped } = await loadInstances(nonexistentPath, fakeKinds());
+
+  assert.equal(instances.length, 0);
+  assert.deepEqual(skipped, []);
+});
+
+test('loadCapabilities loads kinds and instances together', async () => {
+  const gateRoot = await mkdtemp(join(tmpdir(), 'gate-root-'));
+
+  // Create a kind
+  const kindDir = join(gateRoot, 'core', 'capabilities', 'cron');
+  await mkdir(kindDir, { recursive: true });
+  await writeFile(join(kindDir, 'kind.mjs'), goodKind('cron'), 'utf8');
+
+  // Create an instance
+  const registryDir = join(gateRoot, 'registry');
+  await mkdir(registryDir, { recursive: true });
+  await writeFile(join(registryDir, 'standup.json'), JSON.stringify({
+    kind: 'cron',
+    label: 'Standup reminder',
+    config: { schedule: '0 9 * * 1-5' },
+  }), 'utf8');
+
+  const { kinds, instances, skippedKinds, skippedInstances } = await loadCapabilities(gateRoot);
+
+  assert.equal(kinds.size, 1);
+  assert.ok(kinds.has('cron'));
+  assert.deepEqual(skippedKinds, []);
+
+  assert.equal(instances.length, 1);
+  assert.equal(instances[0].id, 'standup');
+  assert.deepEqual(skippedInstances, []);
 });
