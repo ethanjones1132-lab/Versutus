@@ -112,7 +112,14 @@ export async function loadInstances(root, kinds) {
       continue;
     }
 
-    const validation = kindModule.validate(config ?? {});
+    let validation;
+    try {
+      validation = kindModule.validate(config ?? {});
+    } catch (err) {
+      skipped.push({ id, reason: `validate() threw: ${err.message}` });
+      continue;
+    }
+
     if (!validation.ok) {
       skipped.push({ id, reason: validation.errors.map((e) => `${e.field}: ${e.message}`).join('; ') });
       continue;
@@ -139,14 +146,21 @@ export function describeKinds(kinds) {
 export function resolveManifestInstances(kinds, instances) {
   return instances.map((instance) => {
     const kindModule = kinds.get(instance.kind);
+    let manifestEntry;
+    try {
+      manifestEntry = kindModule.toManifestEntry(instance);
+    } catch (err) {
+      console.error(`resolveManifestInstances: toManifestEntry() threw for instance "${instance.id}": ${err.message}`);
+      return null;
+    }
     return {
       id: instance.id,
       kind: instance.kind,
       label: instance.label,
       family: kindModule.family,
-      manifestEntry: kindModule.toManifestEntry(instance),
+      manifestEntry,
     };
-  });
+  }).filter((entry) => entry !== null);
 }
 
 /** Load kinds and instances together from a Gate root directory. */

@@ -79,7 +79,7 @@ function fakeKinds(overrides = {}) {
     family: 'cron',
     configFields: [],
     validate: overrides.validate ?? (() => ({ ok: true, errors: [] })),
-    toManifestEntry: (instance) => ({ id: instance.id }),
+    toManifestEntry: overrides.toManifestEntry ?? ((instance) => ({ id: instance.id })),
     createHandlers: () => ({}),
   });
   return kinds;
@@ -237,4 +237,26 @@ test('loadCapabilities loads kinds and instances together', async () => {
   assert.equal(instances.length, 1);
   assert.equal(instances[0].id, 'standup');
   assert.deepEqual(skippedInstances, []);
+});
+
+test('skips an instance when its kind\'s validate() throws', async () => {
+  const root = await registryDir({
+    'bad.json': { kind: 'cron', label: 'Bad', config: {} },
+  });
+  const kinds = fakeKinds({ validate: () => { throw new Error('boom'); } });
+  const { instances, skipped } = await loadInstances(root, kinds);
+
+  assert.equal(instances.length, 0);
+  assert.equal(skipped.length, 1);
+  assert.equal(skipped[0].id, 'bad');
+  assert.match(skipped[0].reason, /validate\(\) threw: boom/);
+});
+
+test('resolveManifestInstances silently excludes instances whose kind\'s toManifestEntry() throws', () => {
+  const kinds = fakeKinds({ toManifestEntry: () => { throw new Error('boom'); } });
+  const instances = [{ id: 'standup', kind: 'cron', label: 'Standup', config: { schedule: '0 9 * * 1-5' } }];
+
+  const resolved = resolveManifestInstances(kinds, instances);
+
+  assert.equal(resolved.length, 0);
 });
