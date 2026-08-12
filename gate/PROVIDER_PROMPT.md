@@ -23,21 +23,26 @@ This creates `gate/registry/<id>.json` with a template.
 
 Each provider configuration must define the following:
 
-### `id` (string, exported)
-A unique identifier for the provider. Must be lowercase alphanumeric with hyphens.
+### Top-Level Fields
+
+#### `kind`
+Must be the string `"provider"`. This identifies the capability type.
 
 Example:
-```javascript
-export const id = 'my-provider';
+```json
+"kind": "provider"
 ```
 
-### `label` (string, exported)
+#### `label` (string)
 A human-readable name for the provider, shown in UI and logs.
 
 Example:
-```javascript
-export const label = 'My AI Provider';
+```json
+"label": "My AI Provider"
 ```
+
+#### `id` (derived from filename)
+A unique identifier for the provider is derived from the JSON filename. For example, a file at `gate/registry/my-provider.json` has the id `my-provider`. The id must be lowercase alphanumeric with hyphens. Do not include an `id` field inside the JSON file — it is determined by the filename alone.
 
 ### `config` (object, exported)
 
@@ -50,34 +55,34 @@ The implementation template to use. One of:
 - `custom`: Custom implementation with full control
 
 Example:
-```javascript
-flavor: 'openai'
+```json
+"flavor": "openai"
 ```
 
 #### `baseUrl`
 The API endpoint base URL. Must use HTTPS (no HTTP).
 
 Example for OpenAI:
-```javascript
-baseUrl: 'https://api.openai.com/v1'
+```json
+"baseUrl": "https://api.openai.com/v1"
 ```
 
 Example for Anthropic:
-```javascript
-baseUrl: 'https://api.anthropic.com'
+```json
+"baseUrl": "https://api.anthropic.com"
 ```
 
 Example for a self-hosted server:
-```javascript
-baseUrl: 'https://my-llm-server.example.com/v1'
+```json
+"baseUrl": "https://my-llm-server.example.com/v1"
 ```
 
 #### `apiKeyEnv`
 The name of the environment variable containing the API key. The key is **never stored in code** — only the environment variable name is recorded in the config.
 
 Example:
-```javascript
-apiKeyEnv: 'OPENAI_API_KEY'
+```json
+"apiKeyEnv": "OPENAI_API_KEY"
 ```
 
 The Gate loads the actual key from `process.env['OPENAI_API_KEY']` at runtime.
@@ -86,24 +91,32 @@ The Gate loads the actual key from `process.env['OPENAI_API_KEY']` at runtime.
 An array of available model IDs. Must be non-empty.
 
 Example:
-```javascript
-models: ['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo']
+```json
+"models": ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"]
 ```
 
 Example for Anthropic:
-```javascript
-models: ['claude-3-opus-20240229', 'claude-3-sonnet-20240229']
+```json
+"models": ["claude-3-opus-20240229", "claude-3-sonnet-20240229"]
 ```
 
-#### `capabilities`
-What the provider actually supports. `chat` must be `true`. Set `streaming: true`
-only if the upstream API supports server-sent events for this endpoint — the
-Gate will refuse a streaming request to a provider that didn't declare it.
+#### `streaming` (boolean, optional)
+Whether the upstream API supports server-sent events for streaming responses. Defaults to `true` if omitted.
+Set to `false` only if the provider does not support streaming — the Gate will refuse streaming requests to
+providers that did not explicitly declare it as available.
 
 Example:
-```javascript
-capabilities: { chat: true, streaming: true }
+```json
+"streaming": true
 ```
+
+Example (disabling streaming):
+```json
+"streaming": false
+```
+
+Note: The `capabilities` field does not exist in the input config. However, the manifest output (produced by `toManifestEntry()`)
+will include a `capabilities` field derived from this `streaming` value and other provider metadata.
 
 ## Full Example
 
