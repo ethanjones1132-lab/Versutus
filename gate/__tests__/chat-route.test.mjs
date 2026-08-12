@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, writeFile, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 
 import { createGate } from '../core/server.mjs';
+
+const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 
 async function startStubUpstream({ stream } = {}) {
   const server = createServer((req, res) => {
@@ -29,7 +32,7 @@ async function gateWithStubProvider(upstreamBaseUrl, capabilities = { streaming:
   const root = await mkdtemp(join(tmpdir(), 'gate-chat-'));
   await mkdir(join(root, 'core', 'capabilities', 'provider'), { recursive: true });
   await copyFile(
-    join(process.cwd(), 'gate', 'core', 'capabilities', 'provider', 'kind.mjs'),
+    kindModulePath,
     join(root, 'core', 'capabilities', 'provider', 'kind.mjs'),
   );
   await mkdir(join(root, 'registry'), { recursive: true });
@@ -133,6 +136,49 @@ test('rejects streaming when the provider did not declare it', async () => {
       body: JSON.stringify({ model: 'stub-1', messages: [], stream: true }),
     });
     assert.equal(response.status, 400);
+  } finally {
+    await gate.close();
+    upstream.server.close();
+  }
+});
+
+test('allows streaming when the provider omits streaming (defaults to true)', async () => {
+  const upstream = await startStubUpstream({ stream: true });
+  const root = await mkdtemp(join(tmpdir(), 'gate-chat-'));
+  await mkdir(join(root, 'core', 'capabilities', 'provider'), { recursive: true });
+  await copyFile(
+    kindModulePath,
+    join(root, 'core', 'capabilities', 'provider', 'kind.mjs'),
+  );
+  await mkdir(join(root, 'registry'), { recursive: true });
+  await writeFile(
+    join(root, 'registry', 'stub.json'),
+    JSON.stringify({
+      kind: 'provider',
+      label: 'Stub',
+      config: {
+        flavor: 'openai',
+        baseUrl: upstream.baseUrl,
+        apiKeyEnv: 'STUB_KEY',
+        models: ['stub-1'],
+        // NOTE: streaming field is intentionally omitted to test default behavior
+      },
+    }),
+    'utf8',
+  );
+  process.env.STUB_KEY = 'fake-key-for-tests';
+  const gate = await createGate({ root, port: 0 });
+  try {
+    const response = await fetch(`http://localhost:${gate.port}/p/stub/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` },
+      body: JSON.stringify({ model: 'stub-1', messages: [{ role: 'user', content: 'hi' }], stream: true }),
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /Hel/);
+    assert.match(text, /lo/);
+    assert.match(text, /\[DONE\]/);
   } finally {
     await gate.close();
     upstream.server.close();

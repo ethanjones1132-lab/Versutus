@@ -23,7 +23,7 @@ async function proxyChat(provider, requestBody, res) {
   }
 
   const wantsStream = requestBody.stream === true;
-  if (wantsStream && provider.config.streaming !== true) {
+  if (wantsStream && provider.config.streaming === false) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       error: { message: `Provider "${provider.id}" does not support streaming`, code: 'streaming_unsupported' },

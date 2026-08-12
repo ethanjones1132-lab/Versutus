@@ -3,15 +3,18 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile, mkdtemp, readFile, rm, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 
 import { createGate } from '../core/server.mjs';
+
+const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 
 async function testSetup() {
   const root = await mkdtemp(join(tmpdir(), 'gate-server-test-'));
   await mkdir(join(root, 'core', 'capabilities', 'provider'), { recursive: true });
   await copyFile(
-    join(process.cwd(), 'gate', 'core', 'capabilities', 'provider', 'kind.mjs'),
+    kindModulePath,
     join(root, 'core', 'capabilities', 'provider', 'kind.mjs'),
   );
   await mkdir(join(root, 'registry'), { recursive: true });
