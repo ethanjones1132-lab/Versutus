@@ -105,3 +105,8 @@ test('toManifestEntry respects streaming: false', () => {
 test('createHandlers returns no RPC methods — chat is served over the dedicated HTTP routes', () => {
   assert.deepEqual(providerKind.createHandlers({ id: 'claude' }), {});
 });
+
+test('apiKeyEnv is declared as a secret-ref field, so the app knows to route it through registry.secrets.set', () => {
+  const field = providerKind.configFields.find((f) => f.key === 'apiKeyEnv');
+  assert.equal(field.type, 'secret-ref');
+});

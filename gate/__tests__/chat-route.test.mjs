@@ -200,3 +200,26 @@ test('returns 404 for a scoped route naming an unknown provider', async () => {
     upstream.server.close();
   }
 });
+
+test('a secret set via registry.secrets.set takes precedence over the env var of the same name', async () => {
+  const upstream = await startStubUpstream({ stream: false });
+  const gate = await gateWithStubProvider(upstream.baseUrl);
+  try {
+    process.env.STUB_KEY = 'env-value-should-be-overridden';
+    await fetch(`http://localhost:${gate.port}/v1/capabilities/rpc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` },
+      body: JSON.stringify({ method: 'registry.secrets.set', params: { refName: 'STUB_KEY', value: 'secret-store-value' } }),
+    });
+
+    const response = await fetch(`http://localhost:${gate.port}/p/stub/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` },
+      body: JSON.stringify({ model: 'stub-1', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(response.status, 200);
+  } finally {
+    await gate.close();
+    upstream.server.close();
+  }
+});

@@ -66,7 +66,7 @@ export default {
   configFields: [
     { key: 'flavor', label: 'Flavor', type: 'enum', required: true, options: FLAVORS },
     { key: 'baseUrl', label: 'Base URL', type: 'string', required: true },
-    { key: 'apiKeyEnv', label: 'API key environment variable', type: 'string', required: true },
+    { key: 'apiKeyEnv', label: 'API key environment variable', type: 'secret-ref', required: true },
     { key: 'models', label: 'Models', type: 'string-list', required: true },
     { key: 'streaming', label: 'Supports streaming', type: 'boolean', default: true },
   ],
