@@ -175,11 +175,16 @@ every other capability method (§8) — there is one dispatch mechanism, not two
 
 - `registry.kinds.list()` → `{ id, label, family, configFields }[]` — lets the
   app offer "add a capability" without hardcoding kinds.
-- `registry.instances.list()` / `.get(id)` → configured instances, secret-ref
-  field values redacted.
-- `registry.instances.create(kind, label, config)` / `.update(id, config)` /
-  `.delete(id)` → validated via that kind's `configFields` + `validate()`,
-  written to `gate/registry/<id>.json`.
+- `registry.instances.list()` / `.get(id)` → configured instances, `config`
+  returned as-is. No redaction is needed: a `secret-ref` field's value in
+  `config` is structurally always just a reference name (§7), never the
+  underlying secret, the same way `apiKeyEnv` was never allowed to hold a
+  literal key.
+- `registry.instances.create(id, kind, label, config)` / `.update(id, label,
+  config)` / `.delete(id)` → validated via that kind's `configFields` +
+  `validate()`, written to `gate/registry/<id>.json`. `create` rejects an
+  `id` that already exists; `update` rejects one that doesn't. `kind` is
+  immutable once created — changing it means delete then create.
 
 On any mutation: re-validate → re-run `createHandlers()` for that instance →
 recompute that entry in the manifest's `capabilityInstances[]` → return the
