@@ -57,3 +57,70 @@ export async function loadKinds(root) {
 
   return { kinds, skipped };
 }
+
+const RESERVED_INSTANCE_IDS = new Set(['registry']);
+
+/**
+ * Load all capability instance configs from a directory (one <id>.json file
+ * per instance), cross-validated against already-loaded kinds. Skips
+ * invalid instances and logs reasons without crashing.
+ *
+ * @param {string} root
+ * @param {Map<string, object>} kinds - result of loadKinds()
+ * @returns {Promise<{ instances: Array, skipped: Array<{id, reason}> }>}
+ */
+export async function loadInstances(root, kinds) {
+  const instances = [];
+  const skipped = [];
+
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return { instances, skipped };
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const id = entry.name.slice(0, -'.json'.length);
+
+    if (RESERVED_INSTANCE_IDS.has(id)) {
+      skipped.push({ id, reason: `instance id "${id}" is reserved for built-in registry methods` });
+      continue;
+    }
+
+    let raw;
+    try {
+      raw = await readFile(join(root, entry.name), 'utf8');
+    } catch (err) {
+      skipped.push({ id, reason: err.message });
+      continue;
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      skipped.push({ id, reason: `invalid JSON: ${err.message}` });
+      continue;
+    }
+
+    const { kind, label, config } = parsed ?? {};
+    const kindModule = kinds.get(kind);
+    if (!kindModule) {
+      skipped.push({ id, reason: `unknown kind "${kind}"` });
+      continue;
+    }
+
+    const validation = kindModule.validate(config ?? {});
+    if (!validation.ok) {
+      skipped.push({ id, reason: validation.errors.map((e) => `${e.field}: ${e.message}`).join('; ') });
+      continue;
+    }
+
+    instances.push({ id, kind, label: label ?? id, config: config ?? {} });
+  }
+
+  instances.sort((a, b) => a.id.localeCompare(b.id));
+  return { instances, skipped };
+}

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { loadKinds } from '../core/capabilities/registry.mjs';
+import { loadKinds, loadInstances } from '../core/capabilities/registry.mjs';
 
 async function kindsDir(entries) {
   const root = await mkdtemp(join(tmpdir(), 'gate-kinds-'));
@@ -69,4 +69,104 @@ test('returns empty rather than throwing when there are no kinds', async () => {
 
   assert.equal(kinds.size, 0);
   assert.deepEqual(skipped, []);
+});
+
+function fakeKinds(overrides = {}) {
+  const kinds = new Map();
+  kinds.set('cron', {
+    kind: 'cron',
+    label: 'Cron',
+    family: 'cron',
+    configFields: [],
+    validate: overrides.validate ?? (() => ({ ok: true, errors: [] })),
+    toManifestEntry: (instance) => ({ id: instance.id }),
+    createHandlers: () => ({}),
+  });
+  return kinds;
+}
+
+async function registryDir(entries) {
+  const root = await mkdtemp(join(tmpdir(), 'gate-registry-'));
+  for (const [filename, contents] of Object.entries(entries)) {
+    await writeFile(join(root, filename), typeof contents === 'string' ? contents : JSON.stringify(contents), 'utf8');
+  }
+  return root;
+}
+
+test('loads a valid instance referencing a known kind', async () => {
+  const root = await registryDir({
+    'standup.json': { kind: 'cron', label: 'Standup reminder', config: { schedule: '0 9 * * 1-5' } },
+  });
+  const { instances, skipped } = await loadInstances(root, fakeKinds());
+
+  assert.equal(instances.length, 1);
+  assert.deepEqual(instances[0], {
+    id: 'standup',
+    kind: 'cron',
+    label: 'Standup reminder',
+    config: { schedule: '0 9 * * 1-5' },
+  });
+  assert.deepEqual(skipped, []);
+});
+
+test('skips an instance referencing an unknown kind', async () => {
+  const root = await registryDir({
+    'ghost.json': { kind: 'nonexistent', label: 'Ghost', config: {} },
+  });
+  const { instances, skipped } = await loadInstances(root, fakeKinds());
+
+  assert.equal(instances.length, 0);
+  assert.equal(skipped.length, 1);
+  assert.match(skipped[0].reason, /unknown kind/);
+});
+
+test('skips an instance that fails its kind\'s validate()', async () => {
+  const root = await registryDir({
+    'bad.json': { kind: 'cron', label: 'Bad', config: {} },
+  });
+  const kinds = fakeKinds({ validate: () => ({ ok: false, errors: [{ field: 'schedule', message: 'is required' }] }) });
+  const { instances, skipped } = await loadInstances(root, kinds);
+
+  assert.equal(instances.length, 0);
+  assert.equal(skipped.length, 1);
+  assert.match(skipped[0].reason, /schedule: is required/);
+});
+
+test('skips malformed JSON without crashing', async () => {
+  const root = await registryDir({ 'broken.json': '{ not valid json' });
+  const { instances, skipped } = await loadInstances(root, fakeKinds());
+
+  assert.equal(instances.length, 0);
+  assert.equal(skipped.length, 1);
+  assert.match(skipped[0].reason, /invalid JSON/);
+});
+
+test('rejects the reserved instance id "registry"', async () => {
+  const root = await registryDir({
+    'registry.json': { kind: 'cron', label: 'Should not load', config: {} },
+  });
+  const { instances, skipped } = await loadInstances(root, fakeKinds());
+
+  assert.equal(instances.length, 0);
+  assert.equal(skipped.length, 1);
+  assert.equal(skipped[0].id, 'registry');
+  assert.match(skipped[0].reason, /reserved/);
+});
+
+test('ignores non-.json files in the registry directory', async () => {
+  const root = await registryDir({ 'readme.md': '# not an instance' });
+  const { instances, skipped } = await loadInstances(root, fakeKinds());
+
+  assert.deepEqual(instances, []);
+  assert.deepEqual(skipped, []);
+});
+
+test('returns instances sorted by id', async () => {
+  const root = await registryDir({
+    'zzz.json': { kind: 'cron', label: 'Z', config: {} },
+    'aaa.json': { kind: 'cron', label: 'A', config: {} },
+  });
+  const { instances } = await loadInstances(root, fakeKinds());
+
+  assert.deepEqual(instances.map((i) => i.id), ['aaa', 'zzz']);
 });
