@@ -122,7 +122,7 @@ export default {
 type FieldDescriptor = {
   key: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'enum' | 'secret-ref';
+  type: 'string' | 'string-list' | 'number' | 'boolean' | 'enum' | 'secret-ref';
   required?: boolean;
   options?: string[];   // enum only
   default?: unknown;
