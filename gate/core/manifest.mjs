@@ -1,20 +1,26 @@
 /**
- * Manifest builder for Versutus Gateway
- * Constructs the gateway's advertised capabilities and provider list
+ * Manifest builder for Versutus Gateway.
+ * Assembles the gateway's advertised transport, capability kinds, and
+ * capability instances. `providers[]` is derived from instances of kind
+ * `provider` for backward compatibility with child-profile sync — see
+ * docs/superpowers/specs/2026-08-12-gate-capability-registry-design.md §8.
  */
 
 export const MANIFEST_SPEC = 'versutus-gateway/v1';
 export const GATE_KIND = 'versutus-gate';
 
 /**
- * Build the gateway manifest
  * @param {Object} options
- * @param {string} options.name - Gateway name
- * @param {string} [options.version] - Gateway version
- * @param {Array<Object>} options.providers - Array of provider configurations
- * @returns {Object} Gateway manifest with advertised capabilities and providers
+ * @param {string} options.name
+ * @param {string} [options.version]
+ * @param {Array<Object>} [options.capabilityKinds] - wire-shaped, from describeKinds()
+ * @param {Array<Object>} [options.capabilityInstances] - wire-shaped, from resolveManifestInstances()
  */
-export function buildManifest({ name, version, providers = [] }) {
+export function buildManifest({ name, version, capabilityKinds = [], capabilityInstances = [] }) {
+  const providers = capabilityInstances
+    .filter((instance) => instance.kind === 'provider')
+    .map((instance) => instance.manifestEntry);
+
   const manifest = {
     manifest: MANIFEST_SPEC,
     kind: GATE_KIND,
@@ -26,13 +32,9 @@ export function buildManifest({ name, version, providers = [] }) {
       chat: '/v1/chat/completions',
     },
     capabilities: { chat: true, models: true },
-    providers: providers.map((provider) => ({
-      id: provider.id,
-      label: provider.label,
-      basePath: `/p/${provider.id}`,
-      models: provider.config.models,
-      capabilities: provider.config.capabilities,
-    })),
+    providers,
+    capabilityKinds,
+    capabilityInstances,
     auth: {
       grantPath: '/.well-known/gateway/access',
       schemes: ['bearer'],

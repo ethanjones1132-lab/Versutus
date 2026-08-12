@@ -1,29 +1,37 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, writeFile, mkdtemp, readFile, rm, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 
 import { createGate } from '../core/server.mjs';
 
+const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
+
 async function testSetup() {
   const root = await mkdtemp(join(tmpdir(), 'gate-server-test-'));
-  await mkdir(join(root, 'providers', 'test-provider'), { recursive: true });
+  await mkdir(join(root, 'core', 'capabilities', 'provider'), { recursive: true });
+  await copyFile(
+    kindModulePath,
+    join(root, 'core', 'capabilities', 'provider', 'kind.mjs'),
+  );
+  await mkdir(join(root, 'registry'), { recursive: true });
   await writeFile(
-    join(root, 'providers', 'test-provider', 'provider.mjs'),
-    `
-export const id = 'test-provider';
-export const label = 'Test Provider';
-export const config = {
-  flavor: 'openai',
-  baseUrl: 'https://api.example.com/v1',
-  apiKeyEnv: 'TEST_KEY',
-  models: ['test-model-1', 'test-model-2'],
-  capabilities: { chat: true, streaming: true },
-};
-`,
-    'utf8'
+    join(root, 'registry', 'test-provider.json'),
+    JSON.stringify({
+      kind: 'provider',
+      label: 'Test Provider',
+      config: {
+        flavor: 'openai',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEnv: 'TEST_KEY',
+        models: ['test-model-1', 'test-model-2'],
+        streaming: true,
+      },
+    }),
+    'utf8',
   );
   return root;
 }

@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 
-import { loadProviders } from './providers.mjs';
+import { loadCapabilities, describeKinds, resolveManifestInstances } from './capabilities/registry.mjs';
 import { buildManifest } from './manifest.mjs';
 import { TokenStore } from './tokens.mjs';
 import { PairingStore } from './pairing.mjs';
@@ -23,7 +23,7 @@ async function proxyChat(provider, requestBody, res) {
   }
 
   const wantsStream = requestBody.stream === true;
-  if (wantsStream && provider.config.capabilities?.streaming !== true) {
+  if (wantsStream && provider.config.streaming === false) {
     res.writeHead(400, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
       error: { message: `Provider "${provider.id}" does not support streaming`, code: 'streaming_unsupported' },
@@ -130,11 +130,15 @@ export async function createGate(config = {}) {
     version,
   } = config;
 
-  const providersDir = join(root, 'providers');
   const tokenPath = join(root, '.tokens.json');
 
-  // Load providers from the specified directory
-  const { providers } = await loadProviders(providersDir);
+  // Load capability kinds + instances, then adapt provider instances into
+  // the { id, label, config, module } shape the chat/models routes below
+  // already expect — those routes are otherwise unchanged.
+  const { kinds, instances } = await loadCapabilities(root);
+  const providers = instances
+    .filter((instance) => instance.kind === 'provider')
+    .map((instance) => ({ id: instance.id, label: instance.label, config: instance.config }));
 
   // Initialize token store
   const tokenStore = new TokenStore(tokenPath);
@@ -148,7 +152,8 @@ export async function createGate(config = {}) {
   const manifest = buildManifest({
     name,
     version,
-    providers,
+    capabilityKinds: describeKinds(kinds),
+    capabilityInstances: resolveManifestInstances(kinds, instances),
   });
 
   // Create HTTP server
