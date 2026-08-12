@@ -4,6 +4,13 @@ import { join } from 'node:path';
 
 const ALGORITHM = 'aes-256-gcm';
 
+let writeQueue = Promise.resolve();
+function serialize(fn) {
+  const result = writeQueue.then(fn, fn);
+  writeQueue = result.catch(() => {});
+  return result;
+}
+
 async function readKey(root) {
   const hex = await readFile(join(root, 'secrets', '.key'), 'utf8');
   return Buffer.from(hex.trim(), 'hex');
@@ -23,9 +30,9 @@ async function ensureKey(root) {
 async function readStore(root) {
   try {
     const raw = await readFile(join(root, 'secrets', 'store.enc.json'), 'utf8');
-    return JSON.parse(raw);
+    return Object.assign(Object.create(null), JSON.parse(raw));
   } catch {
-    return {};
+    return Object.create(null);
   }
 }
 
@@ -41,14 +48,16 @@ async function writeStore(root, store) {
  * leakage (the same threat model .env already covers), not disk compromise.
  */
 export async function setSecret(root, refName, value) {
-  const key = await ensureKey(root);
-  const store = await readStore(root);
-  const iv = randomBytes(12);
-  const cipher = createCipheriv(ALGORITHM, key, iv);
-  const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  store[refName] = { iv: iv.toString('hex'), tag: tag.toString('hex'), data: encrypted.toString('hex') };
-  await writeStore(root, store);
+  return serialize(async () => {
+    const key = await ensureKey(root);
+    const store = await readStore(root);
+    const iv = randomBytes(12);
+    const cipher = createCipheriv(ALGORITHM, key, iv);
+    const encrypted = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    store[refName] = { iv: iv.toString('hex'), tag: tag.toString('hex'), data: encrypted.toString('hex') };
+    await writeStore(root, store);
+  });
 }
 
 /** Decrypt and return a secret value, or undefined if refName was never set. */

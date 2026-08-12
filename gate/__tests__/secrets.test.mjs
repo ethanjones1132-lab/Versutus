@@ -59,3 +59,21 @@ test('overwriting a refName replaces the old value', async () => {
   await setSecret(root, 'KEY', 'new-value');
   assert.equal(await getSecret(root, 'KEY'), 'new-value');
 });
+
+test('concurrent setSecret calls do not lose data (serialized writes)', async () => {
+  const root = await tempRoot();
+  await Promise.all([
+    setSecret(root, 'A', 'value-a'),
+    setSecret(root, 'B', 'value-b'),
+    setSecret(root, 'C', 'value-c'),
+  ]);
+  assert.equal(await getSecret(root, 'A'), 'value-a');
+  assert.equal(await getSecret(root, 'B'), 'value-b');
+  assert.equal(await getSecret(root, 'C'), 'value-c');
+});
+
+test('refName "__proto__" round-trips correctly', async () => {
+  const root = await tempRoot();
+  await setSecret(root, '__proto__', 'proto-value');
+  assert.equal(await getSecret(root, '__proto__'), 'proto-value');
+});
