@@ -40,6 +40,13 @@ async function writeInstanceFile(root, id, kind, label, config) {
  * @param {() => Promise<{kinds: Map, instances: Array}>} deps.reload - re-read from disk, returns the new state
  */
 export function createRegistryMethods({ root, getState, reload }) {
+  let writeQueue = Promise.resolve();
+  function serialize(fn) {
+    const result = writeQueue.then(fn, fn);
+    writeQueue = result.catch(() => {});
+    return result;
+  }
+
   return {
     'registry.kinds.list': async () => describeKinds(getState().kinds),
 
@@ -51,7 +58,7 @@ export function createRegistryMethods({ root, getState, reload }) {
       return instance;
     },
 
-    'registry.instances.create': async ({ id, kind, label, config } = {}) => {
+    'registry.instances.create': async ({ id, kind, label, config } = {}) => serialize(async () => {
       assertValidInstanceId(id);
       const kindModule = getState().kinds.get(kind);
       if (!kindModule) throw new Error(`unknown kind "${kind}"`);
@@ -62,9 +69,9 @@ export function createRegistryMethods({ root, getState, reload }) {
       await writeInstanceFile(root, id, kind, label ?? id, config ?? {});
       const state = await reload();
       return state.instances.find((i) => i.id === id);
-    },
+    }),
 
-    'registry.instances.update': async ({ id, label, config } = {}) => {
+    'registry.instances.update': async ({ id, label, config } = {}) => serialize(async () => {
       const existing = getState().instances.find((i) => i.id === id);
       if (!existing) throw new Error(`instance "${id}" not found`);
       const kindModule = getState().kinds.get(existing.kind);
@@ -72,15 +79,15 @@ export function createRegistryMethods({ root, getState, reload }) {
       await writeInstanceFile(root, id, existing.kind, label ?? existing.label, config ?? {});
       const state = await reload();
       return state.instances.find((i) => i.id === id);
-    },
+    }),
 
-    'registry.instances.delete': async ({ id } = {}) => {
+    'registry.instances.delete': async ({ id } = {}) => serialize(async () => {
       const existing = getState().instances.find((i) => i.id === id);
       if (!existing) throw new Error(`instance "${id}" not found`);
       await unlink(join(root, 'registry', `${id}.json`));
       await reload();
       return { deleted: true };
-    },
+    }),
 
     'registry.secrets.set': async ({ refName, value } = {}) => {
       if (typeof refName !== 'string' || !refName) throw new Error('refName must be a non-empty string');

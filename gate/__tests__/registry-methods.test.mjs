@@ -186,3 +186,46 @@ test('registry.secrets.set rejects an empty refName or value', async () => {
   await assert.rejects(methods['registry.secrets.set']({ refName: '', value: 'x' }), /refName/);
   await assert.rejects(methods['registry.secrets.set']({ refName: 'X', value: '' }), /value/);
 });
+
+test('concurrent create calls for the same id serialize correctly', async () => {
+  const { methods } = await harness();
+  const results = await Promise.allSettled([
+    methods['registry.instances.create']({ id: 'standup', kind: 'cron', label: 'Standup 1', config: { schedule: '0 9 * * 1-5' } }),
+    methods['registry.instances.create']({ id: 'standup', kind: 'cron', label: 'Standup 2', config: { schedule: '0 10 * * 1-5' } }),
+  ]);
+
+  const fulfilled = results.filter((r) => r.status === 'fulfilled');
+  const rejected = results.filter((r) => r.status === 'rejected');
+
+  assert.equal(fulfilled.length, 1, 'exactly one create should succeed');
+  assert.equal(rejected.length, 1, 'exactly one create should fail');
+  assert(rejected[0].reason.message.includes('already exists'), 'rejected call should mention "already exists"');
+});
+
+test('concurrent update and delete serialize correctly', async () => {
+  const { methods, root } = await harness();
+  await methods['registry.instances.create']({ id: 'standup', kind: 'cron', label: 'Standup', config: { schedule: '0 9 * * 1-5' } });
+
+  const results = await Promise.allSettled([
+    methods['registry.instances.update']({ id: 'standup', label: 'Updated', config: { schedule: '0 11 * * 1-5' } }),
+    methods['registry.instances.delete']({ id: 'standup' }),
+  ]);
+
+  const fulfilled = results.filter((r) => r.status === 'fulfilled');
+  assert.equal(fulfilled.length, 2, 'both operations should complete');
+
+  const fileExists = await readFile(join(root, 'registry', 'standup.json')).then(
+    () => true,
+    () => false,
+  );
+  const instances = await methods['registry.instances.list']();
+
+  // Whichever completed last should win: if delete won, file should not exist; if update won, it should.
+  // The key is that they don't race — the file state should be consistent with whichever operation
+  // ran last in the serialized queue, not a mix of both.
+  assert.equal(
+    fileExists,
+    instances.some((i) => i.id === 'standup'),
+    'file existence should match instance list (no phantom files)',
+  );
+});
