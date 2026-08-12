@@ -2,6 +2,9 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 
 import { loadCapabilities, describeKinds, resolveManifestInstances } from './capabilities/registry.mjs';
+import { buildInstanceHandlers } from './capabilities/dispatch.mjs';
+import { createRegistryMethods } from './capabilities/registry-methods.mjs';
+import { getSecret } from './capabilities/secrets.mjs';
 import { buildManifest } from './manifest.mjs';
 import { TokenStore } from './tokens.mjs';
 import { PairingStore } from './pairing.mjs';
@@ -12,7 +15,7 @@ import * as anthropicFlavor from '../flavors/anthropic.mjs';
 
 const FLAVOR_MODULES = { openai: openaiFlavor, anthropic: anthropicFlavor };
 
-async function proxyChat(provider, requestBody, res) {
+async function proxyChat(root, provider, requestBody, res) {
   const flavorModule = FLAVOR_MODULES[provider.config.flavor];
   if (!flavorModule) {
     res.writeHead(501, { 'Content-Type': 'application/json' });
@@ -31,7 +34,7 @@ async function proxyChat(provider, requestBody, res) {
     return;
   }
 
-  const apiKey = process.env[provider.config.apiKeyEnv] ?? '';
+  const apiKey = (await getSecret(root, provider.config.apiKeyEnv)) ?? process.env[provider.config.apiKeyEnv] ?? '';
   let upstreamRequest;
   try {
     upstreamRequest = flavorModule.buildChatRequest(provider.config, apiKey, {
@@ -116,7 +119,7 @@ async function proxyChat(provider, requestBody, res) {
 /**
  * Create and configure a Versutus Gate HTTP server
  * @param {Object} config
- * @param {string} config.root - Root directory for the Gate (providers and token store location)
+ * @param {string} config.root - Root directory for the Gate (capabilities and token store location)
  * @param {number} [config.port=0] - Port to listen on (0 = OS chooses)
  * @param {string} [config.name='Versutus Gate'] - Gateway name
  * @param {string} [config.version] - Gateway version
@@ -132,13 +135,32 @@ export async function createGate(config = {}) {
 
   const tokenPath = join(root, '.tokens.json');
 
-  // Load capability kinds + instances, then adapt provider instances into
-  // the { id, label, config, module } shape the chat/models routes below
-  // already expect — those routes are otherwise unchanged.
-  const { kinds, instances } = await loadCapabilities(root);
-  const providers = instances
-    .filter((instance) => instance.kind === 'provider')
-    .map((instance) => ({ id: instance.id, label: instance.label, config: instance.config }));
+  // Live, mutable capability state. Recomputed by reload() after any
+  // registry.instances.* mutation, so a new/edited/deleted instance is
+  // reflected in routing, the manifest, and the RPC dispatch table without
+  // restarting the Gate.
+  async function computeState() {
+    const { kinds, instances } = await loadCapabilities(root);
+    const providers = instances
+      .filter((instance) => instance.kind === 'provider')
+      .map((instance) => ({ id: instance.id, label: instance.label, config: instance.config }));
+    const manifest = buildManifest({
+      name,
+      version,
+      capabilityKinds: describeKinds(kinds),
+      capabilityInstances: resolveManifestInstances(kinds, instances),
+    });
+    const dispatch = buildInstanceHandlers(kinds, instances);
+    return { kinds, instances, providers, manifest, dispatch };
+  }
+
+  let state = await computeState();
+  async function reload() {
+    state = await computeState();
+    return state;
+  }
+
+  const registryMethods = createRegistryMethods({ root, getState: () => state, reload });
 
   // Initialize token store
   const tokenStore = new TokenStore(tokenPath);
@@ -147,14 +169,6 @@ export async function createGate(config = {}) {
   const pairing = new PairingStore(join(root, '.pairing.json'));
   const deviceTokens = new DeviceTokenStore(join(root, '.device-tokens.json'));
   const replayCache = new Set();
-
-  // Build manifest
-  const manifest = buildManifest({
-    name,
-    version,
-    capabilityKinds: describeKinds(kinds),
-    capabilityInstances: resolveManifestInstances(kinds, instances),
-  });
 
   // Create HTTP server
   const server = createServer(async (req, res) => {
@@ -193,7 +207,7 @@ export async function createGate(config = {}) {
       // Manifest endpoint (unauthenticated)
       if (pathname === '/.well-known/gateway.json' && method === 'GET') {
         res.writeHead(200);
-        res.end(JSON.stringify(manifest));
+        res.end(JSON.stringify(state.manifest));
         return;
       }
 
@@ -262,7 +276,8 @@ export async function createGate(config = {}) {
         (pathname === '/v1/models' && method === 'GET') ||
         /^\/p\/[^/]+\/v1\/models$/.test(pathname) ||
         (pathname === '/v1/chat/completions' && method === 'POST') ||
-        /^\/p\/[^/]+\/v1\/chat\/completions$/.test(pathname);
+        /^\/p\/[^/]+\/v1\/chat\/completions$/.test(pathname) ||
+        (pathname === '/v1/capabilities/rpc' && method === 'POST');
 
       if (!isKnownAuthenticatedRoute) {
         // Unknown route - return 404
@@ -292,7 +307,7 @@ export async function createGate(config = {}) {
       // /v1/models - all provider models
       if (pathname === '/v1/models' && method === 'GET') {
         const allModels = [];
-        for (const provider of providers) {
+        for (const provider of state.providers) {
           const models = provider.config.models || [];
           for (const modelId of models) {
             allModels.push({
@@ -315,7 +330,7 @@ export async function createGate(config = {}) {
       const scopedModelMatch = pathname.match(/^\/p\/([^\/]+)\/v1\/models$/);
       if (scopedModelMatch && method === 'GET') {
         const providerId = decodeURIComponent(scopedModelMatch[1]);
-        const provider = providers.find((p) => p.id === providerId);
+        const provider = state.providers.find((p) => p.id === providerId);
 
         if (!provider) {
           res.writeHead(404);
@@ -345,13 +360,13 @@ export async function createGate(config = {}) {
       // /v1/chat/completions - unscoped chat (resolves provider from model)
       if (pathname === '/v1/chat/completions' && method === 'POST') {
         const body = await readJsonBody(req);
-        const provider = providers.find((p) => p.config.models.includes(body?.model));
+        const provider = state.providers.find((p) => p.config.models.includes(body?.model));
         if (!provider) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: `No provider declares model "${body?.model}"`, code: 'unknown_model' } }));
           return;
         }
-        await proxyChat(provider, body ?? {}, res);
+        await proxyChat(root, provider, body ?? {}, res);
         return;
       }
 
@@ -359,14 +374,42 @@ export async function createGate(config = {}) {
       const scopedChatMatch = pathname.match(/^\/p\/([^/]+)\/v1\/chat\/completions$/);
       if (scopedChatMatch && method === 'POST') {
         const providerId = decodeURIComponent(scopedChatMatch[1]);
-        const provider = providers.find((p) => p.id === providerId);
+        const provider = state.providers.find((p) => p.id === providerId);
         if (!provider) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: `Unknown provider "${providerId}"`, code: 'unknown_provider' } }));
           return;
         }
         const body = await readJsonBody(req);
-        await proxyChat(provider, body ?? {}, res);
+        await proxyChat(root, provider, body ?? {}, res);
+        return;
+      }
+
+      // /v1/capabilities/rpc - generic dispatch for registry.* built-ins and
+      // instance-contributed methods
+      if (pathname === '/v1/capabilities/rpc' && method === 'POST') {
+        const body = await readJsonBody(req);
+        const rpcMethod = body?.method;
+        const params = body?.params ?? {};
+        if (typeof rpcMethod !== 'string' || !rpcMethod) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'method must be a non-empty string', code: 'invalid_request' } }));
+          return;
+        }
+        const handler = registryMethods[rpcMethod] ?? state.dispatch.get(rpcMethod);
+        if (!handler) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: `Unknown method "${rpcMethod}"`, code: 'unknown_method' } }));
+          return;
+        }
+        try {
+          const result = await handler(params);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ result }));
+        } catch (error) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code: 'rpc_error' } }));
+        }
         return;
       }
     } catch (err) {
@@ -382,7 +425,9 @@ export async function createGate(config = {}) {
   // Start listening immediately
   const gateObj = {
     token,
-    providers,
+    get providers() {
+      return state.providers;
+    },
     port,
     async listen() {
       return new Promise((resolve, reject) => {
