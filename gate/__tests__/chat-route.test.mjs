@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -25,22 +25,27 @@ async function startStubUpstream({ stream } = {}) {
   return { server, baseUrl: `http://127.0.0.1:${port}/v1` };
 }
 
-async function gateWithStubProvider(upstreamBaseUrl, capabilities = { chat: true, streaming: true }) {
+async function gateWithStubProvider(upstreamBaseUrl, capabilities = { streaming: true }) {
   const root = await mkdtemp(join(tmpdir(), 'gate-chat-'));
-  await mkdir(join(root, 'providers', 'stub'), { recursive: true });
+  await mkdir(join(root, 'core', 'capabilities', 'provider'), { recursive: true });
+  await copyFile(
+    join(process.cwd(), 'gate', 'core', 'capabilities', 'provider', 'kind.mjs'),
+    join(root, 'core', 'capabilities', 'provider', 'kind.mjs'),
+  );
+  await mkdir(join(root, 'registry'), { recursive: true });
   await writeFile(
-    join(root, 'providers', 'stub', 'provider.mjs'),
-    `
-export const id = 'stub';
-export const label = 'Stub';
-export const config = {
-  flavor: 'openai',
-  baseUrl: '${upstreamBaseUrl}',
-  apiKeyEnv: 'STUB_KEY',
-  models: ['stub-1'],
-  capabilities: ${JSON.stringify(capabilities)},
-};
-`,
+    join(root, 'registry', 'stub.json'),
+    JSON.stringify({
+      kind: 'provider',
+      label: 'Stub',
+      config: {
+        flavor: 'openai',
+        baseUrl: upstreamBaseUrl,
+        apiKeyEnv: 'STUB_KEY',
+        models: ['stub-1'],
+        streaming: capabilities.streaming,
+      },
+    }),
     'utf8',
   );
   process.env.STUB_KEY = 'fake-key-for-tests';
@@ -120,7 +125,7 @@ test('rejects an unauthenticated chat request', async () => {
 
 test('rejects streaming when the provider did not declare it', async () => {
   const upstream = await startStubUpstream({ stream: true });
-  const gate = await gateWithStubProvider(upstream.baseUrl, { chat: true, streaming: false });
+  const gate = await gateWithStubProvider(upstream.baseUrl, { streaming: false });
   try {
     const response = await fetch(`http://localhost:${gate.port}/p/stub/v1/chat/completions`, {
       method: 'POST',
