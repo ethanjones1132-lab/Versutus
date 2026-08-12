@@ -124,3 +124,34 @@ export async function loadInstances(root, kinds) {
   instances.sort((a, b) => a.id.localeCompare(b.id));
   return { instances, skipped };
 }
+
+/** Wire-safe kind catalog: drops the function properties, keeps the schema. */
+export function describeKinds(kinds) {
+  return [...kinds.values()].map((k) => ({
+    id: k.kind,
+    label: k.label,
+    family: k.family,
+    configFields: k.configFields,
+  }));
+}
+
+/** Wire-safe instance list: each instance's manifest contribution, resolved via its kind. */
+export function resolveManifestInstances(kinds, instances) {
+  return instances.map((instance) => {
+    const kindModule = kinds.get(instance.kind);
+    return {
+      id: instance.id,
+      kind: instance.kind,
+      label: instance.label,
+      family: kindModule.family,
+      manifestEntry: kindModule.toManifestEntry(instance),
+    };
+  });
+}
+
+/** Load kinds and instances together from a Gate root directory. */
+export async function loadCapabilities(root) {
+  const { kinds, skipped: skippedKinds } = await loadKinds(join(root, 'core', 'capabilities'));
+  const { instances, skipped: skippedInstances } = await loadInstances(join(root, 'registry'), kinds);
+  return { kinds, instances, skippedKinds, skippedInstances };
+}

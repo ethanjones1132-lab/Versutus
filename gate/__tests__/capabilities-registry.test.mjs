@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { loadKinds, loadInstances } from '../core/capabilities/registry.mjs';
+import { loadKinds, loadInstances, describeKinds, resolveManifestInstances } from '../core/capabilities/registry.mjs';
 
 async function kindsDir(entries) {
   const root = await mkdtemp(join(tmpdir(), 'gate-kinds-'));
@@ -169,4 +169,24 @@ test('returns instances sorted by id', async () => {
   const { instances } = await loadInstances(root, fakeKinds());
 
   assert.deepEqual(instances.map((i) => i.id), ['aaa', 'zzz']);
+});
+
+test('describeKinds exposes only the wire-safe kind fields', () => {
+  const kinds = fakeKinds();
+  const described = describeKinds(kinds);
+
+  assert.deepEqual(described, [
+    { id: 'cron', label: 'Cron', family: 'cron', configFields: [] },
+  ]);
+});
+
+test('resolveManifestInstances attaches family and calls toManifestEntry', () => {
+  const kinds = fakeKinds();
+  const instances = [{ id: 'standup', kind: 'cron', label: 'Standup', config: { schedule: '0 9 * * 1-5' } }];
+
+  const resolved = resolveManifestInstances(kinds, instances);
+
+  assert.deepEqual(resolved, [
+    { id: 'standup', kind: 'cron', label: 'Standup', family: 'cron', manifestEntry: { id: 'standup' } },
+  ]);
 });
