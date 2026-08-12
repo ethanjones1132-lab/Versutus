@@ -1,0 +1,11 @@
+{
+  "kind": "provider",
+  "label": "NVIDIA NIM",
+  "config": {
+    "flavor": "openai",
+    "baseUrl": "https://integrate.api.nvidia.com/v1",
+    "apiKeyEnv": "NVIDIA_API_KEY",
+    "models": ["deepseek-ai/deepseek-v4-flash-0731", "meta/llama-3.1-8b-instruct"],
+    "streaming": true
+  }
+}

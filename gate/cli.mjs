@@ -27,34 +27,32 @@ function validateFlavor(flavor) {
 }
 
 /**
- * Template for new provider.mjs file
+ * Template for new provider instance JSON
  */
-function getProviderTemplate(id, flavor) {
+function getInstanceTemplate(id, flavor) {
   const label = id.charAt(0).toUpperCase() + id.slice(1);
-  return `export const id = '${id}';
-export const label = '${label}';
-
-// ─── CONFIG: edit only inside this block ───────────────
-export const config = {
-  flavor: '${flavor}',
-  baseUrl: 'https://api.example.com/v1',
-  apiKeyEnv: '${id.toUpperCase()}_API_KEY',
-  models: ['model-id-here'],
-  capabilities: { chat: true, streaming: true },
-};
-// ─── END CONFIG ────────────────────────────────────────
-`;
+  return JSON.stringify({
+    kind: 'provider',
+    label,
+    config: {
+      flavor,
+      baseUrl: 'https://api.example.com/v1',
+      apiKeyEnv: `${id.toUpperCase().replace(/-/g, '_')}_API_KEY`,
+      models: ['model-id-here'],
+      streaming: true,
+    },
+  }, null, 2) + '\n';
 }
 
 /**
- * Handle 'add' command: scaffold a new provider
+ * Handle 'add' command: scaffold a new provider instance
  */
 async function handleAdd(args) {
   const id = args[0];
   const flavorIndex = args.indexOf('--flavor');
 
   if (!id) {
-    console.error('Error: provider id is required');
+    console.error('Error: instance id is required');
     console.error('Usage: node gate/cli.mjs add <id> --flavor <openai|anthropic|custom>');
     process.exit(1);
   }
@@ -68,7 +66,7 @@ async function handleAdd(args) {
   const flavor = args[flavorIndex + 1];
 
   if (!validateProviderId(id)) {
-    console.error(`Error: provider id must be lowercase alphanumeric with hyphens, got "${id}"`);
+    console.error(`Error: instance id must be lowercase alphanumeric with hyphens, got "${id}"`);
     process.exit(1);
   }
 
@@ -77,26 +75,26 @@ async function handleAdd(args) {
     process.exit(1);
   }
 
-  const providerDir = join(__dirname, 'providers', id);
-  const providerFile = join(providerDir, 'provider.mjs');
+  const registryDir = join(__dirname, 'registry');
+  const instanceFile = join(registryDir, `${id}.json`);
 
-  // Check if provider already exists
+  // Check if instance already exists
   try {
-    await access(providerFile);
-    console.error(`Error: provider "${id}" already exists at ${providerDir}`);
+    await access(instanceFile);
+    console.error(`Error: instance "${id}" already exists at ${instanceFile}`);
     process.exit(1);
   } catch {
-    // Provider does not exist, which is what we want
+    // Instance does not exist, which is what we want
   }
 
-  // Create provider directory and file
+  // Create registry instance file
   try {
-    await mkdir(providerDir, { recursive: true });
-    const template = getProviderTemplate(id, flavor);
-    await writeFile(providerFile, template, 'utf-8');
-    console.log(`Created provider "${id}" at ${providerDir}/provider.mjs`);
+    await mkdir(registryDir, { recursive: true });
+    const template = getInstanceTemplate(id, flavor);
+    await writeFile(instanceFile, template, 'utf-8');
+    console.log(`Created instance "${id}" at ${instanceFile}`);
   } catch (err) {
-    console.error(`Error creating provider: ${err.message}`);
+    console.error(`Error creating instance: ${err.message}`);
     process.exit(1);
   }
 }
@@ -207,7 +205,7 @@ async function main() {
     console.log('');
     console.log('Commands:');
     console.log('  add <id> --flavor <openai|anthropic|custom>');
-    console.log('    Scaffold a new provider directory with provider.mjs template');
+    console.log('    Scaffold a new provider instance in gate/registry/<id>.json');
     console.log('');
     console.log('  start');
     console.log('    Start the Gate HTTP server on port 8760');

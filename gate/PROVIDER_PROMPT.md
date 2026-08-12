@@ -4,7 +4,7 @@ This guide explains how to configure AI model providers for the Versutus Gate.
 
 ## Overview
 
-Each provider is a directory under `gate/providers/<id>/` containing a `provider.mjs` file. The Gate loads these providers at startup and exposes their models through the gateway manifest.
+Each provider is a JSON file at `gate/registry/<id>.json`. The Gate loads every instance in `gate/registry/` at startup and exposes provider models through the gateway manifest.
 
 ## Creating a New Provider
 
@@ -17,7 +17,7 @@ node gate/cli.mjs add <id> --flavor <flavor>
 - `<id>`: Provider identifier (lowercase alphanumeric + hyphens, e.g., `my-openai`, `claude-anthropic`)
 - `<flavor>`: Implementation template (`openai`, `anthropic`, or `custom`)
 
-This creates `gate/providers/<id>/provider.mjs` with a template.
+This creates `gate/registry/<id>.json` with a template.
 
 ## Configuration Fields
 
@@ -109,23 +109,24 @@ capabilities: { chat: true, streaming: true }
 
 ### OpenAI Provider
 
-**File:** `gate/providers/openai-prod/provider.mjs`
+**File:** `gate/registry/openai-prod.json`
 
-```javascript
-export const id = 'openai-prod';
-export const label = 'OpenAI Production';
-
-export const config = {
-  flavor: 'openai',
-  baseUrl: 'https://api.openai.com/v1',
-  apiKeyEnv: 'OPENAI_API_KEY',
-  models: [
-    'gpt-4-turbo-preview',
-    'gpt-4',
-    'gpt-3.5-turbo',
-  ],
-  capabilities: { chat: true, streaming: true },
-};
+```json
+{
+  "kind": "provider",
+  "label": "OpenAI Production",
+  "config": {
+    "flavor": "openai",
+    "baseUrl": "https://api.openai.com/v1",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "models": [
+      "gpt-4-turbo-preview",
+      "gpt-4",
+      "gpt-3.5-turbo"
+    ],
+    "streaming": true
+  }
+}
 ```
 
 **Set the environment variable:**
@@ -140,23 +141,24 @@ node gate/cli.mjs start
 
 ### Anthropic Provider
 
-**File:** `gate/providers/claude/provider.mjs`
+**File:** `gate/registry/claude.json`
 
-```javascript
-export const id = 'claude';
-export const label = 'Anthropic Claude';
-
-export const config = {
-  flavor: 'anthropic',
-  baseUrl: 'https://api.anthropic.com',
-  apiKeyEnv: 'ANTHROPIC_API_KEY',
-  models: [
-    'claude-3-opus-20240229',
-    'claude-3-sonnet-20240229',
-    'claude-3-haiku-20240307',
-  ],
-  capabilities: { chat: true, streaming: true },
-};
+```json
+{
+  "kind": "provider",
+  "label": "Anthropic Claude",
+  "config": {
+    "flavor": "anthropic",
+    "baseUrl": "https://api.anthropic.com",
+    "apiKeyEnv": "ANTHROPIC_API_KEY",
+    "models": [
+      "claude-3-opus-20240229",
+      "claude-3-sonnet-20240229",
+      "claude-3-haiku-20240307"
+    ],
+    "streaming": true
+  }
+}
 ```
 
 **Set the environment variable:**
@@ -166,19 +168,23 @@ export ANTHROPIC_API_KEY=sk-ant-...
 
 ### Custom Provider
 
-**File:** `gate/providers/custom-llm/provider.mjs`
+**File:** `gate/registry/custom-llm.json`
 
-```javascript
-export const id = 'custom-llm';
-export const label = 'Custom LLM Server';
-
-export const config = {
-  flavor: 'custom',
-  baseUrl: 'https://my-llm-server.example.com/v1',
-  apiKeyEnv: 'CUSTOM_LLM_TOKEN',
-  models: ['my-model-1', 'my-model-2'],
-  capabilities: { chat: true, streaming: true },
-};
+```json
+{
+  "kind": "provider",
+  "label": "Custom LLM Server",
+  "config": {
+    "flavor": "custom",
+    "baseUrl": "https://my-llm-server.example.com/v1",
+    "apiKeyEnv": "CUSTOM_LLM_TOKEN",
+    "models": [
+      "my-model-1",
+      "my-model-2"
+    ],
+    "streaming": true
+  }
+}
 ```
 
 ## Validation
@@ -247,7 +253,7 @@ The bearer token is printed when the Gate starts.
 ## Troubleshooting
 
 ### Provider not loading
-- Check that the provider directory exists: `gate/providers/<id>/provider.mjs`
+- Check that the instance file exists: `gate/registry/<id>.json`
 - Check the Gate startup logs for validation errors
 - Ensure all required fields are present in `config`
 
