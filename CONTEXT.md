@@ -42,6 +42,14 @@ A live shell session to the gateway's terminal endpoint, distinct from a convers
 A text command (`/session`, `/model`, …) routed to the gateway's command engine.
 _Avoid_: command string, RPC call (when user-facing)
 
+**Capability kind**:
+A category of thing the Gate can do (`provider`, `memory`, `cron`, …), defined once in code at `gate/core/capabilities/<kind>/kind.mjs`.
+_Avoid_: capability (alone, when meaning the kind specifically), plugin (a gateway's own internal plugin list is a distinct, unrelated concept)
+
+**Capability instance**:
+One configured, named instance of a capability kind, defined by config only (`gate/registry/<id>.json`), no code.
+_Avoid_: capability (alone), provider (unless the kind is literally `provider`)
+
 **Pairing**:
 The flow where a device requests access to a gateway and a human approves it.
 _Avoid_: setup, onboarding
@@ -69,6 +77,8 @@ _Avoid_: push (which implies server delivery)
 - A **reconnect** reuses the same endpoint and **session**; an **auto-connect retry** re-runs discovery and **probes**
 - A **session** belongs to a **gateway** and is preserved across **reconnects**
 - A **command transcript** is keyed by gateway + **session**
+- A **capability instance** belongs to exactly one **capability kind**
+- A capability instance of kind `provider` is also synced into a child gateway profile; no other kind is
 - **Pairing** is required when a gateway does not recognize the device
 - A **run** may require an **approval** before it can proceed
 - An **approval** is resolved per run via the gateway's approval endpoint; only runs the app initiated can be approved
