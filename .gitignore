@@ -51,6 +51,7 @@ gate/.env
 gate/.tokens.json
 gate/.pairing.json
 gate/.device-tokens.json
+gate/.grok-desktop-device.json
 gate/secrets/
 
 # Git worktrees
