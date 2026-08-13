@@ -260,3 +260,74 @@ test('resolveManifestInstances silently excludes instances whose kind\'s toManif
 
   assert.equal(resolved.length, 0);
 });
+
+test('resolveManifestInstances qualifies a kind\'s declared command methods with the instance id', () => {
+  const kinds = fakeKinds();
+  kinds.get('cron').commands = [
+    { slash: '/standup', description: 'Run it', method: 'run', danger: 'write' },
+  ];
+  const instances = [{ id: 'standup', kind: 'cron', label: 'Standup', config: {} }];
+
+  const [resolved] = resolveManifestInstances(kinds, instances);
+
+  // 'run' is the local handler name the kind declares; buildInstanceHandlers
+  // registers it as 'standup.run', so that is what the app must be told.
+  assert.deepEqual(resolved.commands, [
+    { slash: '/standup', description: 'Run it', method: 'standup.run', danger: 'write' },
+  ]);
+});
+
+test('two instances of one kind get distinctly qualified command methods', () => {
+  const kinds = fakeKinds();
+  kinds.get('cron').commands = [
+    { slash: '/run', description: 'Run it', method: 'run', danger: 'write' },
+  ];
+  const instances = [
+    { id: 'standup', kind: 'cron', label: 'Standup', config: {} },
+    { id: 'weekly', kind: 'cron', label: 'Weekly', config: {} },
+  ];
+
+  const resolved = resolveManifestInstances(kinds, instances);
+
+  assert.equal(resolved[0].commands[0].method, 'standup.run');
+  assert.equal(resolved[1].commands[0].method, 'weekly.run');
+});
+
+test('resolveManifestInstances preserves a command\'s other declared fields', () => {
+  const kinds = fakeKinds();
+  kinds.get('cron').commands = [
+    { slash: '/standup', description: 'Run it', method: 'run', danger: 'write', params: { dryRun: true } },
+  ];
+  const instances = [{ id: 'standup', kind: 'cron', label: 'Standup', config: {} }];
+
+  const [resolved] = resolveManifestInstances(kinds, instances);
+
+  assert.deepEqual(resolved.commands[0].params, { dryRun: true });
+  assert.equal(resolved.commands[0].danger, 'write');
+});
+
+test('resolveManifestInstances does not mutate the kind\'s own command declarations', () => {
+  const kinds = fakeKinds();
+  kinds.get('cron').commands = [
+    { slash: '/run', description: 'Run it', method: 'run', danger: 'write' },
+  ];
+  const instances = [
+    { id: 'standup', kind: 'cron', label: 'Standup', config: {} },
+    { id: 'weekly', kind: 'cron', label: 'Weekly', config: {} },
+  ];
+
+  resolveManifestInstances(kinds, instances);
+
+  // The kind is a shared, long-lived module object — qualifying in place would
+  // make the second instance inherit the first's prefix on a later reload.
+  assert.equal(kinds.get('cron').commands[0].method, 'run');
+});
+
+test('resolveManifestInstances omits commands for a kind that declares none', () => {
+  const kinds = fakeKinds();
+  const instances = [{ id: 'standup', kind: 'cron', label: 'Standup', config: {} }];
+
+  const [resolved] = resolveManifestInstances(kinds, instances);
+
+  assert.equal(resolved.commands, undefined);
+});

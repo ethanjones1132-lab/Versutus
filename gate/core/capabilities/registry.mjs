@@ -153,12 +153,26 @@ export function resolveManifestInstances(kinds, instances) {
       console.error(`resolveManifestInstances: toManifestEntry() threw for instance "${instance.id}": ${err.message}`);
       return null;
     }
+    // A kind declares its commands with LOCAL method names, since it is
+    // authored once, before any instance of it exists. buildInstanceHandlers
+    // registers those handlers as `<instance-id>.<localName>`, and the app
+    // calls whatever `method` we advertise verbatim — so qualify them here.
+    // Mapping to new objects rather than mutating keeps the kind module (a
+    // shared, long-lived import) clean for the next instance.
+    const commands = Array.isArray(kindModule.commands)
+      ? kindModule.commands.map((command) => ({
+          ...command,
+          method: `${instance.id}.${command.method}`,
+        }))
+      : undefined;
+
     return {
       id: instance.id,
       kind: instance.kind,
       label: instance.label,
       family: kindModule.family,
       manifestEntry,
+      ...(commands ? { commands } : {}),
     };
   }).filter((entry) => entry !== null);
 }
