@@ -142,6 +142,45 @@ export function describeKinds(kinds) {
   }));
 }
 
+/**
+ * A kind declares its commands with LOCAL method names, since it is authored
+ * once, before any instance of it exists. buildInstanceHandlers registers those
+ * handlers as `<instance-id>.<localName>`, and the app calls whatever `method`
+ * we advertise verbatim — so qualify them here.
+ *
+ * Returns undefined (not []) when the kind declares no usable commands, so the
+ * manifest omits the key entirely rather than carrying an empty array.
+ */
+function qualifyCommands(instance, kindModule) {
+  if (!Array.isArray(kindModule.commands)) return undefined;
+
+  const qualified = [];
+  for (const command of kindModule.commands) {
+    const local = command?.method;
+    if (typeof local !== 'string' || !local || local.includes('.')) {
+      // Advertising `<id>.undefined` or a double-prefixed `<id>.<id>.<name>`
+      // would put a command in the palette that matches no dispatch key and
+      // fails on every invocation — drop it loudly instead.
+      console.error(
+        `resolveManifestInstances: instance "${instance.id}" skipped a command with an invalid method ${JSON.stringify(local)} — expected a non-empty local handler name with no dot (the instance id is prefixed automatically).`,
+      );
+      continue;
+    }
+    try {
+      // Deep copy: the kind module is a shared, long-lived import, so a shallow
+      // spread would leave nested fields like `params` aliased across every
+      // instance of that kind and back into the module itself.
+      qualified.push({ ...structuredClone(command), method: `${instance.id}.${local}` });
+    } catch (err) {
+      console.error(
+        `resolveManifestInstances: instance "${instance.id}" skipped command "${local}" — it is not serializable: ${err.message}`,
+      );
+    }
+  }
+
+  return qualified.length > 0 ? qualified : undefined;
+}
+
 /** Wire-safe instance list: each instance's manifest contribution, resolved via its kind. */
 export function resolveManifestInstances(kinds, instances) {
   return instances.map((instance) => {
@@ -153,18 +192,7 @@ export function resolveManifestInstances(kinds, instances) {
       console.error(`resolveManifestInstances: toManifestEntry() threw for instance "${instance.id}": ${err.message}`);
       return null;
     }
-    // A kind declares its commands with LOCAL method names, since it is
-    // authored once, before any instance of it exists. buildInstanceHandlers
-    // registers those handlers as `<instance-id>.<localName>`, and the app
-    // calls whatever `method` we advertise verbatim — so qualify them here.
-    // Mapping to new objects rather than mutating keeps the kind module (a
-    // shared, long-lived import) clean for the next instance.
-    const commands = Array.isArray(kindModule.commands)
-      ? kindModule.commands.map((command) => ({
-          ...command,
-          method: `${instance.id}.${command.method}`,
-        }))
-      : undefined;
+    const commands = qualifyCommands(instance, kindModule);
 
     return {
       id: instance.id,

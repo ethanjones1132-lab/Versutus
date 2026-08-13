@@ -62,11 +62,14 @@ node gate/cli.mjs add-kind <kind-id> --label "<label>" --family <family>
 This creates `gate/core/capabilities/<kind-id>/kind.mjs`, scaffolded with
 the required fields (below) as empty stubs. Fill in the stubs; do not
 restructure the file, add new top-level exports, or rename the existing
-ones.
+ones. The one field you may *add* to the default export is the optional
+`commands` array described below — the scaffold omits it because most
+kinds don't need one.
 
 ### The kind contract
 
-Every `kind.mjs` exports a default object with exactly these fields:
+Every `kind.mjs` exports a default object with these fields — the first
+seven are required, `commands` is optional:
 
 ```ts
 export default {
@@ -77,8 +80,31 @@ export default {
   validate(config) -> { ok: boolean, errors: { field: string, message: string }[] },
   toManifestEntry(instance) -> object,   // what this instance advertises in the manifest
   createHandlers(instance) -> Record<string, (params) => unknown>,  // RPC methods, or {} if none
+  commands?: CapabilityCommand[],   // optional: slash commands for the app's palette
 };
 ```
+
+`commands` is the only optional field. Omit it entirely unless this kind
+should put entries in the app's `/` command palette:
+
+```ts
+type CapabilityCommand = {
+  slash: string;        // e.g. '/standup'
+  description: string;  // shown in the palette
+  method: string;       // a LOCAL handler name — see below
+  danger: 'safe' | 'write' | 'destructive';
+  params?: Record<string, unknown>;  // fixed params sent with every invocation
+};
+```
+
+**`method` must be a bare local handler name** — the same key
+`createHandlers` returns, e.g. `run`, not `standup.run`. The Gate prefixes
+it with the instance id on the way into the manifest, so an instance
+`standup` of this kind advertises `standup.run` and the app calls that.
+Writing a dotted name yourself produces `standup.standup.run`, which
+matches nothing; the Gate drops such a command with a logged reason rather
+than advertising a palette entry that fails on every invocation. Every
+command you list must have a matching key in `createHandlers`.
 
 `configFields` describes each config field declaratively:
 

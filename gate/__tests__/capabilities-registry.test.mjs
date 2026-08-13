@@ -331,3 +331,60 @@ test('resolveManifestInstances omits commands for a kind that declares none', ()
 
   assert.equal(resolved.commands, undefined);
 });
+
+test('a command\'s nested params are not shared with the kind module or a sibling instance', () => {
+  const kinds = fakeKinds();
+  kinds.get('cron').commands = [
+    { slash: '/run', description: 'Run it', method: 'run', danger: 'write', params: { dryRun: false } },
+  ];
+  const instances = [
+    { id: 'standup', kind: 'cron', label: 'Standup', config: {} },
+    { id: 'weekly', kind: 'cron', label: 'Weekly', config: {} },
+  ];
+
+  const resolved = resolveManifestInstances(kinds, instances);
+  resolved[0].commands[0].params.dryRun = true;
+
+  // A shallow spread would leave all three pointing at one object, so editing
+  // one instance's params would silently rewrite its sibling's and the kind's.
+  assert.equal(resolved[1].commands[0].params.dryRun, false);
+  assert.equal(kinds.get('cron').commands[0].params.dryRun, false);
+});
+
+test('a command with no method is skipped rather than advertised as "<id>.undefined"', () => {
+  const kinds = fakeKinds();
+  kinds.get('cron').commands = [
+    { slash: '/broken', description: 'No method', danger: 'safe' },
+    { slash: '/fine', description: 'Fine', method: 'run', danger: 'safe' },
+  ];
+  const instances = [{ id: 'standup', kind: 'cron', label: 'Standup', config: {} }];
+
+  const [resolved] = resolveManifestInstances(kinds, instances);
+
+  assert.deepEqual(resolved.commands.map((command) => command.method), ['standup.run']);
+});
+
+test('a command whose method already contains a dot is skipped, not double-prefixed', () => {
+  const kinds = fakeKinds();
+  kinds.get('cron').commands = [
+    // A kind author who misread the docs and qualified it themselves.
+    { slash: '/broken', description: 'Pre-qualified', method: 'standup.run', danger: 'safe' },
+  ];
+  const instances = [{ id: 'standup', kind: 'cron', label: 'Standup', config: {} }];
+
+  const [resolved] = resolveManifestInstances(kinds, instances);
+
+  // 'standup.standup.run' would match no dispatch key — better to drop it.
+  assert.equal(resolved.commands, undefined);
+});
+
+test('an instance whose commands are all invalid still resolves, just without commands', () => {
+  const kinds = fakeKinds();
+  kinds.get('cron').commands = [{ slash: '/broken', description: 'No method', danger: 'safe' }];
+  const instances = [{ id: 'standup', kind: 'cron', label: 'Standup', config: {} }];
+
+  const [resolved] = resolveManifestInstances(kinds, instances);
+
+  assert.equal(resolved.id, 'standup');
+  assert.equal(resolved.commands, undefined);
+});
