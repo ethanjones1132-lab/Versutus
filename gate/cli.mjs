@@ -2,76 +2,57 @@
 
 import { mkdir, writeFile, access } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createGate } from './core/server.mjs';
 import { PairingStore } from './core/pairing.mjs';
 import { DeviceTokenStore } from './core/device-tokens.mjs';
+import { validateId, buildInstanceConfigTemplate, getKindTemplate } from './core/cli-helpers.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Validate provider ID (lowercase alphanumeric + hyphens)
+ * Load a kind module by id, or null if it doesn't exist / fails to import.
  */
-function validateProviderId(id) {
-  if (!id || !/^[a-z0-9-]+$/.test(id)) {
-    return false;
+async function loadKindModule(kindId) {
+  const modulePath = join(__dirname, 'core', 'capabilities', kindId, 'kind.mjs');
+  try {
+    const module = await import(pathToFileURL(modulePath).href);
+    return module.default ?? null;
+  } catch {
+    return null;
   }
-  return true;
 }
 
 /**
- * Validate provider flavor
- */
-function validateFlavor(flavor) {
-  return ['openai', 'anthropic', 'custom'].includes(flavor);
-}
-
-/**
- * Template for new provider instance JSON
- */
-function getInstanceTemplate(id, flavor) {
-  const label = id.charAt(0).toUpperCase() + id.slice(1);
-  return JSON.stringify({
-    kind: 'provider',
-    label,
-    config: {
-      flavor,
-      baseUrl: 'https://api.example.com/v1',
-      apiKeyEnv: `${id.toUpperCase().replace(/-/g, '_')}_API_KEY`,
-      models: ['model-id-here'],
-      streaming: true,
-    },
-  }, null, 2) + '\n';
-}
-
-/**
- * Handle 'add' command: scaffold a new provider instance
+ * Handle 'add' command: scaffold a new capability instance of an existing kind
  */
 async function handleAdd(args) {
   const id = args[0];
-  const flavorIndex = args.indexOf('--flavor');
+  const kindIndex = args.indexOf('--kind');
 
   if (!id) {
     console.error('Error: instance id is required');
-    console.error('Usage: node gate/cli.mjs add <id> --flavor <openai|anthropic|custom>');
+    console.error('Usage: node gate/cli.mjs add <id> --kind <kind-id>');
     process.exit(1);
   }
 
-  if (flavorIndex === -1) {
-    console.error('Error: --flavor flag is required');
-    console.error('Usage: node gate/cli.mjs add <id> --flavor <openai|anthropic|custom>');
+  if (kindIndex === -1) {
+    console.error('Error: --kind flag is required');
+    console.error('Usage: node gate/cli.mjs add <id> --kind <kind-id>');
     process.exit(1);
   }
 
-  const flavor = args[flavorIndex + 1];
+  const kindId = args[kindIndex + 1];
 
-  if (!validateProviderId(id)) {
+  if (!validateId(id)) {
     console.error(`Error: instance id must be lowercase alphanumeric with hyphens, got "${id}"`);
     process.exit(1);
   }
 
-  if (!validateFlavor(flavor)) {
-    console.error(`Error: flavor must be one of openai, anthropic, custom, got "${flavor}"`);
+  const kindModule = await loadKindModule(kindId);
+  if (!kindModule) {
+    console.error(`Error: kind "${kindId}" not found at gate/core/capabilities/${kindId}/kind.mjs`);
+    console.error(`Run "node gate/cli.mjs add-kind ${kindId} --label \\"<label>\\" --family <family>" first, or check the kind id.`);
     process.exit(1);
   }
 
@@ -87,14 +68,78 @@ async function handleAdd(args) {
     // Instance does not exist, which is what we want
   }
 
+  const label = id.charAt(0).toUpperCase() + id.slice(1);
+  const config = buildInstanceConfigTemplate(kindModule.configFields);
+  const template = JSON.stringify({ kind: kindId, label, config }, null, 2) + '\n';
+
   // Create registry instance file
   try {
     await mkdir(registryDir, { recursive: true });
-    const template = getInstanceTemplate(id, flavor);
     await writeFile(instanceFile, template, 'utf-8');
     console.log(`Created instance "${id}" at ${instanceFile}`);
   } catch (err) {
     console.error(`Error creating instance: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Handle 'add-kind' command: scaffold a new capability kind module
+ */
+async function handleAddKind(args) {
+  const kindId = args[0];
+  const labelIndex = args.indexOf('--label');
+  const familyIndex = args.indexOf('--family');
+
+  if (!kindId) {
+    console.error('Error: kind id is required');
+    console.error('Usage: node gate/cli.mjs add-kind <kind-id> --label "<label>" --family <family>');
+    process.exit(1);
+  }
+
+  if (labelIndex === -1 || familyIndex === -1) {
+    console.error('Error: --label and --family flags are required');
+    console.error('Usage: node gate/cli.mjs add-kind <kind-id> --label "<label>" --family <family>');
+    process.exit(1);
+  }
+
+  const label = args[labelIndex + 1];
+  const family = args[familyIndex + 1];
+
+  if (!validateId(kindId)) {
+    console.error(`Error: kind id must be lowercase alphanumeric with hyphens, got "${kindId}"`);
+    process.exit(1);
+  }
+
+  if (!label) {
+    console.error('Error: --label must be a non-empty string');
+    process.exit(1);
+  }
+
+  if (!family) {
+    console.error('Error: --family must be a non-empty string');
+    process.exit(1);
+  }
+
+  const kindDir = join(__dirname, 'core', 'capabilities', kindId);
+  const kindFile = join(kindDir, 'kind.mjs');
+
+  // Check if kind already exists
+  try {
+    await access(kindFile);
+    console.error(`Error: kind "${kindId}" already exists at ${kindFile}`);
+    process.exit(1);
+  } catch {
+    // Kind does not exist, which is what we want
+  }
+
+  try {
+    await mkdir(kindDir, { recursive: true });
+    const template = getKindTemplate(kindId, label, family);
+    await writeFile(kindFile, template, 'utf-8');
+    console.log(`Created kind "${kindId}" at ${kindFile}`);
+  } catch (err) {
+    console.error(`Error creating kind: ${err.message}`);
     process.exit(1);
   }
 }
@@ -204,8 +249,13 @@ async function main() {
     console.log('Usage: node gate/cli.mjs <command> [options]');
     console.log('');
     console.log('Commands:');
-    console.log('  add <id> --flavor <openai|anthropic|custom>');
-    console.log('    Scaffold a new provider instance in gate/registry/<id>.json');
+    console.log('  add <id> --kind <kind-id>');
+    console.log('    Scaffold a new capability instance in gate/registry/<id>.json,');
+    console.log('    pre-filled from the kind\'s declared config fields');
+    console.log('');
+    console.log('  add-kind <kind-id> --label "<label>" --family <family>');
+    console.log('    Scaffold a new capability kind module at');
+    console.log('    gate/core/capabilities/<kind-id>/kind.mjs');
     console.log('');
     console.log('  start');
     console.log('    Start the Gate HTTP server on port 8760');
@@ -225,6 +275,8 @@ async function main() {
 
   if (command === 'add') {
     await handleAdd(args);
+  } else if (command === 'add-kind') {
+    await handleAddKind(args);
   } else if (command === 'start') {
     await handleStart();
   } else if (command === 'pair') {
