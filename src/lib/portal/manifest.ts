@@ -38,6 +38,80 @@ function isGatewayManifestProvider(value: unknown): value is GatewayManifestProv
   );
 }
 
+export type GatewayCapabilityField = {
+  key: string;
+  label: string;
+  type: 'string' | 'string-list' | 'number' | 'boolean' | 'enum' | 'secret-ref';
+  required?: boolean;
+  options?: string[];
+  default?: unknown;
+  help?: string;
+};
+
+export type GatewayCapabilityKind = {
+  id: string;
+  label: string;
+  family: string;
+  configFields: GatewayCapabilityField[];
+};
+
+export type GatewayCapabilityCommand = {
+  slash: string;
+  description: string;
+  method: string;
+  danger: 'safe' | 'write' | 'destructive';
+  params?: Record<string, unknown>;
+};
+
+export type GatewayCapabilityInstance = {
+  id: string;
+  kind: string;
+  label: string;
+  family: string;
+  manifestEntry?: Record<string, unknown>;
+  commands?: GatewayCapabilityCommand[];
+};
+
+function isGatewayCapabilityKind(value: unknown): value is GatewayCapabilityKind {
+  if (!value || typeof value !== 'object') return false;
+  const raw = value as Record<string, unknown>;
+  return (
+    typeof raw.id === 'string' &&
+    raw.id.length > 0 &&
+    typeof raw.label === 'string' &&
+    typeof raw.family === 'string' &&
+    raw.family.length > 0 &&
+    Array.isArray(raw.configFields)
+  );
+}
+
+function isGatewayCapabilityInstance(value: unknown): value is GatewayCapabilityInstance {
+  if (!value || typeof value !== 'object') return false;
+  const raw = value as Record<string, unknown>;
+  return (
+    typeof raw.id === 'string' &&
+    raw.id.length > 0 &&
+    typeof raw.kind === 'string' &&
+    raw.kind.length > 0 &&
+    typeof raw.label === 'string' &&
+    typeof raw.family === 'string' &&
+    raw.family.length > 0
+  );
+}
+
+function isGatewayCapabilityCommand(value: unknown): value is GatewayCapabilityCommand {
+  if (!value || typeof value !== 'object') return false;
+  const raw = value as Record<string, unknown>;
+  return (
+    typeof raw.slash === 'string' &&
+    raw.slash.startsWith('/') &&
+    typeof raw.method === 'string' &&
+    raw.method.length > 0 &&
+    typeof raw.description === 'string' &&
+    (raw.danger === 'safe' || raw.danger === 'write' || raw.danger === 'destructive')
+  );
+}
+
 export type GatewayManifest = {
   manifest: string;
   /** 'hermes' | 'openclaw' | custom kind id (any other string → 'custom'). */
@@ -62,6 +136,8 @@ export type GatewayManifest = {
   };
   endpoints?: Record<string, string>;
   providers?: GatewayManifestProvider[];
+  capabilityKinds?: GatewayCapabilityKind[];
+  capabilityInstances?: GatewayCapabilityInstance[];
 };
 
 export function isGatewayManifest(value: unknown): value is GatewayManifest {
@@ -110,6 +186,32 @@ export function manifestCapabilityList(manifest: GatewayManifest): string[] {
 export function manifestProviders(manifest: GatewayManifest): GatewayManifestProvider[] {
   if (!Array.isArray(manifest.providers)) return [];
   return manifest.providers.filter(isGatewayManifestProvider);
+}
+
+/**
+ * Every well-formed capability kind a gate advertises. A malformed entry is
+ * dropped, not thrown — same discipline as manifestProviders().
+ */
+export function manifestCapabilityKinds(manifest: GatewayManifest): GatewayCapabilityKind[] {
+  if (!Array.isArray(manifest.capabilityKinds)) return [];
+  return manifest.capabilityKinds.filter(isGatewayCapabilityKind);
+}
+
+/** Every well-formed configured capability instance a gate advertises. */
+export function manifestCapabilityInstances(manifest: GatewayManifest): GatewayCapabilityInstance[] {
+  if (!Array.isArray(manifest.capabilityInstances)) return [];
+  return manifest.capabilityInstances.filter(isGatewayCapabilityInstance);
+}
+
+/**
+ * Every well-formed command a gate's instances contribute, flattened across
+ * instances. A malformed command is dropped so it can never reach the palette
+ * as an entry that could only fail.
+ */
+export function manifestDynamicCommands(manifest: GatewayManifest): GatewayCapabilityCommand[] {
+  return manifestCapabilityInstances(manifest).flatMap((instance) =>
+    Array.isArray(instance.commands) ? instance.commands.filter(isGatewayCapabilityCommand) : [],
+  );
 }
 
 /**
