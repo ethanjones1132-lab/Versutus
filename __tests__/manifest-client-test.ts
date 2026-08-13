@@ -36,6 +36,14 @@ function jsonResponse(body: unknown, status = 200) {
   } as unknown as Response;
 }
 
+function clientWithEndpoints(endpoints: Record<string, string>) {
+  const identity: GatewayIdentity = {
+    ...IDENTITY,
+    manifest: { ...IDENTITY.manifest!, endpoints },
+  };
+  return new ManifestClient(PROFILE, identity, {});
+}
+
 describe('ManifestClient', () => {
   const realFetch = globalThis.fetch;
   afterEach(() => {
@@ -178,5 +186,49 @@ describe('ManifestClient — capabilities the manifest does not advertise', () =
   test('stopRun names the missing capability', async () => {
     const client = new ManifestClient(PROFILE, IDENTITY, {});
     await expect(client.stopRun('r1')).rejects.toThrow(/run/i);
+  });
+});
+
+describe('rpcRequest against a gate advertising capabilitiesRpc', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+  });
+
+  test('posts {method, params} and unwraps the result envelope', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      text: async () => JSON.stringify({ result: { ranInstance: 'standup' } }),
+      json: async () => ({ result: { ranInstance: 'standup' } }),
+    });
+    global.fetch = fetchMock as any;
+
+    const client = clientWithEndpoints({ health: '/health', capabilitiesRpc: '/v1/capabilities/rpc' });
+    const result = await client.rpcRequest('standup.run', { dryRun: true });
+
+    expect(result).toEqual({ ranInstance: 'standup' });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain('/v1/capabilities/rpc');
+    expect(JSON.parse(init.body)).toEqual({ method: 'standup.run', params: { dryRun: true } });
+  });
+
+  test('throws the gateway error message when the envelope carries one', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      text: async () => JSON.stringify({ error: { message: 'instance "nope" not found', code: 'rpc_error' } }),
+      json: async () => ({ error: { message: 'instance "nope" not found', code: 'rpc_error' } }),
+    }) as any;
+
+    const client = clientWithEndpoints({ health: '/health', capabilitiesRpc: '/v1/capabilities/rpc' });
+    await expect(client.rpcRequest('registry.instances.get', { id: 'nope' })).rejects.toThrow(/not found/);
+  });
+
+  test('still throws a named error when the manifest advertises no rpc endpoint', async () => {
+    const client = clientWithEndpoints({ health: '/health' });
+    await expect(client.rpcRequest('anything')).rejects.toThrow(/not supported/);
   });
 });

@@ -295,10 +295,29 @@ export class ManifestClient implements PortalClient {
     );
   }
 
-  async rpcRequest<T = unknown>(method: string, _params: Record<string, unknown> = {}): Promise<T> {
-    throw new Error(
-      `${method} is not supported by ${this.identity.kindLabel} — it only advertises: ${Object.keys(this.endpoints).join(', ') || 'nothing'}.`,
-    );
+  /**
+   * Generic capability RPC. A gate that advertises `capabilitiesRpc` can
+   * answer both its built-in `registry.*` methods and anything its capability
+   * instances contribute (design spec §6/§8). A gate that doesn't advertise it
+   * keeps the old named error rather than guessing at a path.
+   */
+  async rpcRequest<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+    const path = this.endpoints.capabilitiesRpc;
+    if (!path) {
+      throw new Error(
+        `${method} is not supported by ${this.identity.kindLabel} — it only advertises: ${Object.keys(this.endpoints).join(', ') || 'nothing'}.`,
+      );
+    }
+
+    const body = await this.transport.request<{
+      result?: T;
+      error?: { message?: string; code?: string };
+    }>('POST', path, { method, params });
+
+    if (body?.error) {
+      throw new Error(body.error.message ?? `${method} failed on ${this.identity.kindLabel}.`);
+    }
+    return body?.result as T;
   }
 
   async stopRun(_runId: string): Promise<void> {
