@@ -87,6 +87,16 @@ export default function RootLayout() {
                   headerTintColor: VersutusDarkTheme.colors.text,
                 }}
               />
+              <Stack.Screen
+                name="gateway/capabilities"
+                options={{
+                  presentation: 'modal',
+                  headerShown: true,
+                  title: 'Capabilities',
+                  headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                  headerTintColor: VersutusDarkTheme.colors.text,
+                }}
+              />
               {__DEV__ ? <Stack.Screen name="dev" options={{ headerShown: false }} /> : null}
             </Stack>
           </AppBootstrap>

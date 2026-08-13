@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { type Href, useRouter } from 'expo-router';
 import { Alert, StyleSheet, View } from 'react-native';
 
 import * as Haptics from 'expo-haptics';
@@ -140,6 +140,16 @@ export function GatewayHomeDashboard() {
               router.push('/terminal');
             }}
             disabled={!activeGateway}
+            variant="secondary"
+            style={styles.primaryAction}
+          />
+          <Button
+            label="Capabilities"
+            onPress={async () => {
+              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/gateway/capabilities' as Href);
+            }}
+            disabled={!connected}
             variant="secondary"
             style={styles.primaryAction}
           />

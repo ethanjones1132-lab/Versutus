@@ -277,7 +277,8 @@ export async function createGate(config = {}) {
         /^\/p\/[^/]+\/v1\/models$/.test(pathname) ||
         (pathname === '/v1/chat/completions' && method === 'POST') ||
         /^\/p\/[^/]+\/v1\/chat\/completions$/.test(pathname) ||
-        (pathname === '/v1/capabilities/rpc' && method === 'POST');
+        (pathname === '/v1/capabilities/rpc' && method === 'POST') ||
+        /^\/p\/[^/]+\/v1\/capabilities\/rpc$/.test(pathname);
 
       if (!isKnownAuthenticatedRoute) {
         // Unknown route - return 404
@@ -385,9 +386,10 @@ export async function createGate(config = {}) {
         return;
       }
 
-      // /v1/capabilities/rpc - generic dispatch for registry.* built-ins and
-      // instance-contributed methods
-      if (pathname === '/v1/capabilities/rpc' && method === 'POST') {
+      // /v1/capabilities/rpc — also remounted under /p/{id} so a child
+      // profile whose baseUrl is /p/{id} can POST the advertised path.
+      const rpcMatch = pathname === '/v1/capabilities/rpc' || /^\/p\/[^/]+\/v1\/capabilities\/rpc$/.test(pathname);
+      if (rpcMatch && method === 'POST') {
         const body = await readJsonBody(req);
         const rpcMethod = body?.method;
         const params = body?.params ?? {};

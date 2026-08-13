@@ -1,4 +1,5 @@
 import { isAuthRejection } from '@/lib/gateway/errors';
+import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
 import { HttpTransport } from '@/lib/gateway/http-transport';
 import { ConnectionMonitor, HEALTH_INTERVAL_MS } from '@/lib/gateway/connection-monitor';
 import type { GatewayIdentity } from '@/lib/portal/identify';
@@ -11,7 +12,16 @@ import type {
   HermesSession,
   ModelInfo,
   SessionMessage,
+  SessionMessagesResponse,
+  SessionsResponse,
 } from '@/lib/gateway/types';
+
+function interpolatePath(path: string, vars: Record<string, string>): string {
+  return path.replace(/\{(\w+)\}|:(\w+)/g, (_match, named?: string, colon?: string) => {
+    const key = named ?? colon ?? '';
+    return vars[key] ?? '';
+  });
+}
 
 /**
  * A PortalClient for any gateway that serves the Open Gateway Manifest and
@@ -27,6 +37,7 @@ export class ManifestClient implements PortalClient {
   private detail = '';
   private currentSessionId: string | undefined;
   private transport: HttpTransport;
+  private rootTransport: HttpTransport;
   private monitor: ConnectionMonitor;
   private endpoints: Record<string, string>;
 
@@ -38,6 +49,11 @@ export class ManifestClient implements PortalClient {
     this.endpoints = identity.manifest?.endpoints ?? {};
     this.transport = new HttpTransport({
       baseUrl: profile.url,
+      token: profile.token,
+      sessionKey: profile.sessionKey,
+    });
+    this.rootTransport = new HttpTransport({
+      baseUrl: gatewayRootUrl(profile.url),
       token: profile.token,
       sessionKey: profile.sessionKey,
     });
@@ -70,6 +86,11 @@ export class ManifestClient implements PortalClient {
   updateProfile(profile: GatewayProfile) {
     this.profile = profile;
     this.transport.update({ baseUrl: profile.url, token: profile.token, sessionKey: profile.sessionKey });
+    this.rootTransport.update({
+      baseUrl: gatewayRootUrl(profile.url),
+      token: profile.token,
+      sessionKey: profile.sessionKey,
+    });
   }
 
   /** The manifest-declared path for `name`, or throws a named error. */
@@ -283,16 +304,38 @@ export class ManifestClient implements PortalClient {
     return fullText;
   }
 
-  async getSessions(_limit?: number): Promise<HermesSession[]> {
-    throw new Error(
-      `${this.identity.kindLabel} does not advertise session management. This gate has no /api/sessions-style endpoint declared in its manifest.`,
+  async getSessions(limit = 20): Promise<HermesSession[]> {
+    const path = this.endpoints.sessions;
+    if (!path) {
+      throw new Error(
+        `${this.identity.kindLabel} does not advertise session management. This gate has no /api/sessions-style endpoint declared in its manifest.`,
+      );
+    }
+    const separator = path.includes('?') ? '&' : '?';
+    const result = await this.rootTransport.request<SessionsResponse | HermesSession[]>(
+      'GET',
+      `${path}${separator}limit=${limit}`,
     );
+    return Array.isArray(result) ? result : result.data ?? [];
   }
 
-  async getSessionMessages(_sessionId: string, _limit?: number): Promise<SessionMessage[]> {
-    throw new Error(
-      `${this.identity.kindLabel} does not advertise session management, so message history is unavailable. This gate has no sessions endpoint declared in its manifest.`,
+  async getSessionMessages(sessionId: string, limit = 50): Promise<SessionMessage[]> {
+    const template = this.endpoints.sessionMessages;
+    const sessions = this.endpoints.sessions;
+    if (!template && !sessions) {
+      throw new Error(
+        `${this.identity.kindLabel} does not advertise session management, so message history is unavailable. This gate has no sessions endpoint declared in its manifest.`,
+      );
+    }
+    const path = template
+      ? interpolatePath(template, { id: sessionId, sessionId })
+      : `${sessions!.replace(/\/+$/, '')}/${sessionId}/messages`;
+    const separator = path.includes('?') ? '&' : '?';
+    const result = await this.rootTransport.request<SessionMessagesResponse | SessionMessage[]>(
+      'GET',
+      `${path}${separator}limit=${limit}`,
     );
+    return Array.isArray(result) ? result : result.data ?? [];
   }
 
   /**
@@ -309,7 +352,7 @@ export class ManifestClient implements PortalClient {
       );
     }
 
-    const body = await this.transport.request<{
+    const body = await this.rootTransport.request<{
       result?: T;
       error?: { message?: string; code?: string };
     }>('POST', path, { method, params });
@@ -320,8 +363,18 @@ export class ManifestClient implements PortalClient {
     return body?.result as T;
   }
 
-  async stopRun(_runId: string): Promise<void> {
-    throw new Error(`${this.identity.kindLabel} does not advertise run management, so a run cannot be stopped remotely.`);
+  async stopRun(runId: string): Promise<void> {
+    const template = this.endpoints.stopRun;
+    const runs = this.endpoints.runs;
+    if (!template && !runs) {
+      throw new Error(
+        `${this.identity.kindLabel} does not advertise run management, so a run cannot be stopped remotely.`,
+      );
+    }
+    const path = template
+      ? interpolatePath(template, { id: runId, runId })
+      : `${runs!.replace(/\/+$/, '')}/${runId}/stop`;
+    await this.rootTransport.request<unknown>('POST', path, {});
   }
 
   private setStatus(status: ConnectionStatus, detail = '') {

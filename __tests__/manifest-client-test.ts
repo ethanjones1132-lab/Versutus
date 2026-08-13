@@ -231,4 +231,80 @@ describe('rpcRequest against a gate advertising capabilitiesRpc', () => {
     const client = clientWithEndpoints({ health: '/health' });
     await expect(client.rpcRequest('anything')).rejects.toThrow(/not supported/);
   });
+
+  test('posts capabilitiesRpc against the parent origin when the profile is a child /p/{id}', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ result: { ok: true } }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const child: GatewayProfile = {
+      ...PROFILE,
+      url: 'http://gate.test:8760/p/nvidia',
+      parentId: 'parent',
+    };
+    const identity: GatewayIdentity = {
+      ...IDENTITY,
+      manifest: {
+        ...IDENTITY.manifest!,
+        endpoints: { health: '/health', capabilitiesRpc: '/v1/capabilities/rpc' },
+      },
+    };
+    const client = new ManifestClient(child, identity, {});
+    await client.rpcRequest('standup.run', {});
+
+    expect(String(fetchMock.mock.calls[0][0])).toBe('http://gate.test:8760/v1/capabilities/rpc');
+  });
 });
+
+describe('ManifestClient sessions and runs when advertised', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+  });
+
+  test('getSessions GETs the advertised sessions path', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ object: 'list', data: [{ id: 's1', source: 'gate' }] }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({ health: '/health', sessions: '/api/sessions' });
+    const sessions = await client.getSessions(10);
+    expect(sessions).toEqual([{ id: 's1', source: 'gate' }]);
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/sessions?limit=10');
+  });
+
+  test('getSessionMessages GETs the advertised sessions path plus id/messages', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ object: 'list', data: [{ role: 'user', content: 'hi' }] }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({ health: '/health', sessions: '/api/sessions' });
+    const messages = await client.getSessionMessages('abc', 20);
+    expect(messages).toEqual([{ role: 'user', content: 'hi' }]);
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/sessions/abc/messages?limit=20');
+  });
+
+  test('stopRun POSTs the advertised stopRun path with the run id', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({}),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({ health: '/health', stopRun: '/v1/runs/{id}/stop' });
+    await client.stopRun('run-9');
+    expect(String(fetchMock.mock.calls[0][0])).toBe('http://gate.test:8760/v1/runs/run-9/stop');
+    expect(fetchMock.mock.calls[0][1].method).toBe('POST');
+  });
+});
+

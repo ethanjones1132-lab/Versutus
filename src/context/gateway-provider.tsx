@@ -9,7 +9,9 @@ import { createMessageId, historyToChatMessages, pickAppSession } from '@/lib/ga
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { categorizeProbeError, probeGatewayCandidates, probeGatewayUrl, probeHighPriorityCandidates } from '@/lib/gateway/probe';
 import { isSlashCommandInput } from '@/lib/gateway/slash-commands';
-import { GATEWAY_COMMANDS, type GatewayCommand } from '@/lib/gateway/dashboard';
+import { findConfirmableSlash } from '@/lib/gateway/command-match';
+import { GATEWAY_COMMANDS } from '@/lib/gateway/dashboard';
+import { manifestUrlForGateway } from '@/lib/gateway/gateway-origin';
 import { loadRecentCommands, pushRecentCommand } from '@/lib/gateway/recents';
 import { ACTIVITY_EVENT_CAP, executeRun, runEventPreview, type ActivityRun, type RunCapableClient } from '@/lib/gateway/runs';
 import {
@@ -224,7 +226,7 @@ function safeStringify(value: unknown): string {
 
 async function buildActionPreview(
   input: string,
-  command: GatewayCommand | null,
+  command: { label: string; danger?: string } | null,
   label: string,
   gatewayRequest: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>,
 ): Promise<GatewayActionPreview> {
@@ -280,20 +282,7 @@ async function buildActionPreview(
   };
 }
 
-function findMatchingCommand(input: string) {
-  const tokens = input.trim().toLowerCase().split(/\s+/);
-  for (let depth = tokens.length; depth >= 1; depth -= 1) {
-    const prefix = tokens.slice(0, depth).join(' ');
-    const match = GATEWAY_COMMANDS.find((command) => {
-      const slashes = [command.slash, ...(command.aliases ?? [])]
-        .filter(Boolean)
-        .map((item) => item!.toLowerCase());
-      return slashes.includes(prefix);
-    });
-    if (match) return match;
-  }
-  return undefined;
-}
+
 
 function configuredGatewayHosts(): string[] {
   const hosts = new Set<string>();
@@ -562,19 +551,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       clientRef.current?.disconnect();
 
       let identityForClient: GatewayIdentity | undefined;
+      let parentUrl: string | undefined;
       if (gateway.kind === 'custom') {
         // Child profiles are materialised under parent.url + basePath and do
         // not host their own well-known manifest — fetch the parent's.
-        let manifestUrl = gateway.url;
         if (gateway.parentId) {
           const known = await loadGateways();
-          const parent = known.find((item) => item.id === gateway.parentId);
-          if (parent) manifestUrl = parent.url;
+          parentUrl = known.find((item) => item.id === gateway.parentId)?.url;
         }
+        const manifestUrl = manifestUrlForGateway(gateway, parentUrl);
         const manifest = await fetchGatewayManifest(manifestUrl).catch(() => null);
         // Another attachClient may have superseded us while we awaited.
         if (!isCurrent()) return;
         if (manifest) {
+          setActiveManifest(manifest);
           identityForClient = {
             kind: 'custom',
             kindLabel: manifestKindLabel(manifest),
@@ -663,12 +653,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
       // Fetch is cheap and idempotent; only a manifest-serving gate returns
       // providers[] at all, so this is a no-op against Hermes/OpenClaw.
-      void fetchGatewayManifest(gateway.url)
+      // Always use the parent origin — a child /p/{id} URL does not host the
+      // well-known document, and syncing children from a child is wrong.
+      void fetchGatewayManifest(manifestUrlForGateway(gateway, parentUrl))
         .then((manifest) => {
           if (!manifest || !isCurrent()) return;
-          // Kept, not discarded: capabilityInstances[] drives the capability
-          // snapshot and the slash palette (design spec §8).
           setActiveManifest(manifest);
+          if (gateway.parentId) return undefined;
           return syncChildProfiles(gateway, manifestProviders(manifest));
         })
         .then((next) => {
@@ -1087,6 +1078,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       clientRef.current = null;
       setActiveGateway(null);
       setActiveHello(null);
+      setActiveManifest(null);
+      setLiveCapabilities(null);
+      setStatus('disconnected');
       setMessages([]);
       await saveActiveGatewayId(null);
       if (settings.autoConnect && next.length > 0) {
@@ -1411,7 +1405,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         appendLocalMessage('user', trimmed);
       }
       const commandLabel = readCommandLabel(trimmed);
-      const matchingCmd = findMatchingCommand(trimmed);
+      const matchingCmd = findConfirmableSlash(trimmed, dynamicCommands);
       const hasConfirmFlag = trimmed.includes('--confirm');
 
       const needsConfirmation =
@@ -1817,6 +1811,20 @@ const response = await executeGatewaySlashCommand(trimmed, {
       if (client && status === 'connected') {
         await client.healthCheck();
         void client.getCapabilities().then(setLiveCapabilities).catch(() => undefined);
+      }
+      const known = await loadGateways();
+      const parent = activeGateway.parentId
+        ? known.find((item) => item.id === activeGateway.parentId)
+        : undefined;
+      const manifest = await fetchGatewayManifest(
+        manifestUrlForGateway(activeGateway, parent?.url),
+      ).catch(() => null);
+      if (manifest) {
+        setActiveManifest(manifest);
+        if (!activeGateway.parentId) {
+          const next = await syncChildProfiles(activeGateway, manifestProviders(manifest));
+          if (next) setGateways(next);
+        }
       }
       setCapabilityCheckedAt(Date.now());
     } catch {

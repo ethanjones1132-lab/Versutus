@@ -86,6 +86,22 @@ test('dispatches to an instance-contributed method', async () => {
   }
 });
 
+test('dispatches rpc remounted under a provider child prefix', async () => {
+  const gate = await gateWithCronKind();
+  try {
+    const response = await fetch(`http://localhost:${gate.port}/p/nvidia/v1/capabilities/rpc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` },
+      body: JSON.stringify({ method: 'standup.run' }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body.result, { ranInstance: 'standup' });
+  } finally {
+    await gate.close();
+  }
+});
+
 test('returns 404 for an unknown method', async () => {
   const gate = await gateWithCronKind();
   try {
