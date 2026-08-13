@@ -18,7 +18,8 @@ async function loadKindModule(kindId) {
   try {
     const module = await import(pathToFileURL(modulePath).href);
     return module.default ?? null;
-  } catch {
+  } catch (err) {
+    console.error(`(kind "${kindId}" failed to load: ${err.message})`);
     return null;
   }
 }
@@ -46,6 +47,11 @@ async function handleAdd(args) {
 
   if (!validateId(id)) {
     console.error(`Error: instance id must be lowercase alphanumeric with hyphens, got "${id}"`);
+    process.exit(1);
+  }
+
+  if (!validateId(kindId)) {
+    console.error(`Error: kind id must be lowercase alphanumeric with hyphens, got "${kindId}"`);
     process.exit(1);
   }
 
