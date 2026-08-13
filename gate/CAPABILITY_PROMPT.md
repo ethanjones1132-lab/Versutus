@@ -60,7 +60,7 @@ node gate/cli.mjs add-kind <kind-id> --label "<label>" --family <family>
   be — several kinds can share one family).
 
 This creates `gate/core/capabilities/<kind-id>/kind.mjs`, scaffolded with
-the five required exports (below) as empty stubs. Fill in the stubs; do not
+the required fields (below) as empty stubs. Fill in the stubs; do not
 restructure the file, add new top-level exports, or rename the existing
 ones.
 

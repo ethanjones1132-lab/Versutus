@@ -35,7 +35,7 @@ export function buildInstanceConfigTemplate(configFields) {
   return config;
 }
 
-/** Source text for a newly-scaffolded kind.mjs — the five required exports
+/** Source text for a newly-scaffolded kind.mjs — the required fields
  *  as empty holes, matching how `add` scaffolds a provider config's holes. */
 export function getKindTemplate(kindId, label, family) {
   return `export default {
