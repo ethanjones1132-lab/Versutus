@@ -783,7 +783,7 @@ compatibility, a `providers[]` array derived from instances of kind
 ```json
 {
   "providers": [
-    { "id": "my-openai", "label": "OpenAI Production", "models": ["..."], "capabilities": { "chat": true, "streaming": true } }
+    { "id": "my-openai", "label": "OpenAI Production", "basePath": "/p/my-openai", "models": ["..."], "capabilities": { "chat": true, "streaming": true } }
   ],
   "capabilityKinds": [
     { "id": "provider", "label": "Model provider", "family": "provider", "configFields": ["..."] }
@@ -811,10 +811,12 @@ curl -H "Authorization: Bearer <token>" http://127.0.0.1:8760/v1/models
 ## Troubleshooting
 
 ### An instance isn't loading
-- Check that the file exists: `gate/registry/<id>.json`
-- Check the Gate startup logs for a validation error
-- Call `registry.instances.list` over RPC — a skipped instance's reason
-  is visible there
+- Check that the file exists: `gate/registry/<id>.json` and is valid JSON
+- Check that `kind` matches an already-registered kind, and that `config`
+  satisfies every field the kind's `validate()` requires
+- A skipped instance does not currently appear anywhere at runtime — it's
+  silently absent from `registry.instances.list` and the manifest, with no
+  logged reason. This is a known gap, not yet wired up.
 
 ### `add` fails with "kind not found"
 - The kind hasn't been scaffolded yet — run `add-kind` first, or check the
