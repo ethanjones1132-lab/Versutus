@@ -57,7 +57,7 @@ cd gate
 node --env-file=.env cli.mjs start
 ```
 
-Providers live at `gate/registry/<id>.json` (example: `nvidia`), scaffolded via `node cli.mjs add <id> --flavor <openai|anthropic|custom>` and validated against `gate/core/capabilities/provider/kind.mjs`. Tokens print on start and may be cached in `gate/.tokens.json` (gitignored patterns apply).
+Providers live at `gate/registry/<id>.json` (example: `nvidia`), scaffolded via `node cli.mjs add <id> --kind provider` (fill in the generated template per `gate/CAPABILITY_PROMPT.md`) and validated against `gate/core/capabilities/provider/kind.mjs`. Tokens print on start and may be cached in `gate/.tokens.json` (gitignored patterns apply).
 
 ## Verification
 
