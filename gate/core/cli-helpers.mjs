@@ -39,9 +39,9 @@ export function buildInstanceConfigTemplate(configFields) {
  *  as empty holes, matching how `add` scaffolds a provider config's holes. */
 export function getKindTemplate(kindId, label, family) {
   return `export default {
-  kind: '${kindId}',
-  label: '${label}',
-  family: '${family}',
+  kind: ${JSON.stringify(kindId)},
+  label: ${JSON.stringify(label)},
+  family: ${JSON.stringify(family)},
   configFields: [
     // Describe this kind's config fields here, e.g.:
     // { key: 'example', label: 'Example', type: 'string', required: true },

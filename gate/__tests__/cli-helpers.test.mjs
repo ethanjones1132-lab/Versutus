@@ -62,9 +62,9 @@ test('buildInstanceConfigTemplate returns an empty object for no fields', () => 
 
 test('getKindTemplate produces importable ESM naming the given kind/label/family', () => {
   const source = getKindTemplate('cron', 'Scheduled jobs', 'cron');
-  assert.match(source, /kind: 'cron'/);
-  assert.match(source, /label: 'Scheduled jobs'/);
-  assert.match(source, /family: 'cron'/);
+  assert.match(source, /kind: "cron"/);
+  assert.match(source, /label: "Scheduled jobs"/);
+  assert.match(source, /family: "cron"/);
   assert.match(source, /export default \{/);
 });
 
@@ -85,4 +85,18 @@ test('getKindTemplate output is actually valid, importable JS', async () => {
   assert.deepEqual(module.default.configFields, []);
   assert.deepEqual(module.default.validate({}), { ok: true, errors: [] });
   assert.deepEqual(module.default.createHandlers({ id: 'x' }), {});
+});
+
+test('getKindTemplate safely escapes a label containing a quote and apostrophe', async () => {
+  const { writeFile, mkdtemp } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+
+  const dir = await mkdtemp(join(tmpdir(), 'cli-helpers-kind-quote-'));
+  const filePath = join(dir, 'kind.mjs');
+  await writeFile(filePath, getKindTemplate('note', `O'Brien's "Notes"`, 'note'), 'utf8');
+
+  const module = await import(pathToFileURL(filePath).href);
+  assert.equal(module.default.label, `O'Brien's "Notes"`);
 });

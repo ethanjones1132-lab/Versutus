@@ -1,17 +1,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile, rm, mkdtemp } from 'node:fs/promises';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile, rm, access } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const gateDir = join(__dirname, '..');
+const cliPath = join(gateDir, 'cli.mjs');
 
 /**
- * Test helper: run a CLI command and capture stdout/stderr
+ * Test helper: run a CLI command and capture stdout/stderr. Resolves the
+ * CLI script and its cwd relative to this test file, not process.cwd(),
+ * so this file behaves identically whether the suite is invoked from the
+ * repo root or from gate/ (matching this project's other test files).
  */
 async function runCli(args) {
   return new Promise((resolve) => {
-    const proc = spawn('node', ['gate/cli.mjs', ...args], {
-      cwd: process.cwd(),
+    const proc = spawn('node', [cliPath, ...args], {
+      cwd: gateDir,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -42,13 +49,11 @@ test('path traversal attack with --kind "../evil" is rejected at validation', as
   assert.match(result.stderr, /\.\./, 'error message should show the attempted path traversal');
 
   // Verify no instance file was created
-  const { promises: fs } = await import('node:fs');
-  try {
-    await fs.access('gate/registry/test-instance.json');
-    throw new Error('instance file should not have been created');
-  } catch (err) {
-    assert.match(err.message, /ENOENT|instance file should not/, 'instance file should not exist');
-  }
+  await assert.rejects(
+    access(join(gateDir, 'registry', 'test-instance.json')),
+    /ENOENT/,
+    'instance file should not exist',
+  );
 });
 
 test('path traversal with --kind "." is rejected at validation', async () => {
@@ -59,12 +64,7 @@ test('path traversal with --kind "." is rejected at validation', async () => {
 });
 
 test('kind module that throws at import time is reported distinctly from "not found"', async () => {
-  // Create a temporary broken kind module
-  const tmpDir = await mkdtemp(join(tmpdir(), 'cli-security-broken-kind-'));
-  const kindDir = join(tmpDir, '..', 'gate', 'core', 'capabilities', 'broken-kind-test');
-
-  // Set up a temporary directory to mock the kind
-  const mockKindPath = join(process.cwd(), 'gate', 'core', 'capabilities', 'broken-kind-test');
+  const mockKindPath = join(gateDir, 'core', 'capabilities', 'broken-kind-test');
 
   try {
     // Create the broken kind directory
@@ -86,24 +86,14 @@ test('kind module that throws at import time is reported distinctly from "not fo
     assert.match(result.stderr, /Intentional import-time error/, 'should show the actual error message');
 
     // Verify no instance file was created
-    try {
-      await import('node:fs/promises').then((fs) => fs.access('gate/registry/test-instance.json'));
-      throw new Error('instance file should not have been created');
-    } catch (err) {
-      assert.match(err.message, /ENOENT|instance file should not/, 'instance file should not exist');
-    }
+    await assert.rejects(
+      access(join(gateDir, 'registry', 'test-instance.json')),
+      /ENOENT/,
+      'instance file should not exist',
+    );
   } finally {
     // Clean up the broken kind
-    try {
-      await rm(mockKindPath, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
-    try {
-      await rm(tmpDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
+    await rm(mockKindPath, { recursive: true, force: true }).catch(() => {});
   }
 });
 

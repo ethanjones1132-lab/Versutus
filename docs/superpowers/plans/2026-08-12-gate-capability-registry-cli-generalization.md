@@ -759,8 +759,9 @@ node gate/cli.mjs start
 ## Validation
 
 Every instance is validated against its kind's `validate()` on load. A
-config that fails validation is skipped with a logged reason — it never
-takes down the Gate or any other instance.
+config that fails validation is silently skipped — it never takes down the
+Gate or any other instance, but the reason isn't currently surfaced
+anywhere at runtime (see Troubleshooting below).
 
 For `provider` specifically:
 - `flavor` must be one of `openai`, `anthropic`, `custom`
