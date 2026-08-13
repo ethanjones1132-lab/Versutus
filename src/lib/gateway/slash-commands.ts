@@ -6,6 +6,7 @@ import {
 } from '@/lib/gateway/dashboard';
 import type { GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
 import type { RunOutcome } from '@/lib/gateway/runs';
+import type { GatewayCapabilityCommand } from '@/lib/portal/manifest';
 
 const UNSUPPORTED_NOTE = 'Not offered by this gateway';
 
@@ -51,6 +52,12 @@ type SlashCommandContext = {
    * hitting a known-broken endpoint.
    */
   methods?: Record<string, GatewayMethodAvailability>;
+  /**
+   * Commands contributed by the connected gateway's capability instances
+   * (design spec §8). Tried only after every built-in has had its chance,
+   * so a gateway can never shadow a first-party command.
+   */
+  dynamicCommands?: GatewayCapabilityCommand[];
 };
 
 type ConfigSnapshot = {
@@ -147,6 +154,7 @@ export function getSlashCommandSuggestions(
    * implement — the user then types commands that can only fail.
    */
   methods: Record<string, GatewayMethodAvailability> = {},
+  dynamicCommands: GatewayCapabilityCommand[] = [],
 ): SlashCommandSuggestion[] {
   const needle = input.trimStart().toLowerCase();
 
@@ -185,7 +193,26 @@ export function getSlashCommandSuggestions(
     unavailable: false,
   }));
 
-  let suggestions = [...recentSuggestions, ...localWithMeta, ...registrySuggestions];
+  // Instance-contributed commands. A slash already claimed by a built-in is
+  // dropped rather than shadowing it — the same precedence the executor uses.
+  const builtInSlashes = new Set<string>([
+    ...GATEWAY_COMMANDS.map((command) => command.slash).filter(
+      (slash): slash is string => Boolean(slash),
+    ),
+    ...LOCAL_SUGGESTIONS.map((suggestion) => suggestion.value),
+  ]);
+  const dynamicSuggestions: SlashCommandSuggestion[] = dynamicCommands
+    .filter((command) => !builtInSlashes.has(command.slash))
+    .map((command) => ({
+      value: command.slash,
+      label: command.slash,
+      description: command.description,
+      danger: command.danger,
+      family: 'Capability',
+      unavailable: false,
+    }));
+
+  let suggestions = [...recentSuggestions, ...localWithMeta, ...registrySuggestions, ...dynamicSuggestions];
 
   if (needle) {
     // Simple fuzzy-ish filter: startsWith or includes
@@ -305,10 +332,31 @@ export async function executeGatewaySlashCommand(
 
   const command = findCommandBySlash(commandName);
   if (!command) {
+    // Reached only after every built-in dispatch above has declined, so a
+    // gateway-advertised slash can never take precedence over a first-party one.
+    const dynamic = context.dynamicCommands?.find((entry) => entry.slash === commandName);
+    if (dynamic) return runDynamicCommand(dynamic, argText, context);
     return textResult(`Unknown command: ${commandName}\n\n${formatHelp(context.hello)}`, commandName);
   }
 
   return runCommand(command, context);
+}
+
+async function runDynamicCommand(
+  command: GatewayCapabilityCommand,
+  argText: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  const params: Record<string, unknown> = { ...(command.params ?? {}) };
+  const trimmed = argText.trim();
+  if (trimmed) params.input = trimmed;
+
+  const result = await context.gatewayRequest(command.method, params);
+  return textResult(
+    typeof result === 'string' ? result : compactJson(result),
+    command.slash,
+    typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+  );
 }
 
 function findCommandBySlash(value: string): GatewayCommand | undefined {
