@@ -26,9 +26,17 @@
 ?? __tests__/slash-commands-test.ts     ← this plan extends (Task 3)
 ```
 
-A worktree branches from `HEAD`, which does **not** contain these changes. Merging this plan's branch back will hit "local changes would be overwritten" on `slash-commands.ts` and `gateway-provider.tsx`.
+**✅ RESOLVED — no action needed.** The Hermes-audit work was committed to `master` as
+`37ff32b` (`fix(gateway): honor the capability snapshot in the slash-command executor`)
+after verifying it clean: `tsc --noEmit` zero errors, 87/87 Jest tests passing. `git status`
+is clean for both files, so a worktree branched from `HEAD` now includes that work and this
+plan's Task 3 anchors match the committed `slash-commands.ts` (which has
+`blockUnsupportedCommand` and the `methods` snapshot pass-through).
 
-**Resolve before executing:** commit the Hermes-audit work to `master` (preferred — it's already reviewed and tested), or stash it. Do not start Task 1 until `git status` is clean for those two files. If the audit work is committed first, this plan's Task 3 must be written against the *committed* `slash-commands.ts`, which already has `blockUnsupportedCommand` and the `methods` snapshot pass-through — the anchors below assume that state.
+Kept here as the record of why the plan is ordered the way it is. If you find those files
+dirty again before starting, the original guidance applies: commit or stash first, because
+a worktree branches from `HEAD` and merging back would hit "local changes would be
+overwritten."
 
 ---
 
@@ -847,7 +855,31 @@ git commit -m "feat(app): ManifestClient.rpcRequest dispatches through capabilit
 
 ---
 
-### Task 5: Gate emits instance `commands[]` into the manifest
+### ~~Task 5: Gate emits instance `commands[]` into the manifest~~ — ✅ ALREADY DONE
+
+> **Skip this task.** It shipped ahead of the rest of the plan, on `master` in commits
+> `38ccd9d` (emit + instance-qualify) and `5fd399d` (validation, deep-copy, docs).
+> Kept below for the reasoning; verify with
+> `grep -n "qualifyCommands" gate/core/capabilities/registry.mjs` before assuming otherwise.
+>
+> What shipped is broader than what's written below, because a code-review pass found two
+> further ways to advertise an undispatchable command:
+> - A command missing `method` produced `"<id>.undefined"`; one whose `method` already
+>   contained a dot produced `"<id>.<id>.<name>"`. Both now skip with a logged reason,
+>   via a `qualifyCommands(instance, kindModule)` helper.
+> - `{...command}` is a shallow spread, so a command's nested `params` stayed aliased
+>   across every instance of the kind and back into the kind module. Deep-copied now.
+> - `gate/CAPABILITY_PROMPT.md` never documented `commands` at all — it said the contract
+>   had "exactly these fields" and "do not add new top-level exports", so a kind author
+>   following it would never have known the field was legal. Now documented, including
+>   the local-vs-qualified `method` rule.
+>
+> Gate suite is 161/161 under both invocation styles. **Task 3's app-side work is now
+> genuinely reachable end to end** — verified against a running Gate: the manifest
+> advertises `my-note.read`, calling it returns 200, and calling the bare `read` returns
+> 404, confirming the qualification is load-bearing rather than cosmetic.
+
+### Task 5 (shipped — reference only): Gate emits instance `commands[]` into the manifest
 
 **Files:**
 - Modify: `gate/core/capabilities/registry.mjs`
@@ -1216,3 +1248,6 @@ No commit — this task only confirms Tasks 1–5 add up to working software.
   2. Worse, the obvious one-line fix (`commands: kindModule.commands`) would have been **wrong**. A kind is authored before any of its instances exist, so its declared `method` can only be a local handler name — while `buildInstanceHandlers` registers handlers as `<instance-id>.<localName>`. Passing the local name straight through would advertise a palette command that fails on every invocation. Task 5 qualifies the method per-instance and has a dedicated test asserting two instances of one kind get distinct method names.
 - **Riskiest task is 6**, not 3: `gateway-provider.tsx` is ~1976 lines, has uncommitted changes, and the edits are surgical anchors rather than a full-file replacement. Its verification step is `tsc --noEmit` plus the full Jest suite, not just the touched files.
 - **Task ordering matters here.** Tasks 1–4 are app-side and independently landable. Task 5 is a Gate-side prerequisite that makes Task 3 reachable. Task 6 joins the two sides. Task 7 is the acceptance gate. Running 7 before 5 would show an empty palette and look like a Task 3 bug.
+- **Status at handoff (2026-08-12):** the ⚠️ merge-conflict blocker and Task 5 are both
+  done and on `master`. **Remaining work is Tasks 1–4, 6, 7** — all app-side except Task 6's
+  one-line `family: 'models'` change. Start at Task 1.
