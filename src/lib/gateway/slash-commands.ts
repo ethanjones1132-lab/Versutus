@@ -7,6 +7,8 @@ import {
 import type { GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
 import type { RunOutcome } from '@/lib/gateway/runs';
 
+const UNSUPPORTED_NOTE = 'Not offered by this gateway';
+
 export type SlashCommandSuggestion = {
   value: string;
   label: string;
@@ -25,6 +27,7 @@ export type SlashCommandResult = {
 
 type SlashCommandContext = {
   hello: GatewayHelloOk | null;
+  currentModel?: string;
   gatewayRequest: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
   runAgentCommand: (
     command: string,
@@ -42,6 +45,12 @@ type SlashCommandContext = {
    * Used when the gateway has no remote config REST for `/model set`.
    */
   setModelOverride?: (modelId: string) => void | Promise<void>;
+  /**
+   * Per-command availability from the capability snapshot. Anything marked
+   * `available: false` short-circuits with the snapshot's reason instead of
+   * hitting a known-broken endpoint.
+   */
+  methods?: Record<string, GatewayMethodAvailability>;
 };
 
 type ConfigSnapshot = {
@@ -222,6 +231,9 @@ export async function executeGatewaySlashCommand(
   const args = tokens.slice(1);
   const argText = trimmed.slice(commandName?.length ?? 0).trim();
 
+  const blocked = blockUnsupportedCommand(commandName, args, context.methods);
+  if (blocked) return blocked;
+
   if (!commandName || commandName === '/help') {
     const sub = args[0]?.toLowerCase();
     if (sub === 'all') return textResult(formatHelp(context.hello, 'all'), '/help all');
@@ -304,6 +316,44 @@ function findCommandBySlash(value: string): GatewayCommand | undefined {
     const slashes = [command.slash, ...(command.aliases ?? [])].filter(Boolean).map((item) => item?.toLowerCase());
     return slashes.includes(value.toLowerCase());
   });
+}
+
+/**
+ * Multiple slashes can map to the same registry id (e.g. `/session get` shares
+ * `session-get` with nothing, but `/agents <id>` shares `agents` with `/agents`).
+ * Look up the id of the longest slash that is a prefix of the input.
+ */
+function commandIdForInput(input: string, args: string[]): string | undefined {
+  const tokens = [input, ...(input ? [input + ' ' + args.join(' ')] : [])];
+  for (const tokensList of tokens) {
+    const lower = tokensList.toLowerCase().trim();
+    if (!lower) continue;
+    const command = GATEWAY_COMMANDS.find((c) => {
+      const slashes = [c.slash, ...(c.aliases ?? [])]
+        .filter(Boolean)
+        .map((s) => (s as string).toLowerCase());
+      return slashes.some((slash) => lower === slash || lower.startsWith(`${slash} `));
+    });
+    if (command) return command.id;
+  }
+  return undefined;
+}
+
+function blockUnsupportedCommand(
+  commandName: string,
+  args: string[],
+  methods?: Record<string, GatewayMethodAvailability>,
+): SlashCommandResult | null {
+  if (!methods || Object.keys(methods).length === 0) return null;
+  const id = commandIdForInput(commandName, args);
+  if (!id) return null;
+  const entry = methods[id];
+  if (!entry || entry.available !== false) return null;
+  const reason = entry.reason ?? UNSUPPORTED_NOTE;
+  return textResult(
+    `${commandName} is not available on this gateway (${reason}). Use /help to see what is.`,
+    commandName,
+  );
 }
 
 async function runTaskCommand(argText: string, context: SlashCommandContext): Promise<SlashCommandResult> {
@@ -404,6 +454,9 @@ async function runAgentSubcommand(args: string[], context: SlashCommandContext):
 async function runModelCommand(args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
   const subcommand = args[0]?.toLowerCase();
   if (!subcommand || subcommand === 'show' || subcommand === 'status') {
+    if (context.currentModel) {
+      return textResult(`Active model\nPrimary: ${context.currentModel}\n\nModel catalog: /models`, '/model');
+    }
     const snapshot = await readConfigSnapshot(context);
     return textResult(formatModelConfig(snapshot), '/model');
   }

@@ -20,6 +20,16 @@ export function normalizeOpenClawModel(value: unknown): ModelInfo | null {
   return { id, object: 'model' };
 }
 
+export function readOpenClawCollection(value: unknown, keys: string[]): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    if (Array.isArray(record[key])) return record[key] as unknown[];
+  }
+  return [];
+}
+
 export function normalizeOpenClawSession(value: unknown): HermesSession | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Record<string, unknown>;

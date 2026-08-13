@@ -403,6 +403,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    */
   const clientGenerationRef = useRef(0);
   const historyLoadedForRef = useRef<string | null>(null);
+  const historyRequestRef = useRef(0);
   const activeRunIdRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
   const bootstrapStartedRef = useRef(false);
@@ -430,15 +431,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     const client = clientRef.current;
     if (!client) return;
 
+    const requestId = ++historyRequestRef.current;
     historyLoadedForRef.current = gateway.id;
     setHistoryLoading(true);
     try {
-      let sessionId = gateway.sessionId ?? sessionIdRef.current;
+      // A deliberate session switch updates the ref; do not let the profile's
+      // initial session override it on every history reload.
+      let sessionId = sessionIdRef.current ?? gateway.sessionId;
+      let sessionsPromise: Promise<HermesSession[]> | null = null;
+      let availableSessions: HermesSession[] = [];
 
       // Resume this app's own most recent session, or start a fresh one. The
       // session selector still lists every session for deliberate switching.
       if (!sessionId) {
-        const own = pickAppSession(await client.getSessions(20));
+        sessionsPromise = client.getSessions(20).catch(() => [] as HermesSession[]);
+        void sessionsPromise.then((sessions) => {
+          if (requestId === historyRequestRef.current) setSessionList(sessions);
+        });
+        availableSessions = await sessionsPromise;
+        const own = pickAppSession(availableSessions);
         if (own) {
           sessionId = own.id;
         } else if (client.createSession) {
@@ -450,19 +461,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       sessionIdRef.current = sessionId;
       setCurrentSessionId(sessionId);
 
-      let gatewayMessages: ChatMessage[] = [];
-      if (sessionId) {
-        try {
-          const history = await client.getSessionMessages(sessionId, 80);
-          gatewayMessages = historyToChatMessages(history);
-        } catch {
-          // Session might not exist or be empty
-        }
-      }
-
-      // Load and merge local command transcripts
       const sessionKey = gateway.sessionKey ?? sessionId ?? 'default';
-      const localTrans = await loadTranscripts(gateway.id, sessionKey);
+      const [gatewayHistory, localTrans] = await Promise.all([
+        sessionId
+           ? client.getSessionMessages(sessionId, 80).catch(() => [])
+           : Promise.resolve([]),
+         loadTranscripts(gateway.id, sessionKey),
+      ]);
+      if (requestId !== historyRequestRef.current) return;
+      const gatewayMessages = historyToChatMessages(gatewayHistory);
       setTranscripts(localTrans);
 
       const commandMessages = localTrans.map((t) => ({
@@ -504,9 +511,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setMessages(merged);
       setLastError(null);
     } catch (error) {
+      if (requestId !== historyRequestRef.current) return;
       setLastError(error instanceof Error ? error.message : String(error));
     } finally {
-      setHistoryLoading(false);
+      if (requestId === historyRequestRef.current) setHistoryLoading(false);
     }
   }, []);
 
@@ -1412,10 +1420,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // Execute gateway slash command — stream agent-transport output live.
         let streamedText = '';
         const { executeGatewaySlashCommand } = await import('@/lib/gateway/slash-commands');
-        const response = await executeGatewaySlashCommand(trimmed, {
+const response = await executeGatewaySlashCommand(trimmed, {
           hello: activeHello,
+          currentModel: activeGateway?.model,
           gatewayRequest,
           runAgentCommand,
+          methods: capabilitySnapshot.methods,
           runTask: (prompt, onEvent) =>
             runTask(prompt, onEvent, () => {
               streamedText = `${streamedText}\n⏳ Waiting for your approval…`.trim();
@@ -1483,6 +1493,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       activeGateway,
       activeHello,
       appendLocalMessage,
+      capabilitySnapshot.methods,
       gatewayRequest,
       isCommandRunning,
       runAgentCommand,
@@ -1821,6 +1832,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const selectSession = useCallback((sessionId: string) => {
     closeSessionSelector();
     sessionIdRef.current = sessionId;
+    clientRef.current?.setSessionId(sessionId);
     setCurrentSessionId(sessionId);
     if (activeGateway) {
       void reloadHistoryFor(activeGateway);

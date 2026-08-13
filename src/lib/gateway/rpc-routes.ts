@@ -14,7 +14,6 @@ export const METHOD_TO_ROUTE: Record<string, Route> = {
   'diagnostics.full': { method: 'GET', path: '/health/detailed' },
   // Models
   'models.list': { method: 'GET', path: '/v1/models' },
-  'model.options': { method: 'GET', path: '/api/model/options' },
   // Sessions (Sessions API)
   'sessions.list': { method: 'GET', path: '/api/sessions' },
   'sessions.current': { method: 'GET', path: '/api/sessions' },

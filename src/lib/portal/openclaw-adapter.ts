@@ -9,6 +9,7 @@ import {
   normalizeOpenClawMessage,
   normalizeOpenClawModel,
   normalizeOpenClawSession,
+  readOpenClawCollection,
   toOpenClawWsUrl,
 } from '@/lib/portal/openclaw-mapping';
 import type {
@@ -113,7 +114,7 @@ export class OpenClawAdapterClient implements PortalClient {
         | unknown[]
         | { data?: unknown[] }
         | null;
-      const list = Array.isArray(result) ? result : (result?.data ?? []);
+      const list = readOpenClawCollection(result, ['models', 'items', 'data']);
       return list
         .map((item) => normalizeOpenClawModel(item))
         .filter((model): model is ModelInfo => model !== null);
@@ -124,8 +125,8 @@ export class OpenClawAdapterClient implements PortalClient {
 
   async getSessions(limit = 20): Promise<HermesSession[]> {
     try {
-      const result = (await this.inner.request<unknown>('sessions.list', { limit })) as unknown[];
-      const list = Array.isArray(result) ? result : [];
+      const result = await this.inner.request<unknown>('sessions.list', { limit });
+      const list = readOpenClawCollection(result, ['sessions', 'items', 'data']);
       return list
         .map((item) => normalizeOpenClawSession(item))
         .filter((session): session is HermesSession => session !== null);
@@ -152,8 +153,8 @@ export class OpenClawAdapterClient implements PortalClient {
 
   async getSessionMessages(sessionId: string, limit = 50): Promise<SessionMessage[]> {
     try {
-      const result = (await this.inner.request<unknown>('session.messages', { sessionId, limit })) as unknown[];
-      const list = Array.isArray(result) ? result : [];
+      const result = await this.inner.request<unknown>('session.messages', { sessionId, limit });
+      const list = readOpenClawCollection(result, ['messages', 'items', 'data']);
       return list
         .map((entry) => normalizeOpenClawMessage(entry))
         .filter((entry): entry is SessionMessage => entry !== null);
