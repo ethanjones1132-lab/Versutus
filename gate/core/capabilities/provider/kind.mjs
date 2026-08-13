@@ -62,7 +62,7 @@ function createHandlers() {
 export default {
   kind: 'provider',
   label: 'Model provider',
-  family: 'provider',
+  family: 'models',
   configFields: [
     { key: 'flavor', label: 'Flavor', type: 'enum', required: true, options: FLAVORS },
     { key: 'baseUrl', label: 'Base URL', type: 'string', required: true },

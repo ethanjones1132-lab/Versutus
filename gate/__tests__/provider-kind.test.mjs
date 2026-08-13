@@ -18,6 +18,10 @@ test('exposes the required kind contract fields', () => {
   assert.ok(Array.isArray(providerKind.configFields));
 });
 
+test('declares the models family so provider instances reinforce the built-in Models group', () => {
+  assert.equal(providerKind.family, 'models');
+});
+
 test('accepts a well-formed config', () => {
   const result = providerKind.validate(valid);
   assert.deepEqual(result, { ok: true, errors: [] });

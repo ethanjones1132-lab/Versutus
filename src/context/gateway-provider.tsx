@@ -44,9 +44,13 @@ import {
 import {
   fetchGatewayManifest,
   manifestAuthSchemes,
+  manifestCapabilityInstances,
+  manifestDynamicCommands,
   manifestKindLabel,
   manifestProviders,
   manifestRequiresToken,
+  type GatewayCapabilityCommand,
+  type GatewayManifest,
 } from '@/lib/portal/manifest';
 import type { GatewayIdentity } from '@/lib/portal/identify';
 import { loadAppSettings, saveAppSettings, type AppSettings } from '@/lib/settings/app-settings';
@@ -101,6 +105,7 @@ type GatewayContextValue = {
   gatewayRequest: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
   runAgentCommand: (command: string, options?: { onDelta?: (delta: string) => void }) => Promise<string>;
   liveCapabilities: GatewayCapabilities | null;
+  dynamicCommands: GatewayCapabilityCommand[];
   deleteGateway: (id: string) => Promise<void>;
   connectGateway: (gateway: GatewayProfile) => Promise<void>;
   disconnectGateway: () => void;
@@ -362,6 +367,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [pairingDetails, setPairingDetails] = useState<PairingDetails | null>(null);
   const [liveCapabilities, setLiveCapabilities] = useState<GatewayCapabilities | null>(null);
+  const [activeManifest, setActiveManifest] = useState<GatewayManifest | null>(null);
   const [settings, setSettings] = useState<AppSettings>({ autoConnect: true, onboardingComplete: false });
   const settingsRef = useRef<AppSettings>({ autoConnect: true, onboardingComplete: false });
   useEffect(() => {
@@ -371,9 +377,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [transcripts, setTranscripts] = useState<CommandTranscriptEntry[]>([]);
   const [capabilityCheckedAt, setCapabilityCheckedAt] = useState(() => Date.now());
+  const capabilityInstances = useMemo(
+    () => (activeManifest ? manifestCapabilityInstances(activeManifest) : []),
+    [activeManifest],
+  );
+  const dynamicCommands = useMemo(
+    () => (activeManifest ? manifestDynamicCommands(activeManifest) : []),
+    [activeManifest],
+  );
   const capabilitySnapshot = useMemo<GatewayCapabilitySnapshot>(
-    () => buildCapabilitySnapshot(status, activeHello, GATEWAY_COMMANDS, capabilityCheckedAt, liveCapabilities),
-    [status, activeHello, liveCapabilities, capabilityCheckedAt],
+    () =>
+      buildCapabilitySnapshot(
+        status,
+        activeHello,
+        GATEWAY_COMMANDS,
+        capabilityCheckedAt,
+        liveCapabilities,
+        capabilityInstances,
+      ),
+    [status, activeHello, liveCapabilities, capabilityCheckedAt, capabilityInstances],
   );
   const [pendingConfirmation, setPendingConfirmation] = useState<GatewayActionPreview | null>(null);
   const [modelPicker, setModelPicker] = useState<{
@@ -534,6 +556,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
       // Supersede the outgoing client so its teardown cannot drive provider state.
       clientGenerationRef.current += 1;
+      setActiveManifest(null);
       const generation = clientGenerationRef.current;
       const isCurrent = () => clientGenerationRef.current === generation;
       clientRef.current?.disconnect();
@@ -643,6 +666,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       void fetchGatewayManifest(gateway.url)
         .then((manifest) => {
           if (!manifest || !isCurrent()) return;
+          // Kept, not discarded: capabilityInstances[] drives the capability
+          // snapshot and the slash palette (design spec §8).
+          setActiveManifest(manifest);
           return syncChildProfiles(gateway, manifestProviders(manifest));
         })
         .then((next) => {
@@ -1086,6 +1112,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     historyLoadedForRef.current = null;
     setActiveGateway(null);
     setActiveHello(null);
+    setActiveManifest(null);
     setStatus('disconnected');
     setMessages([]);
     setIsSending(false);
@@ -1426,6 +1453,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
           gatewayRequest,
           runAgentCommand,
           methods: capabilitySnapshot.methods,
+          dynamicCommands,
           runTask: (prompt, onEvent) =>
             runTask(prompt, onEvent, () => {
               streamedText = `${streamedText}\n⏳ Waiting for your approval…`.trim();
@@ -1494,6 +1522,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       activeHello,
       appendLocalMessage,
       capabilitySnapshot.methods,
+      dynamicCommands,
       gatewayRequest,
       isCommandRunning,
       runAgentCommand,
@@ -1915,6 +1944,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       gatewayRequest,
       runAgentCommand,
       liveCapabilities,
+      dynamicCommands,
       setupFromPcAddress,
       retryAutoConnect,
       completeOnboarding,
@@ -1961,7 +1991,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       selectModel, modelCatalog, sessionSelector,
       openSessionSelector, closeSessionSelector, selectSession, sessionList, currentSessionId,
       historyLoading, createNewSession, deleteSessionById, deleteLocalMessage,
-      liveCapabilities,
+      liveCapabilities, dynamicCommands,
     ],
   );
 

@@ -95,6 +95,7 @@ export function ChatScreen() {
     deleteLocalMessage,
     disconnectGateway,
     capabilitySnapshot,
+    dynamicCommands,
   } = useGateway();
 
   const [draft, setDraft] = useState('');
@@ -110,7 +111,7 @@ export function ChatScreen() {
   const isStreaming = isSending || messages.some((message) => message.streaming);
   const showPairingSheet = status === 'pairing' && !!deviceId && dismissedPairingKey !== pairingKey;
   const slashSuggestions = draft.trimStart().startsWith('/')
-    ? getSlashCommandSuggestions(draft, activeHello, recentCommands, capabilitySnapshot.methods)
+    ? getSlashCommandSuggestions(draft, activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands)
     : [];
 
   const sessions = (sessionList as SessionRecord[]).map(toSessionItem);
