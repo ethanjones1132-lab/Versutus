@@ -219,3 +219,65 @@ describe('filterExecutableCommands', () => {
     expect(filterExecutableCommands(quick, {})).toEqual(quick);
   });
 });
+
+describe('capability instances drive the snapshot', () => {
+  const cronInstance = { id: 'standup', kind: 'cron', label: 'Standup', family: 'cron' };
+  const providerInstance = { id: 'nvidia', kind: 'provider', label: 'NVIDIA', family: 'models' };
+
+  function snapshotWith(instances: any[]) {
+    return buildCapabilitySnapshot('connected', null, undefined, Date.now(), HERMES_CAPABILITIES, instances);
+  }
+
+  test('an instance whose family matches a built-in group marks it ready', () => {
+    // Hermes advertises jobs_admin: false, so cron is unsupported without instances.
+    const without = buildCapabilitySnapshot('connected', null, undefined, Date.now(), HERMES_CAPABILITIES);
+    expect(without.groups.find((group) => group.id === 'cron')!.status).toBe('unsupported');
+
+    const withInstance = snapshotWith([cronInstance]);
+    expect(withInstance.groups.find((group) => group.id === 'cron')!.status).toBe('ready');
+  });
+
+  test('a family matching nothing built-in synthesizes its own group', () => {
+    const snapshot = snapshotWith([{ id: 'x', kind: 'weather', label: 'Weather', family: 'weather' }]);
+    const group = snapshot.groups.find((entry) => entry.id === 'weather');
+    expect(group).toBeDefined();
+    expect(group!.status).toBe('ready');
+    expect(group!.label).toBe('Weather');
+    expect(group!.totalCount).toBe(1);
+  });
+
+  test('several instances of one synthesized family are counted together', () => {
+    const snapshot = snapshotWith([
+      { id: 'a', kind: 'weather', label: 'A', family: 'weather' },
+      { id: 'b', kind: 'weather', label: 'B', family: 'weather' },
+    ]);
+    expect(snapshot.groups.find((entry) => entry.id === 'weather')!.totalCount).toBe(2);
+  });
+
+  test('no instances leaves the built-in group list unchanged', () => {
+    const withNone = buildCapabilitySnapshot('connected', null, undefined, Date.now(), HERMES_CAPABILITIES);
+    const withEmpty = snapshotWith([]);
+    expect(withEmpty.groups.map((group) => group.id)).toEqual(withNone.groups.map((group) => group.id));
+  });
+
+  test('an instance whose family is already ready does not duplicate the group', () => {
+    const snapshot = snapshotWith([providerInstance]);
+    const models = snapshot.groups.filter((group) => group.id === 'models');
+    expect(models).toHaveLength(1);
+    expect(models[0].status).toBe('ready');
+  });
+
+  test('instance-driven readiness unlocks that group\'s commands too', () => {
+    // Hermes has jobs_admin: false, so Memory-group commands are gated off.
+    // A memory-family instance should flip them available.
+    const withInstance = snapshotWith([{ id: 'm', kind: 'memory', label: 'M', family: 'memory' }]);
+    expect(withInstance.groups.find((group) => group.id === 'memory')!.status).toBe('ready');
+  });
+
+  test('a disconnected gateway reports synthesized groups as unavailable, not ready', () => {
+    const snapshot = buildCapabilitySnapshot('disconnected', null, undefined, Date.now(), null, [
+      { id: 'x', kind: 'weather', label: 'Weather', family: 'weather' },
+    ] as any);
+    expect(snapshot.groups.find((entry) => entry.id === 'weather')!.status).toBe('unavailable');
+  });
+});

@@ -1,4 +1,5 @@
 import type { ConnectionStatus, GatewayHelloOk } from '@/lib/gateway/types';
+import type { GatewayCapabilityInstance } from '@/lib/portal/manifest';
 
 export type GatewayReachabilityState =
   | 'connected'
@@ -869,10 +870,20 @@ export function buildCapabilitySnapshot(
   commands: GatewayCommand[] = GATEWAY_COMMANDS,
   lastProbeAt: number = Date.now(),
   capabilities: import('@/lib/gateway/types').GatewayCapabilities | null = null,
+  capabilityInstances: GatewayCapabilityInstance[] = [],
 ): import('@/lib/gateway/types').GatewayCapabilitySnapshot {
   const scopes = hello?.auth?.scopes ?? [];
   const connected = status === 'connected';
   const isStale = Date.now() - lastProbeAt > 30000;
+
+  // A configured capability instance is direct evidence the gateway offers
+  // that family — stronger than inferring it from a feature flag or endpoint
+  // key, and the only signal available for a family the app has never heard
+  // of (design spec §8).
+  const instanceFamilies = new Set(capabilityInstances.map((instance) => instance.family));
+  const isGroupReady = (definition: CapabilityGroupDef) =>
+    Boolean(capabilities && groupIsAdvertised(definition, capabilities)) ||
+    instanceFamilies.has(definition.id);
 
   const groups = CAPABILITY_GROUP_DEFS.map<import('@/lib/gateway/types').GatewayCapabilityGroup>(
     (definition) => {
@@ -903,7 +914,7 @@ export function buildCapabilitySnapshot(
         };
       }
 
-      const ready = groupIsAdvertised(definition, capabilities);
+      const ready = isGroupReady(definition);
       return {
         id: definition.id,
         label: definition.label,
@@ -915,15 +926,34 @@ export function buildCapabilitySnapshot(
     },
   );
 
+  // A family no built-in group covers gets its own group, so a capability
+  // kind invented after this app shipped is still visible rather than
+  // silently absent.
+  const knownGroupIds = new Set(CAPABILITY_GROUP_DEFS.map((definition) => definition.id));
+  const synthesizedGroups = [...instanceFamilies]
+    .filter((family) => !knownGroupIds.has(family))
+    .sort()
+    .map<import('@/lib/gateway/types').GatewayCapabilityGroup>((family) => {
+      const count = capabilityInstances.filter((instance) => instance.family === family).length;
+      return {
+        id: family,
+        label: family.charAt(0).toUpperCase() + family.slice(1),
+        status: connected ? 'ready' : 'unavailable',
+        availableCount: connected ? count : 0,
+        totalCount: count,
+        note: connected ? undefined : 'Gateway offline',
+      };
+    });
+
   let overallStatus: import('@/lib/gateway/types').GatewayCapabilitySnapshot['status'];
   if (!connected) overallStatus = 'offline';
   else if (!capabilities) overallStatus = 'warming';
   else overallStatus = isStale ? 'stale' : 'fresh';
 
   const advertised = new Set(
-    CAPABILITY_GROUP_DEFS.filter(
-      (definition) => capabilities && groupIsAdvertised(definition, capabilities),
-    ).flatMap((definition) => definition.commandGroups ?? []),
+    CAPABILITY_GROUP_DEFS.filter(isGroupReady).flatMap(
+      (definition) => definition.commandGroups ?? [],
+    ),
   );
 
   const methods: Record<string, import('@/lib/gateway/types').GatewayMethodAvailability> = {};
@@ -946,7 +976,7 @@ export function buildCapabilitySnapshot(
   return {
     checkedAt: lastProbeAt,
     status: overallStatus,
-    groups,
+    groups: [...groups, ...synthesizedGroups],
     methods,
     scopes,
   };
