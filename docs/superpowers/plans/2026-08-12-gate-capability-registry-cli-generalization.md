@@ -247,13 +247,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Load a kind module by id, or null if it doesn't exist / fails to import.
+ * Logs the real error so a broken kind (syntax error, throwing top-level
+ * code) is distinguishable from a genuinely missing one.
  */
 async function loadKindModule(kindId) {
   const modulePath = join(__dirname, 'core', 'capabilities', kindId, 'kind.mjs');
   try {
     const module = await import(pathToFileURL(modulePath).href);
     return module.default ?? null;
-  } catch {
+  } catch (err) {
+    console.error(`(kind "${kindId}" failed to load: ${err.message})`);
     return null;
   }
 }
@@ -281,6 +284,11 @@ async function handleAdd(args) {
 
   if (!validateId(id)) {
     console.error(`Error: instance id must be lowercase alphanumeric with hyphens, got "${id}"`);
+    process.exit(1);
+  }
+
+  if (!validateId(kindId)) {
+    console.error(`Error: kind id must be lowercase alphanumeric with hyphens, got "${kindId}"`);
     process.exit(1);
   }
 
@@ -901,3 +909,4 @@ No commit — this task only confirms Tasks 1-3 add up to working software, mirr
 - **Placeholder scan:** `getKindTemplate`'s generated `.mjs` file intentionally contains `// TODO`-style comments (`// Describe this kind's config fields here, e.g.: ...`) — this is correct and expected, matching the existing convention from the provider template's `─── CONFIG: edit only inside this block ───` markers. It is a template meant to be filled in, not shipped code; it's not a placeholder left in *this plan's own* deliverables.
 - **Type consistency:** `cli-helpers.mjs`'s `templateValueForField`/`buildInstanceConfigTemplate` signatures match exactly how `cli.mjs` calls them (`buildInstanceConfigTemplate(kindModule.configFields)`), and the `FieldDescriptor.type` union matches the spec's `'string' | 'string-list' | 'number' | 'boolean' | 'enum' | 'secret-ref'` exactly (including the `'string-list'` amendment made during the foundation plan).
 - **No `cli.mjs` test file added**, consistent with this project's existing convention (there has never been one) — `main()` runs unconditionally at module load, making direct import-based testing unsafe without restructuring the script's execution trigger, which this plan deliberately avoids doing since it's out of scope for "generalize the CLI." All new *logic* (the parts that actually needed generalizing) lives in the fully-tested `cli-helpers.mjs` instead.
+- **Path-traversal bug found and fixed during implementation**: the code block above originally called `loadKindModule(kindId)` without validating `kindId` first, while `add-kind` (correctly) validated its own id before ever constructing a path from it. Since `loadKindModule` builds a filesystem path from `kindId` and dynamically `import()`s it, an unvalidated `kindId` like `../../../anything` let a crafted `--kind` value execute arbitrary local `.mjs` code before the "not found" fallback ran — demonstrated directly, not theoretical. Fixed by adding the same `validateId(kindId)` check `add-kind` already had, in the same position (before any path is built), and by making `loadKindModule`'s catch log the real import error instead of a blanket `catch { return null }` that made a broken kind indistinguishable from a missing one. The code block above reflects the corrected, shipped version.
