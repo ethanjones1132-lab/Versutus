@@ -203,7 +203,7 @@ describe('rpcRequest against a gate advertising capabilitiesRpc', () => {
       text: async () => JSON.stringify({ result: { ranInstance: 'standup' } }),
       json: async () => ({ result: { ranInstance: 'standup' } }),
     });
-    global.fetch = fetchMock as any;
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
 
     const client = clientWithEndpoints({ health: '/health', capabilitiesRpc: '/v1/capabilities/rpc' });
     const result = await client.rpcRequest('standup.run', { dryRun: true });
@@ -215,7 +215,7 @@ describe('rpcRequest against a gate advertising capabilitiesRpc', () => {
   });
 
   test('throws the gateway error message when the envelope carries one', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
+    (globalThis as { fetch: unknown }).fetch = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
       headers: { get: () => 'application/json' },
