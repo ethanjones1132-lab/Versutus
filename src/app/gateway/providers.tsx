@@ -23,11 +23,7 @@ export default function ProvidersScreen() {
       return;
     }
     try {
-      const listed = await gatewayRequest<{ providers?: ProviderSnapshot[] }>('GET /v1/providers').catch(async () => {
-        const viaRpc = await gatewayRequest<ProviderSnapshot[]>('providers.list').catch(() => []);
-        return { providers: viaRpc };
-      });
-      setProviders(listed.providers ?? []);
+      setProviders(await client.list());
       setError(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));

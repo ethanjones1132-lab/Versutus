@@ -14,6 +14,11 @@ export function createProviderRpc({ service, vault, oauth }) {
   }
 
   return {
+    'providers.list': async () => {
+      const snapshots = await service.list();
+      return { providers: snapshots.map(sanitizeSnapshot) };
+    },
+    'providers.get': async ({ id } = {}) => sanitizeSnapshot(await service.get(id)),
     'providers.create': async (input = {}) => status(() => service.create(input)),
     'providers.update': async ({ id, ...input } = {}) => status(() => service.update(id, input)),
     'providers.delete': async ({ id } = {}) => status(() => service.delete(id)),

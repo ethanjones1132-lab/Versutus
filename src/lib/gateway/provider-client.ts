@@ -4,10 +4,10 @@ export type Rpc = <T = unknown>(method: string, params?: Record<string, unknown>
 
 export function createProviderClient(request: Rpc) {
   return {
-    list: () => request<{ providers: ProviderSnapshot[] }>('providers.list').catch(async () => {
-      const raw = await request<{ providers?: ProviderSnapshot[] } | ProviderSnapshot[]>('GET /v1/providers');
+    list: async () => {
+      const raw = await request<{ providers?: ProviderSnapshot[] } | ProviderSnapshot[]>('providers.list');
       return Array.isArray(raw) ? raw : raw.providers ?? [];
-    }),
+    },
     get: (id: string) => request<ProviderSnapshot>('providers.get', { id }),
     check: (id: string) => request<ProviderSnapshot>('providers.health.check', { id }),
     refreshCatalog: (id: string) => request<ProviderSnapshot>('providers.catalog.refresh', { id }),
