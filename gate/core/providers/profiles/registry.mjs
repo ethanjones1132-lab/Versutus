@@ -1,3 +1,5 @@
+import { buildChatRequest as buildOpenAIChat } from '../../../flavors/openai.mjs';
+import { buildChatRequest as buildAnthropicChat } from '../../../flavors/anthropic.mjs';
 import { openaiProfile } from './openai.mjs';
 import { anthropicProfile } from './anthropic.mjs';
 import { nvidiaNimProfile } from './nvidia-nim.mjs';
@@ -52,12 +54,35 @@ export function createProfileAdapter({
       if (!response.ok) {
         const error = new Error(`models request failed: ${response.status}`);
         error.status = response.status;
+        if (profile.keepBootstrapIfEmpty) error.code = 'catalog_timeout';
         throw error;
       }
       return profile.parseModels(await response.json(), providerId);
     },
-    async chat() {
-      throw new Error('chat is owned by the flavor codec, not the profile registry');
+    async chat(request, signal) {
+      assertAllowedOrigin(baseUrl, origins);
+      const build = profile.protocol === 'anthropic_messages' ? buildAnthropicChat : buildOpenAIChat;
+      const model = request.model;
+      const built = build({ baseUrl, models: model ? [model] : ['default'] }, credential, {
+        model,
+        messages: request.messages ?? [],
+        stream: request.stream,
+      });
+      const response = await fetchImpl(built.url, {
+        ...built.init,
+        headers: {
+          ...built.init.headers,
+          ...profile.authHeaders(credential),
+        },
+        signal,
+      });
+      if (!response.ok) {
+        const error = new Error(`chat failed: ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+      if (request.stream) return response;
+      return response.json();
     },
     async disconnect() {},
   };

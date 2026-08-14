@@ -26,3 +26,35 @@ export async function pollDeviceToken({ tokenEndpoint, clientId, deviceCode, fet
   }
   return payload;
 }
+
+export async function pollUntilAuthorized({
+  tokenEndpoint,
+  clientId,
+  deviceCode,
+  interval = 5,
+  expiresIn = 600,
+  fetchImpl = fetch,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+}) {
+  const deadline = Date.now() + expiresIn * 1000;
+  let waitMs = Math.max(interval, 0) * 1000;
+  while (Date.now() < deadline) {
+    try {
+      return await pollDeviceToken({ tokenEndpoint, clientId, deviceCode, fetchImpl });
+    } catch (error) {
+      if (error.code === 'authorization_pending') {
+        await sleep(waitMs);
+        continue;
+      }
+      if (error.code === 'slow_down') {
+        waitMs += 5000;
+        await sleep(waitMs);
+        continue;
+      }
+      throw error;
+    }
+  }
+  const expired = new Error('device authorization expired');
+  expired.code = 'expired_token';
+  throw expired;
+}

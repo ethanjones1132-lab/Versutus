@@ -11,7 +11,7 @@ const config = {
   capabilities: { chat: true, streaming: true },
 };
 
-test('targets the chat completions endpoint with the bearer key', () => {
+test('targets the chat completions endpoint without resolving auth', () => {
   const request = buildChatRequest(config, 'test-key', {
     model: 'grok-4',
     messages: [{ role: 'user', content: 'hi' }],
@@ -20,7 +20,7 @@ test('targets the chat completions endpoint with the bearer key', () => {
 
   assert.equal(request.url, 'https://api.x.ai/v1/chat/completions');
   assert.equal(request.init.method, 'POST');
-  assert.equal(request.init.headers.Authorization, 'Bearer test-key');
+  assert.equal(request.init.headers.Authorization, undefined);
   assert.equal(JSON.parse(request.init.body).stream, true);
 });
 

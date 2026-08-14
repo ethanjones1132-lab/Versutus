@@ -1,5 +1,5 @@
 import { validateProviderRegistration } from './schema.mjs';
-import { applyCatalogResult } from './catalog.mjs';
+import { applyCatalogResult, isCatalogFresh, nextBackoff } from './catalog.mjs';
 import { readinessFromAuthAndError } from './health.mjs';
 import { classifyProviderError, ProviderErrorCodes } from './errors.mjs';
 import { nextAuthState, toSnapshot } from './runtime.mjs';
@@ -73,8 +73,15 @@ export class ProviderService {
     return toSnapshot(record.config, nextState, { auth, readiness });
   }
 
-  async refreshCatalog(id) {
+  async refreshCatalog(id, { force = false } = {}) {
     const record = await this.require(id);
+    const ttl = record.config.catalogPolicy?.ttlSeconds ?? 300;
+    if (!force && isCatalogFresh(record.state.catalog, ttl)) {
+      return toSnapshot(record.config, record.state);
+    }
+    if (!force && record.state.backoff?.nextRetryAt && Date.now() < record.state.backoff.nextRetryAt) {
+      return toSnapshot(record.config, record.state);
+    }
     const { auth, readiness, error } = await this.inspect(record);
     let catalogError = error;
     let models;
@@ -101,6 +108,11 @@ export class ProviderService {
       : readiness;
 
     const nextState = { ...record.state, auth, readiness: nextReadiness, catalog };
+    if (catalogError) {
+      nextState.backoff = nextBackoff(record.state.backoff);
+    } else {
+      delete nextState.backoff;
+    }
     await this.store.put(record.config, nextState);
     return toSnapshot(record.config, nextState, { auth, readiness: nextReadiness, catalog });
   }

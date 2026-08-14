@@ -65,3 +65,57 @@ test('xAI ships as official API-key access, not consumer OAuth', () => {
 test('OpenAI official label is OpenAI API, not ChatGPT', () => {
   assert.equal(getProfile('openai').label, 'OpenAI API');
 });
+
+test('profile chat uses the flavor codec plus profile auth headers', async () => {
+  const seen = {};
+  const { server, baseUrl, origin } = await listen((req, res) => {
+    seen.auth = req.headers.authorization;
+    seen.url = req.url;
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      seen.body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'ok' } }],
+      }));
+    });
+  });
+  after(() => server.close());
+
+  const adapter = createProfileAdapter({
+    profileId: 'openai',
+    providerId: 'openai-main',
+    baseUrl,
+    credential: 'test-key',
+    allowedOrigins: [origin],
+  });
+  const result = await adapter.chat({
+    model: 'gpt-test',
+    messages: [{ role: 'user', content: 'hi' }],
+  });
+  assert.equal(seen.auth, 'Bearer test-key');
+  assert.equal(seen.url, '/v1/chat/completions');
+  assert.equal(seen.body.model, 'gpt-test');
+  assert.equal(result.choices[0].message.content, 'ok');
+});
+
+test('NVIDIA keeps a catalog error so LKG/bootstrap stays visible', async () => {
+  const { server, baseUrl, origin } = await listen((_req, res) => {
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'no models endpoint' }));
+  });
+  after(() => server.close());
+
+  const adapter = createProfileAdapter({
+    profileId: 'nvidia-nim',
+    providerId: 'nvidia',
+    baseUrl,
+    credential: 'test-key',
+    allowedOrigins: [origin],
+  });
+  await assert.rejects(() => adapter.listModels(), (error) => {
+    assert.equal(error.code, 'catalog_timeout');
+    return true;
+  });
+});

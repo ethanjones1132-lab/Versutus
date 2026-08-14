@@ -51,7 +51,6 @@ export function buildChatRequest(config, apiKey, { model, messages, stream = fal
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
         'anthropic-version': ANTHROPIC_VERSION,
       },
       body: JSON.stringify(body),

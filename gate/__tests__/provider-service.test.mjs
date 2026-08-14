@@ -90,6 +90,31 @@ test('missing credentials make the provider unavailable', async () => {
   assert.equal(snapshot.readiness.code, 'missing_credentials');
 });
 
+test('refreshCatalog skips the adapter while the live catalog is within TTL', async () => {
+  let calls = 0;
+  const service = await makeService({
+    adapter: {
+      listModels: async () => {
+        calls += 1;
+        return [{ providerId: 'nvidia', id: 'live-model', available: true }];
+      },
+    },
+  });
+  await service.store.put(nvidiaConfig, {
+    catalog: {
+      source: 'live',
+      state: 'fresh',
+      generation: 3,
+      observedAt: new Date().toISOString(),
+      models: [{ providerId: 'nvidia', id: 'live-model', available: true }],
+    },
+  });
+  const snapshot = await service.refreshCatalog('nvidia');
+  assert.equal(calls, 0);
+  assert.equal(snapshot.catalog.source, 'live');
+  assert.equal(snapshot.catalog.state, 'fresh');
+});
+
 test('disabled providers are not treated as ready because Gate is healthy', async () => {
   const service = await makeService({ enabled: false });
   const snapshot = await service.check('nvidia');

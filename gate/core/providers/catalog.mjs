@@ -27,6 +27,12 @@ export function applyCatalogResult({ previous = {}, models, error, allowLastKnow
   };
 }
 
+export function nextBackoff(previous = { failures: 0 }, now = Date.now()) {
+  const failures = (previous.failures ?? 0) + 1;
+  const delay = Math.min(30_000 * (2 ** (failures - 1)), 15 * 60_000);
+  return { failures, nextRetryAt: now + delay };
+}
+
 export function isCatalogFresh(catalog, ttlSeconds, now = Date.now()) {
   if (!catalog?.observedAt || catalog.source !== 'live' || catalog.state !== 'fresh') return false;
   const observed = Date.parse(catalog.observedAt);

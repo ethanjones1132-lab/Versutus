@@ -1,10 +1,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { setSecret, getSecret } from '../core/capabilities/secrets.mjs';
+import { setSecret, getSecret, useCredentialBackend } from '../core/capabilities/secrets.mjs';
+
+function memoryBackend() {
+  return {
+    async protect(plain) {
+      return Buffer.from(JSON.stringify({ data: Buffer.from(plain).toString('base64') }));
+    },
+    async unprotect(cipher) {
+      const parsed = JSON.parse(Buffer.from(cipher).toString('utf8'));
+      return Buffer.from(parsed.data, 'base64');
+    },
+  };
+}
+
+useCredentialBackend(memoryBackend());
 
 async function tempRoot() {
   return mkdtemp(join(tmpdir(), 'gate-secrets-'));
@@ -27,22 +41,23 @@ test('returns undefined when no secrets have ever been set in this root', async 
   assert.equal(await getSecret(root, 'ANYTHING'), undefined);
 });
 
-test('the same key is reused across multiple set calls', async () => {
+test('new writes go to the credential vault, not the co-located AES store', async () => {
   const root = await tempRoot();
   await setSecret(root, 'A', 'value-a');
-  const keyAfterFirst = await readFile(join(root, 'secrets', '.key'), 'utf8');
   await setSecret(root, 'B', 'value-b');
-  const keyAfterSecond = await readFile(join(root, 'secrets', '.key'), 'utf8');
-  assert.equal(keyAfterFirst, keyAfterSecond);
+  const files = await readdir(join(root, 'credentials'));
+  assert.ok(files.some((name) => name.endsWith('.dpapi')));
+  await assert.rejects(readFile(join(root, 'secrets', '.key')));
   assert.equal(await getSecret(root, 'A'), 'value-a');
   assert.equal(await getSecret(root, 'B'), 'value-b');
 });
 
-test('the stored value is encrypted, not plaintext, on disk', async () => {
+test('the stored value is not plaintext on disk', async () => {
   const root = await tempRoot();
   await setSecret(root, 'SECRET_NAME', 'sk-super-secret-value');
-  const storeRaw = await readFile(join(root, 'secrets', 'store.enc.json'), 'utf8');
-  assert.equal(storeRaw.includes('sk-super-secret-value'), false);
+  const files = await readdir(join(root, 'credentials'));
+  const raw = await readFile(join(root, 'credentials', files[0]));
+  assert.equal(raw.toString('utf8').includes('sk-super-secret-value'), false);
 });
 
 test('different refNames do not collide', async () => {

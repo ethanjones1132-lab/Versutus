@@ -20,7 +20,9 @@ export class OAuthManager {
     return this.attempts.get(attemptId);
   }
 
-  cancel(attemptId) {
+  async cancel(attemptId) {
+    const attempt = this.attempts.get(attemptId);
+    if (attempt?.close) await attempt.close();
     this.attempts.delete(attemptId);
     return { cancelled: true };
   }

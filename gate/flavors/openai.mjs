@@ -42,7 +42,6 @@ export function buildChatRequest(config, apiKey, options) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
   };

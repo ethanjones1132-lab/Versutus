@@ -54,3 +54,18 @@ test('rotating refresh is single-flight and persists the newest token', async ()
   assert.equal(first.accessToken, second.accessToken);
   assert.equal(first.accessToken, 'access-2');
 });
+
+test('invalid_grant deletes unusable tokens and records needs_reauth', async () => {
+  const { oauth, issuer } = await manager();
+  issuer.failRefreshWith('invalid_grant', 400);
+  await assert.rejects(() => oauth.getAccess('fake-oauth'), /needs_reauth|invalid_grant/);
+  assert.equal(await oauth.readTokens('fake-oauth'), undefined);
+});
+
+test('429 retains the grant and records a retryable failure', async () => {
+  const { oauth, issuer } = await manager();
+  issuer.failRefreshWith('temporarily_unavailable', 429);
+  await assert.rejects(() => oauth.getAccess('fake-oauth'), /temporarily_unavailable|429/);
+  const stored = await oauth.readTokens('fake-oauth');
+  assert.equal(stored.refreshToken, 'refresh-1');
+});
