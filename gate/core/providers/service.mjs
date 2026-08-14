@@ -206,3 +206,15 @@ export class ProviderService {
     return record;
   }
 }
+
+export function assertCliProviderBinding(snapshot, { consumeGateProxy } = {}) {
+  if (consumeGateProxy) return snapshot;
+  const local = snapshot.mode === 'local_interface';
+  const external = snapshot.auth?.credentialCustodian === 'external';
+  if (!local || !external) {
+    const error = new Error('provider_cli_binding_unsupported');
+    error.code = 'provider_cli_binding_unsupported';
+    throw error;
+  }
+  return snapshot;
+}
