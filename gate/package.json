@@ -6,6 +6,7 @@
   "bin": { "versutus-gate": "./cli.mjs" },
   "scripts": {
     "test": "node --test",
-    "start": "node cli.mjs start"
+    "start": "node cli.mjs start",
+    "doctor": "node cli.mjs doctor"
   }
 }

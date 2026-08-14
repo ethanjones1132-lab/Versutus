@@ -10,6 +10,9 @@ import { validateId, buildInstanceConfigTemplate, getKindTemplate } from './core
 import { resolveGateHome } from './core/paths.mjs';
 import { ProviderStore } from './core/providers/store.mjs';
 import { migrateLegacyProviders } from './core/providers/migrate-v1.mjs';
+import { buildTaskDefinition } from './core/service/windows-task.mjs';
+import { acquireInstanceLock } from './core/service/instance-lock.mjs';
+import { doctor } from './core/service/doctor.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -197,6 +200,8 @@ async function handleStart() {
   try {
     console.log(`Starting ${gateName}...`);
     const gateHome = resolveGateHome();
+    const lock = await acquireInstanceLock(gateHome);
+    process.on('exit', () => { void lock.release(); });
     await migrateLegacyProviders({ sourceRoot: __dirname, gateHome });
     const gate = await createGate({
       root: __dirname,
@@ -284,6 +289,41 @@ async function handlePair(args) {
   process.exit(1);
 }
 
+async function handleService(args) {
+  const sub = args[0];
+  const user = process.env.USERNAME ? `${process.env.USERDOMAIN || 'USER'}\\${process.env.USERNAME}` : process.env.USER;
+  const gateHome = resolveGateHome();
+  const definition = buildTaskDefinition({
+    user,
+    executable: join(__dirname, 'cli.mjs'),
+    gateHome,
+  });
+  if (sub === 'install') {
+    console.log(`Would install Scheduled Task ${definition.name} for ${definition.userId}`);
+    return;
+  }
+  if (sub === 'status') {
+    console.log(doctor({ user, gateHome, listen: 'http://127.0.0.1:8760', pid: process.pid }));
+    return;
+  }
+  if (sub === 'start' || sub === 'stop' || sub === 'uninstall') {
+    console.log(`service ${sub}: ${definition.name}`);
+    return;
+  }
+  console.error('Usage: node gate/cli.mjs service <install|start|stop|status|uninstall>');
+  process.exit(1);
+}
+
+async function handleDoctor() {
+  const user = process.env.USERNAME ? `${process.env.USERDOMAIN || 'USER'}\\${process.env.USERNAME}` : process.env.USER;
+  console.log(doctor({
+    user,
+    gateHome: resolveGateHome(),
+    listen: 'http://127.0.0.1:8760',
+    pid: process.pid,
+  }));
+}
+
 /**
  * Main CLI entry point
  */
@@ -314,6 +354,12 @@ async function main() {
     console.log('    revoke <deviceId>   Revoke a device\'s access token');
     console.log('    list                List pending requests and paired devices');
     console.log('');
+    console.log('  service <install|start|stop|status|uninstall>');
+    console.log('    Manage the per-user Windows Scheduled Task');
+    console.log('');
+    console.log('  doctor');
+    console.log('    Print identity, Gate home, listener, and probe status');
+    console.log('');
     console.log('Environment variables:');
     console.log('  GATE_NAME  - Name of the Gate (defaults to "Versutus Gate")');
     console.log('');
@@ -328,6 +374,10 @@ async function main() {
     await handleStart();
   } else if (command === 'pair') {
     await handlePair(args);
+  } else if (command === 'service') {
+    await handleService(args);
+  } else if (command === 'doctor') {
+    await handleDoctor();
   } else {
     console.error(`Error: unknown command "${command}"`);
     console.error('Run "node gate/cli.mjs help" for usage');
