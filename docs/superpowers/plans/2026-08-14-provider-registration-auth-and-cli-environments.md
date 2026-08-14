@@ -618,7 +618,7 @@ git commit -m "feat(gate): add provider-owned OAuth lifecycle"
 - Consumes the `versutus-provider/v1` document from Task 1.
 - Produces a provider adapter whose external service retains upstream credential custody.
 
-- [ ] **Step 1: Write failing conformance and attack tests**
+- [x] **Step 1: Write failing conformance and attack tests**
 
 ```js
 test('rejects a local provider manifest that redirects off loopback', async () => {
@@ -626,21 +626,21 @@ test('rejects a local provider manifest that redirects off loopback', async () =
 });
 ```
 
-- [ ] **Step 2: Run the local-interface tests and confirm failure**
+- [x] **Step 2: Run the local-interface tests and confirm failure**
 
 Run: `node --test gate/__tests__/local-provider-interface.test.mjs`
 
-- [ ] **Step 3: Implement manifest, health, models, chat/SSE, and loopback enforcement**
+- [x] **Step 3: Implement manifest, health, models, chat/SSE, and loopback enforcement**
 
 Reject redirects, DNS rebinding, non-loopback resolution, oversized headers/bodies, incompatible specs, and unbounded streams. Allow `auth.schemes:["none"]` only on loopback with an explicit warning; prefer an adapter-local bearer credential stored in the Gate vault.
 
-- [ ] **Step 4: Run the local-interface tests and example conformance harness**
+- [x] **Step 4: Run the local-interface tests and example conformance harness**
 
 Run: `node --test gate/__tests__/local-provider-interface.test.mjs`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the local-interface slice**
+- [x] **Step 5: Commit the local-interface slice**
 
 ```powershell
 git add gate/core/providers/local gate/provider-sdk gate/__tests__/local-provider-interface.test.mjs gate/__tests__/fixtures/provider-stub.mjs
