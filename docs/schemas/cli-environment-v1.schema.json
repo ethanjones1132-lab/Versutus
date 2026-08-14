@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://versutus.local/schemas/cli-environment-v1.schema.json",
+  "title": "CliEnvironmentRegistration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "id",
+    "label",
+    "adapterId",
+    "executable",
+    "protocolPreference",
+    "versionPolicy",
+    "providerRefs",
+    "workspacePolicy",
+    "lifecycle",
+    "enabled"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "cli-environment" },
+    "id": { "type": "string", "minLength": 1 },
+    "label": { "type": "string", "minLength": 1 },
+    "adapterId": { "enum": ["hermes", "codex", "claude-code"] },
+    "executable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "expectedPublisher": { "type": "string", "minLength": 1 }
+      }
+    },
+    "protocolPreference": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "enum": ["acp", "mcp", "app_server", "jsonl", "conpty"] }
+    },
+    "versionPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["supported", "adapterRevision"],
+      "properties": {
+        "supported": { "type": "string", "minLength": 1 },
+        "adapterRevision": { "type": "string", "minLength": 1 }
+      }
+    },
+    "providerRefs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "workspacePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roots", "defaultRoot", "defaultSandbox", "allowAdditionalRoots"],
+      "properties": {
+        "roots": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "defaultRoot": { "type": "string", "minLength": 1 },
+        "defaultSandbox": { "enum": ["read_only", "workspace_write", "isolated_worktree"] },
+        "allowAdditionalRoots": { "type": "boolean" }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startup", "idleTimeoutSeconds", "maxConcurrentRuns"],
+      "properties": {
+        "startup": { "enum": ["on_demand", "persistent"] },
+        "idleTimeoutSeconds": { "type": "integer", "minimum": 0 },
+        "maxConcurrentRuns": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "enabled": { "type": "boolean" }
+  }
+}
