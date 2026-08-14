@@ -17,6 +17,11 @@ export const codexAdapter = {
       risk: 'read',
       machineReadable: true,
     },
+    interactive: {
+      inputSchema: { type: 'object', properties: { command: { type: 'string' } } },
+      risk: 'credential',
+      machineReadable: false,
+    },
   },
   async probe(executablePath) {
     return probeVersion(executablePath, {
