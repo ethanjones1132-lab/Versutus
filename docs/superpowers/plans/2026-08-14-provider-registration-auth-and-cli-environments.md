@@ -462,7 +462,7 @@ git commit -m "feat(gate): protect provider credentials with DPAPI"
 - Produces: `ProviderService.list()`, `.get(id)`, `.create(input)`, `.update(id,input)`, `.delete(id)`, `.check(id)`, `.refreshCatalog(id)`, `.resolveModel(providerId,modelId)`, and `.chat(request,signal)`.
 - Adapter contract: `authenticate()`, `health()`, `listModels()`, `chat()`, `disconnect()`.
 
-- [ ] **Step 1: Write failing state-machine and catalog-provenance tests**
+- [x] **Step 1: Write failing state-machine and catalog-provenance tests**
 
 ```js
 test('catalog failure yields degraded provider with visible LKG provenance', async () => {
@@ -473,21 +473,21 @@ test('catalog failure yields degraded provider with visible LKG provenance', asy
 });
 ```
 
-- [ ] **Step 2: Run the provider runtime tests and confirm failure**
+- [x] **Step 2: Run the provider runtime tests and confirm failure**
 
 Run: `node --test gate/__tests__/provider-service.test.mjs gate/__tests__/provider-health.test.mjs gate/__tests__/provider-catalog.test.mjs`
 
-- [ ] **Step 3: Implement the provider state machine, TTL refresh, LKG persistence, and backoff**
+- [x] **Step 3: Implement the provider state machine, TTL refresh, LKG persistence, and backoff**
 
 Map missing credentials, invalid credentials, entitlement denial, rate limits, overload, transient network errors, and disabled state to distinct codes. A Gate health response is never evidence that a provider is ready.
 
-- [ ] **Step 4: Run the provider runtime tests**
+- [x] **Step 4: Run the provider runtime tests**
 
 Run: `node --test gate/__tests__/provider-service.test.mjs gate/__tests__/provider-health.test.mjs gate/__tests__/provider-catalog.test.mjs`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the provider runtime**
+- [x] **Step 5: Commit the provider runtime**
 
 ```powershell
 git add gate/core/providers gate/__tests__/provider-service.test.mjs gate/__tests__/provider-health.test.mjs gate/__tests__/provider-catalog.test.mjs
