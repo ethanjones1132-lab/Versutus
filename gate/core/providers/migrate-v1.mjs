@@ -92,6 +92,7 @@ function toV2(id, raw) {
       requestPolicy: { timeoutMs: 120000 },
     },
     state: {
+      legacyApiKeyEnv: raw.config?.apiKeyEnv,
       catalog: {
         source: 'legacy_bootstrap',
         state: 'stale',

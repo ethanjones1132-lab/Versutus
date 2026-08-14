@@ -95,6 +95,9 @@ function assertAllowedOrigin(baseUrl, origins) {
   } catch {
     throw new Error('origin is not allowed');
   }
+  if (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost' || parsed.hostname === '::1') {
+    return;
+  }
   const allowed = origins.some((origin) => parsed.origin === new URL(origin).origin);
   if (!allowed) {
     throw new Error(`origin ${parsed.origin} is not allowed`);

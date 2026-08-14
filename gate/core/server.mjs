@@ -6,6 +6,14 @@ import { buildInstanceHandlers } from './capabilities/dispatch.mjs';
 import { createRegistryMethods } from './capabilities/registry-methods.mjs';
 import { getSecret } from './capabilities/secrets.mjs';
 import { buildManifest } from './manifest.mjs';
+import { ProviderStore } from './providers/store.mjs';
+import { migrateLegacyProviders } from './providers/migrate-v1.mjs';
+import { ProviderService } from './providers/service.mjs';
+import { CredentialVault } from './credentials/vault.mjs';
+import { createProviderAdapter } from './providers/factory.mjs';
+import { createProviderRpc, sanitizeSnapshot } from './providers/rpc.mjs';
+import { OAuthManager } from './providers/oauth/refresh.mjs';
+import { releaseOAuthProfiles } from './providers/oauth/profiles.mjs';
 import { TokenStore } from './tokens.mjs';
 import { PairingStore } from './pairing.mjs';
 import { DeviceTokenStore } from './device-tokens.mjs';
@@ -131,7 +139,20 @@ export async function createGate(config = {}) {
     port = 0,
     name = 'Versutus Gate',
     version,
+    gateHome = process.env.VERSUTUS_GATE_HOME || join(root, '.gate-home'),
+    vault: injectedVault,
   } = config;
+
+  await migrateLegacyProviders({ sourceRoot: root, gateHome });
+  const providerStore = new ProviderStore(gateHome);
+  const vault = injectedVault ?? new CredentialVault({ gateHome });
+  const oauth = new OAuthManager({ vault, profiles: releaseOAuthProfiles });
+  const providerService = new ProviderService({
+    store: providerStore,
+    vault,
+    createAdapter: (registration) => createProviderAdapter(registration, { vault, store: providerStore }),
+  });
+  const providerRpc = createProviderRpc({ service: providerService, vault, oauth });
 
   const tokenPath = join(root, '.tokens.json');
 
@@ -160,7 +181,10 @@ export async function createGate(config = {}) {
     return state;
   }
 
-  const registryMethods = createRegistryMethods({ root, getState: () => state, reload });
+  const registryMethods = {
+    ...createRegistryMethods({ root, getState: () => state, reload, gateHome }),
+    ...providerRpc,
+  };
 
   // Initialize token store
   const tokenStore = new TokenStore(tokenPath);
@@ -274,6 +298,8 @@ export async function createGate(config = {}) {
       // This allows us to return 404 for unknown routes
       const isKnownAuthenticatedRoute =
         (pathname === '/v1/models' && method === 'GET') ||
+        (pathname === '/v1/providers' && method === 'GET') ||
+        /^\/v1\/providers\/[^/]+$/.test(pathname) ||
         /^\/p\/[^/]+\/v1\/models$/.test(pathname) ||
         (pathname === '/v1/chat/completions' && method === 'POST') ||
         /^\/p\/[^/]+\/v1\/chat\/completions$/.test(pathname) ||
@@ -305,18 +331,56 @@ export async function createGate(config = {}) {
 
       // Authenticated endpoints
 
-      // /v1/models - all provider models
+      if (pathname === '/v1/providers' && method === 'GET') {
+        const snapshots = await providerService.list();
+        res.writeHead(200);
+        res.end(JSON.stringify({ providers: snapshots.map(sanitizeSnapshot) }));
+        return;
+      }
+
+      const providerMatch = pathname.match(/^\/v1\/providers\/([^/]+)$/);
+      if (providerMatch && method === 'GET') {
+        try {
+          const snapshot = await providerService.get(decodeURIComponent(providerMatch[1]));
+          res.writeHead(200);
+          res.end(JSON.stringify(sanitizeSnapshot(snapshot)));
+        } catch {
+          res.writeHead(404);
+          res.end(JSON.stringify({ error: { message: 'provider not found', code: 'provider_not_found' } }));
+        }
+        return;
+      }
+
+      // /v1/models - provider-owned live or labeled LKG/bootstrap catalogs
       if (pathname === '/v1/models' && method === 'GET') {
+        const snapshots = await providerService.list();
         const allModels = [];
-        for (const provider of state.providers) {
-          const models = provider.config.models || [];
+        for (const snapshot of snapshots) {
+          const models = snapshot.catalog?.models?.length
+            ? snapshot.catalog.models.map((model) => model.id)
+            : state.providers.find((provider) => provider.id === snapshot.id)?.config.models ?? [];
           for (const modelId of models) {
             allModels.push({
               id: modelId,
-              provider: provider.id,
+              provider: snapshot.id,
+              providerId: snapshot.id,
               label: modelId,
               object: 'model',
+              catalogSource: snapshot.catalog?.source,
             });
+          }
+        }
+        if (allModels.length === 0) {
+          for (const provider of state.providers) {
+            for (const modelId of provider.config.models || []) {
+              allModels.push({
+                id: modelId,
+                provider: provider.id,
+                providerId: provider.id,
+                label: modelId,
+                object: 'model',
+              });
+            }
           }
         }
         res.writeHead(200);
@@ -361,11 +425,50 @@ export async function createGate(config = {}) {
       // /v1/chat/completions - unscoped chat (resolves provider from model)
       if (pathname === '/v1/chat/completions' && method === 'POST') {
         const body = (await readJsonBody(req)) ?? {};
-        // App may omit model on first connect; default to the first advertised one.
-        if (!body.model && state.providers[0]?.config?.models?.[0]) {
-          body.model = state.providers[0].config.models[0];
+        const snapshots = await providerService.list();
+        const advertised = snapshots.flatMap((snapshot) => (
+          snapshot.catalog?.models ?? []
+        ).map((model) => ({ providerId: snapshot.id, modelId: model.id })));
+        for (const provider of state.providers) {
+          for (const modelId of provider.config.models || []) {
+            if (!advertised.some((entry) => entry.providerId === provider.id && entry.modelId === modelId)) {
+              advertised.push({ providerId: provider.id, modelId });
+            }
+          }
         }
-        const provider = state.providers.find((p) => p.config.models.includes(body?.model));
+        if (!body.model && advertised[0]) {
+          body.model = advertised[0].modelId;
+        }
+        const matches = advertised.filter((entry) => entry.modelId === body.model);
+        if (body.providerId) {
+          const provider = state.providers.find((item) => item.id === body.providerId)
+            ?? (await providerService.get(body.providerId).then(() => ({ id: body.providerId, config: { models: [body.model], flavor: 'openai', streaming: true } })).catch(() => null));
+          if (!provider) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: `Unknown provider "${body.providerId}"`, code: 'unknown_provider' } }));
+            return;
+          }
+          if (state.providers.some((item) => item.id === body.providerId)) {
+            await proxyChat(root, state.providers.find((item) => item.id === body.providerId), body, res);
+          } else {
+            try {
+              const result = await providerService.chat({ providerId: body.providerId, ...body });
+              res.writeHead(200);
+              res.end(JSON.stringify(result));
+            } catch (error) {
+              res.writeHead(502);
+              res.end(JSON.stringify({ error: { message: error.message, code: error.code || 'upstream_error' } }));
+            }
+          }
+          return;
+        }
+        if (matches.length > 1) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: `Model "${body.model}" is declared by multiple providers`, code: 'ambiguous_model' } }));
+          return;
+        }
+        const provider = state.providers.find((item) => item.id === matches[0]?.providerId)
+          ?? state.providers.find((item) => item.config.models.includes(body?.model));
         if (!provider) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: `No provider declares model "${body?.model}"`, code: 'unknown_model' } }));

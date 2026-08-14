@@ -663,7 +663,7 @@ git commit -m "feat(gate): add reusable local provider interface"
 - HTTP: `GET /v1/providers`, `GET /v1/providers/:id`, aggregated `GET /v1/models`.
 - RPC: `providers.create/update/delete`, `providers.auth.setApiKey/begin/attempt.get/disconnect`, `providers.health.check`, and `providers.catalog.refresh`.
 
-- [ ] **Step 1: Write failing route tests for sanitization and ambiguous model IDs**
+- [x] **Step 1: Write failing route tests for sanitization and ambiguous model IDs**
 
 ```js
 test('unscoped duplicate model requires providerId', async () => {
@@ -673,21 +673,21 @@ test('unscoped duplicate model requires providerId', async () => {
 });
 ```
 
-- [ ] **Step 2: Run the route tests and confirm failure**
+- [x] **Step 2: Run the route tests and confirm failure**
 
 Run: `node --test gate/__tests__/providers-route.test.mjs gate/__tests__/model-routing-v2.test.mjs`
 
-- [ ] **Step 3: Route all provider behavior through `ProviderService`**
+- [x] **Step 3: Route all provider behavior through `ProviderService`**
 
 Add `endpoints.providers` to the Gate manifest. Keep `/p/:providerId` compatibility routes. Make write RPC responses status-only and redact all errors. Delegate legacy registry provider calls for one compatibility release; deprecate arbitrary `registry.secrets.set`.
 
-- [ ] **Step 4: Run all Gate route tests**
+- [x] **Step 4: Run all Gate route tests**
 
 Run: `npm run test:gate`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the provider API slice**
+- [x] **Step 5: Commit the provider API slice**
 
 ```powershell
 git add gate/core/server.mjs gate/core/manifest.mjs gate/core/capabilities/provider/kind.mjs gate/core/capabilities/registry-methods.mjs gate/__tests__/providers-route.test.mjs gate/__tests__/model-routing-v2.test.mjs gate/__tests__/chat-route.test.mjs gate/__tests__/manifest.test.mjs

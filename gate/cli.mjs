@@ -202,6 +202,7 @@ async function handleStart() {
       root: __dirname,
       port: 8760,
       name: gateName,
+      gateHome,
     });
 
     console.log(`Token: ${gate.token}`);

@@ -106,7 +106,7 @@ export function createRegistryMethods({ root, getState, reload, gateHome }) {
       if (typeof refName !== 'string' || !refName) throw new Error('refName must be a non-empty string');
       if (typeof value !== 'string' || !value) throw new Error('value must be a non-empty string');
       await setSecret(root, refName, value);
-      return { ok: true };
+      return { ok: true, deprecated: true };
     },
   };
 }

@@ -187,7 +187,8 @@ test('registry.secrets.set stores a value retrievable via getSecret, never retur
   const { methods, root } = await harness();
   const result = await methods['registry.secrets.set']({ refName: 'MY_API_KEY', value: 'sk-live-abc' });
 
-  assert.deepEqual(result, { ok: true });
+  assert.equal(result.ok, true);
+  assert.equal(result.deprecated, true);
   assert.equal(await getSecret(root, 'MY_API_KEY'), 'sk-live-abc');
 });
 
