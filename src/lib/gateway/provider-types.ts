@@ -20,12 +20,12 @@ export type ProviderSnapshot = {
     source: 'live' | 'last_known_good' | 'legacy_bootstrap';
     observedAt?: string;
     generation: number;
-    models: Array<{
+    models: {
       providerId: string;
       id: string;
       label?: string;
       available: boolean;
-    }>;
+    }[];
   };
 };
 
@@ -33,10 +33,10 @@ export type ProviderModelGroup = {
   providerId: string;
   label: string;
   catalogSource: ProviderSnapshot['catalog']['source'];
-  models: Array<{
+  models: {
     id: string;
     providerId: string;
     available: boolean;
     catalogState: ProviderSnapshot['catalog']['state'];
-  }>;
+  }[];
 };

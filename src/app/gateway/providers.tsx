@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, ScrollView } from 'react-native';
+import { ScrollView } from 'react-native';
 
 import { OauthProgressSheet } from '@/components/gateway/oauth-progress-sheet';
 import { ProviderCard } from '@/components/gateway/provider-card';
@@ -35,7 +35,8 @@ export default function ProvidersScreen() {
   }, [gatewayRequest, status]);
 
   useEffect(() => {
-    void load();
+    const timer = setTimeout(() => { void load(); }, 0);
+    return () => clearTimeout(timer);
   }, [load]);
 
   async function refreshOne(id: string) {

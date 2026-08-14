@@ -55,7 +55,8 @@ export default function CapabilityEditorScreen() {
   }, [gatewayRequest, status]);
 
   useEffect(() => {
-    void load();
+    const timer = setTimeout(() => { void load(); }, 0);
+    return () => clearTimeout(timer);
   }, [load]);
 
   const selectedKind = useMemo(
