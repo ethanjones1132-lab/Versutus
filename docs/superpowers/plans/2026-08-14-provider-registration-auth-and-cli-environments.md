@@ -757,7 +757,7 @@ git commit -m "feat(gate): separate agents from provider ownership"
 - Produces `CliEnvironmentStore` and `CliAdapterRegistry.get(adapterId)` using the target contract above.
 - Supported initial probes: Hermes ACP, Codex JSONL, Claude stream JSON. Codex app-server is accepted only when its generated schema fingerprint matches the adapter fixture.
 
-- [ ] **Step 1: Write failing version/protocol tests using captured non-secret fixtures**
+- [x] **Step 1: Write failing version/protocol tests using captured non-secret fixtures**
 
 ```js
 test('unknown newer CLI version is incompatible', async () => {
@@ -766,21 +766,21 @@ test('unknown newer CLI version is incompatible', async () => {
 });
 ```
 
-- [ ] **Step 2: Run adapter tests and confirm failure**
+- [x] **Step 2: Run adapter tests and confirm failure**
 
 Run: `node --test gate/__tests__/cli-adapters.test.mjs`
 
-- [ ] **Step 3: Implement explicit adapter manifests and probes**
+- [x] **Step 3: Implement explicit adapter manifests and probes**
 
 Do not parse `--help` to discover operations. Probe executable identity/version plus native handshake. Declare exact operations and input schemas per adapter revision. Mark commands that lack a machine contract `machineReadable:false`.
 
-- [ ] **Step 4: Run adapter tests**
+- [x] **Step 4: Run adapter tests**
 
 Run: `node --test gate/__tests__/cli-adapters.test.mjs`
 
 Expected: PASS for the tested local-version fixtures and FAIL-CLOSED for unknown versions.
 
-- [ ] **Step 5: Commit the CLI adapter registry**
+- [x] **Step 5: Commit the CLI adapter registry**
 
 ```powershell
 git add gate/core/cli-environments gate/__tests__/cli-adapters.test.mjs gate/__tests__/fixtures/cli-protocols
