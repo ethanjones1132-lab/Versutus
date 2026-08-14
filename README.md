@@ -12,7 +12,7 @@ It speaks three gateway shapes through one portal seam:
 
 ## Current Surface
 
-- **Home** command center: connection hero, Chat / Activity / Tools actions, capability groups (ready-first), saved profiles, run/approval presence.
+- **Home** command center: connection hero, Chat / Activity / Tools / Providers / Environments actions, capability groups (ready-first), saved profiles, run/approval presence.
 - **Chat**: streaming markdown, slash commands (executable-first palette), sessions, model picker / `/model set` override, offline outbox (durable), tool-call cards when the stream or history exposes them, run approvals.
 - **Activity**: start an agentic run, live events, approve/deny, stop, recent history (persisted), gateway-target list (profile-scoped).
 - **Tools**: Shell only when the gateway advertises a terminal; otherwise RPC/Agent. Quick RPC is filtered to commands the live gateway can actually run.
@@ -35,7 +35,12 @@ npm start
 npm run android
 npm run ios
 npm run web
+npm run test:gate
+node scripts/smoke-provider-runtime.mjs
+node scripts/smoke-cli-environments.mjs
 ```
+
+Provider and CLI environment operations: `docs/provider-setup.md`, `docs/cli-environments.md`. Gate home is `%LOCALAPPDATA%\Versutus\Gate`.
 
 ### Local APK (Windows)
 

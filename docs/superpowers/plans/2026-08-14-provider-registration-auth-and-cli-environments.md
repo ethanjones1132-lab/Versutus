@@ -801,7 +801,7 @@ git commit -m "feat(gate): add versioned CLI environment adapters"
 - CLI-native sessions require a provider registered in `local_interface` mode with external credential custody.
 - Produces: `buildCliEnvironment(parentEnvironment, request)` with an explicit non-secret allowlist and `VERSUTUS_CLI_INVOCATION_TOKEN`.
 
-- [ ] **Step 1: Write failing audience, replay, expiry, and environment-leak tests**
+- [x] **Step 1: Write failing audience, replay, expiry, and environment-leak tests**
 
 ```js
 test('child environment excludes inherited provider secrets', () => {
@@ -848,7 +848,7 @@ git commit -m "feat(gate): isolate provider credentials from CLI runs"
 - Produces `CliEnvironmentService.startRun(request)`, `.events(runId)`, `.approve(runId,approvalId,decision)`, `.cancel(runId)`, `.start(id)`, `.stop(id)`, and `.check(id)`.
 - Environment states: `not_installed`, `incompatible`, `stopped`, `starting`, `ready`, `busy`, `degraded`, `approval_required`, `crashed`.
 
-- [ ] **Step 1: Write failing root-escape, approval, concurrency, process-tree, and cancellation tests**
+- [x] **Step 1: Write failing root-escape, approval, concurrency, process-tree, and cancellation tests**
 
 ```js
 test('unknown native approval fails closed', async () => {
@@ -893,7 +893,7 @@ git commit -m "feat(gate): supervise CLI runs with policy and cancellation"
 - Produces local-visible `terminal.chunk` events and an exit code for adapter-declared `machineReadable:false` operations.
 - Never exposes arbitrary argument arrays through remote RPC.
 
-- [ ] **Step 1: Write failing local-presence, output-bound, and no-inference tests**
+- [x] **Step 1: Write failing local-presence, output-bound, and no-inference tests**
 
 ```js
 test('unstructured output cannot mutate provider or approval state', async () => {
@@ -936,7 +936,7 @@ git commit -m "feat(gate): add local-interactive CLI fallback"
 - HTTP: `GET /v1/environments`, `POST /v1/environments/:id/runs`, `GET /v1/environments/:id/runs/:runId/events`, `POST /v1/environments/:id/runs/:runId/cancel`, and approval resolution.
 - RPC: `environments.create/update/delete/check`, `environments.commands.list`, `environments.lifecycle.start/stop`.
 
-- [ ] **Step 1: Write failing route/auth/sequence tests**
+- [x] **Step 1: Write failing route/auth/sequence tests**
 
 ```js
 test('run events have monotonic sequence and one terminal event', async () => {
