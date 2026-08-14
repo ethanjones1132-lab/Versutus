@@ -242,6 +242,15 @@ export class ManifestClient implements PortalClient {
     };
   }
 
+  /** First model this gate advertises, if any. */
+  private defaultModelId(): string | undefined {
+    const fromProviders = this.identity.providers?.[0]?.models?.[0];
+    if (typeof fromProviders === 'string' && fromProviders) return fromProviders;
+    const fromManifest = this.identity.manifest?.providers?.[0]?.models?.[0];
+    if (typeof fromManifest === 'string' && fromManifest) return fromManifest;
+    return undefined;
+  }
+
   async streamChat(
     messages: { role: string; content: string }[],
     onDelta: (text: string) => void,
@@ -253,7 +262,13 @@ export class ManifestClient implements PortalClient {
     },
   ): Promise<string> {
     const path = this.requireEndpoint('chat');
-    const body: Record<string, unknown> = { model: options?.model, messages, stream: true };
+    const model = options?.model || this.defaultModelId();
+    if (!model) {
+      throw new Error(
+        `${this.identity.kindLabel} has no model selected and advertises none. Pick a model or configure a provider.`,
+      );
+    }
+    const body: Record<string, unknown> = { model, messages, stream: true };
 
     const controller = new AbortController();
     const signal = options?.signal || controller.signal;

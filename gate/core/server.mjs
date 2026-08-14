@@ -360,14 +360,18 @@ export async function createGate(config = {}) {
 
       // /v1/chat/completions - unscoped chat (resolves provider from model)
       if (pathname === '/v1/chat/completions' && method === 'POST') {
-        const body = await readJsonBody(req);
+        const body = (await readJsonBody(req)) ?? {};
+        // App may omit model on first connect; default to the first advertised one.
+        if (!body.model && state.providers[0]?.config?.models?.[0]) {
+          body.model = state.providers[0].config.models[0];
+        }
         const provider = state.providers.find((p) => p.config.models.includes(body?.model));
         if (!provider) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: `No provider declares model "${body?.model}"`, code: 'unknown_model' } }));
           return;
         }
-        await proxyChat(root, provider, body ?? {}, res);
+        await proxyChat(root, provider, body, res);
         return;
       }
 

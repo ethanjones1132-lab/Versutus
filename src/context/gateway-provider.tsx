@@ -530,7 +530,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const attachClient = useCallback(
-    async (gateway: GatewayProfile) => {
+    async (gatewayInput: GatewayProfile) => {
+      let gateway = gatewayInput;
       authFailureRef.current = false;
       const existing = clientRef.current;
       const existingStatus = existing?.connectionStatus;
@@ -570,10 +571,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (manifest) {
           setActiveManifest(manifest);
           clientKind = 'custom';
+          const providers = manifestProviders(manifest);
           identityForClient = {
             kind: 'custom',
             kindLabel: manifestKindLabel(manifest),
             manifest,
+            providers,
             auth: {
               schemes: manifestAuthSchemes(manifest),
               requiresToken: manifestRequiresToken(manifest),
@@ -582,8 +585,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             source: 'manifest',
             identifiedAt: Date.now(),
           };
-          if (gateway.kind !== 'custom') {
-            const corrected = { ...gateway, kind: 'custom' as const };
+          const firstModel = providers[0]?.models?.[0];
+          const needsKind = gateway.kind !== 'custom';
+          const needsModel = !gateway.model && typeof firstModel === 'string' && firstModel.length > 0;
+          if (needsKind || needsModel) {
+            const corrected = {
+              ...gateway,
+              ...(needsKind ? { kind: 'custom' as const } : {}),
+              ...(needsModel ? { model: firstModel } : {}),
+            };
+            gateway = corrected;
             setActiveGateway(corrected);
             void upsertGateway(corrected).then(setGateways);
           }
@@ -659,6 +670,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         if (isGatewayAuthFailure(error)) authFailureRef.current = true;
         throw error;
+      }
+
+      // Pin a default model so chat is not sent with model: undefined (Gate
+      // would 404 "No provider declares model undefined").
+      if (!gateway.model && isCurrent()) {
+        try {
+          const models = await client.getModels();
+          const first = models[0]?.id;
+          if (first && isCurrent()) {
+            const withModel = { ...gateway, model: first };
+            setActiveGateway(withModel);
+            void upsertGateway(withModel).then(setGateways);
+          }
+        } catch {
+          // optional
+        }
       }
 
       // Fetch is cheap and idempotent; only a manifest-serving gate returns

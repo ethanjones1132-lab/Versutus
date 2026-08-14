@@ -154,7 +154,9 @@ describe('ManifestClient.streamChat', () => {
 
     const client = new ManifestClient(PROFILE, IDENTITY, {});
     const chunks: string[] = [];
-    const full = await client.streamChat([{ role: 'user', content: 'hi' }], (t) => chunks.push(t));
+    const full = await client.streamChat([{ role: 'user', content: 'hi' }], (t) => chunks.push(t), {
+      model: 'test-model',
+    });
 
     expect(chunks).toEqual(['Hel', 'lo']);
     expect(full).toBe('Hello');
@@ -163,7 +165,16 @@ describe('ManifestClient.streamChat', () => {
   test('throws a named error when the manifest has no chat endpoint', async () => {
     const identityNoChat: GatewayIdentity = { ...IDENTITY, manifest: { ...IDENTITY.manifest!, endpoints: { health: '/health' } } };
     const client = new ManifestClient(PROFILE, identityNoChat, {});
-    await expect(client.streamChat([{ role: 'user', content: 'hi' }], () => undefined)).rejects.toThrow(/chat/i);
+    await expect(
+      client.streamChat([{ role: 'user', content: 'hi' }], () => undefined, { model: 'm' }),
+    ).rejects.toThrow(/chat/i);
+  });
+
+  test('throws a clear error when no model is selected and none is advertised', async () => {
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    await expect(client.streamChat([{ role: 'user', content: 'hi' }], () => undefined)).rejects.toThrow(
+      /no model/i,
+    );
   });
 });
 
