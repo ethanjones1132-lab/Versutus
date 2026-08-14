@@ -31,6 +31,8 @@ export type GatewayProfile = {
   agentId?: string;
   /** Per-request model override (Hermes-native model selection) */
   model?: string;
+  /** Provider that owns the selected model. */
+  providerId?: string;
   createdAt: number;
   discoverySource?: 'local' | 'wide-area' | 'manual' | 'tailscale' | 'relay' | 'deep-link';
   /**

@@ -148,7 +148,7 @@ type GatewayContextValue = {
   };
   openModelPicker: (mode: 'default' | 'fallbacks' | 'agent', agentId?: string) => void;
   closeModelPicker: () => void;
-  selectModel: (modelId: string) => void;
+  selectModel: (modelId: string, providerId?: string) => void;
   modelCatalog: any[];
   sessionSelector: { visible: boolean };
   openSessionSelector: () => void;
@@ -1896,7 +1896,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
   }, []);
 
   const selectModel = useCallback(
-    (modelId: string) => {
+    (modelId: string, providerId?: string) => {
       closeModelPicker();
       if (activeGateway?.kind === 'openclaw') {
         // OpenClaw: model is gateway config — run the config command.
@@ -1905,7 +1905,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       }
       // Hermes: per-request model override (API server honors model per request).
       if (!activeGateway) return;
-      const updated = { ...activeGateway, model: modelId };
+      const updated = { ...activeGateway, model: modelId, providerId: providerId ?? activeGateway.providerId };
       setActiveGateway(updated);
       void upsertGateway(updated).then(setGateways);
     },

@@ -332,6 +332,8 @@ export function ChatScreen() {
         models={modelCatalog.map((model: Record<string, unknown>) => ({
           id: String(model.id || model.model || model.name || ''),
           provider: model.provider as string | undefined,
+          providerId: (model.providerId ?? model.provider) as string | undefined,
+          catalogState: (model.catalogSource ?? model.catalogState) as string | undefined,
           available: model.available !== false,
           context: (model.context ?? model.contextLength) as number | undefined,
           price: (model.cost ?? model.price) as number | undefined,

@@ -153,6 +153,26 @@ export function GatewayHomeDashboard() {
             variant="secondary"
             style={styles.primaryAction}
           />
+          <Button
+            label="Providers"
+            onPress={async () => {
+              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/gateway/providers' as Href);
+            }}
+            disabled={!connected}
+            variant="secondary"
+            style={styles.primaryAction}
+          />
+          <Button
+            label="Environments"
+            onPress={async () => {
+              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/gateway/environments' as Href);
+            }}
+            disabled={!connected}
+            variant="secondary"
+            style={styles.primaryAction}
+          />
         </View>
         {!connected ? (
           <Button
