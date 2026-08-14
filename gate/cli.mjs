@@ -10,6 +10,8 @@ import { validateId, buildInstanceConfigTemplate, getKindTemplate } from './core
 import { resolveGateHome } from './core/paths.mjs';
 import { ProviderStore } from './core/providers/store.mjs';
 import { migrateLegacyProviders } from './core/providers/migrate-v1.mjs';
+import { CliEnvironmentStore } from './core/cli-environments/store.mjs';
+import { CliAdapterRegistry } from './core/cli-environments/adapter-registry.mjs';
 import { buildTaskDefinition } from './core/service/windows-task.mjs';
 import { acquireInstanceLock } from './core/service/instance-lock.mjs';
 import { doctor } from './core/service/doctor.mjs';
@@ -128,6 +130,80 @@ async function handleAdd(args) {
     console.error(`Error creating instance: ${err.message}`);
     process.exit(1);
   }
+}
+
+async function handleAddEnvironment(args) {
+  const id = args[0];
+  const adapterIndex = args.indexOf('--adapter');
+  const pathIndex = args.indexOf('--path');
+  const rootIndex = args.indexOf('--root');
+
+  if (!id || adapterIndex === -1 || pathIndex === -1) {
+    console.error('Usage: node gate/cli.mjs add-environment <id> --adapter <adapter-id> --path <executable> [--root <workspace>]');
+    process.exit(1);
+  }
+
+  if (!validateId(id)) {
+    console.error(`Error: environment id must be lowercase alphanumeric with hyphens, got "${id}"`);
+    process.exit(1);
+  }
+
+  const adapterId = args[adapterIndex + 1];
+  const executablePath = args[pathIndex + 1];
+  const workspaceRoot = rootIndex === -1 ? process.cwd() : args[rootIndex + 1];
+  const registry = new CliAdapterRegistry();
+  let adapter;
+  try {
+    adapter = registry.get(adapterId);
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+
+  const probe = await adapter.probe(executablePath);
+  if (probe.state === 'not_installed') {
+    console.error(`Error: executable not found at ${executablePath}`);
+    process.exit(1);
+  }
+  if (probe.state === 'incompatible') {
+    console.error(`Error: ${probe.message ?? 'incompatible CLI version'}`);
+    process.exit(1);
+  }
+
+  const gateHome = resolveGateHome();
+  const store = new CliEnvironmentStore(gateHome);
+  if (await store.get(id)) {
+    console.error(`Error: environment "${id}" already exists in Gate home`);
+    process.exit(1);
+  }
+
+  const label = id.charAt(0).toUpperCase() + id.slice(1);
+  await store.put({
+    schemaVersion: 1,
+    kind: 'cli-environment',
+    id,
+    label,
+    adapterId,
+    executable: { path: executablePath },
+    protocolPreference: Object.keys(adapter.protocolVersions),
+    versionPolicy: { supported: adapter.supportedCliVersions, adapterRevision: adapter.adapterRevision },
+    providerRefs: [],
+    workspacePolicy: {
+      roots: [workspaceRoot],
+      defaultRoot: workspaceRoot,
+      defaultSandbox: 'read_only',
+      allowAdditionalRoots: false,
+    },
+    lifecycle: {
+      startup: 'on_demand',
+      idleTimeoutSeconds: 300,
+      maxConcurrentRuns: 1,
+    },
+    enabled: true,
+  });
+
+  console.log(`Created CLI environment "${id}" in ${gateHome}`);
+  console.log(`adapter=${adapterId} version=${probe.cliVersion ?? 'unknown'} protocol=${probe.protocol ?? 'unknown'} state=${probe.state}`);
 }
 
 /**
@@ -344,6 +420,9 @@ async function main() {
     console.log('    Scaffold a new capability kind module at');
     console.log('    gate/core/capabilities/<kind-id>/kind.mjs');
     console.log('');
+    console.log('  add-environment <id> --adapter <adapter-id> --path <executable> [--root <workspace>]');
+    console.log('    Register a CLI environment (hermes, codex, claude-code, opencode) in Gate home');
+    console.log('');
     console.log('  start');
     console.log('    Start the Gate HTTP server on port 8760');
     console.log('');
@@ -368,6 +447,8 @@ async function main() {
 
   if (command === 'add') {
     await handleAdd(args);
+  } else if (command === 'add-environment') {
+    await handleAddEnvironment(args);
   } else if (command === 'add-kind') {
     await handleAddKind(args);
   } else if (command === 'start') {

@@ -32,7 +32,8 @@ test('adapters mark interactive-only operations as not machine-readable', async 
   const { hermesAdapter } = await import('../core/cli-environments/adapters/hermes.mjs');
   const { codexAdapter } = await import('../core/cli-environments/adapters/codex.mjs');
   const { claudeCodeAdapter } = await import('../core/cli-environments/adapters/claude-code.mjs');
-  for (const adapter of [hermesAdapter, codexAdapter, claudeCodeAdapter]) {
+  const { opencodeAdapter } = await import('../core/cli-environments/adapters/opencode.mjs');
+  for (const adapter of [hermesAdapter, codexAdapter, claudeCodeAdapter, opencodeAdapter]) {
     assert.equal(adapter.operations.interactive.machineReadable, false);
     assert.equal(adapter.operations.interactive.risk, 'credential');
   }

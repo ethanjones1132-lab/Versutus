@@ -1,6 +1,6 @@
 const SCHEMA_VERSION = 1;
 const KIND = 'cli-environment';
-const ADAPTERS = new Set(['hermes', 'codex', 'claude-code']);
+const ADAPTERS = new Set(['hermes', 'codex', 'claude-code', 'opencode']);
 const PROTOCOLS = new Set(['acp', 'mcp', 'app_server', 'jsonl', 'conpty']);
 const SANDBOXES = new Set(['read_only', 'workspace_write', 'isolated_worktree']);
 const STARTUPS = new Set(['on_demand', 'persistent']);

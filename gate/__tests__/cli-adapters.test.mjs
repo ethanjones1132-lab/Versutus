@@ -29,13 +29,24 @@ test('supported Hermes ACP version is ready', async () => {
   assert.equal(probe.protocol, 'acp');
 });
 
+test('supported OpenCode ACP version is ready', async () => {
+  const probe = await registry.get('opencode').probe(await fakeExecutable('1.17.9'));
+  assert.equal(probe.state, 'ready');
+  assert.equal(probe.protocol, 'acp');
+});
+
+test('unknown newer OpenCode version is incompatible', async () => {
+  const probe = await registry.get('opencode').probe(await fakeExecutable('999.0.0'));
+  assert.equal(probe.state, 'incompatible');
+});
+
 test('missing executable is not_installed', async () => {
   const probe = await registry.get('codex').probe('C:\\\\missing\\\\codex.exe');
   assert.equal(probe.state, 'not_installed');
 });
 
 test('adapters declare exact operations and never scrape --help', async () => {
-  for (const id of ['hermes', 'codex', 'claude-code']) {
+  for (const id of ['hermes', 'codex', 'claude-code', 'opencode']) {
     const adapter = registry.get(id);
     assert.ok(adapter.operations);
     for (const operation of Object.values(adapter.operations)) {

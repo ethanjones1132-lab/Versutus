@@ -9,6 +9,7 @@ A CLI environment is an optional execution attachment. It is not a provider and 
 | Codex | JSONL, version `0.142.x` | App-server stays behind schema fingerprint |
 | Claude Code | stream JSON, `2.1.x` | `--bare` is never used to scrape OAuth |
 | Hermes | ACP, `0.18.x` | Hermes is a gateway/agent/CLI, never an xAI provider |
+| OpenCode | ACP (`opencode acp`), `1.17.x`–`1.18.x` | JSON `run --format json` is machine-readable; never pass `--auto` |
 
 Unknown versions fail closed. Interactive-only operations require desktop presence and emit `terminal.chunk` text only.
 
