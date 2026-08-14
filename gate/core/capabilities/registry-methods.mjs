@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { describeKinds } from './registry.mjs';
 import { setSecret } from './secrets.mjs';
+import { ProviderStore } from '../providers/store.mjs';
 
 const INSTANCE_ID_PATTERN = /^[a-z0-9-]+$/;
 const RESERVED_INSTANCE_IDS = new Set(['registry']);
@@ -39,7 +40,7 @@ async function writeInstanceFile(root, id, kind, label, config) {
  * @param {() => {kinds: Map, instances: Array}} deps.getState - current loaded state
  * @param {() => Promise<{kinds: Map, instances: Array}>} deps.reload - re-read from disk, returns the new state
  */
-export function createRegistryMethods({ root, getState, reload }) {
+export function createRegistryMethods({ root, getState, reload, gateHome }) {
   let writeQueue = Promise.resolve();
   function serialize(fn) {
     const result = writeQueue.then(fn, fn);
@@ -66,7 +67,11 @@ export function createRegistryMethods({ root, getState, reload }) {
         throw new Error(`instance "${id}" already exists`);
       }
       assertValid(kindModule.validate(config ?? {}));
-      await writeInstanceFile(root, id, kind, label ?? id, config ?? {});
+      if (kind === 'provider' && gateHome) {
+        await writeProviderRecord(gateHome, id, label ?? id, config ?? {});
+      } else {
+        await writeInstanceFile(root, id, kind, label ?? id, config ?? {});
+      }
       const state = await reload();
       return state.instances.find((i) => i.id === id);
     }),
@@ -76,7 +81,11 @@ export function createRegistryMethods({ root, getState, reload }) {
       if (!existing) throw new Error(`instance "${id}" not found`);
       const kindModule = getState().kinds.get(existing.kind);
       assertValid(kindModule.validate(config ?? {}));
-      await writeInstanceFile(root, id, existing.kind, label ?? existing.label, config ?? {});
+      if (existing.kind === 'provider' && gateHome) {
+        await writeProviderRecord(gateHome, id, label ?? existing.label, config ?? {});
+      } else {
+        await writeInstanceFile(root, id, existing.kind, label ?? existing.label, config ?? {});
+      }
       const state = await reload();
       return state.instances.find((i) => i.id === id);
     }),
@@ -84,7 +93,11 @@ export function createRegistryMethods({ root, getState, reload }) {
     'registry.instances.delete': async ({ id } = {}) => serialize(async () => {
       const existing = getState().instances.find((i) => i.id === id);
       if (!existing) throw new Error(`instance "${id}" not found`);
-      await unlink(join(root, 'registry', `${id}.json`));
+      if (existing.kind === 'provider' && gateHome) {
+        await new ProviderStore(gateHome).delete(id);
+      } else {
+        await unlink(join(root, 'registry', `${id}.json`));
+      }
       await reload();
       return { deleted: true };
     }),
@@ -96,4 +109,35 @@ export function createRegistryMethods({ root, getState, reload }) {
       return { ok: true };
     },
   };
+}
+
+async function writeProviderRecord(gateHome, id, label, config) {
+  const store = new ProviderStore(gateHome);
+  const existing = await store.get(id);
+  const flavor = config.flavor;
+  await store.put({
+    schemaVersion: 2,
+    kind: 'provider',
+    id,
+    label,
+    providerType: flavor === 'anthropic' ? 'anthropic' : flavor === 'openai' ? 'openai' : flavor || 'openai',
+    enabled: true,
+    registration: {
+      mode: 'api_key',
+      protocol: flavor === 'anthropic' ? 'anthropic_messages' : 'openai_chat',
+      baseUrl: config.baseUrl,
+      credentialRef: `provider/${id}/api-key`,
+    },
+    catalogPolicy: { ttlSeconds: 300, allowLastKnownGood: true },
+    requestPolicy: { timeoutMs: 120000 },
+  }, existing?.state ?? {
+    catalog: {
+      source: 'legacy_bootstrap',
+      state: 'stale',
+      generation: 0,
+      models: Array.isArray(config.models)
+        ? config.models.map((modelId) => ({ providerId: id, id: modelId, available: true }))
+        : [],
+    },
+  });
 }

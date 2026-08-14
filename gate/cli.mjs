@@ -7,6 +7,9 @@ import { createGate } from './core/server.mjs';
 import { PairingStore } from './core/pairing.mjs';
 import { DeviceTokenStore } from './core/device-tokens.mjs';
 import { validateId, buildInstanceConfigTemplate, getKindTemplate } from './core/cli-helpers.mjs';
+import { resolveGateHome } from './core/paths.mjs';
+import { ProviderStore } from './core/providers/store.mjs';
+import { migrateLegacyProviders } from './core/providers/migrate-v1.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -62,6 +65,42 @@ async function handleAdd(args) {
     process.exit(1);
   }
 
+  const label = id.charAt(0).toUpperCase() + id.slice(1);
+
+  if (kindId === 'provider') {
+    const gateHome = resolveGateHome();
+    const store = new ProviderStore(gateHome);
+    if (await store.get(id)) {
+      console.error(`Error: provider "${id}" already exists in Gate home`);
+      process.exit(1);
+    }
+    try {
+      await store.put({
+        schemaVersion: 2,
+        kind: 'provider',
+        id,
+        label,
+        providerType: 'openai',
+        enabled: true,
+        registration: {
+          mode: 'api_key',
+          protocol: 'openai_chat',
+          baseUrl: 'https://api.openai.com/v1',
+          credentialRef: `provider/${id}/api-key`,
+        },
+        catalogPolicy: { ttlSeconds: 300, allowLastKnownGood: true },
+        requestPolicy: { timeoutMs: 120000 },
+      }, {
+        catalog: { source: 'legacy_bootstrap', state: 'stale', generation: 0, models: [] },
+      });
+      console.log(`Created provider "${id}" in ${gateHome}`);
+    } catch (err) {
+      console.error(`Error creating provider: ${err.message}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   const registryDir = join(__dirname, 'registry');
   const instanceFile = join(registryDir, `${id}.json`);
 
@@ -74,7 +113,6 @@ async function handleAdd(args) {
     // Instance does not exist, which is what we want
   }
 
-  const label = id.charAt(0).toUpperCase() + id.slice(1);
   const config = buildInstanceConfigTemplate(kindModule.configFields);
   const template = JSON.stringify({ kind: kindId, label, config }, null, 2) + '\n';
 
@@ -158,6 +196,8 @@ async function handleStart() {
 
   try {
     console.log(`Starting ${gateName}...`);
+    const gateHome = resolveGateHome();
+    await migrateLegacyProviders({ sourceRoot: __dirname, gateHome });
     const gate = await createGate({
       root: __dirname,
       port: 8760,

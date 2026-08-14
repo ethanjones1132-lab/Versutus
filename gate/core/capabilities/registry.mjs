@@ -105,6 +105,11 @@ export async function loadInstances(root, kinds) {
       continue;
     }
 
+    if (parsed?.schemaVersion === 2 || parsed?.kind === 'cli-environment') {
+      skipped.push({ id, reason: 'v2 provider and CLI environment records belong in Gate home, not the source registry' });
+      continue;
+    }
+
     const { kind, label, config } = parsed ?? {};
     const kindModule = kinds.get(kind);
     if (!kindModule) {

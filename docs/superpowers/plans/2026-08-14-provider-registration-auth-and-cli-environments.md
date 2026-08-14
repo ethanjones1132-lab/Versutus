@@ -364,7 +364,7 @@ git commit -m "docs(gate): define provider and CLI environment contracts"
 - Produces: `resolveGateHome(env, platform)`, `ProviderStore`, and `migrateLegacyProviders({sourceRoot, gateHome})`.
 - Default home: `%LOCALAPPDATA%\Versutus\Gate`; `VERSUTUS_GATE_HOME` is an explicit override for tests/development.
 
-- [ ] **Step 1: Write failing path, atomic-store, and idempotent-migration tests**
+- [x] **Step 1: Write failing path, atomic-store, and idempotent-migration tests**
 
 ```js
 test('Windows default Gate home is outside the checkout', () => {
@@ -381,21 +381,21 @@ test('legacy NVIDIA models are marked bootstrap, not live', async () => {
 });
 ```
 
-- [ ] **Step 2: Run the focused tests and confirm failure**
+- [x] **Step 2: Run the focused tests and confirm failure**
 
 Run: `node --test gate/__tests__/gate-paths.test.mjs gate/__tests__/provider-store.test.mjs gate/__tests__/provider-migration.test.mjs`
 
-- [ ] **Step 3: Implement data-home resolution, locked atomic writes, and migration receipts**
+- [x] **Step 3: Implement data-home resolution, locked atomic writes, and migration receipts**
 
 Write provider config to `config/providers`, sanitized state to `state/providers`, and a one-time receipt to `state/migrations/provider-v2.json`. Copy legacy records; never delete their source files during migration.
 
-- [ ] **Step 4: Verify the migration twice and after a simulated interrupted write**
+- [x] **Step 4: Verify the migration twice and after a simulated interrupted write**
 
 Run: `node --test gate/__tests__/gate-paths.test.mjs gate/__tests__/provider-store.test.mjs gate/__tests__/provider-migration.test.mjs`
 
 Expected: PASS with one migrated provider and no duplicate/partial record.
 
-- [ ] **Step 5: Commit the data-home slice**
+- [x] **Step 5: Commit the data-home slice**
 
 ```powershell
 git add gate/cli.mjs gate/core/paths.mjs gate/core/providers/store.mjs gate/core/providers/migrate-v1.mjs gate/core/capabilities/registry.mjs gate/core/capabilities/registry-methods.mjs gate/__tests__/gate-paths.test.mjs gate/__tests__/provider-store.test.mjs gate/__tests__/provider-migration.test.mjs gate/__tests__/fixtures/provider-migration.mjs
