@@ -32,6 +32,7 @@ test('advertises design-spec transport, endpoints, and capabilities', () => {
     models: '/v1/models',
     chat: '/v1/chat/completions',
     providers: '/v1/providers',
+    environments: '/v1/environments',
     capabilitiesRpc: '/v1/capabilities/rpc',
   });
   assert.deepEqual(manifest.capabilities, { chat: true, models: true });

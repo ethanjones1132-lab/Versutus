@@ -14,6 +14,10 @@ import { createProviderAdapter } from './providers/factory.mjs';
 import { createProviderRpc, sanitizeSnapshot } from './providers/rpc.mjs';
 import { OAuthManager } from './providers/oauth/refresh.mjs';
 import { releaseOAuthProfiles } from './providers/oauth/profiles.mjs';
+import { CliEnvironmentStore } from './cli-environments/store.mjs';
+import { CliAdapterRegistry } from './cli-environments/adapter-registry.mjs';
+import { CliEnvironmentService } from './cli-environments/supervisor.mjs';
+import { createEnvironmentRpc, sanitizeEnvironment } from './cli-environments/rpc.mjs';
 import { TokenStore } from './tokens.mjs';
 import { PairingStore } from './pairing.mjs';
 import { DeviceTokenStore } from './device-tokens.mjs';
@@ -153,6 +157,17 @@ export async function createGate(config = {}) {
     createAdapter: (registration) => createProviderAdapter(registration, { vault, store: providerStore }),
   });
   const providerRpc = createProviderRpc({ service: providerService, vault, oauth });
+  const environmentStore = new CliEnvironmentStore(gateHome);
+  const environmentRegistry = new CliAdapterRegistry();
+  const environmentService = new CliEnvironmentService({
+    store: environmentStore,
+    registry: environmentRegistry,
+  });
+  const environmentRpc = createEnvironmentRpc({
+    store: environmentStore,
+    service: environmentService,
+    registry: environmentRegistry,
+  });
 
   const tokenPath = join(root, '.tokens.json');
 
@@ -184,6 +199,7 @@ export async function createGate(config = {}) {
   const registryMethods = {
     ...createRegistryMethods({ root, getState: () => state, reload, gateHome }),
     ...providerRpc,
+    ...environmentRpc,
   };
 
   // Initialize token store
@@ -303,6 +319,11 @@ export async function createGate(config = {}) {
         /^\/p\/[^/]+\/v1\/models$/.test(pathname) ||
         (pathname === '/v1/chat/completions' && method === 'POST') ||
         /^\/p\/[^/]+\/v1\/chat\/completions$/.test(pathname) ||
+        (pathname === '/v1/environments' && method === 'GET') ||
+        /^\/v1\/environments\/[^/]+\/runs$/.test(pathname) ||
+        /^\/v1\/environments\/[^/]+\/runs\/[^/]+\/events$/.test(pathname) ||
+        /^\/v1\/environments\/[^/]+\/runs\/[^/]+\/cancel$/.test(pathname) ||
+        /^\/v1\/environments\/[^/]+\/runs\/[^/]+\/approve$/.test(pathname) ||
         (pathname === '/v1/capabilities/rpc' && method === 'POST') ||
         /^\/p\/[^/]+\/v1\/capabilities\/rpc$/.test(pathname);
 
@@ -348,6 +369,74 @@ export async function createGate(config = {}) {
           res.writeHead(404);
           res.end(JSON.stringify({ error: { message: 'provider not found', code: 'provider_not_found' } }));
         }
+        return;
+      }
+
+      if (pathname === '/v1/environments' && method === 'GET') {
+        const records = await environmentStore.list();
+        const environments = [];
+        for (const record of records) {
+          const state = environmentService.environmentState.get(record.id);
+          environments.push(sanitizeEnvironment(record, { state }));
+        }
+        res.writeHead(200);
+        res.end(JSON.stringify({ environments }));
+        return;
+      }
+
+      const runStart = pathname.match(/^\/v1\/environments\/([^/]+)\/runs$/);
+      if (runStart && method === 'POST') {
+        const body = (await readJsonBody(req)) ?? {};
+        try {
+          const handle = await environmentService.startRun({
+            environmentId: decodeURIComponent(runStart[1]),
+            ...body,
+          });
+          res.writeHead(200);
+          res.end(JSON.stringify({ runId: handle.runId }));
+        } catch (error) {
+          res.writeHead(error.code === 'workspace_policy_violation' ? 400 : 409);
+          res.end(JSON.stringify({ error: { message: error.message, code: error.code || 'run_failed' } }));
+        }
+        return;
+      }
+
+      const runEvents = pathname.match(/^\/v1\/environments\/([^/]+)\/runs\/([^/]+)\/events$/);
+      if (runEvents && method === 'GET') {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        });
+        try {
+          for await (const event of environmentService.events(decodeURIComponent(runEvents[2]))) {
+            res.write(`data: ${JSON.stringify(event)}\n\n`);
+          }
+        } catch (error) {
+          res.write(`data: ${JSON.stringify({ type: 'run.failed', payload: { message: error.message } })}\n\n`);
+        }
+        res.end();
+        return;
+      }
+
+      const runCancel = pathname.match(/^\/v1\/environments\/([^/]+)\/runs\/([^/]+)\/cancel$/);
+      if (runCancel && method === 'POST') {
+        const result = await environmentService.cancel(decodeURIComponent(runCancel[2]));
+        res.writeHead(200);
+        res.end(JSON.stringify(result));
+        return;
+      }
+
+      const runApprove = pathname.match(/^\/v1\/environments\/([^/]+)\/runs\/([^/]+)\/approve$/);
+      if (runApprove && method === 'POST') {
+        const body = (await readJsonBody(req)) ?? {};
+        const result = await environmentService.approve(
+          decodeURIComponent(runApprove[2]),
+          body.approvalId,
+          body.decision,
+        );
+        res.writeHead(200);
+        res.end(JSON.stringify(result));
         return;
       }
 

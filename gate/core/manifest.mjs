@@ -31,6 +31,7 @@ export function buildManifest({ name, version, capabilityKinds = [], capabilityI
       models: '/v1/models',
       chat: '/v1/chat/completions',
       providers: '/v1/providers',
+      environments: '/v1/environments',
       capabilitiesRpc: '/v1/capabilities/rpc',
     },
     capabilities: { chat: true, models: true },
