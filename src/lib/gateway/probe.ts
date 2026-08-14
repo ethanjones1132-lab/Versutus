@@ -73,7 +73,7 @@ export async function probeHighPriorityCandidates(
 ): Promise<ProbeResult | null> {
   if (urls.length === 0) return null;
 
-  const top = urls.slice(0, 3);
+  const top = urls.slice(0, 4);
 
   const results = await Promise.allSettled(
     top.map(async (url) => {
@@ -83,13 +83,39 @@ export async function probeHighPriorityCandidates(
     }),
   );
 
+  const successes: ProbeResult[] = [];
   for (const settled of results) {
     if (settled.status === 'fulfilled' && settled.value.res.ok) {
-      return settled.value.res;
+      successes.push(settled.value.res);
     }
   }
+  if (successes.length === 0) return null;
 
-  return null;
+  // Prefer a gate that advertises the Open Gateway Manifest (Versutus Gate)
+  // over a bare Hermes /health on :8642 when both answer.
+  for (const success of successes) {
+    if (await hasGatewayManifest(success.url, timeoutMs)) return success;
+  }
+  return successes[0];
+}
+
+async function hasGatewayManifest(baseUrl: string, timeoutMs: number): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.min(2000, timeoutMs));
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/.well-known/gateway.json`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    if (!response.ok) return false;
+    const body = (await response.json().catch(() => null)) as { manifest?: string } | null;
+    return typeof body?.manifest === 'string' && body.manifest.startsWith('versutus-gateway/');
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function describeProbeTarget(url: string): string {

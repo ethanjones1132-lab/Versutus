@@ -40,6 +40,11 @@ export function buildGatewayCandidates(options: {
     }
   };
 
+  // The host the user just typed must win over a sticky lastSuccessfulUrl.
+  // Otherwise a prior Hermes hit on :8642 permanently shadows Gate on :8760.
+  const host = options.tailscaleHost ? normalizePcAddress(options.tailscaleHost) : '';
+  if (host) pushHostCandidates(host);
+
   if (options.lastSuccessfulUrl) push(options.lastSuccessfulUrl);
 
   for (const gateway of options.discovered ?? []) {
@@ -53,9 +58,6 @@ export function buildGatewayCandidates(options: {
   for (const saved of options.savedUrls ?? []) {
     push(saved);
   }
-
-  const host = options.tailscaleHost ? normalizePcAddress(options.tailscaleHost) : '';
-  if (host) pushHostCandidates(host);
 
   if (options.includeLocalFallbacks !== false) {
     for (const fallbackHost of localFallbackHosts(options.platform)) {

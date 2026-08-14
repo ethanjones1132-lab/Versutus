@@ -57,4 +57,14 @@ describe('gateway candidate URLs', () => {
     });
     expect(urls).toEqual(['http://100.95.137.83:8760']);
   });
+
+  test('user-typed host is ordered before a sticky lastSuccessful Hermes URL', () => {
+    const urls = buildGatewayCandidates({
+      tailscaleHost: '100.95.137.83:8760',
+      lastSuccessfulUrl: 'http://100.95.137.83:8642',
+      includeLocalFallbacks: false,
+    });
+    expect(urls[0]).toBe('http://100.95.137.83:8760');
+    expect(urls).toContain('http://100.95.137.83:8642');
+  });
 });
