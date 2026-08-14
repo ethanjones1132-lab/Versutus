@@ -563,7 +563,7 @@ git commit -m "feat(gate): add official API-key provider profiles"
 - Produces: `releaseOAuthProfiles`, a read-only map containing only approved production profiles.
 - Attempts are in-memory, one-use, and expiry-bound. Tokens are vault-only.
 
-- [ ] **Step 1: Write fake-issuer tests for PKCE, state, device polling, rotation, and quarantine**
+- [x] **Step 1: Write fake-issuer tests for PKCE, state, device polling, rotation, and quarantine**
 
 ```js
 test('rotating refresh is single-flight and persists the newest token', async () => {
@@ -576,15 +576,15 @@ test('rotating refresh is single-flight and persists the newest token', async ()
 });
 ```
 
-- [ ] **Step 2: Run the OAuth tests and confirm failure**
+- [x] **Step 2: Run the OAuth tests and confirm failure**
 
 Run: `node --test gate/__tests__/oauth-*.test.mjs`
 
-- [ ] **Step 3: Implement discovery/host pinning, PKCE callback, device flow, refresh, and disconnect**
+- [x] **Step 3: Implement discovery/host pinning, PKCE callback, device flow, refresh, and disconnect**
 
 Bind callbacks only to `127.0.0.1`; use a random port when the provider permits it. Honor `authorization_pending`, `slow_down`, expiry, refresh rotation, and revocation metadata. Terminal `invalid_grant` removes unusable token material and records `needs_reauth`; 429/5xx retains the grant and records degraded state.
 
-- [ ] **Step 4: Assert that no production xAI consumer OAuth profile is selectable**
+- [x] **Step 4: Assert that no production xAI consumer OAuth profile is selectable**
 
 ```js
 test('xAI consumer OAuth is not a release profile', () => {
@@ -596,7 +596,7 @@ Run: `node --test gate/__tests__/oauth-*.test.mjs`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the generic OAuth engine**
+- [x] **Step 5: Commit the generic OAuth engine**
 
 ```powershell
 git add gate/core/providers/oauth gate/__tests__/oauth-discovery.test.mjs gate/__tests__/oauth-pkce.test.mjs gate/__tests__/oauth-device-code.test.mjs gate/__tests__/oauth-refresh.test.mjs gate/__tests__/oauth-disconnect.test.mjs gate/__tests__/fixtures/oauth-issuer.mjs
