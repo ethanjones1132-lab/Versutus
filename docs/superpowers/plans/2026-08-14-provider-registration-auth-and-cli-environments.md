@@ -510,7 +510,7 @@ git commit -m "feat(gate): add provider readiness and live catalogs"
 - Produces provider-specific origin allowlists, auth headers, model-list parsers, health semantics, and protocol codec selection.
 - Existing flavor modules become request/response codecs and stop resolving auth.
 
-- [ ] **Step 1: Write stub-server tests for auth, live models, and origin pinning**
+- [x] **Step 1: Write stub-server tests for auth, live models, and origin pinning**
 
 ```js
 test('OpenAI profile obtains its catalog from authenticated /v1/models', async () => {
@@ -520,21 +520,21 @@ test('OpenAI profile obtains its catalog from authenticated /v1/models', async (
 });
 ```
 
-- [ ] **Step 2: Run the profile tests and confirm failure**
+- [x] **Step 2: Run the profile tests and confirm failure**
 
 Run: `node --test gate/__tests__/provider-profiles.test.mjs`
 
-- [ ] **Step 3: Implement profiles without external live calls**
+- [x] **Step 3: Implement profiles without external live calls**
 
 Label the official OpenAI provider `OpenAI API`, not `ChatGPT`. Configure official xAI API-key auth independently from the disabled consumer OAuth profile. For hosted NVIDIA, use a live endpoint when supported and otherwise preserve a visibly stale bootstrap catalog.
 
-- [ ] **Step 4: Run provider profile and existing flavor tests**
+- [x] **Step 4: Run provider profile and existing flavor tests**
 
 Run: `node --test gate/__tests__/provider-profiles.test.mjs gate/__tests__/openai-flavor.test.mjs gate/__tests__/anthropic-flavor.test.mjs`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the profile slice**
+- [x] **Step 5: Commit the profile slice**
 
 ```powershell
 git add gate/core/providers/profiles gate/flavors gate/__tests__/provider-profiles.test.mjs

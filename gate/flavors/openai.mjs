@@ -1,6 +1,6 @@
 /**
- * OpenAI-compatible flavor for chat completions API.
- * Handles chat request building and SSE delta parsing.
+ * OpenAI-compatible chat codec. Auth lookup and origin policy live in
+ * provider profiles; this module only encodes requests/responses.
  */
 
 /**
