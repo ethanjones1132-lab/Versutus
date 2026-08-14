@@ -708,7 +708,7 @@ git commit -m "feat(gate): expose provider lifecycle and qualified models"
 - Agent config contains endpoint identity plus `dependencies: Array<{providerId:string,role:string,modelId?:string}>`.
 - Agent validation rejects auth/catalog fields. Provider deletion reports dependent IDs and requires explicit resolution.
 
-- [ ] **Step 1: Write failing ownership and deletion tests**
+- [x] **Step 1: Write failing ownership and deletion tests**
 
 ```js
 test('agent cannot carry an xAI token or catalog', () => {
@@ -721,21 +721,21 @@ test('agent cannot carry an xAI token or catalog', () => {
 });
 ```
 
-- [ ] **Step 2: Run the ownership tests and confirm failure**
+- [x] **Step 2: Run the ownership tests and confirm failure**
 
 Run: `node --test gate/__tests__/agent-kind.test.mjs gate/__tests__/provider-dependencies.test.mjs`
 
-- [ ] **Step 3: Implement agent dependencies and retire provider child profiles**
+- [x] **Step 3: Implement agent dependencies and retire provider child profiles**
 
 Migrate stored child profiles back to the parent Gate plus `{providerId,modelId}` selection. Keep direct Hermes profiles as Hermes gateways/agents. Do not register Hermes under `versutus-provider/v1`.
 
-- [ ] **Step 4: Run Gate and app child-profile tests**
+- [x] **Step 4: Run Gate and app child-profile tests**
 
 Run: `node --test gate/__tests__/agent-kind.test.mjs gate/__tests__/provider-dependencies.test.mjs; npx jest __tests__/child-sync-test.ts --runInBand`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the ownership slice**
+- [x] **Step 5: Commit the ownership slice**
 
 ```powershell
 git add gate/core/capabilities/agent/kind.mjs gate/core/providers/dependencies.mjs gate/__tests__/agent-kind.test.mjs gate/__tests__/provider-dependencies.test.mjs src/lib/gateway/child-sync.ts __tests__/child-sync-test.ts

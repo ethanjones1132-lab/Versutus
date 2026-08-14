@@ -3,13 +3,15 @@ import { applyCatalogResult, isCatalogFresh, nextBackoff } from './catalog.mjs';
 import { readinessFromAuthAndError } from './health.mjs';
 import { classifyProviderError, ProviderErrorCodes } from './errors.mjs';
 import { nextAuthState, toSnapshot } from './runtime.mjs';
+import { assertProviderDeletionAllowed } from './dependencies.mjs';
 
 export class ProviderService {
-  constructor({ store, vault, adapters = {}, createAdapter } = {}) {
+  constructor({ store, vault, adapters = {}, createAdapter, agents = [] } = {}) {
     this.store = store;
     this.vault = vault;
     this.adapters = adapters;
     this.createAdapter = createAdapter;
+    this.agents = agents;
   }
 
   adapterFor(id, config) {
@@ -54,8 +56,9 @@ export class ProviderService {
     return this.get(id);
   }
 
-  async delete(id) {
+  async delete(id, { resolve } = {}) {
     await this.require(id);
+    assertProviderDeletionAllowed(id, this.agents, { resolve });
     await this.store.delete(id);
     return { deleted: true };
   }
