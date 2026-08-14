@@ -54,7 +54,7 @@ import {
   type GatewayCapabilityCommand,
   type GatewayManifest,
 } from '@/lib/portal/manifest';
-import type { GatewayIdentity } from '@/lib/portal/identify';
+import { identifyGateway, type GatewayIdentity } from '@/lib/portal/identify';
 import { loadAppSettings, saveAppSettings, type AppSettings } from '@/lib/settings/app-settings';
 import {
   appendTranscript,
@@ -552,7 +552,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
       let identityForClient: GatewayIdentity | undefined;
       let parentUrl: string | undefined;
-      if (gateway.kind === 'custom') {
+      // OpenClaw is WS-only. Everything else (including profiles saved without a
+      // kind from onboarding) is identified from the well-known when present so
+      // Gate is never forced through the Hermes adapter.
+      let clientKind = gateway.kind ?? 'hermes';
+      if (gateway.kind !== 'openclaw') {
         // Child profiles are materialised under parent.url + basePath and do
         // not host their own well-known manifest — fetch the parent's.
         if (gateway.parentId) {
@@ -565,6 +569,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (!isCurrent()) return;
         if (manifest) {
           setActiveManifest(manifest);
+          clientKind = 'custom';
           identityForClient = {
             kind: 'custom',
             kindLabel: manifestKindLabel(manifest),
@@ -577,13 +582,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             source: 'manifest',
             identifiedAt: Date.now(),
           };
+          if (gateway.kind !== 'custom') {
+            const corrected = { ...gateway, kind: 'custom' as const };
+            setActiveGateway(corrected);
+            void upsertGateway(corrected).then(setGateways);
+          }
         }
       }
 
       if (!isCurrent()) return;
 
       const client = createClientForKind(
-        gateway.kind ?? 'hermes',
+        clientKind,
         gateway,
         {
           onStatus: (nextStatus, detail) => {
@@ -703,14 +713,23 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
 
       const discoveredMatch = discovered.find((item) => item.url === url);
+      let kind: GatewayProfile['kind'] =
+        discoveredMatch && (discoveredMatch.kind === 'openclaw' || discoveredMatch.txt.transport === 'ws')
+          ? 'openclaw'
+          : undefined;
+      // Onboarding used to leave kind unset, which defaulted the client to Hermes
+      // and broke Gate (manifest on :8760). Identify before saving.
+      if (!kind) {
+        const identity = await identifyGateway({ baseUrl: url });
+        if (identity.kind === 'custom' || identity.kind === 'hermes' || identity.kind === 'openclaw') {
+          kind = identity.kind;
+        }
+      }
       const profile = createGatewayProfile({
         name: appSettings.pcName ?? discoveredMatch?.name ?? friendlyPcName(appSettings.tailscaleHost ?? 'Gateway'),
         url,
         token,
-        kind:
-          discoveredMatch && (discoveredMatch.kind === 'openclaw' || discoveredMatch.txt.transport === 'ws')
-            ? 'openclaw'
-            : undefined,
+        kind,
         discoverySource:
           url.includes('.ts.net') || url.startsWith('https://')
             ? 'tailscale'
