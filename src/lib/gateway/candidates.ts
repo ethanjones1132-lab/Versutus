@@ -14,6 +14,8 @@ export function friendlyPcName(input: string): string {
 }
 
 const HERMES_PORT = 8642;
+/** Versutus Gate default listen port (gate/cli.mjs start). */
+const GATE_PORT = 8760;
 
 export function buildGatewayCandidates(options: {
   tailscaleHost?: string;
@@ -57,6 +59,7 @@ export function buildGatewayCandidates(options: {
 
   if (options.includeLocalFallbacks !== false) {
     for (const fallbackHost of localFallbackHosts(options.platform)) {
+      push(`http://${fallbackHost}:${GATE_PORT}`);
       push(`http://${fallbackHost}:${HERMES_PORT}`);
     }
   }
@@ -67,11 +70,20 @@ export function buildGatewayCandidates(options: {
     const candidateHost = normalizePcAddress(rawHost);
     if (!candidateHost) return;
 
+    // Allow "host:port" so onboarding can target Gate :8760 explicitly.
+    const explicit = splitHostPort(candidateHost);
+    if (explicit.port) {
+      push(`http://${explicit.host}:${explicit.port}`);
+      return;
+    }
+
     if (isTailscaleIp(candidateHost)) {
       // A tailnet IP is the DNS-free route: it still rides the encrypted
       // WireGuard tunnel, and it is the only candidate that works when a device
       // has not accepted Tailscale DNS. No HTTPS variant — Serve's certificate
       // is issued for the hostname, so TLS to a bare IP can never validate.
+      // Prefer Gate (:8760), then Hermes (:8642).
+      push(`http://${candidateHost}:${GATE_PORT}`);
       push(`http://${candidateHost}:${HERMES_PORT}`);
       return;
     }
@@ -81,22 +93,32 @@ export function buildGatewayCandidates(options: {
       // proxies to Hermes' plain HTTP listener on :8642. Do not send TLS to
       // :8642; that is the backend listener, not the Serve endpoint.
       push(`https://${candidateHost}`);
+      push(`http://${candidateHost}:${GATE_PORT}`);
       push(`http://${candidateHost}:${HERMES_PORT}`);
       return;
     }
 
     if (isPrivateOrLanHost(candidateHost)) {
+      push(`http://${candidateHost}:${GATE_PORT}`);
       push(`http://${candidateHost}:${HERMES_PORT}`);
       return;
     }
 
     if (candidateHost.includes('.')) {
       // Public/tailnet DNS names may be fronted by a TLS reverse proxy on
-      // :443; the direct Hermes fallback remains plain HTTP on :8642.
+      // :443; the direct Gate/Hermes listeners remain plain HTTP.
       push(`https://${candidateHost}`);
+      push(`http://${candidateHost}:${GATE_PORT}`);
       push(`http://${candidateHost}:${HERMES_PORT}`);
     }
   }
+}
+
+/** Split host:port when the user types an explicit port (IPv4 / hostname only). */
+function splitHostPort(input: string): { host: string; port?: string } {
+  const match = /^([^:[\]]+):(\d{2,5})$/.exec(input);
+  if (!match) return { host: input };
+  return { host: match[1], port: match[2] };
 }
 
 function isTailscaleIp(host: string): boolean {
