@@ -10,7 +10,7 @@ import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { categorizeProbeError, probeGatewayCandidates, probeGatewayUrl, probeHighPriorityCandidates } from '@/lib/gateway/probe';
 import { isSlashCommandInput } from '@/lib/gateway/slash-commands';
 import { findConfirmableSlash } from '@/lib/gateway/command-match';
-import { GATEWAY_COMMANDS } from '@/lib/gateway/dashboard';
+import { GATEWAY_COMMANDS, buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
 import { manifestUrlForGateway } from '@/lib/gateway/gateway-origin';
 import { loadRecentCommands, pushRecentCommand } from '@/lib/gateway/recents';
 import { ACTIVITY_EVENT_CAP, executeRun, runEventPreview, type ActivityRun, type RunCapableClient } from '@/lib/gateway/runs';
@@ -61,8 +61,6 @@ import {
   loadTranscripts,
   updateTranscript,
 } from '@/lib/gateway/transcript';
-import { buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
-
 export type ConnectionPhase =
   | 'idle'
   | 'booting'
