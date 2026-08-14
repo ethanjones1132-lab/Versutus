@@ -416,7 +416,7 @@ git commit -m "feat(gate): persist provider state in Gate home"
 - Produces: `CredentialVault.get(ref)`, `.set(ref,value)`, `.delete(ref)`, `.has(ref)`, and `redactSensitive(value)`.
 - Windows implementation uses DPAPI CurrentUser and `CRYPTPROTECT_UI_FORBIDDEN`; tests inject an in-memory vault.
 
-- [ ] **Step 1: Write failing vault tests for round-trip, tamper, delete, concurrency, and wrong-user failure**
+- [x] **Step 1: Write failing vault tests for round-trip, tamper, delete, concurrency, and wrong-user failure**
 
 ```js
 test('vault status never returns the value', async () => {
@@ -425,21 +425,21 @@ test('vault status never returns the value', async () => {
 });
 ```
 
-- [ ] **Step 2: Run the tests and confirm failure**
+- [x] **Step 2: Run the tests and confirm failure**
 
 Run: `node --test gate/__tests__/credential-vault.test.mjs gate/__tests__/credential-redaction.test.mjs`
 
-- [ ] **Step 3: Implement DPAPI ciphertext persistence and fail-closed migration**
+- [x] **Step 3: Implement DPAPI ciphertext persistence and fail-closed migration**
 
 Use atomic replacement. Migrate an old secret only after successful old-store decryption and successful DPAPI write. Retain old files until a separately approved cleanup. Do not fall back to the old store when DPAPI fails.
 
-- [ ] **Step 4: Run the vault tests**
+- [x] **Step 4: Run the vault tests**
 
 Run: `node --test gate/__tests__/credential-vault.test.mjs gate/__tests__/credential-redaction.test.mjs`
 
 Expected: PASS; no test output contains fixture secret strings.
 
-- [ ] **Step 5: Commit the credential slice**
+- [x] **Step 5: Commit the credential slice**
 
 ```powershell
 git add gate/core/credentials gate/core/capabilities/secrets.mjs gate/__tests__/credential-vault.test.mjs gate/__tests__/credential-redaction.test.mjs

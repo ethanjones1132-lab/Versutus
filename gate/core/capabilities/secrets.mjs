@@ -60,6 +60,28 @@ export async function setSecret(root, refName, value) {
   });
 }
 
+/** List secret refs only. Never returns values. */
+export async function listSecretNames(root) {
+  const store = await readStore(root);
+  return Object.keys(store);
+}
+
+/**
+ * Copy each decrypted legacy secret into the DPAPI vault. Old files stay
+ * until a separately approved cleanup. Fail closed: if decrypt or vault
+ * write fails, throw and do not keep using the old store for that ref.
+ */
+export async function migrateLegacySecretsToVault(root, vault) {
+  const names = await listSecretNames(root);
+  for (const name of names) {
+    const value = await getSecret(root, name);
+    if (value === undefined) {
+      throw new Error(`legacy decrypt failed for ${name}`);
+    }
+    await vault.set(name, value);
+  }
+}
+
 /** Decrypt and return a secret value, or undefined if refName was never set. */
 export async function getSecret(root, refName) {
   return serialize(async () => {
