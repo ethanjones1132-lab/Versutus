@@ -56,20 +56,32 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
     Connection: 'keep-alive',
   });
 
+  // A response that closes before we finish is the client walking away (the
+  // app's "stop" affordance aborting its fetch, or the network dropping) —
+  // not the turn failing. `res.end()` is only ever called from the bottom of
+  // this function, so any 'close' observed before that point is premature.
+  let clientDisconnected = false;
+  res.on('close', () => { clientDisconnected = true; });
+
   const controller = new AbortController();
   let toolIndex = 0;
   const seenTools = new Map();
+  // A tool call is real turn activity with no closing text of its own — only
+  // a turn where *neither* text nor a tool ever happened counts as empty.
+  let sawContent = false;
 
   const streaming = backend
     .streamEvents(
       sessionId,
       (event) => {
         if (event.type === 'message.delta' && event.payload.text) {
+          sawContent = true;
           res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: event.payload.text } }] })}\n\n`);
           return;
         }
         if (event.type === 'tool.started' && event.payload.name) {
           if (seenTools.has(event.payload.callId)) return;
+          sawContent = true;
           const index = toolIndex++;
           seenTools.set(event.payload.callId, index);
           res.write(`data: ${JSON.stringify({
@@ -82,14 +94,29 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
     .catch(() => undefined);
 
   try {
-    await backend.sendMessage(sessionId, { text, model });
+    const result = await backend.sendMessage(sessionId, { text, model });
+    const hasContent = sawContent
+      || Boolean(result?.text && result.text.trim())
+      || Boolean(result?.message?.tool_calls?.length);
+    if (!clientDisconnected && !hasContent) {
+      // The backend reported the turn as done, but nothing came back that
+      // the user could see — a clean [DONE] here would render as a silent
+      // empty bubble with no indication anything went wrong.
+      res.write(`data: ${JSON.stringify({
+        error: { message: 'The backend completed the turn with no assistant content.', code: 'empty_turn' },
+      })}\n\n`);
+    }
   } catch (error) {
-    res.write(`data: ${JSON.stringify({ error: { message: error.message, code: 'backend_error' } })}\n\n`);
+    if (!clientDisconnected) {
+      res.write(`data: ${JSON.stringify({ error: { message: error.message, code: 'backend_error' } })}\n\n`);
+    }
   } finally {
     controller.abort();
     await streaming;
-    res.write('data: [DONE]\n\n');
-    res.end();
+    if (!clientDisconnected) {
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
   }
 }
 
@@ -848,6 +875,17 @@ export async function createGate(config = {}) {
             }
 
             const result = await backend.sendMessage(sessionId, { text, model });
+            const hasContent = Boolean(result?.text && result.text.trim())
+              || Boolean(result?.message?.tool_calls?.length);
+            if (!hasContent) {
+              // Same failure the streaming path guards against: the backend
+              // says the turn is done, but there is nothing to show for it.
+              res.writeHead(502, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                error: { message: 'The backend completed the turn with no assistant content.', code: 'empty_turn' },
+              }));
+              return;
+            }
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
               id: `gate-${Date.now()}`,

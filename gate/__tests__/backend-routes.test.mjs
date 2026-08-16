@@ -70,7 +70,48 @@ function stubRegistry(calls) {
   };
 }
 
-async function makeGate({ calls = [], provider } = {}) {
+/**
+ * An adapter whose turn behaviour (sendMessage/streamEvents) is fully test-
+ * controlled — used to drive the Gate's own empty-turn detection rather than
+ * a fixed canned reply.
+ */
+function stubTurnRegistry({ calls = [], sendMessage, streamEvents } = {}) {
+  const adapter = {
+    adapterId: 'stubcli',
+    adapterRevision: '1',
+    supportedCliVersions: '1.x',
+    protocolVersions: { acp: '1' },
+    capabilities: ['sessions', 'tools', 'models'],
+    server: { defaultPort: 1, healthPath: '/', args: () => [], portFromOutput: () => null },
+    async probe() { return { state: 'ready', cliVersion: '1.0.0', protocol: 'acp' }; },
+    createBackend() {
+      return {
+        async listSessions() { return [SESSION]; },
+        async createSession(input) { return { ...SESSION, title: input?.title ?? null }; },
+        async deleteSession() {},
+        async listMessages() { return []; },
+        async sendMessage(id, input) { calls.push('sendMessage'); return sendMessage(id, input); },
+        async listModels() { return []; },
+        async abort() {},
+        async replyApproval() {},
+        async streamEvents(id, onEvent, signal) {
+          calls.push('streamEvents');
+          if (streamEvents) return streamEvents(id, onEvent, signal);
+          return new Promise((resolve) => {
+            if (signal?.aborted) return resolve();
+            signal?.addEventListener('abort', resolve, { once: true });
+          });
+        },
+      };
+    },
+  };
+  return {
+    get(id) { if (id !== 'stubcli') throw new Error(`unknown CLI adapter "${id}"`); return adapter; },
+    list() { return [adapter]; },
+  };
+}
+
+async function makeGate({ calls = [], provider, registry } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'gate-backend-'));
   roots.push(root);
   const gateHome = join(root, '.gate-home');
@@ -110,7 +151,7 @@ async function makeGate({ calls = [], provider } = {}) {
     root,
     port: 0,
     gateHome,
-    environmentRegistry: stubRegistry(calls),
+    environmentRegistry: registry ?? stubRegistry(calls),
     // The stub server needs no process: report it as already reachable.
     backendServerFactory: () => ({
       ensureRunning: async () => ({ baseUrl: 'http://127.0.0.1:1', attached: true }),
@@ -196,6 +237,120 @@ test('chat routed to a backend goes through the CLI, not the provider proxy', as
     const body = await response.json();
     assert.equal(body.choices[0].message.content, 'echo ping');
     assert.ok(calls.some((c) => c.startsWith('sendMessage:')));
+  } finally {
+    await gate.close();
+  }
+});
+
+// ─── empty-turn detection ───────────────────────────────────────────
+// Reproduced live 2026-08-16: opencode-local's default model 404s upstream,
+// the turn "completes" with zero content, and the app rendered an empty
+// bubble with HTTP 200 and a clean [DONE]. A turn the backend reports as
+// finished but that produced nothing visible must fail loudly instead.
+
+test('a streamed turn with no content surfaces an error instead of a silent [DONE]', async () => {
+  const registry = stubTurnRegistry({
+    sendMessage: async () => ({ text: '', message: { role: 'assistant', content: [] } }),
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'say exactly: ping ok' }],
+        stream: true,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /"code":"empty_turn"/);
+    assert.match(text, /\[DONE\]/);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a tool-only turn is not flagged as empty', async () => {
+  const registry = stubTurnRegistry({
+    sendMessage: async () => ({
+      text: '',
+      message: { role: 'assistant', content: [], tool_calls: [{ name: 'read', id: 'c1', status: 'complete' }] },
+    }),
+    streamEvents: async (id, onEvent, signal) => {
+      onEvent({ type: 'tool.started', payload: { name: 'read', callId: 'c1' } });
+      await new Promise((resolve) => {
+        if (signal?.aborted) return resolve();
+        signal?.addEventListener('abort', resolve, { once: true });
+      });
+    },
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'read the file' }],
+        stream: true,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.doesNotMatch(text, /empty_turn/);
+    assert.match(text, /"name":"read"/);
+    assert.match(text, /\[DONE\]/);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a non-streaming turn with no content fails instead of returning a fake success', async () => {
+  const registry = stubTurnRegistry({
+    sendMessage: async () => ({ text: '', message: { role: 'assistant', content: [] } }),
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'say exactly: ping ok' }],
+      }),
+    });
+    assert.equal(response.status, 502);
+    const body = await response.json();
+    assert.equal(body.error.code, 'empty_turn');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a client that disconnects mid-turn does not get an empty-turn error and does not crash the Gate', async () => {
+  let resolveSend;
+  const registry = stubTurnRegistry({
+    sendMessage: () => new Promise((resolve) => { resolveSend = resolve; }),
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const controller = new AbortController();
+    const pending = fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate), signal: controller.signal,
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: true,
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    controller.abort();
+    await pending.catch(() => undefined);
+    // The turn only resolves — empty — well after the client already left.
+    resolveSend({ text: '', message: { role: 'assistant', content: [] } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const health = await fetch(`http://127.0.0.1:${gate.port}/v1/models`, { headers: auth(gate) });
+    assert.equal(health.status, 200);
   } finally {
     await gate.close();
   }

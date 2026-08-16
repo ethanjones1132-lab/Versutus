@@ -216,6 +216,33 @@ test('a refused send surfaces the server message', async () => {
   await assert.rejects(() => backend.sendMessage('s', { text: 'x' }), /boom|UnknownError/);
 });
 
+// Verified live 2026-08-16: an upstream 404 from the model provider comes
+// back as a 200 from OpenCode's own /message route, with the failure folded
+// into `info.error` and `parts` left empty — never a non-ok HTTP response.
+// Trusting that 200 as success is the same mistake Claude Code's
+// `result.subtype === 'success'` almost caused; this must fail the same way.
+test('an upstream failure embedded in a 200 response fails the turn, not a silent empty reply', async () => {
+  const { fetchImpl } = stubFetch({
+    'POST /session/ses_abc/message': {
+      info: {
+        id: 'msg_9',
+        role: 'assistant',
+        time: { created: 5 },
+        error: {
+          name: 'APIError',
+          data: { message: 'Resource not found', statusCode: 404 },
+        },
+      },
+      parts: [],
+    },
+  });
+  const backend = createOpenCodeBackend({ baseUrl: 'http://127.0.0.1:4096', fetchImpl });
+  await assert.rejects(
+    () => backend.sendMessage('ses_abc', { text: 'say exactly: ping ok' }),
+    /Resource not found/,
+  );
+});
+
 test('abort cancels the active turn', async () => {
   const { calls, fetchImpl } = stubFetch({ 'POST /session/ses_abc/abort': { ok: true } });
   const backend = createOpenCodeBackend({ baseUrl: 'http://127.0.0.1:4096', fetchImpl });

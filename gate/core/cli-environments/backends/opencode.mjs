@@ -180,6 +180,15 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
         method: 'POST',
         body: JSON.stringify(body),
       });
+      // OpenCode's own /message route answers 200 even when the *upstream*
+      // model call failed (e.g. the provider 404s) — the failure is folded
+      // into `info.error` with `parts` left empty, never a non-ok HTTP
+      // response. Trusting that as success would be the same mistake Claude
+      // Code's `result.subtype === 'success'` almost caused for auth failures.
+      if (message?.info?.error) {
+        const upstream = message.info.error;
+        throw new Error(`opencode: ${upstream.data?.message ?? upstream.name ?? 'the turn failed upstream'}`);
+      }
       const mapped = toGatewayMessage(message);
       return {
         message: mapped,
