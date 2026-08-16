@@ -53,6 +53,9 @@ gate/.pairing.json
 gate/.device-tokens.json
 gate/.grok-desktop-device.json
 gate/secrets/
+# The vault names each file after its credential ref, so a mistyped ref puts the
+# secret itself in the filename. Never let this directory reach a commit.
+gate/credentials/
 
 # Git worktrees
 .worktrees/
