@@ -7,6 +7,7 @@ import { buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/li
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
 import { createMessageId, historyToChatMessages, pickAppSession } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
+import { effectiveModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   categorizeProbeError,
   GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
@@ -1051,7 +1052,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       sessionIdRef.current = undefined;
       setCurrentSessionId(undefined);
       setMessages([]);
-      if (activeGateway) void reloadHistoryFor(activeGateway);
+      if (activeGateway) {
+        // Restore the model last used in this backend, so a send after the
+        // switch does not carry the previous backend's model id.
+        const restored = effectiveModel(activeGateway, backendId);
+        if (restored && restored !== activeGateway.model) {
+          const updated = { ...activeGateway, model: restored };
+          setActiveGateway(updated);
+          void upsertGateway(updated).then(setGateways);
+        }
+        void reloadHistoryFor(activeGateway);
+      }
     },
     [activeGateway, reloadHistoryFor],
   );
@@ -1972,11 +1983,14 @@ const response = await executeGatewaySlashCommand(trimmed, {
       }
       // Hermes: per-request model override (API server honors model per request).
       if (!activeGateway) return;
-      const updated = { ...activeGateway, model: modelId, providerId: providerId ?? activeGateway.providerId };
+      const updated = {
+        ...withSelectedModel(activeGateway, modelId, selectedBackendId),
+        providerId: providerId ?? activeGateway.providerId,
+      };
       setActiveGateway(updated);
       void upsertGateway(updated).then(setGateways);
     },
-    [activeGateway, closeModelPicker, sendChatInput],
+    [activeGateway, closeModelPicker, sendChatInput, selectedBackendId],
   );
 
   const selectSession = useCallback((sessionId: string) => {
