@@ -13,6 +13,10 @@ export function createBackendManager({
   store,
   registry,
   vault,
+  // Live per-environment status, shared with CliEnvironmentService. Adapter
+  // capabilities are a static declaration; this is what says whether the CLI
+  // behind them answered.
+  environmentState,
   buildEnvironment,
   onDiagnostic,
   // Left undefined so the transport picks the supervisor; an injected factory
@@ -65,6 +69,7 @@ export function createBackendManager({
   async function describe() {
     return (await list()).map((record) => {
       const adapter = registry.get(record.adapterId);
+      const status = environmentState?.get?.(record.id) ?? {};
       return {
         id: record.id,
         label: record.label,
@@ -72,6 +77,8 @@ export function createBackendManager({
         adapterId: record.adapterId,
         capabilities: adapter.capabilities ?? [],
         workspaceRoot: record.workspacePolicy?.defaultRoot,
+        state: status.state ?? (record.enabled ? 'stopped' : 'disabled'),
+        ...(status.probe?.cliVersion ? { cliVersion: status.probe.cliVersion } : {}),
       };
     });
   }

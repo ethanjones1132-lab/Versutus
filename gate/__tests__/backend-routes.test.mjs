@@ -244,3 +244,26 @@ test('session routes require authentication', async () => {
     await gate.close();
   }
 });
+
+test('a live probe reaches the backend picker as real health, not the static capability list', async () => {
+  const { gate } = await makeGate();
+  try {
+    // Before any probe, the environment is enabled but unchecked.
+    const before = await (await fetch(`http://127.0.0.1:${gate.port}/v1/backends`, { headers: auth(gate) })).json();
+    assert.equal(before.backends[0].state, 'stopped');
+    assert.equal(before.backends[0].cliVersion, undefined);
+
+    const checked = await fetch(`http://127.0.0.1:${gate.port}/v1/capabilities/rpc`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ method: 'environments.check', params: { id: 'stub-local' } }),
+    });
+    assert.equal(checked.status, 200);
+
+    const after = await (await fetch(`http://127.0.0.1:${gate.port}/v1/backends`, { headers: auth(gate) })).json();
+    assert.equal(after.backends[0].state, 'ready');
+    assert.equal(after.backends[0].cliVersion, '1.0.0');
+  } finally {
+    await gate.close();
+  }
+});

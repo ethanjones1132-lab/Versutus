@@ -28,9 +28,10 @@ export function createEnvironmentRpc({ store, service, registry, onChanged }) {
     'environments.list': async () => {
       const records = await store.list();
       return {
-        environments: records.map((record) => sanitizeEnvironment(record, {
-          state: service.environmentState.get(record.id),
-        })),
+        environments: records.map((record) => sanitizeEnvironment(
+          record,
+          service.environmentState.get(record.id),
+        )),
       };
     },
     'environments.create': async (input = {}) => {

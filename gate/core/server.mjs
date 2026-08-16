@@ -268,6 +268,7 @@ export async function createGate(config = {}) {
     store: environmentStore,
     registry: environmentRegistry,
     vault,
+    environmentState: environmentService.environmentState,
     buildEnvironment: async ({ record, credentials }) =>
       buildCliEnvironment(process.env, {
         environmentId: record.id,
@@ -659,8 +660,8 @@ export async function createGate(config = {}) {
         const records = await environmentStore.list();
         const environments = [];
         for (const record of records) {
-          const state = environmentService.environmentState.get(record.id);
-          environments.push(sanitizeEnvironment(record, { state }));
+          const status = environmentService.environmentState.get(record.id);
+          environments.push(sanitizeEnvironment(record, status));
         }
         res.writeHead(200);
         res.end(JSON.stringify({ environments }));

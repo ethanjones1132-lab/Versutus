@@ -21,18 +21,21 @@ export class CliEnvironmentService {
     const adapter = this.registry.get(record.adapterId);
     const probe = await adapter.probe(record.executable.path);
     const state = probe.state === 'ready' ? 'ready' : probe.state;
-    this.environmentState.set(id, state);
+    // The manifest and the app's backend picker (backend-manager.describe())
+    // read this Map for both the coarse state and the probed CLI version, so
+    // the probe travels with the state rather than being discarded.
+    this.environmentState.set(id, { state, probe });
     return { id, state, probe, record };
   }
 
   async start(id) {
     const checked = await this.check(id);
-    if (checked.state === 'ready') this.environmentState.set(id, 'ready');
+    if (checked.state === 'ready') this.environmentState.set(id, { state: 'ready', probe: checked.probe });
     return checked;
   }
 
   async stop(id) {
-    this.environmentState.set(id, 'stopped');
+    this.environmentState.set(id, { state: 'stopped' });
     for (const run of this.runs.values()) {
       if (run.request.environmentId === id && !run.done) {
         await this.cancel(run.runId);
@@ -57,7 +60,7 @@ export class CliEnvironmentService {
     const adapter = this.registry.get(record.adapterId);
     const probe = await adapter.probe(record.executable.path);
     if (probe.state !== 'ready') {
-      this.environmentState.set(record.id, probe.state);
+      this.environmentState.set(record.id, { state: probe.state, probe });
       const error = new Error(`environment ${probe.state}`);
       error.code = probe.state;
       throw error;
@@ -85,7 +88,7 @@ export class CliEnvironmentService {
       done: false,
     };
     this.runs.set(runId, run);
-    this.environmentState.set(record.id, 'busy');
+    this.environmentState.set(record.id, { state: 'busy' });
     log.emit({ type: 'run.started', payload: { operation: request.operation, sandbox: request.sandbox } });
 
     if (request.hang) {
@@ -127,7 +130,7 @@ export class CliEnvironmentService {
     run.done = true;
     run.log.emit({ type, payload });
     const remaining = [...this.runs.values()].filter((item) => item.request.environmentId === run.request.environmentId && !item.done);
-    this.environmentState.set(run.request.environmentId, remaining.length ? 'busy' : 'ready');
+    this.environmentState.set(run.request.environmentId, { state: remaining.length ? 'busy' : 'ready' });
   }
 
   async require(id) {
