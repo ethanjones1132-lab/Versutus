@@ -123,6 +123,9 @@ export type GatewayBackend = {
   adapterId?: string;
   capabilities?: string[];
   workspaceRoot?: string;
+  /** Lifecycle state from the Gate's last probe — not a live guarantee. */
+  state?: string;
+  cliVersion?: string;
 };
 
 export type GatewayManifest = {
