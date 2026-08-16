@@ -10,16 +10,59 @@ export const MANIFEST_SPEC = 'versutus-gateway/v1';
 export const GATE_KIND = 'versutus-gate';
 
 /**
+ * A provider as a client needs to see it: enough state to decide whether it is
+ * usable, and nothing that could be a credential. The manifest is served to any
+ * paired device, so `credentialRef`, `baseUrl` and key material stay out.
+ */
+function providerEntryFromSnapshot(snapshot) {
+  return {
+    id: snapshot.id,
+    label: snapshot.label,
+    basePath: `/p/${snapshot.id}`,
+    models: (snapshot.catalog?.models ?? []).map((model) => model.id),
+    capabilities: { chat: true, streaming: true },
+    readiness: {
+      state: snapshot.readiness?.state ?? 'unavailable',
+      ...(snapshot.readiness?.code ? { code: snapshot.readiness.code } : {}),
+    },
+    auth: { state: snapshot.auth?.state ?? 'missing' },
+    catalog: {
+      state: snapshot.catalog?.state ?? 'unavailable',
+      source: snapshot.catalog?.source ?? 'legacy_bootstrap',
+      count: (snapshot.catalog?.models ?? []).length,
+    },
+  };
+}
+
+const byId = (a, b) => a.id.localeCompare(b.id);
+
+/**
  * @param {Object} options
  * @param {string} options.name
  * @param {string} [options.version]
+ * @param {Array<Object>} [options.providerSnapshots] - v2 provider state, from ProviderService.toSnapshot()
  * @param {Array<Object>} [options.capabilityKinds] - wire-shaped, from describeKinds()
  * @param {Array<Object>} [options.capabilityInstances] - wire-shaped, from resolveManifestInstances()
  */
-export function buildManifest({ name, version, backends = [], capabilityKinds = [], capabilityInstances = [] }) {
-  const providers = capabilityInstances
+export function buildManifest({
+  name,
+  version,
+  backends = [],
+  providerSnapshots = [],
+  capabilityKinds = [],
+  capabilityInstances = [],
+}) {
+  // v2 providers are owned by ProviderService and persist under Gate home;
+  // legacy ones are registry files. Both are advertised, but a v2 record wins
+  // on a collision — it is the one with live readiness and a real catalog.
+  const v2Providers = providerSnapshots.map(providerEntryFromSnapshot).sort(byId);
+  const v2Ids = new Set(v2Providers.map((entry) => entry.id));
+  const legacyProviders = capabilityInstances
     .filter((instance) => instance.kind === 'provider')
-    .map((instance) => instance.manifestEntry);
+    .map((instance) => instance.manifestEntry)
+    .filter((entry) => entry && !v2Ids.has(entry.id))
+    .sort(byId);
+  const providers = [...v2Providers, ...legacyProviders];
 
   // A backend is a native environment that owns its own sessions, models and
   // tools. Their presence is what makes those capabilities real here.
