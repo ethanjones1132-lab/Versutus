@@ -16,6 +16,9 @@ export type ChatHeaderProps = {
   onSessionPress?: () => void;
   onModelPress?: () => void;
   onOverflowPress?: () => void;
+  /** Present only when the gateway advertises chat backends. */
+  backendLabel?: string;
+  onBackendPress?: () => void;
 };
 
 /** Slim contextual chat header: orb, gateway, quick model/session chips, overflow. */
@@ -29,6 +32,8 @@ export function ChatHeader({
   onSessionPress,
   onModelPress,
   onOverflowPress,
+  backendLabel,
+  onBackendPress,
 }: ChatHeaderProps) {
   const tokens = useTokens();
   const color = statusColor(tokens, status);
@@ -40,14 +45,23 @@ export function ChatHeader({
         <View style={[styles.orbHalo, { borderColor: tokens.glassBorder }]}>
           <PulsingDot color={color} active={pulsing} />
         </View>
-        <View style={styles.titles}>
+        <PressableScale
+          onPress={onBackendPress}
+          disabled={!onBackendPress || !backendLabel}
+          accessibilityRole={backendLabel && onBackendPress ? 'button' : undefined}
+          accessibilityLabel={backendLabel ? `Chat backend: ${backendLabel}. Change backend.` : undefined}
+          style={styles.titles}>
           <Text variant="headline" numberOfLines={1} style={styles.name}>
-            {gatewayName}
+            {backendLabel ?? gatewayName}
           </Text>
           <Text variant="micro" color="secondary" numberOfLines={1}>
-            {streaming ? 'Streaming response…' : statusDetail || 'Ready for chat and slash commands'}
+            {streaming
+              ? 'Streaming response…'
+              : backendLabel
+                ? `via ${gatewayName}${statusDetail ? ` · ${statusDetail}` : ''}`
+                : statusDetail || 'Ready for chat and slash commands'}
           </Text>
-        </View>
+        </PressableScale>
 
         {modelLabel && onModelPress ? (
           <Chip
