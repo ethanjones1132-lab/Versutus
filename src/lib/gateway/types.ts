@@ -31,6 +31,11 @@ export type GatewayProfile = {
   agentId?: string;
   /** Per-request model override (Hermes-native model selection) */
   model?: string;
+  /**
+   * Model remembered per chat backend. A Codex model id is meaningless to
+   * OpenCode, so one profile-wide override cannot serve both.
+   */
+  backendModels?: Record<string, string>;
   /** Provider that owns the selected model. */
   providerId?: string;
   createdAt: number;
