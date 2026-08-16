@@ -35,7 +35,16 @@ test('advertises design-spec transport, endpoints, and capabilities', () => {
     environments: '/v1/environments',
     capabilitiesRpc: '/v1/capabilities/rpc',
   });
-  assert.deepEqual(manifest.capabilities, { chat: true, models: true });
+  // One entry per endpoint above. Claiming only chat+models made the Gate
+  // render as featureless in the app despite serving all of these.
+  assert.deepEqual(manifest.capabilities, {
+    chat: true,
+    streaming: true,
+    models: true,
+    providers: true,
+    environments: true,
+    capabilityRegistry: true,
+  });
 });
 
 test('derives providers[] from capabilityInstances of kind provider, in the legacy shape', () => {

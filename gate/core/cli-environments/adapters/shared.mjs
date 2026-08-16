@@ -65,7 +65,10 @@ export async function probeVersion(executablePath, { min, maxExclusiveMajor, pro
     return { state: 'not_installed', executablePath, message: 'executable not runnable' };
   }
 
-  const version = versionResult.stdout.split(/\s+/).pop();
+  // CLIs decorate their version line differently — `1.17.9`,
+  // `codex-cli 0.147.0`, `2.1.140 (Claude Code)`. Taking the last whitespace
+  // token parsed Claude's as "Code)"; take the first semver anywhere instead.
+  const version = versionResult.stdout.match(/\d+\.\d+\.\d+/)?.[0];
   if (!versionInRange(version, min, maxExclusiveMajor)) {
     return {
       state: 'incompatible',

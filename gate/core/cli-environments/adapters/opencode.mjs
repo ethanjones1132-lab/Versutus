@@ -1,11 +1,29 @@
 import { probeVersion } from './shared.mjs';
+import { createOpenCodeBackend } from '../backends/opencode.mjs';
 
 export const opencodeAdapter = {
   adapterId: 'opencode',
   adapterRevision: '1',
   supportedCliVersions: '1.17.x-1.18.x',
   protocolVersions: { acp: '1', jsonl: '1' },
-  capabilities: ['acp', 'run-json', 'mcp'],
+  capabilities: ['acp', 'run-json', 'mcp', 'sessions', 'tools', 'models'],
+
+  /**
+   * The native server this CLI exposes. `opencode serve` announces its port on
+   * stdout; 4096 is its conventional port, which is also where an operator's
+   * own long-running instance usually is — so attach there before spawning.
+   */
+  server: {
+    defaultPort: 4096,
+    healthPath: '/session',
+    args: (port) => ['serve', '--port', String(port), '--hostname', '127.0.0.1'],
+    portFromOutput: (line) => /listening on https?:\/\/[^:]+:(\d+)/.exec(line)?.[1],
+  },
+
+  /** Sessions, models, tools and approvals, owned by OpenCode itself. */
+  createBackend(options) {
+    return createOpenCodeBackend(options);
+  },
   operations: {
     prompt: {
       inputSchema: {

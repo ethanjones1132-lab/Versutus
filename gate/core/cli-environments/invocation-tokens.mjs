@@ -19,8 +19,10 @@ export function issueInvocationToken(request, { now = Date.now(), ttlMs = 10 * 6
   const claims = {
     environmentId: request.environmentId,
     runId: request.runId,
-    providerId: request.providerRef.providerId,
-    modelId: request.providerRef.modelId,
+    // Optional: a status or inspection run references no model. Dereferencing
+    // this unconditionally surfaced a TypeError as a 409 "run_failed".
+    providerId: request.providerRef?.providerId,
+    modelId: request.providerRef?.modelId,
     endpoints: request.endpoints,
     audience: request.audience || 'versutus-gate',
     exp: now + ttlMs,

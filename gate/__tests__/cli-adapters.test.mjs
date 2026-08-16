@@ -11,7 +11,23 @@ test('unknown newer CLI version is incompatible', async () => {
   assert.equal(probe.state, 'incompatible');
 });
 
+// Real version lines are decorated differently per CLI. Claude Code prints
+// "2.1.140 (Claude Code)", which a last-token parse read as "Code)".
+test('a decorated version line is parsed, not the trailing word', async () => {
+  for (const [line, expected] of [
+    ['2.1.140 (Claude Code)', '2.1.140'],
+    ['codex-cli 0.147.0', '0.147.0'],
+    ['1.17.9', '1.17.9'],
+  ]) {
+    const probe = await registry.get('claude-code').probe(await fakeExecutable(line));
+    assert.equal(probe.cliVersion, expected, `"${line}" should parse as ${expected}`);
+  }
+});
+
 test('supported Codex JSONL version is ready', async () => {
+  // Both ends of the supported range must probe ready.
+  const upper = await registry.get('codex').probe(await fakeExecutable('0.147.0'));
+  assert.equal(upper.state, 'ready', 'the upper bound of the supported range must be accepted');
   const probe = await registry.get('codex').probe(await fakeExecutable('0.142.1'));
   assert.equal(probe.state, 'ready');
   assert.equal(probe.protocol, 'jsonl');

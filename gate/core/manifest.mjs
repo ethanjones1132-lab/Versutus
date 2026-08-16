@@ -16,10 +16,16 @@ export const GATE_KIND = 'versutus-gate';
  * @param {Array<Object>} [options.capabilityKinds] - wire-shaped, from describeKinds()
  * @param {Array<Object>} [options.capabilityInstances] - wire-shaped, from resolveManifestInstances()
  */
-export function buildManifest({ name, version, capabilityKinds = [], capabilityInstances = [] }) {
+export function buildManifest({ name, version, backends = [], capabilityKinds = [], capabilityInstances = [] }) {
   const providers = capabilityInstances
     .filter((instance) => instance.kind === 'provider')
     .map((instance) => instance.manifestEntry);
+
+  // A backend is a native environment that owns its own sessions, models and
+  // tools. Their presence is what makes those capabilities real here.
+  const hasBackend = backends.length > 0;
+  const backendCan = (capability) =>
+    backends.some((backend) => (backend.capabilities ?? []).includes(capability));
 
   const manifest = {
     manifest: MANIFEST_SPEC,
@@ -33,8 +39,25 @@ export function buildManifest({ name, version, capabilityKinds = [], capabilityI
       providers: '/v1/providers',
       environments: '/v1/environments',
       capabilitiesRpc: '/v1/capabilities/rpc',
+      ...(hasBackend
+        ? { sessions: '/v1/sessions', sessionMessages: '/v1/sessions/{id}/messages', backends: '/v1/backends' }
+        : {}),
     },
-    capabilities: { chat: true, models: true },
+    // Advertise exactly what the endpoints above serve. Under-claiming makes the
+    // Gate render as featureless in the app; over-claiming (sessions, runs,
+    // approvals, terminal — none of which the Gate implements) would make it
+    // offer surfaces that cannot work.
+    capabilities: {
+      chat: true,
+      streaming: true,
+      models: true,
+      providers: true,
+      environments: true,
+      capabilityRegistry: true,
+      ...(backendCan('sessions') ? { sessions: true } : {}),
+      ...(backendCan('tools') ? { tools: true } : {}),
+    },
+    backends,
     providers,
     capabilityKinds,
     capabilityInstances,

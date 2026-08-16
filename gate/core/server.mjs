@@ -18,6 +18,8 @@ import { CliEnvironmentStore } from './cli-environments/store.mjs';
 import { CliAdapterRegistry } from './cli-environments/adapter-registry.mjs';
 import { CliEnvironmentService } from './cli-environments/supervisor.mjs';
 import { createEnvironmentRpc, sanitizeEnvironment } from './cli-environments/rpc.mjs';
+import { createBackendManager } from './cli-environments/backend-manager.mjs';
+import { buildCliEnvironment } from './cli-environments/process-environment.mjs';
 import { TokenStore } from './tokens.mjs';
 import { PairingStore } from './pairing.mjs';
 import { DeviceTokenStore } from './device-tokens.mjs';
@@ -26,6 +28,77 @@ import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
 
 const FLAVOR_MODULES = { openai: openaiFlavor, anthropic: anthropicFlavor };
+
+/** The turn to send onward. A native session already holds the history. */
+function lastUserText(messages = []) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== 'user') continue;
+    const content = message.content;
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) return content.map((part) => part?.text ?? '').join('');
+  }
+  return '';
+}
+
+/**
+ * Relay a native-environment turn as OpenAI-shaped SSE.
+ *
+ * Subscribing before sending matters: the CLI starts emitting as soon as the
+ * turn is accepted, and a late subscriber loses the opening deltas. Tool events
+ * are relayed as `tool_calls` deltas so the client can show what the agent is
+ * doing — the thing a bare provider proxy can never report.
+ */
+async function streamBackendTurn(backend, sessionId, { text, model }, res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+
+  const controller = new AbortController();
+  let toolIndex = 0;
+  const seenTools = new Map();
+
+  const streaming = backend
+    .streamEvents(
+      sessionId,
+      (event) => {
+        if (event.type === 'message.delta' && event.payload.text) {
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: event.payload.text } }] })}\n\n`);
+          return;
+        }
+        if (event.type === 'tool.started' && event.payload.name) {
+          if (seenTools.has(event.payload.callId)) return;
+          const index = toolIndex++;
+          seenTools.set(event.payload.callId, index);
+          res.write(`data: ${JSON.stringify({
+            choices: [{ delta: { tool_calls: [{ index, function: { name: event.payload.name } }] } }],
+          })}\n\n`);
+        }
+      },
+      controller.signal,
+    )
+    .catch(() => undefined);
+
+  try {
+    await backend.sendMessage(sessionId, { text, model });
+  } catch (error) {
+    res.write(`data: ${JSON.stringify({ error: { message: error.message, code: 'backend_error' } })}\n\n`);
+  } finally {
+    controller.abort();
+    await streaming;
+    res.write('data: [DONE]\n\n');
+    res.end();
+  }
+}
+
+/** Backend models are `providerId/modelId`, since a CLI reaches many vendors. */
+function parseQualifiedModel(model) {
+  const separator = String(model).indexOf('/');
+  if (separator === -1) return { modelId: String(model) };
+  return { providerId: String(model).slice(0, separator), modelId: String(model).slice(separator + 1) };
+}
 
 async function proxyChat(root, provider, requestBody, res) {
   const flavorModule = FLAVOR_MODULES[provider.config.flavor];
@@ -88,6 +161,14 @@ async function proxyChat(root, provider, requestBody, res) {
     return;
   }
 
+  await relayNormalizedSse(upstreamResponse, flavorModule, res);
+}
+
+/**
+ * Read an upstream SSE body and re-emit it in the OpenAI delta shape the app's
+ * clients parse, whatever dialect the vendor speaks.
+ */
+async function relayNormalizedSse(upstreamResponse, flavorModule, res) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -105,8 +186,7 @@ async function proxyChat(root, provider, requestBody, res) {
       buffer += decoder.decode(value, { stream: true });
       if (buffer.length > MAX_BUFFER_BYTES) {
         reader.cancel().catch(() => {});
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: 'Upstream sent an oversized line without a delimiter', code: 'upstream_error' } }));
+        res.end(`data: ${JSON.stringify({ error: { message: 'Upstream sent an oversized line without a delimiter', code: 'upstream_error' } })}\n\n`);
         return;
       }
       const lines = buffer.split('\n');
@@ -145,6 +225,8 @@ export async function createGate(config = {}) {
     version,
     gateHome = process.env.VERSUTUS_GATE_HOME || join(root, '.gate-home'),
     vault: injectedVault,
+    environmentRegistry: injectedRegistry,
+    backendServerFactory,
   } = config;
 
   await migrateLegacyProviders({ sourceRoot: root, gateHome });
@@ -158,7 +240,7 @@ export async function createGate(config = {}) {
   });
   const providerRpc = createProviderRpc({ service: providerService, vault, oauth });
   const environmentStore = new CliEnvironmentStore(gateHome);
-  const environmentRegistry = new CliAdapterRegistry();
+  const environmentRegistry = injectedRegistry ?? new CliAdapterRegistry();
   const environmentService = new CliEnvironmentService({
     store: environmentStore,
     registry: environmentRegistry,
@@ -167,6 +249,26 @@ export async function createGate(config = {}) {
     store: environmentStore,
     service: environmentService,
     registry: environmentRegistry,
+    // The manifest advertises backends and the capabilities they provide, so a
+    // newly attached CLI must be visible without restarting the Gate.
+    onChanged: () => reload(),
+  });
+
+  // Environments that expose a native server become chat backends: they own
+  // their own sessions, models and tools, and the Gate proxies to them rather
+  // than reimplementing any of it.
+  const backendManager = createBackendManager({
+    store: environmentStore,
+    registry: environmentRegistry,
+    vault,
+    buildEnvironment: async ({ record, credentials }) =>
+      buildCliEnvironment(process.env, {
+        environmentId: record.id,
+        runId: `serve-${record.id}`,
+        endpoints: { chat: `http://127.0.0.1:${gateObj?.port ?? port}/v1/chat/completions` },
+        credentials,
+      }),
+    createServer: backendServerFactory,
   });
 
   const tokenPath = join(root, '.tokens.json');
@@ -180,9 +282,13 @@ export async function createGate(config = {}) {
     const providers = instances
       .filter((instance) => instance.kind === 'provider')
       .map((instance) => ({ id: instance.id, label: instance.label, config: instance.config }));
+    // Sessions and tools are only advertised because a backend actually
+    // provides them; a Gate with no environment attached must not claim either.
+    const backends = await backendManager.describe().catch(() => []);
     const manifest = buildManifest({
       name,
       version,
+      backends,
       capabilityKinds: describeKinds(kinds),
       capabilityInstances: resolveManifestInstances(kinds, instances),
     });
@@ -194,6 +300,101 @@ export async function createGate(config = {}) {
   async function reload() {
     state = await computeState();
     return state;
+  }
+
+  /**
+   * Send a chat request to whichever component actually owns the provider's
+   * credentials.
+   *
+   * `migrateLegacyProviders` copies `registry/<id>.json` into the v2 store but
+   * leaves the original file in place, so `loadCapabilities` keeps surfacing a
+   * legacy twin under the same id forever. That twin must never win: the flavor
+   * codecs deliberately emit no auth header (auth moved into provider profiles
+   * — see gate/flavors/openai.mjs), and its `apiKeyEnv`/static `models[]` are
+   * the stale bootstrap values. Routing a migrated provider through proxyChat
+   * reaches the vendor unauthenticated and rejects every model discovered since.
+   */
+  async function dispatchChat(providerId, body, res) {
+    const record = await providerStore.get(providerId);
+    const legacy = state.providers.find((item) => item.id === providerId);
+
+    if (!record && !legacy) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: `Unknown provider "${providerId}"`, code: 'unknown_provider' } }));
+      return;
+    }
+
+    // `streaming: false` is declared on the registry record and has no v2
+    // equivalent yet, so the twin stays authoritative for that one capability.
+    if (body.stream === true && legacy?.config.streaming === false) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: { message: `Provider "${providerId}" does not support streaming`, code: 'streaming_unsupported' },
+      }));
+      return;
+    }
+
+    if (record) {
+      await chatViaProviderService(providerId, record, body, res);
+      return;
+    }
+    await proxyChat(root, legacy, body, res);
+  }
+
+  /** Chat through the v2 ProviderService, which resolves the vault credential. */
+  async function chatViaProviderService(providerId, record, body, res) {
+    const wantsStream = body.stream === true;
+    const flavorModule =
+      record.config?.registration?.protocol === 'anthropic_messages' ? anthropicFlavor : openaiFlavor;
+
+    let result;
+    try {
+      result = await providerService.chat({
+        providerId,
+        model: body.model,
+        messages: body.messages ?? [],
+        stream: wantsStream,
+      });
+    } catch (error) {
+      const status = Number.isInteger(error.status) && error.status >= 400 && error.status <= 599
+        ? error.status
+        : 502;
+      res.writeHead(status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: error.message, code: error.code || 'upstream_error' } }));
+      return;
+    }
+
+    if (!wantsStream) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        id: `gate-${Date.now()}`,
+        object: 'chat.completion',
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: flavorModule.parseResponseText(result) },
+          finish_reason: 'stop',
+        }],
+      }));
+      return;
+    }
+
+    // Profile adapters hand back the raw upstream Response; the local-interface
+    // adapter hands back an async iterator of already-parsed SSE events.
+    if (typeof result?.body?.getReader === 'function') {
+      await relayNormalizedSse(result, flavorModule, res);
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    for await (const event of result) {
+      const text = typeof event === 'string' ? event : event?.choices?.[0]?.delta?.content;
+      if (text) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
+    }
+    res.write('data: [DONE]\n\n');
+    res.end();
   }
 
   const registryMethods = {
@@ -319,6 +520,10 @@ export async function createGate(config = {}) {
         /^\/p\/[^/]+\/v1\/models$/.test(pathname) ||
         (pathname === '/v1/chat/completions' && method === 'POST') ||
         /^\/p\/[^/]+\/v1\/chat\/completions$/.test(pathname) ||
+        (pathname === '/v1/backends' && method === 'GET') ||
+        (pathname === '/v1/sessions' && (method === 'GET' || method === 'POST')) ||
+        /^\/v1\/sessions\/[^/]+$/.test(pathname) ||
+        /^\/v1\/sessions\/[^/]+\/messages$/.test(pathname) ||
         (pathname === '/v1/environments' && method === 'GET') ||
         /^\/v1\/environments\/[^/]+\/runs$/.test(pathname) ||
         /^\/v1\/environments\/[^/]+\/runs\/[^/]+\/events$/.test(pathname) ||
@@ -369,6 +574,72 @@ export async function createGate(config = {}) {
           res.writeHead(404);
           res.end(JSON.stringify({ error: { message: 'provider not found', code: 'provider_not_found' } }));
         }
+        return;
+      }
+
+      // ─── Backends: native environments that own sessions, models, tools ───
+
+      if (pathname === '/v1/backends' && method === 'GET') {
+        res.writeHead(200);
+        res.end(JSON.stringify({ backends: await backendManager.describe() }));
+        return;
+      }
+
+      /** Resolve the backend for a request, or answer 404 and return null. */
+      async function resolveBackend(backendId) {
+        const id = backendId ?? (await backendManager.list())[0]?.id;
+        if (!id) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'No chat backend is attached to this Gate', code: 'no_backend' } }));
+          return null;
+        }
+        try {
+          return await backendManager.get(id);
+        } catch (error) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code: 'unknown_backend' } }));
+          return null;
+        }
+      }
+
+      if (pathname === '/v1/sessions' && method === 'GET') {
+        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        if (!backend) return;
+        const limit = Number(url.searchParams.get('limit')) || undefined;
+        const sessions = await backend.listSessions();
+        res.writeHead(200);
+        res.end(JSON.stringify({ object: 'list', data: limit ? sessions.slice(0, limit) : sessions }));
+        return;
+      }
+
+      if (pathname === '/v1/sessions' && method === 'POST') {
+        const body = (await readJsonBody(req)) ?? {};
+        const backend = await resolveBackend(body.backendId);
+        if (!backend) return;
+        const created = await backend.createSession({ title: body.title, model: body.model });
+        res.writeHead(200);
+        res.end(JSON.stringify(created));
+        return;
+      }
+
+      const sessionMessagesMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/messages$/);
+      if (sessionMessagesMatch && method === 'GET') {
+        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        if (!backend) return;
+        const limit = Number(url.searchParams.get('limit')) || undefined;
+        const messages = await backend.listMessages(decodeURIComponent(sessionMessagesMatch[1]), limit);
+        res.writeHead(200);
+        res.end(JSON.stringify({ object: 'list', data: messages }));
+        return;
+      }
+
+      const sessionMatch = pathname.match(/^\/v1\/sessions\/([^/]+)$/);
+      if (sessionMatch && method === 'DELETE') {
+        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        if (!backend) return;
+        await backend.deleteSession(decodeURIComponent(sessionMatch[1]));
+        res.writeHead(200);
+        res.end(JSON.stringify({ deleted: true }));
         return;
       }
 
@@ -472,6 +743,18 @@ export async function createGate(config = {}) {
             }
           }
         }
+        // Every model a native environment can reach, alongside direct providers.
+        for (const descriptor of await backendManager.list().catch(() => [])) {
+          try {
+            const backend = await backendManager.get(descriptor.id);
+            for (const model of await backend.listModels()) {
+              allModels.push({ ...model, object: 'model', backendId: descriptor.id });
+            }
+          } catch {
+            // a backend that will not start must not blank the model list
+          }
+        }
+
         res.writeHead(200);
         res.end(JSON.stringify({
           object: 'list',
@@ -514,6 +797,38 @@ export async function createGate(config = {}) {
       // /v1/chat/completions - unscoped chat (resolves provider from model)
       if (pathname === '/v1/chat/completions' && method === 'POST') {
         const body = (await readJsonBody(req)) ?? {};
+
+        // A backend-addressed turn runs inside the native environment, which is
+        // what gives it that platform's sessions, tools and approvals.
+        if (body.backendId) {
+          const backend = await resolveBackend(body.backendId);
+          if (!backend) return;
+          try {
+            const sessionId = body.sessionId
+              ?? (await backend.createSession({ title: 'Versutus' })).id;
+            const text = lastUserText(body.messages);
+            const model = body.model ? parseQualifiedModel(body.model) : undefined;
+
+            if (body.stream === true) {
+              await streamBackendTurn(backend, sessionId, { text, model }, res);
+              return;
+            }
+
+            const result = await backend.sendMessage(sessionId, { text, model });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              id: `gate-${Date.now()}`,
+              object: 'chat.completion',
+              session_id: sessionId,
+              choices: [{ index: 0, message: { role: 'assistant', content: result.text }, finish_reason: 'stop' }],
+            }));
+          } catch (error) {
+            res.writeHead(502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: error.message, code: 'backend_error' } }));
+          }
+          return;
+        }
+
         const snapshots = await providerService.list();
         const advertised = snapshots.flatMap((snapshot) => (
           snapshot.catalog?.models ?? []
@@ -530,25 +845,7 @@ export async function createGate(config = {}) {
         }
         const matches = advertised.filter((entry) => entry.modelId === body.model);
         if (body.providerId) {
-          const provider = state.providers.find((item) => item.id === body.providerId)
-            ?? (await providerService.get(body.providerId).then(() => ({ id: body.providerId, config: { models: [body.model], flavor: 'openai', streaming: true } })).catch(() => null));
-          if (!provider) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: { message: `Unknown provider "${body.providerId}"`, code: 'unknown_provider' } }));
-            return;
-          }
-          if (state.providers.some((item) => item.id === body.providerId)) {
-            await proxyChat(root, state.providers.find((item) => item.id === body.providerId), body, res);
-          } else {
-            try {
-              const result = await providerService.chat({ providerId: body.providerId, ...body });
-              res.writeHead(200);
-              res.end(JSON.stringify(result));
-            } catch (error) {
-              res.writeHead(502);
-              res.end(JSON.stringify({ error: { message: error.message, code: error.code || 'upstream_error' } }));
-            }
-          }
+          await dispatchChat(body.providerId, body, res);
           return;
         }
         if (matches.length > 1) {
@@ -556,29 +853,22 @@ export async function createGate(config = {}) {
           res.end(JSON.stringify({ error: { message: `Model "${body.model}" is declared by multiple providers`, code: 'ambiguous_model' } }));
           return;
         }
-        const provider = state.providers.find((item) => item.id === matches[0]?.providerId)
-          ?? state.providers.find((item) => item.config.models.includes(body?.model));
-        if (!provider) {
+        const providerId = matches[0]?.providerId
+          ?? state.providers.find((item) => item.config.models.includes(body?.model))?.id;
+        if (!providerId) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: `No provider declares model "${body?.model}"`, code: 'unknown_model' } }));
           return;
         }
-        await proxyChat(root, provider, body, res);
+        await dispatchChat(providerId, body, res);
         return;
       }
 
       // /p/{provider}/v1/chat/completions - scoped chat
       const scopedChatMatch = pathname.match(/^\/p\/([^/]+)\/v1\/chat\/completions$/);
       if (scopedChatMatch && method === 'POST') {
-        const providerId = decodeURIComponent(scopedChatMatch[1]);
-        const provider = state.providers.find((p) => p.id === providerId);
-        if (!provider) {
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: { message: `Unknown provider "${providerId}"`, code: 'unknown_provider' } }));
-          return;
-        }
         const body = await readJsonBody(req);
-        await proxyChat(root, provider, body ?? {}, res);
+        await dispatchChat(decodeURIComponent(scopedChatMatch[1]), body ?? {}, res);
         return;
       }
 
