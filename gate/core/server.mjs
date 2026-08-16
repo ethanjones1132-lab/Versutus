@@ -238,7 +238,14 @@ export async function createGate(config = {}) {
     vault,
     createAdapter: (registration) => createProviderAdapter(registration, { vault, store: providerStore }),
   });
-  const providerRpc = createProviderRpc({ service: providerService, vault, oauth });
+  const providerRpc = createProviderRpc({
+    service: providerService,
+    vault,
+    oauth,
+    // The manifest advertises providers, so a newly registered one must be
+    // visible without restarting the Gate.
+    onChanged: () => reload(),
+  });
   const environmentStore = new CliEnvironmentStore(gateHome);
   const environmentRegistry = injectedRegistry ?? new CliAdapterRegistry();
   const environmentService = new CliEnvironmentService({
@@ -285,10 +292,15 @@ export async function createGate(config = {}) {
     // Sessions and tools are only advertised because a backend actually
     // provides them; a Gate with no environment attached must not claim either.
     const backends = await backendManager.describe().catch(() => []);
+    // v2 providers live under Gate home and are owned by ProviderService, so
+    // loadCapabilities(root) — which only reads the legacy registry — cannot
+    // see them. A failure here must not take the manifest down.
+    const providerSnapshots = await providerService.list().catch(() => []);
     const manifest = buildManifest({
       name,
       version,
       backends,
+      providerSnapshots,
       capabilityKinds: describeKinds(kinds),
       capabilityInstances: resolveManifestInstances(kinds, instances),
     });

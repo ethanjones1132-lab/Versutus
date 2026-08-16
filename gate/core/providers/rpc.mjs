@@ -1,7 +1,13 @@
 import { redactSensitive } from '../credentials/redaction.mjs';
 import { releaseProfiles } from './profiles/registry.mjs';
 
-export function createProviderRpc({ service, vault, oauth }) {
+/**
+ * @param {Object} deps
+ * @param {() => Promise<unknown>} [deps.onChanged] - refresh derived state (the
+ *   manifest advertises providers, so registering one must update it; otherwise
+ *   a newly created provider stays invisible until the Gate restarts).
+ */
+export function createProviderRpc({ service, vault, oauth, onChanged }) {
   async function status(fn) {
     try {
       await fn();
@@ -12,6 +18,15 @@ export function createProviderRpc({ service, vault, oauth }) {
       wrapped.code = safe.code || 'provider_error';
       throw wrapped;
     }
+  }
+
+  // create/update/delete change which providers exist, and the manifest
+  // advertises providers — without this a registration stays invisible until
+  // the Gate restarts.
+  async function statusAndReload(fn) {
+    const result = await status(fn);
+    await onChanged?.().catch(() => undefined);
+    return result;
   }
 
   return {
@@ -36,9 +51,9 @@ export function createProviderRpc({ service, vault, oauth }) {
       return { providers: snapshots.map(sanitizeSnapshot) };
     },
     'providers.get': async ({ id } = {}) => sanitizeSnapshot(await service.get(id)),
-    'providers.create': async (input = {}) => status(() => service.create(input)),
-    'providers.update': async ({ id, ...input } = {}) => status(() => service.update(id, input)),
-    'providers.delete': async ({ id } = {}) => status(() => service.delete(id)),
+    'providers.create': async (input = {}) => statusAndReload(() => service.create(input)),
+    'providers.update': async ({ id, ...input } = {}) => statusAndReload(() => service.update(id, input)),
+    'providers.delete': async ({ id } = {}) => statusAndReload(() => service.delete(id)),
     'providers.health.check': async ({ id } = {}) => service.check(id).then(sanitizeSnapshot),
     'providers.catalog.refresh': async ({ id } = {}) => service.refreshCatalog(id).then(sanitizeSnapshot),
     'providers.auth.setApiKey': async ({ id, value } = {}) => status(async () => {
