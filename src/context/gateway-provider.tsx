@@ -396,8 +396,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         capabilityCheckedAt,
         liveCapabilities,
         capabilityInstances,
+        {
+          backends: activeManifest?.backends ?? [],
+          selectedBackendId,
+          providers: activeManifest?.providers,
+        },
       ),
-    [status, activeHello, liveCapabilities, capabilityCheckedAt, capabilityInstances],
+    [status, activeHello, liveCapabilities, capabilityCheckedAt, capabilityInstances, activeManifest, selectedBackendId],
   );
   const [pendingConfirmation, setPendingConfirmation] = useState<GatewayActionPreview | null>(null);
   const [modelPicker, setModelPicker] = useState<{

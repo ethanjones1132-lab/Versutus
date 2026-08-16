@@ -289,7 +289,7 @@ export type GatewayMethodAvailability = {
 export type GatewayCapabilityGroup = {
   id: string;
   label: string;
-  status: 'available' | 'unavailable' | 'unknown' | 'ready' | 'missing-scope' | 'unsupported' | 'warming' | 'stale' | 'unhealthy' | 'experimental';
+  status: 'available' | 'unavailable' | 'unknown' | 'ready' | 'missing-scope' | 'unsupported' | 'warming' | 'stale' | 'partial' | 'unhealthy' | 'experimental';
   availableCount?: number;
   totalCount?: number;
   note?: string;

@@ -259,7 +259,7 @@ export function GatewayHomeDashboard() {
 
       {/* Only for gateways that actually offer channels and report them degraded —
           on a gateway without channel admin these commands do not exist. */}
-      {capabilitySnapshot.groups.find(g => g.id === 'channels' && ['unhealthy', 'partial'].includes(g.status as string)) && (
+      {capabilitySnapshot.groups.find(g => g.id === 'channels' && ['unhealthy', 'partial'].includes(g.status)) && (
         <Card padding={Spacing.two} style={{ marginTop: Spacing.two }}>
           <Text variant="caption" color="accentWarm">Channel Repair</Text>
           <Text color="secondary" style={{ marginTop: Spacing.one }}>
