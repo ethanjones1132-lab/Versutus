@@ -1091,6 +1091,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         {
           sessionId: sessionIdRef.current,
           model: gateway.model,
+          providerId: gateway.providerId,
         },
       );
       return fullText;
@@ -1298,6 +1299,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           {
             sessionId: sessionIdRef.current,
             model: gateway.model,
+            providerId: gateway.providerId,
             signal: abortController.signal,
             onToolCall: (toolCall) => {
               setMessages((prev) => {

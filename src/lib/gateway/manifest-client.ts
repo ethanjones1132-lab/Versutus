@@ -262,6 +262,8 @@ export class ManifestClient implements PortalClient {
     onDelta: (text: string) => void,
     options?: {
       model?: string;
+      /** Owning provider, when known — disambiguates a model id declared by more than one. */
+      providerId?: string;
       sessionId?: string;
       signal?: AbortSignal;
       onToolCall?: (tool: import('@/lib/gateway/types').ChatToolCall) => void;
@@ -284,6 +286,11 @@ export class ManifestClient implements PortalClient {
       // The native session holds the history; without it every turn is orphaned.
       const sessionId = options?.sessionId ?? this.currentSessionId;
       if (sessionId) body.sessionId = sessionId;
+    } else if (options?.providerId) {
+      // Unqualified, the Gate refuses to guess between providers that declare
+      // the same model id (409 ambiguous_model) — a backend owns its catalog
+      // outright, so this only applies to the provider-routed path.
+      body.providerId = options.providerId;
     }
 
     const controller = new AbortController();

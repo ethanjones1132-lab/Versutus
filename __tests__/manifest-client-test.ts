@@ -189,6 +189,72 @@ describe('ManifestClient.streamChat', () => {
       /no model/i,
     );
   });
+
+  // A model id can be declared by more than one provider (e.g. "minimax-m3"
+  // from both nvidia and opencode-zen). The Gate refuses to guess and answers
+  // ambiguous_model unless the request also carries providerId — the picker
+  // already knows it (getModels() returns it per-model), so the request must
+  // carry it too.
+  test('a providerId option qualifies the model in the chat request body', async () => {
+    let capturedBody: Record<string, unknown> | undefined;
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/v1/chat/completions')) {
+        capturedBody = JSON.parse(String(init?.body));
+        const body = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        });
+        return Promise.resolve({ ok: true, status: 200, body } as unknown as Response);
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    await client.streamChat([{ role: 'user', content: 'hi' }], () => undefined, {
+      model: 'minimax-m3',
+      providerId: 'nvidia',
+    });
+
+    expect(capturedBody?.model).toBe('minimax-m3');
+    expect(capturedBody?.providerId).toBe('nvidia');
+  });
+
+  test('providerId is left off the request body when routed to a backend', async () => {
+    let capturedBody: Record<string, unknown> | undefined;
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/v1/chat/completions')) {
+        capturedBody = JSON.parse(String(init?.body));
+        const body = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        });
+        return Promise.resolve({ ok: true, status: 200, body } as unknown as Response);
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const identityWithBackend: GatewayIdentity = {
+      ...IDENTITY,
+      manifest: {
+        ...IDENTITY.manifest!,
+        backends: [{ id: 'opencode-local', label: 'OpenCode', kind: 'environment' }],
+      },
+    };
+    const client = new ManifestClient(PROFILE, identityWithBackend, {});
+    await client.streamChat([{ role: 'user', content: 'hi' }], () => undefined, {
+      model: 'kilo/deepcogito/cogito-v2.1-671b',
+      providerId: 'nvidia',
+    });
+
+    expect(capturedBody?.backendId).toBe('opencode-local');
+    expect(capturedBody?.providerId).toBeUndefined();
+  });
 });
 
 describe('ManifestClient — capabilities the manifest does not advertise', () => {

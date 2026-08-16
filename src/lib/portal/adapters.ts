@@ -34,6 +34,8 @@ export interface PortalClient {
     onDelta: (text: string) => void,
     options?: {
       model?: string;
+      /** Owning provider, when known — disambiguates a model id declared by more than one. */
+      providerId?: string;
       sessionId?: string;
       signal?: AbortSignal;
       /** OpenAI-style tool_calls deltas when the gateway emits them. */
