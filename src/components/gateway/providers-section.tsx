@@ -132,6 +132,7 @@ export function ProvidersSection() {
             setOauthMessage('Continue authorization in the desktop browser.');
             void client.beginAuth(snapshot.id);
           }}
+          onEnable={() => void client.update(snapshot.id, { enabled: true }).then(load)}
         />
       ))}
 
