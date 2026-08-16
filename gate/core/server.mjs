@@ -726,6 +726,26 @@ export async function createGate(config = {}) {
 
       // /v1/models - provider-owned live or labeled LKG/bootstrap catalogs
       if (pathname === '/v1/models' && method === 'GET') {
+        // A backend owns its own catalog (ADR-0003); asking for one by id
+        // must return only that catalog, never the Gate's provider list.
+        const requestedBackendId = url.searchParams.get('backendId');
+        if (requestedBackendId) {
+          const backend = await resolveBackend(requestedBackendId);
+          if (!backend) return;
+          try {
+            const models = await backend.listModels();
+            res.writeHead(200);
+            res.end(JSON.stringify({
+              object: 'list',
+              data: models.map((model) => ({ ...model, object: 'model', backendId: requestedBackendId })),
+            }));
+          } catch (error) {
+            res.writeHead(502, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: error.message, code: 'backend_error' } }));
+          }
+          return;
+        }
+
         const snapshots = await providerService.list();
         const allModels = [];
         for (const snapshot of snapshots) {

@@ -70,13 +70,26 @@ function stubRegistry(calls) {
   };
 }
 
-async function makeGate({ calls = [] } = {}) {
+async function makeGate({ calls = [], provider } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'gate-backend-'));
   roots.push(root);
   const gateHome = join(root, '.gate-home');
   await mkdir(join(root, 'core', 'capabilities', 'provider'), { recursive: true });
   await copyFile(kindModulePath, join(root, 'core', 'capabilities', 'provider', 'kind.mjs'));
   await mkdir(join(root, 'registry'), { recursive: true });
+  if (provider) {
+    await writeFile(join(root, 'registry', `${provider.id}.json`), JSON.stringify({
+      kind: 'provider',
+      label: provider.label ?? provider.id,
+      config: {
+        flavor: 'openai',
+        baseUrl: 'https://api.example.com/v1',
+        apiKeyEnv: 'TEST_KEY',
+        models: provider.models ?? [],
+        streaming: true,
+      },
+    }), 'utf8');
+  }
   await mkdir(join(gateHome, 'config', 'environments'), { recursive: true });
   await writeFile(join(gateHome, 'config', 'environments', 'stub-local.json'), JSON.stringify({
     schemaVersion: 1,
@@ -195,6 +208,48 @@ test('backend models are advertised alongside provider models', async () => {
     const stub = body.data.find((m) => m.id === 'stub/one');
     assert.ok(stub, 'the backend catalog should appear in /v1/models');
     assert.equal(stub.backendId, 'stub-local');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a backendId on /v1/models returns only that backend\'s own catalog', async () => {
+  const { gate, calls } = await makeGate({ provider: { id: 'nvidia', models: ['01-ai/yi-large'] } });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/models?backendId=stub-local`, { headers: auth(gate) });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body.data.map((m) => m.id), ['stub/one']);
+    assert.equal(body.data[0].backendId, 'stub-local');
+    assert.ok(
+      !body.data.some((m) => m.id === '01-ai/yi-large'),
+      'a backend-scoped request must not leak provider models',
+    );
+    assert.ok(calls.includes('listModels'));
+  } finally {
+    await gate.close();
+  }
+});
+
+test('an absent backendId on /v1/models leaves provider behaviour unchanged', async () => {
+  const { gate } = await makeGate({ provider: { id: 'nvidia', models: ['01-ai/yi-large'] } });
+  try {
+    const body = await (await fetch(`http://127.0.0.1:${gate.port}/v1/models`, { headers: auth(gate) })).json();
+    const ids = body.data.map((m) => m.id);
+    assert.ok(ids.includes('01-ai/yi-large'), 'provider models must still appear without backendId');
+    assert.ok(ids.includes('stub/one'), 'the legacy unscoped listing still merges backend models in');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('an unknown backendId on /v1/models fails cleanly instead of 500ing', async () => {
+  const { gate } = await makeGate();
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/models?backendId=nope`, { headers: auth(gate) });
+    assert.equal(response.status, 404);
+    const body = await response.json();
+    assert.equal(body.error.code, 'unknown_backend');
   } finally {
     await gate.close();
   }
