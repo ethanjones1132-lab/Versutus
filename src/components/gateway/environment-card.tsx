@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import * as Haptics from 'expo-haptics';
 
-import { Badge, Button, Card, Text } from '@/components/ui';
+import { EnvironmentActionsSheet } from '@/components/gateway/environment-actions-sheet';
+import { Badge, Button, Card, Icon, PressableScale, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { environmentPrimaryAction } from '@/lib/gateway/entity-actions';
 import type { EnvironmentSnapshot } from '@/lib/gateway/environment-types';
@@ -16,6 +18,7 @@ export type EnvironmentCardProps = {
 };
 
 export function EnvironmentCard({ environment, onCheck, onStart, onStop, onRun }: EnvironmentCardProps) {
+  const [actionsVisible, setActionsVisible] = useState(false);
   const primary = environmentPrimaryAction(environment);
   const handlers: Record<string, () => void> = { start: onStart, stop: onStop, check: onCheck };
   const healthy = environment.state === 'ready';
@@ -52,9 +55,26 @@ export function EnvironmentCard({ environment, onCheck, onStart, onStop, onRun }
           }}
           style={styles.primary}
         />
-        <Button label="Run" variant="secondary" onPress={onRun} style={styles.primary} />
+        <PressableScale
+          onPress={() => setActionsVisible(true)}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel={`More actions for ${environment.label}`}
+          style={styles.overflow}>
+          <Icon name={{ ios: 'ellipsis', android: 'more_vert', web: 'more_vert' }} size={18} color="textSecondary" />
+        </PressableScale>
       </View>
       <Text variant="micro" color="tertiary">Interactive operations require desktop presence.</Text>
+
+      <EnvironmentActionsSheet
+        visible={actionsVisible}
+        label={environment.label}
+        onClose={() => setActionsVisible(false)}
+        onCheck={onCheck}
+        onStart={onStart}
+        onStop={onStop}
+        onRun={onRun}
+      />
     </Card>
   );
 }
@@ -63,6 +83,7 @@ const styles = StyleSheet.create({
   card: { gap: Spacing.two, marginBottom: Spacing.three },
   header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   titles: { flex: 1, minWidth: 0, gap: 2 },
-  actions: { flexDirection: 'row', gap: Spacing.two },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   primary: { flex: 1 },
+  overflow: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
 });
