@@ -309,12 +309,26 @@ export class ManifestClient implements PortalClient {
     }
 
     let fullText = '';
+    // A failed turn arrives as an error frame inside an HTTP 200 stream, so
+    // response.ok above cannot catch it. Ignoring the frame renders an empty
+    // assistant bubble with nothing to explain it — the exact silent failure
+    // this stream was changed to stop producing. Captured here rather than
+    // thrown, because the handler's own catch would swallow a throw.
+    let streamError: string | null = null;
     const toolNames = new Map<number, string>();
     await this.transport.streamSSE(
       response,
       (data) => {
         try {
           const chunk = JSON.parse(data);
+          if (chunk?.error) {
+            const reported = chunk.error?.message;
+            streamError =
+              typeof reported === 'string' && reported
+                ? reported
+                : `The gateway reported a failed turn (${chunk.error?.code ?? 'unknown'}).`;
+            return;
+          }
           const delta = chunk?.choices?.[0]?.delta;
           const content = delta?.content;
           if (content) {
@@ -339,6 +353,7 @@ export class ManifestClient implements PortalClient {
       signal,
     );
 
+    if (streamError) throw new Error(streamError);
     return fullText;
   }
 

@@ -175,6 +175,60 @@ describe('ManifestClient.streamChat', () => {
     expect(full).toBe('Hello');
   });
 
+  // The Gate reports a failed backend turn as an error frame inside an HTTP
+  // 200 stream, so response.ok cannot catch it. Ignoring the frame renders an
+  // empty assistant bubble with nothing to explain it — this is the exact
+  // payload a credit-exhausted OpenCode provider produced on the real Gate.
+  test('surfaces an error frame carried inside a 200 stream', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/v1/chat/completions')) {
+        const body = new ReadableStream({
+          start(controller) {
+            const enc = new TextEncoder();
+            controller.enqueue(
+              enc.encode(
+                'data: {"error":{"message":"opencode: Insufficient balance.","code":"backend_error"}}\n\n',
+              ),
+            );
+            controller.enqueue(enc.encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        });
+        return Promise.resolve({ ok: true, status: 200, body } as unknown as Response);
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    await expect(
+      client.streamChat([{ role: 'user', content: 'hi' }], () => undefined, { model: 'test-model' }),
+    ).rejects.toThrow(/Insufficient balance/);
+  });
+
+  test('falls back to the error code when a frame carries no message', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/v1/chat/completions')) {
+        const body = new ReadableStream({
+          start(controller) {
+            const enc = new TextEncoder();
+            controller.enqueue(enc.encode('data: {"error":{"code":"empty_turn"}}\n\n'));
+            controller.enqueue(enc.encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        });
+        return Promise.resolve({ ok: true, status: 200, body } as unknown as Response);
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    await expect(
+      client.streamChat([{ role: 'user', content: 'hi' }], () => undefined, { model: 'test-model' }),
+    ).rejects.toThrow(/empty_turn/);
+  });
+
   test('throws a named error when the manifest has no chat endpoint', async () => {
     const identityNoChat: GatewayIdentity = { ...IDENTITY, manifest: { ...IDENTITY.manifest!, endpoints: { health: '/health' } } };
     const client = new ManifestClient(PROFILE, identityNoChat, {});
