@@ -5,6 +5,7 @@ export const nvidiaNimProfile = {
   mode: 'api_key',
   protocol: 'openai_chat',
   origins: ['https://integrate.api.nvidia.com'],
+  defaultBaseUrl: 'https://integrate.api.nvidia.com/v1',
   modelsPath: '/models',
   authHeaders(credential) {
     return { Authorization: `Bearer ${credential}` };

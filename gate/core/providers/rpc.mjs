@@ -1,4 +1,5 @@
 import { redactSensitive } from '../credentials/redaction.mjs';
+import { releaseProfiles } from './profiles/registry.mjs';
 
 export function createProviderRpc({ service, vault, oauth }) {
   async function status(fn) {
@@ -14,6 +15,22 @@ export function createProviderRpc({ service, vault, oauth }) {
   }
 
   return {
+    /**
+     * The provider types this Gate can actually reach, with enough detail for a
+     * client to prefill a registration form. Without this a client has to
+     * hardcode the vendor list or the operator has to hand-write the JSON.
+     */
+    'providers.profiles.list': async () => ({
+      profiles: [...releaseProfiles.values()].map((profile) => ({
+        id: profile.id,
+        label: profile.label,
+        providerType: profile.providerType,
+        mode: profile.mode,
+        protocol: profile.protocol,
+        defaultBaseUrl: profile.defaultBaseUrl,
+        origins: profile.origins,
+      })),
+    }),
     'providers.list': async () => {
       const snapshots = await service.list();
       return { providers: snapshots.map(sanitizeSnapshot) };
@@ -32,6 +49,8 @@ export function createProviderRpc({ service, vault, oauth }) {
       const record = await service.store.get(id);
       const ref = record.config.registration.credentialRef;
       await vault.set(ref, value);
+      // The adapter closed over the previous credential — rebuild it.
+      service.forgetAdapter(id);
     }),
     'providers.auth.begin': async ({ id } = {}) => {
       if (!oauth) throw new Error('oauth is not configured');
@@ -54,6 +73,7 @@ export function createProviderRpc({ service, vault, oauth }) {
       if (record?.config.registration.credentialRef) {
         await vault.delete(record.config.registration.credentialRef);
       }
+      service.forgetAdapter(id);
     }),
   };
 }

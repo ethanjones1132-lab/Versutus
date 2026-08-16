@@ -5,6 +5,7 @@ export const xaiProfile = {
   mode: 'api_key',
   protocol: 'openai_chat',
   origins: ['https://api.x.ai'],
+  defaultBaseUrl: 'https://api.x.ai/v1',
   modelsPath: '/models',
   authHeaders(credential) {
     return { Authorization: `Bearer ${credential}` };

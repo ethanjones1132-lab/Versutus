@@ -3,7 +3,6 @@ import { join } from 'node:path';
 
 import { describeKinds } from './registry.mjs';
 import { setSecret } from './secrets.mjs';
-import { ProviderStore } from '../providers/store.mjs';
 
 const INSTANCE_ID_PATTERN = /^[a-z0-9-]+$/;
 const RESERVED_INSTANCE_IDS = new Set(['registry']);
@@ -66,12 +65,9 @@ export function createRegistryMethods({ root, getState, reload, gateHome }) {
       if (getState().instances.some((i) => i.id === id)) {
         throw new Error(`instance "${id}" already exists`);
       }
+      assertProviderMethodsOwnProviders(kind, 'providers.create');
       assertValid(kindModule.validate(config ?? {}));
-      if (kind === 'provider' && gateHome) {
-        await writeProviderRecord(gateHome, id, label ?? id, config ?? {});
-      } else {
-        await writeInstanceFile(root, id, kind, label ?? id, config ?? {});
-      }
+      await writeInstanceFile(root, id, kind, label ?? id, config ?? {});
       const state = await reload();
       return state.instances.find((i) => i.id === id);
     }),
@@ -79,13 +75,10 @@ export function createRegistryMethods({ root, getState, reload, gateHome }) {
     'registry.instances.update': async ({ id, label, config } = {}) => serialize(async () => {
       const existing = getState().instances.find((i) => i.id === id);
       if (!existing) throw new Error(`instance "${id}" not found`);
+      assertProviderMethodsOwnProviders(existing.kind, 'providers.update');
       const kindModule = getState().kinds.get(existing.kind);
       assertValid(kindModule.validate(config ?? {}));
-      if (existing.kind === 'provider' && gateHome) {
-        await writeProviderRecord(gateHome, id, label ?? existing.label, config ?? {});
-      } else {
-        await writeInstanceFile(root, id, existing.kind, label ?? existing.label, config ?? {});
-      }
+      await writeInstanceFile(root, id, existing.kind, label ?? existing.label, config ?? {});
       const state = await reload();
       return state.instances.find((i) => i.id === id);
     }),
@@ -93,11 +86,10 @@ export function createRegistryMethods({ root, getState, reload, gateHome }) {
     'registry.instances.delete': async ({ id } = {}) => serialize(async () => {
       const existing = getState().instances.find((i) => i.id === id);
       if (!existing) throw new Error(`instance "${id}" not found`);
-      if (existing.kind === 'provider' && gateHome) {
-        await new ProviderStore(gateHome).delete(id);
-      } else {
-        await unlink(join(root, 'registry', `${id}.json`));
-      }
+      // `state.instances` only ever holds registry files now, so this always
+      // removes the registry file. A v2 provider record is deleted by
+      // providers.delete, which also revokes its credential.
+      await unlink(join(root, 'registry', `${id}.json`));
       await reload();
       return { deleted: true };
     }),
@@ -105,39 +97,26 @@ export function createRegistryMethods({ root, getState, reload, gateHome }) {
     'registry.secrets.set': async ({ refName, value } = {}) => {
       if (typeof refName !== 'string' || !refName) throw new Error('refName must be a non-empty string');
       if (typeof value !== 'string' || !value) throw new Error('value must be a non-empty string');
+      // This writes the Gate-root store that legacy registry instances read.
+      // A provider credential lives in the Gate-home vault under the provider's
+      // own credentialRef, so accepting one here would silently strand the key.
+      if (/^provider\//.test(refName)) {
+        throw new Error(
+          `"${refName}" is a provider credential — set it with providers.auth.setApiKey so the provider's adapter can read it.`,
+        );
+      }
       await setSecret(root, refName, value);
       return { ok: true, deprecated: true };
     },
   };
 }
 
-async function writeProviderRecord(gateHome, id, label, config) {
-  const store = new ProviderStore(gateHome);
-  const existing = await store.get(id);
-  const flavor = config.flavor;
-  await store.put({
-    schemaVersion: 2,
-    kind: 'provider',
-    id,
-    label,
-    providerType: flavor === 'anthropic' ? 'anthropic' : flavor === 'openai' ? 'openai' : flavor || 'openai',
-    enabled: true,
-    registration: {
-      mode: 'api_key',
-      protocol: flavor === 'anthropic' ? 'anthropic_messages' : 'openai_chat',
-      baseUrl: config.baseUrl,
-      credentialRef: `provider/${id}/api-key`,
-    },
-    catalogPolicy: { ttlSeconds: 300, allowLastKnownGood: true },
-    requestPolicy: { timeoutMs: 120000 },
-  }, existing?.state ?? {
-    catalog: {
-      source: 'legacy_bootstrap',
-      state: 'stale',
-      generation: 0,
-      models: Array.isArray(config.models)
-        ? config.models.map((modelId) => ({ providerId: id, id: modelId, available: true }))
-        : [],
-    },
-  });
+/**
+ * Providers are owned by the providers.* methods, which hold the v2 schema,
+ * credential custody and catalog lifecycle. Creating one here produced a second,
+ * half-configured record and a key written to a store no adapter reads.
+ */
+function assertProviderMethodsOwnProviders(kind, method) {
+  if (kind !== 'provider') return;
+  throw new Error(`providers are managed with ${method}, not the capability registry`);
 }

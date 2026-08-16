@@ -8,7 +8,10 @@ test('PKCE attempts are one-use, state-bound, and expiry-bound', async () => {
   const store = new AttemptStore();
   const attempt = await createPkceAttempt(store, {
     providerId: 'fake-oauth',
-    ttlMs: 50,
+    // Long enough that a loaded machine cannot expire it before the one-use and
+    // state-binding assertions below run. Expiry is covered separately, with its
+    // own 1ms attempt, so nothing is lost by not racing the clock here.
+    ttlMs: 2000,
   });
   try {
     assert.equal(attempt.redirectUri.startsWith('http://127.0.0.1:'), true);

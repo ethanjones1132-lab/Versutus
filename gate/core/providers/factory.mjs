@@ -6,6 +6,7 @@ export function profileIdFor(providerType) {
   if (providerType === 'nvidia-nim') return 'nvidia-nim';
   if (providerType === 'anthropic') return 'anthropic';
   if (providerType === 'xai') return 'xai';
+  if (providerType === 'openai-compatible') return 'openai-compatible';
   return 'openai';
 }
 

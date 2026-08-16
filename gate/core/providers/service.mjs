@@ -24,6 +24,16 @@ export class ProviderService {
     throw new Error(`no adapter registered for provider "${id}"`);
   }
 
+  /**
+   * Drop the cached adapter for `id`. An adapter closes over the base URL and
+   * credential it was built with, so anything that changes either — an edit, a
+   * key rotation, a delete-and-recreate — must force a rebuild. Without this an
+   * edit saves to disk and then has no effect until the Gate restarts.
+   */
+  forgetAdapter(id) {
+    delete this.adapters[id];
+  }
+
   async list() {
     const records = await this.store.list();
     return records.map((record) => toSnapshot(record.config, record.state));
@@ -53,13 +63,19 @@ export class ProviderService {
       throw new Error(validation.errors.map((error) => `${error.field}: ${error.message}`).join('; '));
     }
     await this.store.put(next, existing.state);
+    this.forgetAdapter(id);
     return this.get(id);
   }
 
   async delete(id, { resolve } = {}) {
-    await this.require(id);
+    const record = await this.require(id);
     assertProviderDeletionAllowed(id, this.agents, { resolve });
     await this.store.delete(id);
+    this.forgetAdapter(id);
+    // The credential is the provider's, not the vault's: leaving it behind
+    // strands a secret no surface can reach, name, or revoke.
+    const ref = record.config.registration?.credentialRef;
+    if (ref && this.vault) await this.vault.delete(ref).catch(() => undefined);
     return { deleted: true };
   }
 

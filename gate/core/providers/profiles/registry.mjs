@@ -4,12 +4,14 @@ import { openaiProfile } from './openai.mjs';
 import { anthropicProfile } from './anthropic.mjs';
 import { nvidiaNimProfile } from './nvidia-nim.mjs';
 import { xaiProfile } from './xai.mjs';
+import { openaiCompatibleProfile } from './openai-compatible.mjs';
 
 export const releaseProfiles = new Map([
   [openaiProfile.id, openaiProfile],
   [anthropicProfile.id, anthropicProfile],
   [nvidiaNimProfile.id, nvidiaNimProfile],
   [xaiProfile.id, xaiProfile],
+  [openaiCompatibleProfile.id, openaiCompatibleProfile],
 ]);
 
 export function getProfile(id) {

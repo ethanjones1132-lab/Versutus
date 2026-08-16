@@ -1,5 +1,9 @@
+import { releaseProfiles } from './profiles/registry.mjs';
+
 const SCHEMA_VERSION = 2;
 const KIND = 'provider';
+/** Provider types with a shipped profile — the only ones a remote mode can use. */
+const PROVIDER_TYPES = new Set(releaseProfiles.keys());
 const MODES = new Set(['api_key', 'oauth', 'local_interface']);
 const REMOTE_PROTOCOLS = new Set(['openai_chat', 'openai_responses', 'anthropic_messages']);
 const LOCAL_PROTOCOL = 'versutus_provider_v1';
@@ -104,7 +108,21 @@ export function validateProviderRegistration(value) {
   }
   requireString(value.id, 'id', errors);
   requireString(value.label, 'label', errors);
-  requireString(value.providerType, 'providerType', errors);
+  if (requireString(value.providerType, 'providerType', errors)) {
+    // A remote provider is reached through a shipped profile (origins, models
+    // path, auth headers). `profileIdFor` silently falls back to 'openai' for an
+    // unknown type, so without this an unrecognised type registers cleanly and
+    // then fails at request time against the wrong vendor's shape entirely.
+    // Local-interface providers bring their own manifest and are exempt.
+    const mode = value.registration?.mode;
+    if (mode && mode !== 'local_interface' && !PROVIDER_TYPES.has(value.providerType)) {
+      err(
+        errors,
+        'providerType',
+        `must be one of [${[...PROVIDER_TYPES].join(', ')}] — no profile ships for "${value.providerType}". A CLI agent such as OpenCode is registered as a CLI environment, not a provider.`,
+      );
+    }
+  }
   if (typeof value.enabled !== 'boolean') {
     err(errors, 'enabled', 'must be a boolean');
   }

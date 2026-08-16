@@ -5,6 +5,7 @@ export const anthropicProfile = {
   mode: 'api_key',
   protocol: 'anthropic_messages',
   origins: ['https://api.anthropic.com'],
+  defaultBaseUrl: 'https://api.anthropic.com/v1',
   modelsPath: '/models',
   authHeaders(credential) {
     return {
