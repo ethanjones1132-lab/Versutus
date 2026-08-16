@@ -1,3 +1,13 @@
+/** A CLI adapter this Gate ships, as advertised by environments.adapters.list. */
+export type EnvironmentAdapter = {
+  adapterId: string;
+  adapterRevision: string;
+  supportedCliVersions: string;
+  protocols: string[];
+  capabilities: string[];
+  operations: string[];
+};
+
 export type EnvironmentSnapshot = {
   id: string;
   label: string;

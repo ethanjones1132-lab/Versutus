@@ -3,10 +3,19 @@ export type ProbeResult =
   | { ok: false; url: string; error: string; code?: 'timeout' | 'connect-failed' | 'closed' | 'unreachable' };
 
 /**
+ * Phone → PC over a Tailscale DERP relay was measured at 0.9–1.7s RTT
+ * with dropped pings. The 3-way handshake alone can exceed a 3.5s budget;
+ * aborted fetches then show up on the PC as TIME_WAIT / SynReceived.
+ */
+export const GATEWAY_PROBE_TIMEOUT_MS = 12_000;
+export const GATEWAY_PROBE_PARALLEL_TIMEOUT_MS = 10_000;
+export const GATEWAY_MANIFEST_PROBE_TIMEOUT_MS = 8_000;
+
+/**
  * Probe a Hermes gateway by hitting the /health endpoint.
  * Hermes uses HTTP (not WebSocket), default port 8642.
  */
-export async function probeGatewayUrl(url: string, timeoutMs = 7000): Promise<ProbeResult> {
+export async function probeGatewayUrl(url: string, timeoutMs = GATEWAY_PROBE_TIMEOUT_MS): Promise<ProbeResult> {
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -53,7 +62,7 @@ export async function probeGatewayUrl(url: string, timeoutMs = 7000): Promise<Pr
 export async function probeGatewayCandidates(
   urls: string[],
   onProgress?: (message: string) => void,
-  timeoutMs = 7000,
+  timeoutMs = GATEWAY_PROBE_TIMEOUT_MS,
 ): Promise<ProbeResult | null> {
   for (const url of urls) {
     onProgress?.(describeProbeTarget(url));
@@ -69,7 +78,7 @@ export async function probeGatewayCandidates(
 export async function probeHighPriorityCandidates(
   urls: string[],
   onProgress?: (message: string) => void,
-  timeoutMs = 3500,
+  timeoutMs = GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
 ): Promise<ProbeResult | null> {
   if (urls.length === 0) return null;
 
@@ -101,7 +110,10 @@ export async function probeHighPriorityCandidates(
 
 async function hasGatewayManifest(baseUrl: string, timeoutMs: number): Promise<boolean> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.min(2000, timeoutMs));
+  const timer = setTimeout(
+    () => controller.abort(),
+    Math.max(GATEWAY_MANIFEST_PROBE_TIMEOUT_MS, timeoutMs),
+  );
   try {
     const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/.well-known/gateway.json`, {
       method: 'GET',

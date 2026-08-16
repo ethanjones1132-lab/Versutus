@@ -848,7 +848,21 @@ const CAPABILITY_GROUP_DEFS: CapabilityGroupDef[] = [
   { id: 'plugins', label: 'Plugins', commandGroups: ['Plugins'] },
   { id: 'logs', label: 'Logs', commandGroups: ['Logs'] },
   { id: 'devices', label: 'Devices', commandGroups: ['Devices'] },
-  { id: 'environments', label: 'Environments' },
+  // A Gate serves both of these; without keys to match on, groupIsAdvertised
+  // could never return true and both tiles read "Not offered" permanently.
+  {
+    id: 'providers',
+    label: 'Providers',
+    features: ['providers'],
+    endpoints: ['providers'],
+    commandGroups: ['Models'],
+  },
+  {
+    id: 'environments',
+    label: 'Environments',
+    features: ['environments'],
+    endpoints: ['environments'],
+  },
   { id: 'artifacts', label: 'Artifacts' },
   { id: 'nodes', label: 'Nodes' },
 ];

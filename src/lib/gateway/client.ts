@@ -195,7 +195,7 @@ export class HermesGatewayClient {
    * seconds to complete its first request, and a false negative here reads as
    * "gateway down" to the whole app.
    */
-  async healthCheck(timeoutMs = 8000): Promise<HealthResponse | null> {
+  async healthCheck(timeoutMs = 12_000): Promise<HealthResponse | null> {
     try {
       const result = await this.transport.request<HealthResponse>('GET', '/health', undefined, timeoutMs);
       this.lastHealthError = null;

@@ -126,6 +126,19 @@ describe('ManifestClient', () => {
     await expect(client.connect()).rejects.toThrow(/token/i);
     client.disconnect();
   });
+
+  test('connect reports the health transport error instead of a blank no-response', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.reject(new TypeError('Network request failed')),
+    );
+    const errors: string[] = [];
+    const client = new ManifestClient(PROFILE, IDENTITY, {
+      onError: (message) => errors.push(message),
+    });
+    await client.connect();
+    expect(errors.some((message) => /Network request failed/i.test(message))).toBe(true);
+    client.disconnect();
+  });
 });
 
 describe('ManifestClient.streamChat', () => {

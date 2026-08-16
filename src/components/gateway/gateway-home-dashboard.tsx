@@ -143,31 +143,13 @@ export function GatewayHomeDashboard() {
             variant="secondary"
             style={styles.primaryAction}
           />
+          {/* One entry point: providers, CLI environments and the capability
+              registry all live under Setup. */}
           <Button
-            label="Capabilities"
+            label="Setup"
             onPress={async () => {
               await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.push('/gateway/capabilities' as Href);
-            }}
-            disabled={!connected}
-            variant="secondary"
-            style={styles.primaryAction}
-          />
-          <Button
-            label="Providers"
-            onPress={async () => {
-              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.push('/gateway/providers' as Href);
-            }}
-            disabled={!connected}
-            variant="secondary"
-            style={styles.primaryAction}
-          />
-          <Button
-            label="Environments"
-            onPress={async () => {
-              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.push('/gateway/environments' as Href);
+              router.push('/gateway/setup' as Href);
             }}
             disabled={!connected}
             variant="secondary"

@@ -1,3 +1,14 @@
+/** A provider type this Gate ships an adapter profile for. */
+export type ProviderProfile = {
+  id: string;
+  label: string;
+  providerType: string;
+  mode: 'api_key' | 'oauth' | 'local_interface';
+  protocol: string;
+  defaultBaseUrl?: string;
+  origins: string[];
+};
+
 export type ProviderSnapshot = {
   id: string;
   label: string;

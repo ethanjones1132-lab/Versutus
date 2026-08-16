@@ -3,6 +3,7 @@ import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
 import { HttpTransport } from '@/lib/gateway/http-transport';
 import { ConnectionMonitor, HEALTH_INTERVAL_MS } from '@/lib/gateway/connection-monitor';
 import type { GatewayIdentity } from '@/lib/portal/identify';
+import type { GatewayBackend } from '@/lib/portal/manifest';
 import type { PortalClient, PortalClientCallbacks } from '@/lib/portal/adapters';
 import type {
   ConnectionStatus,
@@ -36,6 +37,8 @@ export class ManifestClient implements PortalClient {
   private status: ConnectionStatus = 'disconnected';
   private detail = '';
   private currentSessionId: string | undefined;
+  private selectedBackendId: string | undefined;
+  private lastHealthError: string | null = null;
   private transport: HttpTransport;
   private rootTransport: HttpTransport;
   private monitor: ConnectionMonitor;
@@ -117,7 +120,7 @@ export class ManifestClient implements PortalClient {
     }
 
     if (!health) {
-      const reason = 'no response';
+      const reason = this.lastHealthError ?? 'no response';
       this.callbacks.onError?.(`Could not reach ${this.transport.displayHost}: ${reason}`);
       this.monitor.scheduleReconnect(`No answer from ${this.transport.displayHost}`);
       return;
@@ -167,12 +170,15 @@ export class ManifestClient implements PortalClient {
     }
   }
 
-  async healthCheck(timeoutMs = 8000): Promise<HealthResponse | null> {
+  async healthCheck(timeoutMs = 12_000): Promise<HealthResponse | null> {
     // Missing endpoint must surface to connect() — not be swallowed as "null health".
     const path = this.requireEndpoint('health');
     try {
-      return await this.transport.request<HealthResponse>('GET', path, undefined, timeoutMs);
-    } catch {
+      const result = await this.transport.request<HealthResponse>('GET', path, undefined, timeoutMs);
+      this.lastHealthError = null;
+      return result;
+    } catch (error) {
+      this.lastHealthError = error instanceof Error ? error.message : String(error);
       return null;
     }
   }
@@ -262,13 +268,23 @@ export class ManifestClient implements PortalClient {
     },
   ): Promise<string> {
     const path = this.requireEndpoint('chat');
+    const backendId = this.backendId;
     const model = options?.model || this.defaultModelId();
-    if (!model) {
+    // A backend supplies its own model catalog and default, so a turn routed to
+    // one does not need the app to have picked a model first.
+    if (!model && !backendId) {
       throw new Error(
         `${this.identity.kindLabel} has no model selected and advertises none. Pick a model or configure a provider.`,
       );
     }
-    const body: Record<string, unknown> = { model, messages, stream: true };
+    const body: Record<string, unknown> = { messages, stream: true };
+    if (model) body.model = model;
+    if (backendId) {
+      body.backendId = backendId;
+      // The native session holds the history; without it every turn is orphaned.
+      const sessionId = options?.sessionId ?? this.currentSessionId;
+      if (sessionId) body.sessionId = sessionId;
+    }
 
     const controller = new AbortController();
     const signal = options?.signal || controller.signal;
@@ -319,6 +335,28 @@ export class ManifestClient implements PortalClient {
     return fullText;
   }
 
+  /** Native environments this gate can hold a conversation through. */
+  get backends(): GatewayBackend[] {
+    return this.identity.manifest?.backends ?? [];
+  }
+
+  /** The backend sessions and chat are scoped to; the first unless chosen. */
+  get backendId(): string | undefined {
+    return this.selectedBackendId ?? this.backends[0]?.id;
+  }
+
+  setBackendId(id: string | undefined) {
+    this.selectedBackendId = id;
+  }
+
+  /** Append backendId so a multi-environment gate knows which one is meant. */
+  private withBackend(path: string): string {
+    const backendId = this.backendId;
+    if (!backendId) return path;
+    const separator = path.includes('?') ? '&' : '?';
+    return `${path}${separator}backendId=${encodeURIComponent(backendId)}`;
+  }
+
   async getSessions(limit = 20): Promise<HermesSession[]> {
     const path = this.endpoints.sessions;
     if (!path) {
@@ -329,9 +367,29 @@ export class ManifestClient implements PortalClient {
     const separator = path.includes('?') ? '&' : '?';
     const result = await this.rootTransport.request<SessionsResponse | HermesSession[]>(
       'GET',
-      `${path}${separator}limit=${limit}`,
+      this.withBackend(`${path}${separator}limit=${limit}`),
     );
     return Array.isArray(result) ? result : result.data ?? [];
+  }
+
+  /**
+   * Sessions live in the backend, so creation is only offered when one is
+   * attached — the app hides the control rather than failing at the tap.
+   */
+  async createSession(title?: string): Promise<HermesSession> {
+    const path = this.requireEndpoint('sessions');
+    return this.rootTransport.request<HermesSession>('POST', path, {
+      ...(this.backendId ? { backendId: this.backendId } : {}),
+      ...(title ? { title } : {}),
+    });
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    const path = this.requireEndpoint('sessions');
+    await this.rootTransport.request<unknown>(
+      'DELETE',
+      this.withBackend(`${path.replace(/\/+$/, '')}/${encodeURIComponent(sessionId)}`),
+    );
   }
 
   async getSessionMessages(sessionId: string, limit = 50): Promise<SessionMessage[]> {
@@ -348,7 +406,7 @@ export class ManifestClient implements PortalClient {
     const separator = path.includes('?') ? '&' : '?';
     const result = await this.rootTransport.request<SessionMessagesResponse | SessionMessage[]>(
       'GET',
-      `${path}${separator}limit=${limit}`,
+      this.withBackend(`${path}${separator}limit=${limit}`),
     );
     return Array.isArray(result) ? result : result.data ?? [];
   }
@@ -376,6 +434,17 @@ export class ManifestClient implements PortalClient {
       throw new Error(body.error.message ?? `${method} failed on ${this.identity.kindLabel}.`);
     }
     return body?.result as T;
+  }
+
+  /**
+   * Authenticated fetch against the gateway root. Runs live under the root
+   * origin even for a child /p/{id} profile, so rootTransport is correct here.
+   */
+  async authorizedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+    const headers = { ...this.rootTransport.headers, ...((init.headers as Record<string, string>) ?? {}) };
+    // The transport sets JSON by default; a GET/SSE request should not claim one.
+    if (!init.body) delete headers['Content-Type'];
+    return fetch(`${this.rootTransport.baseUrl}${path}`, { ...init, headers });
   }
 
   async stopRun(runId: string): Promise<void> {

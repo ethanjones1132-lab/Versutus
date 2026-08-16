@@ -7,7 +7,14 @@ import { buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/li
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
 import { createMessageId, historyToChatMessages, pickAppSession } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
-import { categorizeProbeError, probeGatewayCandidates, probeGatewayUrl, probeHighPriorityCandidates } from '@/lib/gateway/probe';
+import {
+  categorizeProbeError,
+  GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
+  GATEWAY_PROBE_TIMEOUT_MS,
+  probeGatewayCandidates,
+  probeGatewayUrl,
+  probeHighPriorityCandidates,
+} from '@/lib/gateway/probe';
 import { isSlashCommandInput } from '@/lib/gateway/slash-commands';
 import { findConfirmableSlash } from '@/lib/gateway/command-match';
 import { GATEWAY_COMMANDS, buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
@@ -103,6 +110,13 @@ type GatewayContextValue = {
     discoverySource?: GatewayProfile['discoverySource'];
   }) => Promise<GatewayProfile>;
   gatewayRequest: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
+  /** Authenticated fetch for non-RPC gateway routes (CLI runs and their SSE stream). */
+  gatewayFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  /** Native environments this gateway can converse through, if any. */
+  backends: import('@/lib/portal/manifest').GatewayBackend[];
+  selectedBackendId: string | undefined;
+  /** Route chat and sessions through a different native environment. */
+  selectBackend: (backendId: string | undefined) => void;
   runAgentCommand: (command: string, options?: { onDelta?: (delta: string) => void }) => Promise<string>;
   liveCapabilities: GatewayCapabilities | null;
   dynamicCommands: GatewayCapabilityCommand[];
@@ -352,6 +366,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [runningCommandLabel, setRunningCommandLabel] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [selectedBackendId, setSelectedBackendId] = useState<string | undefined>(undefined);
   const [pairingDetails, setPairingDetails] = useState<PairingDetails | null>(null);
   const [liveCapabilities, setLiveCapabilities] = useState<GatewayCapabilities | null>(null);
   const [activeManifest, setActiveManifest] = useState<GatewayManifest | null>(null);
@@ -818,7 +833,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               await connectGateway(saved);
               return;
             }
-            const savedProbe = await probeGatewayUrl(saved.url, 3500);
+            const savedProbe = await probeGatewayUrl(saved.url, GATEWAY_PROBE_TIMEOUT_MS);
             if (savedProbe.ok) {
               if (autoRetryTimerRef.current) {
                 clearTimeout(autoRetryTimerRef.current);
@@ -847,7 +862,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         let probeResult: Awaited<ReturnType<typeof probeHighPriorityCandidates>> = null;
 
         if (highPriorityUrls.length > 0) {
-          probeResult = await probeHighPriorityCandidates(highPriorityUrls, setProbeMessage, 3500);
+          probeResult = await probeHighPriorityCandidates(
+            highPriorityUrls,
+            setProbeMessage,
+            GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
+          );
         }
 
         if (!probeResult?.ok) {
@@ -867,7 +886,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             return;
           }
 
-          probeResult = await probeGatewayCandidates(candidates, setProbeMessage, 3500);
+          probeResult = await probeGatewayCandidates(candidates, setProbeMessage, GATEWAY_PROBE_TIMEOUT_MS);
         }
 
         if (!probeResult?.ok) {
@@ -993,6 +1012,43 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       return client.rpcRequest<T>(method, params);
     },
     [status],
+  );
+
+  /**
+   * Authenticated fetch against the connected gateway, for routes that are not
+   * RPC — today the CLI run submission and its SSE event stream. Undefined when
+   * the adapter has no such transport, so callers can degrade instead of guess.
+   */
+  const gatewayFetch = useCallback(
+    async (path: string, init?: RequestInit) => {
+      const client = clientRef.current;
+      if (!client || status !== 'connected') throw new Error('Gateway not connected');
+      if (!client.authorizedFetch) {
+        throw new Error('This gateway does not expose direct routes.');
+      }
+      return client.authorizedFetch(path, init);
+    },
+    [status],
+  );
+
+  const backends = useMemo(() => activeManifest?.backends ?? [], [activeManifest]);
+
+  /**
+   * Switching backend switches the whole conversation context — sessions, models
+   * and tools all belong to that environment — so the current session is
+   * released and history reloads from the new one.
+   */
+  const selectBackend = useCallback(
+    (backendId: string | undefined) => {
+      const client = clientRef.current as { setBackendId?: (id: string | undefined) => void } | null;
+      client?.setBackendId?.(backendId);
+      setSelectedBackendId(backendId);
+      sessionIdRef.current = undefined;
+      setCurrentSessionId(undefined);
+      setMessages([]);
+      if (activeGateway) void reloadHistoryFor(activeGateway);
+    },
+    [activeGateway, reloadHistoryFor],
   );
 
   const runAgentCommand = useCallback(
@@ -1688,10 +1744,18 @@ const response = await executeGatewaySlashCommand(trimmed, {
 
       setConnectionPhase('searching');
 
-      let probeResult = await probeHighPriorityCandidates(candidates, setProbeMessage, 3000);
+      let probeResult = await probeHighPriorityCandidates(
+        candidates,
+        setProbeMessage,
+        GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
+      );
 
       if (!probeResult?.ok) {
-        probeResult = await probeGatewayCandidates(candidates.slice(3), setProbeMessage, 3500);
+        probeResult = await probeGatewayCandidates(
+          candidates.slice(3),
+          setProbeMessage,
+          GATEWAY_PROBE_TIMEOUT_MS,
+        );
       }
       if (!probeResult?.ok) {
         setConnectionPhase('failed');
@@ -1777,7 +1841,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       await connectGateway(active);
       return;
     }
-    const probe = await probeGatewayUrl(active.url, 3500);
+    const probe = await probeGatewayUrl(active.url, GATEWAY_PROBE_TIMEOUT_MS);
     if (probe.ok) {
       await connectGateway(active);
       return;
@@ -1994,6 +2058,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
       stopStreaming,
       reloadHistory,
       gatewayRequest,
+      gatewayFetch,
+      backends,
+      selectedBackendId,
+      selectBackend,
       runAgentCommand,
       liveCapabilities,
       dynamicCommands,
@@ -2036,7 +2104,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       messages, isSending, isCommandRunning, runningCommandLabel, lastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendMessage, sendChatInput, stopStreaming, reloadHistory,
-      gatewayRequest, runAgentCommand, setupFromPcAddress, retryAutoConnect, completeOnboarding,
+      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, runAgentCommand, setupFromPcAddress, retryAutoConnect, completeOnboarding,
       setAutoConnect, transcripts, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval, runTask, activityRuns, stopActivityRun, modelPicker, openModelPicker, closeModelPicker,

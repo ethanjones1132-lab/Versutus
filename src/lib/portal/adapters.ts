@@ -47,6 +47,12 @@ export interface PortalClient {
   deleteSession?(sessionId: string): Promise<void>;
   getSessionMessages(sessionId: string, limit?: number): Promise<SessionMessage[]>;
   stopRun(runId: string): Promise<void>;
+  /**
+   * Authenticated fetch against the gateway origin for routes that are not RPC
+   * and not chat — CLI run submission and its SSE event stream. Keeps transport
+   * details (base URL, bearer, session key) inside the adapter.
+   */
+  authorizedFetch?(path: string, init?: RequestInit): Promise<Response>;
   /** Pause automatic reconnect (e.g. app backgrounded). */
   suspendReconnect(): void;
   /** Resume automatic reconnect; attempts immediately if not connected. */
