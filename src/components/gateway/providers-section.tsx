@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { OauthProgressSheet } from '@/components/gateway/oauth-progress-sheet';
 import { ProviderCard } from '@/components/gateway/provider-card';
-import { ProviderEditor } from '@/components/gateway/provider-editor';
+import { ProviderKeySheet } from '@/components/gateway/provider-key-sheet';
 import { ProviderRegistrationForm } from '@/components/gateway/provider-registration-form';
-import { Button, EmptyState, Text } from '@/components/ui';
+import { Button, EmptyState, ErrorCard, Skeleton, Text } from '@/components/ui';
+import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { createProviderClient, type CreateProviderInput } from '@/lib/gateway/provider-client';
 import type { ProviderProfile, ProviderSnapshot } from '@/lib/gateway/provider-types';
@@ -21,10 +22,12 @@ export function ProvidersSection() {
   const [oauthMessage, setOauthMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {
     if (status !== 'connected') {
       setError('Connect to a Gate to manage providers.');
+      setLoaded(true);
       return;
     }
     try {
@@ -39,6 +42,8 @@ export function ProvidersSection() {
       setProfiles(await client.listProfiles());
     } catch {
       setProfiles([]);
+    } finally {
+      setLoaded(true);
     }
   }, [client, status]);
 
@@ -91,7 +96,14 @@ export function ProvidersSection() {
 
   return (
     <>
-      {error ? <Text variant="caption">{error}</Text> : null}
+      {error ? (
+        <ErrorCard
+          cause={error}
+          affected="Providers on this Gate"
+          next={status === 'connected' ? 'Retry, or check the Gate log for the failing call.' : 'Connect to the Gate first.'}
+          onRetry={() => void load()}
+        />
+      ) : null}
       {notice ? <Text variant="caption">{notice}</Text> : null}
 
       {canRegister && !registering ? (
@@ -108,7 +120,14 @@ export function ProvidersSection() {
         />
       ) : null}
 
-      {providers.length === 0 && !registering && status === 'connected' ? (
+      {!loaded && status === 'connected' ? (
+        <>
+          <Skeleton height={96} style={{ marginBottom: Spacing.three }} />
+          <Skeleton height={96} />
+        </>
+      ) : null}
+
+      {loaded && providers.length === 0 && !registering && status === 'connected' ? (
         <EmptyState
           icon={{ ios: 'square.stack.3d.up', android: 'layers', web: 'layers' }}
           title="No providers yet"
@@ -136,7 +155,13 @@ export function ProvidersSection() {
         />
       ))}
 
-      {editingId ? <ProviderEditor onSubmit={(value) => void saveKey(editingId, value)} /> : null}
+      <ProviderKeySheet
+        visible={editingId !== null}
+        label={providers.find((provider) => provider.id === editingId)?.label ?? editingId ?? ''}
+        busy={busy}
+        onSubmit={(value) => { if (editingId) void saveKey(editingId, value); }}
+        onClose={() => setEditingId(null)}
+      />
 
       <OauthProgressSheet visible={!!oauthMessage} message={oauthMessage} onClose={() => setOauthMessage('')} />
     </>

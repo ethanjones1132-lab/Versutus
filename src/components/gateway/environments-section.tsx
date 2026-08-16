@@ -3,7 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EnvironmentCard } from '@/components/gateway/environment-card';
 import { EnvironmentRegistrationForm } from '@/components/gateway/environment-registration-form';
 import { EnvironmentRunLauncher } from '@/components/gateway/environment-run-launcher';
-import { Button, EmptyState, Text } from '@/components/ui';
+import { Button, EmptyState, ErrorCard, Skeleton } from '@/components/ui';
+import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { createEnvironmentClient, type CreateEnvironmentInput } from '@/lib/gateway/environment-client';
 import { createProviderClient } from '@/lib/gateway/provider-client';
@@ -22,10 +23,12 @@ export function EnvironmentsSection() {
   const [busy, setBusy] = useState(false);
   const [runTarget, setRunTarget] = useState<EnvironmentSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {
     if (status !== 'connected') {
       setError('Connect to a Gate to manage CLI environments.');
+      setLoaded(true);
       return;
     }
     try {
@@ -44,6 +47,8 @@ export function EnvironmentsSection() {
       setProviders(await providerClient.list());
     } catch {
       setProviders([]);
+    } finally {
+      setLoaded(true);
     }
   }, [client, providerClient, status]);
 
@@ -73,7 +78,14 @@ export function EnvironmentsSection() {
 
   return (
     <>
-      {error ? <Text variant="caption">{error}</Text> : null}
+      {error ? (
+        <ErrorCard
+          cause={error}
+          affected="CLI environments on this Gate"
+          next={status === 'connected' ? 'Retry, or check the Gate log for the failing call.' : 'Connect to the Gate first.'}
+          onRetry={() => void load()}
+        />
+      ) : null}
 
       {canRegister && !registering ? (
         <Button label="Add environment" onPress={() => setRegistering(true)} />
@@ -90,7 +102,14 @@ export function EnvironmentsSection() {
         />
       ) : null}
 
-      {environments.length === 0 && !registering && status === 'connected' ? (
+      {!loaded && status === 'connected' ? (
+        <>
+          <Skeleton height={96} style={{ marginBottom: Spacing.three }} />
+          <Skeleton height={96} />
+        </>
+      ) : null}
+
+      {loaded && environments.length === 0 && !registering && status === 'connected' ? (
         <EmptyState
           icon={{ ios: 'terminal', android: 'terminal', web: 'terminal' }}
           title="No CLI environments yet"
