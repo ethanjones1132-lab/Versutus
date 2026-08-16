@@ -1,10 +1,11 @@
 /**
- * Anthropic Messages API flavor.
+ * Anthropic Messages codec. Auth lookup and origin policy live in
+ * provider profiles; this module only encodes requests/responses.
  *
- * Three differences from the openai.mjs dialect: `max_tokens` is required,
+ * Differences from the openai.mjs dialect: `max_tokens` is required,
  * a system prompt is a top-level `system` field rather than a
- * `role: "system"` message, and auth is `x-api-key` / `anthropic-version`
- * headers instead of a bearer token.
+ * `role: "system"` message, and auth headers are `x-api-key` /
+ * `anthropic-version` instead of a bearer token.
  */
 
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -50,7 +51,6 @@ export function buildChatRequest(config, apiKey, { model, messages, stream = fal
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
         'anthropic-version': ANTHROPIC_VERSION,
       },
       body: JSON.stringify(body),

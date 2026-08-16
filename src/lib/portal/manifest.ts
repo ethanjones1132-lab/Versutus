@@ -112,6 +112,22 @@ function isGatewayCapabilityCommand(value: unknown): value is GatewayCapabilityC
   );
 }
 
+/**
+ * A native environment the gate can hold a conversation through — it owns that
+ * platform's own sessions, models, tools and approvals.
+ */
+export type GatewayBackend = {
+  id: string;
+  label: string;
+  kind: 'environment';
+  adapterId?: string;
+  capabilities?: string[];
+  workspaceRoot?: string;
+  /** Lifecycle state from the Gate's last probe — not a live guarantee. */
+  state?: string;
+  cliVersion?: string;
+};
+
 export type GatewayManifest = {
   manifest: string;
   /** 'hermes' | 'openclaw' | custom kind id (any other string → 'custom'). */
@@ -135,6 +151,7 @@ export type GatewayManifest = {
     [key: string]: boolean | undefined;
   };
   endpoints?: Record<string, string>;
+  backends?: GatewayBackend[];
   providers?: GatewayManifestProvider[];
   capabilityKinds?: GatewayCapabilityKind[];
   capabilityInstances?: GatewayCapabilityInstance[];
@@ -220,7 +237,7 @@ export function manifestDynamicCommands(manifest: GatewayManifest): GatewayCapab
  */
 export async function fetchGatewayManifest(
   baseUrl: string,
-  timeoutMs = 4000,
+  timeoutMs = 10_000,
 ): Promise<GatewayManifest | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);

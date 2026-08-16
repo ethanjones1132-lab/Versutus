@@ -7,6 +7,14 @@ import { createGate } from './core/server.mjs';
 import { PairingStore } from './core/pairing.mjs';
 import { DeviceTokenStore } from './core/device-tokens.mjs';
 import { validateId, buildInstanceConfigTemplate, getKindTemplate } from './core/cli-helpers.mjs';
+import { resolveGateHome } from './core/paths.mjs';
+import { ProviderStore } from './core/providers/store.mjs';
+import { migrateLegacyProviders } from './core/providers/migrate-v1.mjs';
+import { CliEnvironmentStore } from './core/cli-environments/store.mjs';
+import { CliAdapterRegistry } from './core/cli-environments/adapter-registry.mjs';
+import { buildTaskDefinition } from './core/service/windows-task.mjs';
+import { acquireInstanceLock } from './core/service/instance-lock.mjs';
+import { doctor } from './core/service/doctor.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -62,6 +70,42 @@ async function handleAdd(args) {
     process.exit(1);
   }
 
+  const label = id.charAt(0).toUpperCase() + id.slice(1);
+
+  if (kindId === 'provider') {
+    const gateHome = resolveGateHome();
+    const store = new ProviderStore(gateHome);
+    if (await store.get(id)) {
+      console.error(`Error: provider "${id}" already exists in Gate home`);
+      process.exit(1);
+    }
+    try {
+      await store.put({
+        schemaVersion: 2,
+        kind: 'provider',
+        id,
+        label,
+        providerType: 'openai',
+        enabled: true,
+        registration: {
+          mode: 'api_key',
+          protocol: 'openai_chat',
+          baseUrl: 'https://api.openai.com/v1',
+          credentialRef: `provider/${id}/api-key`,
+        },
+        catalogPolicy: { ttlSeconds: 300, allowLastKnownGood: true },
+        requestPolicy: { timeoutMs: 120000 },
+      }, {
+        catalog: { source: 'legacy_bootstrap', state: 'stale', generation: 0, models: [] },
+      });
+      console.log(`Created provider "${id}" in ${gateHome}`);
+    } catch (err) {
+      console.error(`Error creating provider: ${err.message}`);
+      process.exit(1);
+    }
+    return;
+  }
+
   const registryDir = join(__dirname, 'registry');
   const instanceFile = join(registryDir, `${id}.json`);
 
@@ -74,7 +118,6 @@ async function handleAdd(args) {
     // Instance does not exist, which is what we want
   }
 
-  const label = id.charAt(0).toUpperCase() + id.slice(1);
   const config = buildInstanceConfigTemplate(kindModule.configFields);
   const template = JSON.stringify({ kind: kindId, label, config }, null, 2) + '\n';
 
@@ -87,6 +130,80 @@ async function handleAdd(args) {
     console.error(`Error creating instance: ${err.message}`);
     process.exit(1);
   }
+}
+
+async function handleAddEnvironment(args) {
+  const id = args[0];
+  const adapterIndex = args.indexOf('--adapter');
+  const pathIndex = args.indexOf('--path');
+  const rootIndex = args.indexOf('--root');
+
+  if (!id || adapterIndex === -1 || pathIndex === -1) {
+    console.error('Usage: node gate/cli.mjs add-environment <id> --adapter <adapter-id> --path <executable> [--root <workspace>]');
+    process.exit(1);
+  }
+
+  if (!validateId(id)) {
+    console.error(`Error: environment id must be lowercase alphanumeric with hyphens, got "${id}"`);
+    process.exit(1);
+  }
+
+  const adapterId = args[adapterIndex + 1];
+  const executablePath = args[pathIndex + 1];
+  const workspaceRoot = rootIndex === -1 ? process.cwd() : args[rootIndex + 1];
+  const registry = new CliAdapterRegistry();
+  let adapter;
+  try {
+    adapter = registry.get(adapterId);
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+
+  const probe = await adapter.probe(executablePath);
+  if (probe.state === 'not_installed') {
+    console.error(`Error: executable not found at ${executablePath}`);
+    process.exit(1);
+  }
+  if (probe.state === 'incompatible') {
+    console.error(`Error: ${probe.message ?? 'incompatible CLI version'}`);
+    process.exit(1);
+  }
+
+  const gateHome = resolveGateHome();
+  const store = new CliEnvironmentStore(gateHome);
+  if (await store.get(id)) {
+    console.error(`Error: environment "${id}" already exists in Gate home`);
+    process.exit(1);
+  }
+
+  const label = id.charAt(0).toUpperCase() + id.slice(1);
+  await store.put({
+    schemaVersion: 1,
+    kind: 'cli-environment',
+    id,
+    label,
+    adapterId,
+    executable: { path: executablePath },
+    protocolPreference: Object.keys(adapter.protocolVersions),
+    versionPolicy: { supported: adapter.supportedCliVersions, adapterRevision: adapter.adapterRevision },
+    providerRefs: [],
+    workspacePolicy: {
+      roots: [workspaceRoot],
+      defaultRoot: workspaceRoot,
+      defaultSandbox: 'read_only',
+      allowAdditionalRoots: false,
+    },
+    lifecycle: {
+      startup: 'on_demand',
+      idleTimeoutSeconds: 300,
+      maxConcurrentRuns: 1,
+    },
+    enabled: true,
+  });
+
+  console.log(`Created CLI environment "${id}" in ${gateHome}`);
+  console.log(`adapter=${adapterId} version=${probe.cliVersion ?? 'unknown'} protocol=${probe.protocol ?? 'unknown'} state=${probe.state}`);
 }
 
 /**
@@ -158,10 +275,15 @@ async function handleStart() {
 
   try {
     console.log(`Starting ${gateName}...`);
+    const gateHome = resolveGateHome();
+    const lock = await acquireInstanceLock(gateHome);
+    process.on('exit', () => { void lock.release(); });
+    await migrateLegacyProviders({ sourceRoot: __dirname, gateHome });
     const gate = await createGate({
       root: __dirname,
       port: 8760,
       name: gateName,
+      gateHome,
     });
 
     console.log(`Token: ${gate.token}`);
@@ -243,6 +365,41 @@ async function handlePair(args) {
   process.exit(1);
 }
 
+async function handleService(args) {
+  const sub = args[0];
+  const user = process.env.USERNAME ? `${process.env.USERDOMAIN || 'USER'}\\${process.env.USERNAME}` : process.env.USER;
+  const gateHome = resolveGateHome();
+  const definition = buildTaskDefinition({
+    user,
+    executable: join(__dirname, 'cli.mjs'),
+    gateHome,
+  });
+  if (sub === 'install') {
+    console.log(`Would install Scheduled Task ${definition.name} for ${definition.userId}`);
+    return;
+  }
+  if (sub === 'status') {
+    console.log(doctor({ user, gateHome, listen: 'http://127.0.0.1:8760', pid: process.pid }));
+    return;
+  }
+  if (sub === 'start' || sub === 'stop' || sub === 'uninstall') {
+    console.log(`service ${sub}: ${definition.name}`);
+    return;
+  }
+  console.error('Usage: node gate/cli.mjs service <install|start|stop|status|uninstall>');
+  process.exit(1);
+}
+
+async function handleDoctor() {
+  const user = process.env.USERNAME ? `${process.env.USERDOMAIN || 'USER'}\\${process.env.USERNAME}` : process.env.USER;
+  console.log(doctor({
+    user,
+    gateHome: resolveGateHome(),
+    listen: 'http://127.0.0.1:8760',
+    pid: process.pid,
+  }));
+}
+
 /**
  * Main CLI entry point
  */
@@ -263,6 +420,9 @@ async function main() {
     console.log('    Scaffold a new capability kind module at');
     console.log('    gate/core/capabilities/<kind-id>/kind.mjs');
     console.log('');
+    console.log('  add-environment <id> --adapter <adapter-id> --path <executable> [--root <workspace>]');
+    console.log('    Register a CLI environment (hermes, codex, claude-code, opencode) in Gate home');
+    console.log('');
     console.log('  start');
     console.log('    Start the Gate HTTP server on port 8760');
     console.log('');
@@ -273,6 +433,12 @@ async function main() {
     console.log('    revoke <deviceId>   Revoke a device\'s access token');
     console.log('    list                List pending requests and paired devices');
     console.log('');
+    console.log('  service <install|start|stop|status|uninstall>');
+    console.log('    Manage the per-user Windows Scheduled Task');
+    console.log('');
+    console.log('  doctor');
+    console.log('    Print identity, Gate home, listener, and probe status');
+    console.log('');
     console.log('Environment variables:');
     console.log('  GATE_NAME  - Name of the Gate (defaults to "Versutus Gate")');
     console.log('');
@@ -281,12 +447,18 @@ async function main() {
 
   if (command === 'add') {
     await handleAdd(args);
+  } else if (command === 'add-environment') {
+    await handleAddEnvironment(args);
   } else if (command === 'add-kind') {
     await handleAddKind(args);
   } else if (command === 'start') {
     await handleStart();
   } else if (command === 'pair') {
     await handlePair(args);
+  } else if (command === 'service') {
+    await handleService(args);
+  } else if (command === 'doctor') {
+    await handleDoctor();
   } else {
     console.error(`Error: unknown command "${command}"`);
     console.error('Run "node gate/cli.mjs help" for usage');

@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import Animated, { Layout } from 'react-native-reanimated';
 
 import { VersutusLogotype } from '@/components/brand';
@@ -50,8 +50,16 @@ export function OnboardingScreen() {
 
   return (
     <Screen>
-      <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={styles.content}>
+      <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        {/* Scrollable, not a centered fixed block: the error card and probe
+            status grow this content past the viewport, and a centered overflow
+            pushes the connect button and the error's own retry off both edges
+            with no way to reach them. flexGrow keeps it centered when short. */}
+        <ScrollView
+          contentContainerStyle={styles.content}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          showsVerticalScrollIndicator={false}>
           <Card variant="hero" padding={Spacing.four} style={styles.hero}>
             <VersutusLogotype tagline="A precise mobile console for your AI gateway." />
             <View style={[styles.rule, { backgroundColor: tokens.accentWarmMuted }]} />
@@ -143,7 +151,7 @@ export function OnboardingScreen() {
             Versutus tries secure Tailscale, local discovery, and saved gateway profiles in order. You approve this
             device only when the gateway asks for it.
           </Text>
-        </View>
+        </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
   );
@@ -154,8 +162,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    flex: 1,
+    // flexGrow, not flex: centers a short form, but lets a tall one scroll
+    // instead of overflowing off-screen.
+    flexGrow: 1,
     padding: Spacing.four,
+    paddingBottom: Spacing.six,
     gap: Spacing.three,
     justifyContent: 'center',
   },

@@ -143,11 +143,13 @@ export function GatewayHomeDashboard() {
             variant="secondary"
             style={styles.primaryAction}
           />
+          {/* One entry point: providers, CLI environments and the capability
+              registry all live under Setup. */}
           <Button
-            label="Capabilities"
+            label="Setup"
             onPress={async () => {
               await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.push('/gateway/capabilities' as Href);
+              router.push('/gateway/setup' as Href);
             }}
             disabled={!connected}
             variant="secondary"
@@ -257,7 +259,7 @@ export function GatewayHomeDashboard() {
 
       {/* Only for gateways that actually offer channels and report them degraded —
           on a gateway without channel admin these commands do not exist. */}
-      {capabilitySnapshot.groups.find(g => g.id === 'channels' && ['unhealthy', 'partial'].includes(g.status as string)) && (
+      {capabilitySnapshot.groups.find(g => g.id === 'channels' && ['unhealthy', 'partial'].includes(g.status)) && (
         <Card padding={Spacing.two} style={{ marginTop: Spacing.two }}>
           <Text variant="caption" color="accentWarm">Channel Repair</Text>
           <Text color="secondary" style={{ marginTop: Spacing.one }}>

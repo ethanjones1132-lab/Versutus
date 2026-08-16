@@ -47,8 +47,16 @@ A category of thing the Gate can do (`provider`, `memory`, `cron`, …), defined
 _Avoid_: capability (alone, when meaning the kind specifically), plugin (a gateway's own internal plugin list is a distinct, unrelated concept)
 
 **Capability instance**:
-One configured, named instance of a capability kind, defined by config only (`gate/registry/<id>.json`), no code.
-_Avoid_: capability (alone), provider (unless the kind is literally `provider`)
+One configured, named instance of a capability kind. Non-provider instances still live in `gate/registry/<id>.json`. Providers persist under Gate home.
+_Avoid_: capability (alone)
+
+**Provider**:
+The Gate-owned registration that holds credential custody, readiness, and a live or last-known-good model catalog.
+_Avoid_: child gateway, Hermes (when meaning a model vendor)
+
+**CLI environment**:
+An optional execution attachment that runs Hermes, Codex, or Claude through a versioned adapter.
+_Avoid_: provider, agent (when meaning the CLI process)
 
 **Pairing**:
 The flow where a device requests access to a gateway and a human approves it.
@@ -78,7 +86,8 @@ _Avoid_: push (which implies server delivery)
 - A **session** belongs to a **gateway** and is preserved across **reconnects**
 - A **command transcript** is keyed by gateway + **session**
 - A **capability instance** belongs to exactly one **capability kind**
-- A capability instance of kind `provider` is also synced into a child gateway profile; no other kind is
+- A **provider** owns registration, credentials, readiness, and its catalog. Agents and CLI environments only reference `{providerId, modelId}`.
+- Provider child gateway profiles are retired; Hermes remains a gateway/agent/CLI environment, never an xAI provider.
 - **Pairing** is required when a gateway does not recognize the device
 - A **run** may require an **approval** before it can proceed
 - An **approval** is resolved per run via the gateway's approval endpoint; only runs the app initiated can be approved

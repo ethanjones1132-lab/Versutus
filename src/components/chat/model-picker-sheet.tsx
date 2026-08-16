@@ -11,11 +11,13 @@ import { useTokens } from '@/hooks/use-tokens';
 type ModelItem = {
   id: string;
   provider?: string;
+  providerId?: string;
   available?: boolean;
   context?: number;
   price?: number;
   auth?: string;
   usage?: string;
+  catalogState?: string;
 };
 
 function formatContext(context?: number): string | undefined {
@@ -39,7 +41,7 @@ export function ModelPickerSheet({
   currentDefault?: string;
   mode?: 'default' | 'fallbacks' | 'agent';
   agentId?: string;
-  onSelect: (modelId: string) => void;
+  onSelect: (modelId: string, providerId?: string) => void;
   onClose: () => void;
   onRefresh?: () => void;
 }) {
@@ -50,6 +52,7 @@ export function ModelPickerSheet({
       const isCurrent = item.id === currentDefault;
       const meta = [
         item.provider,
+        item.catalogState,
         formatContext(item.context),
         item.price !== undefined ? `$${item.price}` : undefined,
         item.auth,
@@ -73,7 +76,7 @@ export function ModelPickerSheet({
             accessibilityLabel={`Apply model ${item.id}`}
             onPress={async () => {
               await Haptics.selectionAsync();
-              onSelect(item.id);
+              onSelect(item.id, item.providerId ?? item.provider);
             }}>
             <View style={styles.modelHeader}>
               <Text variant="body" numberOfLines={1} style={styles.modelId}>

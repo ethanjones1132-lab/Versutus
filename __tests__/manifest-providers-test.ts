@@ -37,6 +37,15 @@ describe('manifestProviders', () => {
     expect(result[0].id).toBe('claude');
   });
 
+  test('accepts a manifest that advertises provider and environment endpoints', () => {
+    const manifest: GatewayManifest = {
+      ...baseManifest,
+      endpoints: { providers: '/v1/providers', environments: '/v1/environments' },
+    };
+    expect(manifest.endpoints?.providers).toBe('/v1/providers');
+    expect(manifest.endpoints?.environments).toBe('/v1/environments');
+  });
+
   test('returns an empty array when providers is not an array', () => {
     const manifest = { ...baseManifest, providers: 'nope' } as unknown as GatewayManifest;
     expect(manifestProviders(manifest)).toEqual([]);

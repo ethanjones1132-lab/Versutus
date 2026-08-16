@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://versutus.local/schemas/provider-instance-v2.schema.json",
+  "title": "ProviderRegistration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "id",
+    "label",
+    "providerType",
+    "enabled",
+    "registration",
+    "catalogPolicy",
+    "requestPolicy"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "kind": { "const": "provider" },
+    "id": { "type": "string", "minLength": 1 },
+    "label": { "type": "string", "minLength": 1 },
+    "providerType": { "type": "string", "minLength": 1 },
+    "enabled": { "type": "boolean" },
+    "registration": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "protocol", "baseUrl", "credentialRef"],
+          "properties": {
+            "mode": { "const": "api_key" },
+            "protocol": { "enum": ["openai_chat", "openai_responses", "anthropic_messages"] },
+            "baseUrl": { "type": "string", "minLength": 1 },
+            "credentialRef": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "protocol", "resourceBaseUrl", "oauthProfileId"],
+          "properties": {
+            "mode": { "const": "oauth" },
+            "protocol": { "enum": ["openai_chat", "openai_responses", "anthropic_messages"] },
+            "resourceBaseUrl": { "type": "string", "minLength": 1 },
+            "oauthProfileId": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "protocol", "manifestUrl", "credentialCustodian"],
+          "properties": {
+            "mode": { "const": "local_interface" },
+            "protocol": { "const": "versutus_provider_v1" },
+            "manifestUrl": { "type": "string", "minLength": 1 },
+            "adapterCredentialRef": { "type": "string", "minLength": 1 },
+            "credentialCustodian": { "const": "external" }
+          }
+        }
+      ]
+    },
+    "catalogPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ttlSeconds", "allowLastKnownGood"],
+      "properties": {
+        "ttlSeconds": { "type": "integer", "minimum": 0 },
+        "allowLastKnownGood": { "type": "boolean" }
+      }
+    },
+    "requestPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeoutMs"],
+      "properties": {
+        "timeoutMs": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

@@ -39,7 +39,7 @@ async function writeInstanceFile(root, id, kind, label, config) {
  * @param {() => {kinds: Map, instances: Array}} deps.getState - current loaded state
  * @param {() => Promise<{kinds: Map, instances: Array}>} deps.reload - re-read from disk, returns the new state
  */
-export function createRegistryMethods({ root, getState, reload }) {
+export function createRegistryMethods({ root, getState, reload, gateHome }) {
   let writeQueue = Promise.resolve();
   function serialize(fn) {
     const result = writeQueue.then(fn, fn);
@@ -65,6 +65,7 @@ export function createRegistryMethods({ root, getState, reload }) {
       if (getState().instances.some((i) => i.id === id)) {
         throw new Error(`instance "${id}" already exists`);
       }
+      assertProviderMethodsOwnProviders(kind, 'providers.create');
       assertValid(kindModule.validate(config ?? {}));
       await writeInstanceFile(root, id, kind, label ?? id, config ?? {});
       const state = await reload();
@@ -74,6 +75,7 @@ export function createRegistryMethods({ root, getState, reload }) {
     'registry.instances.update': async ({ id, label, config } = {}) => serialize(async () => {
       const existing = getState().instances.find((i) => i.id === id);
       if (!existing) throw new Error(`instance "${id}" not found`);
+      assertProviderMethodsOwnProviders(existing.kind, 'providers.update');
       const kindModule = getState().kinds.get(existing.kind);
       assertValid(kindModule.validate(config ?? {}));
       await writeInstanceFile(root, id, existing.kind, label ?? existing.label, config ?? {});
@@ -84,6 +86,9 @@ export function createRegistryMethods({ root, getState, reload }) {
     'registry.instances.delete': async ({ id } = {}) => serialize(async () => {
       const existing = getState().instances.find((i) => i.id === id);
       if (!existing) throw new Error(`instance "${id}" not found`);
+      // `state.instances` only ever holds registry files now, so this always
+      // removes the registry file. A v2 provider record is deleted by
+      // providers.delete, which also revokes its credential.
       await unlink(join(root, 'registry', `${id}.json`));
       await reload();
       return { deleted: true };
@@ -92,8 +97,26 @@ export function createRegistryMethods({ root, getState, reload }) {
     'registry.secrets.set': async ({ refName, value } = {}) => {
       if (typeof refName !== 'string' || !refName) throw new Error('refName must be a non-empty string');
       if (typeof value !== 'string' || !value) throw new Error('value must be a non-empty string');
+      // This writes the Gate-root store that legacy registry instances read.
+      // A provider credential lives in the Gate-home vault under the provider's
+      // own credentialRef, so accepting one here would silently strand the key.
+      if (/^provider\//.test(refName)) {
+        throw new Error(
+          `"${refName}" is a provider credential — set it with providers.auth.setApiKey so the provider's adapter can read it.`,
+        );
+      }
       await setSecret(root, refName, value);
-      return { ok: true };
+      return { ok: true, deprecated: true };
     },
   };
+}
+
+/**
+ * Providers are owned by the providers.* methods, which hold the v2 schema,
+ * credential custody and catalog lifecycle. Creating one here produced a second,
+ * half-configured record and a key written to a store no adapter reads.
+ */
+function assertProviderMethodsOwnProviders(kind, method) {
+  if (kind !== 'provider') return;
+  throw new Error(`providers are managed with ${method}, not the capability registry`);
 }

@@ -31,6 +31,13 @@ export type GatewayProfile = {
   agentId?: string;
   /** Per-request model override (Hermes-native model selection) */
   model?: string;
+  /**
+   * Model remembered per chat backend. A Codex model id is meaningless to
+   * OpenCode, so one profile-wide override cannot serve both.
+   */
+  backendModels?: Record<string, string>;
+  /** Provider that owns the selected model. */
+  providerId?: string;
   createdAt: number;
   discoverySource?: 'local' | 'wide-area' | 'manual' | 'tailscale' | 'relay' | 'deep-link';
   /**
@@ -287,7 +294,7 @@ export type GatewayMethodAvailability = {
 export type GatewayCapabilityGroup = {
   id: string;
   label: string;
-  status: 'available' | 'unavailable' | 'unknown' | 'ready' | 'missing-scope' | 'unsupported' | 'warming' | 'stale' | 'unhealthy' | 'experimental';
+  status: 'available' | 'unavailable' | 'unknown' | 'ready' | 'missing-scope' | 'unsupported' | 'warming' | 'stale' | 'partial' | 'unhealthy' | 'experimental';
   availableCount?: number;
   totalCount?: number;
   note?: string;

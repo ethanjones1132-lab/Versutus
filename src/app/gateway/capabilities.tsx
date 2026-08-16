@@ -55,7 +55,8 @@ export default function CapabilityEditorScreen() {
   }, [gatewayRequest, status]);
 
   useEffect(() => {
-    void load();
+    const timer = setTimeout(() => { void load(); }, 0);
+    return () => clearTimeout(timer);
   }, [load]);
 
   const selectedKind = useMemo(
@@ -165,7 +166,7 @@ export default function CapabilityEditorScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <Text variant="title">Capabilities</Text>
         <Text variant="caption" color="secondary">
-          Create, edit, and delete Gate capability instances. Secret values are stored separately from config.
+          Create, edit, and delete Gate capability instances. Provider auth and CLI environments have dedicated screens.
         </Text>
 
         {error ? (

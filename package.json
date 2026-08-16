@@ -60,6 +60,8 @@
     "smoke:gateway-commands": "node ./scripts/smoke-gateway-commands.mjs",
     "smoke:portal": "tsx ./scripts/smoke-portal.mts",
     "smoke:live": "tsx ./scripts/smoke-live-gateway.mts",
+    "smoke:providers": "node ./scripts/smoke-provider-runtime.mjs",
+    "smoke:environments": "node ./scripts/smoke-cli-environments.mjs",
     "build:android:preview": "eas build --profile preview --platform android",
     "build:android:preview:local": "eas build --profile preview --platform android --local"
   },

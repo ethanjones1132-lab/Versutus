@@ -1,5 +1,6 @@
 import type { ConnectionStatus, GatewayHelloOk } from '@/lib/gateway/types';
-import type { GatewayCapabilityInstance } from '@/lib/portal/manifest';
+import type { GatewayBackend, GatewayCapabilityInstance } from '@/lib/portal/manifest';
+import { capabilitiesForBackend } from '@/lib/gateway/backend-capabilities';
 
 export type GatewayReachabilityState =
   | 'connected'
@@ -848,7 +849,21 @@ const CAPABILITY_GROUP_DEFS: CapabilityGroupDef[] = [
   { id: 'plugins', label: 'Plugins', commandGroups: ['Plugins'] },
   { id: 'logs', label: 'Logs', commandGroups: ['Logs'] },
   { id: 'devices', label: 'Devices', commandGroups: ['Devices'] },
-  { id: 'environments', label: 'Environments' },
+  // A Gate serves both of these; without keys to match on, groupIsAdvertised
+  // could never return true and both tiles read "Not offered" permanently.
+  {
+    id: 'providers',
+    label: 'Providers',
+    features: ['providers'],
+    endpoints: ['providers'],
+    commandGroups: ['Models'],
+  },
+  {
+    id: 'environments',
+    label: 'Environments',
+    features: ['environments'],
+    endpoints: ['environments'],
+  },
   { id: 'artifacts', label: 'Artifacts' },
   { id: 'nodes', label: 'Nodes' },
 ];
@@ -864,6 +879,12 @@ function groupIsAdvertised(
   return definition.endpoints?.some((key) => endpoints[key] != null) ?? false;
 }
 
+export type CapabilitySnapshotOptions = {
+  backends?: GatewayBackend[];
+  selectedBackendId?: string;
+  providers?: { id: string; readiness?: { state?: string } }[];
+};
+
 export function buildCapabilitySnapshot(
   status: ConnectionStatus,
   hello: GatewayHelloOk | null,
@@ -871,6 +892,7 @@ export function buildCapabilitySnapshot(
   lastProbeAt: number = Date.now(),
   capabilities: import('@/lib/gateway/types').GatewayCapabilities | null = null,
   capabilityInstances: GatewayCapabilityInstance[] = [],
+  options: CapabilitySnapshotOptions = {},
 ): import('@/lib/gateway/types').GatewayCapabilitySnapshot {
   const scopes = hello?.auth?.scopes ?? [];
   const connected = status === 'connected';
@@ -884,6 +906,20 @@ export function buildCapabilitySnapshot(
   const isGroupReady = (definition: CapabilityGroupDef) =>
     Boolean(capabilities && groupIsAdvertised(definition, capabilities)) ||
     instanceFamilies.has(definition.id);
+
+  // A conversation runs inside one backend. Reporting the Gate-wide union once
+  // a backend is selected makes the app offer surfaces that backend cannot serve.
+  const backends = options.backends ?? [];
+  const selectedBackend = options.selectedBackendId
+    ? backends.find((backend) => backend.id === options.selectedBackendId)
+    : undefined;
+  const backendScoped = capabilitiesForBackend(backends, options.selectedBackendId);
+  const backendOverride: Record<string, boolean> = { sessions: backendScoped.sessions, tools: backendScoped.tools };
+
+  const providerRecords = options.providers ?? [];
+  const readyProviders = providerRecords.filter(
+    (provider) => provider.readiness?.state === 'ready',
+  ).length;
 
   const groups = CAPABILITY_GROUP_DEFS.map<import('@/lib/gateway/types').GatewayCapabilityGroup>(
     (definition) => {
@@ -915,6 +951,39 @@ export function buildCapabilitySnapshot(
       }
 
       const ready = isGroupReady(definition);
+
+      // Sessions and tools exist only because a backend provides them.
+      if (backends.length > 0 && definition.id in backendOverride) {
+        const supported = backendOverride[definition.id];
+        return {
+          id: definition.id,
+          label: definition.label,
+          status: supported ? 'ready' : 'unsupported',
+          availableCount: supported ? totalCount : 0,
+          totalCount,
+          note: supported
+            ? selectedBackend
+              ? `via ${selectedBackend.label}`
+              : undefined
+            : selectedBackend
+              ? `${selectedBackend.label} does not offer this`
+              : 'No backend offers this',
+        };
+      }
+
+      // A Gate with three keyless providers and one that works look identical
+      // when readiness comes from the endpoint existing.
+      if (definition.id === 'providers' && providerRecords.length > 0) {
+        return {
+          id: definition.id,
+          label: definition.label,
+          status: readyProviders === providerRecords.length ? 'ready' : readyProviders > 0 ? 'partial' : 'unhealthy',
+          availableCount: readyProviders,
+          totalCount: providerRecords.length,
+          note: `${readyProviders} of ${providerRecords.length} ready`,
+        };
+      }
+
       return {
         id: definition.id,
         label: definition.label,

@@ -7,10 +7,18 @@ import { buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/li
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
 import { createMessageId, historyToChatMessages, pickAppSession } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
-import { categorizeProbeError, probeGatewayCandidates, probeGatewayUrl, probeHighPriorityCandidates } from '@/lib/gateway/probe';
+import { effectiveModel, withSelectedModel } from '@/lib/gateway/model-selection';
+import {
+  categorizeProbeError,
+  GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
+  GATEWAY_PROBE_TIMEOUT_MS,
+  probeGatewayCandidates,
+  probeGatewayUrl,
+  probeHighPriorityCandidates,
+} from '@/lib/gateway/probe';
 import { isSlashCommandInput } from '@/lib/gateway/slash-commands';
 import { findConfirmableSlash } from '@/lib/gateway/command-match';
-import { GATEWAY_COMMANDS } from '@/lib/gateway/dashboard';
+import { GATEWAY_COMMANDS, buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
 import { manifestUrlForGateway } from '@/lib/gateway/gateway-origin';
 import { loadRecentCommands, pushRecentCommand } from '@/lib/gateway/recents';
 import { ACTIVITY_EVENT_CAP, executeRun, runEventPreview, type ActivityRun, type RunCapableClient } from '@/lib/gateway/runs';
@@ -61,8 +69,6 @@ import {
   loadTranscripts,
   updateTranscript,
 } from '@/lib/gateway/transcript';
-import { buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
-
 export type ConnectionPhase =
   | 'idle'
   | 'booting'
@@ -105,6 +111,13 @@ type GatewayContextValue = {
     discoverySource?: GatewayProfile['discoverySource'];
   }) => Promise<GatewayProfile>;
   gatewayRequest: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
+  /** Authenticated fetch for non-RPC gateway routes (CLI runs and their SSE stream). */
+  gatewayFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  /** Native environments this gateway can converse through, if any. */
+  backends: import('@/lib/portal/manifest').GatewayBackend[];
+  selectedBackendId: string | undefined;
+  /** Route chat and sessions through a different native environment. */
+  selectBackend: (backendId: string | undefined) => void;
   runAgentCommand: (command: string, options?: { onDelta?: (delta: string) => void }) => Promise<string>;
   liveCapabilities: GatewayCapabilities | null;
   dynamicCommands: GatewayCapabilityCommand[];
@@ -148,7 +161,7 @@ type GatewayContextValue = {
   };
   openModelPicker: (mode: 'default' | 'fallbacks' | 'agent', agentId?: string) => void;
   closeModelPicker: () => void;
-  selectModel: (modelId: string) => void;
+  selectModel: (modelId: string, providerId?: string) => void;
   modelCatalog: any[];
   sessionSelector: { visible: boolean };
   openSessionSelector: () => void;
@@ -354,6 +367,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [runningCommandLabel, setRunningCommandLabel] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [selectedBackendId, setSelectedBackendId] = useState<string | undefined>(undefined);
   const [pairingDetails, setPairingDetails] = useState<PairingDetails | null>(null);
   const [liveCapabilities, setLiveCapabilities] = useState<GatewayCapabilities | null>(null);
   const [activeManifest, setActiveManifest] = useState<GatewayManifest | null>(null);
@@ -383,8 +397,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         capabilityCheckedAt,
         liveCapabilities,
         capabilityInstances,
+        {
+          backends: activeManifest?.backends ?? [],
+          selectedBackendId,
+          providers: activeManifest?.providers,
+        },
       ),
-    [status, activeHello, liveCapabilities, capabilityCheckedAt, capabilityInstances],
+    [status, activeHello, liveCapabilities, capabilityCheckedAt, capabilityInstances, activeManifest, selectedBackendId],
   );
   const [pendingConfirmation, setPendingConfirmation] = useState<GatewayActionPreview | null>(null);
   const [modelPicker, setModelPicker] = useState<{
@@ -820,7 +839,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               await connectGateway(saved);
               return;
             }
-            const savedProbe = await probeGatewayUrl(saved.url, 3500);
+            const savedProbe = await probeGatewayUrl(saved.url, GATEWAY_PROBE_TIMEOUT_MS);
             if (savedProbe.ok) {
               if (autoRetryTimerRef.current) {
                 clearTimeout(autoRetryTimerRef.current);
@@ -849,7 +868,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         let probeResult: Awaited<ReturnType<typeof probeHighPriorityCandidates>> = null;
 
         if (highPriorityUrls.length > 0) {
-          probeResult = await probeHighPriorityCandidates(highPriorityUrls, setProbeMessage, 3500);
+          probeResult = await probeHighPriorityCandidates(
+            highPriorityUrls,
+            setProbeMessage,
+            GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
+          );
         }
 
         if (!probeResult?.ok) {
@@ -869,7 +892,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             return;
           }
 
-          probeResult = await probeGatewayCandidates(candidates, setProbeMessage, 3500);
+          probeResult = await probeGatewayCandidates(candidates, setProbeMessage, GATEWAY_PROBE_TIMEOUT_MS);
         }
 
         if (!probeResult?.ok) {
@@ -997,6 +1020,53 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [status],
   );
 
+  /**
+   * Authenticated fetch against the connected gateway, for routes that are not
+   * RPC — today the CLI run submission and its SSE event stream. Undefined when
+   * the adapter has no such transport, so callers can degrade instead of guess.
+   */
+  const gatewayFetch = useCallback(
+    async (path: string, init?: RequestInit) => {
+      const client = clientRef.current;
+      if (!client || status !== 'connected') throw new Error('Gateway not connected');
+      if (!client.authorizedFetch) {
+        throw new Error('This gateway does not expose direct routes.');
+      }
+      return client.authorizedFetch(path, init);
+    },
+    [status],
+  );
+
+  const backends = useMemo(() => activeManifest?.backends ?? [], [activeManifest]);
+
+  /**
+   * Switching backend switches the whole conversation context — sessions, models
+   * and tools all belong to that environment — so the current session is
+   * released and history reloads from the new one.
+   */
+  const selectBackend = useCallback(
+    (backendId: string | undefined) => {
+      const client = clientRef.current as { setBackendId?: (id: string | undefined) => void } | null;
+      client?.setBackendId?.(backendId);
+      setSelectedBackendId(backendId);
+      sessionIdRef.current = undefined;
+      setCurrentSessionId(undefined);
+      setMessages([]);
+      if (activeGateway) {
+        // Restore the model last used in this backend, so a send after the
+        // switch does not carry the previous backend's model id.
+        const restored = effectiveModel(activeGateway, backendId);
+        if (restored && restored !== activeGateway.model) {
+          const updated = { ...activeGateway, model: restored };
+          setActiveGateway(updated);
+          void upsertGateway(updated).then(setGateways);
+        }
+        void reloadHistoryFor(activeGateway);
+      }
+    },
+    [activeGateway, reloadHistoryFor],
+  );
+
   const runAgentCommand = useCallback(
     async (command: string, options?: { onDelta?: (delta: string) => void }) => {
       const gateway = activeGateway;
@@ -1021,6 +1091,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         {
           sessionId: sessionIdRef.current,
           model: gateway.model,
+          providerId: gateway.providerId,
         },
       );
       return fullText;
@@ -1228,6 +1299,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           {
             sessionId: sessionIdRef.current,
             model: gateway.model,
+            providerId: gateway.providerId,
             signal: abortController.signal,
             onToolCall: (toolCall) => {
               setMessages((prev) => {
@@ -1690,10 +1762,18 @@ const response = await executeGatewaySlashCommand(trimmed, {
 
       setConnectionPhase('searching');
 
-      let probeResult = await probeHighPriorityCandidates(candidates, setProbeMessage, 3000);
+      let probeResult = await probeHighPriorityCandidates(
+        candidates,
+        setProbeMessage,
+        GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
+      );
 
       if (!probeResult?.ok) {
-        probeResult = await probeGatewayCandidates(candidates.slice(3), setProbeMessage, 3500);
+        probeResult = await probeGatewayCandidates(
+          candidates.slice(3),
+          setProbeMessage,
+          GATEWAY_PROBE_TIMEOUT_MS,
+        );
       }
       if (!probeResult?.ok) {
         setConnectionPhase('failed');
@@ -1779,7 +1859,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       await connectGateway(active);
       return;
     }
-    const probe = await probeGatewayUrl(active.url, 3500);
+    const probe = await probeGatewayUrl(active.url, GATEWAY_PROBE_TIMEOUT_MS);
     if (probe.ok) {
       await connectGateway(active);
       return;
@@ -1896,7 +1976,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
   }, []);
 
   const selectModel = useCallback(
-    (modelId: string) => {
+    (modelId: string, providerId?: string) => {
       closeModelPicker();
       if (activeGateway?.kind === 'openclaw') {
         // OpenClaw: model is gateway config — run the config command.
@@ -1905,11 +1985,14 @@ const response = await executeGatewaySlashCommand(trimmed, {
       }
       // Hermes: per-request model override (API server honors model per request).
       if (!activeGateway) return;
-      const updated = { ...activeGateway, model: modelId };
+      const updated = {
+        ...withSelectedModel(activeGateway, modelId, selectedBackendId),
+        providerId: providerId ?? activeGateway.providerId,
+      };
       setActiveGateway(updated);
       void upsertGateway(updated).then(setGateways);
     },
-    [activeGateway, closeModelPicker, sendChatInput],
+    [activeGateway, closeModelPicker, sendChatInput, selectedBackendId],
   );
 
   const selectSession = useCallback((sessionId: string) => {
@@ -1996,6 +2079,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
       stopStreaming,
       reloadHistory,
       gatewayRequest,
+      gatewayFetch,
+      backends,
+      selectedBackendId,
+      selectBackend,
       runAgentCommand,
       liveCapabilities,
       dynamicCommands,
@@ -2038,7 +2125,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       messages, isSending, isCommandRunning, runningCommandLabel, lastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendMessage, sendChatInput, stopStreaming, reloadHistory,
-      gatewayRequest, runAgentCommand, setupFromPcAddress, retryAutoConnect, completeOnboarding,
+      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, runAgentCommand, setupFromPcAddress, retryAutoConnect, completeOnboarding,
       setAutoConnect, transcripts, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval, runTask, activityRuns, stopActivityRun, modelPicker, openModelPicker, closeModelPicker,

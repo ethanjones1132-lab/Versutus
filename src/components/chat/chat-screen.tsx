@@ -4,6 +4,7 @@ import { FlatList, StyleSheet, View, type NativeScrollEvent, type NativeSyntheti
 import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { ApprovalSheet } from '@/components/chat/approval-sheet';
+import { BackendPickerSheet } from '@/components/chat/backend-picker-sheet';
 import { ChatComposer } from '@/components/chat/chat-composer';
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
 import { ChatHeader } from '@/components/chat/chat-header';
@@ -96,11 +97,15 @@ export function ChatScreen() {
     disconnectGateway,
     capabilitySnapshot,
     dynamicCommands,
+    backends,
+    selectedBackendId,
+    selectBackend,
   } = useGateway();
 
   const [draft, setDraft] = useState('');
   const [dismissedPairingKey, setDismissedPairingKey] = useState<string | null>(null);
   const [overflowVisible, setOverflowVisible] = useState(false);
+  const [backendPickerVisible, setBackendPickerVisible] = useState(false);
   const [actionMessage, setActionMessage] = useState<ChatMessage | null>(null);
   const [jumpVisible, setJumpVisible] = useState(false);
   const listRef = useRef<FlatList<ChatMessage>>(null);
@@ -128,6 +133,8 @@ export function ChatScreen() {
 
   const sessionLabel = currentSession?.title ?? (currentSessionId ? `${currentSessionId.slice(0, 10)}…` : undefined);
   const modelLabel = activeGateway?.model ?? 'Default model';
+  const activeBackend = backends.find((backend) => backend.id === selectedBackendId) ?? backends[0];
+  const backendLabel = activeBackend?.label;
 
   const handleSend = useCallback(async () => {
     const text = draft;
@@ -203,6 +210,8 @@ export function ChatScreen() {
         onSessionPress={() => void openSessionSelector()}
         onModelPress={() => openModelPicker('default')}
         onOverflowPress={() => setOverflowVisible(true)}
+        backendLabel={backendLabel}
+        onBackendPress={backends.length > 0 ? () => setBackendPickerVisible(true) : undefined}
       />
 
       <PairingSheet
@@ -319,6 +328,14 @@ export function ChatScreen() {
         }}
       />
 
+      <BackendPickerSheet
+        visible={backendPickerVisible}
+        backends={backends}
+        selectedBackendId={activeBackend?.id}
+        onSelect={selectBackend}
+        onClose={() => setBackendPickerVisible(false)}
+      />
+
       <MessageActionsSheet
         visible={!!actionMessage}
         message={actionMessage}
@@ -332,6 +349,8 @@ export function ChatScreen() {
         models={modelCatalog.map((model: Record<string, unknown>) => ({
           id: String(model.id || model.model || model.name || ''),
           provider: model.provider as string | undefined,
+          providerId: (model.providerId ?? model.provider) as string | undefined,
+          catalogState: (model.catalogSource ?? model.catalogState) as string | undefined,
           available: model.available !== false,
           context: (model.context ?? model.contextLength) as number | undefined,
           price: (model.cost ?? model.price) as number | undefined,

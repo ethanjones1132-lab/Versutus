@@ -55,6 +55,9 @@ function toManifestEntry(instance) {
   };
 }
 
+// Live catalogs, auth state, and credentials are owned by ProviderService.
+// This kind only validates legacy registry records for one compatibility release.
+
 function createHandlers() {
   return {};
 }

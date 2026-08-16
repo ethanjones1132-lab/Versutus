@@ -90,7 +90,7 @@ function identityFromManifest(manifest: GatewayManifest, baseUrl: string): Gatew
  */
 export async function identifyGateway(options: IdentifyGatewayOptions): Promise<GatewayIdentity> {
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
-  const timeoutMs = options.timeoutMs ?? 9000;
+  const timeoutMs = options.timeoutMs ?? 15_000;
   const started = Date.now();
 
   // 1. Beacon fast path (no network).
@@ -111,7 +111,7 @@ export async function identifyGateway(options: IdentifyGatewayOptions): Promise<
 
   // 2. Manifest (authoritative for any custom gate that serves it).
   if (!options.skipManifest) {
-    const manifest = await fetchGatewayManifest(baseUrl, Math.min(4000, timeoutMs));
+    const manifest = await fetchGatewayManifest(baseUrl, Math.min(10_000, timeoutMs));
     if (manifest) return identityFromManifest(manifest, baseUrl);
   }
 

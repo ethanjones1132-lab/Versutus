@@ -23,21 +23,13 @@ function provider(overrides: Partial<GatewayManifestProvider> = {}): GatewayMani
 }
 
 describe('reconcileChildProfiles', () => {
-  test('creates a child profile for a newly advertised provider', () => {
+  test('does not create child profiles for advertised providers', () => {
     const { toUpsert, toRemove } = reconcileChildProfiles(PARENT, [provider()], [PARENT]);
+    expect(toUpsert).toEqual([]);
     expect(toRemove).toEqual([]);
-    expect(toUpsert).toHaveLength(1);
-    expect(toUpsert[0]).toMatchObject({
-      id: 'gw-parent::claude',
-      name: 'Claude',
-      url: 'http://gate.test:8760/p/claude',
-      kind: 'custom',
-      token: 'parent-token',
-      parentId: 'gw-parent',
-    });
   });
 
-  test('is a no-op when the child already matches the provider', () => {
+  test('retires stored provider child profiles back to the parent Gate', () => {
     const existingChild: GatewayProfile = {
       id: 'gw-parent::claude',
       name: 'Claude',
@@ -49,38 +41,7 @@ describe('reconcileChildProfiles', () => {
     };
     const { toUpsert, toRemove } = reconcileChildProfiles(PARENT, [provider()], [PARENT, existingChild]);
     expect(toUpsert).toEqual([]);
-    expect(toRemove).toEqual([]);
-  });
-
-  test('updates an existing child when the parent token rotates, preserving its id and createdAt', () => {
-    const existingChild: GatewayProfile = {
-      id: 'gw-parent::claude',
-      name: 'Claude',
-      url: 'http://gate.test:8760/p/claude',
-      kind: 'custom',
-      token: 'stale-token',
-      parentId: 'gw-parent',
-      createdAt: 2000,
-    };
-    const { toUpsert, toRemove } = reconcileChildProfiles(PARENT, [provider()], [PARENT, existingChild]);
-    expect(toRemove).toEqual([]);
-    expect(toUpsert).toHaveLength(1);
-    expect(toUpsert[0]).toMatchObject({ id: 'gw-parent::claude', token: 'parent-token', createdAt: 2000 });
-  });
-
-  test('removes a child whose provider is no longer advertised', () => {
-    const existingChild: GatewayProfile = {
-      id: 'gw-parent::gone',
-      name: 'Gone',
-      url: 'http://gate.test:8760/p/gone',
-      kind: 'custom',
-      token: 'parent-token',
-      parentId: 'gw-parent',
-      createdAt: 2000,
-    };
-    const { toUpsert, toRemove } = reconcileChildProfiles(PARENT, [], [PARENT, existingChild]);
-    expect(toUpsert).toEqual([]);
-    expect(toRemove).toEqual(['gw-parent::gone']);
+    expect(toRemove).toEqual(['gw-parent::claude']);
   });
 
   test('never touches a gateway belonging to a different parent', () => {
@@ -98,22 +59,17 @@ describe('reconcileChildProfiles', () => {
     expect(toRemove).toEqual([]);
   });
 
-  test('handles multiple providers, adding one and removing another in the same pass', () => {
-    const staleChild: GatewayProfile = {
-      id: 'gw-parent::old',
-      name: 'Old',
-      url: 'http://gate.test:8760/p/old',
-      kind: 'custom',
-      token: 'parent-token',
-      parentId: 'gw-parent',
+  test('keeps a direct Hermes/agent profile that is not a provider child', () => {
+    const hermes: GatewayProfile = {
+      id: 'hermes-local',
+      name: 'Hermes',
+      url: 'http://127.0.0.1:8642',
+      kind: 'hermes',
+      token: 't',
       createdAt: 2000,
     };
-    const { toUpsert, toRemove } = reconcileChildProfiles(
-      PARENT,
-      [provider(), provider({ id: 'grok', label: 'Grok', basePath: '/p/grok', models: ['grok-4'] })],
-      [PARENT, staleChild],
-    );
-    expect(toRemove).toEqual(['gw-parent::old']);
-    expect(toUpsert.map((p) => p.id).sort()).toEqual(['gw-parent::claude', 'gw-parent::grok']);
+    const { toUpsert, toRemove } = reconcileChildProfiles(PARENT, [provider()], [PARENT, hermes]);
+    expect(toUpsert).toEqual([]);
+    expect(toRemove).toEqual([]);
   });
 });

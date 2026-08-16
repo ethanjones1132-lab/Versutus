@@ -195,7 +195,7 @@ export class HermesGatewayClient {
    * seconds to complete its first request, and a false negative here reads as
    * "gateway down" to the whole app.
    */
-  async healthCheck(timeoutMs = 8000): Promise<HealthResponse | null> {
+  async healthCheck(timeoutMs = 12_000): Promise<HealthResponse | null> {
     try {
       const result = await this.transport.request<HealthResponse>('GET', '/health', undefined, timeoutMs);
       this.lastHealthError = null;
@@ -315,11 +315,23 @@ export class HermesGatewayClient {
     }
 
     let fullText = '';
+    // A failed turn can arrive as an error frame inside an HTTP 200 stream,
+    // which response.ok above cannot catch. Captured rather than thrown,
+    // because the handler's own catch would swallow a throw.
+    let streamError: string | null = null;
     // Accumulate partial tool_call name fragments by index (OpenAI stream shape).
     const toolNames = new Map<number, string>();
     await this.transport.streamSSE(response, (data) => {
       try {
         const chunk = JSON.parse(data);
+        if (chunk?.error) {
+          const reported = chunk.error?.message;
+          streamError =
+            typeof reported === 'string' && reported
+              ? reported
+              : `The gateway reported a failed turn (${chunk.error?.code ?? 'unknown'}).`;
+          return;
+        }
         const delta = chunk?.choices?.[0]?.delta;
         const content = delta?.content;
         if (content) {
@@ -345,6 +357,7 @@ export class HermesGatewayClient {
       }
     }, signal);
 
+    if (streamError) throw new Error(streamError);
     return fullText;
   }
 

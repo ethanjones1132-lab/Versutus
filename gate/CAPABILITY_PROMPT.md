@@ -24,8 +24,8 @@ node gate/cli.mjs add <id> --kind <kind-id>
 ```
 
 - `<id>`: instance identifier (lowercase alphanumeric + hyphens, e.g.
-  `my-openai`, `standup-reminder`). This becomes the filename —
-  `gate/registry/<id>.json` — never a field inside the file itself.
+  `my-openai`, `standup-reminder`). Non-provider instances become
+  `gate/registry/<id>.json`. Provider instances are written to Gate home.
 - `<kind-id>`: an already-registered kind, e.g. `provider`.
 
 This creates `gate/registry/<id>.json`, pre-filled with one entry per field

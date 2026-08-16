@@ -11,15 +11,15 @@ const config = {
   capabilities: { chat: true, streaming: true },
 };
 
-test('targets the messages endpoint with x-api-key and anthropic-version', () => {
+test('targets the messages endpoint without resolving auth', () => {
   const request = buildChatRequest(config, 'test-key', {
     messages: [{ role: 'user', content: 'hi' }],
   });
 
   assert.equal(request.url, 'https://api.anthropic.com/v1/messages');
-  assert.equal(request.init.headers['x-api-key'], 'test-key');
+  assert.equal(request.init.headers['x-api-key'], undefined);
   assert.equal(request.init.headers['anthropic-version'], '2023-06-01');
-  assert.equal(request.init.headers['Authorization'], undefined);
+  assert.equal(request.init.headers.Authorization, undefined);
 });
 
 test('moves a system message out of messages and into the system field', () => {

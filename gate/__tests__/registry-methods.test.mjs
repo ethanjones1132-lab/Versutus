@@ -5,7 +5,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createRegistryMethods } from '../core/capabilities/registry-methods.mjs';
-import { getSecret } from '../core/capabilities/secrets.mjs';
+import { getSecret, useCredentialBackend } from '../core/capabilities/secrets.mjs';
+
+useCredentialBackend({
+  async protect(plain) {
+    return Buffer.from(JSON.stringify({ data: Buffer.from(plain).toString('base64') }));
+  },
+  async unprotect(cipher) {
+    const parsed = JSON.parse(Buffer.from(cipher).toString('utf8'));
+    return Buffer.from(parsed.data, 'base64');
+  },
+});
 
 function fakeCronKind() {
   return {
@@ -177,7 +187,8 @@ test('registry.secrets.set stores a value retrievable via getSecret, never retur
   const { methods, root } = await harness();
   const result = await methods['registry.secrets.set']({ refName: 'MY_API_KEY', value: 'sk-live-abc' });
 
-  assert.deepEqual(result, { ok: true });
+  assert.equal(result.ok, true);
+  assert.equal(result.deprecated, true);
   assert.equal(await getSecret(root, 'MY_API_KEY'), 'sk-live-abc');
 });
 

@@ -281,3 +281,61 @@ describe('capability instances drive the snapshot', () => {
     expect(snapshot.groups.find((entry) => entry.id === 'weather')!.status).toBe('unavailable');
   });
 });
+
+describe('capability tiles reflect the selected backend', () => {
+  const backends = [
+    { id: 'opencode-local', label: 'OpenCode', kind: 'environment' as const, capabilities: ['sessions', 'tools'] },
+    { id: 'hermes-local', label: 'Hermes', kind: 'environment' as const, capabilities: ['chat'] },
+  ];
+
+  test('marks tools unsupported when the selected backend cannot do it', () => {
+    const snapshot = buildCapabilitySnapshot(
+      'connected',
+      null,
+      undefined,
+      Date.now(),
+      { chat: true, tools: true, sessions: true } as unknown as GatewayCapabilities,
+      [],
+      { backends, selectedBackendId: 'hermes-local' },
+    );
+    const tools = snapshot.groups.find((group) => group.id === 'tools');
+    expect(tools?.status).toBe('unsupported');
+    expect(tools?.note).toContain('Hermes');
+  });
+
+  test('attributes a supported capability to the backend providing it', () => {
+    const snapshot = buildCapabilitySnapshot(
+      'connected',
+      null,
+      undefined,
+      Date.now(),
+      { chat: true, tools: true, sessions: true } as unknown as GatewayCapabilities,
+      [],
+      { backends, selectedBackendId: 'opencode-local' },
+    );
+    const tools = snapshot.groups.find((group) => group.id === 'tools');
+    expect(tools?.status).toBe('ready');
+    expect(tools?.note).toBe('via OpenCode');
+  });
+
+  test('counts provider readiness rather than endpoint existence', () => {
+    const snapshot = buildCapabilitySnapshot(
+      'connected',
+      null,
+      undefined,
+      Date.now(),
+      { providers: true } as unknown as GatewayCapabilities,
+      [],
+      {
+        providers: [
+          { id: 'a', readiness: { state: 'ready' } },
+          { id: 'b', readiness: { state: 'unavailable' } },
+          { id: 'c', readiness: { state: 'unavailable' } },
+        ],
+      },
+    );
+    const providers = snapshot.groups.find((group) => group.id === 'providers');
+    expect(providers?.status).toBe('partial');
+    expect(providers?.note).toBe('1 of 3 ready');
+  });
+});

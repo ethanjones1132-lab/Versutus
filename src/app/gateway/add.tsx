@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { TransportSecurityCard } from '@/components/gateway/transport-security-card';
 import { Button, Card, Screen, Text, TextField } from '@/components/ui';
@@ -98,7 +98,15 @@ export default function AddGatewayScreen() {
     <Screen>
       <KeyboardAvoidingView
         style={styles.keyboard}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        {/* Six fields plus a transport card outgrow the viewport once the
+            keyboard is up, and a bottom-anchored fixed block puts Save out of
+            reach with nothing to scroll. */}
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          showsVerticalScrollIndicator={false}>
         <Card padding={Spacing.four} style={styles.sheet}>
           <Text color="secondary">
             Usually you do not need this — Versutus connects automatically via Tailscale. Use manual add only for
@@ -157,6 +165,7 @@ export default function AddGatewayScreen() {
             disabled={saving || !url.trim()}
           />
         </Card>
+        </ScrollView>
       </KeyboardAvoidingView>
     </Screen>
   );
@@ -234,7 +243,13 @@ function AdvancedOptions({
 const styles = StyleSheet.create({
   keyboard: {
     flex: 1,
+  },
+  scroll: {
+    // flexGrow keeps the sheet bottom-anchored when it fits, and lets it
+    // scroll rather than overflow when it does not.
+    flexGrow: 1,
     justifyContent: 'flex-end',
+    paddingBottom: Spacing.four,
   },
   sheet: {
     margin: Spacing.four,
