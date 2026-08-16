@@ -2,7 +2,7 @@ import { mkdir, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { describeKinds } from './registry.mjs';
-import { setSecret } from './secrets.mjs';
+import { looksLikeCredential, setSecret } from './secrets.mjs';
 
 const INSTANCE_ID_PATTERN = /^[a-z0-9-]+$/;
 const RESERVED_INSTANCE_IDS = new Set(['registry']);
@@ -103,6 +103,13 @@ export function createRegistryMethods({ root, getState, reload, gateHome }) {
       if (/^provider\//.test(refName)) {
         throw new Error(
           `"${refName}" is a provider credential — set it with providers.auth.setApiKey so the provider's adapter can read it.`,
+        );
+      }
+      // The ref becomes the vault filename, so a key pasted here writes itself
+      // into a filename on disk.
+      if (looksLikeCredential(refName)) {
+        throw new Error(
+          'refName looks like a credential. It names the secret, it is not the secret — put the key in "value".',
         );
       }
       await setSecret(root, refName, value);

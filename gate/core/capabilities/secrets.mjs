@@ -9,6 +9,26 @@ const ALGORITHM = 'aes-256-gcm';
 const vaults = new Map();
 let injectedBackend;
 
+const CREDENTIAL_PREFIXES = ['sk-', 'sk_', 'gsk_', 'xai-', 'ghp_', 'github_pat_'];
+
+/**
+ * A ref names a secret; it is not the secret. The vault writes each file as
+ * `<ref>.dpapi`, so a ref that is itself a key puts the key in a filename —
+ * which happened on 2026-08-14, into a directory that was not gitignored.
+ *
+ * This rejects rather than sanitizes: silently renaming a bad ref would strand
+ * the secret under a name no adapter reads, trading a visible mistake for an
+ * invisible one.
+ */
+export function looksLikeCredential(refName) {
+  const value = String(refName ?? '').trim();
+  if (!value) return false;
+  const lowered = value.toLowerCase();
+  if (CREDENTIAL_PREFIXES.some((prefix) => lowered.startsWith(prefix))) return true;
+  // A real ref is a path or a phrase; an unbroken 32+ character run is a token.
+  return value.length >= 32 && !/[/\-_.:]/.test(value);
+}
+
 export function useCredentialBackend(backend) {
   injectedBackend = backend;
   vaults.clear();

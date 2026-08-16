@@ -4,6 +4,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Button, Card, Screen, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { looksLikeCredential } from '@/lib/gateway/credential-shape';
 import {
   defaultConfigForFields,
   isValidInstanceId,
@@ -125,6 +126,13 @@ export default function CapabilityEditorScreen() {
       const secretField = selectedKind.configFields.find((field) => field.type === 'secret-ref');
       const refName = secretField ? String(config[secretField.key] ?? '') : '';
       if (refName && draft.secretValue.trim()) {
+        // The Gate refuses this too, but catching it here can name the field.
+        if (looksLikeCredential(refName)) {
+          setError(
+            `"${secretField?.label ?? 'Secret ref'}" holds the secret's name, not the secret. Put the key in "Secret value" and give this field a name like "my-api-key".`,
+          );
+          return;
+        }
         await gatewayRequest('registry.secrets.set', { refName, value: draft.secretValue.trim() });
       }
       setDraft(null);
@@ -203,14 +211,19 @@ export default function CapabilityEditorScreen() {
                     setDraft({ ...draft, values: { ...draft.values, [field.key]: text } })
                   }
                   placeholder={field.help ?? field.type}
-                  secureTextEntry={field.type === 'secret-ref'}
+                  autoCapitalize={field.type === 'secret-ref' ? 'none' : undefined}
+                  autoCorrect={field.type === 'secret-ref' ? false : undefined}
+                  // Deliberately not secureTextEntry: this holds the secret's
+                  // *name*, not the secret. Masking it made it read as a
+                  // password field, which is how a real key ended up here — and
+                  // the vault then wrote that key into a filename on disk.
                 />
               </View>
             ))}
             {selectedKind.configFields.some((field) => field.type === 'secret-ref') ? (
               <View style={styles.field}>
                 <Text variant="caption" color="secondary">
-                  Secret value (optional, written via registry.secrets.set)
+                  Secret value — the key itself. The ref field above only names it.
                 </Text>
                 <TextField
                   value={draft.secretValue}

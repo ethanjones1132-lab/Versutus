@@ -85,6 +85,36 @@ test('registry.secrets.set refuses provider credential refs', async () => {
   }
 });
 
+test('registry.secrets.set refuses a credential pasted into the ref field', async () => {
+  const gate = await makeGate();
+  try {
+    // The vault names each file after its ref, so this would have written the
+    // key itself into a filename on disk — observed on 2026-08-14.
+    const body = await rpc(gate, 'registry.secrets.set', {
+      refName: 'sk-Q0f4ioEsl3tE7Hm4ahCvlLIfuPoKxp6OAgXxaoy3mbDP22JR',
+      value: 'the-actual-secret',
+    });
+    assert.ok(body.error, 'a credential-shaped refName must be refused');
+    assert.match(body.error.message, /names the secret/i);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('registry.secrets.set still accepts an ordinary ref name', async () => {
+  const gate = await makeGate();
+  try {
+    const body = await rpc(gate, 'registry.secrets.set', {
+      refName: 'my-memory-token',
+      value: 'sk-this-is-fine-here',
+    });
+    assert.equal(body.error, undefined, body.error?.message);
+    assert.equal(body.result?.ok, true);
+  } finally {
+    await gate.close();
+  }
+});
+
 test('non-provider capability kinds are unaffected', async () => {
   const gate = await makeGate();
   try {
