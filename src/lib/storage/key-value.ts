@@ -25,6 +25,21 @@ function removeWebValue(key: string): void {
   }
 }
 
+function readWebKeys(): string[] {
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage) return [];
+    const keys: string[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key !== null) keys.push(key);
+    }
+    return keys;
+  } catch {
+    return [];
+  }
+}
+
 export const keyValueStorage = {
   async getItem(key: string): Promise<string | null> {
     if (Platform.OS === 'web') return readWebValue(key);
@@ -45,5 +60,20 @@ export const keyValueStorage = {
       return;
     }
     await AsyncStorage.removeItem(key);
+  },
+
+  /** Every key currently held, so callers can clean up by prefix. */
+  async getAllKeys(): Promise<string[]> {
+    if (Platform.OS === 'web') return readWebKeys();
+    return [...(await AsyncStorage.getAllKeys())];
+  },
+
+  async multiRemove(keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    if (Platform.OS === 'web') {
+      for (const key of keys) removeWebValue(key);
+      return;
+    }
+    await AsyncStorage.multiRemove(keys);
   },
 };

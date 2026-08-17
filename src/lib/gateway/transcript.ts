@@ -51,10 +51,17 @@ export async function updateTranscript(
   return next;
 }
 
+/**
+ * Drop every stored transcript belonging to a gateway. Called when its profile
+ * is deleted — without this the keys outlive the gateway forever.
+ */
 export async function clearTranscriptsForGateway(gatewayId: string): Promise<void> {
-  // Best-effort: we don't have a full index, so we clear by known patterns isn't possible easily.
-  // For now callers should clear specific session keys when gateway is removed.
-  // A future improvement could keep a manifest.
+  // Keys are `versutus:transcript:{gatewayId}:{sessionKey}`. Matching includes
+  // the trailing separator so `gw-1` does not also clear `gw-10`.
+  const prefix = `${TRANSCRIPT_PREFIX}:${gatewayId}:`;
+  const keys = await keyValueStorage.getAllKeys();
+  const owned = keys.filter((key) => key.startsWith(prefix));
+  await keyValueStorage.multiRemove(owned);
 }
 
 export function createTranscriptId(prefix = 'cmd'): string {
