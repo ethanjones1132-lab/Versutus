@@ -133,3 +133,50 @@ export function historyToChatMessages(messages: unknown[]): ChatMessage[] {
 export function createMessageId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+// ─── Bounded in-memory message window ─────────────────────────────
+// Chat appends one entry per send and per stream delta. Left unbounded the
+// list grows for the lifetime of a session — the long-running agent tasks
+// this app exists for are exactly the case that pushes it to OOM. Older
+// turns stay durable in gateway history; only the in-memory window is capped.
+
+/** How many chat messages are kept in memory before the oldest are dropped. */
+export const MESSAGE_WINDOW_CAP = 200;
+
+/** Trim a list to its newest `cap` entries, returning it as-is when it fits. */
+export function boundWindow<T>(list: T[], cap: number = MESSAGE_WINDOW_CAP): T[] {
+  // Returning the original reference keeps React from re-rendering on a no-op.
+  return list.length <= cap ? list : list.slice(list.length - cap);
+}
+
+/** Append one entry, dropping the oldest entries past `cap`. */
+export function appendBounded<T>(list: T[], item: T, cap: number = MESSAGE_WINDOW_CAP): T[] {
+  return boundWindow([...list, item], cap);
+}
+
+/**
+ * Whether a "load earlier" page likely has more history behind it.
+ *
+ * The history endpoint takes only a limit — no offset or cursor — so a page
+ * shorter than what was requested is the only signal that the beginning of
+ * the session has been reached.
+ */
+export function hasEarlierHistory(returnedCount: number, requestedLimit: number): boolean {
+  return returnedCount >= requestedLimit && requestedLimit > 0;
+}
+
+/**
+ * Page older messages in ahead of the current window, skipping any already
+ * present.
+ *
+ * Deliberately does **not** re-apply `MESSAGE_WINDOW_CAP`: the cap exists to
+ * stop runaway streaming growth, and re-bounding here would discard exactly
+ * the history the user just asked to see.
+ */
+export function prependEarlier<T extends { id: string }>(current: T[], earlier: T[]): T[] {
+  if (earlier.length === 0) return current;
+  const present = new Set(current.map((item) => item.id));
+  const fresh = earlier.filter((item) => !present.has(item.id));
+  // Same reference when the page was entirely overlap — no needless re-render.
+  return fresh.length === 0 ? current : [...fresh, ...current];
+}
