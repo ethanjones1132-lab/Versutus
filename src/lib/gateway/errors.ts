@@ -21,6 +21,25 @@ export function isAuthRejection(error: unknown): boolean {
   return /(?:\b401\b|\b403\b|invalid api key|unauthorized|authentication required)/i.test(message);
 }
 
+/**
+ * True when a failure is the user cancelling — our own AbortController firing,
+ * or a genuine `AbortError` from fetch.
+ *
+ * Message text is deliberately never consulted. A substring test for "abort"
+ * also matches server failures like "connection aborted by peer", which would
+ * be silently swallowed as a cancellation instead of shown as the error it is.
+ */
+export function isUserAbort(error: unknown, signal?: AbortSignal): boolean {
+  if (signal?.aborted) return true;
+  if (error instanceof Error && error.name === 'AbortError') return true;
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const { code } = error as { code?: unknown };
+    // DOMException.ABORT_ERR is 20; Node and fetch polyfills use the name.
+    return code === 'ABORT_ERR' || code === 20;
+  }
+  return false;
+}
+
 const GATEWAY_TOKEN_REQUIRED_MARKERS = [
   'setup token required',
   'auth token missing',
