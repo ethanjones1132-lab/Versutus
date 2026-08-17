@@ -83,6 +83,20 @@ live** — the `session.next.*` family did not appear and must not be relied on:
 
 Every event carries `properties.sessionID`; filter the shared bus by it.
 
+### Client-side approval matching
+
+`approval.required` is the **typed** signal the app matches on (`runNeedsApproval`
+in `src/lib/gateway/runs.ts`), alongside the waiting-state status spellings
+(`waiting-approval`, `approval_required`, `pending-approval`, `needs-approval`).
+A loose `approv` substring test remains as a fallback for gateways predating this
+contract, but it explicitly does **not** fire for signals reporting a decision
+already taken (`approved`, `denied`, `rejected`, `resolved`, `granted`) — matching
+those re-opens the approval prompt for a decision the user already made and can
+spin the run against its poll cap.
+
+Renaming `approval.required` is therefore a **breaking change** for the app: add
+the new spelling to `APPROVAL_REQUIRED_SIGNALS` in the same change.
+
 ## Native providers
 
 `GET /config/providers` on this desktop returns 7 providers OpenCode already holds credentials for
