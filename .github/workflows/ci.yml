@@ -19,11 +19,9 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Typecheck
-        run: npx tsc --noEmit
-      - name: Lint
-        run: npm run lint
-      - name: Unit tests
-        run: npm test -- --coverage=false
+      # Identical to what contributors run locally as `npm run verify`, so CI
+      # and local checks cannot drift apart.
+      - name: Verify (typecheck, lint, unit + gate tests)
+        run: npm run verify
       - name: Portal smoke tests
         run: npm run smoke:portal

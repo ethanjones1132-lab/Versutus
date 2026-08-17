@@ -162,8 +162,13 @@ async function main() {
     tailnetCandidates,
   );
   check(
+    'Gate candidate uses HTTP :8760, ahead of the Hermes fallback',
+    tailnetCandidates[1] === 'http://ethanspc.tail3a1a8a.ts.net:8760',
+    tailnetCandidates,
+  );
+  check(
     'direct Hermes fallback uses HTTP :8642',
-    tailnetCandidates[1] === 'http://ethanspc.tail3a1a8a.ts.net:8642',
+    tailnetCandidates[2] === 'http://ethanspc.tail3a1a8a.ts.net:8642',
     tailnetCandidates,
   );
   check(
@@ -228,9 +233,12 @@ async function main() {
     resolveRoute('cron.list')?.path,
   );
   check(
-    'model.options → rich inventory',
-    resolveRoute('model.options')?.path === '/api/model/options',
-    resolveRoute('model.options')?.path,
+    // GET /api/model/options 404s against Hermes 0.18.0 — removed from
+    // METHOD_TO_ROUTE by 37ff32b. Assert it stays removed rather than
+    // re-testing a phantom route.
+    'model.options has no route (phantom endpoint, removed 37ff32b)',
+    resolveRoute('model.options') === null,
+    resolveRoute('model.options'),
   );
   check(
     'diagnostics.full → health/detailed',
