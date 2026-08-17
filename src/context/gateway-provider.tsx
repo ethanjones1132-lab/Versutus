@@ -5,7 +5,18 @@ import { AppState, Platform } from 'react-native';
 import { GatewayDiscoveryScanner, isNativeDiscoveryAvailable } from '@/lib/discovery/scanner';
 import { buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/lib/gateway/candidates';
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
-import { createMessageId, historyToChatMessages, pickAppSession } from '@/lib/gateway/messages';
+import { decideConnectionPhase } from '@/lib/connection/phase';
+import { abortAndClear } from '@/lib/gateway/abort';
+import { isUserAbort } from '@/lib/gateway/errors';
+import {
+  appendBounded,
+  boundWindow,
+  createMessageId,
+  hasEarlierHistory,
+  historyToChatMessages,
+  pickAppSession,
+  prependEarlier,
+} from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { effectiveModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
@@ -66,6 +77,7 @@ import { identifyGateway, type GatewayIdentity } from '@/lib/portal/identify';
 import { loadAppSettings, saveAppSettings, type AppSettings } from '@/lib/settings/app-settings';
 import {
   appendTranscript,
+  clearTranscriptsForGateway,
   loadTranscripts,
   updateTranscript,
 } from '@/lib/gateway/transcript';
@@ -177,7 +189,16 @@ type GatewayContextValue = {
   deleteSessionById: (sessionId: string) => Promise<void>;
   /** Remove a message from the local view (not propagated to the gateway). */
   deleteLocalMessage: (id: string) => void;
+  /** Whether an earlier page of this session's history is likely available. */
+  hasMoreHistory: boolean;
+  /** True while a "load earlier" page fetch is in flight. */
+  loadingEarlierHistory: boolean;
+  /** Fetch and prepend the next page of older messages, deduped against what is shown. */
+  loadEarlierMessages: () => Promise<void>;
 };
+
+/** Turns fetched per `reloadHistoryFor` call and per `loadEarlierMessages` page. */
+const HISTORY_PAGE_SIZE = 80;
 
 const GatewayContext = createContext<GatewayContextValue | null>(null);
 
@@ -354,12 +375,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [activeGateway]);
   const [activeHello, setActiveHello] = useState<GatewayHelloOk | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
+  // Request helpers consult this ref rather than rendered state. `status` is a
+  // render value, so a request issued in the same tick as a connection change
+  // reads whatever was captured at the last render — which throws "Gateway not
+  // connected" on a live client, or lets a request through on a dead one.
+  const statusRef = useRef<ConnectionStatus>('disconnected');
+  const applyStatus = useCallback((next: ConnectionStatus) => {
+    statusRef.current = next;
+    setStatus(next);
+  }, []);
   const [statusDetail, setStatusDetail] = useState('');
   const [connectionPhase, setConnectionPhase] = useState<ConnectionPhase>('booting');
+  // Kept in step synchronously (not via a useEffect, which lands a render
+  // late) so decideConnectionPhase always sees the true current phase even
+  // when two status events land in the same tick.
   const connectionPhaseRef = useRef<ConnectionPhase>('booting');
-  useEffect(() => {
-    connectionPhaseRef.current = connectionPhase;
-  }, [connectionPhase]);
+  const applyConnectionPhase = useCallback((next: ConnectionPhase) => {
+    connectionPhaseRef.current = next;
+    setConnectionPhase(next);
+  }, []);
   const [probeMessage, setProbeMessage] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isSending, setIsSending] = useState(false);
@@ -416,6 +450,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [sessionSelector, setSessionSelector] = useState<{ visible: boolean }>({ visible: false });
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [loadingEarlierHistory, setLoadingEarlierHistory] = useState(false);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
+  // No offset/cursor on the history endpoint — "load earlier" re-fetches with
+  // a bigger limit and diffs against what is already shown.
+  const historyLimitRef = useRef(HISTORY_PAGE_SIZE);
+  const loadingEarlierRef = useRef(false);
   const confirmationBypassRef = useRef(false);
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
   const [pendingRunApproval, setPendingRunApproval] = useState<{ runId: string; prompt: string } | null>(null);
@@ -464,6 +504,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     const requestId = ++historyRequestRef.current;
     historyLoadedForRef.current = gateway.id;
     setHistoryLoading(true);
+    // A fresh load starts a new page sequence for "load earlier".
+    historyLimitRef.current = HISTORY_PAGE_SIZE;
+    setHasMoreHistory(false);
     try {
       // A deliberate session switch updates the ref; do not let the profile's
       // initial session override it on every history reload.
@@ -494,11 +537,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const sessionKey = gateway.sessionKey ?? sessionId ?? 'default';
       const [gatewayHistory, localTrans] = await Promise.all([
         sessionId
-           ? client.getSessionMessages(sessionId, 80).catch(() => [])
+           ? client.getSessionMessages(sessionId, historyLimitRef.current).catch(() => [])
            : Promise.resolve([]),
          loadTranscripts(gateway.id, sessionKey),
       ]);
       if (requestId !== historyRequestRef.current) return;
+      setHasMoreHistory(hasEarlierHistory(gatewayHistory.length, historyLimitRef.current));
       const gatewayMessages = historyToChatMessages(gatewayHistory);
       setTranscripts(localTrans);
 
@@ -538,13 +582,36 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      setMessages(merged);
+      setMessages(boundWindow(merged));
       setLastError(null);
     } catch (error) {
       if (requestId !== historyRequestRef.current) return;
       setLastError(error instanceof Error ? error.message : String(error));
     } finally {
       if (requestId === historyRequestRef.current) setHistoryLoading(false);
+    }
+  }, []);
+
+  const loadEarlierMessages = useCallback(async () => {
+    const client = clientRef.current;
+    const sessionId = sessionIdRef.current;
+    // Re-entrant taps and a request already superseded by a fresh reload both
+    // no-op rather than racing a second page fetch against the first.
+    if (!client || !sessionId || loadingEarlierRef.current) return;
+    const requestId = historyRequestRef.current;
+    loadingEarlierRef.current = true;
+    setLoadingEarlierHistory(true);
+    try {
+      const nextLimit = historyLimitRef.current + HISTORY_PAGE_SIZE;
+      const older = await client.getSessionMessages(sessionId, nextLimit).catch(() => []);
+      if (requestId !== historyRequestRef.current) return;
+      historyLimitRef.current = nextLimit;
+      setHasMoreHistory(hasEarlierHistory(older.length, nextLimit));
+      const olderChat = historyToChatMessages(older);
+      setMessages((prev) => prependEarlier(prev, olderChat));
+    } finally {
+      loadingEarlierRef.current = false;
+      setLoadingEarlierHistory(false);
     }
   }, []);
 
@@ -628,34 +695,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         {
           onStatus: (nextStatus, detail) => {
             if (!isCurrent()) return;
-            setStatus(nextStatus);
+            applyStatus(nextStatus);
             setStatusDetail(detail ?? '');
-            if (nextStatus === 'connected') {
-              if (autoRetryTimerRef.current) {
-                clearTimeout(autoRetryTimerRef.current);
-                autoRetryTimerRef.current = null;
-              }
-              gatewayDownNotifiedRef.current = false;
-              setConnectionPhase('connected');
-              setProbeMessage('');
-              setLastError(null);
-            } else if (nextStatus === 'connecting' || nextStatus === 'reconnecting') {
-              setConnectionPhase('connecting');
-              // Only a fresh attempt clears the last failure. 'reconnecting' is
-              // reported immediately after onError, so clearing here wiped the
-              // reason before it could ever be shown.
-              if (nextStatus === 'connecting') setLastError(null);
-              if (nextStatus === 'reconnecting' && !gatewayDownNotifiedRef.current) {
-                gatewayDownNotifiedRef.current = true;
-                void notifyGatewayDown(gatewayHostForDisplay(gateway.url));
-              }
-            } else if (nextStatus === 'disconnected') {
-              setConnectionPhase((phase) =>
-                phase === 'connecting' || phase === 'connected' ? 'failed' : phase,
-              );
-              if (activeGatewayRef.current && !authFailureRef.current) {
-                scheduleAutoRetryRef.current(12000);
-              }
+
+            const decision = decideConnectionPhase(connectionPhaseRef.current, nextStatus);
+            applyConnectionPhase(decision.phase);
+            if (decision.clearAutoRetryTimer && autoRetryTimerRef.current) {
+              clearTimeout(autoRetryTimerRef.current);
+              autoRetryTimerRef.current = null;
+            }
+            if (decision.clearGatewayDownNotified) gatewayDownNotifiedRef.current = false;
+            if (decision.clearProbeMessage) setProbeMessage('');
+            if (decision.clearLastError) setLastError(null);
+            if (decision.notifyGatewayDown && !gatewayDownNotifiedRef.current) {
+              gatewayDownNotifiedRef.current = true;
+              void notifyGatewayDown(gatewayHostForDisplay(gateway.url));
+            }
+            if (decision.scheduleAutoRetry && activeGatewayRef.current && !authFailureRef.current) {
+              scheduleAutoRetryRef.current(12000);
             }
           },
           onHello: (hello) => {
@@ -681,7 +738,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       );
       clientRef.current = client;
       historyLoadedForRef.current = null;
-      setConnectionPhase('connecting');
+      applyConnectionPhase('connecting');
       // connect() rejects only on auth rejection; unreachable gateways are left
       // in 'reconnecting' with backoff running.
       try {
@@ -723,7 +780,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         })
         .catch(() => undefined);
     },
-    [reloadHistoryFor],
+    [reloadHistoryFor, applyStatus, applyConnectionPhase],
   );
 
   const connectGateway = useCallback(
@@ -803,7 +860,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       autoConnectInFlightRef.current = true;
-      setConnectionPhase('searching');
+      applyConnectionPhase('searching');
       setProbeMessage('Looking for your gateway…');
       setLastError(null);
 
@@ -886,7 +943,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           });
 
           if (candidates.length === 0) {
-            setConnectionPhase('failed');
+            applyConnectionPhase('failed');
             setProbeMessage('Add your gateway address to connect.');
             scheduleAutoRetryRef.current(30000);
             return;
@@ -896,7 +953,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (!probeResult?.ok) {
-          setConnectionPhase('failed');
+          applyConnectionPhase('failed');
           const hint = categorizeProbeError(probeResult) || (probeResult?.error ? `${probeResult.error}. ` : '');
           setProbeMessage(hint || 'Check that your gateway is running and reachable.');
           scheduleAutoRetryRef.current(20000);
@@ -916,7 +973,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         autoConnectInFlightRef.current = false;
       }
     },
-    [connectGateway, resolveGatewayForUrl],
+    [connectGateway, resolveGatewayForUrl, applyConnectionPhase],
   );
 
   const refreshGateways = useCallback(async () => {
@@ -957,14 +1014,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
       if (!loadedSettings.autoConnect) {
         setNeedsOnboarding(onboardingNeeded);
-        setConnectionPhase('idle');
+        applyConnectionPhase('idle');
         return;
       }
 
       setNeedsOnboarding(false);
 
       void runAutoConnect(loadedSettings, loadedGateways, activeId).catch((error) => {
-        setConnectionPhase('failed');
+        applyConnectionPhase('failed');
         setNeedsOnboarding(onboardingNeeded);
         setProbeMessage(
           isGatewayAuthFailure(error)
@@ -976,12 +1033,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       });
     } catch (error) {
       setIsBootstrapped(true);
-      setConnectionPhase('failed');
+      applyConnectionPhase('failed');
       setProbeMessage('Could not load saved gateway settings.');
       setLastError(error instanceof Error ? error.message : String(error));
       scheduleAutoRetryRef.current(30000);
     }
-  }, [runAutoConnect]);
+  }, [runAutoConnect, applyConnectionPhase]);
 
   useEffect(() => {
     if (bootstrapStartedRef.current) return;
@@ -1014,10 +1071,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const gatewayRequest = useCallback(
     async <T,>(method: string, params: Record<string, unknown> = {}) => {
       const client = clientRef.current;
-      if (!client || status !== 'connected') throw new Error('Gateway not connected');
+      if (!client || statusRef.current !== 'connected') throw new Error('Gateway not connected');
       return client.rpcRequest<T>(method, params);
     },
-    [status],
+    [],
   );
 
   /**
@@ -1028,13 +1085,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const gatewayFetch = useCallback(
     async (path: string, init?: RequestInit) => {
       const client = clientRef.current;
-      if (!client || status !== 'connected') throw new Error('Gateway not connected');
+      if (!client || statusRef.current !== 'connected') throw new Error('Gateway not connected');
       if (!client.authorizedFetch) {
         throw new Error('This gateway does not expose direct routes.');
       }
       return client.authorizedFetch(path, init);
     },
-    [status],
+    [],
   );
 
   const backends = useMemo(() => activeManifest?.backends ?? [], [activeManifest]);
@@ -1110,7 +1167,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     const ts = Date.now();
 
     const msg: ChatMessage = { id, role, text, timestamp: ts, command, queued };
-    setMessages((prev) => [...prev, msg]);
+    setMessages((prev) => appendBounded(prev, msg));
 
     if (command?.input && activeGateway) {
       const sessionKey = activeGateway.sessionKey ?? sessionIdRef.current ?? 'default';
@@ -1179,8 +1236,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [activeGateway]);
 
   const deleteGateway = useCallback(async (id: string) => {
+    const before = gateways;
     const next = await removeGateway(id);
     setGateways(next);
+
+    // Transcripts are keyed by gateway id and outlive the profile otherwise.
+    // The cascade can take child profiles with it, so clear everything that
+    // disappeared rather than only the id we were handed.
+    const removedIds = new Set<string>([id]);
+    for (const gateway of before) {
+      if (!next.some((remaining) => remaining.id === gateway.id)) removedIds.add(gateway.id);
+    }
+    await Promise.all([...removedIds].map((removedId) => clearTranscriptsForGateway(removedId)));
+
     // Cascade removes child profiles too — tear down if the active gateway
     // was the deleted parent or one of its children.
     const activeWasRemoved =
@@ -1197,18 +1265,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setActiveHello(null);
       setActiveManifest(null);
       setLiveCapabilities(null);
-      setStatus('disconnected');
+      applyStatus('disconnected');
       setMessages([]);
       await saveActiveGatewayId(null);
       if (settings.autoConnect && next.length > 0) {
-        setConnectionPhase('searching');
+        applyConnectionPhase('searching');
         setProbeMessage('Searching for another gateway…');
         void runAutoConnect(settings, next, null);
       } else {
-        setConnectionPhase('idle');
+        applyConnectionPhase('idle');
       }
     }
-  }, [activeGateway, settings, runAutoConnect]);
+  }, [activeGateway, gateways, settings, runAutoConnect, applyStatus, applyConnectionPhase]);
 
   const disconnectGateway = useCallback(() => {
     // Supersede first: the client emits 'disconnected' synchronously, and the
@@ -1224,12 +1292,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setActiveGateway(null);
     setActiveHello(null);
     setActiveManifest(null);
-    setStatus('disconnected');
+    applyStatus('disconnected');
     setMessages([]);
     setIsSending(false);
-    setConnectionPhase('idle');
+    applyConnectionPhase('idle');
     void saveActiveGatewayId(null);
-  }, []);
+  }, [applyStatus, applyConnectionPhase]);
 
   const sendMessage = useCallback(
     async (text: string, existingMessageId?: string) => {
@@ -1251,7 +1319,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           text: trimmed,
           timestamp: Date.now(),
         };
-        setMessages((prev) => [...prev, userMessage]);
+        setMessages((prev) => appendBounded(prev, userMessage));
       }
       setIsSending(true);
       setLastError(null);
@@ -1260,13 +1328,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       activeRunIdRef.current = runId;
 
       // Add streaming placeholder
-      setMessages((prev) => [...prev, {
-        id: `run-${runId}`,
-        role: 'assistant',
-        text: '',
-        streaming: true,
-        timestamp: Date.now(),
-      }]);
+      setMessages((prev) =>
+        appendBounded(prev, {
+          id: `run-${runId}`,
+          role: 'assistant',
+          text: '',
+          streaming: true,
+          timestamp: Date.now(),
+        }),
+      );
+
+      // Declared outside the try so the catch can ask the signal itself
+      // whether this failure was the user cancelling.
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
 
       try {
         // Build bounded conversation context: last 20 real turns, no command payloads.
@@ -1277,9 +1352,6 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             .map((m) => ({ role: m.role, content: m.text })),
           { role: 'user', content: trimmed },
         ];
-
-        const abortController = new AbortController();
-        abortControllerRef.current = abortController;
 
         await client.streamChat(
           conversationMessages,
@@ -1333,7 +1405,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         setLastError(null);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (message.includes('abort') || message.includes('Abort')) {
+        if (isUserAbort(error, abortController.signal)) {
           // User cancelled — remove the streaming placeholder
           setMessages((prev) => prev.filter((m) => m.id !== `run-${runId}`));
         } else {
@@ -1448,9 +1520,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           },
         });
 
-        const succeeded = /(complete|succeeded|success|done|finished)/i.test(outcome.status);
+        // An unresolved run never reached a terminal state — it may still be
+        // running on the gateway, so it is neither a success nor a failure.
+        const succeeded =
+          !outcome.unresolved && /(complete|succeeded|success|done|finished)/i.test(outcome.status);
         patchRun(trackedId.current, {
-          status: outcome.cancelled ? 'cancelled' : succeeded ? 'complete' : 'failed',
+          status: outcome.cancelled
+            ? 'cancelled'
+            : outcome.unresolved
+              ? 'unresolved'
+              : succeeded
+                ? 'complete'
+                : 'failed',
           summary: (outcome.error ?? outcome.result ?? outcome.status ?? '').slice(0, 160) || undefined,
           finishedAt: Date.now(),
         });
@@ -1458,7 +1539,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (!outcome.cancelled) {
           const summary = (outcome.error ?? outcome.result ?? outcome.status ?? '').slice(0, 120);
           void notifyRunComplete(
-            succeeded ? 'Run complete' : outcome.status === 'cancelled' ? 'Run cancelled' : 'Run finished',
+            succeeded
+              ? 'Run complete'
+              : outcome.unresolved
+                ? 'Run unconfirmed'
+                : outcome.status === 'cancelled'
+                  ? 'Run cancelled'
+                  : 'Run finished',
             summary || outcome.status,
           );
         }
@@ -1474,8 +1561,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     (runId: string) => {
       const client = clientRef.current;
       // Abort the local driver (denies any pending approval, stops the stream).
-      runAbortControllerRef.current?.abort();
-      runAbortControllerRef.current = null;
+      abortAndClear(runAbortControllerRef);
       // Ask the gateway to stop the run server-side (best effort).
       if (client?.stopRun && !runId.startsWith('local-')) {
         void client.stopRun(runId).catch(() => undefined);
@@ -1554,7 +1640,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
       try {
         const client = clientRef.current;
-        if (!client || status !== 'connected') throw new Error('Gateway not connected');
+        if (!client || statusRef.current !== 'connected') throw new Error('Gateway not connected');
 
         // Execute gateway slash command — stream agent-transport output live.
         let streamedText = '';
@@ -1715,15 +1801,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
 
     // Abort the fetch controller — this stops the local stream; the adapter
     // (OpenClaw) additionally issues session.abort via the signal listener.
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
+    abortAndClear(abortControllerRef);
     // Abort an in-flight agentic run (denies any pending approval).
-    if (runAbortControllerRef.current) {
-      runAbortControllerRef.current.abort();
-      runAbortControllerRef.current = null;
-    }
+    abortAndClear(runAbortControllerRef);
 
     // Remove streaming placeholders
     setMessages((prev) => prev.filter((m) => !m.streaming));
@@ -1760,7 +1840,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
         platform: Platform.OS,
       });
 
-      setConnectionPhase('searching');
+      applyConnectionPhase('searching');
 
       let probeResult = await probeHighPriorityCandidates(
         candidates,
@@ -1776,7 +1856,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
         );
       }
       if (!probeResult?.ok) {
-        setConnectionPhase('failed');
+        applyConnectionPhase('failed');
         const hint = categorizeProbeError(probeResult) || (probeResult?.error ? `${probeResult.error}. ` : '');
         setProbeMessage(
           `${hint}Saved your address, but could not reach the gateway. Make sure it is running and exposed over Tailscale or local network.`,
@@ -1801,7 +1881,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       await connectGateway(gateway);
       return true;
     },
-    [connectGateway, gateways, resolveGatewayForUrl],
+    [connectGateway, gateways, resolveGatewayForUrl, applyConnectionPhase],
   );
 
   const retryAutoConnect = useCallback(async () => {
@@ -1905,8 +1985,8 @@ const response = await executeGatewaySlashCommand(trimmed, {
     const next = await saveAppSettings({ onboardingComplete: true });
     setSettings(next);
     setNeedsOnboarding(false);
-    setConnectionPhase('idle');
-  }, []);
+    applyConnectionPhase('idle');
+  }, [applyConnectionPhase]);
 
   const setAutoConnect = useCallback(async (enabled: boolean) => {
     const next = await saveAppSettings({ autoConnect: enabled });
@@ -1919,6 +1999,12 @@ const response = await executeGatewaySlashCommand(trimmed, {
   }, [sendChatInput]);
 
   const cancelCommand = useCallback((id: string) => {
+    // Cancelling has to actually stop the work. Without this the transcript
+    // reads "cancelled" while the gateway keeps running, and its completion
+    // then re-updates the very message the user cancelled.
+    abortAndClear(abortControllerRef);
+    abortAndClear(runAbortControllerRef);
+
     if (activeGateway) {
       const sessionKey = activeGateway.sessionKey ?? sessionIdRef.current ?? 'default';
       void updateTranscript(activeGateway.id, sessionKey, id, {
@@ -2119,6 +2205,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
       createNewSession,
       deleteSessionById,
       deleteLocalMessage,
+      hasMoreHistory,
+      loadingEarlierHistory,
+      loadEarlierMessages,
     }),
     [
       gateways, activeGateway, activeHello, status, statusDetail, connectionPhase, probeMessage,
@@ -2133,6 +2222,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       openSessionSelector, closeSessionSelector, selectSession, sessionList, currentSessionId,
       historyLoading, createNewSession, deleteSessionById, deleteLocalMessage,
       liveCapabilities, dynamicCommands,
+      hasMoreHistory, loadingEarlierHistory, loadEarlierMessages,
     ],
   );
 

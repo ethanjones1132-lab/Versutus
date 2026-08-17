@@ -15,7 +15,7 @@ import { MessageBubble } from '@/components/chat/message-bubble';
 import { ModelPickerSheet } from '@/components/chat/model-picker-sheet';
 import { PairingSheet } from '@/components/chat/pairing-sheet';
 import { SessionSelectorSheet, type SessionItem } from '@/components/chat/session-selector-sheet';
-import { EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text } from '@/components/ui';
+import { Button, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text } from '@/components/ui';
 import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
@@ -91,6 +91,9 @@ export function ChatScreen() {
     resolveRunApproval,
     recentCommands,
     historyLoading,
+    hasMoreHistory,
+    loadingEarlierHistory,
+    loadEarlierMessages,
     createNewSession,
     deleteSessionById,
     deleteLocalMessage,
@@ -244,6 +247,19 @@ export function ChatScreen() {
           scrollEventThrottle={80}
           onContentSizeChange={handleContentSizeChange}
           renderItem={renderMessage}
+          ListHeaderComponent={
+            hasMoreHistory && messages.length > 0 ? (
+              <View style={styles.loadEarlierWrap}>
+                <Button
+                  label={loadingEarlierHistory ? 'Loading…' : 'Load earlier messages'}
+                  variant="ghost"
+                  size="sm"
+                  disabled={loadingEarlierHistory}
+                  onPress={() => void loadEarlierMessages()}
+                />
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
             historyLoading ? (
               <ChatSkeleton />
@@ -393,6 +409,10 @@ const styles = StyleSheet.create({
   },
   list: {
     flex: 1,
+  },
+  loadEarlierWrap: {
+    alignItems: 'center',
+    paddingVertical: Spacing.two,
   },
   messages: {
     paddingHorizontal: Spacing.three,

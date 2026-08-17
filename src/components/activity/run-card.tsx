@@ -15,6 +15,7 @@ const STATUS_LABEL: Record<ActivityRun['status'], string> = {
   complete: 'Complete',
   failed: 'Failed',
   cancelled: 'Cancelled',
+  unresolved: 'Unconfirmed',
 };
 
 const STATUS_TONE: Record<ActivityRun['status'], 'warning' | 'accent' | 'success' | 'danger' | 'neutral'> = {
@@ -23,6 +24,7 @@ const STATUS_TONE: Record<ActivityRun['status'], 'warning' | 'accent' | 'success
   complete: 'success',
   failed: 'danger',
   cancelled: 'neutral',
+  unresolved: 'warning',
 };
 
 export type RunCardProps = {
