@@ -1,22 +1,12 @@
 import { StyleSheet, View } from 'react-native';
 
-import { Palette, Radius } from '@/constants/tokens';
+import { Radius } from '@/constants/tokens';
 
-import type { GlassSurfaceProps, GlassVariant } from './types';
+import { glassVariantStyles } from './glass-variants';
+import type { GlassSurfaceProps } from './types';
 
-/**
- * Variant → surface treatment. Shared by all platforms; platform files may
- * layer native effects (blur/liquid glass) on top of the same mapping.
- */
-export const glassVariantStyles: Record<
-  GlassVariant,
-  { backgroundColor: string; borderColor: string }
-> = {
-  hero: { backgroundColor: Palette.glassHero, borderColor: Palette.glassHeroBorder },
-  surface: { backgroundColor: Palette.glass, borderColor: Palette.glassBorder },
-  inset: { backgroundColor: Palette.backgroundInset, borderColor: Palette.borderSubtle },
-  chip: { backgroundColor: Palette.accentMuted, borderColor: Palette.accentWarmMuted },
-};
+// Re-exported for any consumers that imported the map from the base module.
+export { glassVariantStyles } from './glass-variants';
 
 /**
  * Shared frosted-surface implementation (Android + default). Web adds a real

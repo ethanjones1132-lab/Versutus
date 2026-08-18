@@ -88,13 +88,13 @@ export const MOCK_CHAT_MESSAGES: ChatMessage[] = [
     id: 'preview-user-1',
     role: 'user',
     text: 'What can you help me with on this machine?',
-    timestamp: Date.now() - 60_000,
+    timestamp: Date.now() - 86_400_000,
   },
   {
     id: 'preview-assistant-1',
     role: 'assistant',
     text: 'I can run shell commands, inspect gateway health, and help you debug Tailscale routing.',
-    timestamp: Date.now() - 45_000,
+    timestamp: Date.now() - 86_400_000 + 15_000,
   },
   {
     id: 'preview-assistant-stream',

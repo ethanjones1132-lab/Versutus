@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
-import { Badge, Card, Icon, PressableScale, Text } from '@/components/ui';
+import { Badge, Card, Icon, PressableScale, Text, type IconName } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
 import { springSnappy } from '@/lib/motion/presets';
@@ -18,6 +18,8 @@ type ChatComposerProps = {
   onReconnect: () => void;
   slashSuggestions?: SlashCommandSuggestion[];
   onSelectSlashSuggestion?: (value: string) => void;
+  /** One-tap command seeds shown in the dock's left slot while idle. */
+  quickActions?: { label: string; draft: string; icon: IconName }[];
   isStreaming: boolean;
   canSend: boolean;
 };
@@ -31,6 +33,7 @@ export function ChatComposer({
   onReconnect,
   slashSuggestions = [],
   onSelectSlashSuggestion,
+  quickActions = [],
   isStreaming,
   canSend,
 }: ChatComposerProps) {
@@ -60,7 +63,30 @@ export function ChatComposer({
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={72}>
       <View style={styles.dock}>
         <View style={styles.utilityRow}>
-          <View style={styles.chipGroup} />
+          <View style={styles.chipGroup}>
+            {!isStreaming && !draft.trim() && quickActions.length > 0
+              ? quickActions.map((action) => (
+                  <PressableScale
+                    key={action.label}
+                    onPress={async () => {
+                      await Haptics.selectionAsync();
+                      onSelectSlashSuggestion?.(action.draft);
+                    }}
+                    hitSlop={6}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Quick action ${action.label}`}
+                    style={[
+                      styles.quickChip,
+                      { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+                    ]}>
+                    <Icon name={action.icon} size={11} color="accentWarm" />
+                    <Text variant="micro" color="accentWarm">
+                      {action.label}
+                    </Text>
+                  </PressableScale>
+                ))
+              : null}
+          </View>
           <View style={styles.chipGroup}>
             <PressableScale
               onPress={async () => {
@@ -231,8 +257,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.two,
   },
-  contextChip: {
-    maxWidth: 132,
+  quickChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+    height: 26,
+    paddingHorizontal: Spacing.two + 2,
+    borderRadius: Radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
   },
   utilityButton: {
     width: 28,

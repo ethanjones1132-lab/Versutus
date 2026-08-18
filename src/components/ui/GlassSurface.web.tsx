@@ -2,7 +2,7 @@ import { StyleSheet, View, type ViewStyle } from 'react-native';
 
 import { Radius } from '@/constants/tokens';
 
-import { glassVariantStyles } from './GlassSurface';
+import { glassVariantStyles } from './glass-variants';
 import type { GlassSurfaceProps } from './types';
 
 const webGlass = {

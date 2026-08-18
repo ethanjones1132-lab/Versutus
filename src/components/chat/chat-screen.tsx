@@ -6,6 +6,7 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { ApprovalSheet } from '@/components/chat/approval-sheet';
 import { BackendPickerSheet } from '@/components/chat/backend-picker-sheet';
 import { ChatComposer } from '@/components/chat/chat-composer';
+import { DayDivider } from '@/components/chat/day-divider';
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
 import { ChatHeader } from '@/components/chat/chat-header';
 import { ChatOverflowSheet, type ChatSessionStats } from '@/components/chat/chat-overflow-sheet';
@@ -20,6 +21,7 @@ import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
+import { formatDayDivider } from '@/lib/format';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 
 const PIN_THRESHOLD_PX = 96;
@@ -136,6 +138,7 @@ export function ChatScreen() {
 
   const sessionLabel = currentSession?.title ?? (currentSessionId ? `${currentSessionId.slice(0, 10)}…` : undefined);
   const modelLabel = activeGateway?.model ?? 'Default model';
+  const identity = settings.pcName ?? activeGateway?.name;
   const activeBackend = backends.find((backend) => backend.id === selectedBackendId) ?? backends[0];
   const backendLabel = activeBackend?.label;
 
@@ -171,15 +174,24 @@ export function ChatScreen() {
   }, []);
 
   const renderMessage = useCallback(
-    ({ item }: { item: ChatMessage }) => (
-      <MessageBubble
-        message={item}
-        onRetry={retryCommand}
-        onCancel={cancelCommand}
-        onLongPress={setActionMessage}
-      />
-    ),
-    [cancelCommand, retryCommand],
+    ({ item, index }: { item: ChatMessage; index: number }) => {
+      const previous = messages[index - 1];
+      const label = item.timestamp ? formatDayDivider(item.timestamp) : undefined;
+      const previousLabel = previous?.timestamp ? formatDayDivider(previous.timestamp) : undefined;
+      return (
+        <>
+          {label && label !== previousLabel ? <DayDivider label={label} /> : null}
+          <MessageBubble
+            message={item}
+            identity={identity}
+            onRetry={retryCommand}
+            onCancel={cancelCommand}
+            onLongPress={setActionMessage}
+          />
+        </>
+      );
+    },
+    [cancelCommand, identity, messages, retryCommand],
   );
 
   if (!activeGateway) {
@@ -202,7 +214,7 @@ export function ChatScreen() {
   }
 
   return (
-    <Screen edges={['bottom']} ambient={false}>
+    <Screen edges={['bottom']}>
       <ChatHeader
         gatewayName={settings.pcName ?? activeGateway.name}
         status={status}
@@ -306,6 +318,11 @@ export function ChatScreen() {
         onReconnect={() => void retryAutoConnect()}
         slashSuggestions={slashSuggestions}
         onSelectSlashSuggestion={(value) => setDraft(value)}
+        quickActions={[
+          { label: 'Run', draft: '/run ', icon: { ios: 'bolt.fill', android: 'bolt', web: 'bolt' } },
+          { label: 'Status', draft: '/status', icon: { ios: 'waveform.path.ecg', android: 'pulse', web: 'pulse' } },
+          { label: 'Help', draft: '/help', icon: { ios: 'questionmark.circle', android: 'help', web: 'help' } },
+        ]}
         isStreaming={isStreaming}
         // Allow send while disconnected so the offline outbox can queue; the
         // provider flushes on reconnect. Block only when no gateway exists.
@@ -447,3 +464,4 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
   },
 });
+

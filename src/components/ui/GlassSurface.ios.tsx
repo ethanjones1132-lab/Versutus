@@ -3,7 +3,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { Radius } from '@/constants/tokens';
 
-import { glassVariantStyles } from './GlassSurface';
+import { glassVariantStyles } from './glass-variants';
 import type { GlassSurfaceProps } from './types';
 
 export function GlassSurface({

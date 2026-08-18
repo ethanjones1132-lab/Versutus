@@ -36,6 +36,23 @@ export function formatClockTime(timestamp: number): string {
   return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
+/** Day-group label for message dividers: "Today", "Yesterday", weekday, else short date. */
+export function formatDayDivider(timestamp: number): string {
+  const ms = timestamp > 1_000_000_000_000 ? timestamp : timestamp * 1000;
+  const day = new Date(ms);
+  const now = new Date();
+  const startOf = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const diffDays = Math.round((startOf(now) - startOf(day)) / 86_400_000);
+  if (diffDays <= 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return day.toLocaleDateString(undefined, { weekday: 'long' });
+  return day.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: day.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+  });
+}
+
 /** Elapsed duration: "0:07", "3:42", "1:02:11" */
 export function formatDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));

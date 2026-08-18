@@ -7,8 +7,9 @@ import { MarkdownText } from '@/components/chat/markdown/markdown-text';
 import { StreamingIndicator } from '@/components/chat/streaming-indicator';
 import { ToolCallCard } from '@/components/chat/tool-call-card';
 import { Badge, Card, PressableScale, Text } from '@/components/ui';
-import { Radius, Spacing } from '@/constants/tokens';
+import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { entering } from '@/lib/motion/presets';
+import { formatClockTime } from '@/lib/format';
 import { useTokens } from '@/hooks/use-tokens';
 import type { ChatMessage, CommandTranscriptEntry } from '@/lib/gateway/types';
 
@@ -18,6 +19,8 @@ type MessageBubbleProps = {
   onCancel?: (id: string) => void;
   /** Long-press opens the message action sheet. */
   onLongPress?: (message: ChatMessage) => void;
+  /** Gateway display name; its initial becomes the assistant monogram. */
+  identity?: string;
 };
 
 const COMMAND_STATUS_LABEL = {
@@ -32,7 +35,7 @@ const COMMAND_STATUS_TONE = {
   error: 'danger',
 } as const;
 
-export function MessageBubble({ message, onRetry, onCancel, onLongPress }: MessageBubbleProps) {
+export function MessageBubble({ message, onRetry, onCancel, onLongPress, identity }: MessageBubbleProps) {
   const tokens = useTokens();
   const isUser = message.role === 'user';
   const isCommand = !!message.command;
@@ -55,10 +58,22 @@ export function MessageBubble({ message, onRetry, onCancel, onLongPress }: Messa
     <Animated.View
       entering={isUser ? entering.slideInRight : entering.slideInLeft}
       style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}>
-      <PressableScale
-        onLongPress={() => void handleLongPress()}
-        delayLongPress={350}
-        style={styles.bubblePress}>
+      {!isUser && identity ? (
+        <View
+          style={[
+            styles.monogram,
+            { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+          ]}>
+          <Text variant="micro" color="accentWarm" style={styles.monogramLetter}>
+            {identity.slice(0, 1).toUpperCase()}
+          </Text>
+        </View>
+      ) : null}
+      <View style={[styles.bubbleColumn, isUser ? styles.bubbleColumnUser : styles.bubbleColumnAssistant]}>
+        <PressableScale
+          onLongPress={() => void handleLongPress()}
+          delayLongPress={350}
+          style={styles.bubblePress}>
         <Card
           variant={isUser ? 'chip' : 'surface'}
           padding={Spacing.three}
@@ -177,7 +192,13 @@ export function MessageBubble({ message, onRetry, onCancel, onLongPress }: Messa
 
           {message.streaming || commandStatus === 'running' ? <StreamingIndicator /> : null}
         </Card>
-      </PressableScale>
+        </PressableScale>
+        {message.timestamp ? (
+          <Text variant="micro" color="tertiary" style={styles.timestamp}>
+            {formatClockTime(message.timestamp)}
+          </Text>
+        ) : null}
+        </View>
     </Animated.View>
   );
 }
@@ -185,12 +206,39 @@ export function MessageBubble({ message, onRetry, onCancel, onLongPress }: Messa
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: Spacing.two,
   },
   rowUser: {
     justifyContent: 'flex-end',
   },
   rowAssistant: {
     justifyContent: 'flex-start',
+  },
+  monogram: {
+    width: 26,
+    height: 26,
+    borderRadius: Radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.two,
+  },
+  monogramLetter: {
+    fontFamily: FontFamily.sansSemiBold,
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  bubbleColumn: {
+    flexShrink: 1,
+    minWidth: 0,
+    gap: Spacing.half,
+  },
+  bubbleColumnUser: {
+    alignItems: 'flex-end',
+  },
+  bubbleColumnAssistant: {
+    alignItems: 'flex-start',
   },
   bubblePress: {
     maxWidth: '85%',
@@ -248,5 +296,11 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     minHeight: 28,
     justifyContent: 'center',
+  },
+  timestamp: {
+    fontSize: 10,
+    lineHeight: 13,
+    fontFamily: FontFamily.mono,
+    paddingHorizontal: Spacing.one,
   },
 });

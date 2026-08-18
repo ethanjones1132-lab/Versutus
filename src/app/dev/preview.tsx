@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 
+import { DayDivider } from '@/components/chat/day-divider';
 import { MessageBubble } from '@/components/chat/message-bubble';
 import { PreviewScenarioChip } from '@/components/dev/preview-scenario-chip';
 import { GlassCollapsible } from '@/components/glass-collapsible';
@@ -10,6 +11,7 @@ import { PairingPanel } from '@/components/pairing-panel';
 import { Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { entering } from '@/lib/motion/presets';
+import { formatDayDivider } from '@/lib/format';
 import { useTokens } from '@/hooks/use-tokens';
 
 import {
@@ -23,6 +25,20 @@ export default function DevPreviewScreen() {
   const tokens = useTokens();
   const [scenarioId, setScenarioId] = useState<PreviewScenario>('idle');
   const scenario = PREVIEW_SCENARIOS.find((item) => item.id === scenarioId) ?? PREVIEW_SCENARIOS[0];
+
+  // Day-grouped chat rows so the lab shows the divider behaviour that the real
+  // FlatList produces between date boundaries.
+  const chatRows = useMemo(() => {
+    const rows: ReactNode[] = [];
+    let lastLabel: string | null = null;
+    for (const message of MOCK_CHAT_MESSAGES) {
+      const label = message.timestamp ? formatDayDivider(message.timestamp) : null;
+      if (label && label !== lastLabel) rows.push(<DayDivider key={`day-${label}`} label={label} />);
+      rows.push(<MessageBubble key={message.id} message={message} identity="V" />);
+      lastLabel = label;
+    }
+    return rows;
+  }, []);
 
   return (
     <Screen edges={['bottom']}>
@@ -51,11 +67,7 @@ export default function DevPreviewScreen() {
 
         <Animated.View key={scenarioId} entering={entering.fadeIn} style={styles.stage}>
           {scenario.id === 'chat-streaming' ? (
-            <View style={styles.chatPane}>
-              {MOCK_CHAT_MESSAGES.map((message) => (
-                <MessageBubble key={message.id} message={message} />
-              ))}
-            </View>
+            <View style={styles.chatPane}>{chatRows}</View>
           ) : (
             <>
               <HomeStatusCard
