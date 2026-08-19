@@ -1,4 +1,4 @@
-import type { ConnectionStatus, GatewayHelloOk } from '@/lib/gateway/types';
+import type { ConnectionStatus, GatewayHelloOk, GatewayKind } from '@/lib/gateway/types';
 import type { GatewayBackend, GatewayCapabilityInstance } from '@/lib/portal/manifest';
 import { capabilitiesForBackend } from '@/lib/gateway/backend-capabilities';
 
@@ -1112,4 +1112,35 @@ function readString(record: Record<string, unknown> | undefined, key: string): s
 function readArray(record: Record<string, unknown> | undefined, key: string): unknown[] | undefined {
   const value = record?.[key];
   return Array.isArray(value) ? value : undefined;
+}
+
+/**
+ * Gateway kinds that speak the Hermes RPC dialect.
+ *
+ * The quick RPC set (`tools.list`, `sessions.list`, …) is mapped to Hermes REST
+ * routes by `rpc-routes.ts`. A Versutus Gate serves a different surface: its
+ * `/v1/capabilities/rpc` dispatches only `registry.*`, `providers.*` and
+ * `environment*`, so a Hermes-dialect method there answers
+ * `Unknown method "tools.list"`. The Gate's manifest still advertises
+ * `tools: true` — truthfully, because it has tools *via its backends* — so
+ * capability flags alone cannot tell these apart. Dialect can.
+ */
+export function speaksHermesRpcDialect(kind?: GatewayKind): boolean {
+  return kind === 'hermes' || kind === 'unknown' || kind === undefined;
+}
+
+/**
+ * Drop RPC commands the target gateway cannot route.
+ *
+ * Kept separate from `filterExecutableCommands` (which filters on advertised
+ * per-method availability) because this is about the transport dialect, not
+ * about whether a given feature is switched on.
+ */
+export function filterCommandsForDialect(
+  commands: GatewayCommand[],
+  kind?: GatewayKind,
+): GatewayCommand[] {
+  if (speaksHermesRpcDialect(kind)) return commands;
+  // Non-Hermes gateways keep only what is not a Hermes-dialect RPC call.
+  return commands.filter((command) => command.transport !== 'rpc');
 }

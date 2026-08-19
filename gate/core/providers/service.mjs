@@ -1,7 +1,7 @@
 import { validateProviderRegistration } from './schema.mjs';
 import { applyCatalogResult, isCatalogFresh, nextBackoff } from './catalog.mjs';
 import { readinessFromAuthAndError } from './health.mjs';
-import { classifyProviderError, ProviderErrorCodes } from './errors.mjs';
+import { authStateForCode, classifyProviderError, ProviderErrorCodes } from './errors.mjs';
 import { nextAuthState, toSnapshot } from './runtime.mjs';
 import { assertProviderDeletionAllowed } from './dependencies.mjs';
 
@@ -90,6 +90,46 @@ export class ProviderService {
     };
     await this.store.put(record.config, nextState);
     return toSnapshot(record.config, nextState, { auth, readiness });
+  }
+
+  /**
+   * Fold a real chat outcome into readiness.
+   *
+   * `inspect` probes the catalog endpoint, which for several providers is free
+   * and answers 200 with no credits on the account -- so a provider that cannot
+   * complete a single turn was still advertised as `ready`. Listing models is
+   * not the thing the provider is for; completing a chat is. A failed turn is
+   * therefore the most authoritative readiness signal available, and it costs
+   * nothing extra to record.
+   */
+  async noteChatOutcome(id, error) {
+    const record = await this.store.get(id);
+    if (!record) return;
+
+    if (!error) {
+      // A turn that succeeded proves more than any probe could.
+      if (record.state.readiness?.state === 'ready' && !record.state.lastError) return;
+      await this.store.put(record.config, {
+        ...record.state,
+        auth: { ...(record.state.auth ?? {}), state: 'ready' },
+        readiness: { state: 'ready', checkedAt: new Date().toISOString() },
+        lastError: undefined,
+      });
+      return;
+    }
+
+    const code = classifyProviderError(error);
+    const readiness = readinessFromAuthAndError({
+      enabled: record.config.enabled !== false,
+      authState: record.state.auth?.state ?? 'ready',
+      error,
+    });
+    await this.store.put(record.config, {
+      ...record.state,
+      auth: { ...(record.state.auth ?? {}), state: authStateForCode(code, record.state.auth?.state ?? 'ready') },
+      readiness,
+      lastError: { code, message: error.message ?? String(error) },
+    });
   }
 
   async refreshCatalog(id, { force = false } = {}) {

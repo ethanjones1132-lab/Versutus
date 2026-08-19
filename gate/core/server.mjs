@@ -396,6 +396,9 @@ export async function createGate(config = {}) {
         stream: wantsStream,
       });
     } catch (error) {
+      // Readiness is only as good as its last real turn: a catalog probe passes
+      // on a provider whose account cannot pay for a completion.
+      await providerService.noteChatOutcome(providerId, error).catch(() => undefined);
       const status = Number.isInteger(error.status) && error.status >= 400 && error.status <= 599
         ? error.status
         : 502;
@@ -403,6 +406,8 @@ export async function createGate(config = {}) {
       res.end(JSON.stringify({ error: { message: error.message, code: error.code || 'upstream_error' } }));
       return;
     }
+
+    await providerService.noteChatOutcome(providerId, null).catch(() => undefined);
 
     if (!wantsStream) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
