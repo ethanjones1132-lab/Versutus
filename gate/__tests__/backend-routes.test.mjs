@@ -111,7 +111,7 @@ function stubTurnRegistry({ calls = [], sendMessage, streamEvents } = {}) {
   };
 }
 
-async function makeGate({ calls = [], provider, registry, terminalSessions } = {}) {
+async function makeGate({ calls = [], provider, registry, terminalSessions, environments } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'gate-backend-'));
   roots.push(root);
   const gateHome = join(root, '.gate-home');
@@ -132,12 +132,15 @@ async function makeGate({ calls = [], provider, registry, terminalSessions } = {
     }), 'utf8');
   }
   await mkdir(join(gateHome, 'config', 'environments'), { recursive: true });
-  await writeFile(join(gateHome, 'config', 'environments', 'stub-local.json'), JSON.stringify({
+  // Most tests want one environment; resolution-order tests want several, in a
+  // known order, so the id is what the Gate sorts and picks on.
+  for (const env of environments ?? [{ id: 'stub-local', adapterId: 'stubcli' }]) {
+  await writeFile(join(gateHome, 'config', 'environments', `${env.id}.json`), JSON.stringify({
     schemaVersion: 1,
     kind: 'cli-environment',
-    id: 'stub-local',
-    label: 'Stub CLI',
-    adapterId: 'stubcli',
+    id: env.id,
+    label: `Stub ${env.adapterId}`,
+    adapterId: env.adapterId,
     executable: { path: 'C:\\stub.exe' },
     protocolPreference: ['acp'],
     versionPolicy: { supported: '1.x', adapterRevision: '1' },
@@ -146,6 +149,7 @@ async function makeGate({ calls = [], provider, registry, terminalSessions } = {
     lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 300, maxConcurrentRuns: 1 },
     enabled: true,
   }), 'utf8');
+  }
 
   const gate = await createGate({
     root,
@@ -1024,6 +1028,55 @@ test('a refused stream falls back to the whole turn rather than losing the reply
     assert.match(text, /echo ping/);
     assert.doesNotMatch(text, /empty_turn/);
     assert.match(text, /\[DONE\]/);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a fronted route picks the backend that can serve it, not the first attached', async () => {
+  // The live Gate attaches claude/codex/hermes/opencode; only one fronts the
+  // Hermes surfaces. Resolving by position would 501 while a capable backend
+  // sat there unused.
+  const calls = [];
+  const registry = stubRegistry(calls);
+  const plain = registry.get('stubcli');
+  const capable = {
+    ...plain,
+    adapterId: 'capablecli',
+    capabilities: [...plain.capabilities, 'skills'],
+    createBackend: () => ({
+      ...plain.createBackend(),
+      async listSkills() { calls.push('listSkills'); return { data: [{ id: 'from-capable' }] }; },
+    }),
+  };
+  // `stubcli` is first and cannot serve skills; `capablecli` is second and can.
+  const twoBackends = {
+    get(id) {
+      if (id === 'stubcli') return plain;
+      if (id === 'capablecli') return capable;
+      throw new Error(`unknown CLI adapter "${id}"`);
+    },
+    list() { return [plain, capable]; },
+  };
+
+  const { gate } = await makeGate({ calls, registry: twoBackends, environments: [{ id: 'a-stub', adapterId: 'stubcli' }, { id: 'b-capable', adapterId: 'capablecli' }] });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/skills`, { headers: auth(gate) });
+    assert.equal(response.status, 200, 'the capable backend should have answered');
+    assert.equal((await response.json()).data[0].id, 'from-capable');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('no attached backend implementing a fronted route is a named 501', async () => {
+  const { gate } = await makeGate();
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/skills`, { headers: auth(gate) });
+    assert.equal(response.status, 501);
+    const body = await response.json();
+    assert.equal(body.error.code, 'backend_unsupported');
+    assert.match(body.error.message, /listSkills/);
   } finally {
     await gate.close();
   }

@@ -13,7 +13,10 @@
 
 /** Ask a backend for one method, failing with a message the app can show. */
 async function via(getBackend, params, name, call) {
-  const backend = await getBackend(params?.backendId);
+  // The method name is passed so the resolver can pick a backend that
+  // implements it — a Gate with several environments attached must not answer
+  // skills.list from whichever one happens to be first.
+  const backend = await getBackend(params?.backendId, name);
   if (typeof backend?.[name] !== 'function') {
     throw new Error(`This gateway's backend does not implement ${name}`);
   }

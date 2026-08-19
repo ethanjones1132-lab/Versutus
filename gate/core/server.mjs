@@ -451,8 +451,18 @@ export async function createGate(config = {}) {
   // Resolution throws rather than writing a response: the RPC dispatcher below
   // owns the reply shape, unlike the REST routes' `resolveBackend`.
   const gatewayMethods = createGatewayMethods({
-    async getBackend(backendId) {
-      const id = backendId ?? (await backendManager.list())[0]?.id;
+    async getBackend(backendId, method) {
+      if (backendId) return backendManager.get(backendId);
+      const entries = await backendManager.list();
+      // Same rule as the REST routes: prefer a backend that can answer, rather
+      // than whichever happens to be attached first.
+      if (method) {
+        for (const entry of entries) {
+          const backend = await backendManager.get(entry.id).catch(() => null);
+          if (backend && typeof backend[method] === 'function') return backend;
+        }
+      }
+      const id = entries[0]?.id;
       if (!id) throw new Error('No chat backend is attached to this Gate');
       return backendManager.get(id);
     },
@@ -827,6 +837,35 @@ export async function createGate(config = {}) {
       }
 
       /**
+       * Resolve a backend that can actually serve `method`.
+       *
+       * `resolveBackend` returns the *first* attached backend, which is right
+       * when any of them can serve the route. It is wrong for the fronted
+       * Hermes surfaces: a Gate with claude/codex/hermes/opencode attached
+       * would answer /v1/skills from claude-local and 501, while hermes-local
+       * sat there able to serve it. An explicit ?backendId= still wins, so a
+       * caller can pin the environment; otherwise pick by capability, exactly
+       * as resolveRunBackend already does for runs.
+       */
+      async function resolveBackendFor(method) {
+        const explicit = url.searchParams.get('backendId');
+        if (explicit) {
+          const backend = await resolveBackend(explicit);
+          if (!backend) return null;
+          return requireBackendMethod(backend, method) ? backend : null;
+        }
+        for (const entry of await backendManager.list()) {
+          const backend = await backendManager.get(entry.id).catch(() => null);
+          if (backend && typeof backend[method] === 'function') return backend;
+        }
+        res.writeHead(501, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          error: { message: `No attached backend implements ${method}`, code: 'backend_unsupported' },
+        }));
+        return null;
+      }
+
+      /**
        * Agentic runs, delegated to whichever backend implements them.
        *
        * The Gate's CLI backends run a turn synchronously and have no notion of
@@ -944,9 +983,8 @@ export async function createGate(config = {}) {
       // `tools: true` since the adapter declared the capability; this is the
       // route that makes the claim true.
       if (pathname === '/v1/toolsets' && method === 'GET') {
-        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        const backend = await resolveBackendFor('listToolsets');
         if (!backend) return;
-        if (!requireBackendMethod(backend, 'listToolsets')) return;
         const toolsets = await backend.listToolsets();
         res.writeHead(200);
         res.end(JSON.stringify(toolsets));
@@ -1012,27 +1050,24 @@ export async function createGate(config = {}) {
       // reachable on Hermes all along; the Gate could not offer them because
       // it served no route, so the app's tiles read "Not offered".
       if (pathname === '/v1/skills' && method === 'GET') {
-        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        const backend = await resolveBackendFor('listSkills');
         if (!backend) return;
-        if (!requireBackendMethod(backend, 'listSkills')) return;
         res.writeHead(200);
         res.end(JSON.stringify(await backend.listSkills()));
         return;
       }
 
       if (pathname === '/health/detailed' && method === 'GET') {
-        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        const backend = await resolveBackendFor('healthDetailed');
         if (!backend) return;
-        if (!requireBackendMethod(backend, 'healthDetailed')) return;
         res.writeHead(200);
         res.end(JSON.stringify(await backend.healthDetailed()));
         return;
       }
 
       if (pathname === '/v1/jobs' && method === 'GET') {
-        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        const backend = await resolveBackendFor('listJobs');
         if (!backend) return;
-        if (!requireBackendMethod(backend, 'listJobs')) return;
         res.writeHead(200);
         res.end(JSON.stringify(await backend.listJobs()));
         return;
@@ -1042,10 +1077,8 @@ export async function createGate(config = {}) {
       if (jobActionMatch && method === 'POST') {
         const [, rawJobId, action] = jobActionMatch;
         const jobId = decodeURIComponent(rawJobId);
-        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        const backend = await resolveBackendFor(action === 'run' ? 'runJob' : 'setJobPaused');
         if (!backend) return;
-        const needed = action === 'run' ? 'runJob' : 'setJobPaused';
-        if (!requireBackendMethod(backend, needed)) return;
         const result = action === 'run'
           ? await backend.runJob(jobId)
           : await backend.setJobPaused(jobId, action === 'pause');
