@@ -328,8 +328,14 @@ test('a non-streaming turn with no content fails instead of returning a fake suc
 
 test('a client that disconnects mid-turn does not get an empty-turn error and does not crash the Gate', async () => {
   let resolveSend;
+  let onInFlight;
+  const inFlight = new Promise((resolve) => { onInFlight = resolve; });
   const registry = stubTurnRegistry({
-    sendMessage: () => new Promise((resolve) => { resolveSend = resolve; }),
+    sendMessage: () =>
+      new Promise((resolve) => {
+        resolveSend = resolve;
+        onInFlight();
+      }),
   });
   const { gate } = await makeGate({ registry });
   try {
@@ -339,10 +345,13 @@ test('a client that disconnects mid-turn does not get an empty-turn error and do
       body: JSON.stringify({
         backendId: 'stub-local', sessionId: 'ses_1',
         messages: [{ role: 'user', content: 'hi' }],
-        stream: true,
       }),
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Wait until the turn is genuinely in-flight (sendMessage entered) before
+    // aborting. The old fixed 50ms sleep raced the server under full-suite
+    // load — the abort could land before the handler reached sendMessage,
+    // leaving resolveSend undefined and tripping the resolve below.
+    await inFlight;
     controller.abort();
     await pending.catch(() => undefined);
     // The turn only resolves — empty — well after the client already left.

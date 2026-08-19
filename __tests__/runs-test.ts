@@ -1,4 +1,4 @@
-import { executeRun, runNeedsApproval, type RunCapableClient } from '@/lib/gateway/runs';
+import { executeRun, isTerminalRunStatus, runNeedsApproval, type RunCapableClient } from '@/lib/gateway/runs';
 import type { RunResponse, RunStatus } from '@/lib/gateway/types';
 
 /**
@@ -121,5 +121,73 @@ describe('executeRun terminal-state handling', () => {
     expect(outcome.cancelled).toBe(true);
     expect(outcome.status).toBe('cancelled');
     expect(calls.stop).toBe(1);
+  });
+});
+
+describe('A2 regression lock — the terminal-status classifier (isTerminalRunStatus)', () => {
+  // The run reducer decides "is this done?" purely through this classifier.
+  // A heuristic widening it into in-flight states (running/pending/unknown)
+  // would present a half-finished run as complete — the exact silent trust
+  // break A2 exists to stop. Pin both directions.
+
+  it('treats every gateway terminal word as terminal', () => {
+    for (const status of [
+      'complete',
+      'completed',
+      'succeeded',
+      'success',
+      'done',
+      'finished',
+      'failed',
+      'error',
+      'cancelled',
+      'canceled',
+      'aborted',
+    ]) {
+      expect(isTerminalRunStatus(status)).toBe(true);
+    }
+  });
+
+  it('never treats in-flight or unknown states as terminal', () => {
+    for (const status of [
+      'running',
+      'waiting-approval',
+      'waiting',
+      'approved',
+      'queued',
+      'pending',
+      'unresolved',
+      'unknown',
+    ]) {
+      expect(isTerminalRunStatus(status)).toBe(false);
+    }
+  });
+
+  it('an unresolved outcome carries a status that can never render as complete', async () => {
+    const { client } = scriptedClient(['running']);
+
+    const outcome = await executeRun(client, 'do the thing', {
+      onApprovalRequired: async () => ({ approved: true }),
+      sleep: noSleep,
+    });
+
+    // Card contract: the gateway never reached a terminal state, so this run
+    // must never surface as complete/succeeded — even if the classifier drifts.
+    expect(outcome.unresolved).toBe(true);
+    expect(isTerminalRunStatus(outcome.status)).toBe(false);
+    expect(outcome.status).not.toMatch(/^complete/i);
+  });
+
+  it('a status query that collapses to unknown stays unresolved (never complete)', async () => {
+    const { client } = scriptedClient(['running', 'running', 'unknown']);
+
+    const outcome = await executeRun(client, 'do the thing', {
+      onApprovalRequired: async () => ({ approved: true }),
+      sleep: noSleep,
+    });
+
+    expect(outcome.status).toBe('unknown');
+    expect(outcome.unresolved).toBe(true);
+    expect(isTerminalRunStatus(outcome.status)).toBe(false);
   });
 });
