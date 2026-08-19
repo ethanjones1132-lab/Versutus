@@ -1,0 +1,117 @@
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+
+/**
+ * Shell sessions for the app's Shell tab.
+ *
+ * Deliberately not a PTY. `gate/package.json` has no dependencies and node-pty
+ * is a native module needing a C++ toolchain, but the stronger reason is that
+ * the client does not want one: the app renders output as a list of lines
+ * (`TerminalOutput lines={…}`), sends one newline-terminated command per
+ * submit, and never calls resize. A PTY would emit cursor-addressing escapes
+ * that a line list cannot render, making the feature worse, not better.
+ *
+ * What this is: a real shell process with piped stdio, streamed live. What it
+ * is not: a terminal. Full-screen programs (vim, htop, anything checking
+ * isatty) will misbehave, and that is a property of the client's design rather
+ * than a gap to close later.
+ *
+ * The old `conpty.mjs` claimed this territory while spawning nothing at all.
+ */
+
+/** Bounded so one runaway command cannot stream unbounded frames to a phone. */
+const MAX_CHUNK_BYTES = 64 * 1024;
+
+function defaultShell() {
+  if (process.platform === 'win32') {
+    return { command: process.env.ComSpec || 'cmd.exe', args: [] };
+  }
+  // No `-i`: an interactive shell without a tty warns on every prompt. Reading
+  // piped lines is exactly the mode this client drives.
+  return { command: process.env.SHELL || '/bin/sh', args: [] };
+}
+
+/**
+ * Kill the whole tree. A shell's children outlive `child.kill()` on Windows,
+ * which would leave orphaned processes behind every closed tab.
+ */
+function killTree(child, spawnImpl) {
+  if (!child || child.exitCode !== null) return;
+  if (process.platform === 'win32' && child.pid) {
+    try {
+      spawnImpl('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+      return;
+    } catch {
+      // fall through to the plain kill below
+    }
+  }
+  try { child.kill(); } catch { /* already gone */ }
+}
+
+export function createTerminalSessions({
+  spawnImpl = spawn,
+  shell = defaultShell,
+  cwd = process.cwd(),
+  maxSessions = 8,
+} = {}) {
+  const sessions = new Map();
+
+  return {
+    get size() { return sessions.size; },
+
+    /**
+     * Open a session. Its lifetime is the caller's stream: when the consumer
+     * detaches, the process tree dies with it. One consumer per session is
+     * what the client does, and tying them together is what stops a dropped
+     * phone connection leaving a shell running on the host.
+     */
+    open({ onChunk, onExit, onError }) {
+      if (sessions.size >= maxSessions) {
+        throw new Error(`too many terminal sessions open (limit ${maxSessions})`);
+      }
+
+      const { command, args } = shell();
+      const child = spawnImpl(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+      const sid = randomUUID();
+
+      const emit = (buffer) => {
+        const text = Buffer.from(buffer).subarray(0, MAX_CHUNK_BYTES).toString('utf8');
+        if (text) onChunk(text);
+      };
+      child.stdout?.on('data', emit);
+      child.stderr?.on('data', emit);
+
+      child.on('error', (error) => {
+        sessions.delete(sid);
+        onError?.(error.message);
+      });
+      child.on('exit', (code) => {
+        sessions.delete(sid);
+        onExit?.(code ?? 0);
+      });
+
+      const session = {
+        sid,
+        write(data) {
+          if (child.exitCode !== null) throw new Error('terminal session has exited');
+          child.stdin?.write(String(data));
+        },
+        close() {
+          sessions.delete(sid);
+          killTree(child, spawnImpl);
+        },
+      };
+      sessions.set(sid, session);
+      return session;
+    },
+
+    get(sid) {
+      return sessions.get(sid) ?? null;
+    },
+
+    /** Tear every session down — used when the Gate itself shuts down. */
+    closeAll() {
+      for (const session of [...sessions.values()]) session.close();
+    },
+  };
+}

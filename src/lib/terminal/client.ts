@@ -75,7 +75,7 @@ export async function openTerminalSession(
   token?: string,
 ): Promise<TerminalSession> {
   const httpBase = httpToWsBase(gatewayWsUrl).replace(/^wss:/, "https://").replace(/^ws:/, "http://");
-  const streamUrl = `${httpBase}/better-gateway/terminal/stream`;
+  const streamUrl = `${httpBase}/v1/terminal/stream`;
   let sid = '';
   const setSid = (value: string) => {
     sid = value;
@@ -139,25 +139,10 @@ export async function sendTerminalInput(
   token?: string,
 ): Promise<void> {
   const httpBase = httpToWsBase(gatewayWsUrl).replace(/^wss:/, "https://").replace(/^ws:/, "http://");
-  const response = await fetch(`${httpBase}/better-gateway/terminal/input`, {
+  const response = await fetch(`${httpBase}/v1/terminal/input`, {
     method: 'POST',
     headers: authHeaders(token),
     body: JSON.stringify({ sid, data }),
   });
   if (!response.ok) throw new Error(`Terminal input failed (${response.status})`);
-}
-
-export async function resizeTerminal(
-  gatewayWsUrl: string,
-  sid: string,
-  cols: number,
-  rows: number,
-  token?: string,
-): Promise<void> {
-  const httpBase = httpToWsBase(gatewayWsUrl).replace(/^wss:/, "https://").replace(/^ws:/, "http://");
-  await fetch(`${httpBase}/better-gateway/terminal/resize`, {
-    method: 'POST',
-    headers: authHeaders(token),
-    body: JSON.stringify({ sid, cols, rows }),
-  });
 }

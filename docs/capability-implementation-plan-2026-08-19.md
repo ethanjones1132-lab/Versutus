@@ -10,12 +10,31 @@ including one blocker (the authenticated-route allowlist) that would have made
 Phase 1's routes dead code, and one capability (`tools`) that the audit lists
 as *ready* while nothing implements it.
 
-**Status (2026-08-19).** Phases 0, 1 and 2 are implemented and `npm run verify`
-is green (410 gate tests, 468 jest tests, tsc, lint, ratchet). Phases 3–7 are
-untouched. Decisions taken where the plan left a choice: the allowlist got a
-drift test rather than a route-table collapse; `tools` was implemented rather
-than un-advertised; agent-transport commands are gated on their own capability
-and never on the method table.
+**Status (2026-08-19).** Phases 0–4 are implemented and `npm run verify` is
+green (422 gate tests, 468 jest tests, tsc, lint, ratchet). Phases 5–7 are
+untouched.
+
+Decisions taken where the plan left a choice:
+
+- The allowlist got a drift test rather than a route-table collapse.
+- `tools` was implemented rather than un-advertised.
+- Agent-transport commands are gated on their own capability, never on the
+  method table.
+- **The terminal is a piped shell, not a PTY** — and this is the right shape,
+  not a compromise. The client renders output as a list of lines, sends one
+  newline-terminated command per submit, and never called resize. A PTY would
+  emit cursor-addressing escapes a line list cannot render. `gate/package.json`
+  having no dependencies (node-pty is native) reinforced it but did not decide
+  it. Full-screen programs will misbehave; that follows from the client's
+  design, not from an unfinished implementation.
+- **No `/v1/terminal/resize`.** Nothing called `resizeTerminal`, and a route
+  accepting dimensions nothing can apply is the dead-config shape this codebase
+  keeps finding. The client function was deleted with it. Restore both
+  alongside a real PTY, not before.
+- `terminal: true` is advertised unconditionally: the shell is the Gate's own
+  process, so it needs no backend and no platform gate. This resolved the
+  Phase 4 tripwire — `terminal` moved out of the "must not be advertised" set
+  because it is now backed, not because the test was in the way.
 
 Format per phase: **Goal** → **Changes** (file-by-file) → **Tests** → **Gate**.
 Ordered by impact-per-effort. Phases 1+2 ship together or not at all (audit

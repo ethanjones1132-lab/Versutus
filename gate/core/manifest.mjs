@@ -83,6 +83,10 @@ export function buildManifest({
       providers: '/v1/providers',
       environments: '/v1/environments',
       capabilitiesRpc: '/v1/capabilities/rpc',
+      // Unconditional: the shell is the Gate's own process, not a backend's,
+      // so it needs no environment attached and no platform gate — the
+      // implementation is child_process on every OS.
+      terminal: '/v1/terminal/stream',
       ...(hasBackend
         ? { sessions: '/v1/sessions', sessionMessages: '/v1/sessions/{id}/messages', backends: '/v1/backends' }
         : {}),
@@ -116,6 +120,7 @@ export function buildManifest({
       providers: true,
       environments: true,
       capabilityRegistry: true,
+      terminal: true,
       ...(backendCan('sessions') ? { sessions: true } : {}),
       ...(backendCan('tools') ? { tools: true } : {}),
       ...(backendCan('runs') ? { runs: true, approvals: true } : {}),

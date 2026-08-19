@@ -34,6 +34,8 @@ test('advertises design-spec transport, endpoints, and capabilities', () => {
     providers: '/v1/providers',
     environments: '/v1/environments',
     capabilitiesRpc: '/v1/capabilities/rpc',
+    // The shell is the Gate's own process, so it needs no backend attached.
+    terminal: '/v1/terminal/stream',
   });
   // One entry per endpoint above. Claiming only chat+models made the Gate
   // render as featureless in the app despite serving all of these.
@@ -44,6 +46,7 @@ test('advertises design-spec transport, endpoints, and capabilities', () => {
     providers: true,
     environments: true,
     capabilityRegistry: true,
+    terminal: true,
   });
 });
 

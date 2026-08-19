@@ -5,6 +5,7 @@ import { loadCapabilities, describeKinds, resolveManifestInstances } from './cap
 import { buildInstanceHandlers } from './capabilities/dispatch.mjs';
 import { createRegistryMethods } from './capabilities/registry-methods.mjs';
 import { createGatewayMethods } from './capabilities/gateway-methods.mjs';
+import { createTerminalSessions } from './cli-environments/terminal.mjs';
 import { getSecret } from './capabilities/secrets.mjs';
 import { buildManifest } from './manifest.mjs';
 import { ProviderStore } from './providers/store.mjs';
@@ -255,6 +256,7 @@ export async function createGate(config = {}) {
     vault: injectedVault,
     environmentRegistry: injectedRegistry,
     backendServerFactory,
+    terminalSessions: injectedTerminalSessions,
   } = config;
 
   await migrateLegacyProviders({ sourceRoot: root, gateHome });
@@ -306,6 +308,14 @@ export async function createGate(config = {}) {
       }),
     createServer: backendServerFactory,
   });
+
+  // Shell sessions for the app's Shell tab. See terminal.mjs for why this is a
+  // piped shell rather than a PTY — it is what this client actually consumes.
+  const terminalSessions = injectedTerminalSessions ?? createTerminalSessions();
+  // Open SSE responses, tracked so shutdown can end them. `server.close()`
+  // waits for in-flight connections, and a terminal stream never finishes on
+  // its own — without this a Gate with the Shell tab open cannot shut down.
+  const terminalStreams = new Set();
 
   const tokenPath = join(root, '.tokens.json');
 
@@ -595,6 +605,8 @@ export async function createGate(config = {}) {
         /^\/p\/[^/]+\/v1\/chat\/completions$/.test(pathname) ||
         (pathname === '/v1/backends' && method === 'GET') ||
         (pathname === '/v1/toolsets' && method === 'GET') ||
+        (pathname === '/v1/terminal/stream' && method === 'GET') ||
+        (pathname === '/v1/terminal/input' && method === 'POST') ||
         (pathname === '/v1/skills' && method === 'GET') ||
         // Note the divergence from plain /health, which is unauthenticated:
         // detailed diagnostics expose backend internals and need a token.
@@ -828,6 +840,61 @@ export async function createGate(config = {}) {
         const toolsets = await backend.listToolsets();
         res.writeHead(200);
         res.end(JSON.stringify(toolsets));
+        return;
+      }
+
+      // Shell. The stream is the session: SSE out, POST in. There is no
+      // /resize — the client never called it, and a route that accepts
+      // dimensions nothing can apply is the dead-config shape this codebase
+      // keeps finding. Restore it alongside a real PTY, not before.
+      if (pathname === '/v1/terminal/stream' && method === 'GET') {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        });
+        const send = (event, data) => {
+          if (event) res.write(`event: ${event}\n`);
+          res.write(`data: ${data}\n\n`);
+        };
+        let session;
+        try {
+          session = terminalSessions.open({
+            onChunk: (text) => send(null, Buffer.from(text, 'utf8').toString('base64')),
+            onExit: (code) => { send('exit', JSON.stringify({ code })); res.end(); },
+            onError: (message) => { send('error', JSON.stringify({ error: message })); res.end(); },
+          });
+        } catch (error) {
+          // The client reads an `error` field on the session event as a failed
+          // open, so a refusal arrives as a message rather than a dead stream.
+          send('session', JSON.stringify({ error: error.message }));
+          res.end();
+          return;
+        }
+        send('session', JSON.stringify({ sid: session.sid }));
+        terminalStreams.add(res);
+        // The stream owns the session's lifetime: a phone that drops off wifi
+        // must not leave a shell running on the host forever.
+        res.on('close', () => {
+          terminalStreams.delete(res);
+          session.close();
+        });
+        return;
+      }
+
+      if (pathname === '/v1/terminal/input' && method === 'POST') {
+        const body = (await readJsonBody(req)) ?? {};
+        const session = terminalSessions.get(body.sid);
+        if (!session) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: { message: `unknown terminal session "${body.sid ?? ''}"`, code: 'unknown_session' },
+          }));
+          return;
+        }
+        session.write(body.data ?? '');
+        res.writeHead(200);
+        res.end(JSON.stringify({ ok: true }));
         return;
       }
 
@@ -1262,6 +1329,13 @@ export async function createGate(config = {}) {
       });
     },
     async close() {
+      // Kill any live shells before the listener goes away, or they outlive it,
+      // and end their streams or `server.close()` waits on them forever.
+      terminalSessions.closeAll();
+      for (const stream of [...terminalStreams]) {
+        terminalStreams.delete(stream);
+        try { stream.end(); } catch { /* already gone */ }
+      }
       return new Promise((resolve, reject) => {
         server.close((err) => {
           if (err) reject(err);

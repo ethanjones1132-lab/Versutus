@@ -111,7 +111,7 @@ function stubTurnRegistry({ calls = [], sendMessage, streamEvents } = {}) {
   };
 }
 
-async function makeGate({ calls = [], provider, registry } = {}) {
+async function makeGate({ calls = [], provider, registry, terminalSessions } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'gate-backend-'));
   roots.push(root);
   const gateHome = join(root, '.gate-home');
@@ -152,6 +152,7 @@ async function makeGate({ calls = [], provider, registry } = {}) {
     port: 0,
     gateHome,
     environmentRegistry: registry ?? stubRegistry(calls),
+    ...(terminalSessions ? { terminalSessions } : {}),
     // The stub server needs no process: report it as already reachable.
     backendServerFactory: () => ({
       ensureRunning: async () => ({ baseUrl: 'http://127.0.0.1:1', attached: true }),
@@ -502,17 +503,29 @@ test('every GET endpoint the manifest advertises is allowlisted', async () => {
     const checked = [];
     for (const [name, path] of Object.entries(manifest.endpoints)) {
       if (postOnly.has(name) || path.includes('{')) continue;
-      const response = await fetch(`http://127.0.0.1:${gate.port}${path}`, { headers: auth(gate) });
-      const body = await response.json().catch(() => ({}));
-      assert.notEqual(
-        body.error,
-        'Not Found',
-        `${name} (${path}) is advertised but not allowlisted — the handler is unreachable`,
-      );
+      // Only a 404 body is read. Some advertised endpoints stream forever
+      // (the terminal), so parsing every response would hang here — and the
+      // allowlist rejection is a 404 with this exact shape.
+      const controller = new AbortController();
+      const response = await fetch(`http://127.0.0.1:${gate.port}${path}`, {
+        headers: auth(gate),
+        signal: controller.signal,
+      });
+      if (response.status === 404) {
+        const body = await response.json().catch(() => ({}));
+        assert.notEqual(
+          body.error,
+          'Not Found',
+          `${name} (${path}) is advertised but not allowlisted — the handler is unreachable`,
+        );
+      }
+      controller.abort();
       checked.push(name);
     }
     // Guard against the assertion silently checking nothing.
-    assert.ok(checked.includes('toolsets'), `expected toolsets among ${checked.join(', ')}`);
+    for (const expected of ['toolsets', 'terminal']) {
+      assert.ok(checked.includes(expected), `expected ${expected} among ${checked.join(', ')}`);
+    }
   } finally {
     await gate.close();
   }
@@ -702,6 +715,169 @@ test('the manifest advertises the methods the Gate can actually dispatch', async
       body: JSON.stringify({ method: 'definitely.not.a.method', params: {} }),
     });
     assert.equal(absent.status, 404);
+  } finally {
+    await gate.close();
+  }
+});
+
+/** A terminal manager with no real shell behind it. */
+function fakeTerminal() {
+  const opened = [];
+  const sessions = new Map();
+  return {
+    opened,
+    open(handlers) {
+      const session = {
+        sid: `sid-${opened.length + 1}`,
+        written: [],
+        closed: false,
+        write(data) { session.written.push(data); },
+        close() { session.closed = true; sessions.delete(session.sid); },
+        handlers,
+      };
+      opened.push(session);
+      sessions.set(session.sid, session);
+      return session;
+    },
+    get(sid) { return sessions.get(sid) ?? null; },
+    closeAll() { for (const s of [...sessions.values()]) s.close(); },
+  };
+}
+
+/**
+ * A stateful SSE frame reader. One reader per response — calling getReader()
+ * twice locks the stream, and a predicate that never matches blocks forever.
+ */
+function sseReader(response) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const pending = [];
+  return {
+    async next() {
+      while (pending.length === 0) {
+        const { done, value } = await reader.read();
+        if (done) return null;
+        buffer += decoder.decode(value, { stream: true });
+        let index;
+        while ((index = buffer.indexOf('\n\n')) !== -1) {
+          pending.push(buffer.slice(0, index));
+          buffer = buffer.slice(index + 2);
+        }
+      }
+      return pending.shift();
+    },
+    cancel: () => reader.cancel().catch(() => undefined),
+  };
+}
+
+/** The `data:` payload of one SSE frame. */
+function frameData(frame) {
+  const line = frame.split('\n').find((l) => l.startsWith('data: '));
+  return line ? line.slice('data: '.length) : '';
+}
+
+test('the terminal is advertised because the Gate can actually serve it', async () => {
+  const { gate } = await makeGate();
+  try {
+    const manifest = await (await fetch(`http://127.0.0.1:${gate.port}/.well-known/gateway.json`)).json();
+    assert.equal(manifest.capabilities.terminal, true);
+    assert.equal(manifest.endpoints.terminal, '/v1/terminal/stream');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('the terminal stream refuses an unauthenticated client', async () => {
+  const { gate } = await makeGate();
+  try {
+    assert.equal((await fetch(`http://127.0.0.1:${gate.port}/v1/terminal/stream`)).status, 401);
+    const input = await fetch(`http://127.0.0.1:${gate.port}/v1/terminal/input`, {
+      method: 'POST',
+      body: JSON.stringify({ sid: 'x', data: 'ls\n' }),
+    });
+    assert.equal(input.status, 401);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('the stream hands back a session id, then relays output the client can decode', async () => {
+  const terminal = fakeTerminal();
+  const { gate } = await makeGate({ terminalSessions: terminal });
+  let stream;
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/terminal/stream`, { headers: auth(gate) });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type') ?? '', /text\/event-stream/);
+
+    stream = sseReader(response);
+    const opened = await stream.next();
+    assert.match(opened, /^event: session/m);
+    assert.equal(JSON.parse(frameData(opened)).sid, 'sid-1');
+
+    // Chunks carry base64 UTF-8 with no event name — what client.ts decodes.
+    terminal.opened[0].handlers.onChunk('hello\n');
+    const chunk = await stream.next();
+    assert.ok(!chunk.startsWith('event:'), 'output frames carry no event name');
+    assert.equal(Buffer.from(frameData(chunk), 'base64').toString('utf8'), 'hello\n');
+
+    terminal.opened[0].handlers.onExit(0);
+    const exited = await stream.next();
+    assert.match(exited, /^event: exit/m);
+    assert.equal(JSON.parse(frameData(exited)).code, 0);
+  } finally {
+    await stream?.cancel();
+    await gate.close();
+  }
+});
+
+test('input reaches the shell, and an unknown session is refused', async () => {
+  const terminal = fakeTerminal();
+  const { gate } = await makeGate({ terminalSessions: terminal });
+  const base = `http://127.0.0.1:${gate.port}`;
+  let stream;
+  try {
+    const response = await fetch(`${base}/v1/terminal/stream`, { headers: auth(gate) });
+    stream = sseReader(response);
+    await stream.next();
+
+    const ok = await fetch(`${base}/v1/terminal/input`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ sid: 'sid-1', data: 'echo hi\n' }),
+    });
+    assert.equal(ok.status, 200);
+    // Verbatim: the app already appended the newline.
+    assert.deepEqual(terminal.opened[0].written, ['echo hi\n']);
+
+    const missing = await fetch(`${base}/v1/terminal/input`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ sid: 'nope', data: 'ls\n' }),
+    });
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, 'unknown_session');
+  } finally {
+    await stream?.cancel();
+    await gate.close();
+  }
+});
+
+test('a refused open arrives as a message, not a silently dead stream', async () => {
+  const terminal = {
+    open() { throw new Error('too many terminal sessions open (limit 8)'); },
+    get() { return null; },
+    closeAll() {},
+  };
+  const { gate } = await makeGate({ terminalSessions: terminal });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/terminal/stream`, { headers: auth(gate) });
+    const stream = sseReader(response);
+    const frame = await stream.next();
+    assert.match(frame, /^event: session/m);
+    assert.match(JSON.parse(frameData(frame)).error, /too many terminal sessions/);
+    await stream.cancel();
   } finally {
     await gate.close();
   }

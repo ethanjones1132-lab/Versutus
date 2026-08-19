@@ -39,6 +39,7 @@ const CAPABILITY_BACKING = {
   runs: 'runs',
   approvals: 'runApproval',
   jobs_admin: 'jobs',
+  terminal: 'terminal',
 };
 
 function assertFullyBacked(manifest) {
@@ -71,9 +72,11 @@ test('capabilities a backend unlocks are backed too', () => {
 
 test('capabilities the Gate does not implement stay absent', () => {
   const manifest = buildManifest({ name: 'Gate', capabilityKinds: [], capabilityInstances: [] });
-  // The Gate has no conversation sessions, generic runs, approvals or terminal.
-  // Claiming them would make the app offer surfaces that cannot work.
-  for (const absent of ['sessions', 'runs', 'approvals', 'terminal']) {
+  // The Gate has no conversation sessions, generic runs or approvals without a
+  // backend to provide them. `terminal` used to sit in this list; it now has a
+  // real endpoint (see the shell routes in server.mjs), so claiming it is
+  // honest rather than aspirational.
+  for (const absent of ['sessions', 'runs', 'approvals']) {
     assert.notEqual(manifest.capabilities[absent], true, `${absent} must not be advertised`);
   }
 });
