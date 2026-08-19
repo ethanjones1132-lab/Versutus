@@ -1,10 +1,10 @@
-import * as Haptics from 'expo-haptics';
 import { useState } from 'react';
 import { StyleSheet, TextInput, View } from 'react-native';
 
 import { BaseSheet, Button, Text } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
+import { haptics } from '@/lib/haptics';
 
 export function ApprovalSheet({
   visible,
@@ -71,7 +71,7 @@ export function ApprovalSheet({
           label="Deny"
           variant="secondary"
           onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            await haptics.warning();
             onDeny(feedback.trim() || undefined);
           }}
           style={styles.footerButton}
@@ -79,7 +79,7 @@ export function ApprovalSheet({
         <Button
           label="Approve"
           onPress={async () => {
-            await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            await haptics.success();
             onApprove(feedback.trim() || undefined);
           }}
           style={styles.footerPrimary}

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
   StyleSheet,
   TextInput,
   View,
@@ -13,6 +14,7 @@ import { ChatEmptyState } from '@/components/chat/chat-empty-state';
 import { ConnectionBadge } from '@/components/connection-badge';
 import { GatewayCommandPanel } from '@/components/gateway/gateway-command-panel';
 import { CommandLogSheet } from '@/components/terminal/command-log-sheet';
+import { CommandResultView } from '@/components/terminal/command-result-view';
 import { TerminalModePicker, type TerminalMode } from '@/components/terminal/mode-picker';
 import { TerminalOutput } from '@/components/terminal/terminal-output';
 import { Button, Card, Chip, EmptyState, ErrorCard, Screen, Text } from '@/components/ui';
@@ -26,6 +28,7 @@ import {
   summarizeCommandResult,
   type GatewayCommand,
 } from '@/lib/gateway/dashboard';
+import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { appendTerminalChunk, type TerminalLine } from '@/lib/terminal/output';
 import { openTerminalSession, sendTerminalInput, type TerminalSession } from '@/lib/terminal/client';
 
@@ -36,6 +39,7 @@ export function TerminalScreen() {
   const tokens = useTokens();
   const {
     activeGateway,
+    activeHello,
     status,
     statusDetail,
     settings,
@@ -64,6 +68,7 @@ export function TerminalScreen() {
   const [runningCommandId, setRunningCommandId] = useState<string | null>(null);
   const [commandLog, setCommandLog] = useState('');
   const [logSheetVisible, setLogSheetVisible] = useState(false);
+  const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const sessionRef = useRef<TerminalSession | null>(null);
 
   const appendOutput = useCallback((chunk: string) => {
@@ -210,7 +215,7 @@ export function TerminalScreen() {
   const modeLabel = mode === 'shell' ? 'Shell' : mode === 'rpc' ? 'Gateway RPC' : 'Agent';
 
   return (
-    <Screen edges={['bottom']}>
+    <Screen edges={['bottom']} parallaxY={parallaxY}>
       <View style={styles.header}>
         <View style={styles.headerText}>
           <Text variant="caption" color="accentWarm" style={styles.headerKicker}>
@@ -257,7 +262,23 @@ export function TerminalScreen() {
                 borderColor: tokens.glassBorder,
               },
             ]}>
-            <TerminalOutput lines={terminalLines} />
+            <View style={[styles.terminalBanner, { borderBottomColor: tokens.glassBorder }]}>
+              <View
+                style={[
+                  styles.terminalBannerDot,
+                  { backgroundColor: terminalConnected ? tokens.statusConnected : tokens.statusConnecting },
+                ]}
+              />
+              <Text variant="caption" color={terminalConnected ? 'statusConnected' : 'secondary'}>
+                {terminalConnected
+                  ? 'connected'
+                  : terminalError
+                    ? 'session error'
+                    : 'starting…'}
+                {terminalConnected && activeHello?.server?.version ? ` · v${activeHello.server.version}` : ''}
+              </Text>
+            </View>
+            <TerminalOutput lines={terminalLines} onScroll={onScroll} />
           </View>
 
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -293,7 +314,11 @@ export function TerminalScreen() {
           </KeyboardAvoidingView>
         </>
       ) : (
-        <View style={styles.commandContent}>
+        <ScrollView
+          style={styles.commandContent}
+          contentContainerStyle={styles.commandScroll}
+          onScroll={onScroll}
+          scrollEventThrottle={16}>
           <GatewayCommandPanel
             title={mode === 'rpc' ? 'Gateway RPC' : 'Agent commands'}
             commands={commandList}
@@ -302,11 +327,14 @@ export function TerminalScreen() {
             onRun={(command) => void runGatewayCommand(command)}
             onOpenOutput={() => setLogSheetVisible(true)}
           />
-          {commandOutput ? (
-            <Card padding={Spacing.two} style={[styles.resultCard, { borderColor: tokens.glassBorder }]}> 
-              <Text variant="mono" color="secondary">
-                {commandOutput}
-              </Text>
+          {commandLog ? (
+            <Card padding={Spacing.two} style={[styles.resultCard, { borderColor: tokens.glassBorder }]}>
+              {commandOutput && commandOutput !== commandLog ? (
+                <Text variant="caption" color="secondary" style={styles.resultSummary}>
+                  {commandOutput}
+                </Text>
+              ) : null}
+              <CommandResultView log={commandLog} />
             </Card>
           ) : (
             <Text color="tertiary" variant="caption">
@@ -315,7 +343,7 @@ export function TerminalScreen() {
                 : 'Connect to the gateway to run commands.'}
             </Text>
           )}
-        </View>
+        </ScrollView>
       )}
 
       <CommandLogSheet visible={logSheetVisible} log={commandLog} onClose={() => setLogSheetVisible(false)} />
@@ -357,6 +385,20 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
   },
+  terminalBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.one,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  terminalBannerDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
   historyRow: {
     flexDirection: 'row',
     gap: Spacing.two,
@@ -387,10 +429,17 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: Spacing.four,
     paddingBottom: Spacing.four,
+  },
+  commandScroll: {
     gap: Spacing.three,
+    paddingBottom: Spacing.four,
   },
   resultCard: {
     borderRadius: Radius.md,
     borderWidth: StyleSheet.hairlineWidth,
+    gap: Spacing.two,
+  },
+  resultSummary: {
+    marginBottom: Spacing.one,
   },
 });

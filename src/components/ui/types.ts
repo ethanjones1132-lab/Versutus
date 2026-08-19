@@ -90,6 +90,8 @@ export type ScreenProps = {
   style?: StyleProp<ViewStyle>;
   /** Layered ambient blooms; disable on dense inset panes (e.g. terminal). */
   ambient?: boolean;
+  parallaxX?: number;
+  parallaxY?: number;
 };
 
 export type ScreenHeaderProps = {

@@ -1,5 +1,6 @@
 import { Link, useRouter } from 'expo-router';
-import { ScrollView, StyleSheet } from 'react-native';
+import { useState } from 'react';
+import { RefreshControl, ScrollView, StyleSheet } from 'react-native';
 
 import { GatewayHomeDashboard } from '@/components/gateway/gateway-home-dashboard';
 import { GlassCollapsible } from '@/components/glass-collapsible';
@@ -9,10 +10,13 @@ import { Button, Screen, ScreenHeader, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayDiscovery } from '@/hooks/use-gateway-discovery';
+import { useTokens } from '@/hooks/use-tokens';
 import { isGatewayTokenRequiredMessage } from '@/lib/gateway/errors';
+import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
 export default function HomeScreen() {
   const router = useRouter();
+  const tokens = useTokens();
   const {
     gateways,
     settings,
@@ -24,19 +28,45 @@ export default function HomeScreen() {
     pairingDetails,
     lastError,
     retryAutoConnect,
+    refreshCapabilities,
+    refreshGateways,
+    reloadHistory,
   } = useGateway();
+  const [refreshing, setRefreshing] = useState(false);
+  const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const discovery = useGatewayDiscovery(true);
   const needsSetupAction = !settings.tailscaleHost || isGatewayTokenRequiredMessage(lastError);
   const hasSavedGateway = gateways.length > 0;
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    const started = Date.now();
+    await Promise.all([refreshCapabilities(), refreshGateways(), reloadHistory()]).catch(() => undefined);
+    const elapsed = Date.now() - started;
+    if (elapsed < 400) await new Promise((resolve) => setTimeout(resolve, 400 - elapsed));
+    setRefreshing(false);
+  };
+
   return (
-    <Screen edges={['bottom']}>
+    <Screen edges={['bottom']} parallaxY={parallaxY}>
       <ScreenHeader
         title="Versutus"
         subtitle={hasSavedGateway ? 'Command center' : 'Connect your gateway'}
         onTrailingPress={() => router.push('/gateway/settings')}
       />
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => void onRefresh()}
+            tintColor={tokens.accentWarm}
+            colors={[tokens.accentWarm]}
+            progressBackgroundColor={tokens.backgroundElevated}
+          />
+        }>
         {hasSavedGateway ? (
           <GatewayHomeDashboard />
         ) : (

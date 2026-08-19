@@ -1,8 +1,10 @@
 import { StyleSheet, View } from 'react-native';
 
-import { BaseSheet, Divider, ListRow, StatTile, Text } from '@/components/ui';
+import { SessionAnalytics } from '@/components/chat/session-analytics';
+import { BaseSheet, Divider, ListRow, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
-import { formatCost, formatRelativeTime, formatTokenCount } from '@/lib/format';
+import { formatRelativeTime } from '@/lib/format';
+import type { SessionUsageInput } from '@/lib/gateway/session-analytics';
 
 export type ChatSessionStats = {
   title?: string | null;
@@ -22,6 +24,7 @@ export type ChatOverflowSheetProps = {
   /** Prefill composer with /run when the gateway supports agentic runs. */
   onStartRun?: () => void;
   runsSupported?: boolean;
+  sessions?: SessionUsageInput[];
 };
 
 /** Chat header overflow: session usage at a glance + session/connection actions. */
@@ -34,17 +37,22 @@ export function ChatOverflowSheet({
   onDisconnect,
   onStartRun,
   runsSupported = false,
+  sessions = [],
 }: ChatOverflowSheetProps) {
   if (!visible) return null;
 
   return (
     <BaseSheet visible={visible} eyebrow="CHAT" title="Session &amp; connection" onClose={onClose} closeLabel="Dismiss">
       {session ? (
-        <View style={styles.stats}>
-          <StatTile label="Messages" value={String(session.messageCount ?? 0)} />
-          <StatTile label="Tokens" value={formatTokenCount(session.totalTokens ?? 0)} />
-          <StatTile label="Cost" value={session.costUsd != null ? formatCost(session.costUsd) : '—'} />
-        </View>
+        <SessionAnalytics
+          session={{
+            input_tokens: session.totalTokens,
+            output_tokens: 0,
+            actual_cost_usd: session.costUsd,
+          }}
+          sessions={sessions}
+          messageCount={session.messageCount}
+        />
       ) : (
         <Text variant="caption" color="tertiary" style={styles.noSession}>
           No session stats yet — open the session selector to load them.
@@ -103,12 +111,6 @@ export function ChatOverflowSheet({
 }
 
 const styles = StyleSheet.create({
-  stats: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-    paddingHorizontal: Spacing.one,
-    paddingBottom: Spacing.two,
-  },
   noSession: {
     paddingHorizontal: Spacing.two,
     paddingBottom: Spacing.two,

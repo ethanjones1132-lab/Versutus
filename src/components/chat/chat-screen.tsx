@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import { FlatList, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { FlatList, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { ApprovalSheet } from '@/components/chat/approval-sheet';
@@ -23,6 +23,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDivider } from '@/lib/format';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
+import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
 const PIN_THRESHOLD_PX = 96;
 const JUMP_PILL_THRESHOLD_PX = 260;
@@ -113,6 +114,8 @@ export function ChatScreen() {
   const [backendPickerVisible, setBackendPickerVisible] = useState(false);
   const [actionMessage, setActionMessage] = useState<ChatMessage | null>(null);
   const [jumpVisible, setJumpVisible] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const pinnedRef = useRef(true);
   const jumpVisibleRef = useRef(false);
@@ -152,6 +155,7 @@ export function ChatScreen() {
   }, [draft, sendChatInput]);
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    onScroll(event);
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
     pinnedRef.current = distanceFromBottom < PIN_THRESHOLD_PX;
@@ -160,7 +164,7 @@ export function ChatScreen() {
       jumpVisibleRef.current = shouldShowJump;
       setJumpVisible(shouldShowJump);
     }
-  }, []);
+  }, [onScroll]);
 
   const handleContentSizeChange = useCallback(() => {
     if (pinnedRef.current) {
@@ -172,6 +176,15 @@ export function ChatScreen() {
     pinnedRef.current = true;
     listRef.current?.scrollToEnd({ animated: true });
   }, []);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    const started = Date.now();
+    await reloadHistory().catch(() => undefined);
+    const elapsed = Date.now() - started;
+    if (elapsed < 400) await new Promise((resolve) => setTimeout(resolve, 400 - elapsed));
+    setRefreshing(false);
+  }, [reloadHistory]);
 
   const renderMessage = useCallback(
     ({ item, index }: { item: ChatMessage; index: number }) => {
@@ -214,7 +227,7 @@ export function ChatScreen() {
   }
 
   return (
-    <Screen edges={['bottom']}>
+    <Screen edges={['bottom']} parallaxY={parallaxY}>
       <ChatHeader
         gatewayName={settings.pcName ?? activeGateway.name}
         status={status}
@@ -256,7 +269,7 @@ export function ChatScreen() {
           style={styles.list}
           contentContainerStyle={styles.messages}
           onScroll={handleScroll}
-          scrollEventThrottle={80}
+          scrollEventThrottle={16}
           onContentSizeChange={handleContentSizeChange}
           renderItem={renderMessage}
           ListHeaderComponent={
@@ -286,6 +299,15 @@ export function ChatScreen() {
                 }
               />
             )
+          }
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => void onRefresh()}
+              tintColor={tokens.accentWarm}
+              colors={[tokens.accentWarm]}
+              progressBackgroundColor={tokens.backgroundElevated}
+            />
           }
           removeClippedSubviews
         />
@@ -349,6 +371,7 @@ export function ChatScreen() {
         visible={overflowVisible}
         onClose={() => setOverflowVisible(false)}
         session={sessionStats}
+        sessions={sessionList}
         onReloadHistory={() => void reloadHistory()}
         onNewSession={() => void createNewSession()}
         onDisconnect={disconnectGateway}

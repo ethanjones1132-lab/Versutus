@@ -1,14 +1,16 @@
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 
 import { AgentTargets } from '@/components/activity/agent-targets';
+import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
 import { RunCard } from '@/components/activity/run-card';
-import { Badge, Button, Card, EmptyState, Icon, Screen, Text } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, Screen, Text } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
+import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
 export default function ActivityScreen() {
   const router = useRouter();
@@ -23,11 +25,15 @@ export default function ActivityScreen() {
     resolveRunApproval,
     connectGateway,
     capabilitySnapshot,
+    refreshCapabilities,
+    refreshGateways,
     sendChatInput,
   } = useGateway();
 
   const [runPrompt, setRunPrompt] = useState('');
   const [starting, setStarting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const { parallaxY, onScroll } = useAmbientParallaxScroll();
 
   const activeRuns = activityRuns.filter((run) => run.status === 'running' || run.status === 'waiting-approval');
   const finishedRuns = activityRuns.filter((run) => !activeRuns.includes(run));
@@ -37,13 +43,6 @@ export default function ActivityScreen() {
   const runsUnsupported =
     status === 'connected' &&
     capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'unsupported';
-
-  const decide = async (approved: boolean) => {
-    await Haptics.notificationAsync(
-      approved ? Haptics.NotificationFeedbackType.Success : Haptics.NotificationFeedbackType.Warning,
-    );
-    resolveRunApproval(approved);
-  };
 
   const startRun = async () => {
     const prompt = runPrompt.trim();
@@ -59,9 +58,31 @@ export default function ActivityScreen() {
     }
   };
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    const started = Date.now();
+    await Promise.all([refreshCapabilities(), refreshGateways()]).catch(() => undefined);
+    // Hold the spinner briefly so recovery isn't a disorienting flash.
+    const elapsed = Date.now() - started;
+    if (elapsed < 400) await new Promise((resolve) => setTimeout(resolve, 400 - elapsed));
+    setRefreshing(false);
+  };
+
   return (
-    <Screen edges={['bottom']}>
-      <ScrollView contentContainerStyle={styles.content}>
+    <Screen edges={['bottom']} parallaxY={parallaxY}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => void onRefresh()}
+            tintColor={tokens.accentWarm}
+            colors={[tokens.accentWarm]}
+            progressBackgroundColor={tokens.backgroundElevated}
+          />
+        }>
         <View style={styles.titleRow}>
           <Text variant="title">Activity</Text>
           <Badge
@@ -71,36 +92,11 @@ export default function ActivityScreen() {
         </View>
 
         {pendingRunApproval ? (
-          <Card
-            variant="hero"
-            padding={Spacing.three}
-            style={[styles.approvalCard, { borderColor: tokens.accentWarm }]}>
-            <View style={styles.approvalHeader}>
-              <Icon
-                name={{ ios: 'hand.raised.fill', android: 'pan_tool', web: 'pan_tool' }}
-                size={16}
-                color="accentWarm"
-              />
-              <Text variant="caption" color="accentWarm" style={styles.approvalEyebrow}>
-                Approval requested
-              </Text>
-            </View>
-            <Text variant="body" numberOfLines={3}>
-              {pendingRunApproval.prompt}
-            </Text>
-            <Text variant="mono" color="tertiary" numberOfLines={1}>
-              run {pendingRunApproval.runId}
-            </Text>
-            <View style={styles.approvalActions}>
-              <Button label="Approve" onPress={() => void decide(true)} style={styles.approvalButton} />
-              <Button
-                label="Deny"
-                variant="destructive"
-                onPress={() => void decide(false)}
-                style={styles.approvalButton}
-              />
-            </View>
-          </Card>
+          <ApprovalDecisionCard
+            runId={pendingRunApproval.runId}
+            prompt={pendingRunApproval.prompt}
+            onResolve={(approved) => resolveRunApproval(approved)}
+          />
         ) : null}
 
         {runsSupported ? (
@@ -208,6 +204,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: Spacing.two,
   },
+  approvalEyebrow: {
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
   startCard: {
     gap: Spacing.two,
   },
@@ -220,28 +220,6 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.sans,
     fontSize: 15,
     textAlignVertical: 'top',
-  },
-  approvalCard: {
-    borderRadius: Radius.xl,
-    borderWidth: StyleSheet.hairlineWidth * 2,
-    gap: Spacing.two,
-  },
-  approvalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-  },
-  approvalEyebrow: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  approvalActions: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-    marginTop: Spacing.one,
-  },
-  approvalButton: {
-    flex: 1,
   },
   section: {
     gap: Spacing.two,

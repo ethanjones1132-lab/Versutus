@@ -6,12 +6,19 @@ import { useTokens } from '@/hooks/use-tokens';
 
 import type { ScreenProps } from './types';
 
-export function Screen({ children, edges = ['top', 'bottom'], style, ambient = true }: ScreenProps) {
+export function Screen({
+  children,
+  edges = ['top', 'bottom'],
+  style,
+  ambient = true,
+  parallaxX,
+  parallaxY,
+}: ScreenProps) {
   const tokens = useTokens();
 
   return (
     <View style={[styles.root, { backgroundColor: tokens.background }]}>
-      {ambient ? <AmbientCanvas /> : null}
+      {ambient ? <AmbientCanvas parallaxX={parallaxX} parallaxY={parallaxY} /> : null}
       <SafeAreaView style={[styles.safe, style]} edges={edges}>
         {children}
       </SafeAreaView>
