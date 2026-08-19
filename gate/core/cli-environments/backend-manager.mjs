@@ -103,6 +103,11 @@ export function createBackendManager({
     }
 
     const isStdio = adapter.server?.transport === 'stdio';
+    // Resolved once here rather than only inside the factory: an HTTP backend
+    // attached to an operator's own server may still need to authenticate to
+    // it (Hermes requires a bearer token on every route), and that is the
+    // backend's concern, not the supervisor's.
+    const credentials = await resolveCredentials(record);
     let server = servers.get(environmentId);
     if (!server) {
       // HTTP servers can be shared with an operator's own instance; a stdio
@@ -112,7 +117,7 @@ export function createBackendManager({
         record,
         adapter,
         vault,
-        credentials: await resolveCredentials(record),
+        credentials,
         buildEnvironment,
         onDiagnostic,
         ...(isStdio ? { onNotification: (message) => fanOut(environmentId, message) } : {}),
@@ -133,7 +138,7 @@ export function createBackendManager({
           // raw stream to await its own turn.
           subscribe: (handler) => subscribe(environmentId, handler),
         })
-      : adapter.createBackend({ baseUrl: handle.baseUrl });
+      : adapter.createBackend({ baseUrl: handle.baseUrl, credentials });
     backends.set(environmentId, { key, backend });
     return backend;
   }

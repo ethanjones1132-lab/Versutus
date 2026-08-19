@@ -1,0 +1,204 @@
+/**
+ * Hermes as a chat backend — SPIKE.
+ *
+ * Hermes runs as a long-lived HTTP service and already owns sessions, a model
+ * catalog, toolsets, skills and a full agentic run API. This maps that surface
+ * onto the same backend interface the CLI environments implement, so the Gate
+ * can front Hermes the way it fronts opencode/codex/claude-code and the app
+ * sees one dialect instead of two gateways.
+ *
+ * Two things make this cheaper than it looks:
+ *   - Hermes session objects are already almost exactly the shape the app
+ *     parses (the app's `HermesSession` type was modelled on them).
+ *   - Sessions live under `/api/sessions`, while models/runs live under `/v1`.
+ *     That split is not a typo; it is what `/v1/capabilities` advertises.
+ *
+ * Verified against Hermes 0.20.3.
+ */
+
+/** Hermes sessions are already gateway-shaped; fill only what may be absent. */
+export function toGatewaySession(session) {
+  return {
+    id: session.id,
+    source: session.source ?? 'hermes',
+    user_id: session.user_id ?? null,
+    model: session.model ?? null,
+    title: session.title ?? null,
+    // Hermes reports seconds as a float; the app expects milliseconds.
+    started_at: toMillis(session.started_at),
+    ended_at: session.ended_at == null ? null : toMillis(session.ended_at),
+    end_reason: session.end_reason ?? null,
+    message_count: session.message_count ?? 0,
+    tool_call_count: session.tool_call_count ?? 0,
+    input_tokens: session.input_tokens ?? 0,
+    output_tokens: session.output_tokens ?? 0,
+    cache_read_tokens: session.cache_read_tokens ?? 0,
+    cache_write_tokens: session.cache_write_tokens ?? 0,
+    reasoning_tokens: session.reasoning_tokens ?? 0,
+    estimated_cost_usd: session.estimated_cost_usd ?? null,
+    actual_cost_usd: session.actual_cost_usd ?? null,
+    api_call_count: session.api_call_count ?? 0,
+    parent_session_id: session.parent_session_id ?? null,
+    last_active: toMillis(session.last_active ?? session.started_at),
+    preview: session.preview ?? session.title ?? null,
+    has_system_prompt: Boolean(session.has_system_prompt),
+    has_model_config: Boolean(session.has_model_config),
+  };
+}
+
+function toMillis(value) {
+  if (typeof value !== 'number') return Date.now();
+  // Hermes emits epoch seconds; anything already past this bound is millis.
+  return value > 1e12 ? value : Math.round(value * 1000);
+}
+
+/** Hermes message content is a plain string; the app wants text parts. */
+export function toGatewayMessage(message) {
+  const content = typeof message.content === 'string' && message.content
+    ? [{ type: 'text', text: message.content }]
+    : [];
+  const toolCalls = Array.isArray(message.tool_calls)
+    ? message.tool_calls.map((call) => ({
+        name: call.function?.name ?? call.name ?? 'tool',
+        status: 'complete',
+        id: call.id ?? message.tool_call_id ?? undefined,
+      }))
+    : [];
+
+  return {
+    id: String(message.id),
+    role: message.role ?? 'assistant',
+    content,
+    timestamp: toMillis(message.timestamp),
+    ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+  };
+}
+
+/** Build a backend bound to a running Hermes API server. */
+export function createHermesBackend({ baseUrl, apiKey, fetchImpl = fetch } = {}) {
+  const root = String(baseUrl).replace(/\/+$/, '');
+
+  async function call(path, init = {}) {
+    const headers = { ...(init.headers ?? {}) };
+    if (init.body) headers['Content-Type'] = 'application/json';
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    const response = await fetchImpl(`${root}${path}`, { ...init, headers });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      let message = text || `HTTP ${response.status}`;
+      try {
+        const parsed = JSON.parse(text);
+        message = parsed?.error?.message ?? parsed?.detail ?? parsed?.message ?? message;
+      } catch {
+        // keep the raw text
+      }
+      const error = new Error(`hermes: ${message}`);
+      error.status = response.status;
+      throw error;
+    }
+    return response.json();
+  }
+
+  return {
+    kind: 'hermes',
+
+    async listSessions() {
+      const body = await call('/api/sessions');
+      return (body.data ?? []).map(toGatewaySession);
+    },
+
+    async createSession({ title, model } = {}) {
+      const payload = {};
+      if (title) payload.title = title;
+      if (model?.modelId) payload.model = model.modelId;
+      const body = await call('/api/sessions', { method: 'POST', body: JSON.stringify(payload) });
+      // Create answers `{object, session}` rather than the session directly.
+      return toGatewaySession(body.session ?? body);
+    },
+
+    async deleteSession(sessionId) {
+      await call(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+    },
+
+    async listMessages(sessionId, limit) {
+      const body = await call(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
+      const mapped = (body.data ?? [])
+        .map(toGatewayMessage)
+        .filter((message) => message.content.length > 0 || message.tool_calls);
+      return typeof limit === 'number' ? mapped.slice(-limit) : mapped;
+    },
+
+    async sendMessage(sessionId, { text, model } = {}) {
+      const payload = { message: text };
+      if (model?.modelId) payload.model = model.modelId;
+      const body = await call(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      const content = body.message?.content;
+      return {
+        text: typeof content === 'string' ? content : '',
+        message: {
+          id: body.message?.id ? String(body.message.id) : `hermes-${Date.now()}`,
+          role: body.message?.role ?? 'assistant',
+          content: typeof content === 'string' && content ? [{ type: 'text', text: content }] : [],
+        },
+        usage: body.usage,
+      };
+    },
+
+    /**
+     * `/v1/models` reports Hermes as a single `hermes-agent` entry -- true to
+     * the OpenAI contract (Hermes *is* the model from a caller's view) but
+     * useless for a picker. The real catalog is `/api/model/options`: the
+     * providers Hermes can route to, each with its own model list.
+     */
+    async listModels() {
+      const body = await call('/api/model/options');
+      const providers = Array.isArray(body.providers)
+        ? body.providers
+        : Object.values(body.providers ?? {});
+
+      const models = [];
+      for (const provider of providers) {
+        const providerId = provider.slug ?? provider.id ?? provider.name;
+        if (!providerId) continue;
+        for (const modelId of provider.models ?? []) {
+          models.push({
+            id: `${providerId}/${modelId}`,
+            providerId,
+            modelId,
+            label: `${provider.name ?? providerId} · ${modelId}`,
+            available: true,
+          });
+        }
+      }
+      return models;
+    },
+
+    /**
+     * Hermes exposes stop only on runs, not on a session chat turn. Left
+     * unimplemented rather than faked: a no-op `abort` would tell the Gate a
+     * turn was cancelled when it is still burning tokens upstream.
+     */
+    async abort() {
+      throw new Error('hermes: session turns cannot be aborted; use the runs API');
+    },
+
+    async replyApproval(runId, { approved, feedback } = {}) {
+      await call(`/v1/runs/${encodeURIComponent(runId)}/approval`, {
+        method: 'POST',
+        body: JSON.stringify({ approved, ...(feedback ? { feedback } : {}) }),
+      });
+    },
+
+    /**
+     * Streaming exists (`/api/sessions/{id}/chat/stream`) but is a POST that
+     * both sends the turn and streams it, which does not fit the Gate's
+     * subscribe-then-send shape. Out of scope for the spike; `sendMessage`
+     * returns the whole turn, so chat works without it.
+     */
+    async streamEvents() {},
+  };
+}
