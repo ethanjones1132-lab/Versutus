@@ -10,9 +10,19 @@ including one blocker (the authenticated-route allowlist) that would have made
 Phase 1's routes dead code, and one capability (`tools`) that the audit lists
 as *ready* while nothing implements it.
 
-**Status (2026-08-19).** Phases 0–4 are implemented and `npm run verify` is
-green (422 gate tests, 468 jest tests, tsc, lint, ratchet). Phases 5–7 are
+**Status (2026-08-19).** Phases 0–5 are implemented and `npm run verify` is
+green (433 gate tests, 468 jest tests, tsc, lint, ratchet). Phases 6–7 are
 untouched.
+
+Phase 5 diverged from the plan on the endpoint. The plan named
+`/api/sessions/{id}/chat/stream`; the implementation uses
+`/v1/chat/completions` with `X-Hermes-Session-Id`, because that emits
+OpenAI-shaped chunks — the shape the Gate already writes — which makes the
+turn a true relay instead of a translation between two frame formats, one of
+which is undocumented here. It is also the path the app's own Hermes client
+takes, so the session binding is exercised in production rather than assumed.
+A refused stream falls back to the whole-turn path, so a wrong guess costs
+token-by-token delivery, not the reply.
 
 Decisions taken where the plan left a choice:
 

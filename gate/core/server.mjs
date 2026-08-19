@@ -51,6 +51,59 @@ function lastUserText(messages = []) {
  * are relayed as `tool_calls` deltas so the client can show what the agent is
  * doing — the thing a bare provider proxy can never report.
  */
+/**
+ * Relay an OpenAI-shaped SSE stream to the client.
+ *
+ * Payloads pass through unchanged -- Hermes and the Gate write the same chunk
+ * shape, so translating would only add a place to get it wrong. Frames are
+ * still split and inspected for two reasons: `[DONE]` is held back so the
+ * caller writes exactly one terminator, and deltas are counted so the
+ * empty-turn guarantee below survives on this path too. Inspecting is not
+ * rewriting; an unparseable frame is forwarded as-is.
+ *
+ * @returns whether anything the user could see came through.
+ */
+async function relayOpenAiStream(upstream, res, isDisconnected) {
+  const reader = upstream.body?.getReader?.();
+  if (!reader) return false;
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let sawContent = false;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (isDisconnected()) {
+      await reader.cancel().catch(() => undefined);
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    let index;
+    while ((index = buffer.indexOf('\n\n')) !== -1) {
+      const frame = buffer.slice(0, index);
+      buffer = buffer.slice(index + 2);
+
+      const data = frame
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice('data:'.length).trim())
+        .join('\n');
+      if (!data || data === '[DONE]') continue;
+
+      try {
+        const delta = JSON.parse(data)?.choices?.[0]?.delta;
+        if (delta?.content || delta?.tool_calls?.length) sawContent = true;
+      } catch {
+        // Opaque frame: relay it rather than dropping what we cannot read.
+      }
+      res.write(`data: ${data}\n\n`);
+    }
+  }
+  return sawContent;
+}
+
 async function streamBackendTurn(backend, sessionId, { text, model }, res) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -66,6 +119,51 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
   res.on('close', () => { clientDisconnected = true; });
 
   const controller = new AbortController();
+  // A client that walks away must also stop the upstream turn, or the request
+  // keeps streaming into a socket nobody is reading.
+  res.on('close', () => controller.abort());
+
+  // Token-by-token, when the backend can do it. Hermes sends and streams in one
+  // POST, which does not fit the subscribe-then-send shape below, so it is
+  // handled as its own path rather than bent into that one.
+  if (typeof backend.sendMessageStreaming === 'function') {
+    let upstream = null;
+    try {
+      upstream = await backend.sendMessageStreaming(sessionId, { text, model }, controller.signal);
+    } catch (error) {
+      // Nothing has been written yet, so the whole-turn path below can still
+      // serve this turn. A streaming endpoint that is missing or refuses must
+      // not cost the user their reply -- it should cost them only the tokens
+      // arriving one at a time.
+      upstream = null;
+      if (clientDisconnected) {
+        res.end();
+        return;
+      }
+    }
+
+    if (upstream) {
+      try {
+        const sawContent = await relayOpenAiStream(upstream, res, () => clientDisconnected);
+        if (!clientDisconnected && !sawContent) {
+          res.write(`data: ${JSON.stringify({
+            error: { message: 'The backend completed the turn with no assistant content.', code: 'empty_turn' },
+          })}\n\n`);
+        }
+      } catch (error) {
+        if (!clientDisconnected) {
+          res.write(`data: ${JSON.stringify({ error: { message: error.message, code: 'backend_error' } })}\n\n`);
+        }
+      } finally {
+        if (!clientDisconnected) {
+          res.write('data: [DONE]\n\n');
+          res.end();
+        }
+      }
+      return;
+    }
+  }
+
   let toolIndex = 0;
   const seenTools = new Map();
   // A tool call is real turn activity with no closing text of its own — only
@@ -100,6 +198,18 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
     const hasContent = sawContent
       || Boolean(result?.text && result.text.trim())
       || Boolean(result?.message?.tool_calls?.length);
+
+    // A backend whose `streamEvents` is a no-op (Hermes' is, and it is not the
+    // only one) finishes the turn with real text that never reached the wire:
+    // every delta came from the subscription, and there was no subscription.
+    // The turn then renders as an empty bubble that the empty-turn guard below
+    // deliberately does not flag, because the content *does* exist. Send it as
+    // one delta rather than dropping it -- and only when nothing streamed, so
+    // a backend that does emit events is not echoed twice.
+    if (!clientDisconnected && !sawContent && result?.text && result.text.trim()) {
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: result.text } }] })}\n\n`);
+    }
+
     if (!clientDisconnected && !hasContent) {
       // The backend reported the turn as done, but nothing came back that
       // the user could see — a clean [DONE] here would render as a silent

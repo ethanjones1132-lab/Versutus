@@ -882,3 +882,149 @@ test('a refused open arrives as a message, not a silently dead stream', async ()
     await gate.close();
   }
 });
+
+/** An upstream SSE response built from ready-made frames. */
+function sseUpstream(frames) {
+  const encoder = new TextEncoder();
+  return {
+    body: new ReadableStream({
+      start(controller) {
+        for (const frame of frames) controller.enqueue(encoder.encode(frame));
+        controller.close();
+      },
+    }),
+  };
+}
+
+const delta = (content) => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
+
+/** A backend that streams a turn in one call, the way Hermes does. */
+function stubStreamingRegistry({ frames, onCall, streamingError } = {}) {
+  const registry = stubRegistry([]);
+  const adapter = registry.get('stubcli');
+  const createBackend = adapter.createBackend.bind(adapter);
+  adapter.createBackend = (...args) => ({
+    ...createBackend(...args),
+    async sendMessageStreaming(sessionId, input, signal) {
+      onCall?.({ sessionId, input, signal });
+      if (streamingError) throw streamingError;
+      return sseUpstream(frames);
+    },
+  });
+  return registry;
+}
+
+test('a streaming backend has its deltas relayed unchanged', async () => {
+  const registry = stubStreamingRegistry({
+    frames: [delta('Hel'), delta('lo'), 'data: [DONE]\n\n'],
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'hi' }], stream: true,
+      }),
+    });
+    const text = await response.text();
+
+    assert.match(text, /"content":"Hel"/);
+    assert.match(text, /"content":"lo"/);
+    // Exactly one terminator: the backend sent its own, which is held back so
+    // a client reading until [DONE] does not stop a frame early.
+    assert.equal(text.match(/data: \[DONE\]/g)?.length, 1);
+    assert.doesNotMatch(text, /empty_turn/);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a streamed turn is bound to the session and model the caller asked for', async () => {
+  const calls = [];
+  const registry = stubStreamingRegistry({
+    frames: [delta('ok')],
+    onCall: (call) => calls.push(call),
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_7', model: 'openai/gpt-4o',
+        messages: [{ role: 'user', content: 'hi' }], stream: true,
+      }),
+    });
+    assert.equal(calls[0].sessionId, 'ses_7');
+    assert.equal(calls[0].input.text, 'hi');
+    assert.deepEqual(calls[0].input.model, { providerId: 'openai', modelId: 'gpt-4o' });
+    assert.ok(calls[0].signal, 'an abort signal must reach the backend or a walk-away leaks the turn');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a stream that carries nothing still refuses to look like a clean turn', async () => {
+  const registry = stubStreamingRegistry({ frames: ['data: [DONE]\n\n'] });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'hi' }], stream: true,
+      }),
+    });
+    assert.match(await response.text(), /"code":"empty_turn"/);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a tool-only stream is not mistaken for an empty turn', async () => {
+  const toolFrame = `data: ${JSON.stringify({
+    choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'read_file' } }] } }],
+  })}\n\n`;
+  const registry = stubStreamingRegistry({ frames: [toolFrame] });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'hi' }], stream: true,
+      }),
+    });
+    const text = await response.text();
+    assert.match(text, /read_file/);
+    assert.doesNotMatch(text, /empty_turn/);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a refused stream falls back to the whole turn rather than losing the reply', async () => {
+  // The cost of a missing streaming endpoint should be tokens arriving all at
+  // once, not the user's answer disappearing.
+  const registry = stubStreamingRegistry({
+    frames: [],
+    streamingError: Object.assign(new Error('hermes: HTTP 404'), { status: 404 }),
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'ping' }], stream: true,
+      }),
+    });
+    const text = await response.text();
+    // stubRegistry's sendMessage echoes the prompt back.
+    assert.match(text, /echo ping/);
+    assert.doesNotMatch(text, /empty_turn/);
+    assert.match(text, /\[DONE\]/);
+  } finally {
+    await gate.close();
+  }
+});

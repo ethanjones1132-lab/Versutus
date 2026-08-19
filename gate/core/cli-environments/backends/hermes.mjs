@@ -272,11 +272,51 @@ export function createHermesBackend({ baseUrl, apiKey, fetchImpl = fetch } = {})
     },
 
     /**
-     * Streaming exists (`/api/sessions/{id}/chat/stream`) but is a POST that
-     * both sends the turn and streams it, which does not fit the Gate's
-     * subscribe-then-send shape. Out of scope for the spike; `sendMessage`
-     * returns the whole turn, so chat works without it.
+     * Streaming turns.
+     *
+     * The Gate's other backends are subscribe-then-send: `streamEvents` opens a
+     * feed, `sendMessage` pushes the turn down it. Hermes has no such split --
+     * one POST both sends and streams -- so this is modelled as what it is
+     * rather than faked as a two-step handshake, and `streamEvents` stays a
+     * no-op for the same reason `abort` throws: an empty subscription that
+     * never yields is worse than an absent one.
+     *
+     * /v1/chat/completions is chosen over the session-native
+     * /api/sessions/{id}/chat/stream because it emits OpenAI-shaped chunks --
+     * exactly what the Gate already writes to its own clients -- so the turn
+     * can be relayed instead of translated. The session binding comes from
+     * X-Hermes-Session-Id, which is the same path the app's own Hermes client
+     * takes, and the same session the non-streaming `sendMessage` writes to.
+     *
+     * Returns the raw Response: the caller owns the framing.
      */
+    async sendMessageStreaming(sessionId, { text, model } = {}, signal) {
+      const headers = {
+        'Content-Type': 'application/json',
+        'X-Hermes-Session-Id': sessionId,
+      };
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+      const response = await fetchImpl(`${root}/v1/chat/completions`, {
+        method: 'POST',
+        headers,
+        signal,
+        body: JSON.stringify({
+          model: model?.modelId ?? 'hermes-agent',
+          messages: [{ role: 'user', content: text }],
+          stream: true,
+        }),
+      });
+
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        const error = new Error(`hermes: ${detail || `HTTP ${response.status}`}`);
+        error.status = response.status;
+        throw error;
+      }
+      return response;
+    },
+
     async streamEvents() {},
   };
 }
