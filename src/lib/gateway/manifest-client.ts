@@ -249,6 +249,9 @@ export class ManifestClient implements PortalClient {
       },
       features,
       endpoints: endpointsRecord,
+      ...(Array.isArray(this.identity.manifest?.rpcMethods)
+        ? { rpcMethods: this.identity.manifest.rpcMethods.filter((m): m is string => typeof m === 'string') }
+        : {}),
     };
   }
 

@@ -1,6 +1,7 @@
-import type { ConnectionStatus, GatewayHelloOk, GatewayKind } from '@/lib/gateway/types';
+import type { ConnectionStatus, GatewayHelloOk } from '@/lib/gateway/types';
 import type { GatewayBackend, GatewayCapabilityInstance } from '@/lib/portal/manifest';
 import { capabilitiesForBackend } from '@/lib/gateway/backend-capabilities';
+import { METHOD_TO_ROUTE } from '@/lib/gateway/rpc-routes';
 
 export type GatewayReachabilityState =
   | 'connected'
@@ -1035,6 +1036,30 @@ export function buildCapabilitySnapshot(
     ),
   );
 
+  /**
+   * Can this gateway route the method behind a command?
+   *
+   * A Gate reports its own dispatch table (`rpcMethods`), so this is a fact
+   * rather than an inference. Hermes reports none, and its dispatch table *is*
+   * the route map in `rpc-routes.ts` — the keys there are exactly the methods
+   * that resolve to a real Hermes endpoint.
+   *
+   * This replaces the old kind-based `filterCommandsForDialect`, which dropped
+   * every rpc command on any non-Hermes gateway. That was a static answer to a
+   * question only the live gateway can answer, and it emptied the RPC tab on a
+   * Gate that now dispatches these methods perfectly well.
+   */
+  const dispatchesMethod = (command: GatewayCommand): boolean => {
+    // Agent-transport commands are not RPC at all; they carry `agentCommand`,
+    // not `method`. Filtering them on a method table would hide both of them
+    // on every gateway.
+    if (command.transport !== 'rpc') return true;
+    if (!command.method) return true;
+    const advertisedMethods = capabilities?.rpcMethods;
+    if (advertisedMethods) return advertisedMethods.includes(command.method);
+    return Object.prototype.hasOwnProperty.call(METHOD_TO_ROUTE, command.method);
+  };
+
   const methods: Record<string, import('@/lib/gateway/types').GatewayMethodAvailability> = {};
   commands.forEach((command) => {
     if (!connected) {
@@ -1043,6 +1068,10 @@ export function buildCapabilitySnapshot(
     }
     if (!capabilities) {
       methods[command.id] = { available: commandAllowed(command, hello) };
+      return;
+    }
+    if (!dispatchesMethod(command)) {
+      methods[command.id] = { available: false, reason: 'not dispatched by this gateway' };
       return;
     }
     const available = advertised.has(command.group) && commandAllowed(command, hello);
@@ -1120,33 +1149,3 @@ function readArray(record: Record<string, unknown> | undefined, key: string): un
   return Array.isArray(value) ? value : undefined;
 }
 
-/**
- * Gateway kinds that speak the Hermes RPC dialect.
- *
- * The quick RPC set (`tools.list`, `sessions.list`, …) is mapped to Hermes REST
- * routes by `rpc-routes.ts`. A Versutus Gate serves a different surface: its
- * `/v1/capabilities/rpc` dispatches only `registry.*`, `providers.*` and
- * `environment*`, so a Hermes-dialect method there answers
- * `Unknown method "tools.list"`. The Gate's manifest still advertises
- * `tools: true` — truthfully, because it has tools *via its backends* — so
- * capability flags alone cannot tell these apart. Dialect can.
- */
-export function speaksHermesRpcDialect(kind?: GatewayKind): boolean {
-  return kind === 'hermes' || kind === 'unknown' || kind === undefined;
-}
-
-/**
- * Drop RPC commands the target gateway cannot route.
- *
- * Kept separate from `filterExecutableCommands` (which filters on advertised
- * per-method availability) because this is about the transport dialect, not
- * about whether a given feature is switched on.
- */
-export function filterCommandsForDialect(
-  commands: GatewayCommand[],
-  kind?: GatewayKind,
-): GatewayCommand[] {
-  if (speaksHermesRpcDialect(kind)) return commands;
-  // Non-Hermes gateways keep only what is not a Hermes-dialect RPC call.
-  return commands.filter((command) => command.transport !== 'rpc');
-}

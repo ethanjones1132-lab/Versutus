@@ -486,3 +486,223 @@ test('a live probe reaches the backend picker as real health, not the static cap
     await gate.close();
   }
 });
+
+/**
+ * The `isKnownAuthenticatedRoute` allowlist (server.mjs) is a second,
+ * hand-maintained copy of the route table: a path added to the handler block
+ * but not the allowlist 404s ~180 lines earlier and the handler is dead code.
+ * Nothing caught that drift, so this walks the manifest's own advertisement and
+ * asserts each GET endpoint actually reaches a handler.
+ */
+test('every GET endpoint the manifest advertises is allowlisted', async () => {
+  const { gate } = await makeGate();
+  try {
+    const manifest = await (await fetch(`http://127.0.0.1:${gate.port}/.well-known/gateway.json`)).json();
+    const postOnly = new Set(['chat', 'capabilitiesRpc', 'runs']);
+    const checked = [];
+    for (const [name, path] of Object.entries(manifest.endpoints)) {
+      if (postOnly.has(name) || path.includes('{')) continue;
+      const response = await fetch(`http://127.0.0.1:${gate.port}${path}`, { headers: auth(gate) });
+      const body = await response.json().catch(() => ({}));
+      assert.notEqual(
+        body.error,
+        'Not Found',
+        `${name} (${path}) is advertised but not allowlisted — the handler is unreachable`,
+      );
+      checked.push(name);
+    }
+    // Guard against the assertion silently checking nothing.
+    assert.ok(checked.includes('toolsets'), `expected toolsets among ${checked.join(', ')}`);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a backend that cannot serve a route gets an answer, not a hung socket', async () => {
+  // The stub adapter declares the `tools` capability but its backend has no
+  // listToolsets, which is precisely the shape that used to bare-`return`.
+  const { gate } = await makeGate();
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/toolsets`, { headers: auth(gate) });
+    assert.equal(response.status, 501);
+    const body = await response.json();
+    assert.equal(body.error.code, 'backend_unsupported');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('toolsets are listed from a backend that implements them', async () => {
+  const calls = [];
+  const registry = stubRegistry(calls);
+  const adapter = registry.get('stubcli');
+  const createBackend = adapter.createBackend.bind(adapter);
+  adapter.createBackend = (...args) => ({
+    ...createBackend(...args),
+    async listToolsets() { calls.push('listToolsets'); return { toolsets: [{ id: 'fs', tools: ['read'] }] }; },
+  });
+
+  const { gate } = await makeGate({ calls, registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/toolsets`, { headers: auth(gate) });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.toolsets[0].id, 'fs');
+    assert.ok(calls.includes('listToolsets'));
+  } finally {
+    await gate.close();
+  }
+});
+
+/** A stub that fronts the surfaces Hermes exposes and the Gate now proxies. */
+function stubFrontedRegistry(calls) {
+  const registry = stubRegistry(calls);
+  const adapter = registry.get('stubcli');
+  adapter.capabilities = [...adapter.capabilities, 'skills', 'diagnostics', 'cron'];
+  const createBackend = adapter.createBackend.bind(adapter);
+  adapter.createBackend = (...args) => ({
+    ...createBackend(...args),
+    async listToolsets() { calls.push('listToolsets'); return { toolsets: [] }; },
+    async listSkills() { calls.push('listSkills'); return { data: [{ id: 'skill-1' }] }; },
+    async healthDetailed() { calls.push('healthDetailed'); return { status: 'ok', checks: { db: 'ok' } }; },
+    async listJobs() { calls.push('listJobs'); return { data: [{ id: 'job-1', paused: false }] }; },
+    async runJob(id) { calls.push(`runJob:${id}`); return { started: true }; },
+    async setJobPaused(id, paused) { calls.push(`setJobPaused:${id}:${paused}`); return { paused }; },
+  });
+  return registry;
+}
+
+test('skills, diagnostics and cron are advertised only when a backend fronts them', async () => {
+  const plain = await makeGate();
+  try {
+    const manifest = await (await fetch(`http://127.0.0.1:${plain.gate.port}/.well-known/gateway.json`)).json();
+    assert.equal(manifest.endpoints.skills, undefined);
+    assert.equal(manifest.endpoints.health_detailed, undefined);
+    assert.equal(manifest.capabilities.jobs_admin, undefined);
+  } finally {
+    await plain.gate.close();
+  }
+
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  try {
+    const manifest = await (await fetch(`http://127.0.0.1:${gate.port}/.well-known/gateway.json`)).json();
+    assert.equal(manifest.endpoints.skills, '/v1/skills');
+    assert.equal(manifest.endpoints.health_detailed, '/health/detailed');
+    assert.equal(manifest.endpoints.jobs, '/v1/jobs');
+    // Advertised from the Gate's own fronting, not from the backend's self-report.
+    assert.equal(manifest.capabilities.jobs_admin, true);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('the fronted routes proxy to the backend and are reachable', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    const skills = await fetch(`${base}/v1/skills`, { headers: auth(gate) });
+    assert.equal(skills.status, 200);
+    assert.equal((await skills.json()).data[0].id, 'skill-1');
+
+    const health = await fetch(`${base}/health/detailed`, { headers: auth(gate) });
+    assert.equal(health.status, 200);
+    assert.deepEqual((await health.json()).checks, { db: 'ok' });
+
+    const jobs = await fetch(`${base}/v1/jobs`, { headers: auth(gate) });
+    assert.equal(jobs.status, 200);
+    assert.equal((await jobs.json()).data[0].id, 'job-1');
+
+    for (const [action, expected] of [['run', 'runJob:job-1'], ['pause', 'setJobPaused:job-1:true'], ['resume', 'setJobPaused:job-1:false']]) {
+      const response = await fetch(`${base}/v1/jobs/job-1/${action}`, { method: 'POST', headers: auth(gate) });
+      assert.equal(response.status, 200, `${action} should proxy`);
+      assert.ok(calls.includes(expected), `${action} should call ${expected}`);
+    }
+  } finally {
+    await gate.close();
+  }
+});
+
+test('detailed health needs a token even though plain /health does not', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  try {
+    assert.equal((await fetch(`http://127.0.0.1:${gate.port}/health`)).status, 200);
+    assert.equal((await fetch(`http://127.0.0.1:${gate.port}/health/detailed`)).status, 401);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('the Gate dispatches the Hermes-dialect methods the app actually sends', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  const rpc = async (method, params = {}) => {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/capabilities/rpc`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ method, params }),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  try {
+    for (const method of ['health', 'status', 'diagnostics.full', 'skills.list', 'skills.status',
+      'cron.list', 'cron.status', 'sessions.list', 'models.list', 'tools.list']) {
+      const { status, body } = await rpc(method);
+      assert.equal(status, 200, `${method} should dispatch, got ${JSON.stringify(body)}`);
+      assert.ok(body.result !== undefined, `${method} should return a result`);
+    }
+
+    assert.equal((await rpc('jobs.run', { jobId: 'job-1' })).status, 200);
+    assert.equal((await rpc('jobs.pause', { jobId: 'job-1' })).status, 200);
+    assert.equal((await rpc('jobs.resume', { jobId: 'job-1' })).status, 200);
+    assert.ok(calls.includes('setJobPaused:job-1:false'));
+
+    // Unknown methods must still be refused, not swallowed by the new map.
+    const unknown = await rpc('nope.nope');
+    assert.equal(unknown.status, 404);
+    assert.equal(unknown.body.error.code, 'unknown_method');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('the manifest advertises the methods the Gate can actually dispatch', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  try {
+    const manifest = await (await fetch(`http://127.0.0.1:${gate.port}/.well-known/gateway.json`)).json();
+    // An empty list is the failure mode to guard: building the manifest before
+    // the RPC tables exist would ship one, and the app would silently render an
+    // empty command tab rather than fail loudly.
+    assert.ok(manifest.rpcMethods?.length > 0, 'rpcMethods must not be empty');
+    for (const method of ['skills.list', 'cron.list', 'tools.list', 'registry.kinds.list']) {
+      assert.ok(manifest.rpcMethods.includes(method), `${method} should be advertised`);
+    }
+    // Advertised implies dispatchable — checked over the read-only methods
+    // only. Calling every advertised name would fire `registry.instances.*`
+    // and `registry.secrets.set` with empty params, which is a mutation, not
+    // a probe.
+    const readOnly = manifest.rpcMethods.filter((m) => /\.(list|status)$/.test(m) || m === 'health');
+    assert.ok(readOnly.length >= 5, `expected read-only methods among ${manifest.rpcMethods.join(', ')}`);
+    for (const method of readOnly) {
+      const response = await fetch(`http://127.0.0.1:${gate.port}/v1/capabilities/rpc`, {
+        method: 'POST',
+        headers: auth(gate),
+        body: JSON.stringify({ method, params: {} }),
+      });
+      assert.notEqual(response.status, 404, `${method} is advertised but not dispatched`);
+    }
+
+    // And the converse: a name absent from the list is genuinely not answered.
+    const absent = await fetch(`http://127.0.0.1:${gate.port}/v1/capabilities/rpc`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ method: 'definitely.not.a.method', params: {} }),
+    });
+    assert.equal(absent.status, 404);
+  } finally {
+    await gate.close();
+  }
+});

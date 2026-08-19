@@ -19,20 +19,54 @@ test('capabilities cover everything the Gate actually serves', () => {
   assert.equal(manifest.capabilities.streaming, true);
 });
 
-test('every advertised capability has an endpoint backing it', () => {
-  const manifest = buildManifest({ name: 'Gate', capabilityKinds: [], capabilityInstances: [] });
-  const backing = {
-    chat: 'chat',
-    models: 'models',
-    providers: 'providers',
-    environments: 'environments',
-    capabilityRegistry: 'capabilitiesRpc',
-  };
-  for (const [capability, endpoint] of Object.entries(backing)) {
-    if (manifest.capabilities[capability]) {
-      assert.ok(manifest.endpoints[endpoint], `${capability} advertised without an ${endpoint} endpoint`);
-    }
+/**
+ * Every capability the Gate can advertise, and the endpoint that proves it.
+ *
+ * This map used to stop at the five capabilities a backend-less Gate offers,
+ * so `tools`, `sessions`, `runs` and `approvals` were exempt — which is how
+ * `capabilities.tools: true` survived with no tools route and no backend
+ * method behind it, rendering a ready Tools tile over a command that could not
+ * run. A capability missing from this map is a capability nothing checks.
+ */
+const CAPABILITY_BACKING = {
+  chat: 'chat',
+  models: 'models',
+  providers: 'providers',
+  environments: 'environments',
+  capabilityRegistry: 'capabilitiesRpc',
+  sessions: 'sessions',
+  tools: 'toolsets',
+  runs: 'runs',
+  approvals: 'runApproval',
+  jobs_admin: 'jobs',
+};
+
+function assertFullyBacked(manifest) {
+  for (const capability of Object.keys(manifest.capabilities)) {
+    if (manifest.capabilities[capability] !== true) continue;
+    if (capability === 'streaming') continue; // a modifier on chat, not its own surface
+    const endpoint = CAPABILITY_BACKING[capability];
+    assert.ok(endpoint, `${capability} is advertised but absent from CAPABILITY_BACKING — add it or stop advertising it`);
+    assert.ok(manifest.endpoints[endpoint], `${capability} advertised without an ${endpoint} endpoint`);
   }
+}
+
+test('every advertised capability has an endpoint backing it', () => {
+  assertFullyBacked(buildManifest({ name: 'Gate', capabilityKinds: [], capabilityInstances: [] }));
+});
+
+test('capabilities a backend unlocks are backed too', () => {
+  // A backend-less Gate never advertises sessions/tools/runs/approvals, so the
+  // bare manifest cannot exercise their backing. This is the one that matters.
+  const manifest = buildManifest({
+    name: 'Gate',
+    capabilityKinds: [],
+    capabilityInstances: [],
+    backends: [{ id: 'hermes', kind: 'hermes', capabilities: ['chat', 'tools', 'sessions', 'models', 'runs'] }],
+  });
+  assert.equal(manifest.capabilities.tools, true);
+  assert.equal(manifest.endpoints.toolsets, '/v1/toolsets');
+  assertFullyBacked(manifest);
 });
 
 test('capabilities the Gate does not implement stay absent', () => {

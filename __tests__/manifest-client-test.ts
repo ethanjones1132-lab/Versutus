@@ -452,3 +452,32 @@ describe('ManifestClient sessions and runs when advertised', () => {
   });
 });
 
+
+describe('rpcMethods pass-through', () => {
+  function clientWithManifest(extra: Record<string, unknown>) {
+    const identity: GatewayIdentity = {
+      ...IDENTITY,
+      manifest: { ...IDENTITY.manifest!, ...extra },
+    };
+    return new ManifestClient(PROFILE, identity, {});
+  }
+
+  test('a gate that enumerates its dispatch table has it carried onto capabilities', async () => {
+    // This is the seam the app's command filtering reads: without it every rpc
+    // button falls back to guessing from the gateway's kind.
+    const caps = await clientWithManifest({ rpcMethods: ['skills.list', 'cron.list'] }).getCapabilities();
+    expect(caps.rpcMethods).toEqual(['skills.list', 'cron.list']);
+  });
+
+  test('a gate that reports none leaves it undefined rather than empty', async () => {
+    // Undefined means "cannot say"; an empty array would mean "dispatches
+    // nothing", which would blank every command button.
+    const caps = await clientWithManifest({}).getCapabilities();
+    expect(caps.rpcMethods).toBeUndefined();
+  });
+
+  test('non-string entries are dropped rather than trusted', async () => {
+    const caps = await clientWithManifest({ rpcMethods: ['skills.list', 42, null] }).getCapabilities();
+    expect(caps.rpcMethods).toEqual(['skills.list']);
+  });
+});

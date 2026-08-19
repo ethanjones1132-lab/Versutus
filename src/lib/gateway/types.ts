@@ -75,6 +75,15 @@ export type GatewayCapabilities = {
   };
   features: Record<string, boolean | string>;
   endpoints: Record<string, { method: string; path: string }>;
+  /**
+   * Every RPC method name this gateway will answer, when it can say so.
+   *
+   * A Gate reports it from its own dispatch table. Hermes does not report one,
+   * so it stays undefined there and the caller falls back to the route map in
+   * `rpc-routes.ts`. Undefined means "this gateway cannot tell us" — never
+   * "this gateway dispatches nothing".
+   */
+  rpcMethods?: string[];
 };
 
 // ─── Models ────────────────────────────────────────────────────────

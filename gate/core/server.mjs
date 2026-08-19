@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { loadCapabilities, describeKinds, resolveManifestInstances } from './capabilities/registry.mjs';
 import { buildInstanceHandlers } from './capabilities/dispatch.mjs';
 import { createRegistryMethods } from './capabilities/registry-methods.mjs';
+import { createGatewayMethods } from './capabilities/gateway-methods.mjs';
 import { getSecret } from './capabilities/secrets.mjs';
 import { buildManifest } from './manifest.mjs';
 import { ProviderStore } from './providers/store.mjs';
@@ -312,6 +313,31 @@ export async function createGate(config = {}) {
   // registry.instances.* mutation, so a new/edited/deleted instance is
   // reflected in routing, the manifest, and the RPC dispatch table without
   // restarting the Gate.
+  /**
+   * RPC method tables.
+   *
+   * Declared above `computeState()` because the manifest advertises their
+   * names (`rpcMethods`), and a manifest built before they exist would ship an
+   * empty list — which reads to the app as "this gateway dispatches nothing".
+   * Both close over `state`/`reload` lazily, so the order is safe.
+   */
+  const registryMethods = {
+    ...createRegistryMethods({ root, getState: () => state, reload, gateHome }),
+    ...providerRpc,
+    ...environmentRpc,
+  };
+
+  // The Hermes-dialect methods the app's command registry actually sends.
+  // Resolution throws rather than writing a response: the RPC dispatcher below
+  // owns the reply shape, unlike the REST routes' `resolveBackend`.
+  const gatewayMethods = createGatewayMethods({
+    async getBackend(backendId) {
+      const id = backendId ?? (await backendManager.list())[0]?.id;
+      if (!id) throw new Error('No chat backend is attached to this Gate');
+      return backendManager.get(id);
+    },
+  });
+
   async function computeState() {
     const { kinds, instances } = await loadCapabilities(root);
     const providers = instances
@@ -324,6 +350,10 @@ export async function createGate(config = {}) {
     // loadCapabilities(root) — which only reads the legacy registry — cannot
     // see them. A failure here must not take the manifest down.
     const providerSnapshots = await providerService.list().catch(() => []);
+    // Built before the manifest so its keys can be advertised: a capability
+    // instance that contributes methods must appear in `rpcMethods` on the
+    // same reload that registers it, not on the next restart.
+    const dispatch = buildInstanceHandlers(kinds, instances);
     const manifest = buildManifest({
       name,
       version,
@@ -331,8 +361,12 @@ export async function createGate(config = {}) {
       providerSnapshots,
       capabilityKinds: describeKinds(kinds),
       capabilityInstances: resolveManifestInstances(kinds, instances),
+      rpcMethods: [...new Set([
+        ...Object.keys(registryMethods),
+        ...Object.keys(gatewayMethods),
+        ...dispatch.keys(),
+      ])].sort(),
     });
-    const dispatch = buildInstanceHandlers(kinds, instances);
     return { kinds, instances, providers, manifest, dispatch };
   }
 
@@ -441,12 +475,6 @@ export async function createGate(config = {}) {
     res.write('data: [DONE]\n\n');
     res.end();
   }
-
-  const registryMethods = {
-    ...createRegistryMethods({ root, getState: () => state, reload, gateHome }),
-    ...providerRpc,
-    ...environmentRpc,
-  };
 
   // Initialize token store
   const tokenStore = new TokenStore(tokenPath);
@@ -566,6 +594,13 @@ export async function createGate(config = {}) {
         (pathname === '/v1/chat/completions' && method === 'POST') ||
         /^\/p\/[^/]+\/v1\/chat\/completions$/.test(pathname) ||
         (pathname === '/v1/backends' && method === 'GET') ||
+        (pathname === '/v1/toolsets' && method === 'GET') ||
+        (pathname === '/v1/skills' && method === 'GET') ||
+        // Note the divergence from plain /health, which is unauthenticated:
+        // detailed diagnostics expose backend internals and need a token.
+        (pathname === '/health/detailed' && method === 'GET') ||
+        (pathname === '/v1/jobs' && method === 'GET') ||
+        /^\/v1\/jobs\/[^/]+\/(run|pause|resume)$/.test(pathname) ||
         (pathname === '/v1/sessions' && (method === 'GET' || method === 'POST')) ||
         /^\/v1\/sessions\/[^/]+$/.test(pathname) ||
         /^\/v1\/sessions\/[^/]+\/messages$/.test(pathname) ||
@@ -651,6 +686,25 @@ export async function createGate(config = {}) {
       }
 
       /**
+       * Guard a route that needs one specific backend method.
+       *
+       * Answers 501 and returns false when the backend cannot serve it. The
+       * point is that it always *writes*: the earlier
+       * `if (!backend || typeof backend.x !== 'function') return;` shape left
+       * the socket hanging with no response whenever the backend existed but
+       * lacked the method, because nothing downstream answers either (the
+       * `isKnownAuthenticatedRoute` 404 fires far earlier, on the path).
+       */
+      function requireBackendMethod(backend, name) {
+        if (typeof backend?.[name] === 'function') return true;
+        res.writeHead(501, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          error: { message: `This backend does not implement ${name}`, code: 'backend_unsupported' },
+        }));
+        return false;
+      }
+
+      /**
        * Agentic runs, delegated to whichever backend implements them.
        *
        * The Gate's CLI backends run a turn synchronously and have no notion of
@@ -709,7 +763,8 @@ export async function createGate(config = {}) {
       const runEventsMatch = pathname.match(/^\/v1\/runs\/([^/]+)\/events$/);
       if (runEventsMatch && method === 'GET') {
         const backend = await resolveRunBackend();
-        if (!backend || typeof backend.runEvents !== 'function') return;
+        if (!backend) return;
+        if (!requireBackendMethod(backend, 'runEvents')) return;
         const upstream = await backend.runEvents(decodeURIComponent(runEventsMatch[1]));
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
@@ -742,7 +797,8 @@ export async function createGate(config = {}) {
       if (runApprovalMatch && method === 'POST') {
         const body = (await readJsonBody(req)) ?? {};
         const backend = await resolveRunBackend();
-        if (!backend || typeof backend.replyApproval !== 'function') return;
+        if (!backend) return;
+        if (!requireBackendMethod(backend, 'replyApproval')) return;
         await backend.replyApproval(decodeURIComponent(runApprovalMatch[1]), {
           approved: body.approved,
           feedback: body.feedback,
@@ -759,6 +815,65 @@ export async function createGate(config = {}) {
         const status = await backend.getRunStatus(decodeURIComponent(runStatusMatch[1]));
         res.writeHead(200);
         res.end(JSON.stringify(status));
+        return;
+      }
+
+      // Tools, from whichever backend owns them. The Gate has claimed
+      // `tools: true` since the adapter declared the capability; this is the
+      // route that makes the claim true.
+      if (pathname === '/v1/toolsets' && method === 'GET') {
+        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        if (!backend) return;
+        if (!requireBackendMethod(backend, 'listToolsets')) return;
+        const toolsets = await backend.listToolsets();
+        res.writeHead(200);
+        res.end(JSON.stringify(toolsets));
+        return;
+      }
+
+      // Skills, diagnostics and cron, fronted from the backend. Each was
+      // reachable on Hermes all along; the Gate could not offer them because
+      // it served no route, so the app's tiles read "Not offered".
+      if (pathname === '/v1/skills' && method === 'GET') {
+        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        if (!backend) return;
+        if (!requireBackendMethod(backend, 'listSkills')) return;
+        res.writeHead(200);
+        res.end(JSON.stringify(await backend.listSkills()));
+        return;
+      }
+
+      if (pathname === '/health/detailed' && method === 'GET') {
+        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        if (!backend) return;
+        if (!requireBackendMethod(backend, 'healthDetailed')) return;
+        res.writeHead(200);
+        res.end(JSON.stringify(await backend.healthDetailed()));
+        return;
+      }
+
+      if (pathname === '/v1/jobs' && method === 'GET') {
+        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        if (!backend) return;
+        if (!requireBackendMethod(backend, 'listJobs')) return;
+        res.writeHead(200);
+        res.end(JSON.stringify(await backend.listJobs()));
+        return;
+      }
+
+      const jobActionMatch = pathname.match(/^\/v1\/jobs\/([^/]+)\/(run|pause|resume)$/);
+      if (jobActionMatch && method === 'POST') {
+        const [, rawJobId, action] = jobActionMatch;
+        const jobId = decodeURIComponent(rawJobId);
+        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        if (!backend) return;
+        const needed = action === 'run' ? 'runJob' : 'setJobPaused';
+        if (!requireBackendMethod(backend, needed)) return;
+        const result = action === 'run'
+          ? await backend.runJob(jobId)
+          : await backend.setJobPaused(jobId, action === 'pause');
+        res.writeHead(200);
+        res.end(JSON.stringify(result ?? { ok: true }));
         return;
       }
 
@@ -1103,7 +1218,7 @@ export async function createGate(config = {}) {
           res.end(JSON.stringify({ error: { message: 'method must be a non-empty string', code: 'invalid_request' } }));
           return;
         }
-        const handler = registryMethods[rpcMethod] ?? state.dispatch.get(rpcMethod);
+        const handler = registryMethods[rpcMethod] ?? gatewayMethods[rpcMethod] ?? state.dispatch.get(rpcMethod);
         if (!handler) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: `Unknown method "${rpcMethod}"`, code: 'unknown_method' } }));

@@ -51,6 +51,7 @@ export function buildManifest({
   providerSnapshots = [],
   capabilityKinds = [],
   capabilityInstances = [],
+  rpcMethods = [],
 }) {
   // v2 providers are owned by ProviderService and persist under Gate home;
   // legacy ones are registry files. Both are advertised, but a v2 record wins
@@ -96,6 +97,13 @@ export function buildManifest({
             runApproval: '/v1/runs/{run_id}/approval',
           }
         : {}),
+      // `capabilities.tools` was advertised from the adapter's declaration
+      // alone, with no route and no backend method behind it. The endpoint is
+      // what makes that claim checkable.
+      ...(backendCan('tools') ? { toolsets: '/v1/toolsets' } : {}),
+      ...(backendCan('skills') ? { skills: '/v1/skills' } : {}),
+      ...(backendCan('diagnostics') ? { health_detailed: '/health/detailed' } : {}),
+      ...(backendCan('cron') ? { jobs: '/v1/jobs' } : {}),
     },
     // Advertise exactly what the endpoints above serve. Under-claiming makes the
     // Gate render as featureless in the app; over-claiming (sessions, runs,
@@ -111,11 +119,19 @@ export function buildManifest({
       ...(backendCan('sessions') ? { sessions: true } : {}),
       ...(backendCan('tools') ? { tools: true } : {}),
       ...(backendCan('runs') ? { runs: true, approvals: true } : {}),
+      // Hermes reports `jobs_admin: false` on its own /v1/capabilities while
+      // answering the full jobs CRUD with 200. The Gate advertises from what it
+      // observably fronts, so the app stops hiding cron on a gateway that has it.
+      ...(backendCan('cron') ? { jobs_admin: true } : {}),
     },
     backends,
     providers,
     capabilityKinds,
     capabilityInstances,
+    // Every method name /v1/capabilities/rpc will answer. The app filters its
+    // command buttons on this instead of guessing from the gateway's kind, so
+    // a button renders iff this gateway actually dispatches it.
+    rpcMethods,
     auth: {
       grantPath: '/.well-known/gateway/access',
       schemes: ['bearer'],

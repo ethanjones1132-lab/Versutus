@@ -178,6 +178,42 @@ export function createHermesBackend({ baseUrl, apiKey, fetchImpl = fetch } = {})
     },
 
     /**
+     * Toolsets. The adapter declares the `tools` capability, so the Gate
+     * advertises `tools: true` — which was a claim with nothing behind it: a
+     * ready Tools tile over a command that could not run. This is what backs
+     * the advertisement.
+     */
+    async listToolsets() {
+      return call('/v1/toolsets');
+    },
+
+    async listSkills() {
+      return call('/v1/skills');
+    },
+
+    async healthDetailed() {
+      return call('/health/detailed');
+    },
+
+    /**
+     * Cron jobs. Hermes serves the full CRUD here and answers 200, but reports
+     * `jobs_admin: false` on its own /v1/capabilities. The Gate advertises from
+     * what it can observably proxy, not from that self-report.
+     */
+    async listJobs() {
+      return call('/api/jobs');
+    },
+
+    async runJob(jobId) {
+      return call(`/api/jobs/${encodeURIComponent(jobId)}/run`, { method: 'POST' });
+    },
+
+    async setJobPaused(jobId, paused) {
+      const action = paused ? 'pause' : 'resume';
+      return call(`/api/jobs/${encodeURIComponent(jobId)}/${action}`, { method: 'POST' });
+    },
+
+    /**
      * Hermes exposes stop only on runs, not on a session chat turn. Left
      * unimplemented rather than faked: a no-op `abort` would tell the Gate a
      * turn was cancelled when it is still burning tokens upstream.

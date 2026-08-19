@@ -23,7 +23,6 @@ import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import {
   agentCommands,
-  filterCommandsForDialect,
   filterExecutableCommands,
   homeQuickCommands,
   summarizeCommandResult,
@@ -195,15 +194,11 @@ export function TerminalScreen() {
     [gatewayRequest, runAgentCommand, status],
   );
 
-  // Dialect first, then per-method availability. A Versutus Gate advertises
-  // `tools: true` truthfully (it has tools via its backends) but dispatches no
-  // Hermes-dialect RPC, so availability flags alone would still render buttons
-  // that can only answer `Unknown method "tools.list"`.
+  // One filter, keyed on what the connected gateway says it dispatches. The
+  // old two-stage version guessed from the gateway's kind first, which emptied
+  // this tab on any non-Hermes gateway regardless of what it could answer.
   const commandList = filterExecutableCommands(
-    filterCommandsForDialect(
-      mode === 'rpc' ? homeQuickCommands() : mode === 'agent' ? agentCommands() : [],
-      activeGateway?.kind,
-    ),
+    mode === 'rpc' ? homeQuickCommands() : mode === 'agent' ? agentCommands() : [],
     capabilitySnapshot.methods,
   );
 

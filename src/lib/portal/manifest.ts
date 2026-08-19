@@ -155,6 +155,12 @@ export type GatewayManifest = {
   providers?: GatewayManifestProvider[];
   capabilityKinds?: GatewayCapabilityKind[];
   capabilityInstances?: GatewayCapabilityInstance[];
+  /**
+   * Every RPC method name this gate's `/v1/capabilities/rpc` will answer,
+   * recomputed whenever the capability registry reloads. Absent on gateways
+   * that cannot report one — which means "unknown", not "none".
+   */
+  rpcMethods?: string[];
 };
 
 export function isGatewayManifest(value: unknown): value is GatewayManifest {
