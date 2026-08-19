@@ -667,9 +667,37 @@ export async function createGate(config = {}) {
         const backend = await resolveBackend(url.searchParams.get('backendId'));
         if (!backend) return;
         const limit = Number(url.searchParams.get('limit')) || undefined;
-        const messages = await backend.listMessages(decodeURIComponent(sessionMessagesMatch[1]), limit);
+        const before = url.searchParams.get('before') || undefined;
+
+        // Paging is done here rather than in the backends: all three read their
+        // whole transcript upstream (a file, thread/read, /session/{id}/message)
+        // and cannot ask for a slice, so pushing a cursor down would just be a
+        // slice wearing a different hat. Doing it here still wins the part that
+        // matters to the client -- a bounded, stable page instead of
+        // re-downloading the entire window with an ever-larger limit.
+        const all = await backend.listMessages(decodeURIComponent(sessionMessagesMatch[1]));
+        const cutoff = before ? all.findIndex((message) => message?.id === before) : -1;
+        // An unknown cursor must not silently behave like "no cursor" and
+        // re-serve the newest page; that would loop the client forever.
+        if (before && cutoff === -1) {
+          res.writeHead(400);
+          res.end(JSON.stringify({ error: `unknown cursor: ${before}` }));
+          return;
+        }
+
+        const upper = cutoff === -1 ? all.length : cutoff;
+        const lower = typeof limit === 'number' ? Math.max(0, upper - limit) : 0;
+        const page = all.slice(lower, upper);
+
         res.writeHead(200);
-        res.end(JSON.stringify({ object: 'list', data: messages }));
+        res.end(
+          JSON.stringify({
+            object: 'list',
+            data: page,
+            hasMore: lower > 0,
+            nextBefore: lower > 0 ? (page[0]?.id ?? null) : null,
+          }),
+        );
         return;
       }
 

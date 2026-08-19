@@ -1,5 +1,5 @@
 import { GatewayHttpError } from '@/lib/gateway/errors';
-import { humanizeGatewayError, parseStructuredError } from '@/lib/gateway/error-humanizer';
+import { describeGatewayError, humanizeGatewayError, parseStructuredError } from '@/lib/gateway/error-humanizer';
 
 describe('humanizeGatewayError', () => {
   it('maps user abort to dismissible cancelled', () => {
@@ -52,5 +52,39 @@ describe('parseStructuredError', () => {
 
   it('falls back to the whole message when no structure is present', () => {
     expect(parseStructuredError('plain error')).toEqual({ cause: 'plain error' });
+  });
+});
+
+describe('describeGatewayError', () => {
+  it('joins cause and next into one sentence', () => {
+    const result = describeGatewayError(new Error('Failed to fetch'));
+    expect(result).toContain('Failed to fetch');
+    expect(result).toContain('Check that the gateway is running');
+  });
+
+  it('never emits the Cause/Affected/Next dev-speak it replaced', () => {
+    const result = describeGatewayError(new Error('getaddrinfo ENOTFOUND host'));
+    expect(result).not.toMatch(/Cause:|Affected:|Next:/);
+  });
+
+  it('returns cause alone when there is no next step', () => {
+    const abort = new Error('The operation was aborted.');
+    abort.name = 'AbortError';
+    expect(describeGatewayError(abort)).toBe('You cancelled the request.');
+  });
+
+  it('does not double up terminal punctuation', () => {
+    const result = describeGatewayError(new Error('Connection refused.'));
+    expect(result).not.toContain('.. ');
+  });
+
+  it('adds a separator when the cause has no terminal punctuation', () => {
+    const result = describeGatewayError(new Error('Connection refused'));
+    expect(result).toContain('Connection refused. ');
+  });
+
+  it('handles a non-Error value without throwing', () => {
+    expect(typeof describeGatewayError('plain string failure')).toBe('string');
+    expect(describeGatewayError(undefined).length).toBeGreaterThan(0);
   });
 });

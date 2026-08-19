@@ -81,6 +81,22 @@ export function humanizeGatewayError(error: unknown): HumanizedError {
 }
 
 /**
+ * One-line prose form, for surfaces that take a plain string instead of an
+ * `ErrorCard` — empty states, banners, notification bodies.
+ *
+ * Without this, those callers hand-rolled their own `Cause: … Affected: … Next: …`
+ * template around the raw exception, which is exactly the dev-speak the
+ * humanizer exists to remove.
+ */
+export function describeGatewayError(error: unknown): string {
+  const { cause, next } = humanizeGatewayError(error);
+  const trimmedCause = cause.trim();
+  if (!next) return trimmedCause;
+  const separator = /[.!?]$/.test(trimmedCause) ? ' ' : '. ';
+  return `${trimmedCause}${separator}${next.trim()}`;
+}
+
+/**
  * Parse a raw error string that may already contain Cause/Affected/Next lines
  * into the structured ErrorCard props. Used as a fallback for messages that
  * were emitted before humanizeGatewayError existed.

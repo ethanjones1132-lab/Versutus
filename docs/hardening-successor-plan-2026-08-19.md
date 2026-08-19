@@ -192,11 +192,11 @@ Part A is complete; B1 landed with it. Gate after every item:
 | A4 coverage ratchet | **done** | `scripts/coverage-ratchet.mts` + git-tracked `coverage-baseline.json` |
 | A5 cover `slash-commands.ts` | **done** | 19 registry tests; **found a duplicate `/plugins`** |
 | B1 palette from the `/` strip | **done** | "Browse all commands" row + `initialQuery` seeding |
-| B2 frequency-ranked recents | open | |
-| B3 humanize remaining error sites | open | |
-| C1 gateway history cursor | open | |
-| C2 live + visual verification | open | still the largest unverified claim |
-| C3 settle interrupted streams | open | |
+| B2 frequency-ranked recents | **done** | decayed frequency in `command-frequency.ts`, 20 tests |
+| B3 humanize remaining error sites | **done** | `describeGatewayError`; the last raw site was the chat empty state |
+| C1 gateway history cursor | **done** | `before`/`hasMore`/`nextBefore` in the Gate, 5 gate tests |
+| C2 live + visual verification | **partial** | sheet lab below; gateway-gated surfaces still need a native build |
+| C3 settle interrupted streams | **done** | `settleInterruptedFromRuns`, wired into reconnect |
 
 ### What the new detectors caught immediately
 
@@ -253,3 +253,66 @@ local mock that speaks the handshake.
 The lab is the reusable part: any future sheet can be dropped into it and checked
 without a gateway, which is the structural answer to "shipped without ever being
 seen".
+
+---
+
+## Part B and C — implementation notes (2026-08-19, later)
+
+### B2 — decayed frequency, not raw frequency
+
+Implemented as `src/lib/gateway/command-frequency.ts`. The plan said
+"frequency-then-recency"; raw count-then-recency was rejected because a command
+hammered in one burst last month would outrank the one being used today. Each
+command's score is `count × 0.5^(age / oneWeek)` — high counts still win, but
+only while they stay warm.
+
+`recents.ts` keeps its external API (`loadRecentCommands` / `pushRecentCommand`
+returning `string[]`), so neither the provider nor the palette changed. The
+stored shape did change, and `parseStoredUsage` migrates the legacy `string[]`
+MRU in place, preserving its order so an upgrade does not reset what a user has
+built up. Eviction at the cap is by lowest score, not oldest — a rarely-used
+command added yesterday is a better eviction candidate than a daily driver that
+happens not to have run in the last hour.
+
+### B3 — one raw site left, and it was the worst one
+
+The chat empty state was still hand-rolling
+`` `Cause: ${lastError}. Affected: gateway connection. Next: …` `` — the exact
+dev-speak the humanizer was built to delete — forty lines above where the
+humanizer was already being used correctly. Added `describeGatewayError`, the
+one-line prose form for surfaces that take a plain string rather than an
+`ErrorCard`, with a test asserting the output never contains `Cause:`/
+`Affected:`/`Next:`. The connect timeline the plan named no longer exists.
+
+### C1 — the cursor lives in the Gate, and that is the honest ceiling
+
+All three CLI backends (`claude-code`, `codex`, `opencode`) read their entire
+transcript upstream — a file, `thread/read`, `/session/{id}/message` — and then
+`.slice(-limit)`. **None of them can page upstream**, so threading a cursor down
+into the backend interface would be a slice wearing a different hat.
+
+The cursor is therefore implemented in `gate/core/server.mjs`: `before` selects
+the page ending just before that message id, and the response carries `hasMore`
+and `nextBefore`. This does not reduce what the Gate reads from the CLI, and the
+plan should not be read as claiming it does. What it does fix is the client
+contract — bounded pages instead of re-downloading the whole window with an
+ever-larger limit, and paging that works past any `limit` ceiling.
+
+An **unknown cursor is a 400, not a silent fallback**. Treating it as "no cursor"
+would re-serve the newest page, and a client walking backwards would never
+terminate.
+
+Client side: `getSessionMessagePage(sessionId, limit, before)` on `ManifestClient`,
+declared optional on `PortalClient` so adapters without it still typecheck.
+`loadEarlierMessages` prefers the cursor and falls back to the limit-growing path
+whenever the gateway omits `hasMore` or the history has no message ids.
+
+### C3 — settle interrupted bubbles from their own run
+
+`reconcileInterruptedMessages` can only settle a bubble that the reloaded history
+page happens to contain, and a run that finished *after* the disconnect usually
+is not in it — so the bubble stayed interrupted until a manual reload. Reconnect
+now also re-polls the run behind each interrupted bubble (`interruptedRunIds` →
+`getRunStatus` → `settleInterruptedFromRuns`) and settles it from the terminal
+result. A run with no text is left alone rather than blanking the bubble: the
+partial text the user can already see beats nothing.

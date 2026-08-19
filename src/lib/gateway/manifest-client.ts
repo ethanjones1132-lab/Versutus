@@ -13,6 +13,7 @@ import type {
   HermesSession,
   ModelInfo,
   SessionMessage,
+  SessionMessagePage,
   SessionMessagesResponse,
   SessionsResponse,
 } from '@/lib/gateway/types';
@@ -415,6 +416,22 @@ export class ManifestClient implements PortalClient {
   }
 
   async getSessionMessages(sessionId: string, limit = 50): Promise<SessionMessage[]> {
+    return (await this.getSessionMessagePage(sessionId, limit)).messages;
+  }
+
+  /**
+   * One page of history, oldest-first, ending just before `before`.
+   *
+   * The array-returning `getSessionMessages` cannot express "the page before
+   * this one", which forced callers to re-fetch the whole window with an
+   * ever-larger limit. Gateways that do not report `hasMore`/`nextBefore` leave
+   * those undefined, and the caller keeps its short-page heuristic.
+   */
+  async getSessionMessagePage(
+    sessionId: string,
+    limit = 50,
+    before?: string,
+  ): Promise<SessionMessagePage> {
     const template = this.endpoints.sessionMessages;
     const sessions = this.endpoints.sessions;
     if (!template && !sessions) {
@@ -426,11 +443,18 @@ export class ManifestClient implements PortalClient {
       ? interpolatePath(template, { id: sessionId, sessionId })
       : `${sessions!.replace(/\/+$/, '')}/${sessionId}/messages`;
     const separator = path.includes('?') ? '&' : '?';
+    const query = `limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`;
     const result = await this.rootTransport.request<SessionMessagesResponse | SessionMessage[]>(
       'GET',
-      this.withBackend(`${path}${separator}limit=${limit}`),
+      this.withBackend(`${path}${separator}${query}`),
     );
-    return Array.isArray(result) ? result : result.data ?? [];
+
+    if (Array.isArray(result)) return { messages: result };
+    return {
+      messages: result.data ?? [],
+      hasMore: result.hasMore,
+      nextBefore: result.nextBefore,
+    };
   }
 
   /**

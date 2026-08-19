@@ -134,6 +134,21 @@ export type SessionMessage = {
 export type SessionMessagesResponse = {
   object: string;
   data: SessionMessage[];
+  /** True when older turns exist before this page. Absent on gateways without cursor support. */
+  hasMore?: boolean;
+  /** Cursor to pass as `before` for the next older page. */
+  nextBefore?: string | null;
+};
+
+/** One page of history, with whatever paging information the gateway supplied. */
+export type SessionMessagePage = {
+  messages: SessionMessage[];
+  /**
+   * Undefined means the gateway did not report paging at all — the caller must
+   * fall back to inferring "reached the beginning" from a short page.
+   */
+  hasMore?: boolean;
+  nextBefore?: string | null;
 };
 
 // ─── Chat ──────────────────────────────────────────────────────────

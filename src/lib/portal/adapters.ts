@@ -16,6 +16,7 @@ import type {
   HermesSession,
   ModelInfo,
   SessionMessage,
+  SessionMessagePage,
 } from '@/lib/gateway/types';
 
 /** The unified client surface the provider uses, regardless of kind. */
@@ -48,6 +49,16 @@ export interface PortalClient {
   createSession?(title?: string): Promise<HermesSession>;
   deleteSession?(sessionId: string): Promise<void>;
   getSessionMessages(sessionId: string, limit?: number): Promise<SessionMessage[]>;
+  /**
+   * One page of history ending just before `before`. Optional: adapters for
+   * gateways with no cursor support omit it, and callers fall back to
+   * re-fetching with a larger limit.
+   */
+  getSessionMessagePage?(
+    sessionId: string,
+    limit?: number,
+    before?: string,
+  ): Promise<SessionMessagePage>;
   stopRun(runId: string): Promise<void>;
   /**
    * Authenticated fetch against the gateway origin for routes that are not RPC

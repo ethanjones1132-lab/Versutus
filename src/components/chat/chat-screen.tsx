@@ -20,7 +20,7 @@ import { SlashCommandPalette } from '@/components/chat/slash-command-palette';
 import { Button, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text } from '@/components/ui';
 import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
-import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
+import { describeGatewayError, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDivider } from '@/lib/format';
@@ -244,7 +244,7 @@ export function ChatScreen() {
           title="Not connected yet"
           description={
             lastError
-              ? `Cause: ${lastError}. Affected: gateway connection. Next: tap Connect to gateway or check Tailscale.`
+              ? describeGatewayError(lastError)
               : connectionPhase === 'searching' || connectionPhase === 'connecting'
                 ? probeMessage || 'Connecting automatically…'
                 : 'Versutus will connect to your PC automatically. You can also tap below.'

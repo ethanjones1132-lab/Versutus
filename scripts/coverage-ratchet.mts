@@ -66,8 +66,13 @@ for (const metric of METRICS) {
 }
 
 for (const metric of METRICS) {
-  const marker = current[metric] >= (baseline[metric] ?? 0) ? 'ok  ' : 'DROP';
-  console.log(`  ${marker}  ${metric.padEnd(11)} ${current[metric]}%  (mark ${baseline[metric] ?? 0}%)`);
+  const was = baseline[metric] ?? 0;
+  const now = current[metric];
+  // The marker must agree with the exit code: anything inside the tolerance
+  // passes, so printing DROP for a 0.01pp wobble reads as a failure on a green
+  // build. Only a genuine regression gets the alarming label.
+  const marker = now < was - TOLERANCE ? 'DROP' : now < was ? 'dip ' : 'ok  ';
+  console.log(`  ${marker}  ${metric.padEnd(11)} ${now}%  (mark ${was}%)`);
 }
 
 if (regressions.length > 0) {

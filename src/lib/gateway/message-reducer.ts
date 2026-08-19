@@ -173,3 +173,68 @@ export function preserveInterruptedAfterReload(
   merged.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
   return merged;
 }
+
+/**
+ * Run ids of assistant bubbles still sitting in the interrupted state.
+ *
+ * The in-flight bubble is keyed `run-${runId}`, so the id round-trips back out.
+ * Only bubbles that carry a run id can be settled from a run result; a bubble
+ * interrupted before its run id was known is left for history reconciliation.
+ */
+export function interruptedRunIds(messages: readonly ChatMessage[]): string[] {
+  const ids: string[] = [];
+  for (const message of messages) {
+    if (!message.interrupted || message.role !== 'assistant') continue;
+    if (!message.id.startsWith('run-')) continue;
+    const runId = message.id.slice('run-'.length);
+    if (runId) ids.push(runId);
+  }
+  return [...new Set(ids)];
+}
+
+export type InterruptedRunResolution = {
+  runId: string;
+  /** Terminal text from the gateway, when the run produced one. */
+  text?: string;
+  /** True when the run reached a terminal failure. */
+  failed?: boolean;
+};
+
+/**
+ * Replace interrupted bubbles with the authoritative outcome of their run.
+ *
+ * `reconcileInterruptedMessages` can only settle a bubble that history happens
+ * to contain. A run that finished on the gateway *after* the disconnect is
+ * often absent from the history page the client just reloaded, which left the
+ * bubble stuck as interrupted until the user reloaded again by hand. Polling
+ * the run directly closes that gap.
+ *
+ * A resolution with no text is ignored rather than blanking the bubble — the
+ * partial text the user can already see is better than nothing.
+ */
+export function settleInterruptedFromRuns(
+  messages: readonly ChatMessage[],
+  resolutions: readonly InterruptedRunResolution[],
+): ChatMessage[] {
+  if (resolutions.length === 0) return [...messages];
+  const byRunId = new Map(resolutions.map((item) => [item.runId, item]));
+
+  return messages.map((message) => {
+    if (!message.interrupted || message.role !== 'assistant') return message;
+    if (!message.id.startsWith('run-')) return message;
+
+    const resolution = byRunId.get(message.id.slice('run-'.length));
+    if (!resolution) return message;
+
+    const text = resolution.text?.trim();
+    if (!text && !resolution.failed) return message;
+
+    return {
+      ...message,
+      interrupted: false,
+      streaming: false,
+      text: text || message.text,
+      ...(resolution.failed ? { command: { ...message.command, status: 'error' as const } } : {}),
+    };
+  });
+}

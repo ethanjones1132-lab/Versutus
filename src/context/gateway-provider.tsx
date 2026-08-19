@@ -16,8 +16,10 @@ import {
   appendToolCallDelta,
   convertStreamError,
   finalizeStreamingMessage,
+  interruptedRunIds,
   markInterrupted,
   preserveInterruptedAfterReload,
+  settleInterruptedFromRuns,
 } from '@/lib/gateway/message-reducer';
 import {
   appendBounded,
@@ -46,8 +48,10 @@ import { loadRecentCommands, pushRecentCommand } from '@/lib/gateway/recents';
 import {
   ACTIVITY_EVENT_CAP,
   executeRun,
+  isTerminalRunStatus,
   outcomeToActivityStatus,
   runEventPreview,
+  runStatusToActivityStatus,
   settleUnresolvedRuns,
   type ActivityRun,
   type RunCapableClient,
@@ -486,6 +490,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // No offset/cursor on the history endpoint — "load earlier" re-fetches with
   // a bigger limit and diffs against what is already shown.
   const historyLimitRef = useRef(HISTORY_PAGE_SIZE);
+  /** Oldest message id currently held, used as the `before` cursor. */
+  const historyCursorRef = useRef<string | null>(null);
   const loadingEarlierRef = useRef(false);
   const confirmationBypassRef = useRef(false);
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
@@ -547,6 +553,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setHistoryLoading(true);
     // A fresh load starts a new page sequence for "load earlier".
     historyLimitRef.current = HISTORY_PAGE_SIZE;
+    historyCursorRef.current = null;
     setHasMoreHistory(false);
     try {
       // A deliberate session switch updates the ref; do not let the profile's
@@ -584,6 +591,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       ]);
       if (requestId !== historyRequestRef.current) return;
       setHasMoreHistory(hasEarlierHistory(gatewayHistory.length, historyLimitRef.current));
+      // Seed the paging cursor from the oldest turn this page returned. A
+      // gateway with no message ids leaves it null, which sends
+      // loadEarlierMessages down the limit-growing fallback.
+      historyCursorRef.current = gatewayHistory[0]?.id ?? null;
       const gatewayMessages = historyToChatMessages(gatewayHistory);
       setTranscripts(localTrans);
 
@@ -643,6 +654,28 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     loadingEarlierRef.current = true;
     setLoadingEarlierHistory(true);
     try {
+      // Preferred path: ask for the page *before* the oldest turn we hold. Only
+      // the new turns cross the wire, and paging is expressible past whatever
+      // ceiling the gateway enforces on `limit`.
+      const cursor = historyCursorRef.current;
+      if (client.getSessionMessagePage && cursor) {
+        const page = await client
+          .getSessionMessagePage(sessionId, HISTORY_PAGE_SIZE, cursor)
+          .catch(() => null);
+        if (requestId !== historyRequestRef.current) return;
+
+        // A gateway that reports paging settles it; one that does not falls
+        // through to the short-page heuristic below.
+        if (page && page.hasMore !== undefined) {
+          historyCursorRef.current = page.nextBefore ?? null;
+          setHasMoreHistory(page.hasMore && !!page.nextBefore);
+          setMessages((prev) => prependEarlier(prev, historyToChatMessages(page.messages)));
+          return;
+        }
+      }
+
+      // Fallback for gateways with no cursor support: re-fetch a bigger window
+      // and prepend only what it newly reveals.
       const nextLimit = historyLimitRef.current + HISTORY_PAGE_SIZE;
       const older = await client.getSessionMessages(sessionId, nextLimit).catch(() => []);
       if (requestId !== historyRequestRef.current) return;
@@ -783,6 +816,34 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             void (async () => {
               await reloadHistoryFor(gateway);
               setMessages((history) => preserveInterruptedAfterReload(history, previousMessages));
+
+              // Settle interrupted bubbles from their own run, not just from
+              // history: a run that finished *after* the disconnect is often
+              // absent from the history page just reloaded, which left the
+              // bubble stuck as interrupted until a manual reload.
+              const streamClient = clientRef.current;
+              if (streamClient?.getRunStatus) {
+                const pending = interruptedRunIds(messagesRef.current);
+                if (pending.length > 0) {
+                  const resolutions = await Promise.all(
+                    pending.map(async (runId) => {
+                      const result = await streamClient.getRunStatus!(runId).catch(() => null);
+                      if (!result || !isTerminalRunStatus(result.status)) return null;
+                      return {
+                        runId,
+                        text: result.result ?? result.error,
+                        failed: runStatusToActivityStatus(result.status) === 'failed',
+                      };
+                    }),
+                  );
+                  const settled = resolutions.filter(
+                    (item): item is NonNullable<typeof item> => item !== null,
+                  );
+                  if (settled.length > 0) {
+                    setMessages((prev) => settleInterruptedFromRuns(prev, settled));
+                  }
+                }
+              }
 
               // Settle any runs left unresolved by the disconnect.
               const client = clientRef.current;
