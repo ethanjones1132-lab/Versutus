@@ -43,6 +43,11 @@ export class ProviderStore {
     } catch {
       return null;
     }
+    // The filename is the canonical id -- it is what `get` is addressed by, and
+    // what `list` derives before reading. Legacy v1 records carry no `id` field
+    // at all, and a record that does not know its own id reaches the manifest
+    // as `{ id: undefined }` and takes the whole Gate down on the first sort.
+    if (typeof config.id !== 'string' || !config.id) config = { ...config, id };
     let state = { catalog: { source: 'legacy_bootstrap', state: 'stale', generation: 0, models: [] } };
     try {
       state = JSON.parse(await readFile(join(this.stateDir, `${id}.json`), 'utf8'));
