@@ -2,11 +2,11 @@ import { isAuthRejection } from '@/lib/gateway/errors';
 import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
 import { HttpTransport } from '@/lib/gateway/http-transport';
 import { ConnectionMonitor, HEALTH_INTERVAL_MS } from '@/lib/gateway/connection-monitor';
+import { streamingFetch } from '@/lib/net/streaming-fetch';
 import type { GatewayIdentity } from '@/lib/portal/identify';
 import type { GatewayBackend } from '@/lib/portal/manifest';
 import type { PortalClient, PortalClientCallbacks } from '@/lib/portal/adapters';
 import type {
-import { streamingFetch } from '@/lib/net/streaming-fetch';
   ConnectionStatus,
   GatewayCapabilities,
   GatewayProfile,

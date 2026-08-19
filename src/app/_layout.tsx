@@ -1,5 +1,14 @@
 import '@/global.css';
 
+import { fetch as expoFetch } from 'expo/fetch';
+
+import { installStreamingFetch } from '@/lib/net/streaming-fetch';
+
+// React Native's global fetch cannot stream a response body, so SSE readers
+// throw on device. Install the WinterCG implementation before any client is
+// constructed. See streaming-fetch.ts for why this is installed, not imported.
+installStreamingFetch(expoFetch as unknown as typeof globalThis.fetch);
+
 import * as Notifications from 'expo-notifications';
 import * as Linking from 'expo-linking';
 import { Stack, ThemeProvider, useRouter } from 'expo-router';

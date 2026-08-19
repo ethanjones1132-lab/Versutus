@@ -6,8 +6,8 @@ import {
 } from '@/lib/gateway/connection-monitor';
 import { METHOD_GUIDANCE, METHOD_TO_ROUTE, resolveRoute } from '@/lib/gateway/rpc-routes';
 
-import type {
 import { streamingFetch } from '@/lib/net/streaming-fetch';
+import type {
   ChatCompletionResponse,
   ConnectionStatus,
   GatewayCapabilities,
