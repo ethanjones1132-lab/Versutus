@@ -1,9 +1,12 @@
+import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/ui';
-import { FontFamily, Radius, Spacing } from '@/constants/tokens';
+import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
+
+import { CommandResultView } from './command-result-view';
 
 // Pure-RN bottom sheet (Modal) — replaces the @expo/ui native bottom
 // sheet, which crashed native builds under the New Architecture.
@@ -22,6 +25,11 @@ export function CommandLogSheet({
   const handleClose = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     onClose();
+  };
+
+  const copyAll = async () => {
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await Clipboard.setStringAsync(log);
   };
 
   if (!log) return null;
@@ -47,16 +55,22 @@ export function CommandLogSheet({
             <Text variant="caption" color="secondary">
               Command output
             </Text>
-            <Pressable onPress={() => void handleClose()} hitSlop={12}>
-              <Text variant="caption" color="tertiary">
-                Dismiss
-              </Text>
-            </Pressable>
+            <View style={styles.headerActions}>
+              <Pressable onPress={() => void copyAll()} hitSlop={12} accessibilityRole="button">
+                <Text variant="caption" color="accentWarm">
+                  Copy
+                </Text>
+              </Pressable>
+              <Pressable onPress={() => void handleClose()} hitSlop={12}>
+                <Text variant="caption" color="tertiary">
+                  Dismiss
+                </Text>
+              </Pressable>
+            </View>
           </View>
+
           <ScrollView contentContainerStyle={styles.logScroll}>
-            <Text variant="mono" style={styles.logText}>
-              {log}
-            </Text>
+            <CommandResultView log={log} />
           </ScrollView>
         </View>
       </View>
@@ -92,11 +106,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingBottom: Spacing.one,
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+  },
   logScroll: {
     paddingBottom: Spacing.four,
-  },
-  logText: {
-    fontFamily: FontFamily.mono,
-    lineHeight: 18,
   },
 });

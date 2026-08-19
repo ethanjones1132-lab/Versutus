@@ -5,9 +5,11 @@ import * as Linking from 'expo-linking';
 import { Stack, ThemeProvider, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef } from 'react';
+import { StyleSheet, View } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AppBootstrap } from '@/components/app-bootstrap';
+import { ConnectedToast } from '@/components/connected-toast';
 import { FontProvider } from '@/components/font-provider';
 import { VersutusDarkTheme } from '@/constants/navigation-theme';
 import { GatewayProvider } from '@/context/gateway-provider';
@@ -59,69 +61,78 @@ export default function RootLayout() {
            <NotificationRouter />
            <GatewayDeepLinkRouter />
           <AppBootstrap>
-            <AnimatedSplashOverlay />
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                contentStyle: { backgroundColor: VersutusDarkTheme.colors.background },
-              }}>
-              <Stack.Screen name="(tabs)" />
-              <Stack.Screen name="onboarding" options={{ headerShown: false }} />
-              <Stack.Screen
-                name="gateway/add"
-                options={{
-                  presentation: 'modal',
-                  headerShown: true,
-                  title: 'Add Gateway',
-                  headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                  headerTintColor: VersutusDarkTheme.colors.text,
-                }}
-              />
-              <Stack.Screen
-                name="gateway/settings"
-                options={{
-                  presentation: 'modal',
-                  headerShown: true,
-                  title: 'Settings',
-                  headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                  headerTintColor: VersutusDarkTheme.colors.text,
-                }}
-              />
-              <Stack.Screen
-                name="gateway/capabilities"
-                options={{
-                  presentation: 'modal',
-                  headerShown: true,
-                  title: 'Capabilities',
-                  headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                  headerTintColor: VersutusDarkTheme.colors.text,
-                }}
-              />
-              <Stack.Screen
-                name="gateway/providers"
-                options={{
-                  presentation: 'modal',
-                  headerShown: true,
-                  title: 'Providers',
-                  headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                  headerTintColor: VersutusDarkTheme.colors.text,
-                }}
-              />
-              <Stack.Screen
-                name="gateway/environments"
-                options={{
-                  presentation: 'modal',
-                  headerShown: true,
-                  title: 'CLI environments',
-                  headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                  headerTintColor: VersutusDarkTheme.colors.text,
-                }}
-              />
-              {__DEV__ ? <Stack.Screen name="dev" options={{ headerShown: false }} /> : null}
-            </Stack>
+            <View style={styles.root}>
+              <AnimatedSplashOverlay />
+              <Stack
+                screenOptions={{
+                  headerShown: false,
+                  contentStyle: { backgroundColor: VersutusDarkTheme.colors.background },
+                }}>
+                <Stack.Screen name="(tabs)" />
+                <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+                <Stack.Screen
+                  name="gateway/add"
+                  options={{
+                    presentation: 'modal',
+                    headerShown: true,
+                    title: 'Add Gateway',
+                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                    headerTintColor: VersutusDarkTheme.colors.text,
+                  }}
+                />
+                <Stack.Screen
+                  name="gateway/settings"
+                  options={{
+                    presentation: 'modal',
+                    headerShown: true,
+                    title: 'Settings',
+                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                    headerTintColor: VersutusDarkTheme.colors.text,
+                  }}
+                />
+                <Stack.Screen
+                  name="gateway/capabilities"
+                  options={{
+                    presentation: 'modal',
+                    headerShown: true,
+                    title: 'Capabilities',
+                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                    headerTintColor: VersutusDarkTheme.colors.text,
+                  }}
+                />
+                <Stack.Screen
+                  name="gateway/providers"
+                  options={{
+                    presentation: 'modal',
+                    headerShown: true,
+                    title: 'Providers',
+                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                    headerTintColor: VersutusDarkTheme.colors.text,
+                  }}
+                />
+                <Stack.Screen
+                  name="gateway/environments"
+                  options={{
+                    presentation: 'modal',
+                    headerShown: true,
+                    title: 'CLI environments',
+                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                    headerTintColor: VersutusDarkTheme.colors.text,
+                  }}
+                />
+                {__DEV__ ? <Stack.Screen name="dev" options={{ headerShown: false }} /> : null}
+              </Stack>
+              <ConnectedToast />
+            </View>
           </AppBootstrap>
         </ThemeProvider>
       </GatewayProvider>
     </FontProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
+});

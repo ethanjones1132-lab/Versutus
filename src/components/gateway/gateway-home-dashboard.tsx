@@ -4,6 +4,7 @@ import { Alert, StyleSheet, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 
 import { PulsingDot, statusColor } from '@/components/connection-badge';
+import { CapabilityHive } from '@/components/gateway/capability-hive';
 import { CompactGatewayList } from '@/components/gateway/compact-gateway-list';
 import { GatewayCapabilities } from '@/components/gateway/gateway-capabilities';
 import { Badge, Button, Card, Icon, StatTile, Text } from '@/components/ui';
@@ -246,6 +247,7 @@ export function GatewayHomeDashboard() {
         onDelete={confirmDelete}
       />
 
+      <CapabilityHive groups={capabilitySnapshot.groups} status={capabilitySnapshot.status} />
       <GatewayCapabilities snapshot={capabilitySnapshot} />
       <Button
         label="Refresh capabilities"

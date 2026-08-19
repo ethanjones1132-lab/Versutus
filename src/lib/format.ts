@@ -53,6 +53,17 @@ export function formatDayDivider(timestamp: number): string {
   });
 }
 
+/** Connected-ceremony HUD: "Connected · Studio · v0.5.2" */
+export function formatConnectedToastLabel(input: {
+  gatewayName?: string | null;
+  version?: string | null;
+}): string {
+  const parts = ['Connected'];
+  if (input.gatewayName) parts.push(input.gatewayName);
+  if (input.version) parts.push(`v${input.version}`);
+  return parts.join(' \u00b7 ');
+}
+
 /** Elapsed duration: "0:07", "3:42", "1:02:11" */
 export function formatDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));

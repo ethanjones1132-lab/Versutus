@@ -9,6 +9,7 @@ import { GlassSurface } from './GlassSurface';
 import { PressableScale } from './PressableScale';
 import { Text } from './Text';
 import type { ScreenHeaderProps } from './types';
+import { WebSymbol } from './WebSymbol';
 
 export function ScreenHeader({
   title,
@@ -40,9 +41,7 @@ export function ScreenHeader({
           <PressableScale onPress={onTrailingPress} hitSlop={12}>
             <GlassSurface variant="chip" padding={0} style={styles.trailing}>
               {Platform.OS === 'web' ? (
-                <Text variant="caption" color="accentWarm" style={styles.webIcon}>
-                  {'\u2699'}
-                </Text>
+                <WebSymbol name={trailingIcon.web} size={22} color={tokens.accentWarm} />
               ) : (
                 <SymbolView
                   name={
@@ -83,9 +82,5 @@ const styles = StyleSheet.create({
     height: 40,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  webIcon: {
-    fontSize: 20,
-    lineHeight: 22,
   },
 });

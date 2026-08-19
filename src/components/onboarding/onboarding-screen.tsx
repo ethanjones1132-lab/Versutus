@@ -1,8 +1,15 @@
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
-import Animated, { Layout } from 'react-native-reanimated';
+import Animated, {
+  Easing,
+  Layout,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from 'react-native-reanimated';
 
 import { VersutusLogotype } from '@/components/brand';
 import { ConnectionTimeline, CONNECTION_TIMELINE_STEPS_LONG } from '@/components/connection-timeline';
@@ -60,15 +67,42 @@ export function OnboardingScreen() {
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
           showsVerticalScrollIndicator={false}>
-          <Card variant="hero" padding={Spacing.four} style={styles.hero}>
-            <VersutusLogotype tagline="A precise mobile console for your AI gateway." />
-            <View style={[styles.rule, { backgroundColor: tokens.accentWarmMuted }]} />
-            <Text variant="micro" color="accentWarm" style={styles.eyebrow}>
-              FIRST CONNECTION · 01
-            </Text>
-          </Card>
+          <Animated.View entering={entering.fadeIn}>
+            <Card variant="hero" padding={Spacing.four} style={styles.hero}>
+              <Animated.View entering={entering.fadeIn.delay(80)}>
+                <VersutusLogotype tagline="A precise mobile console for your AI gateway." />
+              </Animated.View>
+              <View style={[styles.rule, { backgroundColor: tokens.accentWarmMuted }]} />
+              <Text variant="micro" color="accentWarm" style={styles.eyebrow}>
+                {busy ? 'DISCOVERING YOUR GATEWAY · 02' : 'FIRST CONNECTION · 01'}
+              </Text>
 
-          <Card variant="surface" padding={Spacing.four} style={styles.formCard}>
+              <View style={styles.scanSection}>
+                <ScanningStrip active={busy} color={tokens.accentWarm} track={tokens.border} />
+                <ConnectionTimeline
+                  activeStep={activeTimelineStep}
+                  busy={busy}
+                  steps={CONNECTION_TIMELINE_STEPS_LONG}
+                />
+                {busy ? (
+                  <View style={styles.scanMessage}>
+                    <ActivityIndicator size="small" color={tokens.accent} />
+                    <Text variant="caption" color="secondary" numberOfLines={2} style={styles.scanText}>
+                      {probeMessage ?? 'Scanning Tailscale, local discovery, and saved profiles in order…'}
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={styles.scanMessage}>
+                    <Text variant="caption" color="tertiary" numberOfLines={2} style={styles.scanText}>
+                      Enter your PC or gateway address below, or let Versutus find it on your tailnet.
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </Card>
+          </Animated.View>
+
+          <Card variant="surface" padding={Spacing.four} style={[styles.formCard, busy && styles.formDimmed]}>
             <Text variant="title">Connect your gateway</Text>
             <Text color="secondary" style={styles.lead}>
               Give Versutus the address and API key for the gateway running on your PC. Your credentials are stored in
@@ -117,9 +151,7 @@ export function OnboardingScreen() {
               </Text>
             </View>
 
-            <ConnectionTimeline activeStep={activeTimelineStep} busy={busy} steps={CONNECTION_TIMELINE_STEPS_LONG} />
-
-            {probeMessage ? (
+            {probeMessage && !busy ? (
               <Animated.View
                 layout={Layout.duration(Motion.duration.normal)}
                 entering={entering.fadeIn}
@@ -157,6 +189,35 @@ export function OnboardingScreen() {
   );
 }
 
+/** Discovery-theater scan line: a gold pulse sweeping a thin track. */
+function ScanningStrip({ active, color, track }: { active: boolean; color: string; track: string }) {
+  const x = useSharedValue(-40);
+
+  useEffect(() => {
+    if (!active) {
+      x.value = withTiming(-40, { duration: 200 });
+      return;
+    }
+    x.value = withRepeat(
+      withTiming(280, { duration: 1500, easing: Easing.inOut(Easing.quad) }),
+      -1,
+      true,
+    );
+  }, [active, x]);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: x.value }],
+  }));
+
+  return (
+    <View style={[styles.scanTrack, { backgroundColor: track }]}>
+      <Animated.View
+        style={[styles.scanDot, { backgroundColor: color, opacity: active ? 0.9 : 0.35 }, animatedStyle]}
+      />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   keyboard: {
     flex: 1,
@@ -183,6 +244,33 @@ const styles = StyleSheet.create({
   eyebrow: {
     textTransform: 'uppercase',
     letterSpacing: 0.8,
+  },
+  scanSection: {
+    alignSelf: 'stretch',
+    gap: Spacing.three,
+    paddingTop: Spacing.one,
+  },
+  scanTrack: {
+    height: 2,
+    borderRadius: 1,
+    overflow: 'hidden',
+  },
+  scanDot: {
+    width: 56,
+    height: 2,
+    borderRadius: 1,
+  },
+  scanMessage: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  scanText: {
+    flex: 1,
+    lineHeight: 16,
+  },
+  formDimmed: {
+    opacity: 0.55,
   },
   formCard: {
     borderRadius: Radius.xl,
