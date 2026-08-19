@@ -1,4 +1,5 @@
 import { httpToWsBase } from '@/lib/gateway/url';
+import { streamingFetch } from '@/lib/net/streaming-fetch';
 
 export type TerminalSession = {
   sid: string;
@@ -82,7 +83,7 @@ export async function openTerminalSession(
   };
 
   const controller = new AbortController();
-  const response = await fetch(streamUrl, {
+  const response = await streamingFetch(streamUrl, {
     headers: authHeaders(token),
     signal: controller.signal,
   });

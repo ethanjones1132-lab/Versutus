@@ -6,6 +6,7 @@ import type { GatewayIdentity } from '@/lib/portal/identify';
 import type { GatewayBackend } from '@/lib/portal/manifest';
 import type { PortalClient, PortalClientCallbacks } from '@/lib/portal/adapters';
 import type {
+import { streamingFetch } from '@/lib/net/streaming-fetch';
   ConnectionStatus,
   GatewayCapabilities,
   GatewayProfile,
@@ -303,7 +304,7 @@ export class ManifestClient implements PortalClient {
     const controller = new AbortController();
     const signal = options?.signal || controller.signal;
 
-    const response = await fetch(`${this.transport.baseUrl}${path}`, {
+    const response = await streamingFetch(`${this.transport.baseUrl}${path}`, {
       method: 'POST',
       headers: this.transport.headers,
       body: JSON.stringify(body),
@@ -536,7 +537,7 @@ export class ManifestClient implements PortalClient {
       ? interpolatePath(template, { id: runId, runId, run_id: runId })
       : `${this.requireRunsEndpoint().replace(/\/+$/, '')}/${runId}/events`;
 
-    const response = await fetch(`${this.rootTransport.baseUrl}${path}`, {
+    const response = await streamingFetch(`${this.rootTransport.baseUrl}${path}`, {
       headers: this.rootTransport.headers,
       signal,
     });

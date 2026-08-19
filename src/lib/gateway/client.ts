@@ -7,6 +7,7 @@ import {
 import { METHOD_GUIDANCE, METHOD_TO_ROUTE, resolveRoute } from '@/lib/gateway/rpc-routes';
 
 import type {
+import { streamingFetch } from '@/lib/net/streaming-fetch';
   ChatCompletionResponse,
   ConnectionStatus,
   GatewayCapabilities,
@@ -302,7 +303,7 @@ export class HermesGatewayClient {
     const controller = new AbortController();
     const signal = options?.signal || controller.signal;
 
-    const response = await fetch(`${this.transport.baseUrl}/v1/chat/completions`, {
+    const response = await streamingFetch(`${this.transport.baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: { ...this.transport.headers, ...extraHeaders },
       body: JSON.stringify(body),
@@ -393,7 +394,7 @@ export class HermesGatewayClient {
     onEvent: (event: RunEvent) => void,
     signal?: AbortSignal,
   ): Promise<void> {
-    const response = await fetch(`${this.transport.baseUrl}/v1/runs/${runId}/events`, {
+    const response = await streamingFetch(`${this.transport.baseUrl}/v1/runs/${runId}/events`, {
       headers: this.transport.headers,
       signal,
     });

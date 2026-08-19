@@ -1240,6 +1240,11 @@ export async function createGate(config = {}) {
               data: models.map((model) => ({ ...model, object: 'model', backendId: requestedBackendId })),
             }));
           } catch (error) {
+            // The streaming branch above may already have sent headers.
+            if (res.headersSent) {
+              res.end();
+              return;
+            }
             res.writeHead(502, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: { message: error.message, code: 'backend_error' } }));
           }
@@ -1446,11 +1451,25 @@ export async function createGate(config = {}) {
       }
     } catch (err) {
       console.error('Request handler error:', err);
-      res.writeHead(500);
-      res.end(JSON.stringify({
-        error: 'Internal Server Error',
-        message: err.message,
-      }));
+      // This is the last line of defence, so it must not be able to throw.
+      // A streaming route (SSE chat, run events, terminal) has already
+      // committed its status line by the time an error reaches here; calling
+      // writeHead again raises ERR_HTTP_HEADERS_SENT *inside this catch*,
+      // where nothing handles it -- which took the whole Gate down whenever a
+      // client asked about a session that no longer existed.
+      if (res.headersSent) {
+        res.end();
+        return;
+      }
+      try {
+        res.writeHead(500);
+        res.end(JSON.stringify({
+          error: 'Internal Server Error',
+          message: err.message,
+        }));
+      } catch {
+        res.end();
+      }
     }
   });
 
