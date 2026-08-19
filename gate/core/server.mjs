@@ -574,6 +574,9 @@ export async function createGate(config = {}) {
         /^\/v1\/environments\/[^/]+\/runs\/[^/]+\/events$/.test(pathname) ||
         /^\/v1\/environments\/[^/]+\/runs\/[^/]+\/cancel$/.test(pathname) ||
         /^\/v1\/environments\/[^/]+\/runs\/[^/]+\/approve$/.test(pathname) ||
+        (pathname === '/v1/runs' && method === 'POST') ||
+        /^\/v1\/runs\/[^/]+$/.test(pathname) ||
+        /^\/v1\/runs\/[^/]+\/(events|stop|approval|steer)$/.test(pathname) ||
         (pathname === '/v1/capabilities/rpc' && method === 'POST') ||
         /^\/p\/[^/]+\/v1\/capabilities\/rpc$/.test(pathname);
 
@@ -645,6 +648,118 @@ export async function createGate(config = {}) {
           res.end(JSON.stringify({ error: { message: error.message, code: 'unknown_backend' } }));
           return null;
         }
+      }
+
+      /**
+       * Agentic runs, delegated to whichever backend implements them.
+       *
+       * The Gate's CLI backends run a turn synchronously and have no notion of
+       * a run id, so runs were simply absent and the app correctly reported
+       * "Runs not offered". Hermes has the full lifecycle, so fronting it gives
+       * the Gate a runs API without reimplementing an agent loop. Paths mirror
+       * Hermes exactly, which is also what the app's client already speaks.
+       */
+      async function resolveRunBackend(backendId) {
+        const explicit = backendId ?? url.searchParams.get('backendId');
+        if (explicit) {
+          const backend = await resolveBackend(explicit);
+          if (!backend) return null;
+          if (typeof backend.startRun !== 'function') {
+            res.writeHead(501, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              error: { message: `Backend "${explicit}" does not implement runs`, code: 'runs_unsupported' },
+            }));
+            return null;
+          }
+          return backend;
+        }
+        // No backend named: pick the first that can actually run one.
+        for (const entry of await backendManager.list()) {
+          const backend = await backendManager.get(entry.id).catch(() => null);
+          if (backend && typeof backend.startRun === 'function') return backend;
+        }
+        res.writeHead(501, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          error: { message: 'No attached backend implements runs', code: 'runs_unsupported' },
+        }));
+        return null;
+      }
+
+      if (pathname === '/v1/runs' && method === 'POST') {
+        const body = (await readJsonBody(req)) ?? {};
+        const backend = await resolveRunBackend(body.backendId);
+        if (!backend) return;
+        const prompt = typeof body.input === 'string'
+          ? body.input
+          : lastUserText(Array.isArray(body.input) ? body.input : body.messages);
+        if (!prompt) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: "Missing 'input'", code: 'invalid_request' } }));
+          return;
+        }
+        const started = await backend.startRun(prompt, {
+          sessionId: body.session_id ?? body.sessionId,
+          model: body.model,
+        });
+        res.writeHead(200);
+        res.end(JSON.stringify(started));
+        return;
+      }
+
+      const runEventsMatch = pathname.match(/^\/v1\/runs\/([^/]+)\/events$/);
+      if (runEventsMatch && method === 'GET') {
+        const backend = await resolveRunBackend();
+        if (!backend || typeof backend.runEvents !== 'function') return;
+        const upstream = await backend.runEvents(decodeURIComponent(runEventsMatch[1]));
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+        });
+        // Relay bytes unchanged: the app already parses Hermes run events.
+        const reader = upstream.body?.getReader?.();
+        if (!reader) { res.end(); return; }
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(Buffer.from(value));
+        }
+        res.end();
+        return;
+      }
+
+      const runStopMatch = pathname.match(/^\/v1\/runs\/([^/]+)\/stop$/);
+      if (runStopMatch && method === 'POST') {
+        const backend = await resolveRunBackend();
+        if (!backend) return;
+        await backend.stopRun(decodeURIComponent(runStopMatch[1]));
+        res.writeHead(200);
+        res.end(JSON.stringify({ stopped: true }));
+        return;
+      }
+
+      const runApprovalMatch = pathname.match(/^\/v1\/runs\/([^/]+)\/approval$/);
+      if (runApprovalMatch && method === 'POST') {
+        const body = (await readJsonBody(req)) ?? {};
+        const backend = await resolveRunBackend();
+        if (!backend || typeof backend.replyApproval !== 'function') return;
+        await backend.replyApproval(decodeURIComponent(runApprovalMatch[1]), {
+          approved: body.approved,
+          feedback: body.feedback,
+        });
+        res.writeHead(200);
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      const runStatusMatch = pathname.match(/^\/v1\/runs\/([^/]+)$/);
+      if (runStatusMatch && method === 'GET') {
+        const backend = await resolveRunBackend();
+        if (!backend) return;
+        const status = await backend.getRunStatus(decodeURIComponent(runStatusMatch[1]));
+        res.writeHead(200);
+        res.end(JSON.stringify(status));
+        return;
       }
 
       if (pathname === '/v1/sessions' && method === 'GET') {

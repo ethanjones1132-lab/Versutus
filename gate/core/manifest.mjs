@@ -85,6 +85,17 @@ export function buildManifest({
       ...(hasBackend
         ? { sessions: '/v1/sessions', sessionMessages: '/v1/sessions/{id}/messages', backends: '/v1/backends' }
         : {}),
+      // Runs are advertised only when a backend actually implements them: the
+      // CLI backends run a turn synchronously and have no run id to report.
+      ...(backendCan('runs')
+        ? {
+            runs: '/v1/runs',
+            runStatus: '/v1/runs/{run_id}',
+            runEvents: '/v1/runs/{run_id}/events',
+            runStop: '/v1/runs/{run_id}/stop',
+            runApproval: '/v1/runs/{run_id}/approval',
+          }
+        : {}),
     },
     // Advertise exactly what the endpoints above serve. Under-claiming makes the
     // Gate render as featureless in the app; over-claiming (sessions, runs,
@@ -99,6 +110,7 @@ export function buildManifest({
       capabilityRegistry: true,
       ...(backendCan('sessions') ? { sessions: true } : {}),
       ...(backendCan('tools') ? { tools: true } : {}),
+      ...(backendCan('runs') ? { runs: true, approvals: true } : {}),
     },
     backends,
     providers,

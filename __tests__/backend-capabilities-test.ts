@@ -11,7 +11,8 @@ const HERMES: GatewayBackend = {
   id: 'hermes-local',
   label: 'Hermes',
   kind: 'environment',
-  capabilities: ['chat', 'tools'],
+  // Hermes is the one backend with an agentic run lifecycle.
+  capabilities: ['chat', 'tools', 'runs'],
 };
 
 describe('capabilitiesForBackend', () => {
@@ -19,6 +20,7 @@ describe('capabilitiesForBackend', () => {
     expect(capabilitiesForBackend([OPENCODE, HERMES], 'hermes-local')).toEqual({
       sessions: false,
       tools: true,
+      runs: true,
     });
   });
 
@@ -26,6 +28,7 @@ describe('capabilitiesForBackend', () => {
     expect(capabilitiesForBackend([OPENCODE, HERMES], undefined)).toEqual({
       sessions: true,
       tools: true,
+      runs: true,
     });
   });
 
@@ -33,10 +36,11 @@ describe('capabilitiesForBackend', () => {
     expect(capabilitiesForBackend([OPENCODE], 'deleted-backend')).toEqual({
       sessions: true,
       tools: true,
+      runs: false,
     });
   });
 
   it('reports nothing for a gateway with no backends', () => {
-    expect(capabilitiesForBackend([], undefined)).toEqual({ sessions: false, tools: false });
+    expect(capabilitiesForBackend([], undefined)).toEqual({ sessions: false, tools: false, runs: false });
   });
 });

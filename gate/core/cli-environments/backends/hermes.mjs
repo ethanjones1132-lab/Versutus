@@ -186,6 +186,48 @@ export function createHermesBackend({ baseUrl, apiKey, fetchImpl = fetch } = {})
       throw new Error('hermes: session turns cannot be aborted; use the runs API');
     },
 
+    /**
+     * Agentic runs. This is the capability the Gate has never had: its CLI
+     * backends run a turn synchronously, while Hermes accepts a run, returns an
+     * id immediately, and streams events until it reaches a terminal state.
+     */
+    async startRun(prompt, { sessionId, model } = {}) {
+      const payload = { input: prompt };
+      if (sessionId) payload.session_id = sessionId;
+      if (model) payload.model = model;
+      return call('/v1/runs', { method: 'POST', body: JSON.stringify(payload) });
+    },
+
+    async getRunStatus(runId) {
+      return call(`/v1/runs/${encodeURIComponent(runId)}`);
+    },
+
+    async stopRun(runId) {
+      await call(`/v1/runs/${encodeURIComponent(runId)}/stop`, { method: 'POST', body: JSON.stringify({}) });
+    },
+
+    async steerRun(runId, text) {
+      await call(`/v1/runs/${encodeURIComponent(runId)}/steer`, {
+        method: 'POST',
+        body: JSON.stringify({ input: text }),
+      });
+    },
+
+    /** Raw SSE stream, relayed by the Gate rather than parsed here. */
+    async runEvents(runId, { signal } = {}) {
+      const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+      const response = await fetchImpl(`${root}/v1/runs/${encodeURIComponent(runId)}/events`, {
+        headers,
+        signal,
+      });
+      if (!response.ok) {
+        const error = new Error(`hermes: run events HTTP ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+      return response;
+    },
+
     async replyApproval(runId, { approved, feedback } = {}) {
       await call(`/v1/runs/${encodeURIComponent(runId)}/approval`, {
         method: 'POST',

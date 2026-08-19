@@ -13,6 +13,9 @@ import type {
   HermesSession,
   ModelInfo,
   SessionMessage,
+  RunEvent,
+  RunResponse,
+  RunStatus,
   SessionMessagePage,
   SessionMessagesResponse,
   SessionsResponse,
@@ -491,6 +494,83 @@ export class ManifestClient implements PortalClient {
     // The transport sets JSON by default; a GET/SSE request should not claim one.
     if (!init.body) delete headers['Content-Type'];
     return fetch(`${this.rootTransport.baseUrl}${path}`, { ...init, headers });
+  }
+
+  /**
+   * Agentic runs, when the gateway advertises them.
+   *
+   * A Gate fronting Hermes serves the same paths Hermes does, so these are the
+   * shapes the app already parses. A gateway that advertises no `runs` endpoint
+   * throws rather than guessing a path — the Activity screen keys off the
+   * capability, so it never calls these on a gateway without them.
+   */
+  async startRun(
+    prompt: string,
+    options?: { sessionId?: string; model?: string },
+  ): Promise<RunResponse> {
+    const runs = this.requireRunsEndpoint();
+    const body: Record<string, unknown> = { input: prompt };
+    if (options?.sessionId) body.session_id = options.sessionId;
+    if (options?.model) body.model = options.model;
+    return this.rootTransport.request<RunResponse>('POST', this.withBackend(runs), body);
+  }
+
+  async getRunStatus(runId: string): Promise<RunStatus> {
+    const template = this.endpoints.runStatus;
+    const path = template
+      ? interpolatePath(template, { id: runId, runId, run_id: runId })
+      : `${this.requireRunsEndpoint().replace(/\/+$/, '')}/${runId}`;
+    return this.rootTransport.request<RunStatus>('GET', path);
+  }
+
+  async streamRunEvents(
+    runId: string,
+    onEvent: (event: RunEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const template = this.endpoints.runEvents;
+    const path = template
+      ? interpolatePath(template, { id: runId, runId, run_id: runId })
+      : `${this.requireRunsEndpoint().replace(/\/+$/, '')}/${runId}/events`;
+
+    const response = await fetch(`${this.rootTransport.baseUrl}${path}`, {
+      headers: this.rootTransport.headers,
+      signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    await this.rootTransport.streamSSE(
+      response,
+      (data) => {
+        try {
+          onEvent(JSON.parse(data) as RunEvent);
+        } catch {
+          // A malformed frame must not kill the stream.
+        }
+      },
+      signal,
+    );
+  }
+
+  async resolveApproval(runId: string, approved: boolean, feedback?: string): Promise<void> {
+    const template = this.endpoints.runApproval;
+    const path = template
+      ? interpolatePath(template, { id: runId, runId, run_id: runId })
+      : `${this.requireRunsEndpoint().replace(/\/+$/, '')}/${runId}/approval`;
+    await this.rootTransport.request<unknown>('POST', path, {
+      approved,
+      ...(feedback ? { feedback } : {}),
+    });
+  }
+
+  private requireRunsEndpoint(): string {
+    const runs = this.endpoints.runs;
+    if (!runs) {
+      throw new Error(
+        `${this.identity.kindLabel} does not advertise agentic runs, so a run cannot be started here.`,
+      );
+    }
+    return runs;
   }
 
   async stopRun(runId: string): Promise<void> {

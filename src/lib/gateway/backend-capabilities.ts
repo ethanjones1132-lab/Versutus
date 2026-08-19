@@ -3,6 +3,8 @@ import type { GatewayBackend } from '@/lib/portal/manifest';
 export type BackendCapabilities = {
   sessions: boolean;
   tools: boolean;
+  /** Agentic runs — a run id, streamed events and a terminal state. */
+  runs: boolean;
 };
 
 /**
@@ -23,5 +25,5 @@ export function capabilitiesForBackend(
   const source = selected ? [selected] : backends;
   const can = (capability: string) =>
     source.some((backend) => (backend.capabilities ?? []).includes(capability));
-  return { sessions: can('sessions'), tools: can('tools') };
+  return { sessions: can('sessions'), tools: can('tools'), runs: can('runs') };
 }

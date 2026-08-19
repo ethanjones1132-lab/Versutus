@@ -918,7 +918,13 @@ export function buildCapabilitySnapshot(
     ? backends.find((backend) => backend.id === options.selectedBackendId)
     : undefined;
   const backendScoped = capabilitiesForBackend(backends, options.selectedBackendId);
-  const backendOverride: Record<string, boolean> = { sessions: backendScoped.sessions, tools: backendScoped.tools };
+  const backendOverride: Record<string, boolean> = {
+    sessions: backendScoped.sessions,
+    tools: backendScoped.tools,
+    // The `agent` group is what gates the Activity screen's run UI.
+    agent: backendScoped.runs,
+    approvals: backendScoped.runs,
+  };
 
   const providerRecords = options.providers ?? [];
   const readyProviders = providerRecords.filter(
