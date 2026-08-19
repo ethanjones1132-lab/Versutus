@@ -5,10 +5,13 @@ import Animated from 'react-native-reanimated';
 import { DayDivider } from '@/components/chat/day-divider';
 import { MessageBubble } from '@/components/chat/message-bubble';
 import { PreviewScenarioChip } from '@/components/dev/preview-scenario-chip';
+import { SlashCommandPalette } from '@/components/chat/slash-command-palette';
+import { TlsFingerprintChangeSheet } from '@/components/gateway/tls-fingerprint-change-sheet';
 import { GlassCollapsible } from '@/components/glass-collapsible';
 import { HomeStatusCard } from '@/components/home-status-card';
 import { PairingPanel } from '@/components/pairing-panel';
-import { Screen, Text } from '@/components/ui';
+import { Button, Screen, Text } from '@/components/ui';
+import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { Spacing } from '@/constants/tokens';
 import { entering } from '@/lib/motion/presets';
 import { formatDayDivider } from '@/lib/format';
@@ -24,6 +27,13 @@ import {
 export default function DevPreviewScreen() {
   const tokens = useTokens();
   const [scenarioId, setScenarioId] = useState<PreviewScenario>('idle');
+  const [paletteVisible, setPaletteVisible] = useState(false);
+  const [tlsVisible, setTlsVisible] = useState(false);
+  // Real registry data, no gateway: the palette's whole job is browsing this.
+  const previewCommands = useMemo(
+    () => getSlashCommandSuggestions('', null, [], {}, [], Number.POSITIVE_INFINITY),
+    [],
+  );
   const scenario = PREVIEW_SCENARIOS.find((item) => item.id === scenarioId) ?? PREVIEW_SCENARIOS[0];
 
   // Day-grouped chat rows so the lab shows the divider behaviour that the real
@@ -97,17 +107,50 @@ export default function DevPreviewScreen() {
           )}
         </Animated.View>
 
+        <View style={styles.sheetLab}>
+          <Text variant="mono" color="accentWarm" style={styles.eyebrow}>
+            SHEET LAB
+          </Text>
+          <Text color="secondary">
+            Sheets that normally sit behind a connected gateway, openable here so they can be
+            checked without one.
+          </Text>
+          <Button label="Open command palette" variant="secondary" onPress={() => setPaletteVisible(true)} />
+          <Button
+            label="Open TLS fingerprint change"
+            variant="secondary"
+            onPress={() => setTlsVisible(true)}
+          />
+        </View>
+
         <View style={[styles.meta, { borderColor: tokens.glassBorder }]}>
           <Text variant="mono" color="tertiary">
             {scenario.phase.toUpperCase()} · {scenario.status.toUpperCase()}
           </Text>
         </View>
       </ScrollView>
+
+      <SlashCommandPalette
+        visible={paletteVisible}
+        commands={previewCommands}
+        onClose={() => setPaletteVisible(false)}
+        onSelect={() => undefined}
+      />
+
+      <TlsFingerprintChangeSheet
+        visible={tlsVisible}
+        gatewayLabel="Studio PC"
+        previousFingerprint="AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+        observedFingerprint="99:88:77:66:55:44:33:22:11:00:FF:EE:DD:CC:BB:AA"
+        onApprove={() => setTlsVisible(false)}
+        onReject={() => setTlsVisible(false)}
+      />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  sheetLab: { gap: Spacing.two, marginTop: Spacing.four },
   content: {
     padding: Spacing.three,
     gap: Spacing.three,

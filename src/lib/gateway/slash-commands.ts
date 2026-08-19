@@ -155,6 +155,12 @@ export function getSlashCommandSuggestions(
    */
   methods: Record<string, GatewayMethodAvailability> = {},
   dynamicCommands: GatewayCapabilityCommand[] = [],
+  /**
+   * Cap on returned rows. The composer strip wants a short list it can show
+   * above the keyboard; the browsable palette passes Infinity because hiding
+   * commands is the exact problem it exists to solve.
+   */
+  limit: number = 12,
 ): SlashCommandSuggestion[] {
   const needle = input.trimStart().toLowerCase();
 
@@ -243,7 +249,7 @@ export function getSlashCommandSuggestions(
   // Working commands first; any remaining unsupported ones sink to the end.
   suggestions = dedupeSuggestions(suggestions)
     .sort((a, b) => Number(a.unavailable ?? false) - Number(b.unavailable ?? false))
-    .slice(0, 12);
+    .slice(0, limit);
 
   return suggestions;
 }

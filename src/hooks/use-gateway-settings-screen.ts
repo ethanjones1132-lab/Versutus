@@ -1,6 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useCallback } from 'react';
-import { Alert } from 'react-native';
+import { useCallback, useState } from 'react';
 
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayDiscovery } from '@/hooks/use-gateway-discovery';
@@ -23,6 +22,7 @@ export function useGatewaySettingsScreen() {
   } = useGateway();
   const discovery = useGatewayDiscovery(true);
   const reachability = useGatewayReachability({ gateways, activeGateway, status });
+  const [deleteCandidateId, setDeleteCandidateId] = useState<string | null>(null);
 
   const handleConnect = useCallback(
     async (gatewayId: string) => {
@@ -34,19 +34,20 @@ export function useGatewaySettingsScreen() {
     [connectGateway, gateways, router],
   );
 
-  const handleDelete = useCallback(
-    (gatewayId: string) => {
-      Alert.alert('Remove gateway?', 'Versutus can find it again automatically.', [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Remove',
-          style: 'destructive',
-          onPress: () => void deleteGateway(gatewayId),
-        },
-      ]);
-    },
-    [deleteGateway],
-  );
+  const handleDelete = useCallback((gatewayId: string) => {
+    setDeleteCandidateId(gatewayId);
+  }, []);
+
+  const confirmDelete = useCallback(() => {
+    if (deleteCandidateId) {
+      void deleteGateway(deleteCandidateId);
+    }
+    setDeleteCandidateId(null);
+  }, [deleteCandidateId, deleteGateway]);
+
+  const cancelDelete = useCallback(() => {
+    setDeleteCandidateId(null);
+  }, []);
 
   const handleAddDiscovered = useCallback(
     async (beaconId: string) => {
@@ -64,6 +65,10 @@ export function useGatewaySettingsScreen() {
     [addGateway, connectGateway, discovery.gateways, router],
   );
 
+  const deleteCandidate = deleteCandidateId
+    ? gateways.find((item) => item.id === deleteCandidateId) ?? null
+    : null;
+
   return {
     gateways,
     activeGateway,
@@ -78,6 +83,9 @@ export function useGatewaySettingsScreen() {
     handleConnect,
     handleDelete,
     handleAddDiscovered,
+    deleteCandidate,
+    confirmDelete,
+    cancelDelete,
     router,
   };
 }

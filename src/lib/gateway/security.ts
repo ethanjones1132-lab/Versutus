@@ -7,6 +7,12 @@ export type GatewayTransportInfo = {
   isEncrypted: boolean;
 };
 
+export type TlsTofuResult =
+  | { kind: 'first-seen'; fingerprint: string }
+  | { kind: 'unchanged'; fingerprint: string }
+  | { kind: 'changed'; previousFingerprint: string; observedFingerprint: string }
+  | { kind: 'none' };
+
 /** Inspect URL transport without pretending that JS fetch performs pinning. */
 export function inspectGatewayTransport(url: string, observedFingerprint?: string): GatewayTransportInfo {
   let scheme = '';
@@ -48,4 +54,42 @@ export function inspectGatewayTransport(url: string, observedFingerprint?: strin
     detail: 'Verify the gateway URL before sending credentials.',
     isEncrypted: false,
   };
+}
+
+/**
+ * Verify-on-first-use for a discovered TLS fingerprint.
+ *
+ * The fingerprint is "observed, not verified" by the underlying fetch, so this
+ * helper only tracks changes: first seen → trust; same → unchanged; different →
+ * changed (caller must prompt).
+ */
+export function checkTlsFingerprintTofu(
+  profile: { tlsFingerprint?: string; tlsFingerprintTrusted?: boolean; tlsFingerprintFirstSeenAt?: number },
+  observedFingerprint?: string,
+): TlsTofuResult {
+  if (!observedFingerprint) return { kind: 'none' };
+
+  const stored = profile.tlsFingerprint;
+
+  // A stored fingerprint that disagrees with what is presented is a change even
+  // when the user never explicitly trusted it. Gateways added from LAN discovery
+  // record the beacon's fingerprint but never set the trusted flag, so keying
+  // this decision off `tlsFingerprintTrusted` alone would silently accept a
+  // substituted certificate on the first connect — the exact substitution TOFU
+  // exists to catch.
+  if (stored && stored !== observedFingerprint) {
+    return {
+      kind: 'changed',
+      previousFingerprint: stored,
+      observedFingerprint,
+    };
+  }
+
+  // Nothing stored, or stored and identical but not yet trusted: this connect is
+  // the first *use*, so it establishes the trust baseline.
+  if (!profile.tlsFingerprintTrusted) {
+    return { kind: 'first-seen', fingerprint: observedFingerprint };
+  }
+
+  return { kind: 'unchanged', fingerprint: observedFingerprint };
 }

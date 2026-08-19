@@ -11,6 +11,7 @@ import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AppBootstrap } from '@/components/app-bootstrap';
 import { ConnectedToast } from '@/components/connected-toast';
 import { FontProvider } from '@/components/font-provider';
+import { TlsFingerprintGuard } from '@/components/gateway/tls-fingerprint-guard';
 import { VersutusDarkTheme } from '@/constants/navigation-theme';
 import { GatewayProvider } from '@/context/gateway-provider';
 
@@ -91,6 +92,16 @@ export default function RootLayout() {
                   }}
                 />
                 <Stack.Screen
+                  name="gateway/setup"
+                  options={{
+                    presentation: 'modal',
+                    headerShown: true,
+                    title: 'Gate setup',
+                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                    headerTintColor: VersutusDarkTheme.colors.text,
+                  }}
+                />
+                <Stack.Screen
                   name="gateway/capabilities"
                   options={{
                     presentation: 'modal',
@@ -100,29 +111,10 @@ export default function RootLayout() {
                     headerTintColor: VersutusDarkTheme.colors.text,
                   }}
                 />
-                <Stack.Screen
-                  name="gateway/providers"
-                  options={{
-                    presentation: 'modal',
-                    headerShown: true,
-                    title: 'Providers',
-                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                    headerTintColor: VersutusDarkTheme.colors.text,
-                  }}
-                />
-                <Stack.Screen
-                  name="gateway/environments"
-                  options={{
-                    presentation: 'modal',
-                    headerShown: true,
-                    title: 'CLI environments',
-                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                    headerTintColor: VersutusDarkTheme.colors.text,
-                  }}
-                />
                 {__DEV__ ? <Stack.Screen name="dev" options={{ headerShown: false }} /> : null}
               </Stack>
               <ConnectedToast />
+              <TlsFingerprintGuard />
             </View>
           </AppBootstrap>
         </ThemeProvider>

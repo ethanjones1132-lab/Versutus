@@ -21,6 +21,10 @@ export type GatewayProfile = {
   token?: string;
   /** SHA-256 fingerprint observed from discovery; native fetch does not verify it. */
   tlsFingerprint?: string;
+  /** True once the user has explicitly trusted the observed fingerprint. */
+  tlsFingerprintTrusted?: boolean;
+  /** When the observed fingerprint was first trusted. */
+  tlsFingerprintFirstSeenAt?: number;
   /** OpenClaw bootstrap/setup token (one-time pairing secret) */
   bootstrapToken?: string;
   /** Session key for scoping long-term memory (optional) */
@@ -150,6 +154,8 @@ export type ChatMessage = {
   streaming?: boolean;
   /** True while an offline message waits for the next connected state. */
   queued?: boolean;
+  /** Set when the connection drops mid-stream; the bubble may be reconciled later. */
+  interrupted?: boolean;
   /** Tool calls attached to this message, when the stream exposes them. */
   toolCalls?: ChatToolCall[];
   command?: {

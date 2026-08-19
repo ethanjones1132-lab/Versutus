@@ -1,11 +1,12 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { TransportSecurityCard } from '@/components/gateway/transport-security-card';
-import { Button, Card, Screen, Text, TextField } from '@/components/ui';
+import { Button, Card, ErrorCard, Screen, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { requestGatewayAccess, type AccessRequestResult } from '@/lib/portal/access';
 import { identifyGateway, type GatewayIdentity } from '@/lib/portal/identify';
 
@@ -33,11 +34,13 @@ export default function AddGatewayScreen() {
   const [identified, setIdentified] = useState<GatewayIdentity | null>(null);
   const [accessNote, setAccessNote] = useState<string | null>(null);
   const [accessStatus, setAccessStatus] = useState<AccessRequestResult['status'] | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   async function handleSave() {
     setSaving(true);
     setAccessNote(null);
     setAccessStatus(null);
+    setSaveError(null);
     try {
       // 1. Identify the gateway regardless of origin (manifest → fingerprints).
       const identity = await identifyGateway({ baseUrl: url });
@@ -81,7 +84,7 @@ export default function AddGatewayScreen() {
       await connectGateway(gateway);
       router.replace('/chat');
     } catch (error) {
-      Alert.alert('Could not save gateway', error instanceof Error ? error.message : String(error));
+      setSaveError(error instanceof Error ? error.message : String(error));
     } finally {
       setSaving(false);
     }
@@ -158,6 +161,13 @@ export default function AddGatewayScreen() {
             agentId={agentId}
             onAgentIdChange={setAgentId}
           />
+
+          {saveError ? (
+            <ErrorCard
+              {...humanizeGatewayError(saveError)}
+              onRetry={() => void handleSave()}
+            />
+          ) : null}
 
           <Button
             label="Save & connect"

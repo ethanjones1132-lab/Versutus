@@ -294,15 +294,19 @@ export const GATEWAY_COMMANDS: GatewayCommand[] = [
     usage: '/config patch {"key":"value"}',
   },
   {
-    id: 'plugins',
-    label: 'Plugins',
+    // Distinct from the `plugins` entry below: both previously claimed id
+    // `plugins` and slash `/plugins`, so the lookup's `.find` returned this one
+    // and `plugins.list` was unreachable. Sub-command slash matches the
+    // `/session list` pattern — the matcher tries the longest prefix first.
+    id: 'plugins-ui',
+    label: 'Plugin UI descriptors',
     group: 'Plugins',
     transport: 'rpc',
     method: 'plugins.uiDescriptors',
     params: {},
     requiredScope: 'operator.read',
     danger: 'safe',
-    slash: '/plugins',
+    slash: '/plugins ui',
     description: 'Installed plugin UI descriptors',
   },
   {

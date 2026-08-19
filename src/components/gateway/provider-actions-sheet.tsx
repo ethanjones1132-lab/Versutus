@@ -1,8 +1,6 @@
-import { Alert } from 'react-native';
+import { useState } from 'react';
 
-import * as Haptics from 'expo-haptics';
-
-import { BaseSheet, Divider, ListRow } from '@/components/ui';
+import { BaseSheet, ConfirmSheet, Divider, ListRow } from '@/components/ui';
 
 export type ProviderActionsSheetProps = {
   visible: boolean;
@@ -29,6 +27,8 @@ export function ProviderActionsSheet({
   onDisable,
   onDelete,
 }: ProviderActionsSheetProps) {
+  const [deleteVisible, setDeleteVisible] = useState(false);
+
   if (!visible) return null;
 
   const run = (action: () => void) => () => {
@@ -37,18 +37,13 @@ export function ProviderActionsSheet({
   };
 
   function confirmDelete() {
-    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-    Alert.alert('Remove provider?', `${label} and its stored credential will be removed from the Gate.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Remove',
-        style: 'destructive',
-        onPress: () => {
-          onDelete();
-          onClose();
-        },
-      },
-    ]);
+    setDeleteVisible(true);
+  }
+
+  function executeDelete() {
+    onDelete();
+    setDeleteVisible(false);
+    onClose();
   }
 
   return (
@@ -61,6 +56,16 @@ export function ProviderActionsSheet({
       <ListRow title="Disconnect" icon={{ ios: 'link.badge.plus', android: 'link_off', web: 'link_off' }} chevron={false} onPress={run(onDisconnect)} />
       <ListRow title="Disable" icon={{ ios: 'pause.circle', android: 'pause_circle', web: 'pause_circle' }} chevron={false} onPress={run(onDisable)} />
       <ListRow title="Remove provider" icon={{ ios: 'trash', android: 'delete', web: 'delete' }} chevron={false} onPress={confirmDelete} />
+
+      <ConfirmSheet
+        visible={deleteVisible}
+        title="Remove provider?"
+        message={`${label} and its stored credential will be removed from the Gate.`}
+        confirmLabel="Remove"
+        danger
+        onCancel={() => setDeleteVisible(false)}
+        onConfirm={executeDelete}
+      />
     </BaseSheet>
   );
 }

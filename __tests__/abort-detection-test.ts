@@ -1,4 +1,4 @@
-import { isUserAbort } from '@/lib/gateway/errors';
+import { GatewayHttpError, isAuthRejection, isGatewayTokenRequiredMessage, isUserAbort } from '@/lib/gateway/errors';
 
 function abortError(): Error {
   const error = new Error('The operation was aborted.');
@@ -33,5 +33,27 @@ describe('isUserAbort', () => {
 
   it('recognises the DOM abort error code', () => {
     expect(isUserAbort({ code: 'ABORT_ERR' })).toBe(true);
+  });
+});
+
+describe('A2 regression lock — typed HTTP error classification', () => {
+  it('isAuthRejection matches 401/403 GatewayHttpError exactly', () => {
+    expect(isAuthRejection(new GatewayHttpError('nope', 401))).toBe(true);
+    expect(isAuthRejection(new GatewayHttpError('nope', 403))).toBe(true);
+    expect(isAuthRejection(new GatewayHttpError('nope', 500))).toBe(false);
+  });
+
+  it('isAuthRejection falls back to message text for transports that lose status', () => {
+    expect(isAuthRejection(new Error('invalid api key'))).toBe(true);
+    expect(isAuthRejection(new Error('Unauthorized request'))).toBe(true);
+    expect(isAuthRejection(new Error('something else'))).toBe(false);
+  });
+
+  it('isGatewayTokenRequiredMessage matches setup-token markers', () => {
+    expect(isGatewayTokenRequiredMessage('setup token required')).toBe(true);
+    expect(isGatewayTokenRequiredMessage('auth token missing')).toBe(true);
+    expect(isGatewayTokenRequiredMessage('token required')).toBe(true);
+    expect(isGatewayTokenRequiredMessage('unknown failure')).toBe(false);
+    expect(isGatewayTokenRequiredMessage(null)).toBe(false);
   });
 });

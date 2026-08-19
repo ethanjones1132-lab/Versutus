@@ -18,6 +18,8 @@ type ChatComposerProps = {
   onReconnect: () => void;
   slashSuggestions?: SlashCommandSuggestion[];
   onSelectSlashSuggestion?: (value: string) => void;
+  /** Open the browsable command palette. Hidden when not provided. */
+  onBrowseCommands?: () => void;
   /** One-tap command seeds shown in the dock's left slot while idle. */
   quickActions?: { label: string; draft: string; icon: IconName }[];
   isStreaming: boolean;
@@ -33,6 +35,7 @@ export function ChatComposer({
   onReconnect,
   slashSuggestions = [],
   onSelectSlashSuggestion,
+  onBrowseCommands,
   quickActions = [],
   isStreaming,
   canSend,
@@ -110,6 +113,23 @@ export function ChatComposer({
               style={styles.utilityButton}>
               <Icon name={{ ios: 'bolt.horizontal', android: 'cable', web: 'cable' }} size={15} color="textTertiary" />
             </PressableScale>
+            {onBrowseCommands ? (
+              <PressableScale
+                onPress={async () => {
+                  await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  onBrowseCommands();
+                }}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Browse commands"
+                style={styles.utilityButton}>
+                <Icon
+                  name={{ ios: 'command', android: 'terminal', web: 'terminal' }}
+                  size={15}
+                  color="textTertiary"
+                />
+              </PressableScale>
+            ) : null}
           </View>
         </View>
 
@@ -177,6 +197,33 @@ export function ChatComposer({
                   </PressableScale>
                 );
               })}
+              {onBrowseCommands ? (
+                <PressableScale
+                  style={[
+                    styles.paletteItem,
+                    { backgroundColor: 'transparent', borderColor: tokens.borderSubtle },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Browse all commands"
+                  onPress={async () => {
+                    await Haptics.selectionAsync();
+                    onBrowseCommands();
+                  }}>
+                  <View style={styles.paletteRow}>
+                    <Text variant="caption" color="accent" numberOfLines={1} style={styles.paletteLabel}>
+                      Browse all commands
+                    </Text>
+                    <Icon
+                      name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
+                      size={11}
+                      color="textTertiary"
+                    />
+                  </View>
+                  <Text variant="micro" color="tertiary" numberOfLines={1} style={styles.paletteDesc}>
+                    This list is capped — the palette groups every command by family.
+                  </Text>
+                </PressableScale>
+              ) : null}
             </ScrollView>
           </View>
         ) : null}

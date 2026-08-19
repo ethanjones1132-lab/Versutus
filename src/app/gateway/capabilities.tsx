@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
-import { Button, Card, Screen, Text, TextField } from '@/components/ui';
+import { Button, Card, ConfirmSheet, Screen, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { looksLikeCredential } from '@/lib/gateway/credential-shape';
@@ -36,6 +36,7 @@ export default function CapabilityEditorScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<RegistryInstance | null>(null);
 
   const load = useCallback(async () => {
     if (status !== 'connected') {
@@ -146,27 +147,23 @@ export default function CapabilityEditorScreen() {
   }
 
   function confirmDelete(instance: RegistryInstance) {
-    Alert.alert('Delete capability?', `${instance.label} (${instance.id}) will be removed from the Gate.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: () => {
-          void (async () => {
-            setBusy(true);
-            try {
-              await gatewayRequest('registry.instances.delete', { id: instance.id });
-              await refreshCapabilities();
-              await load();
-            } catch (caught) {
-              setError(caught instanceof Error ? caught.message : String(caught));
-            } finally {
-              setBusy(false);
-            }
-          })();
-        },
-      },
-    ]);
+    setDeleteCandidate(instance);
+  }
+
+  async function executeDelete() {
+    if (!deleteCandidate) return;
+    const id = deleteCandidate.id;
+    setDeleteCandidate(null);
+    setBusy(true);
+    try {
+      await gatewayRequest('registry.instances.delete', { id });
+      await refreshCapabilities();
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -275,6 +272,16 @@ export default function CapabilityEditorScreen() {
           </>
         )}
       </ScrollView>
+
+      <ConfirmSheet
+        visible={deleteCandidate !== null}
+        title="Delete capability?"
+        message={`${deleteCandidate?.label ?? 'This instance'} (${deleteCandidate?.id ?? ''}) will be removed from the Gate.`}
+        confirmLabel="Delete"
+        danger
+        onCancel={() => setDeleteCandidate(null)}
+        onConfirm={executeDelete}
+      />
     </Screen>
   );
 }

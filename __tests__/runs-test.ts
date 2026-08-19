@@ -1,4 +1,12 @@
-import { executeRun, isTerminalRunStatus, runNeedsApproval, type RunCapableClient } from '@/lib/gateway/runs';
+import {
+  executeRun,
+  isTerminalRunStatus,
+  outcomeToActivityStatus,
+  runNeedsApproval,
+  runStatusToActivityStatus,
+  settleUnresolvedRuns,
+  type RunCapableClient,
+} from '@/lib/gateway/runs';
 import type { RunResponse, RunStatus } from '@/lib/gateway/types';
 
 /**
@@ -189,5 +197,63 @@ describe('A2 regression lock — the terminal-status classifier (isTerminalRunSt
     expect(outcome.status).toBe('unknown');
     expect(outcome.unresolved).toBe(true);
     expect(isTerminalRunStatus(outcome.status)).toBe(false);
+  });
+});
+
+describe('A2 regression lock — outcome-to-activity mapping', () => {
+  it('an unresolved outcome renders as unresolved, never complete', () => {
+    expect(outcomeToActivityStatus({ runId: 'r1', status: 'running', unresolved: true })).toBe('unresolved');
+  });
+
+  it('a cancelled outcome renders as cancelled', () => {
+    expect(outcomeToActivityStatus({ runId: 'r1', status: 'cancelled', cancelled: true })).toBe('cancelled');
+  });
+
+  it('a terminal success renders as complete', () => {
+    expect(outcomeToActivityStatus({ runId: 'r1', status: 'completed' })).toBe('complete');
+    expect(outcomeToActivityStatus({ runId: 'r1', status: 'succeeded' })).toBe('complete');
+  });
+
+  it('a terminal failure renders as failed', () => {
+    expect(outcomeToActivityStatus({ runId: 'r1', status: 'failed' })).toBe('failed');
+    expect(outcomeToActivityStatus({ runId: 'r1', status: 'error' })).toBe('failed');
+  });
+});
+
+describe('C2 — settle unresolved runs on reconnect', () => {
+  it('runStatusToActivityStatus maps terminal statuses correctly', () => {
+    expect(runStatusToActivityStatus('completed')).toBe('complete');
+    expect(runStatusToActivityStatus('failed')).toBe('failed');
+    expect(runStatusToActivityStatus('cancelled')).toBe('cancelled');
+    expect(runStatusToActivityStatus('running')).toBe('unresolved');
+  });
+
+  it('settleUnresolvedRuns updates unresolved runs to their terminal state', async () => {
+    const client = {
+      getRunStatus: jest.fn().mockResolvedValue({ run_id: 'run-1', status: 'completed', result: 'done' }),
+    };
+    const runs = [
+      { id: 'run-1', prompt: 'test', status: 'unresolved' as const, startedAt: 1, events: [] },
+      { id: 'run-2', prompt: 'other', status: 'complete' as const, startedAt: 2, events: [] },
+    ];
+
+    const { runs: settled, changed } = await settleUnresolvedRuns(client, runs);
+
+    expect(settled[0].status).toBe('complete');
+    expect(settled[0].summary).toBe('done');
+    expect(changed).toHaveLength(1);
+    expect(client.getRunStatus).toHaveBeenCalledWith('run-1');
+  });
+
+  it('settleUnresolvedRuns leaves still-unresolved runs alone', async () => {
+    const client = {
+      getRunStatus: jest.fn().mockResolvedValue({ run_id: 'run-1', status: 'running' }),
+    };
+    const runs = [{ id: 'run-1', prompt: 'test', status: 'unresolved' as const, startedAt: 1, events: [] }];
+
+    const { runs: settled, changed } = await settleUnresolvedRuns(client, runs);
+
+    expect(settled[0].status).toBe('unresolved');
+    expect(changed).toHaveLength(0);
   });
 });

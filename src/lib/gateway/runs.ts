@@ -114,6 +114,30 @@ export function isTerminalRunStatus(status: string): boolean {
   return /(complete|succeeded|success|done|finished|failed|error|cancelled|canceled|aborted)/i.test(status);
 }
 
+function isTerminalSuccessStatus(status: string): boolean {
+  return /(complete|succeeded|success|done|finished)/i.test(status);
+}
+
+/**
+ * Map a gateway run status string to the activity-run status the UI renders.
+ */
+export function runStatusToActivityStatus(status: string): ActivityRun['status'] {
+  if (!isTerminalRunStatus(status)) return 'unresolved';
+  if (/cancelled|canceled|aborted/i.test(status)) return 'cancelled';
+  return isTerminalSuccessStatus(status) ? 'complete' : 'failed';
+}
+
+/**
+ * Map a run outcome to the activity-run status the UI renders.
+ * Keeps `unresolved` distinct from `complete` — a run that never reached a
+ * terminal state must not be presented as finished.
+ */
+export function outcomeToActivityStatus(outcome: RunOutcome): ActivityRun['status'] {
+  if (outcome.cancelled) return 'cancelled';
+  if (outcome.unresolved) return 'unresolved';
+  return runStatusToActivityStatus(outcome.status);
+}
+
 const MAX_STATUS_POLLS = 120;
 const DEFAULT_POLL_DELAY_MS = 1000;
 
@@ -205,4 +229,40 @@ export async function executeRun(
 
 function safeStatus(run: RunStatus | null): string {
   return run?.status ?? 'unknown';
+}
+
+/**
+ * Re-poll unresolved runs after a reconnect and settle them to their real
+ * terminal state. Returns the updated runs and which ones changed.
+ */
+export async function settleUnresolvedRuns(
+  client: Pick<RunCapableClient, 'getRunStatus'>,
+  runs: ActivityRun[],
+): Promise<{ runs: ActivityRun[]; changed: ActivityRun[] }> {
+  const next: ActivityRun[] = [];
+  const changed: ActivityRun[] = [];
+
+  for (const run of runs) {
+    if (run.status !== 'unresolved') {
+      next.push(run);
+      continue;
+    }
+
+    const status = await client.getRunStatus(run.id).catch(() => null);
+    const settled = status ? runStatusToActivityStatus(safeStatus(status)) : 'unresolved';
+    if (settled !== 'unresolved') {
+      const updated: ActivityRun = {
+        ...run,
+        status: settled,
+        finishedAt: Date.now(),
+        summary: status?.result ?? status?.error ?? run.summary,
+      };
+      next.push(updated);
+      changed.push(updated);
+    } else {
+      next.push(run);
+    }
+  }
+
+  return { runs: next, changed };
 }

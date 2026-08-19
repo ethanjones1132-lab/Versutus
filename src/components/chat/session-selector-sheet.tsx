@@ -1,9 +1,9 @@
 import * as Haptics from 'expo-haptics';
-import { useCallback } from 'react';
-import { Alert, FlatList, StyleSheet, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { FlatList, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 
-import { Badge, BaseSheet, Button, EmptyState, Icon, PressableScale, Text } from '@/components/ui';
+import { Badge, BaseSheet, Button, ConfirmSheet, EmptyState, Icon, PressableScale, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { formatCost, formatRelativeTime, formatTokenCount } from '@/lib/format';
 import { entering } from '@/lib/motion/presets';
@@ -40,21 +40,18 @@ export function SessionSelectorSheet({
   onDeleteSession?: (sessionId: string) => void;
 }) {
   const tokens = useTokens();
+  const [deleteCandidate, setDeleteCandidate] = useState<SessionItem | null>(null);
 
-  const confirmDelete = useCallback(
-    (item: SessionItem) => {
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      Alert.alert('Delete session?', `"${item.title ?? item.id}" is removed from the gateway.`, [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete session',
-          style: 'destructive',
-          onPress: () => onDeleteSession?.(item.id),
-        },
-      ]);
-    },
-    [onDeleteSession],
-  );
+  const confirmDelete = useCallback((item: SessionItem) => {
+    setDeleteCandidate(item);
+  }, []);
+
+  const executeDelete = useCallback(() => {
+    if (deleteCandidate) {
+      onDeleteSession?.(deleteCandidate.id);
+    }
+    setDeleteCandidate(null);
+  }, [deleteCandidate, onDeleteSession]);
 
   const renderSessionItem = useCallback(
     ({ item }: { item: SessionItem }) => {
@@ -181,6 +178,16 @@ export function SessionSelectorSheet({
           style={styles.refresh}
         />
       ) : null}
+
+      <ConfirmSheet
+        visible={deleteCandidate !== null}
+        title="Delete session?"
+        message={`"${deleteCandidate?.title ?? deleteCandidate?.id ?? ''}" is removed from the gateway.`}
+        confirmLabel="Delete session"
+        danger
+        onCancel={() => setDeleteCandidate(null)}
+        onConfirm={executeDelete}
+      />
     </BaseSheet>
   );
 }

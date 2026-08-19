@@ -1,4 +1,4 @@
-import { executeGatewaySlashCommand } from '@/lib/gateway/slash-commands';
+import { executeGatewaySlashCommand, getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 
 describe('slash commands', () => {
   test('executes local help without a gateway RPC', async () => {
@@ -56,5 +56,35 @@ describe('slash commands', () => {
       runAgentCommand: jest.fn(),
     });
     expect(gatewayRequest).toHaveBeenCalledWith('channels.status', {});
+  });
+});
+
+describe('slash command palette', () => {
+  test('typing / surfaces local and registry suggestions', () => {
+    const suggestions = getSlashCommandSuggestions('/', null, [], {});
+    expect(suggestions.length).toBeGreaterThan(0);
+    expect(suggestions.some((s) => s.value === '/help')).toBe(true);
+  });
+
+  test('filters by prefix', () => {
+    const suggestions = getSlashCommandSuggestions('/model', null, [], {});
+    expect(suggestions.every((s) => s.value.toLowerCase().includes('/model'))).toBe(true);
+  });
+
+  test('hides unavailable commands when live methods are known and prefix is short', () => {
+    const methods = { channels: { available: false, reason: 'Not offered' } };
+    const suggestions = getSlashCommandSuggestions('/ch', null, [], methods);
+    expect(suggestions.every((s) => !s.unavailable)).toBe(true);
+  });
+
+  test('groups suggestions by family', () => {
+    const suggestions = getSlashCommandSuggestions('/model', null, [], {});
+    const families = new Set(suggestions.map((s) => s.family));
+    expect(families.size).toBeGreaterThanOrEqual(1);
+  });
+
+  test('surfaces recent commands first', () => {
+    const suggestions = getSlashCommandSuggestions('/', null, ['/model set foo'], {});
+    expect(suggestions[0]?.value).toBe('/model set foo');
   });
 });

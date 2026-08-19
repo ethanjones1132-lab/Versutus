@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { FlatList, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
@@ -16,9 +16,11 @@ import { MessageBubble } from '@/components/chat/message-bubble';
 import { ModelPickerSheet } from '@/components/chat/model-picker-sheet';
 import { PairingSheet } from '@/components/chat/pairing-sheet';
 import { SessionSelectorSheet, type SessionItem } from '@/components/chat/session-selector-sheet';
+import { SlashCommandPalette } from '@/components/chat/slash-command-palette';
 import { Button, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text } from '@/components/ui';
 import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDivider } from '@/lib/format';
@@ -112,6 +114,7 @@ export function ChatScreen() {
   const [dismissedPairingKey, setDismissedPairingKey] = useState<string | null>(null);
   const [overflowVisible, setOverflowVisible] = useState(false);
   const [backendPickerVisible, setBackendPickerVisible] = useState(false);
+  const [paletteVisible, setPaletteVisible] = useState(false);
   const [actionMessage, setActionMessage] = useState<ChatMessage | null>(null);
   const [jumpVisible, setJumpVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -126,6 +129,21 @@ export function ChatScreen() {
   const slashSuggestions = draft.trimStart().startsWith('/')
     ? getSlashCommandSuggestions(draft, activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands)
     : [];
+
+  // The palette browses the whole surface, so it asks for an uncapped list --
+  // the composer strip's 12-row cap is what makes discovery impossible.
+  const allCommands = useMemo(
+    () =>
+      getSlashCommandSuggestions(
+        '',
+        activeHello,
+        recentCommands,
+        capabilitySnapshot.methods,
+        dynamicCommands,
+        Number.POSITIVE_INFINITY,
+      ),
+    [activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands],
+  );
 
   const sessions = (sessionList as SessionRecord[]).map(toSessionItem);
   const currentSession = sessions.find((session) => session.id === currentSessionId);
@@ -153,6 +171,17 @@ export function ChatScreen() {
     await sendChatInput(text);
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
   }, [draft, sendChatInput]);
+
+  const handleResumeMessage = useCallback(
+    (message: ChatMessage) => {
+      const idx = messages.findIndex((m) => m.id === message.id);
+      const previousUser = messages.slice(0, idx).reverse().find((m) => m.role === 'user');
+      if (previousUser?.text.trim()) {
+        void sendChatInput(previousUser.text.trim());
+      }
+    },
+    [messages, sendChatInput],
+  );
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     onScroll(event);
@@ -199,12 +228,13 @@ export function ChatScreen() {
             identity={identity}
             onRetry={retryCommand}
             onCancel={cancelCommand}
+            onResume={handleResumeMessage}
             onLongPress={setActionMessage}
           />
         </>
       );
     },
-    [cancelCommand, identity, messages, retryCommand],
+    [cancelCommand, handleResumeMessage, identity, messages, retryCommand],
   );
 
   if (!activeGateway) {
@@ -252,9 +282,7 @@ export function ChatScreen() {
       {lastError ? (
         <Animated.View entering={FadeIn.duration(Motion.duration.fast)} style={styles.bannerWrap}>
           <ErrorCard
-            cause={lastError}
-            affected="gateway connection"
-            next="Reconnect gateway or check Tailscale/PC."
+            {...humanizeGatewayError(lastError)}
             retryLabel="Reconnect gateway"
             onRetry={() => void retryAutoConnect()}
           />
@@ -340,6 +368,7 @@ export function ChatScreen() {
         onReconnect={() => void retryAutoConnect()}
         slashSuggestions={slashSuggestions}
         onSelectSlashSuggestion={(value) => setDraft(value)}
+        onBrowseCommands={() => setPaletteVisible(true)}
         quickActions={[
           { label: 'Run', draft: '/run ', icon: { ios: 'bolt.fill', android: 'bolt', web: 'bolt' } },
           { label: 'Status', draft: '/status', icon: { ios: 'waveform.path.ecg', android: 'pulse', web: 'pulse' } },
@@ -349,6 +378,16 @@ export function ChatScreen() {
         // Allow send while disconnected so the offline outbox can queue; the
         // provider flushes on reconnect. Block only when no gateway exists.
         canSend={!!activeGateway && !isCommandRunning}
+      />
+
+      <SlashCommandPalette
+        visible={paletteVisible}
+        commands={allCommands}
+        // Opening from the `/` strip carries the partial command across, so the
+        // palette lands already filtered to what the user was typing.
+        initialQuery={draft.trimStart().startsWith('/') ? draft : ''}
+        onClose={() => setPaletteVisible(false)}
+        onSelect={(value) => setDraft(value)}
       />
 
       <ConfirmationSheet

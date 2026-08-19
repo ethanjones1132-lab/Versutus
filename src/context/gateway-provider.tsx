@@ -7,7 +7,18 @@ import { buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/li
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
 import { decideConnectionPhase } from '@/lib/connection/phase';
 import { abortAndClear } from '@/lib/gateway/abort';
-import { isUserAbort } from '@/lib/gateway/errors';
+import { serverSideCancelForCommand } from '@/lib/gateway/cancel';
+import { isConnectionError, isUserAbort } from '@/lib/gateway/errors';
+import {
+  addStreamingPlaceholder,
+  addUserMessage,
+  appendStreamDelta,
+  appendToolCallDelta,
+  convertStreamError,
+  finalizeStreamingMessage,
+  markInterrupted,
+  preserveInterruptedAfterReload,
+} from '@/lib/gateway/message-reducer';
 import {
   appendBounded,
   boundWindow,
@@ -32,7 +43,15 @@ import { findConfirmableSlash } from '@/lib/gateway/command-match';
 import { GATEWAY_COMMANDS, buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
 import { manifestUrlForGateway } from '@/lib/gateway/gateway-origin';
 import { loadRecentCommands, pushRecentCommand } from '@/lib/gateway/recents';
-import { ACTIVITY_EVENT_CAP, executeRun, runEventPreview, type ActivityRun, type RunCapableClient } from '@/lib/gateway/runs';
+import {
+  ACTIVITY_EVENT_CAP,
+  executeRun,
+  outcomeToActivityStatus,
+  runEventPreview,
+  settleUnresolvedRuns,
+  type ActivityRun,
+  type RunCapableClient,
+} from '@/lib/gateway/runs';
 import {
   loadActivityRuns,
   loadOfflineQueue,
@@ -41,6 +60,7 @@ import {
   type OfflineQueueItem,
 } from '@/lib/gateway/session-persistence';
 import { syncChildProfiles } from '@/lib/gateway/child-sync';
+import { checkTlsFingerprintTofu } from '@/lib/gateway/security';
 import { notifyApprovalRequired, notifyGatewayDown, notifyRunComplete } from '@/lib/notifications/local';
 import type {
   ChatMessage,
@@ -102,7 +122,6 @@ type GatewayContextValue = {
   messages: ChatMessage[];
   isSending: boolean;
   isCommandRunning: boolean;
-  runningCommandLabel: string | null;
   lastError: string | null;
   deviceId: string | null;
   pairingDetails: PairingDetails | null;
@@ -131,12 +150,10 @@ type GatewayContextValue = {
   /** Route chat and sessions through a different native environment. */
   selectBackend: (backendId: string | undefined) => void;
   runAgentCommand: (command: string, options?: { onDelta?: (delta: string) => void }) => Promise<string>;
-  liveCapabilities: GatewayCapabilities | null;
   dynamicCommands: GatewayCapabilityCommand[];
   deleteGateway: (id: string) => Promise<void>;
   connectGateway: (gateway: GatewayProfile) => Promise<void>;
   disconnectGateway: () => void;
-  sendMessage: (text: string, existingMessageId?: string) => Promise<void>;
   sendChatInput: (
     text: string,
     options?: { fromQueue?: boolean; messageId?: string },
@@ -145,9 +162,7 @@ type GatewayContextValue = {
   reloadHistory: () => Promise<void>;
   setupFromPcAddress: (pcAddress: string, token?: string) => Promise<boolean>;
   retryAutoConnect: () => Promise<void>;
-  completeOnboarding: () => Promise<void>;
   setAutoConnect: (enabled: boolean) => Promise<void>;
-  transcripts: CommandTranscriptEntry[];
   recentCommands: string[];
   retryCommand: (entry: Partial<CommandTranscriptEntry> & { input: string }) => void;
   cancelCommand: (id: string) => void;
@@ -158,6 +173,13 @@ type GatewayContextValue = {
   cancelPendingConfirmation: () => void;
   pendingRunApproval: { runId: string; prompt: string } | null;
   resolveRunApproval: (approved: boolean, feedback?: string) => void;
+  tlsFingerprintChange: {
+    previousFingerprint: string;
+    observedFingerprint: string;
+    gatewayName: string;
+  } | null;
+  approveTlsFingerprintChange: () => Promise<void>;
+  rejectTlsFingerprintChange: () => void;
   runTask: (
     prompt: string,
     onEvent?: (event: { type: string; data?: Record<string, unknown>; timestamp?: number }) => void,
@@ -396,9 +418,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, []);
   const [probeMessage, setProbeMessage] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   const [isSending, setIsSending] = useState(false);
   const [isCommandRunning, setIsCommandRunning] = useState(false);
-  const [runningCommandLabel, setRunningCommandLabel] = useState<string | null>(null);
+  // Write-only: the label is tracked so a future running-command indicator can
+  // read it, but nothing renders it today. Kept as state (not a ref) because
+  // the setter is already threaded through the command paths.
+  const [, setRunningCommandLabel] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [selectedBackendId, setSelectedBackendId] = useState<string | undefined>(undefined);
@@ -412,7 +441,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [settings]);
   const [isBootstrapped, setIsBootstrapped] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
-  const [transcripts, setTranscripts] = useState<CommandTranscriptEntry[]>([]);
+  // Write-only: command transcripts are recorded but no surface renders them
+  // yet. Removing the recording would lose the data a transcript view needs.
+  const [, setTranscripts] = useState<CommandTranscriptEntry[]>([]);
   const [capabilityCheckedAt, setCapabilityCheckedAt] = useState(() => Date.now());
   const capabilityInstances = useMemo(
     () => (activeManifest ? manifestCapabilityInstances(activeManifest) : []),
@@ -459,9 +490,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const confirmationBypassRef = useRef(false);
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
   const [pendingRunApproval, setPendingRunApproval] = useState<{ runId: string; prompt: string } | null>(null);
+  const [tlsFingerprintChange, setTlsFingerprintChange] = useState<{
+    gateway: GatewayProfile;
+    previousFingerprint: string;
+    observedFingerprint: string;
+  } | null>(null);
   const [activityRuns, setActivityRuns] = useState<ActivityRun[]>([]);
+  const activityRunsRef = useRef<ActivityRun[]>([]);
+  useEffect(() => {
+    activityRunsRef.current = activityRuns;
+  }, [activityRuns]);
   const runApprovalResolverRef = useRef<((approved: boolean, feedback?: string) => void) | null>(null);
   const runAbortControllerRef = useRef<AbortController | null>(null);
+  const activeRunTaskIdRef = useRef<string | null>(null);
   const gatewayDownNotifiedRef = useRef(false);
   const authFailureRef = useRef(false);
 
@@ -725,10 +766,46 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             if (isCurrent()) setPairingDetails(details as PairingDetails);
           },
           onHealthCheck: (_healthy) => {
-            // Only on the first connect to this gateway. Reloading on every
-            // reconnect rebuilds the message list underneath the user.
-            if (!isCurrent() || historyLoadedForRef.current === gateway.id) return;
-            void reloadHistoryFor(gateway);
+            if (!isCurrent()) return;
+            const firstConnect = historyLoadedForRef.current !== gateway.id;
+            if (firstConnect) {
+              void reloadHistoryFor(gateway);
+              return;
+            }
+            // Reconnect: freeze any still-streaming placeholder as interrupted,
+            // reload history, and reconcile interrupted bubbles with authoritative
+            // turns so a mid-stream disconnect does not leave a ghost message.
+            const activeRunId = activeRunIdRef.current;
+            if (activeRunId) {
+              setMessages((prev) => markInterrupted(prev, activeRunId));
+            }
+            const previousMessages = messagesRef.current;
+            void (async () => {
+              await reloadHistoryFor(gateway);
+              setMessages((history) => preserveInterruptedAfterReload(history, previousMessages));
+
+              // Settle any runs left unresolved by the disconnect.
+              const client = clientRef.current;
+              if (client?.getRunStatus) {
+                const currentRuns = activityRunsRef.current;
+                const unresolved = currentRuns.filter((run) => run.status === 'unresolved');
+                if (unresolved.length > 0) {
+                  const { runs: settled, changed } = await settleUnresolvedRuns(
+                    client as unknown as RunCapableClient,
+                    currentRuns,
+                  );
+                  if (changed.length > 0) {
+                    patchActivityRuns(() => settled);
+                    for (const run of changed) {
+                      void notifyRunComplete(
+                        run.status === 'complete' ? 'Run complete' : 'Run finished',
+                        run.summary ?? run.status,
+                      );
+                    }
+                  }
+                }
+              }
+            })();
           },
           onError: (message) => {
             if (isCurrent()) setLastError(message);
@@ -736,6 +813,28 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         },
         identityForClient,
       );
+      // TLS fingerprint verify-on-first-use. A changed fingerprint blocks the
+      // connection until the user explicitly approves it.
+      const tofu = checkTlsFingerprintTofu(gateway, gateway.tlsFingerprint);
+      if (tofu.kind === 'first-seen') {
+        const updated = {
+          ...gateway,
+          tlsFingerprint: tofu.fingerprint,
+          tlsFingerprintTrusted: true,
+          tlsFingerprintFirstSeenAt: Date.now(),
+        };
+        gateway = updated;
+        setActiveGateway(updated);
+        void upsertGateway(updated).then(setGateways);
+      } else if (tofu.kind === 'changed') {
+        setTlsFingerprintChange({
+          gateway,
+          previousFingerprint: tofu.previousFingerprint,
+          observedFingerprint: tofu.observedFingerprint,
+        });
+        return;
+      }
+
       clientRef.current = client;
       historyLoadedForRef.current = null;
       applyConnectionPhase('connecting');
@@ -780,7 +879,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         })
         .catch(() => undefined);
     },
-    [reloadHistoryFor, applyStatus, applyConnectionPhase],
+    // patchActivityRuns is a useCallback with [] deps, so its identity is stable
+    // for the provider's lifetime; listing it satisfies exhaustive-deps without
+    // changing when this callback is rebuilt.
+    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns],
   );
 
   const connectGateway = useCallback(
@@ -1129,6 +1231,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const gateway = activeGateway;
       const client = clientRef.current;
       const trimmed = command.trim();
+      // Pre-flight guard: a stale read only declines a retryable action.
+      // Converting to statusRef or the connection reducer needs live-device
+      // verification because it changes when this effect/callback re-runs.
       if (!trimmed || !gateway || !client || status !== 'connected') {
         throw new Error('Connect to a gateway first');
       }
@@ -1313,13 +1418,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           ),
         );
       } else {
-        const userMessage: ChatMessage = {
-          id: createMessageId('user'),
-          role: 'user',
-          text: trimmed,
-          timestamp: Date.now(),
-        };
-        setMessages((prev) => appendBounded(prev, userMessage));
+        setMessages((prev) => addUserMessage(prev, trimmed));
       }
       setIsSending(true);
       setLastError(null);
@@ -1328,15 +1427,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       activeRunIdRef.current = runId;
 
       // Add streaming placeholder
-      setMessages((prev) =>
-        appendBounded(prev, {
-          id: `run-${runId}`,
-          role: 'assistant',
-          text: '',
-          streaming: true,
-          timestamp: Date.now(),
-        }),
-      );
+      setMessages((prev) => addStreamingPlaceholder(prev, runId));
 
       // Declared outside the try so the catch can ask the signal itself
       // whether this failure was the user cancelling.
@@ -1356,17 +1447,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         await client.streamChat(
           conversationMessages,
           (delta) => {
-            setMessages((prev) => {
-              const idx = prev.findIndex((m) => m.id === `run-${runId}`);
-              if (idx < 0) return prev;
-              const copy = [...prev];
-              copy[idx] = {
-                ...copy[idx],
-                text: copy[idx].text + delta,
-                streaming: true,
-              };
-              return copy;
-            });
+            setMessages((prev) => appendStreamDelta(prev, runId, delta));
           },
           {
             sessionId: sessionIdRef.current,
@@ -1374,53 +1455,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             providerId: gateway.providerId,
             signal: abortController.signal,
             onToolCall: (toolCall) => {
-              setMessages((prev) => {
-                const idx = prev.findIndex((m) => m.id === `run-${runId}`);
-                if (idx < 0) return prev;
-                const copy = [...prev];
-                const existing = copy[idx].toolCalls ?? [];
-                const match = existing.findIndex((item) => item.name === toolCall.name);
-                const nextTools =
-                  match >= 0
-                    ? existing.map((item, i) => (i === match ? { ...item, ...toolCall } : item))
-                    : [...existing, toolCall];
-                copy[idx] = { ...copy[idx], toolCalls: nextTools, streaming: true };
-                return copy;
-              });
+              setMessages((prev) => appendToolCallDelta(prev, runId, toolCall));
             },
           },
         );
 
         // Mark as complete
-        setMessages((prev) => {
-          const idx = prev.findIndex((m) => m.id === `run-${runId}`);
-          if (idx < 0) return prev;
-          const copy = [...prev];
-          const tools = copy[idx].toolCalls?.map((tool) =>
-            tool.status === 'running' ? { ...tool, status: 'complete' as const } : tool,
-          );
-          copy[idx] = { ...copy[idx], streaming: false, toolCalls: tools };
-          return copy;
-        });
+        setMessages((prev) => finalizeStreamingMessage(prev, runId));
         setLastError(null);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (isUserAbort(error, abortController.signal)) {
-          // User cancelled — remove the streaming placeholder
-          setMessages((prev) => prev.filter((m) => m.id !== `run-${runId}`));
-        } else {
+        const aborted = isUserAbort(error, abortController.signal);
+        if (aborted) {
+          setMessages((prev) => convertStreamError(prev, runId, message, true));
+        } else if (isConnectionError(error)) {
+          setMessages((prev) => markInterrupted(prev, runId));
           setLastError(message);
-          setMessages((prev) => {
-            const idx = prev.findIndex((m) => m.id === `run-${runId}`);
-            if (idx < 0) return prev;
-            const copy = [...prev];
-            copy[idx] = {
-              ...copy[idx],
-              text: `Error: ${message}`,
-              streaming: false,
-            };
-            return copy;
-          });
+        } else {
+          setMessages((prev) => convertStreamError(prev, runId, message, false));
+          setLastError(message);
         }
       } finally {
         setIsSending(false);
@@ -1445,6 +1498,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     ) => {
       const client = clientRef.current;
       const gateway = activeGatewayRef.current;
+      // Pre-flight guard: a stale read only declines a retryable action.
+      // Converting to statusRef or the connection reducer needs live-device
+      // verification because it changes when this effect/callback re-runs.
       if (
         !client ||
         !gateway ||
@@ -1484,6 +1540,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               prev.map((run) => (run.id === trackedId.current ? { ...run, id: runId } : run)),
             );
             trackedId.current = runId;
+            activeRunTaskIdRef.current = runId;
           },
           onEvent: (event) => {
             const preview = runEventPreview(event);
@@ -1520,38 +1577,28 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           },
         });
 
-        // An unresolved run never reached a terminal state — it may still be
-        // running on the gateway, so it is neither a success nor a failure.
-        const succeeded =
-          !outcome.unresolved && /(complete|succeeded|success|done|finished)/i.test(outcome.status);
         patchRun(trackedId.current, {
-          status: outcome.cancelled
-            ? 'cancelled'
-            : outcome.unresolved
-              ? 'unresolved'
-              : succeeded
-                ? 'complete'
-                : 'failed',
+          status: outcomeToActivityStatus(outcome),
           summary: (outcome.error ?? outcome.result ?? outcome.status ?? '').slice(0, 160) || undefined,
           finishedAt: Date.now(),
         });
 
         if (!outcome.cancelled) {
           const summary = (outcome.error ?? outcome.result ?? outcome.status ?? '').slice(0, 120);
+          const status = outcomeToActivityStatus(outcome);
           void notifyRunComplete(
-            succeeded
+            status === 'complete'
               ? 'Run complete'
-              : outcome.unresolved
+              : status === 'unresolved'
                 ? 'Run unconfirmed'
-                : outcome.status === 'cancelled'
-                  ? 'Run cancelled'
-                  : 'Run finished',
+                : 'Run finished',
             summary || outcome.status,
           );
         }
         return outcome;
       } finally {
         runAbortControllerRef.current = null;
+        activeRunTaskIdRef.current = null;
       }
     },
     [patchActivityRuns, status],
@@ -1559,13 +1606,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const stopActivityRun = useCallback(
     (runId: string) => {
-      const client = clientRef.current;
       // Abort the local driver (denies any pending approval, stops the stream).
       abortAndClear(runAbortControllerRef);
       // Ask the gateway to stop the run server-side (best effort).
-      if (client?.stopRun && !runId.startsWith('local-')) {
-        void client.stopRun(runId).catch(() => undefined);
-      }
+      void serverSideCancelForCommand(clientRef.current, runId);
       patchActivityRuns((prev) =>
         prev.map((run) =>
           run.id === runId && (run.status === 'running' || run.status === 'waiting-approval')
@@ -1587,6 +1631,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const fromQueue = options?.fromQueue === true;
       const client = clientRef.current;
 
+      // Pre-flight guard: a stale read only declines a retryable action.
+      // Converting to statusRef or the connection reducer needs live-device
+      // verification because it changes when this effect/callback re-runs.
       if (!fromQueue && (!activeGateway || !client || status !== 'connected')) {
         queueOfflineInput(trimmed);
         return;
@@ -1733,6 +1780,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
   );
 
   useEffect(() => {
+    // Pre-flight guard: a stale read only pauses a retryable flush.
+    // Converting to statusRef or the connection reducer needs live-device
+    // verification because it changes when this effect re-runs.
     if (status !== 'connected' || isSending || isCommandRunning || flushingOfflineRef.current || offlineQueueRef.current.length === 0) {
       return;
     }
@@ -1981,13 +2031,6 @@ const response = await executeGatewaySlashCommand(trimmed, {
     return () => subscription.remove();
   }, [reconnectLastKnownGateway]);
 
-  const completeOnboarding = useCallback(async () => {
-    const next = await saveAppSettings({ onboardingComplete: true });
-    setSettings(next);
-    setNeedsOnboarding(false);
-    applyConnectionPhase('idle');
-  }, [applyConnectionPhase]);
-
   const setAutoConnect = useCallback(async (enabled: boolean) => {
     const next = await saveAppSettings({ autoConnect: enabled });
     setSettings(next);
@@ -2005,6 +2048,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
     abortAndClear(abortControllerRef);
     abortAndClear(runAbortControllerRef);
 
+    // Best-effort server-side stop for agentic runs. Chat streams are stopped
+    // by the abort signal above (adapters listen to it and call session.abort).
+    void serverSideCancelForCommand(clientRef.current, activeRunTaskIdRef.current);
+
     if (activeGateway) {
       const sessionKey = activeGateway.sessionKey ?? sessionIdRef.current ?? 'default';
       void updateTranscript(activeGateway.id, sessionKey, id, {
@@ -2016,10 +2063,34 @@ const response = await executeGatewaySlashCommand(trimmed, {
     void reloadHistory();
   }, [activeGateway, reloadHistory]);
 
+  const approveTlsFingerprintChange = useCallback(async () => {
+    if (!tlsFingerprintChange) return;
+    const { gateway, observedFingerprint } = tlsFingerprintChange;
+    const updated = {
+      ...gateway,
+      tlsFingerprint: observedFingerprint,
+      tlsFingerprintTrusted: true,
+      tlsFingerprintFirstSeenAt: Date.now(),
+    };
+    setTlsFingerprintChange(null);
+    setActiveGateway(updated);
+    const next = await upsertGateway(updated);
+    setGateways(next);
+    await attachClient(updated);
+  }, [tlsFingerprintChange, attachClient]);
+
+  const rejectTlsFingerprintChange = useCallback(() => {
+    setTlsFingerprintChange(null);
+    disconnectGateway();
+  }, [disconnectGateway]);
+
   const refreshCapabilities = useCallback(async () => {
     if (!activeGateway) return;
     try {
       const client = clientRef.current;
+      // Pre-flight guard: a stale read only skips a retryable refresh.
+      // Converting to statusRef or the connection reducer needs live-device
+      // verification because it changes when this effect/callback re-runs.
       if (client && status === 'connected') {
         await client.healthCheck();
         void client.getCapabilities().then(setLiveCapabilities).catch(() => undefined);
@@ -2148,7 +2219,6 @@ const response = await executeGatewaySlashCommand(trimmed, {
       messages,
       isSending,
       isCommandRunning,
-      runningCommandLabel,
       lastError,
       deviceId,
       pairingDetails,
@@ -2160,7 +2230,6 @@ const response = await executeGatewaySlashCommand(trimmed, {
       deleteGateway,
       connectGateway,
       disconnectGateway,
-      sendMessage,
       sendChatInput,
       stopStreaming,
       reloadHistory,
@@ -2170,13 +2239,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
       selectedBackendId,
       selectBackend,
       runAgentCommand,
-      liveCapabilities,
       dynamicCommands,
       setupFromPcAddress,
       retryAutoConnect,
-      completeOnboarding,
       setAutoConnect,
-      transcripts,
       recentCommands,
       retryCommand,
       cancelCommand,
@@ -2187,6 +2253,15 @@ const response = await executeGatewaySlashCommand(trimmed, {
       cancelPendingConfirmation,
       pendingRunApproval,
       resolveRunApproval,
+      tlsFingerprintChange: tlsFingerprintChange
+        ? {
+            previousFingerprint: tlsFingerprintChange.previousFingerprint,
+            observedFingerprint: tlsFingerprintChange.observedFingerprint,
+            gatewayName: tlsFingerprintChange.gateway.name,
+          }
+        : null,
+      approveTlsFingerprintChange,
+      rejectTlsFingerprintChange,
       runTask,
       activityRuns,
       stopActivityRun,
@@ -2211,17 +2286,21 @@ const response = await executeGatewaySlashCommand(trimmed, {
     }),
     [
       gateways, activeGateway, activeHello, status, statusDetail, connectionPhase, probeMessage,
-      messages, isSending, isCommandRunning, runningCommandLabel, lastError, deviceId, pairingDetails,
+      messages, isSending, isCommandRunning, lastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
-      connectGateway, disconnectGateway, sendMessage, sendChatInput, stopStreaming, reloadHistory,
-      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, runAgentCommand, setupFromPcAddress, retryAutoConnect, completeOnboarding,
-      setAutoConnect, transcripts, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
+      connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
+      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, runAgentCommand, setupFromPcAddress, retryAutoConnect,
+      setAutoConnect, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
-      pendingRunApproval, resolveRunApproval, runTask, activityRuns, stopActivityRun, modelPicker, openModelPicker, closeModelPicker,
+      pendingRunApproval, resolveRunApproval,
+      approveTlsFingerprintChange,
+      rejectTlsFingerprintChange,
+      runTask, activityRuns, stopActivityRun, modelPicker, openModelPicker, closeModelPicker,
       selectModel, modelCatalog, sessionSelector,
       openSessionSelector, closeSessionSelector, selectSession, sessionList, currentSessionId,
       historyLoading, createNewSession, deleteSessionById, deleteLocalMessage,
-      liveCapabilities, dynamicCommands,
+      tlsFingerprintChange,
+      dynamicCommands,
       hasMoreHistory, loadingEarlierHistory, loadEarlierMessages,
     ],
   );

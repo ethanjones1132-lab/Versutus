@@ -52,3 +52,15 @@ export function isGatewayTokenRequiredMessage(message?: string | null): boolean 
   const normalized = message.toLowerCase();
   return GATEWAY_TOKEN_REQUIRED_MARKERS.some((marker) => normalized.includes(marker));
 }
+
+/**
+ * True when an error looks like a transport/connection failure rather than a
+ * gateway-side application error. Used to decide whether a mid-stream failure
+ * should be marked as interrupted (recoverable) rather than failed.
+ */
+export function isConnectionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(fetch|network|connection|reachable|timed out|timeout|econnrefused|ENOTFOUND|getaddrinfo|failed to fetch|aborted by peer|network error|stream closed unexpectedly)/i.test(
+    message,
+  );
+}

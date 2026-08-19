@@ -1,5 +1,6 @@
 import { type Href, useRouter } from 'expo-router';
-import { Alert, StyleSheet, View } from 'react-native';
+import { useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 
 import * as Haptics from 'expo-haptics';
 
@@ -7,11 +8,12 @@ import { PulsingDot, statusColor } from '@/components/connection-badge';
 import { CapabilityHive } from '@/components/gateway/capability-hive';
 import { CompactGatewayList } from '@/components/gateway/compact-gateway-list';
 import { GatewayCapabilities } from '@/components/gateway/gateway-capabilities';
-import { Badge, Button, Card, Icon, StatTile, Text } from '@/components/ui';
+import { Badge, Button, Card, ConfirmSheet, ErrorCard, Icon, StatTile, Text } from '@/components/ui';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
 import { useTokens } from '@/hooks/use-tokens';
+import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
 export function GatewayHomeDashboard() {
@@ -33,6 +35,7 @@ export function GatewayHomeDashboard() {
     pendingRunApproval,
   } = useGateway();
   const reachability = useGatewayReachability({ gateways, activeGateway, status });
+  const [deleteCandidate, setDeleteCandidate] = useState<GatewayProfile | null>(null);
 
   const connected = status === 'connected' && !!activeGateway;
   const activeLabel = activeGateway?.name ?? 'No active gateway';
@@ -52,15 +55,14 @@ export function GatewayHomeDashboard() {
         : 'Disconnected';
 
   function confirmDelete(gateway: GatewayProfile) {
-    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-    Alert.alert('Remove gateway?', `${gateway.name} will stay available if discovered again.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Remove',
-        style: 'destructive',
-        onPress: () => void deleteGateway(gateway.id),
-      },
-    ]);
+    setDeleteCandidate(gateway);
+  }
+
+  function executeDelete() {
+    if (deleteCandidate) {
+      void deleteGateway(deleteCandidate.id);
+    }
+    setDeleteCandidate(null);
   }
 
   return (
@@ -107,12 +109,11 @@ export function GatewayHomeDashboard() {
         ) : null}
 
         {lastError ? (
-          // Long-pressable and generously clipped: this string is what the user
-          // has to relay when a connection fails, and a truncated cause is
-          // worth nothing.
-          <Text variant="caption" numberOfLines={8} selectable style={styles.onGlassTertiary}>
-            {lastError}
-          </Text>
+          <ErrorCard
+            {...humanizeGatewayError(lastError)}
+            retryLabel="Retry"
+            onRetry={() => void retryAutoConnect()}
+          />
         ) : null}
 
         <View style={styles.primaryActions}>
@@ -270,6 +271,16 @@ export function GatewayHomeDashboard() {
           <Button label="Open chat to manage channels" variant="ghost" onPress={() => router.push('/chat')} style={{ marginTop: Spacing.one }} />
         </Card>
       )}
+
+      <ConfirmSheet
+        visible={deleteCandidate !== null}
+        title="Remove gateway?"
+        message={`${deleteCandidate?.name ?? 'This gateway'} will stay available if discovered again.`}
+        confirmLabel="Remove"
+        danger
+        onCancel={() => setDeleteCandidate(null)}
+        onConfirm={executeDelete}
+      />
     </>
   );
 }

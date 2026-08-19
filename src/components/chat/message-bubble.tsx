@@ -17,6 +17,8 @@ type MessageBubbleProps = {
   message: ChatMessage;
   onRetry?: (entry: Partial<CommandTranscriptEntry> & { input: string }) => void;
   onCancel?: (id: string) => void;
+  /** Resume an assistant bubble left interrupted by a mid-stream disconnect. */
+  onResume?: (message: ChatMessage) => void;
   /** Long-press opens the message action sheet. */
   onLongPress?: (message: ChatMessage) => void;
   /** Gateway display name; its initial becomes the assistant monogram. */
@@ -35,7 +37,7 @@ const COMMAND_STATUS_TONE = {
   error: 'danger',
 } as const;
 
-export function MessageBubble({ message, onRetry, onCancel, onLongPress, identity }: MessageBubbleProps) {
+export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPress, identity }: MessageBubbleProps) {
   const tokens = useTokens();
   const isUser = message.role === 'user';
   const isCommand = !!message.command;
@@ -53,6 +55,7 @@ export function MessageBubble({ message, onRetry, onCancel, onLongPress, identit
   };
 
   const body = message.streaming ? `${message.text} ▍` : message.text;
+  const isInterrupted = !!message.interrupted;
 
   return (
     <Animated.View
@@ -82,11 +85,13 @@ export function MessageBubble({ message, onRetry, onCancel, onLongPress, identit
             isCommand && styles.commandBubble,
             isUser
               ? { backgroundColor: tokens.accentMuted, borderColor: tokens.accentWarm }
-              : message.streaming || commandStatus === 'running'
-                ? { borderColor: tokens.accentWarmMuted }
-                : commandStatus === 'error'
-                  ? { borderColor: tokens.statusDisconnected }
-                  : { borderColor: tokens.glassBorder },
+              : isInterrupted
+                ? { borderColor: tokens.statusDisconnected }
+                : message.streaming || commandStatus === 'running'
+                  ? { borderColor: tokens.accentWarmMuted }
+                  : commandStatus === 'error'
+                    ? { borderColor: tokens.statusDisconnected }
+                    : { borderColor: tokens.glassBorder },
           ]}>
           {message.queued ? (
             <Badge label="Queued" tone="warning" dot={false} />
@@ -115,6 +120,10 @@ export function MessageBubble({ message, onRetry, onCancel, onLongPress, identit
             <ToolCallCard key={`${toolCall.name}-${index}`} toolCall={toolCall} />
           ))}
 
+          {isInterrupted ? (
+            <Badge label="Interrupted" tone="warning" dot={false} />
+          ) : null}
+
           {isCommand ? (
             <Text color="primary" variant="caption">
               {body}
@@ -126,6 +135,19 @@ export function MessageBubble({ message, onRetry, onCancel, onLongPress, identit
           ) : (
             <MarkdownText text={body} />
           )}
+
+          {isInterrupted && onResume ? (
+            <PressableScale
+              onPress={async () => {
+                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                onResume(message);
+              }}
+              style={styles.actionButton}>
+              <Text variant="caption" color="accent">
+                Resume
+              </Text>
+            </PressableScale>
+          ) : null}
 
           {message.command?.raw ? (
             <View style={styles.rawSection}>

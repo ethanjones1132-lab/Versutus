@@ -3,17 +3,19 @@ import { Link, type Href } from 'expo-router';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { EnvironmentsSection } from '@/components/gateway/environments-section';
+import { GatewayManagementSection } from '@/components/gateway/gateway-management-section';
 import { ProvidersSection } from '@/components/gateway/providers-section';
 import { Button, Card, Chip, Screen, SegmentedControl, Text } from '@/components/ui';
 import { useGateway } from '@/context/gateway-provider';
 import { Spacing } from '@/constants/tokens';
 
-type Section = 'providers' | 'environments' | 'advanced';
+type Section = 'providers' | 'environments' | 'capabilities' | 'management';
 
 const SECTIONS = [
   { key: 'providers' as const, label: 'Providers' },
   { key: 'environments' as const, label: 'CLI' },
-  { key: 'advanced' as const, label: 'Advanced' },
+  { key: 'capabilities' as const, label: 'Capabilities' },
+  { key: 'management' as const, label: 'Manage' },
 ];
 
 /**
@@ -75,7 +77,7 @@ export default function GatewaySetupScreen() {
           </>
         ) : null}
 
-        {section === 'advanced' ? (
+        {section === 'capabilities' ? (
           <Card padding={Spacing.three} style={styles.card}>
             <Text variant="title">Capability registry</Text>
             <Text variant="caption">
@@ -86,6 +88,15 @@ export default function GatewaySetupScreen() {
               <Button label="Open capability editor" variant="secondary" />
             </Link>
           </Card>
+        ) : null}
+
+        {section === 'management' ? (
+          <>
+            <Text variant="caption">
+              Saved gateways, auto-connect, and local discovery.
+            </Text>
+            <GatewayManagementSection />
+          </>
         ) : null}
       </ScrollView>
     </Screen>
