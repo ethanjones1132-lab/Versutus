@@ -199,10 +199,14 @@ into someone else's session. It can still open its own.
 Rejected in taking this decision: a config flag defaulting off, and a distinct
 scope on the device token. Either remains available if the posture changes.
 
-### 2.4 Phase 7 (bots) — unchanged
+### 2.4 Phase 7 (bots) — SUPERSEDED by ADRs 0004–0006
 
-Still gated on the upstream-fork decision. Nothing in this work changed the
-analysis in `docs/capability-gap-audit-2026-08-19.md` §4.
+No longer gated on an upstream fork. `docs/adr/0004-bots-are-hermes-profiles.md`
+rejects §4's premise outright: a Bot is a Hermes **profile**, not an entry in
+`runner.adapters`, and Hermes already owns the multiplex address that routes to
+one. ADRs 0004–0006 are the current design; §4's tiering and its fork cost no
+longer apply. `docs/handoff-phase7-bots-2026-08-19.md` carries a banner to the
+same effect.
 
 ---
 

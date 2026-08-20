@@ -1,5 +1,34 @@
 # Handoff — Phase 7 / §2.4: Hermes bots API (Tier 1, behind a Gate front)
 
+> ## SUPERSEDED — read this first
+>
+> This handoff was written from `docs/capability-gap-audit-2026-08-19.md` §4,
+> which treats a Bot as an entry in `runner.adapters` — a *messaging channel* —
+> and therefore requires forking Hermes to add `GET /api/bots`.
+>
+> **That premise is rejected.** `docs/adr/0004-bots-are-hermes-profiles.md` names
+> this handoff explicitly: "Treating `runner.adapters` (channels) as Bots — that
+> was the Phase 7 handoff's object, and it is the wrong one." A Bot is a Hermes
+> **profile** (`~/.hermes/profiles/<name>/`), which is what carries @mention,
+> Bot Chat, `[bot:<name>]` routines, soul and scoped sessions.
+>
+> The ADRs are the current design. Read them and `CONTEXT.md` instead of §4:
+>
+> - `docs/adr/0004-bots-are-hermes-profiles.md` — what a Bot is
+> - `docs/adr/0005-bot-routing-via-hermes-multiplex.md` — routing via `/p/<name>/`
+> - `docs/adr/0006-bot-listen-keys-from-profile-env.md` — where listen keys come from
+>
+> **The upstream fork is not needed.** Hermes already owns the multiplex address
+> (`gateway.multiplex_profiles`), so the blocking decision this document opens
+> with does not apply. Do not start a Python fork on the strength of §4.
+>
+> What survives below: the in-repo Gate-front mechanics (§"Split the work" step
+> (b) onward) are still accurate as *patterns* — the allowlist trap, resolving
+> by capability rather than backend position, manifest advertisement gated on
+> `backendCan`, the RPC method table, and the new capability group def. Apply
+> them to the profile-based design, not to `/api/bots`.
+
+
 For a fresh agent picking up the bots work in `C:\Projects\Versutus`.
 Branch `master`, clean, `npm run verify` green (494 jest, 443 gate tests).
 Several commits are **unpushed** — check `git status` before assuming.
