@@ -53,7 +53,7 @@ export type GatewayCommand = {
   aliases?: string[];
 };
 
-export type GatewayCapabilityStatus = 'available' | 'unavailable' | 'unknown';
+export type GatewayCapabilityStatus = 'available' | 'unavailable' | 'unknown' | 'undeclared';
 
 export type GatewayCapabilityGroup = {
   id: string;
@@ -992,6 +992,24 @@ export function buildCapabilitySnapshot(
           availableCount: readyProviders,
           totalCount: providerRecords.length,
           note: `${readyProviders} of ${providerRecords.length} ready`,
+        };
+      }
+
+      // Six groups (channels, plugins, logs, devices, artifacts, nodes) declare
+      // no `features` or `endpoints`, so `groupIsAdvertised` can never return
+      // true for them and their only route to ready is a registered capability
+      // instance. Reporting them as "Not offered" put six capabilities that
+      // exist nowhere into the denominator, making the headline permanently
+      // understate what the gateway actually does.
+      const canEverMatch = Boolean(definition.features?.length || definition.endpoints?.length);
+      if (!canEverMatch && !instanceFamilies.has(definition.id)) {
+        return {
+          id: definition.id,
+          label: definition.label,
+          status: 'undeclared',
+          availableCount: 0,
+          totalCount,
+          note: 'No gateway defines this yet',
         };
       }
 

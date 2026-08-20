@@ -63,6 +63,28 @@ export default function GatewaySettingsScreen() {
           </Card>
         ) : null}
 
+        <Card variant="surface" padding={Spacing.three} style={styles.card}>
+          <View style={styles.sectionHeading}>
+            <View style={styles.sectionTitle}>
+              <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+                This build
+              </Text>
+              <Text variant="headline">Runtime environment</Text>
+            </View>
+          </View>
+          <Text color="secondary">
+            What this build&apos;s engine actually provides. Tests run elsewhere; only
+            the device can answer for the device.
+          </Text>
+          <Link href="/gateway/diagnostics" asChild>
+            <Pressable accessibilityRole="button">
+              <Text variant="link" color="accent">
+                Check runtime environment
+              </Text>
+            </Pressable>
+          </Link>
+        </Card>
+
         {activeGateway ? (
           <>
             <TransportSecurityCard url={activeGateway.url} tlsFingerprint={activeGateway.tlsFingerprint} />

@@ -16,9 +16,12 @@ export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilityS
     return () => clearInterval(timer);
   }, []);
 
+  // Undeclared groups exist in no gateway this app knows; they are not
+  // capabilities the connected one lacks, so they stay out of the ratio.
+  const counted = useMemo(() => groups.filter((group) => group.status !== 'undeclared'), [groups]);
   const readyGroups = useMemo(
-    () => groups.filter((group) => group.status === 'ready' || group.status === 'available'),
-    [groups],
+    () => counted.filter((group) => group.status === 'ready' || group.status === 'available'),
+    [counted],
   );
   const otherGroups = useMemo(
     () => groups.filter((group) => group.status !== 'ready' && group.status !== 'available'),
@@ -34,7 +37,7 @@ export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilityS
         <Text variant="caption" style={styles.onGlassPrimary}>Gateway capabilities</Text>
         <View style={{ alignItems: 'flex-end' }}>
           <Text variant="caption" style={styles.onGlassSecondary}>
-            {readyGroups.length}/{groups.length} ready
+            {readyGroups.length}/{counted.length} ready
           </Text>
           <Text variant="caption" color="tertiary" style={{ fontSize: 10 }}>
             {snapStatus} • {staleMinutes}m ago

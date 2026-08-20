@@ -324,7 +324,13 @@ export type GatewayMethodAvailability = {
 export type GatewayCapabilityGroup = {
   id: string;
   label: string;
-  status: 'available' | 'unavailable' | 'unknown' | 'ready' | 'missing-scope' | 'unsupported' | 'warming' | 'stale' | 'partial' | 'unhealthy' | 'experimental';
+  /**
+   * `undeclared` means no gateway this app knows how to talk to defines the
+   * group at all — distinct from `unsupported`, which means a real capability
+   * this gateway does not offer. Undeclared groups are excluded from the
+   * ready/total headline; counting them made the figure permanently wrong.
+   */
+  status: 'available' | 'unavailable' | 'unknown' | 'ready' | 'missing-scope' | 'unsupported' | 'warming' | 'stale' | 'partial' | 'unhealthy' | 'experimental' | 'undeclared';
   availableCount?: number;
   totalCount?: number;
   note?: string;

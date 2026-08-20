@@ -10,7 +10,19 @@ _Avoid_: server, backend, node
 
 **Gateway profile**:
 The app's stored configuration for a gateway (name, URL, auth token, kind, agent).
-_Avoid_: gateway (when meaning the stored config)
+_Avoid_: gateway (when meaning the stored config), profile (alone), bot
+
+**Bot**:
+A named, isolated agent with its own soul, provider/model pin, avatar, sessions, memory, skills, and crons. A Bot **is** a Hermes profile (`~/.hermes/profiles/<name>/`); Bot Mode is a UI over that primitive, not a second store. A non-Hermes CLI environment is not a Bot.
+_Avoid_: profile (alone), gateway profile, channel, capability instance, platform adapter, CLI environment (when meaning a Bot)
+
+**Soul**:
+A Bot's standing personality and instructions (Hermes `SOUL.md`).
+_Avoid_: system prompt (a per-request overlay), personality (the unused gateway-detection plan term)
+
+**Listen key**:
+A Bot's Hermes API-server credential, used only to address that Bot through multiplex. Distinct from the provider keys the Bot inherits or owns.
+_Avoid_: API key (alone), token, provider credential
 
 **Connection status**:
 The live state of the connection to a gateway: disconnected, connecting, reconnecting, connected, pairing.
@@ -84,6 +96,11 @@ _Avoid_: push (which implies server delivery)
 - A **connection status** describes the live connection to a **gateway**; a **connection phase** describes the journey to it
 - A **reconnect** reuses the same endpoint and **session**; an **auto-connect retry** re-runs discovery and **probes**
 - A **session** belongs to a **gateway** and is preserved across **reconnects**
+- A **Bot** has many **sessions**, one **soul**, and its own crons; it is not a **gateway profile**
+- A **soul** belongs to exactly one **Bot**
+- A **Bot** lives on one Hermes **CLI environment**; Codex, Claude Code, and OpenCode are not Bots
+- Many **Bots** are reached through one **gateway**; a Bot is not its own **gateway profile**
+- A **Bot** is addressed with its own **listen key**; provider credentials stay in the Hermes profile
 - A **command transcript** is keyed by gateway + **session**
 - A **capability instance** belongs to exactly one **capability kind**
 - A **provider** owns registration, credentials, readiness, and its catalog. Agents and CLI environments only reference `{providerId, modelId}`.
@@ -98,9 +115,15 @@ _Avoid_: push (which implies server delivery)
 > **Dev:** "When the phone reconnects after a wifi blip, do we re-probe the network?"
 > **Domain expert:** "No — a reconnect just retries the same gateway. Only when that fails do we fall back to the auto-connect retry, which probes candidates again."
 
+> **Dev:** "If I add a Bot, is that another gateway profile?"
+> **Domain expert:** "No — the gateway profile is how the phone remembers the Gate. A Bot is an isolated agent living on that gateway: its own soul, sessions, and crons."
+
 ## Flagged ambiguities
 
 - "retry" and "reconnect" were used interchangeably — resolved: they are distinct mechanisms with different costs (endpoint retry vs discovery loop)
 - "session" meant both the conversation context and a live terminal shell — resolved: session vs terminal session
 - "gateway" meant both the reachable endpoint and its stored config — resolved: gateway vs gateway profile
 - "push" meant both local notifications and server-delivered push — resolved: local notification vs true push (relay-delivered, Phase D)
+- "profile" meant three things — resolved: **gateway profile** (phone's stored gateway), **Bot** (Hermes profile / Bot Mode agent), **provider profile** (`providers.profiles.list` connection template). Never say "profile" alone.
+- "bot" was briefly used for Discord/Telegram platform adapters (`runner.adapters`) — resolved: those are channels. A Bot is a Hermes profile.
+- A Bot that is "just a CLI backend" (Codex/Claude/OpenCode wearing the roster UI) is deferred — a Bot is a Hermes profile. See ADR 0004.

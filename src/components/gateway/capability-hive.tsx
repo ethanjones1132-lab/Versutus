@@ -30,7 +30,10 @@ export function CapabilityHive({
 }) {
   const tokens = useTokens();
   const [selected, setSelected] = useState<string | null>(null);
-  const ready = groups.filter((group) => group.status === 'ready' || group.status === 'available').length;
+  // Undeclared groups are not capabilities this gateway is missing — nothing
+  // defines them — so they belong in neither half of the ratio.
+  const counted = groups.filter((group) => group.status !== 'undeclared');
+  const ready = counted.filter((group) => group.status === 'ready' || group.status === 'available').length;
   const selectedGroup = selected ? groups.find((group) => group.id === selected) : undefined;
   const showBusy = status === 'warming' || status === 'partial';
 
@@ -54,7 +57,7 @@ export function CapabilityHive({
       </View>
       <View style={styles.summary}>
         <Text variant="micro" color="accentWarm">
-          {ready}/{groups.length} ready
+          {ready}/{counted.length} ready
         </Text>
         <Text variant="micro" color="tertiary" numberOfLines={1} style={styles.detail}>
           {selectedGroup ? selectedGroup.label : status}

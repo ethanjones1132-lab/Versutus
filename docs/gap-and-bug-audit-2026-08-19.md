@@ -141,20 +141,28 @@ in this area do not surface. Worth a pass to separate the two.
 
 ## 2. Gaps
 
-### 2.1 There is no device-level verification loop — the top gap
+### 2.1 There is no device-level verification loop — FIXED
 
 This repo can verify: Node unit tests, Node gate tests, types, lint (partially,
 per §1.4), and live HTTP against a running Gate **from Node**. It cannot verify
 anything about the JS environment the app actually runs in. §0 and §1.1–§1.3 all
 live in that blind spot.
 
-Cheapest meaningful fix: a dev-only screen that reports which globals exist
+**Fixed.** `src/lib/runtime-environment.ts` probes the engine and
+`src/app/gateway/diagnostics.tsx` surfaces it at Settings → Runtime environment.
+It ships in **release** builds deliberately: `src/app/dev/*` redirects away
+outside `__DEV__`, and the release build is the one whose engine is in question.
+The live check reads the gateway's `/health` through the installed streaming
+fetch and asserts a reader exists — the exact capability whose absence broke
+streaming, which no global-presence check can answer.
+
+The original proposal, for the record: a dev-only screen that reports which globals exist
 (`fetch().body`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`, `ReadableStream`)
 and runs one real SSE round-trip against the connected Gate. The `/dev` route
 group already exists (`src/app/dev/`). That converts an entire class of
 unverifiable assumption into a five-second check on the device in your hand.
 
-### 2.2 The capability denominator — Phase 6, now measurable
+### 2.2 The capability denominator — FIXED
 
 Computed from the live manifest after the restart:
 
@@ -164,10 +172,11 @@ Computed from the live manifest after the restart:
 **Defined nowhere (6):** `channels`, `plugins`, `logs`, `devices`, `artifacts`,
 `nodes`
 
-So the honest headline is **12 of 15**, not 12 of 21. The six undefined groups
-have no `features`/`endpoints` keys (`src/lib/gateway/dashboard.ts:852-855,
-871-872`) and can never resolve. Phase 6 is now purely presentational — the
-number it would fix is the only thing still wrong about it.
+**Fixed.** The six now report a distinct `undeclared` status and are excluded
+from both halves of the ratio, so the headline reads **12 of 15**. The
+distinction that matters is preserved: `unsupported` means a real capability
+this gateway does not offer, `undeclared` means nothing defines it anywhere. A
+registered capability instance still promotes a group out of it.
 
 ### 2.3 The terminal is remote code execution — DECIDED: accepted as-is
 
@@ -224,7 +233,7 @@ found here, and is blocked on a decision this work cannot make.
 
 | # | Finding | Severity | Effort |
 |---|---|---|---|
-| 1 | §2.1 No device-level verification loop | **High** — hides the whole §1.1–§1.3 class | Small (one dev screen) |
+| — | §2.1 Device-level verification loop | **Fixed** — Settings → Runtime environment | Closed |
 | 2 | §1.1 `btoa`/`atob`/`TextEncoder` unverified on device | **High if wrong** — pairing breaks | Trivial to check once §2.1 exists |
 | — | §2.3 Terminal RCE posture | **Decided** — accepted as-is, 2026-08-19 | Closed |
 | 4 | §1.2 Terminal drops output past 64KB | Medium — silent data loss | Small |
@@ -232,7 +241,7 @@ found here, and is blocked on a decision this work cannot make.
 | 6 | §1.3 Shell tab fails silently | Medium | Trivial |
 | 7 | §1.5 Terminal input unbound to owner | Low today | Small; folds into §2.3 |
 | 8 | §1.6 Swallowed rejections | Low, diffuse | Medium |
-| 9 | §2.2 Capability denominator | Cosmetic | Small |
+| — | §2.2 Capability denominator | **Fixed** — undeclared groups excluded | Closed |
 | — | §2.4 Phase 7 (bots) | Carried forward — unranked | Blocked on the upstream-fork decision, not on effort |
 
 ## 5. Deliberately not findings
