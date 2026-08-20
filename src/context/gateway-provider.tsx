@@ -31,6 +31,7 @@ import {
   prependEarlier,
 } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
+import { BOT_CHAT_TITLE, ensureBotChat, type PublicBot } from '@/lib/gateway/bots';
 import { effectiveModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   categorizeProbeError,
@@ -153,6 +154,10 @@ type GatewayContextValue = {
   selectedBackendId: string | undefined;
   /** Route chat and sessions through a different native environment. */
   selectBackend: (backendId: string | undefined) => void;
+  selectedBotId: string | undefined;
+  listBots: () => Promise<import('@/lib/gateway/bots').PublicBot[]>;
+  openBot: (botId: string) => Promise<void>;
+  clearBot: () => void;
   runAgentCommand: (command: string, options?: { onDelta?: (delta: string) => void }) => Promise<string>;
   dynamicCommands: GatewayCapabilityCommand[];
   deleteGateway: (id: string) => Promise<void>;
@@ -210,7 +215,7 @@ type GatewayContextValue = {
   /** True while session history is being (re)loaded — drives chat skeletons. */
   historyLoading: boolean;
   /** Create a fresh session on the gateway and make it current. */
-  createNewSession: () => Promise<void>;
+  createNewSession: (title?: string) => Promise<void>;
   /** Delete a session on the gateway (when the adapter supports it). */
   deleteSessionById: (sessionId: string) => Promise<void>;
   /** Remove a message from the local view (not propagated to the gateway). */
@@ -435,6 +440,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [lastError, setLastError] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [selectedBackendId, setSelectedBackendId] = useState<string | undefined>(undefined);
+  const [selectedBotId, setSelectedBotId] = useState<string | undefined>(undefined);
   const [pairingDetails, setPairingDetails] = useState<PairingDetails | null>(null);
   const [liveCapabilities, setLiveCapabilities] = useState<GatewayCapabilities | null>(null);
   const [activeManifest, setActiveManifest] = useState<GatewayManifest | null>(null);
@@ -1266,9 +1272,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    */
   const selectBackend = useCallback(
     (backendId: string | undefined) => {
-      const client = clientRef.current as { setBackendId?: (id: string | undefined) => void } | null;
+      const client = clientRef.current as (PortalClient & { setBackendId?: (id: string | undefined) => void }) | null;
       client?.setBackendId?.(backendId);
+      client?.setBotId?.(undefined);
       setSelectedBackendId(backendId);
+      setSelectedBotId(undefined);
       sessionIdRef.current = undefined;
       setCurrentSessionId(undefined);
       setMessages([]);
@@ -2223,11 +2231,49 @@ const response = await executeGatewaySlashCommand(trimmed, {
     }
   }, [closeSessionSelector, activeGateway, reloadHistoryFor]);
 
-  const createNewSession = useCallback(async () => {
+  const listBots = useCallback(async (): Promise<PublicBot[]> => {
+    const client = clientRef.current;
+    if (!client?.listBots) return [];
+    return client.listBots();
+  }, []);
+
+  const clearBot = useCallback(() => {
+    clientRef.current?.setBotId?.(undefined);
+    setSelectedBotId(undefined);
+  }, []);
+
+  const openBot = useCallback(async (botId: string) => {
+    const client = clientRef.current;
+    if (!client?.setBotId || !client.createSession) {
+      setLastError('This gateway does not expose bots.');
+      return;
+    }
+    client.setBotId(botId);
+    setSelectedBotId(botId);
+    try {
+      const sessions = await client.getSessions(200).catch(() => [] as HermesSession[]);
+      setSessionList(sessions);
+      const chat = await ensureBotChat(sessions, (title) => client.createSession!(title));
+      sessionIdRef.current = chat.id;
+      client.setSessionId(chat.id);
+      setCurrentSessionId(chat.id);
+      if (!sessions.some((session) => session.id === chat.id)) {
+        setSessionList((prev) => [chat, ...prev]);
+      }
+      if (activeGateway) void reloadHistoryFor(activeGateway);
+    } catch (error) {
+      client.setBotId(undefined);
+      setSelectedBotId(undefined);
+      setLastError(error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }, [activeGateway, reloadHistoryFor]);
+
+  const createNewSession = useCallback(async (title?: string) => {
     const client = clientRef.current;
     if (!client?.createSession) return;
     try {
-      const created = await client.createSession();
+      const created = await client.createSession(title);
       sessionIdRef.current = created.id;
       setCurrentSessionId(created.id);
       setMessages([]);
@@ -2299,6 +2345,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
       backends,
       selectedBackendId,
       selectBackend,
+      selectedBotId,
+      listBots,
+      openBot,
+      clearBot,
       runAgentCommand,
       dynamicCommands,
       setupFromPcAddress,
@@ -2350,7 +2400,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       messages, isSending, isCommandRunning, lastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, runAgentCommand, setupFromPcAddress, retryAutoConnect,
+      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, openBot, clearBot, runAgentCommand, setupFromPcAddress, retryAutoConnect,
       setAutoConnect, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

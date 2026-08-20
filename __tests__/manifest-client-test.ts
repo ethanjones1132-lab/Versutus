@@ -437,6 +437,64 @@ describe('ManifestClient sessions and runs when advertised', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain('/api/sessions/abc/messages?limit=20');
   });
 
+  test('getSessions appends bot= when a bot is selected', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ object: 'list', data: [] }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', sessions: '/v1/sessions' });
+    client.setBotId('researcher');
+    await client.getSessions(10);
+    expect(String(fetchMock.mock.calls[0][0])).toContain('bot=researcher');
+  });
+
+  test('createSession posts bot in the body', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ id: 's2' }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', sessions: '/v1/sessions' });
+    client.setBotId('default');
+    await client.createSession('notes');
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.bot).toBe('default');
+  });
+
+  test('createSession from a Bot does not clear botId', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ id: 's9', title: 'scratch' }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', sessions: '/v1/sessions' });
+    client.setBotId('researcher');
+    await client.createSession('scratch');
+    expect(client.botId).toBe('researcher');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).bot).toBe('researcher');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).title).toBe('scratch');
+  });
+
+  test('listBots GETs endpoints.bots and does not resume a session', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        object: 'list',
+        data: [{ id: 'default', displayName: 'Harumesu', routable: true }],
+      }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', bots: '/v1/bots' });
+    const bots = await client.listBots();
+    expect(bots[0].id).toBe('default');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/v1/bots');
+  });
+
   test('stopRun POSTs the advertised stopRun path with the run id', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

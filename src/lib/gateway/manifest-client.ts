@@ -43,6 +43,7 @@ export class ManifestClient implements PortalClient {
   private detail = '';
   private currentSessionId: string | undefined;
   private selectedBackendId: string | undefined;
+  private selectedBotId: string | undefined;
   private lastHealthError: string | null = null;
   private transport: HttpTransport;
   private rootTransport: HttpTransport;
@@ -294,6 +295,7 @@ export class ManifestClient implements PortalClient {
       // The native session holds the history; without it every turn is orphaned.
       const sessionId = options?.sessionId ?? this.currentSessionId;
       if (sessionId) body.sessionId = sessionId;
+      if (this.botId) body.bot = this.botId;
     } else if (options?.providerId) {
       // Unqualified, the Gate refuses to guess between providers that declare
       // the same model id (409 ambiguous_model) — a backend owns its catalog
@@ -379,12 +381,40 @@ export class ManifestClient implements PortalClient {
     this.selectedBackendId = id;
   }
 
+  get botId(): string | undefined {
+    return this.selectedBotId;
+  }
+
+  setBotId(id: string | undefined) {
+    this.selectedBotId = id || undefined;
+  }
+
   /** Append backendId so a multi-environment gate knows which one is meant. */
   private withBackend(path: string): string {
     const backendId = this.backendId;
     if (!backendId) return path;
     const separator = path.includes('?') ? '&' : '?';
     return `${path}${separator}backendId=${encodeURIComponent(backendId)}`;
+  }
+
+  private withBot(path: string): string {
+    const botId = this.botId;
+    if (!botId) return path;
+    const separator = path.includes('?') ? '&' : '?';
+    return `${path}${separator}bot=${encodeURIComponent(botId)}`;
+  }
+
+  private withScope(path: string): string {
+    return this.withBot(this.withBackend(path));
+  }
+
+  async listBots(): Promise<Array<{ id: string; displayName: string; routable: boolean }>> {
+    const path = this.endpoints.bots;
+    if (!path) return [];
+    const result = await this.rootTransport.request<{
+      data?: Array<{ id: string; displayName: string; routable: boolean }>;
+    }>('GET', this.withBackend(path));
+    return result.data ?? [];
   }
 
   async getSessions(limit = 20): Promise<HermesSession[]> {
@@ -397,7 +427,7 @@ export class ManifestClient implements PortalClient {
     const separator = path.includes('?') ? '&' : '?';
     const result = await this.rootTransport.request<SessionsResponse | HermesSession[]>(
       'GET',
-      this.withBackend(`${path}${separator}limit=${limit}`),
+      this.withScope(`${path}${separator}limit=${limit}`),
     );
     return Array.isArray(result) ? result : result.data ?? [];
   }
@@ -410,6 +440,7 @@ export class ManifestClient implements PortalClient {
     const path = this.requireEndpoint('sessions');
     return this.rootTransport.request<HermesSession>('POST', path, {
       ...(this.backendId ? { backendId: this.backendId } : {}),
+      ...(this.botId ? { bot: this.botId } : {}),
       ...(title ? { title } : {}),
     });
   }
@@ -418,7 +449,7 @@ export class ManifestClient implements PortalClient {
     const path = this.requireEndpoint('sessions');
     await this.rootTransport.request<unknown>(
       'DELETE',
-      this.withBackend(`${path.replace(/\/+$/, '')}/${encodeURIComponent(sessionId)}`),
+      this.withScope(`${path.replace(/\/+$/, '')}/${encodeURIComponent(sessionId)}`),
     );
   }
 
@@ -453,7 +484,7 @@ export class ManifestClient implements PortalClient {
     const query = `limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`;
     const result = await this.rootTransport.request<SessionMessagesResponse | SessionMessage[]>(
       'GET',
-      this.withBackend(`${path}${separator}${query}`),
+      this.withScope(`${path}${separator}${query}`),
     );
 
     if (Array.isArray(result)) return { messages: result };

@@ -1,11 +1,12 @@
 import { useRouter } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { ApprovalSheet } from '@/components/chat/approval-sheet';
 import { BackendPickerSheet } from '@/components/chat/backend-picker-sheet';
 import { ChatComposer } from '@/components/chat/chat-composer';
+import { ChatRoster } from '@/components/chat/chat-roster';
 import { DayDivider } from '@/components/chat/day-divider';
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
 import { ChatHeader } from '@/components/chat/chat-header';
@@ -25,6 +26,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDivider } from '@/lib/format';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
+import { buildRoster, type ChatSurface, type RosterRow } from '@/lib/gateway/bots';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
 const PIN_THRESHOLD_PX = 96;
@@ -108,6 +110,9 @@ export function ChatScreen() {
     backends,
     selectedBackendId,
     selectBackend,
+    listBots,
+    openBot,
+    clearBot,
   } = useGateway();
 
   const [draft, setDraft] = useState('');
@@ -118,6 +123,10 @@ export function ChatScreen() {
   const [actionMessage, setActionMessage] = useState<ChatMessage | null>(null);
   const [jumpVisible, setJumpVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [surface, setSurface] = useState<ChatSurface>({ kind: 'roster' });
+  const [rosterRows, setRosterRows] = useState<RosterRow[]>([{ kind: 'configurable' }]);
+  const [rosterLoading, setRosterLoading] = useState(false);
+  const [rosterError, setRosterError] = useState<string | undefined>();
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const pinnedRef = useRef(true);
@@ -206,6 +215,29 @@ export function ChatScreen() {
     listRef.current?.scrollToEnd({ animated: true });
   }, []);
 
+  useEffect(() => {
+    if (surface.kind !== 'roster' || status !== 'connected') return;
+    let cancelled = false;
+    setRosterLoading(true);
+    setRosterError(undefined);
+    void listBots()
+      .then((bots) => {
+        if (!cancelled) setRosterRows(buildRoster(bots));
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setRosterError(error instanceof Error ? error.message : String(error));
+          setRosterRows([{ kind: 'configurable' }]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRosterLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [surface.kind, status, listBots]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     const started = Date.now();
@@ -263,13 +295,23 @@ export function ChatScreen() {
         status={status}
         statusDetail={status === 'connected' ? undefined : statusDetail || probeMessage}
         streaming={isStreaming}
-        sessionLabel={sessionLabel}
-        modelLabel={modelLabel}
-        onSessionPress={() => void openSessionSelector()}
-        onModelPress={() => openModelPicker('default')}
-        onOverflowPress={() => setOverflowVisible(true)}
-        backendLabel={backendLabel}
-        onBackendPress={backends.length > 0 ? () => setBackendPickerVisible(true) : undefined}
+        sessionLabel={surface.kind === 'roster' ? undefined : sessionLabel}
+        modelLabel={surface.kind === 'configurable' ? modelLabel : undefined}
+        onSessionPress={surface.kind === 'roster' ? undefined : () => void openSessionSelector()}
+        onModelPress={surface.kind === 'configurable' ? () => openModelPicker('default') : undefined}
+        onOverflowPress={surface.kind === 'roster' ? undefined : () => setOverflowVisible(true)}
+        backendLabel={
+          surface.kind === 'bot'
+            ? rosterRows.find((row): row is Extract<RosterRow, { kind: 'bot' }> => row.kind === 'bot' && row.bot.id === surface.botId)?.bot.displayName
+            : surface.kind === 'configurable'
+              ? backendLabel
+              : undefined
+        }
+        onBackendPress={surface.kind === 'configurable' && backends.length > 0 ? () => setBackendPickerVisible(true) : undefined}
+        onRosterPress={surface.kind === 'roster' ? undefined : () => {
+          clearBot();
+          setSurface({ kind: 'roster' });
+        }}
       />
 
       <PairingSheet
@@ -289,6 +331,22 @@ export function ChatScreen() {
         </Animated.View>
       ) : null}
 
+      {surface.kind === 'roster' ? (
+        <ChatRoster
+          rows={rosterRows}
+          loading={rosterLoading}
+          error={rosterError}
+          onSelectConfigurable={() => {
+            clearBot();
+            setSurface({ kind: 'configurable' });
+          }}
+          onSelectBot={(bot) => {
+            void openBot(bot.id)
+              .then(() => setSurface({ kind: 'bot', botId: bot.id }))
+              .catch(() => undefined);
+          }}
+        />
+      ) : (
       <View style={styles.listWrap}>
         <FlatList
           ref={listRef}
@@ -359,6 +417,9 @@ export function ChatScreen() {
         ) : null}
       </View>
 
+      )}
+
+      {surface.kind === 'roster' ? null : (
       <ChatComposer
         draft={draft}
         onChangeText={setDraft}
@@ -379,6 +440,7 @@ export function ChatScreen() {
         // provider flushes on reconnect. Block only when no gateway exists.
         canSend={!!activeGateway && !isCommandRunning}
       />
+      )}
 
       <SlashCommandPalette
         visible={paletteVisible}

@@ -19,6 +19,7 @@ export type ChatHeaderProps = {
   /** Present only when the gateway advertises chat backends. */
   backendLabel?: string;
   onBackendPress?: () => void;
+  onRosterPress?: () => void;
 };
 
 /** Slim contextual chat header: orb, gateway, quick model/session chips, overflow. */
@@ -34,6 +35,7 @@ export function ChatHeader({
   onOverflowPress,
   backendLabel,
   onBackendPress,
+  onRosterPress,
 }: ChatHeaderProps) {
   const tokens = useTokens();
   const color = statusColor(tokens, status);
@@ -45,6 +47,20 @@ export function ChatHeader({
         <View style={[styles.orbHalo, { borderColor: tokens.glassBorder }]}>
           <PulsingDot color={color} active={pulsing} />
         </View>
+        {onRosterPress ? (
+          <PressableScale
+            onPress={onRosterPress}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Back to roster"
+            style={styles.overflow}>
+            <Icon
+              name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
+              size={18}
+              color="textSecondary"
+            />
+          </PressableScale>
+        ) : null}
         <PressableScale
           onPress={onBackendPress}
           disabled={!onBackendPress || !backendLabel}
