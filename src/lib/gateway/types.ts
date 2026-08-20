@@ -294,6 +294,7 @@ export type GatewayFeatureFamily =
   | 'Devices'
   | 'Nodes'
   | 'Voice'
+  | 'Bots'
   | 'Other';
 
 export type GatewayCommandDanger = 'safe' | 'write' | 'destructive';

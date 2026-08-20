@@ -575,7 +575,7 @@ test('toolsets are listed from a backend that implements them', async () => {
 function stubFrontedRegistry(calls) {
   const registry = stubRegistry(calls);
   const adapter = registry.get('stubcli');
-  adapter.capabilities = [...adapter.capabilities, 'skills', 'diagnostics', 'cron'];
+  adapter.capabilities = [...adapter.capabilities, 'skills', 'diagnostics', 'cron', 'bots'];
   const createBackend = adapter.createBackend.bind(adapter);
   adapter.createBackend = (...args) => ({
     ...createBackend(...args),
@@ -585,6 +585,34 @@ function stubFrontedRegistry(calls) {
     async listJobs() { calls.push('listJobs'); return { data: [{ id: 'job-1', paused: false }] }; },
     async runJob(id) { calls.push(`runJob:${id}`); return { started: true }; },
     async setJobPaused(id, paused) { calls.push(`setJobPaused:${id}:${paused}`); return { paused }; },
+    async listBots() {
+      calls.push('listBots');
+      return { object: 'list', data: [{ id: 'researcher', displayName: 'researcher', routable: true }] };
+    },
+    async forBot(botId) {
+      calls.push(`forBot:${botId}`);
+      if (botId === 'nope') {
+        const error = new Error('unknown');
+        error.code = 'unknown_bot';
+        throw error;
+      }
+      if (botId === 'silent') {
+        const error = new Error('no key');
+        error.code = 'bot_not_routable';
+        throw error;
+      }
+      return {
+        async listSessions() { calls.push(`listSessions:${botId}`); return [{ ...SESSION, title: 'Bot Chat' }]; },
+        async createSession(input) {
+          calls.push(`createSession:${botId}:${input?.title}`);
+          return { ...SESSION, title: input?.title ?? 'Bot Chat' };
+        },
+        async listMessages() { return []; },
+        async sendMessage() {
+          return { text: 'ok', message: { id: 'm', role: 'assistant', content: [{ type: 'text', text: 'ok' }] } };
+        },
+      };
+    },
   });
   return registry;
 }
@@ -607,6 +635,7 @@ test('skills, diagnostics and cron are advertised only when a backend fronts the
     assert.equal(manifest.endpoints.skills, '/v1/skills');
     assert.equal(manifest.endpoints.health_detailed, '/health/detailed');
     assert.equal(manifest.endpoints.jobs, '/v1/jobs');
+    assert.equal(manifest.endpoints.bots, '/v1/bots');
     // Advertised from the Gate's own fronting, not from the backend's self-report.
     assert.equal(manifest.capabilities.jobs_admin, true);
   } finally {
@@ -636,6 +665,78 @@ test('the fronted routes proxy to the backend and are reachable', async () => {
       assert.equal(response.status, 200, `${action} should proxy`);
       assert.ok(calls.includes(expected), `${action} should call ${expected}`);
     }
+
+    const bots = await fetch(`${base}/v1/bots`, { headers: auth(gate) });
+    assert.equal(bots.status, 200);
+    assert.equal((await bots.json()).data[0].id, 'researcher');
+    assert.ok(calls.includes('listBots'));
+  } finally {
+    await gate.close();
+  }
+});
+
+test('GET /v1/bots 501s when no backend implements listBots', async () => {
+  const { gate } = await makeGate();
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/bots`, { headers: auth(gate) });
+    assert.equal(response.status, 501);
+    assert.equal((await response.json()).error.code, 'backend_unsupported');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('GET /v1/sessions?bot=researcher uses forBot, not the unprefixed backend', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${gate.port}/v1/sessions?backendId=stub-local&bot=researcher`,
+      { headers: auth(gate) },
+    );
+    assert.equal(response.status, 200);
+    assert.ok(calls.includes('forBot:researcher'));
+    assert.ok(calls.includes('listSessions:researcher'));
+  } finally {
+    await gate.close();
+  }
+});
+
+test('bot=default still calls forBot(default)', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  try {
+    await fetch(`http://127.0.0.1:${gate.port}/v1/sessions?bot=default`, { headers: auth(gate) });
+    assert.ok(calls.includes('forBot:default'));
+  } finally {
+    await gate.close();
+  }
+});
+
+test('unknown bot is 404, unroutable is 409', async () => {
+  const { gate } = await makeGate({ calls: [], registry: stubFrontedRegistry([]) });
+  try {
+    const unknown = await fetch(`http://127.0.0.1:${gate.port}/v1/sessions?bot=nope`, { headers: auth(gate) });
+    assert.equal(unknown.status, 404);
+    const silent = await fetch(`http://127.0.0.1:${gate.port}/v1/sessions?bot=silent`, { headers: auth(gate) });
+    assert.equal(silent.status, 409);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('POST /v1/sessions with bot creates on that profile', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/sessions`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ backendId: 'stub-local', bot: 'researcher', title: 'scratch' }),
+    });
+    assert.equal(response.status, 200);
+    assert.ok(calls.includes('forBot:researcher'));
+    assert.ok(calls.includes('createSession:researcher:scratch'));
   } finally {
     await gate.close();
   }
@@ -665,7 +766,7 @@ test('the Gate dispatches the Hermes-dialect methods the app actually sends', as
   };
   try {
     for (const method of ['health', 'status', 'diagnostics.full', 'skills.list', 'skills.status',
-      'cron.list', 'cron.status', 'sessions.list', 'models.list', 'tools.list']) {
+      'cron.list', 'cron.status', 'sessions.list', 'models.list', 'tools.list', 'bots.list']) {
       const { status, body } = await rpc(method);
       assert.equal(status, 200, `${method} should dispatch, got ${JSON.stringify(body)}`);
       assert.ok(body.result !== undefined, `${method} should return a result`);
@@ -694,7 +795,7 @@ test('the manifest advertises the methods the Gate can actually dispatch', async
     // the RPC tables exist would ship one, and the app would silently render an
     // empty command tab rather than fail loudly.
     assert.ok(manifest.rpcMethods?.length > 0, 'rpcMethods must not be empty');
-    for (const method of ['skills.list', 'cron.list', 'tools.list', 'registry.kinds.list']) {
+    for (const method of ['skills.list', 'cron.list', 'tools.list', 'bots.list', 'registry.kinds.list']) {
       assert.ok(manifest.rpcMethods.includes(method), `${method} should be advertised`);
     }
     // Advertised implies dispatchable — checked over the read-only methods

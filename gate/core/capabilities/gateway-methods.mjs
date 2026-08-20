@@ -62,5 +62,7 @@ export function createGatewayMethods({ getBackend }) {
       via(getBackend, params, 'listModels', async (b) => ({ object: 'list', data: await b.listModels() })),
 
     'tools.list': (params) => via(getBackend, params, 'listToolsets', (b) => b.listToolsets()),
+
+    'bots.list': (params) => via(getBackend, params, 'listBots', (b) => b.listBots()),
   };
 }

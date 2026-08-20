@@ -40,7 +40,8 @@ export type GatewayCommand = {
     | 'Devices'
     | 'Tools'
     | 'Skills'
-    | 'Voice';
+    | 'Voice'
+    | 'Bots';
   transport: 'rpc' | 'agent';
   method?: string;
   params?: Record<string, unknown>;
@@ -112,6 +113,18 @@ export const GATEWAY_COMMANDS: GatewayCommand[] = [
     danger: 'safe',
     slash: '/channels',
     description: 'Connected channel state',
+  },
+  {
+    id: 'bots',
+    label: 'Bots',
+    group: 'Bots',
+    transport: 'rpc',
+    method: 'bots.list',
+    params: {},
+    requiredScope: 'operator.read',
+    danger: 'safe',
+    slash: '/bots',
+    description: 'List Hermes bots',
   },
   {
     id: 'channel-start',
@@ -851,6 +864,7 @@ const CAPABILITY_GROUP_DEFS: CapabilityGroupDef[] = [
   { id: 'memory', label: 'Memory', features: ['memory_write_api'], commandGroups: ['Memory'] },
   { id: 'voice', label: 'Voice/Talk', features: ['audio_api', 'realtime_voice'], commandGroups: ['Voice'] },
   { id: 'channels', label: 'Channels', commandGroups: ['Channels'] },
+  { id: 'bots', label: 'Bots', endpoints: ['bots'], commandGroups: ['Bots'] },
   { id: 'plugins', label: 'Plugins', commandGroups: ['Plugins'] },
   { id: 'logs', label: 'Logs', commandGroups: ['Logs'] },
   { id: 'devices', label: 'Devices', commandGroups: ['Devices'] },
@@ -1147,6 +1161,11 @@ export function summarizeCommandResult(command: GatewayCommand, result: unknown)
   if (command.id === 'channels') {
     const channels = readArray(record, 'channels') ?? readArray(record, 'items');
     if (channels) return `Channels: ${channels.length}`;
+  }
+
+  if (command.id === 'bots') {
+    const bots = readArray(record, 'data') ?? readArray(record, 'bots') ?? readArray(record, 'items');
+    if (bots) return `Bots: ${bots.length}`;
   }
 
   if (command.transport === 'agent') return `Sent to agent: ${command.agentCommand ?? command.label}`;

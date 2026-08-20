@@ -108,6 +108,7 @@ export function buildManifest({
       ...(backendCan('skills') ? { skills: '/v1/skills' } : {}),
       ...(backendCan('diagnostics') ? { health_detailed: '/health/detailed' } : {}),
       ...(backendCan('cron') ? { jobs: '/v1/jobs' } : {}),
+      ...(backendCan('bots') ? { bots: '/v1/bots' } : {}),
     },
     // Advertise exactly what the endpoints above serve. Under-claiming makes the
     // Gate render as featureless in the app; over-claiming (sessions, runs,

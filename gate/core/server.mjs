@@ -728,6 +728,7 @@ export async function createGate(config = {}) {
         (pathname === '/v1/terminal/stream' && method === 'GET') ||
         (pathname === '/v1/terminal/input' && method === 'POST') ||
         (pathname === '/v1/skills' && method === 'GET') ||
+        (pathname === '/v1/bots' && method === 'GET') ||
         // Note the divergence from plain /health, which is unauthenticated:
         // detailed diagnostics expose backend internals and need a token.
         (pathname === '/health/detailed' && method === 'GET') ||
@@ -851,6 +852,32 @@ export async function createGate(config = {}) {
        * caller can pin the environment; otherwise pick by capability, exactly
        * as resolveRunBackend already does for runs.
        */
+      function readBotId(requestUrl, body) {
+        return requestUrl.searchParams.get('bot') || body?.bot || undefined;
+      }
+
+      async function resolveConversationBackend(backendId, botId) {
+        const backend = await resolveBackend(backendId);
+        if (!backend) return null;
+        if (!botId) return backend;
+        if (typeof backend.forBot !== 'function') {
+          res.writeHead(501, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: { message: 'This backend does not implement bots', code: 'backend_unsupported' },
+          }));
+          return null;
+        }
+        try {
+          return await backend.forBot(botId);
+        } catch (error) {
+          const code = error.code ?? 'backend_unsupported';
+          const status = code === 'unknown_bot' ? 404 : code === 'bot_not_routable' ? 409 : 501;
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code } }));
+          return null;
+        }
+      }
+
       async function resolveBackendFor(method) {
         const explicit = url.searchParams.get('backendId');
         if (explicit) {
@@ -1087,6 +1114,14 @@ export async function createGate(config = {}) {
         return;
       }
 
+      if (pathname === '/v1/bots' && method === 'GET') {
+        const backend = await resolveBackendFor('listBots');
+        if (!backend) return;
+        res.writeHead(200);
+        res.end(JSON.stringify(await backend.listBots()));
+        return;
+      }
+
       const jobActionMatch = pathname.match(/^\/v1\/jobs\/([^/]+)\/(run|pause|resume)$/);
       if (jobActionMatch && method === 'POST') {
         const [, rawJobId, action] = jobActionMatch;
@@ -1102,7 +1137,7 @@ export async function createGate(config = {}) {
       }
 
       if (pathname === '/v1/sessions' && method === 'GET') {
-        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        const backend = await resolveConversationBackend(url.searchParams.get('backendId'), readBotId(url));
         if (!backend) return;
         const limit = Number(url.searchParams.get('limit')) || undefined;
         const sessions = await backend.listSessions();
@@ -1113,7 +1148,7 @@ export async function createGate(config = {}) {
 
       if (pathname === '/v1/sessions' && method === 'POST') {
         const body = (await readJsonBody(req)) ?? {};
-        const backend = await resolveBackend(body.backendId);
+        const backend = await resolveConversationBackend(body.backendId, readBotId(url, body));
         if (!backend) return;
         const created = await backend.createSession({ title: body.title, model: body.model });
         res.writeHead(200);
@@ -1123,7 +1158,7 @@ export async function createGate(config = {}) {
 
       const sessionMessagesMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/messages$/);
       if (sessionMessagesMatch && method === 'GET') {
-        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        const backend = await resolveConversationBackend(url.searchParams.get('backendId'), readBotId(url));
         if (!backend) return;
         const limit = Number(url.searchParams.get('limit')) || undefined;
         const before = url.searchParams.get('before') || undefined;
@@ -1162,7 +1197,7 @@ export async function createGate(config = {}) {
 
       const sessionMatch = pathname.match(/^\/v1\/sessions\/([^/]+)$/);
       if (sessionMatch && method === 'DELETE') {
-        const backend = await resolveBackend(url.searchParams.get('backendId'));
+        const backend = await resolveConversationBackend(url.searchParams.get('backendId'), readBotId(url));
         if (!backend) return;
         await backend.deleteSession(decodeURIComponent(sessionMatch[1]));
         res.writeHead(200);
@@ -1353,7 +1388,7 @@ export async function createGate(config = {}) {
         // A backend-addressed turn runs inside the native environment, which is
         // what gives it that platform's sessions, tools and approvals.
         if (body.backendId) {
-          const backend = await resolveBackend(body.backendId);
+          const backend = await resolveConversationBackend(body.backendId, readBotId(url, body));
           if (!backend) return;
           try {
             const sessionId = body.sessionId
