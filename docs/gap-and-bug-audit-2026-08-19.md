@@ -169,7 +169,7 @@ have no `features`/`endpoints` keys (`src/lib/gateway/dashboard.ts:852-855,
 871-872`) and can never resolve. Phase 6 is now purely presentational — the
 number it would fix is the only thing still wrong about it.
 
-### 2.3 The terminal is remote code execution, still undecided
+### 2.3 The terminal is remote code execution — DECIDED: accepted as-is
 
 Raised four times across this work and never answered, so it ships as built:
 any holder of a Gate token gets an interactive shell on the host, enabled by
@@ -178,9 +178,17 @@ runs CLI agents with `credential`-risk operations, so this is arguably within
 the existing posture — but it materially changes what a leaked or stale device
 token is worth, and no operator opted into it.
 
-Options, cheapest first: leave as-is; gate on a config flag defaulting off;
-require a distinct scope on the device token; or bind sessions to the device
-that opened them (which also fixes §1.5).
+**Decision (Ethan, 2026-08-19): accepted as-is.** The terminal ships enabled by
+default; any holder of a valid Gate token can open a shell on the host. This is
+a deliberate acceptance of the posture, not an oversight — recorded here so it
+does not get re-raised as an open question.
+
+Session ownership was tightened independently (§1.5, `c0ca07f`): a shell only
+accepts input from the credential that opened it, so a second token cannot type
+into someone else's session. It can still open its own.
+
+Rejected in taking this decision: a config flag defaulting off, and a distinct
+scope on the device token. Either remains available if the posture changes.
 
 ### 2.4 Phase 7 (bots) — unchanged
 
@@ -218,7 +226,7 @@ found here, and is blocked on a decision this work cannot make.
 |---|---|---|---|
 | 1 | §2.1 No device-level verification loop | **High** — hides the whole §1.1–§1.3 class | Small (one dev screen) |
 | 2 | §1.1 `btoa`/`atob`/`TextEncoder` unverified on device | **High if wrong** — pairing breaks | Trivial to check once §2.1 exists |
-| 3 | §2.3 Terminal RCE posture undecided | **High** — a decision, not a defect | Small either way |
+| — | §2.3 Terminal RCE posture | **Decided** — accepted as-is, 2026-08-19 | Closed |
 | 4 | §1.2 Terminal drops output past 64KB | Medium — silent data loss | Small |
 | 5 | §1.4 `gate/` unlinted while verify implies coverage | Medium — false assurance | Small |
 | 6 | §1.3 Shell tab fails silently | Medium | Trivial |
