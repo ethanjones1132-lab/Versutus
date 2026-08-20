@@ -2,7 +2,7 @@
 
 Chat, sessions, and jobs for a Bot go through the single attached Hermes on `/p/<name>/…`, authenticated with that Bot's own `API_SERVER_KEY`. The default profile stays on the unprefixed listener. The phone keeps one **gateway profile** (the Gate); the roster is an in-app view, not N connections.
 
-Hermes already owns this address (`gateway.multiplex_profiles`). Named prefixes reject the default listen key (July 2026). If multiplex is off, the Gate fails honestly rather than guessing a header or spawning `hermes -p`.
+Hermes already owns this address (`gateway.multiplex_profiles`). Named prefixes reject the default listen key (July 2026). If multiplex is off, the Gate fails honestly rather than guessing a header or spawning `hermes -p` (ADR 0008).
 
 ## Considered
 

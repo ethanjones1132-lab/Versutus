@@ -24,6 +24,18 @@ _Avoid_: system prompt (a per-request overlay), personality (the unused gateway-
 A Bot's Hermes API-server credential, used only to address that Bot through multiplex. Distinct from the provider keys the Bot inherits or owns.
 _Avoid_: API key (alone), token, provider credential
 
+**Roster**:
+The Chat tab landing: a **configurable chat** row, then one row per **Bot** (including `default`). Opening the tab does not resume the last session.
+_Avoid_: session list (the conversations inside one Bot or inside configurable chat), backend picker
+
+**Configurable chat**:
+The first roster row — model picker, sessions, and CLI backend, with no Bot selected. Not a Bot.
+_Avoid_: default bot, unscoped chat, current chat (alone)
+
+**Bot Chat**:
+A Bot's canonical, persistent conversation. Tapping a Bot opens this session, not whichever session ran last. Other sessions on the same Bot are extra threads, not replacements for it.
+_Avoid_: last session, current session (when meaning the forever-chat)
+
 **Connection status**:
 The live state of the connection to a gateway: disconnected, connecting, reconnecting, connected, pairing.
 _Avoid_: phase (when meaning the app-level journey)
@@ -44,7 +56,7 @@ A lightweight reachability check against a candidate gateway URL (e.g. HTTP /hea
 _Avoid_: ping, handshake
 
 **Session**:
-The conversation context on a gateway, identified by a sessionId (Hermes) or sessionKey (OpenClaw).
+The conversation context on a gateway, identified by a sessionId (Hermes) or sessionKey (OpenClaw). On Hermes, a session belongs to one **Bot**.
 _Avoid_: conversation (when meaning the server-held context)
 
 **Terminal session**:
@@ -96,7 +108,11 @@ _Avoid_: push (which implies server delivery)
 - A **connection status** describes the live connection to a **gateway**; a **connection phase** describes the journey to it
 - A **reconnect** reuses the same endpoint and **session**; an **auto-connect retry** re-runs discovery and **probes**
 - A **session** belongs to a **gateway** and is preserved across **reconnects**
+- A Hermes **session** belongs to one **Bot**; selecting a Bot does not change the **backend** or **gateway profile**
+- The **roster** lists **configurable chat** first, then every **Bot** including `default`; configurable chat is not a Bot
+- **Configurable chat** and the `default` **Bot** can both open the default Hermes home; they are different doors (runtime vs Bot Chat), not a mistake
 - A **Bot** has many **sessions**, one **soul**, and its own crons; it is not a **gateway profile**
+- Tapping a **Bot** opens its **Bot Chat**; other **sessions** on that Bot can be opened or created from there without replacing Bot Chat
 - A **soul** belongs to exactly one **Bot**
 - A **Bot** lives on one Hermes **CLI environment**; Codex, Claude Code, and OpenCode are not Bots
 - Many **Bots** are reached through one **gateway**; a Bot is not its own **gateway profile**
@@ -118,6 +134,9 @@ _Avoid_: push (which implies server delivery)
 > **Dev:** "If I add a Bot, is that another gateway profile?"
 > **Domain expert:** "No — the gateway profile is how the phone remembers the Gate. A Bot is an isolated agent living on that gateway: its own soul, sessions, and crons."
 
+> **Dev:** "When I open the Chat tab, do I land in last night's session?"
+> **Domain expert:** "No — you land on the roster. Configurable chat is the first row; Bots are underneath. You pick, then you talk."
+
 ## Flagged ambiguities
 
 - "retry" and "reconnect" were used interchangeably — resolved: they are distinct mechanisms with different costs (endpoint retry vs discovery loop)
@@ -127,3 +146,6 @@ _Avoid_: push (which implies server delivery)
 - "profile" meant three things — resolved: **gateway profile** (phone's stored gateway), **Bot** (Hermes profile / Bot Mode agent), **provider profile** (`providers.profiles.list` connection template). Never say "profile" alone.
 - "bot" was briefly used for Discord/Telegram platform adapters (`runner.adapters`) — resolved: those are channels. A Bot is a Hermes profile.
 - A Bot that is "just a CLI backend" (Codex/Claude/OpenCode wearing the roster UI) is deferred — a Bot is a Hermes profile. See ADR 0004.
+- First Bot slice is talk-to-existing only. New Agent, routines, `@mention`, and group chats are the decided next work after that runtime is proven. See ADR 0007.
+- "Chat" meant the tab, the first roster row, and the act of messaging — resolved: the tab opens the **roster**; the first row is **configurable chat**; a **Bot** is a row under it. See ADR 0010.
+- The default Hermes profile **is** a Bot, listed with the others. Configurable chat remains a separate first row; the overlap is accepted. See ADR 0013 (supersedes 0011).
