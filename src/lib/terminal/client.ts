@@ -1,4 +1,5 @@
 import { httpToWsBase } from '@/lib/gateway/url';
+import { base64ToBytes } from '@/lib/encoding';
 import { streamingFetch } from '@/lib/net/streaming-fetch';
 
 export type TerminalSession = {
@@ -13,11 +14,11 @@ type TerminalHandlers = {
 };
 
 function decodeBase64Utf8(base64: string): string {
-  if (typeof globalThis.atob !== 'function') return '';
-  const binary = globalThis.atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
+  // Previously this returned '' when `atob` was missing, so the pane showed a
+  // connected session producing no output and reported nothing wrong -- the
+  // silent-empty failure the Gate goes out of its way to avoid for chat turns.
+  // Decoding directly removes both the dependency and the silent branch.
+  return new TextDecoder().decode(base64ToBytes(base64));
 }
 
 function parseSseChunk(buffer: string): { events: { event?: string; data: string }[]; rest: string } {

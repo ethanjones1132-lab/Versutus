@@ -733,6 +733,7 @@ function fakeTerminal() {
     open(handlers) {
       const session = {
         sid: `sid-${opened.length + 1}`,
+        owner: handlers.owner ?? null,
         written: [],
         closed: false,
         write(data) { session.written.push(data); },
@@ -1078,6 +1079,39 @@ test('no attached backend implementing a fronted route is a named 501', async ()
     assert.equal(body.error.code, 'backend_unsupported');
     assert.match(body.error.message, /listSkills/);
   } finally {
+    await gate.close();
+  }
+});
+
+test('a shell session only accepts input from the credential that opened it', async () => {
+  // A session is a live process on the host. Another valid token has no
+  // business typing into one it did not open.
+  const terminal = fakeTerminal();
+  const { gate } = await makeGate({ terminalSessions: terminal });
+  const base = `http://127.0.0.1:${gate.port}`;
+  let stream;
+  try {
+    const response = await fetch(`${base}/v1/terminal/stream`, { headers: auth(gate) });
+    stream = sseReader(response);
+    await stream.next();
+    assert.ok(terminal.opened[0].owner, 'the session must record an owner');
+
+    // Same credential: accepted.
+    const mine = await fetch(`${base}/v1/terminal/input`, {
+      method: 'POST', headers: auth(gate), body: JSON.stringify({ sid: 'sid-1', data: 'ok' }),
+    });
+    assert.equal(mine.status, 200);
+
+    // A different owner is refused, and told nothing about the session existing.
+    terminal.opened[0].owner = 'someone-else';
+    const theirs = await fetch(`${base}/v1/terminal/input`, {
+      method: 'POST', headers: auth(gate), body: JSON.stringify({ sid: 'sid-1', data: 'whoami' }),
+    });
+    assert.equal(theirs.status, 404);
+    assert.equal((await theirs.json()).error.code, 'unknown_session');
+    assert.deepEqual(terminal.opened[0].written, ['ok'], 'the refused write must not reach the shell');
+  } finally {
+    await stream?.cancel();
     await gate.close();
   }
 });

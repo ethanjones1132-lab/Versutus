@@ -145,6 +145,34 @@ const DEFAULT_POLL_DELAY_MS = 1000;
  * Start a run and drive it to a terminal state, pausing for the user's
  * decision whenever the gateway requests approval.
  */
+/**
+ * Ask the gateway to stop a run, and say so honestly when it would not.
+ *
+ * Both call sites used `.catch(() => undefined)` and then returned
+ * `cancelled: true` regardless — telling the user the run was over while it
+ * kept burning tokens upstream. That is the same lie the Gate refuses to tell:
+ * the Hermes backend leaves session abort throwing rather than fake a cancel,
+ * precisely so a cancellation that never happened is not reported as one.
+ *
+ * `unresolved` already carries the right meaning for callers, so a failed stop
+ * reuses it rather than inventing a second signal.
+ */
+async function requestStop(
+  client: Parameters<typeof executeRun>[0],
+  runId: string,
+): Promise<{ unresolved?: true; error?: string }> {
+  try {
+    await client.stopRun(runId);
+    return {};
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      unresolved: true,
+      error: `Stop was requested but the gateway did not confirm it (${detail}). The run may still be going.`,
+    };
+  }
+}
+
 export async function executeRun(
   client: RunCapableClient,
   prompt: string,
@@ -165,13 +193,17 @@ export async function executeRun(
 
   for (let iteration = 0; iteration < MAX_STATUS_POLLS && !reachedTerminal; iteration += 1) {
     if (options.signal?.aborted) {
-      await client.stopRun(runId).catch(() => undefined);
-      return { runId, status: 'cancelled', cancelled: true, approved };
+      const stop = await requestStop(client, runId);
+      return { runId, status: 'cancelled', cancelled: true, approved, ...stop };
     }
 
     if (runNeedsApproval(status)) {
       const decision = await options.onApprovalRequired(runId, prompt);
       approved = decision.approved;
+      // Deliberately non-fatal: the decision may well have registered even if
+      // the response did not come back, so polling continues rather than
+      // abandoning a run the user just approved. The status poll below decides.
+      // Unlike a failed stop, this does not report an outcome that never happened.
       await client.resolveApproval(runId, decision.approved, decision.feedback).catch(() => undefined);
       status = safeStatus(await client.getRunStatus(runId));
       reachedTerminal = isTerminalRunStatus(status);
@@ -193,8 +225,8 @@ export async function executeRun(
       .catch(() => undefined);
 
     if (options.signal?.aborted) {
-      await client.stopRun(runId).catch(() => undefined);
-      return { runId, status: 'cancelled', cancelled: true, approved };
+      const stop = await requestStop(client, runId);
+      return { runId, status: 'cancelled', cancelled: true, approved, ...stop };
     }
 
     const previousStatus = status;

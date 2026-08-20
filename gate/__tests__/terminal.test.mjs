@@ -130,3 +130,47 @@ test('closeAll tears down every live shell', () => {
   assert.equal(shells().length, 2);
   for (const shell of shells()) assert.ok(isDead(shell), `pid ${shell.child.pid} outlived closeAll`);
 });
+
+test('a large burst is split across frames, not truncated', () => {
+  // `subarray(0, MAX)` dropped everything past the cap. A command that prints a
+  // lot in one go lost its tail with nothing to indicate it.
+  const { sessions, spawned } = harness();
+  const chunks = [];
+  sessions.open({ onChunk: (t) => chunks.push(t), onExit() {} });
+
+  const payload = 'x'.repeat(200_000);
+  spawned[0].child.stdout.emit('data', Buffer.from(payload, 'utf8'));
+
+  assert.ok(chunks.length > 1, 'a 200k burst should span several frames');
+  assert.equal(chunks.join(''), payload, 'no output may be lost');
+});
+
+test('a multi-byte character split across two reads survives', () => {
+  // 'é' is two bytes; delivering them in separate 'data' events used to decode
+  // each half independently and produce replacement characters.
+  const { sessions, spawned } = harness();
+  const chunks = [];
+  sessions.open({ onChunk: (t) => chunks.push(t), onExit() {} });
+
+  const bytes = Buffer.from('café', 'utf8');
+  spawned[0].child.stdout.emit('data', bytes.subarray(0, 4));
+  spawned[0].child.stdout.emit('data', bytes.subarray(4));
+
+  assert.equal(chunks.join(''), 'café');
+  assert.ok(!chunks.join('').includes('�'), 'no replacement characters');
+});
+
+test('stdout and stderr decode independently', () => {
+  // Sharing one decoder would let a partial sequence on one stream corrupt the
+  // next write on the other.
+  const { sessions, spawned } = harness();
+  const chunks = [];
+  sessions.open({ onChunk: (t) => chunks.push(t), onExit() {} });
+
+  const out = Buffer.from('é', 'utf8');
+  spawned[0].child.stdout.emit('data', out.subarray(0, 1));
+  spawned[0].child.stderr.emit('data', Buffer.from('E', 'utf8'));
+  spawned[0].child.stdout.emit('data', out.subarray(1));
+
+  assert.equal(chunks.join(''), 'Eé');
+});

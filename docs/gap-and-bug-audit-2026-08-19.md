@@ -210,7 +210,9 @@ been checked at all.
 
 ## 4. Ranked
 
-By expected cost of leaving it, not by effort.
+By expected cost of leaving it, not by effort. Ten findings; §2.4 is listed
+unranked because it is carried forward from the previous audit rather than
+found here, and is blocked on a decision this work cannot make.
 
 | # | Finding | Severity | Effort |
 |---|---|---|---|
@@ -223,6 +225,7 @@ By expected cost of leaving it, not by effort.
 | 7 | §1.5 Terminal input unbound to owner | Low today | Small; folds into §2.3 |
 | 8 | §1.6 Swallowed rejections | Low, diffuse | Medium |
 | 9 | §2.2 Capability denominator | Cosmetic | Small |
+| — | §2.4 Phase 7 (bots) | Carried forward — unranked | Blocked on the upstream-fork decision, not on effort |
 
 ## 5. Deliberately not findings
 

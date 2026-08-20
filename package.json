@@ -55,7 +55,7 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "lint": "expo lint",
+    "lint": "expo lint && eslint gate --max-warnings 0",
     "verify": "npm run verify:config && tsc --noEmit && npm run lint && npm run test:coverage && npm run coverage:ratchet && npm run test:gate",
     "verify:config": "tsx ./scripts/verify-config.mts",
     "coverage:ratchet": "tsx ./scripts/coverage-ratchet.mts",

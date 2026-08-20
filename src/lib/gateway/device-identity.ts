@@ -2,6 +2,11 @@ import * as ed from '@noble/ed25519';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex } from '@noble/hashes/utils.js';
 import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
+import {
+  bytesToBase64Url as encodeBase64Url,
+  base64UrlToBytes as decodeBase64Url,
+  utf8Encode,
+} from '@/lib/encoding';
 
 export type StoredDeviceIdentity = {
   version: 1;
@@ -13,20 +18,11 @@ export type StoredDeviceIdentity = {
 
 const DEVICE_IDENTITY_KEY = 'versutus:device-identity';
 
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
-}
-
-function base64UrlToBytes(input: string): Uint8Array {
-  const normalized = input.replaceAll('-', '+').replaceAll('_', '/');
-  const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
+// Re-exported from the engine-independent implementations: `btoa`/`atob` are
+// not installed by React Native or Expo, and this is the pairing/signing path.
+// See src/lib/encoding.ts.
+const bytesToBase64Url = encodeBase64Url;
+const base64UrlToBytes = decodeBase64Url;
 
 function deriveDeviceId(publicKey: Uint8Array): string {
   return bytesToHex(sha256(publicKey));
@@ -87,6 +83,6 @@ export async function signDevicePayload(
   payload: string,
 ): Promise<string> {
   const privateKey = base64UrlToBytes(identity.privateKeyB64Url);
-  const signature = await ed.signAsync(new TextEncoder().encode(payload), privateKey);
+  const signature = await ed.signAsync(utf8Encode(payload), privateKey);
   return bytesToBase64Url(signature);
 }

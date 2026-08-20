@@ -1,5 +1,4 @@
-import { randomBytes } from 'node:crypto';
-import { timingSafeEqual } from 'node:crypto';
+import { randomBytes , timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 
 export class TokenStore {
@@ -20,7 +19,7 @@ export class TokenStore {
       const parsed = JSON.parse(data);
       this.#cached = parsed.token;
       return this.#cached;
-    } catch (error) {
+    } catch {
       return null;
     }
   }

@@ -37,7 +37,6 @@ function fakeChild({ port = 4599, announce = true } = {}) {
 
 function reachable(urls) {
   return async (url) => {
-    const base = String(url).replace(/\/[^/]*$/, '');
     const ok = urls.some((u) => String(url).startsWith(u));
     if (!ok) throw new Error('ECONNREFUSED');
     return { ok: true, status: 200, async json() { return []; } };

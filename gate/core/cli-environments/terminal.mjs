@@ -19,8 +19,14 @@ import { randomUUID } from 'node:crypto';
  * The old `conpty.mjs` claimed this territory while spawning nothing at all.
  */
 
-/** Bounded so one runaway command cannot stream unbounded frames to a phone. */
-const MAX_CHUNK_BYTES = 64 * 1024;
+/**
+ * Frame size bound, not a data cap.
+ *
+ * This was applied with `subarray(0, MAX)`, which truncated: everything past
+ * the limit in one burst was dropped, silently. Output is now split across
+ * frames instead, so a large burst arrives whole.
+ */
+const MAX_CHUNK_CHARS = 16 * 1024;
 
 function defaultShell() {
   if (process.platform === 'win32') {
@@ -65,7 +71,7 @@ export function createTerminalSessions({
      * what the client does, and tying them together is what stops a dropped
      * phone connection leaving a shell running on the host.
      */
-    open({ onChunk, onExit, onError }) {
+    open({ onChunk, onExit, onError, owner = null }) {
       if (sessions.size >= maxSessions) {
         throw new Error(`too many terminal sessions open (limit ${maxSessions})`);
       }
@@ -74,12 +80,28 @@ export function createTerminalSessions({
       const child = spawnImpl(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
       const sid = randomUUID();
 
-      const emit = (buffer) => {
-        const text = Buffer.from(buffer).subarray(0, MAX_CHUNK_BYTES).toString('utf8');
-        if (text) onChunk(text);
+      // One decoder per stream. A multi-byte character can straddle two 'data'
+      // events, and decoding each buffer independently turns the split point
+      // into U+FFFD; a streaming decoder carries the partial sequence over.
+      // stdout and stderr get their own because they interleave independently.
+      const makeEmitter = () => {
+        const decoder = new TextDecoder('utf-8');
+        return (buffer) => {
+          const text = decoder.decode(buffer, { stream: true });
+          for (let i = 0; i < text.length; ) {
+            let end = Math.min(i + MAX_CHUNK_CHARS, text.length);
+            // Never cut between the halves of a surrogate pair.
+            if (end < text.length) {
+              const code = text.charCodeAt(end - 1);
+              if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+            }
+            onChunk(text.slice(i, end));
+            i = end;
+          }
+        };
       };
-      child.stdout?.on('data', emit);
-      child.stderr?.on('data', emit);
+      child.stdout?.on('data', makeEmitter());
+      child.stderr?.on('data', makeEmitter());
 
       child.on('error', (error) => {
         sessions.delete(sid);
@@ -92,6 +114,10 @@ export function createTerminalSessions({
 
       const session = {
         sid,
+        // Who may write to this shell. A session is a live process on the
+        // host; another credential holding a valid token has no business
+        // typing into one it did not open.
+        owner,
         write(data) {
           if (child.exitCode !== null) throw new Error('terminal session has exited');
           child.stdin?.write(String(data));

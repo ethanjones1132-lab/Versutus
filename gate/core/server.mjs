@@ -130,7 +130,7 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
     let upstream = null;
     try {
       upstream = await backend.sendMessageStreaming(sessionId, { text, model }, controller.signal);
-    } catch (error) {
+    } catch {
       // Nothing has been written yet, so the whole-turn path below can still
       // serve this turn. A streaming endpoint that is missing or refuses must
       // not cost the user their reply -- it should cost them only the tokens
@@ -759,7 +759,11 @@ export async function createGate(config = {}) {
 
       // All authenticated endpoints require authentication
       const authHeader = req.headers.authorization;
-      const isAuthenticated = (await tokenStore.verify(authHeader)) || Boolean(await deviceTokens.verify(authHeader));
+      // The device grant is kept, not just counted: it is the only caller
+      // identity the Gate has, and terminal sessions are bound to it.
+      const deviceGrant = await deviceTokens.verify(authHeader);
+      const isAuthenticated = (await tokenStore.verify(authHeader)) || Boolean(deviceGrant);
+      const callerId = deviceGrant?.deviceId ?? 'bootstrap-token';
 
       if (!isAuthenticated) {
         res.writeHead(401);
@@ -1008,6 +1012,7 @@ export async function createGate(config = {}) {
         let session;
         try {
           session = terminalSessions.open({
+            owner: callerId,
             onChunk: (text) => send(null, Buffer.from(text, 'utf8').toString('base64')),
             onExit: (code) => { send('exit', JSON.stringify({ code })); res.end(); },
             onError: (message) => { send('error', JSON.stringify({ error: message })); res.end(); },
@@ -1033,6 +1038,15 @@ export async function createGate(config = {}) {
       if (pathname === '/v1/terminal/input' && method === 'POST') {
         const body = (await readJsonBody(req)) ?? {};
         const session = terminalSessions.get(body.sid);
+        if (session && session.owner !== null && session.owner !== callerId) {
+          // Answer as if it does not exist: confirming the id to a caller that
+          // does not own it leaks which sessions are live.
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: { message: `unknown terminal session "${body.sid ?? ''}"`, code: 'unknown_session' },
+          }));
+          return;
+        }
         if (!session) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
