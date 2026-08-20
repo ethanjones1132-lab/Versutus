@@ -31,7 +31,7 @@ import {
   prependEarlier,
 } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
-import { BOT_CHAT_TITLE, ensureBotChat, type PublicBot } from '@/lib/gateway/bots';
+import { ensureBotChat, type PublicBot } from '@/lib/gateway/bots';
 import { effectiveModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   categorizeProbeError,
@@ -155,7 +155,7 @@ type GatewayContextValue = {
   /** Route chat and sessions through a different native environment. */
   selectBackend: (backendId: string | undefined) => void;
   selectedBotId: string | undefined;
-  listBots: () => Promise<import('@/lib/gateway/bots').PublicBot[]>;
+  listBots: () => Promise<PublicBot[]>;
   openBot: (botId: string) => Promise<void>;
   clearBot: () => void;
   runAgentCommand: (command: string, options?: { onDelta?: (delta: string) => void }) => Promise<string>;

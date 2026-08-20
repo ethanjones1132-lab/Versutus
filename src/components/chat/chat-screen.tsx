@@ -113,6 +113,7 @@ export function ChatScreen() {
     listBots,
     openBot,
     clearBot,
+    selectedBotId,
   } = useGateway();
 
   const [draft, setDraft] = useState('');
@@ -218,20 +219,18 @@ export function ChatScreen() {
   useEffect(() => {
     if (surface.kind !== 'roster' || status !== 'connected') return;
     let cancelled = false;
-    setRosterLoading(true);
-    setRosterError(undefined);
     void listBots()
       .then((bots) => {
-        if (!cancelled) setRosterRows(buildRoster(bots));
+        if (cancelled) return;
+        setRosterRows(buildRoster(bots));
+        setRosterError(undefined);
+        setRosterLoading(false);
       })
       .catch((error: unknown) => {
-        if (!cancelled) {
-          setRosterError(error instanceof Error ? error.message : String(error));
-          setRosterRows([{ kind: 'configurable' }]);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setRosterLoading(false);
+        if (cancelled) return;
+        setRosterError(error instanceof Error ? error.message : String(error));
+        setRosterRows([{ kind: 'configurable' }]);
+        setRosterLoading(false);
       });
     return () => {
       cancelled = true;
@@ -303,6 +302,7 @@ export function ChatScreen() {
         backendLabel={
           surface.kind === 'bot'
             ? rosterRows.find((row): row is Extract<RosterRow, { kind: 'bot' }> => row.kind === 'bot' && row.bot.id === surface.botId)?.bot.displayName
+              ?? selectedBotId
             : surface.kind === 'configurable'
               ? backendLabel
               : undefined

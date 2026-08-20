@@ -408,11 +408,11 @@ export class ManifestClient implements PortalClient {
     return this.withBot(this.withBackend(path));
   }
 
-  async listBots(): Promise<Array<{ id: string; displayName: string; routable: boolean }>> {
+  async listBots(): Promise<{ id: string; displayName: string; routable: boolean }[]> {
     const path = this.endpoints.bots;
     if (!path) return [];
     const result = await this.rootTransport.request<{
-      data?: Array<{ id: string; displayName: string; routable: boolean }>;
+      data?: { id: string; displayName: string; routable: boolean }[];
     }>('GET', this.withBackend(path));
     return result.data ?? [];
   }

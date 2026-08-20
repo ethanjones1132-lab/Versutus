@@ -47,6 +47,7 @@ export const METHOD_TO_ROUTE: Record<string, Route> = {
  * instead of a bare failure.
  */
 export const METHOD_GUIDANCE: Record<string, string> = {
+  'bots.list': 'Hermes has no bots REST on the API server. The Gate inventories ~/.hermes profiles at GET /v1/bots and chats via /p/<bot>/. Connect to the Gate, not Hermes directly, to list Bots.',
   'agents.list': 'Hermes has no remote agent registry — agents are profiles. Multi-profile gateways expose each profile at /p/<profile>/; add that URL as its own gateway with the profile API key.',
   'agent.get': 'Hermes has no remote agent registry — agents are profiles. See agents.list guidance.',
   'approvals.pending': 'Hermes run approvals are resolved via POST /v1/runs/{run_id}/approval; there is no remote pending-approval list. Approve from the app when a run requests it.',
