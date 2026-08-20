@@ -16,6 +16,8 @@
  * Verified against Hermes 0.20.3.
  */
 
+import { getHermesBot, listHermesBots, toPublicBot } from '../hermes-profiles.mjs';
+
 /** Hermes sessions are already gateway-shaped; fill only what may be absent. */
 export function toGatewaySession(session) {
   return {
@@ -75,7 +77,7 @@ export function toGatewayMessage(message) {
 }
 
 /** Build a backend bound to a running Hermes API server. */
-export function createHermesBackend({ baseUrl, apiKey, fetchImpl = fetch } = {}) {
+export function createHermesBackend({ baseUrl, apiKey, fetchImpl = fetch, profilesHome } = {}) {
   const root = String(baseUrl).replace(/\/+$/, '');
 
   async function call(path, init = {}) {
@@ -318,5 +320,39 @@ export function createHermesBackend({ baseUrl, apiKey, fetchImpl = fetch } = {})
     },
 
     async streamEvents() {},
+
+    async listBots() {
+      if (!profilesHome) return { object: 'list', data: [] };
+      const records = await listHermesBots(profilesHome);
+      return { object: 'list', data: records.map(toPublicBot) };
+    },
+
+    async forBot(botId) {
+      if (!profilesHome) {
+        const error = new Error('Hermes home is not configured');
+        error.code = 'unknown_bot';
+        error.status = 404;
+        throw error;
+      }
+      const record = await getHermesBot(profilesHome, botId);
+      if (!record) {
+        const error = new Error(`unknown bot "${botId}"`);
+        error.code = 'unknown_bot';
+        error.status = 404;
+        throw error;
+      }
+      if (!record.listenKey) {
+        const error = new Error(`bot "${botId}" has no API_SERVER_KEY`);
+        error.code = 'bot_not_routable';
+        error.status = 409;
+        throw error;
+      }
+      return createHermesBackend({
+        baseUrl: `${root}/p/${encodeURIComponent(botId)}`,
+        apiKey: record.listenKey,
+        fetchImpl,
+        profilesHome,
+      });
+    },
   };
 }

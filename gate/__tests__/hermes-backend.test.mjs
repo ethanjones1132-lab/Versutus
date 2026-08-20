@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { createHermesBackend } from '../core/cli-environments/backends/hermes.mjs';
 
@@ -94,4 +97,74 @@ test('a refused stream throws with the upstream detail, not a bare status', asyn
 test('session turns still refuse to fake a cancel', async () => {
   const { hermes } = backend();
   await assert.rejects(() => hermes.abort(), /cannot be aborted/);
+});
+
+test('forBot prefixes /p/<id>/ and uses that profile listen key, not the default', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');
+  await mkdir(join(home, 'profiles', 'researcher'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'researcher', '.env'), 'API_SERVER_KEY=res-listen\nOPENAI_API_KEY=sk-nope\n');
+
+  const { calls, fetchImpl } = recordingFetch();
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'default-listen',
+    fetchImpl,
+    profilesHome: home,
+  });
+  const scoped = await hermes.forBot('researcher');
+  await scoped.listSessions();
+
+  assert.equal(calls[0].url, 'http://h:8642/p/researcher/api/sessions');
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer res-listen');
+});
+
+test('forBot(default) still prefixes — omitted bot is the other door', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');
+  const { calls, fetchImpl } = recordingFetch();
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'default-listen',
+    fetchImpl,
+    profilesHome: home,
+  });
+  const scoped = await hermes.forBot('default');
+  await scoped.listSessions();
+  assert.equal(calls[0].url, 'http://h:8642/p/default/api/sessions');
+});
+
+test('forBot rejects unknown and unroutable bots', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');
+  await mkdir(join(home, 'profiles', 'silent'), { recursive: true });
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'default-listen',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    profilesHome: home,
+  });
+  await assert.rejects(() => hermes.forBot('nope'), (err) => err.code === 'unknown_bot');
+  await assert.rejects(() => hermes.forBot('silent'), (err) => err.code === 'bot_not_routable');
+});
+
+test('listBots returns every profile including default and never leaks listen keys', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\nOPENAI_API_KEY=sk-nope\n');
+  await mkdir(join(home, 'profiles', 'researcher'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'researcher', '.env'), 'API_SERVER_KEY=res-listen\n');
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'default-listen',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    profilesHome: home,
+  });
+  const body = await hermes.listBots();
+  assert.equal(body.object, 'list');
+  const ids = body.data.map((row) => row.id);
+  assert.ok(ids.includes('default'));
+  assert.ok(ids.includes('researcher'));
+  assert.equal(body.data.find((row) => row.id === 'researcher').routable, true);
+  assert.equal(JSON.stringify(body).includes('res-listen'), false);
+  assert.equal(JSON.stringify(body).includes('sk-nope'), false);
 });

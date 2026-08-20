@@ -1,3 +1,6 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 import { probeVersion } from './shared.mjs';
 import { createHermesBackend } from '../backends/hermes.mjs';
 
@@ -46,6 +49,7 @@ export const hermesAdapter = {
     return createHermesBackend({
       baseUrl,
       apiKey: credentials?.API_SERVER_KEY ?? credentials?.HERMES_API_SERVER_KEY,
+      profilesHome: join(homedir(), '.hermes'),
     });
   },
 
