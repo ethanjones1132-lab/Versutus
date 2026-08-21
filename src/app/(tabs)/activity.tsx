@@ -69,7 +69,7 @@ export default function ActivityScreen() {
   };
 
   return (
-    <Screen edges={['bottom']} parallaxY={parallaxY}>
+    <Screen parallaxY={parallaxY}>
       <ScrollView
         contentContainerStyle={styles.content}
         onScroll={onScroll}

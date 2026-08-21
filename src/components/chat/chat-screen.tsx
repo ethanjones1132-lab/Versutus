@@ -288,7 +288,7 @@ export function ChatScreen() {
   }
 
   return (
-    <Screen edges={['bottom']} parallaxY={parallaxY}>
+    <Screen parallaxY={parallaxY}>
       <ChatHeader
         gatewayName={settings.pcName ?? activeGateway.name}
         status={status}

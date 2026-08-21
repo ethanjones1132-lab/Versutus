@@ -51,7 +51,7 @@ export default function DevPreviewScreen() {
   }, []);
 
   return (
-    <Screen edges={['bottom']}>
+    <Screen>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <Text variant="mono" color="accentWarm" style={styles.eyebrow}>

@@ -48,7 +48,7 @@ export default function HomeScreen() {
   };
 
   return (
-    <Screen edges={['bottom']} parallaxY={parallaxY}>
+    <Screen parallaxY={parallaxY}>
       <ScreenHeader
         title="Versutus"
         subtitle={hasSavedGateway ? 'Command center' : 'Connect your gateway'}

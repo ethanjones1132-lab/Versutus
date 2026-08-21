@@ -219,7 +219,7 @@ export function TerminalScreen() {
   const modeLabel = mode === 'shell' ? 'Shell' : mode === 'rpc' ? 'Gateway RPC' : 'Agent';
 
   return (
-    <Screen edges={['bottom']} parallaxY={parallaxY}>
+    <Screen parallaxY={parallaxY}>
       <View style={styles.header}>
         <View style={styles.headerText}>
           <Text variant="caption" color="accentWarm" style={styles.headerKicker}>
