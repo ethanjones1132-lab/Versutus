@@ -4,6 +4,7 @@ import {
   ensureBotChat,
   findBotChat,
   isBotChat,
+  loadBotChat,
   type ChatSurface,
 } from '@/lib/gateway/bots';
 
@@ -50,4 +51,28 @@ test('ensureBotChat creates Bot Chat when missing', async () => {
 test('the tab starts on the roster, not a session', () => {
   const initial: ChatSurface = { kind: 'roster' };
   expect(initial.kind).toBe('roster');
+});
+
+test('loadBotChat does not swallow a list failure', async () => {
+  await expect(
+    loadBotChat(
+      async () => {
+        throw new Error('hermes: An internal server error has occurred');
+      },
+      async (title) => ({ id: 'new', title }),
+    ),
+  ).rejects.toThrow(/internal server error/i);
+});
+
+test('loadBotChat reuses Bot Chat when list succeeds', async () => {
+  const created: string[] = [];
+  const session = await loadBotChat(
+    async () => [{ id: 's2', title: BOT_CHAT_TITLE }],
+    async (title) => {
+      created.push(title);
+      return { id: 'new', title };
+    },
+  );
+  expect(session.id).toBe('s2');
+  expect(created).toEqual([]);
 });

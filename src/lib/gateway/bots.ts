@@ -29,3 +29,11 @@ export async function ensureBotChat<T extends { title?: string | null }>(
 ): Promise<T> {
   return findBotChat(sessions) ?? create(BOT_CHAT_TITLE);
 }
+
+export async function loadBotChat<T extends { title?: string | null }>(
+  list: () => Promise<T[]>,
+  create: (title: string) => Promise<T>,
+): Promise<T> {
+  const sessions = await list();
+  return ensureBotChat(sessions, create);
+}

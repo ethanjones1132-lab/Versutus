@@ -341,9 +341,10 @@ export function ChatScreen() {
             setSurface({ kind: 'configurable' });
           }}
           onSelectBot={(bot) => {
-            void openBot(bot.id)
-              .then(() => setSurface({ kind: 'bot', botId: bot.id }))
-              .catch(() => undefined);
+            setSurface({ kind: 'bot', botId: bot.id });
+            void openBot(bot.id).catch(() => {
+              setSurface({ kind: 'roster' });
+            });
           }}
         />
       ) : (

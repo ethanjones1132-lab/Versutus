@@ -31,7 +31,7 @@ import {
   prependEarlier,
 } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
-import { ensureBotChat, type PublicBot } from '@/lib/gateway/bots';
+import { loadBotChat, type PublicBot } from '@/lib/gateway/bots';
 import { effectiveModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   categorizeProbeError,
@@ -2251,15 +2251,14 @@ const response = await executeGatewaySlashCommand(trimmed, {
     client.setBotId(botId);
     setSelectedBotId(botId);
     try {
-      const sessions = await client.getSessions(200).catch(() => [] as HermesSession[]);
-      setSessionList(sessions);
-      const chat = await ensureBotChat(sessions, (title) => client.createSession!(title));
+      const chat = await loadBotChat(
+        () => client.getSessions(200),
+        (title) => client.createSession!(title),
+      );
       sessionIdRef.current = chat.id;
       client.setSessionId(chat.id);
       setCurrentSessionId(chat.id);
-      if (!sessions.some((session) => session.id === chat.id)) {
-        setSessionList((prev) => [chat, ...prev]);
-      }
+      setSessionList((prev) => (prev.some((session) => session.id === chat.id) ? prev : [chat, ...prev]));
       if (activeGateway) void reloadHistoryFor(activeGateway);
     } catch (error) {
       client.setBotId(undefined);
