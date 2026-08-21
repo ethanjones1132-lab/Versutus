@@ -75,6 +75,9 @@ async function makeService(overrides = {}) {
           setTimeout(resolve, 2000).unref?.();
         }
       }));
+      for (const child of children) {
+        try { child.kill(); } catch { /* already gone */ }
+      }
       // The spawned child holds its cwd (the temp workspace), so Windows
       // reports EBUSY if the rmdir races the process dying.
       return Promise.all(exits)
