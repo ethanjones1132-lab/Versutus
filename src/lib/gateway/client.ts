@@ -225,9 +225,12 @@ export class HermesGatewayClient {
   }
 
   async createSession(title?: string): Promise<HermesSession> {
-    const body: Record<string, unknown> = {};
-    if (title) body.title = title;
-    const result = await this.transport.request<{ session: HermesSession }>('POST', '/api/sessions', body);
+    // The Hermes API server rejects an empty JSON body with 400
+    // ("Invalid JSON in request body"). Send an explicit empty-string title
+    // instead so the request shape is always valid.
+    const result = await this.transport.request<{ session: HermesSession }>('POST', '/api/sessions', {
+      title: title ?? '',
+    });
     this.currentSessionId = result.session.id;
     return result.session;
   }
