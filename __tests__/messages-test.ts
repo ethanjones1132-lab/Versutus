@@ -45,4 +45,22 @@ describe('historyToChatMessages', () => {
   test('still skips empty non-tool messages', () => {
     expect(historyToChatMessages([{ role: 'assistant', content: '' }])).toEqual([]);
   });
+
+  test('two history turns with the same timestamp still get unique ids', () => {
+    const messages = historyToChatMessages([
+      { role: 'user', content: 'a', timestamp: 1 },
+      { role: 'assistant', content: 'b', timestamp: 1 },
+      { role: 'user', content: 'c', timestamp: 1 },
+    ]);
+    const ids = messages.map((message) => message.id);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids.some((id) => id === 'user-1' || id === 'assistant-1')).toBe(false);
+  });
+
+  test('preserves an explicit OpenClaw id', () => {
+    const messages = historyToChatMessages([
+      { role: 'user', content: 'a', timestamp: 1, __openclaw: { id: 'oc-99' } },
+    ]);
+    expect(messages[0].id).toBe('oc-99');
+  });
 });

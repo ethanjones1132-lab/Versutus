@@ -105,6 +105,7 @@ export function historyToChatMessages(messages: unknown[]): ChatMessage[] {
       role?: string;
       content?: unknown;
       timestamp?: number;
+      id?: string;
       tool_calls?: unknown;
       toolCalls?: unknown;
       __openclaw?: { id?: string };
@@ -115,10 +116,13 @@ export function historyToChatMessages(messages: unknown[]): ChatMessage[] {
     const toolCalls = extractToolCalls(message);
     // Keep assistant tool-only turns (text empty, tools present).
     if (!text && toolCalls.length === 0) continue;
-    const id =
-      typeof message.__openclaw?.id === 'string'
+    const explicitId =
+      typeof message.__openclaw?.id === 'string' && message.__openclaw.id
         ? message.__openclaw.id
-        : `${role}-${message.timestamp ?? result.length}`;
+        : typeof message.id === 'string' && message.id
+          ? message.id
+          : undefined;
+    const id = explicitId ?? createMessageId(role);
     result.push({
       id,
       role,

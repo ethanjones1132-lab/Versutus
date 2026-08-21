@@ -395,7 +395,6 @@ export function ChatScreen() {
               progressBackgroundColor={tokens.backgroundElevated}
             />
           }
-          removeClippedSubviews
         />
 
         {jumpVisible ? (
