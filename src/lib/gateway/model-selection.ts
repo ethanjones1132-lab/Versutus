@@ -1,6 +1,6 @@
 import type { GatewayProfile } from '@/lib/gateway/types';
 
-type ModelBearing = Pick<GatewayProfile, 'model' | 'backendModels'>;
+type ModelBearing = Pick<GatewayProfile, 'model' | 'backendModels' | 'botModels'>;
 
 /** The fields a model catalog entry can be searched by. */
 export type ModelSearchable = { id: string; provider?: string; providerId?: string };
@@ -23,12 +23,17 @@ export function filterModels<T extends ModelSearchable>(models: T[], query: stri
   );
 }
 
-/** The model a send should use: the active backend's memory, else the profile's. */
+/** The model a send should use: Bot pick, else backend memory, else profile. */
 export function effectiveModel(
   gateway: ModelBearing | null | undefined,
   selectedBackendId: string | undefined,
+  selectedBotId?: string,
 ): string | undefined {
   if (!gateway) return undefined;
+  if (selectedBotId) {
+    const botRemembered = gateway.botModels?.[selectedBotId];
+    if (botRemembered) return botRemembered;
+  }
   if (selectedBackendId) {
     const remembered = gateway.backendModels?.[selectedBackendId];
     if (remembered) return remembered;
@@ -37,19 +42,39 @@ export function effectiveModel(
 }
 
 /**
- * Records a model choice. `model` is written too, not just the per-backend
- * entry: every existing send path reads `gateway.model`, and leaving it stale
- * would send the previous backend's model id to the new one.
+ * Records a model choice.
+ *
+ * Without a Bot: writes `model` and `backendModels` so every send path that
+ * still reads `gateway.model` stays correct.
+ * With a Bot: writes **only** `botModels` so configurable chat is not stolen
+ * (ADR 0014).
  */
 export function withSelectedModel<T extends ModelBearing>(
   gateway: T,
   modelId: string,
   selectedBackendId: string | undefined,
+  selectedBotId?: string,
 ): T {
+  if (selectedBotId) {
+    return {
+      ...gateway,
+      botModels: { ...(gateway.botModels ?? {}), [selectedBotId]: modelId },
+    };
+  }
   if (!selectedBackendId) return { ...gateway, model: modelId };
   return {
     ...gateway,
     model: modelId,
     backendModels: { ...(gateway.backendModels ?? {}), [selectedBackendId]: modelId },
   };
+}
+
+/** Send-time model payload. Prefer this over reading `gateway.model` directly. */
+export function resolveSendModel(
+  gateway: ModelBearing | null | undefined,
+  selectedBackendId: string | undefined,
+  selectedBotId: string | undefined,
+): { model?: string } {
+  const model = effectiveModel(gateway, selectedBackendId, selectedBotId);
+  return model ? { model } : {};
 }

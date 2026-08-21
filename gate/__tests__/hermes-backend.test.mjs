@@ -70,6 +70,7 @@ test('a streamed turn is bound to its session and asks for OpenAI-shaped chunks'
   assert.equal(calls[0].init.headers.Authorization, 'Bearer k');
   assert.equal(calls[0].body.stream, true);
   assert.equal(calls[0].body.model, 'gpt-4o');
+  assert.equal(calls[0].body.provider, 'openai');
   assert.deepEqual(calls[0].body.messages, [{ role: 'user', content: 'hello' }]);
   // The raw response is handed back: the caller owns the framing.
   assert.equal(response.body, 'stream');

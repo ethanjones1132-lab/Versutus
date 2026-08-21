@@ -192,7 +192,7 @@ export class ManifestClient implements PortalClient {
 
   async getModels(): Promise<ModelInfo[]> {
     const path = this.requireEndpoint('models');
-    const result = await this.transport.request<{ data: ModelInfo[] }>('GET', path);
+    const result = await this.rootTransport.request<{ data: ModelInfo[] }>('GET', this.withScope(path));
     return result.data;
   }
 

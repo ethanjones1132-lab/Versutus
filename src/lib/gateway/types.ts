@@ -40,6 +40,11 @@ export type GatewayProfile = {
    * OpenCode, so one profile-wide override cannot serve both.
    */
   backendModels?: Record<string, string>;
+  /**
+   * Model remembered per Hermes Bot (profile id). Qualified `providerId/modelId`.
+   * Not a backend — see ADR 0014.
+   */
+  botModels?: Record<string, string>;
   /** Provider that owns the selected model. */
   providerId?: string;
   createdAt: number;

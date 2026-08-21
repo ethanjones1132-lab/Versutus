@@ -32,7 +32,7 @@ import {
 } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { loadBotChat, type PublicBot } from '@/lib/gateway/bots';
-import { effectiveModel, withSelectedModel } from '@/lib/gateway/model-selection';
+import { effectiveModel, resolveSendModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   categorizeProbeError,
   GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
@@ -1321,13 +1321,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         },
         {
           sessionId: sessionIdRef.current,
-          model: gateway.model,
-          providerId: gateway.providerId,
+          ...resolveSendModel(gateway, selectedBackendId, selectedBotId),
+          providerId: selectedBotId ? undefined : gateway.providerId,
         },
       );
       return fullText;
     },
-    [activeGateway, status],
+    [activeGateway, status, selectedBackendId, selectedBotId],
   );
 
   const appendLocalMessage = useCallback(
@@ -1520,8 +1520,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           },
           {
             sessionId: sessionIdRef.current,
-            model: gateway.model,
-            providerId: gateway.providerId,
+            ...resolveSendModel(gateway, selectedBackendId, selectedBotId),
+            providerId: selectedBotId ? undefined : gateway.providerId,
             signal: abortController.signal,
             onToolCall: (toolCall) => {
               setMessages((prev) => appendToolCallDelta(prev, runId, toolCall));
@@ -1550,7 +1550,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         abortControllerRef.current = null;
       }
     },
-    [activeGateway, isSending, messages],
+    [activeGateway, isSending, messages, selectedBackendId, selectedBotId],
   );
 
   const resolveRunApproval = useCallback((approved: boolean, feedback?: string) => {
@@ -2211,14 +2211,16 @@ const response = await executeGatewaySlashCommand(trimmed, {
       }
       // Hermes: per-request model override (API server honors model per request).
       if (!activeGateway) return;
-      const updated = {
-        ...withSelectedModel(activeGateway, modelId, selectedBackendId),
-        providerId: providerId ?? activeGateway.providerId,
-      };
+      const updated = selectedBotId
+        ? withSelectedModel(activeGateway, modelId, selectedBackendId, selectedBotId)
+        : {
+            ...withSelectedModel(activeGateway, modelId, selectedBackendId),
+            providerId: providerId ?? activeGateway.providerId,
+          };
       setActiveGateway(updated);
       void upsertGateway(updated).then(setGateways);
     },
-    [activeGateway, closeModelPicker, sendChatInput, selectedBackendId],
+    [activeGateway, closeModelPicker, sendChatInput, selectedBackendId, selectedBotId],
   );
 
   const selectSession = useCallback((sessionId: string) => {

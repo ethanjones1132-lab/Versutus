@@ -27,6 +27,7 @@ import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDivider } from '@/lib/format';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { buildRoster, type ChatSurface, type RosterRow } from '@/lib/gateway/bots';
+import { effectiveModel } from '@/lib/gateway/model-selection';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
 const PIN_THRESHOLD_PX = 96;
@@ -168,7 +169,7 @@ export function ChatScreen() {
     : null;
 
   const sessionLabel = currentSession?.title ?? (currentSessionId ? `${currentSessionId.slice(0, 10)}…` : undefined);
-  const modelLabel = activeGateway?.model ?? 'Default model';
+  const modelLabel = effectiveModel(activeGateway, selectedBackendId, selectedBotId) ?? 'Default model';
   const identity = settings.pcName ?? activeGateway?.name;
   const activeBackend = backends.find((backend) => backend.id === selectedBackendId) ?? backends[0];
   const backendLabel = activeBackend?.label;
@@ -295,9 +296,9 @@ export function ChatScreen() {
         statusDetail={status === 'connected' ? undefined : statusDetail || probeMessage}
         streaming={isStreaming}
         sessionLabel={surface.kind === 'roster' ? undefined : sessionLabel}
-        modelLabel={surface.kind === 'configurable' ? modelLabel : undefined}
+        modelLabel={surface.kind === 'roster' ? undefined : modelLabel}
         onSessionPress={surface.kind === 'roster' ? undefined : () => void openSessionSelector()}
-        onModelPress={surface.kind === 'configurable' ? () => openModelPicker('default') : undefined}
+        onModelPress={surface.kind === 'roster' ? undefined : () => openModelPicker('default')}
         onOverflowPress={surface.kind === 'roster' ? undefined : () => setOverflowVisible(true)}
         backendLabel={
           surface.kind === 'bot'

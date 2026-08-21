@@ -36,6 +36,18 @@ _Avoid_: default bot, unscoped chat, current chat (alone)
 A Bot's canonical, persistent conversation. Tapping a Bot opens this session, not whichever session ran last. Other sessions on the same Bot are extra threads, not replacements for it.
 _Avoid_: last session, current session (when meaning the forever-chat)
 
+**Routine**:
+A scheduled job that belongs to one Bot (Hermes cron, namespaced `[bot:<name>]`).
+_Avoid_: cron (when meaning a Bot's jobs), job (user-facing)
+
+**Mention**:
+An `@name` in a message that hands work to another Bot on the same roster.
+_Avoid_: tag, ping, @user (that's the human)
+
+**Group**:
+A roster room of two to six Bots that share a `Group: <name>` session on each member.
+_Avoid_: channel, chat (alone)
+
 **Connection status**:
 The live state of the connection to a gateway: disconnected, connecting, reconnecting, connected, pairing.
 _Avoid_: phase (when meaning the app-level journey)
@@ -111,7 +123,10 @@ _Avoid_: push (which implies server delivery)
 - A Hermes **session** belongs to one **Bot**; selecting a Bot does not change the **backend** or **gateway profile**
 - The **roster** lists **configurable chat** first, then every **Bot** including `default`; configurable chat is not a Bot
 - **Configurable chat** and the `default` **Bot** can both open the default Hermes home; they are different doors (runtime vs Bot Chat), not a mistake
-- A **Bot** has many **sessions**, one **soul**, and its own crons; it is not a **gateway profile**
+- A **Bot** has many **sessions**, one **soul**, and its own **routines**; it is not a **gateway profile**
+- A **routine** belongs to exactly one **Bot**
+- A **mention** names a **Bot** on the roster; unknown `@` is ordinary text
+- A **group** has two to six **Bots**; each member has its own `Group:` **session**
 - Tapping a **Bot** opens its **Bot Chat**; other **sessions** on that Bot can be opened or created from there without replacing Bot Chat
 - A **soul** belongs to exactly one **Bot**
 - A **Bot** lives on one Hermes **CLI environment**; Codex, Claude Code, and OpenCode are not Bots

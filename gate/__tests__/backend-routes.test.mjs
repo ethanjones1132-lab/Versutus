@@ -608,6 +608,10 @@ function stubFrontedRegistry(calls) {
           return { ...SESSION, title: input?.title ?? 'Bot Chat' };
         },
         async listMessages() { return []; },
+        async listModels() {
+          calls.push(`listModels:${botId}`);
+          return [{ id: `${botId}/one`, providerId: botId, modelId: 'one', label: `${botId} · one` }];
+        },
         async sendMessage() {
           return { text: 'ok', message: { id: 'm', role: 'assistant', content: [{ type: 'text', text: 'ok' }] } };
         },
@@ -720,6 +724,22 @@ test('unknown bot is 404, unroutable is 409', async () => {
     assert.equal(unknown.status, 404);
     const silent = await fetch(`http://127.0.0.1:${gate.port}/v1/sessions?bot=silent`, { headers: auth(gate) });
     assert.equal(silent.status, 409);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('GET /v1/models?bot=researcher uses that Bot catalog', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${gate.port}/v1/models?backendId=stub-local&bot=researcher`,
+      { headers: auth(gate) },
+    );
+    assert.equal(response.status, 200);
+    assert.ok(calls.includes('forBot:researcher'));
+    assert.ok(calls.includes('listModels:researcher'));
   } finally {
     await gate.close();
   }

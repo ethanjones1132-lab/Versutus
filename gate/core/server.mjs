@@ -1279,7 +1279,7 @@ export async function createGate(config = {}) {
         // must return only that catalog, never the Gate's provider list.
         const requestedBackendId = url.searchParams.get('backendId');
         if (requestedBackendId) {
-          const backend = await resolveBackend(requestedBackendId);
+          const backend = await resolveConversationBackend(requestedBackendId, readBotId(url));
           if (!backend) return;
           try {
             const models = await backend.listModels();

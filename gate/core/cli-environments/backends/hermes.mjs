@@ -133,6 +133,7 @@ export function createHermesBackend({ baseUrl, apiKey, fetchImpl = fetch, profil
     async sendMessage(sessionId, { text, model } = {}) {
       const payload = { message: text };
       if (model?.modelId) payload.model = model.modelId;
+      if (model?.providerId) payload.provider = model.providerId;
       const body = await call(`/api/sessions/${encodeURIComponent(sessionId)}/chat`, {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -305,6 +306,7 @@ export function createHermesBackend({ baseUrl, apiKey, fetchImpl = fetch, profil
         signal,
         body: JSON.stringify({
           model: model?.modelId ?? 'hermes-agent',
+          ...(model?.providerId ? { provider: model.providerId } : {}),
           messages: [{ role: 'user', content: text }],
           stream: true,
         }),
