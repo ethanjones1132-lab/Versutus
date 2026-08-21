@@ -62,7 +62,22 @@ export const hermesAdapter = {
       handshakeArgs: ['--acp', '--probe'],
     });
   },
-  async startRun() {
-    throw new Error('hermes startRun is implemented by the supervisor');
+  /**
+   * Non-interactive argv per operation, read off the real CLI's usage line
+   * (`hermes -h`): `-z PROMPT` runs one bounded task and prints the reply,
+   * `--version` is the call probe() already makes. The long-lived service
+   * stays with server/createBackend; this is the per-task spawn the
+   * supervisor executes inside the workspace. Returns null for an operation
+   * that needs a real terminal, so the run fails honestly instead of
+   * completing empty.
+   */
+  runInvocation(operation, input = {}) {
+    if (operation === 'status') return { args: ['--version'] };
+    if (operation === 'prompt') {
+      const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
+      if (!prompt) return null;
+      return { args: ['-z', prompt] };
+    }
+    return null;
   },
 };

@@ -50,7 +50,20 @@ export const claudeCodeAdapter = {
       handshakeArgs: ['--output-format', 'stream-json', '--probe'],
     });
   },
-  async startRun() {
-    throw new Error('claude-code startRun is implemented by the supervisor');
+  /**
+   * Non-interactive argv per operation, read off `claude --help`: `-p` prints
+   * the reply for a prompt given as the positional argument, and `--version`
+   * is the call probe() already makes. Returns null for an operation that
+   * needs a real terminal, so the run fails honestly instead of completing
+   * empty.
+   */
+  runInvocation(operation, input = {}) {
+    if (operation === 'status') return { args: ['--version'] };
+    if (operation === 'prompt') {
+      const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
+      if (!prompt) return null;
+      return { args: ['-p', prompt] };
+    }
+    return null;
   },
 };

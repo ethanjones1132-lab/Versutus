@@ -1,3 +1,4 @@
+import { spawn as nodeSpawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 
 import { assertWorkspaceAccess } from './workspace-policy.mjs';
@@ -5,13 +6,56 @@ import { ApprovalService } from './approvals.mjs';
 import { createWindowsJob } from './windows-job.mjs';
 import { createEventLog } from './run-protocol.mjs';
 import { buildCliEnvironment } from './process-environment.mjs';
+import { spawnCommand } from './adapters/shared.mjs';
+
+/**
+ * Upper bound on one run.output event's text, in characters. The cap bounds
+ * frame size, not data: output past it is sliced into further events rather
+ * than dropped (the terminal module made that mistake once already), and a
+ * streaming decoder carries a multi-byte sequence that straddles two 'data'
+ * events so the split point never becomes U+FFFD.
+ */
+const MAX_OUTPUT_CHARS = 16_000;
+
+function createOutputPump(emit) {
+  const decoders = new Map();
+
+  function decodeInto(stream, buffer, final = false) {
+    let decoder = decoders.get(stream);
+    if (!decoder) {
+      decoder = new TextDecoder('utf-8');
+      decoders.set(stream, decoder);
+    }
+    const text = decoder.decode(buffer, { stream: !final });
+    for (let i = 0; i < text.length; ) {
+      let end = Math.min(i + MAX_OUTPUT_CHARS, text.length);
+      // Never cut between the halves of a surrogate pair.
+      if (end < text.length) {
+        const code = text.charCodeAt(end - 1);
+        if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+      }
+      emit(stream, text.slice(i, end));
+      i = end;
+    }
+  }
+
+  return {
+    push(stream, buffer) {
+      decodeInto(stream, buffer);
+    },
+    flush() {
+      for (const stream of decoders.keys()) decodeInto(stream, undefined, true);
+    },
+  };
+}
 
 export class CliEnvironmentService {
-  constructor({ store, registry, jobFactory = createWindowsJob, approvals = new ApprovalService() } = {}) {
+  constructor({ store, registry, jobFactory = createWindowsJob, approvals = new ApprovalService(), spawnImpl = nodeSpawn } = {}) {
     this.store = store;
     this.registry = registry;
     this.jobFactory = jobFactory;
     this.approvals = approvals;
+    this.spawnImpl = spawnImpl;
     this.runs = new Map();
     this.environmentState = new Map();
   }
@@ -91,13 +135,61 @@ export class CliEnvironmentService {
     this.environmentState.set(record.id, { state: 'busy' });
     log.emit({ type: 'run.started', payload: { operation: request.operation, sandbox: request.sandbox } });
 
-    if (request.hang) {
-      run.pending = true;
-    } else {
-      queueMicrotask(() => this.finish(run, 'run.completed', { exitCode: 0 }));
+    /**
+     * The invocation is the adapter's own contract — `codex exec`, `claude -p`,
+     * `hermes -z`, `opencode run` — verified against each CLI's usage line.
+     * Without it this service used to emit run.completed exitCode 0 without
+     * ever spawning anything: a phone operator watched a task "succeed" with
+     * no reply in it, which is exactly the silent-empty failure the Gate
+     * exists to prevent.
+     */
+    const invocation = adapter.runInvocation?.(request.operation, request.input);
+    if (!invocation) {
+      queueMicrotask(() =>
+        this.finish(run, 'run.failed', {
+          message: `"${request.operation}" on adapter "${record.adapterId}" has no non-interactive invocation`,
+        }),
+      );
+      return { runId, completed: this.wait(runId) };
     }
 
+    this.execute(run, invocation.args);
     return { runId, completed: this.wait(runId) };
+  }
+
+  execute(run, args) {
+    const { command, prefix } = spawnCommand(run.record.executable.path);
+    let child;
+    try {
+      child = this.spawnImpl(command, [...prefix, ...args], {
+        cwd: run.workspace.canonical,
+        env: run.childEnv,
+        windowsHide: true,
+      });
+    } catch (error) {
+      this.finish(run, 'run.failed', { message: error.message });
+      return;
+    }
+    // Registered before any event can fire so cancel() kills this child.
+    run.job.add(child);
+
+    const pump = createOutputPump((stream, text) => {
+      run.log.emit({ type: 'run.output', payload: { stream, text } });
+    });
+    child.stdout?.on('data', (chunk) => pump.push('stdout', chunk));
+    child.stderr?.on('data', (chunk) => pump.push('stderr', chunk));
+    child.on('error', (error) => {
+      if (run.done || run.nativeCancel) return;
+      this.finish(run, 'run.failed', { message: error.message });
+    });
+    child.on('close', (code) => {
+      pump.flush();
+      // A killed child reports a nonzero/null code; cancel() already emitted
+      // the terminal event, and finish() would refuse a second one anyway.
+      if (run.done || run.nativeCancel) return;
+      if (code === 0) this.finish(run, 'run.completed', { exitCode: 0 });
+      else this.finish(run, 'run.failed', { exitCode: code ?? null });
+    });
   }
 
   events(runId) {

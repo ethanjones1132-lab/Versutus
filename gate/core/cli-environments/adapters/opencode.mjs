@@ -53,7 +53,20 @@ export const opencodeAdapter = {
       handshakeArgs: ['session', 'list', '--format', 'json'],
     });
   },
-  async startRun() {
-    throw new Error('opencode startRun is implemented by the supervisor');
+  /**
+   * Non-interactive argv per operation, read off `opencode run --help`:
+   * `opencode run [message..]` runs one bounded task non-interactively, and
+   * `--version` is the call probe() already makes. Returns null for an
+   * operation that needs a real terminal, so the run fails honestly instead
+   * of completing empty.
+   */
+  runInvocation(operation, input = {}) {
+    if (operation === 'status') return { args: ['--version'] };
+    if (operation === 'prompt') {
+      const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
+      if (!prompt) return null;
+      return { args: ['run', prompt] };
+    }
+    return null;
   },
 };
