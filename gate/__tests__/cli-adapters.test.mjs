@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { fakeExecutable } from './fixtures/cli-protocols/fake-executable.mjs';
 import { CliAdapterRegistry } from '../core/cli-environments/adapter-registry.mjs';
@@ -43,6 +46,26 @@ test('supported Hermes ACP version is ready', async () => {
   const probe = await registry.get('hermes').probe(await fakeExecutable('0.18.0'));
   assert.equal(probe.state, 'ready');
   assert.equal(probe.protocol, 'acp');
+});
+
+test('Hermes Bot inventory follows the configured HERMES_HOME', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-adapter-home-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');
+  await mkdir(join(home, 'profiles', 'forge'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'forge', '.env'), 'API_SERVER_KEY=forge-listen\n');
+  const previousHome = process.env.HERMES_HOME;
+  process.env.HERMES_HOME = home;
+  try {
+    const hermes = registry.get('hermes').createBackend({
+      baseUrl: 'http://127.0.0.1:8642',
+      credentials: { API_SERVER_KEY: 'default-listen' },
+    });
+    const bots = await hermes.listBots();
+    assert.deepEqual(bots.data.map((bot) => bot.id), ['default', 'forge']);
+  } finally {
+    if (previousHome === undefined) delete process.env.HERMES_HOME;
+    else process.env.HERMES_HOME = previousHome;
+  }
 });
 
 test('supported OpenCode ACP version is ready', async () => {

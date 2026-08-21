@@ -49,7 +49,7 @@ export const hermesAdapter = {
     return createHermesBackend({
       baseUrl,
       apiKey: credentials?.API_SERVER_KEY ?? credentials?.HERMES_API_SERVER_KEY,
-      profilesHome: join(homedir(), '.hermes'),
+      profilesHome: process.env.HERMES_HOME || join(homedir(), '.hermes'),
     });
   },
 
