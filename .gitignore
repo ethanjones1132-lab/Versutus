@@ -59,3 +59,6 @@ gate/credentials/
 
 # Git worktrees
 .worktrees/
+
+# Commercial/pricing working documents — not for the public repo.
+docs/commercial/
