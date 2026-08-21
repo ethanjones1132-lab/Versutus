@@ -1,4 +1,5 @@
 import { ManifestClient } from '@/lib/gateway/manifest-client';
+import { createEnvironmentClient } from '@/lib/gateway/environment-client';
 import { installStreamingFetch, streamingFetch } from '@/lib/net/streaming-fetch';
 import type { GatewayIdentity } from '@/lib/portal/identify';
 import type { GatewayProfile } from '@/lib/gateway/types';
@@ -95,6 +96,36 @@ describe('streaming call sites', () => {
     // Arriving as separate deltas is the whole point — one block means no live feed.
     expect(deltas).toEqual(['to', 'ken']);
     expect(full).toBe('token');
+    globalFetch.mockRestore();
+  });
+
+  test('the CLI run event stream reads through the installed fetch, not the global one', async () => {
+    let usedInstalled = false;
+    installStreamingFetch((async () => {
+      usedInstalled = true;
+      return sseResponse([
+        `data: ${JSON.stringify({ type: 'run.started' })}\n\n`,
+        `data: ${JSON.stringify({ type: 'run.output', payload: { text: 'pong', stream: 'stdout' } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'run.completed', payload: { exitCode: 0 } })}\n\n`,
+      ]);
+    }) as unknown as typeof globalThis.fetch);
+
+    const globalFetch = jest.spyOn(globalThis, 'fetch');
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    // Same wiring as production: gateway-provider.gatewayFetch hands the
+    // environments section client.authorizedFetch, and streamRun reads the SSE
+    // body off the response. On device a plain-fetch response has no body at
+    // all, so this seam is what makes the streamed reply arrive — or not.
+    const environments = createEnvironmentClient(
+      async <T,>() => undefined as T,
+      (path, init) => client.authorizedFetch(path, init),
+    );
+    const types: string[] = [];
+    await environments.streamRun('env-1', 'r-1', (event) => types.push(event.type));
+
+    expect(usedInstalled).toBe(true);
+    expect(globalFetch).not.toHaveBeenCalled();
+    expect(types).toEqual(['run.started', 'run.output', 'run.completed']);
     globalFetch.mockRestore();
   });
 });

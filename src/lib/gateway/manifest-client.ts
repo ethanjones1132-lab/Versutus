@@ -571,12 +571,18 @@ export class ManifestClient implements PortalClient {
   /**
    * Authenticated fetch against the gateway root. Runs live under the root
    * origin even for a child /p/{id} profile, so rootTransport is correct here.
+   *
+   * This is the CLI-environment run transport — including the SSE event stream
+   * (`GET /v1/environments/{id}/runs/{runId}/events`) — so it must go through
+   * streamingFetch: React Native's global fetch has no readable response body,
+   * and a plain-fetch stream silently delivers zero events on device while
+   * every Node-side test stays green. See streaming-fetch.ts.
    */
   async authorizedFetch(path: string, init: RequestInit = {}): Promise<Response> {
     const headers = { ...this.rootTransport.headers, ...((init.headers as Record<string, string>) ?? {}) };
     // The transport sets JSON by default; a GET/SSE request should not claim one.
     if (!init.body) delete headers['Content-Type'];
-    return fetch(`${this.rootTransport.baseUrl}${path}`, { ...init, headers });
+    return streamingFetch(`${this.rootTransport.baseUrl}${path}`, { ...init, headers });
   }
 
   /**
