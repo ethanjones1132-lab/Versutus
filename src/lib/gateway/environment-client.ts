@@ -1,6 +1,7 @@
 import type {
   EnvironmentAdapter,
   EnvironmentRunEvent,
+  EnvironmentRunSummary,
   EnvironmentSnapshot,
 } from '@/lib/gateway/environment-types';
 import { messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
@@ -81,6 +82,17 @@ export function createEnvironmentClient(
     return `${basePath.replace(/\/+$/, '')}/${segments.join('/')}`;
   }
 
+  /**
+   * Runs kept by the Gate for this environment, newest first. Feeds the
+   * recovery affordance: after a dropped stream or an app restart, the run id
+   * is discoverable again and the event stream replays the whole run.
+   */
+  const listRuns = async (environmentId: string): Promise<EnvironmentRunSummary[]> => {
+    const response = await ensureOk(await requireFetcher()(runPath(environmentId)));
+    const body = (await response.json()) as { runs?: EnvironmentRunSummary[] };
+    return Array.isArray(body.runs) ? body.runs : [];
+  };
+
   function requireFetcher(): GatewayFetch {
     if (!fetcher) {
       throw new Error(
@@ -98,6 +110,8 @@ export function createEnvironmentClient(
   }
 
   return {
+    listRuns,
+
     /** Begin a run. Resolves once the Gate has accepted it and assigned an id. */
     startRun: async (environmentId: string, input: StartRunInput): Promise<{ runId: string }> => {
       const response = await ensureOk(

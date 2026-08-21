@@ -1353,6 +1353,21 @@ export async function createGate(config = {}) {
         return;
       }
 
+      if (runStart && method === 'GET') {
+        try {
+          // require() first so a typo'd environment id is a 404, not an
+          // empty list pretending the environment has never run anything.
+          await environmentService.require(decodeURIComponent(runStart[1]));
+          const runs = environmentService.listRuns(decodeURIComponent(runStart[1]));
+          res.writeHead(200);
+          res.end(JSON.stringify({ runs }));
+        } catch (error) {
+          res.writeHead(error.code === 'environment_not_found' ? 404 : 500);
+          res.end(JSON.stringify({ error: { message: error.message, code: error.code || 'runs_list_failed' } }));
+        }
+        return;
+      }
+
       const runEvents = pathname.match(/^\/v1\/environments\/([^/]+)\/runs\/([^/]+)\/events$/);
       if (runEvents && method === 'GET') {
         res.writeHead(200, {

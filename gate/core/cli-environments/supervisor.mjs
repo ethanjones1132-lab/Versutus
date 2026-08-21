@@ -111,6 +111,7 @@ export class CliEnvironmentService {
     }
 
     const runId = request.runId ?? `run-${randomBytes(6).toString('hex')}`;
+    const startedAtMs = Date.now();
     const log = createEventLog(runId);
     const job = this.jobFactory();
     const childEnv = buildCliEnvironment(process.env, {
@@ -129,6 +130,7 @@ export class CliEnvironmentService {
       childEnv,
       workspace,
       adapter,
+      startedAtMs,
       done: false,
     };
     this.runs.set(runId, run);
@@ -196,6 +198,36 @@ export class CliEnvironmentService {
     const run = this.runs.get(runId);
     if (!run) throw new Error(`unknown run ${runId}`);
     return run.log.stream();
+  }
+
+  /**
+   * Summaries for the runs retained on an environment, newest first. This is
+   * how a phone finds its way back to a run after the SSE connection dropped:
+   * the event stream replays from sequence 0 to any subscriber, but only if
+   * the caller can rediscover the run id. Runs live in memory with the Gate,
+   * so this is a recovery window, not an archive.
+   */
+  listRuns(environmentId, limit = 50) {
+    return [...this.runs.values()]
+      .filter((run) => run.request.environmentId === environmentId)
+      .sort((a, b) => b.startedAtMs - a.startedAtMs)
+      .slice(0, limit)
+      .map((run) => {
+        const events = run.log.events();
+        const last = events.at(-1);
+        const terminal = last && /^run\.(completed|failed|cancelled)$/.test(last.type) ? last : null;
+        const exitCode =
+          terminal && typeof terminal.payload.exitCode === 'number' ? terminal.payload.exitCode : null;
+        return {
+          runId: run.runId,
+          environmentId: run.request.environmentId,
+          operation: run.request.operation,
+          state: terminal ? terminal.type.slice(4) : events.length ? 'running' : 'starting',
+          startedAt: new Date(run.startedAtMs).toISOString(),
+          endedAt: terminal ? terminal.timestamp : null,
+          exitCode,
+        };
+      });
   }
 
   async approve(runId, approvalId, decision) {

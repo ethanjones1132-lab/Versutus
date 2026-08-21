@@ -95,6 +95,34 @@ describe('CLI runs from the app', () => {
     });
   });
 
+  it('lists retained runs so a dropped stream can be found again', async () => {
+    const runs = [
+      {
+        runId: 'run-2',
+        environmentId: 'opencode-local',
+        operation: 'prompt',
+        state: 'completed',
+        startedAt: '2026-08-21T22:00:00.000Z',
+        endedAt: '2026-08-21T22:00:05.000Z',
+        exitCode: 0,
+      },
+    ];
+    const { calls, client } = harness({
+      '/v1/environments/opencode-local/runs': () =>
+        new Response(JSON.stringify({ runs }), { status: 200 }),
+    });
+    await expect(client.listRuns('opencode-local')).resolves.toEqual(runs);
+    expect(calls[0].path).toBe('/v1/environments/opencode-local/runs');
+    expect(calls[0].init?.method ?? 'GET').toBe('GET');
+  });
+
+  it('treats a gateway without a run list as an empty history, not an error', async () => {
+    const { client } = harness({
+      '/v1/environments/e/runs': () => new Response('{}', { status: 200 }),
+    });
+    await expect(client.listRuns('e')).resolves.toEqual([]);
+  });
+
   it('surfaces a refused run rather than resolving with a bad id', async () => {
     const { client } = harness({
       '/v1/environments/e/runs': () =>

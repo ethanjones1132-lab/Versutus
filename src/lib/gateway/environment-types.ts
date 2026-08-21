@@ -35,3 +35,18 @@ export type EnvironmentRunEvent = {
   type: string;
   payload: Record<string, unknown>;
 };
+
+/**
+ * One retained run as the Gate's list endpoint reports it. This is how the
+ * app finds its way back to a run after the stream dropped — the event
+ * endpoint replays from sequence 0, but only once the run id is known again.
+ */
+export type EnvironmentRunSummary = {
+  runId: string;
+  environmentId: string;
+  operation: string;
+  state: 'starting' | 'running' | 'completed' | 'failed' | 'cancelled';
+  startedAt: string;
+  endedAt: string | null;
+  exitCode: number | null;
+};
