@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
+import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
 import { Badge, Card, Icon, PressableScale, Text, type IconName } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
@@ -64,6 +65,7 @@ export function ChatComposer({
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={72}>
+      <ComposerKeyboardLift>
       <View style={styles.dock}>
         <View style={styles.utilityRow}>
           <View style={styles.chipGroup}>
@@ -283,6 +285,7 @@ export function ChatComposer({
           </Animated.View>
         </Card>
       </View>
+      </ComposerKeyboardLift>
     </KeyboardAvoidingView>
   );
 }

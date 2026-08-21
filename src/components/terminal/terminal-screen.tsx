@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
+import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
 import { ConnectionBadge } from '@/components/connection-badge';
 import { GatewayCommandPanel } from '@/components/gateway/gateway-command-panel';
 import { CommandLogSheet } from '@/components/terminal/command-log-sheet';
@@ -285,6 +286,7 @@ export function TerminalScreen() {
           </View>
 
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <ComposerKeyboardLift>
             {inputHistory.length > 0 ? (
               <View style={styles.historyRow}>
                 {inputHistory.slice(0, 3).map((command) => (
@@ -314,6 +316,7 @@ export function TerminalScreen() {
               />
               <Button label="Send" size="sm" onPress={() => void sendToTerminal()} />
             </Card>
+            </ComposerKeyboardLift>
           </KeyboardAvoidingView>
         </>
       ) : (
