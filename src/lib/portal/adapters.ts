@@ -57,6 +57,11 @@ export interface PortalClient {
     modelId?: string;
     providerId?: string;
   }): Promise<{ id: string; displayName: string; routable: boolean }>;
+  listJobs?(): Promise<{ id: string; name?: string; paused?: boolean }[]>;
+  createJob?(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }>;
+  runJob?(jobId: string): Promise<void>;
+  setJobPaused?(jobId: string, paused: boolean): Promise<void>;
+  handoffMention?(input: { fromId: string; toId: string; text: string }): Promise<unknown>;
   setBotId?(id: string | undefined): void;
   setBackendId?(id: string | undefined): void;
   readonly botId?: string;

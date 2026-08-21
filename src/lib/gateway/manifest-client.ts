@@ -395,6 +395,14 @@ export class ManifestClient implements PortalClient {
     return this.withBot(this.withBackend(path));
   }
 
+  async handoffMention(input: { fromId: string; toId: string; text: string }): Promise<unknown> {
+    const path = this.requireEndpoint('bots');
+    return this.rootTransport.request('POST', this.withBackend(`${path.replace(/\/+$/, '')}/handoff`), {
+      ...input,
+      ...(this.backendId ? { backendId: this.backendId } : {}),
+    });
+  }
+
   async createBot(input: {
     name: string;
     soul?: string;
@@ -408,6 +416,44 @@ export class ManifestClient implements PortalClient {
       ...input,
       ...(this.backendId ? { backendId: this.backendId } : {}),
     });
+  }
+
+  async listJobs(): Promise<{ id: string; name?: string; paused?: boolean }[]> {
+    const path = this.endpoints.jobs;
+    if (!path) return [];
+    const result = await this.rootTransport.request<{ data?: { id: string; name?: string; paused?: boolean }[] }>(
+      'GET',
+      this.withScope(path),
+    );
+    return result.data ?? [];
+  }
+
+  async createJob(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }> {
+    const path = this.requireEndpoint('jobs');
+    return this.rootTransport.request('POST', this.withBackend(path), {
+      ...input,
+      ...(this.backendId ? { backendId: this.backendId } : {}),
+      ...(this.botId ? { bot: this.botId } : {}),
+    });
+  }
+
+  async runJob(jobId: string): Promise<void> {
+    const path = this.requireEndpoint('jobs');
+    await this.rootTransport.request(
+      'POST',
+      this.withScope(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/run`),
+      this.botId ? { bot: this.botId } : {},
+    );
+  }
+
+  async setJobPaused(jobId: string, paused: boolean): Promise<void> {
+    const path = this.requireEndpoint('jobs');
+    const action = paused ? 'pause' : 'resume';
+    await this.rootTransport.request(
+      'POST',
+      this.withScope(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/${action}`),
+      this.botId ? { bot: this.botId } : {},
+    );
   }
 
   async listBots(): Promise<{ id: string; displayName: string; routable: boolean }[]> {

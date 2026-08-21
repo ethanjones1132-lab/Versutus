@@ -8,6 +8,7 @@ import { BackendPickerSheet } from '@/components/chat/backend-picker-sheet';
 import { ChatComposer } from '@/components/chat/chat-composer';
 import { ChatRoster } from '@/components/chat/chat-roster';
 import { NewAgentSheet } from '@/components/chat/new-agent-sheet';
+import { RoutinesPane, type RoutineJob } from '@/components/chat/routines-pane';
 import { DayDivider } from '@/components/chat/day-divider';
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
 import { ChatHeader } from '@/components/chat/chat-header';
@@ -28,6 +29,7 @@ import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDivider } from '@/lib/format';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { buildRoster, type ChatSurface, type RosterRow } from '@/lib/gateway/bots';
+import { routineName } from '@/lib/gateway/routines';
 import { effectiveModel } from '@/lib/gateway/model-selection';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
@@ -116,6 +118,7 @@ export function ChatScreen() {
     createBot,
     openBot,
     clearBot,
+    botJobs,
     selectedBotId,
   } = useGateway();
 
@@ -134,6 +137,7 @@ export function ChatScreen() {
   const [newAgentVisible, setNewAgentVisible] = useState(false);
   const [newAgentBusy, setNewAgentBusy] = useState(false);
   const [newAgentError, setNewAgentError] = useState<string | undefined>();
+  const [routineJobs, setRoutineJobs] = useState<RoutineJob[]>([]);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const pinnedRef = useRef(true);
@@ -242,6 +246,20 @@ export function ChatScreen() {
       cancelled = true;
     };
   }, [surface.kind, status, listBots]);
+
+  const botSurfaceId = surface.kind === 'bot' ? surface.botId : undefined;
+  useEffect(() => {
+    if (!botSurfaceId || status !== 'connected') return;
+    let cancelled = false;
+    void botJobs.list().then((jobs) => {
+      if (!cancelled) setRoutineJobs(jobs);
+    }).catch(() => {
+      if (!cancelled) setRoutineJobs([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [botSurfaceId, status, botJobs]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -360,6 +378,33 @@ export function ChatScreen() {
             onRetry={() => void retryAutoConnect()}
           />
         </Animated.View>
+      ) : null}
+
+      {surface.kind === 'bot' ? (
+        <RoutinesPane
+          jobs={routineJobs}
+          onCreate={(input) => {
+            void botJobs
+              .create({
+                name: routineName(surface.botId, input.title),
+                prompt: input.prompt,
+                schedule: input.schedule,
+              })
+              .then(() => botJobs.list())
+              .then(setRoutineJobs)
+              .catch(() => undefined);
+          }}
+          onRun={(jobId) => {
+            void botJobs.run(jobId).catch(() => undefined);
+          }}
+          onTogglePause={(jobId, paused) => {
+            void botJobs
+              .pause(jobId, paused)
+              .then(() => botJobs.list())
+              .then(setRoutineJobs)
+              .catch(() => undefined);
+          }}
+        />
       ) : null}
 
       {surface.kind === 'roster' ? (

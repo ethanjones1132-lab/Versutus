@@ -32,6 +32,7 @@ import {
 } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { loadBotChat, type PublicBot } from '@/lib/gateway/bots';
+import { extractMentions } from '@/lib/gateway/mentions';
 import { effectiveModel, resolveSendModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   categorizeProbeError,
@@ -166,6 +167,12 @@ type GatewayContextValue = {
   }) => Promise<PublicBot>;
   openBot: (botId: string) => Promise<void>;
   clearBot: () => void;
+  botJobs: {
+    list: () => Promise<{ id: string; name?: string; paused?: boolean }[]>;
+    create: (input: { name: string; prompt: string; schedule: string }) => Promise<void>;
+    run: (jobId: string) => Promise<void>;
+    pause: (jobId: string, paused: boolean) => Promise<void>;
+  };
   runAgentCommand: (command: string, options?: { onDelta?: (delta: string) => void }) => Promise<string>;
   dynamicCommands: GatewayCapabilityCommand[];
   deleteGateway: (id: string) => Promise<void>;
@@ -1540,6 +1547,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // Mark as complete
         setMessages((prev) => finalizeStreamingMessage(prev, runId));
         setLastError(null);
+        if (selectedBotId && client.handoffMention && client.listBots) {
+          const roster = await client.listBots().catch(() => []);
+          const mentions = extractMentions(trimmed, roster.map((bot) => bot.id)).filter((id) => id !== selectedBotId);
+          for (const toId of mentions) {
+            await client.handoffMention({ fromId: selectedBotId, toId, text: trimmed }).catch(() => undefined);
+          }
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const aborted = isUserAbort(error, abortController.signal);
@@ -2247,6 +2261,29 @@ const response = await executeGatewaySlashCommand(trimmed, {
     return client.listBots();
   }, []);
 
+  const botJobs = useMemo(() => ({
+    list: async () => {
+      const client = clientRef.current;
+      if (!client?.listJobs) return [];
+      return client.listJobs();
+    },
+    create: async (input: { name: string; prompt: string; schedule: string }) => {
+      const client = clientRef.current;
+      if (!client?.createJob) throw new Error('This gateway does not manage jobs.');
+      await client.createJob(input);
+    },
+    run: async (jobId: string) => {
+      const client = clientRef.current;
+      if (!client?.runJob) throw new Error('This gateway does not run jobs.');
+      await client.runJob(jobId);
+    },
+    pause: async (jobId: string, paused: boolean) => {
+      const client = clientRef.current;
+      if (!client?.setJobPaused) throw new Error('This gateway does not pause jobs.');
+      await client.setJobPaused(jobId, paused);
+    },
+  }), []);
+
   const createBot = useCallback(async (input: {
     name: string;
     soul?: string;
@@ -2374,6 +2411,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       createBot,
       openBot,
       clearBot,
+      botJobs,
       runAgentCommand,
       dynamicCommands,
       setupFromPcAddress,
@@ -2425,7 +2463,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       messages, isSending, isCommandRunning, lastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, openBot, clearBot, runAgentCommand, setupFromPcAddress, retryAutoConnect,
+      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, openBot, clearBot, botJobs, runAgentCommand, setupFromPcAddress, retryAutoConnect,
       setAutoConnect, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

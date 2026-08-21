@@ -21,6 +21,7 @@ import { CliAdapterRegistry } from './cli-environments/adapter-registry.mjs';
 import { CliEnvironmentService } from './cli-environments/supervisor.mjs';
 import { createEnvironmentRpc, sanitizeEnvironment } from './cli-environments/rpc.mjs';
 import { createBackendManager } from './cli-environments/backend-manager.mjs';
+import { createBotGroupStore } from './cli-environments/bot-groups.mjs';
 import { buildCliEnvironment } from './cli-environments/process-environment.mjs';
 import { TokenStore } from './tokens.mjs';
 import { PairingStore } from './pairing.mjs';
@@ -387,6 +388,7 @@ export async function createGate(config = {}) {
     onChanged: () => reload(),
   });
   const environmentStore = new CliEnvironmentStore(gateHome);
+  const botGroups = createBotGroupStore(gateHome);
   const environmentRegistry = injectedRegistry ?? new CliAdapterRegistry();
   const environmentService = new CliEnvironmentService({
     store: environmentStore,
@@ -730,10 +732,13 @@ export async function createGate(config = {}) {
         (pathname === '/v1/skills' && method === 'GET') ||
         (pathname === '/v1/bots' && method === 'GET') ||
         (pathname === '/v1/bots' && method === 'POST') ||
+        (pathname === '/v1/bots/handoff' && method === 'POST') ||
+        (pathname === '/v1/bot-groups' && (method === 'GET' || method === 'POST')) ||
+        /^\/v1\/bot-groups\/[^/]+\/messages$/.test(pathname) ||
         // Note the divergence from plain /health, which is unauthenticated:
         // detailed diagnostics expose backend internals and need a token.
         (pathname === '/health/detailed' && method === 'GET') ||
-        (pathname === '/v1/jobs' && method === 'GET') ||
+        (pathname === '/v1/jobs' && (method === 'GET' || method === 'POST')) ||
         /^\/v1\/jobs\/[^/]+\/(run|pause|resume)$/.test(pathname) ||
         (pathname === '/v1/sessions' && (method === 'GET' || method === 'POST')) ||
         /^\/v1\/sessions\/[^/]+$/.test(pathname) ||
@@ -1107,11 +1112,48 @@ export async function createGate(config = {}) {
         return;
       }
 
-      if (pathname === '/v1/jobs' && method === 'GET') {
-        const backend = await resolveBackendFor('listJobs');
+      if (pathname === '/v1/bots/handoff' && method === 'POST') {
+        const body = (await readJsonBody(req)) ?? {};
+        const backend = await resolveBackendFor('handoffMention');
         if (!backend) return;
+        try {
+          const result = await backend.handoffMention({
+            fromId: body.fromId,
+            toId: body.toId,
+            text: body.text,
+          });
+          res.writeHead(200);
+          res.end(JSON.stringify(result ?? { ok: true }));
+        } catch (error) {
+          const status = error.status || 502;
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code: error.code ?? 'handoff_failed' } }));
+        }
+        return;
+      }
+
+      if (pathname === '/v1/jobs' && method === 'GET') {
+        const botId = readBotId(url);
+        const backend = botId
+          ? await resolveConversationBackend(url.searchParams.get('backendId'), botId)
+          : await resolveBackendFor('listJobs');
+        if (!backend) return;
+        if (!requireBackendMethod(backend, 'listJobs')) return;
         res.writeHead(200);
         res.end(JSON.stringify(await backend.listJobs()));
+        return;
+      }
+
+      if (pathname === '/v1/jobs' && method === 'POST') {
+        const body = (await readJsonBody(req)) ?? {};
+        const botId = readBotId(url, body);
+        const backend = botId
+          ? await resolveConversationBackend(body.backendId ?? url.searchParams.get('backendId'), botId)
+          : await resolveBackendFor('createJob');
+        if (!backend) return;
+        if (!requireBackendMethod(backend, 'createJob')) return;
+        res.writeHead(200);
+        res.end(JSON.stringify(await backend.createJob(body)));
         return;
       }
 
@@ -1147,12 +1189,64 @@ export async function createGate(config = {}) {
         return;
       }
 
+      if (pathname === '/v1/bot-groups' && method === 'GET') {
+        res.writeHead(200);
+        res.end(JSON.stringify({ object: 'list', data: await botGroups.list() }));
+        return;
+      }
+
+      if (pathname === '/v1/bot-groups' && method === 'POST') {
+        const body = (await readJsonBody(req)) ?? {};
+        try {
+          const group = await botGroups.create({ name: body.name, memberIds: body.memberIds });
+          res.writeHead(200);
+          res.end(JSON.stringify(group));
+        } catch (error) {
+          res.writeHead(error.status || 400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code: error.code ?? 'invalid_group' } }));
+        }
+        return;
+      }
+
+      const groupMessageMatch = pathname.match(/^\/v1\/bot-groups\/([^/]+)\/messages$/);
+      if (groupMessageMatch && method === 'POST') {
+        const body = (await readJsonBody(req)) ?? {};
+        const group = await botGroups.get(decodeURIComponent(groupMessageMatch[1]));
+        if (!group) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'group not found', code: 'unknown_group' } }));
+          return;
+        }
+        const backend = await resolveBackendFor('deliverGroupMessage');
+        if (!backend) return;
+        try {
+          const result = await backend.deliverGroupMessage({
+            name: group.name,
+            memberIds: group.memberIds,
+            mentionedIds: body.mentionedIds,
+            text: body.text,
+          });
+          res.writeHead(200);
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          res.writeHead(error.status || 502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code: error.code ?? 'group_send_failed' } }));
+        }
+        return;
+      }
+
       const jobActionMatch = pathname.match(/^\/v1\/jobs\/([^/]+)\/(run|pause|resume)$/);
       if (jobActionMatch && method === 'POST') {
         const [, rawJobId, action] = jobActionMatch;
         const jobId = decodeURIComponent(rawJobId);
-        const backend = await resolveBackendFor(action === 'run' ? 'runJob' : 'setJobPaused');
+        const body = (await readJsonBody(req)) ?? {};
+        const botId = readBotId(url, body);
+        const methodName = action === 'run' ? 'runJob' : 'setJobPaused';
+        const backend = botId
+          ? await resolveConversationBackend(body.backendId ?? url.searchParams.get('backendId'), botId)
+          : await resolveBackendFor(methodName);
         if (!backend) return;
+        if (!requireBackendMethod(backend, methodName)) return;
         const result = action === 'run'
           ? await backend.runJob(jobId)
           : await backend.setJobPaused(jobId, action === 'pause');

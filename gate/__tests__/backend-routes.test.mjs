@@ -583,6 +583,7 @@ function stubFrontedRegistry(calls) {
     async listSkills() { calls.push('listSkills'); return { data: [{ id: 'skill-1' }] }; },
     async healthDetailed() { calls.push('healthDetailed'); return { status: 'ok', checks: { db: 'ok' } }; },
     async listJobs() { calls.push('listJobs'); return { data: [{ id: 'job-1', paused: false }] }; },
+    async createJob(body) { calls.push(`createJob:${body?.name}`); return { id: 'job-new', name: body?.name }; },
     async runJob(id) { calls.push(`runJob:${id}`); return { started: true }; },
     async setJobPaused(id, paused) { calls.push(`setJobPaused:${id}:${paused}`); return { paused }; },
     async listBots() {
@@ -616,6 +617,8 @@ function stubFrontedRegistry(calls) {
           calls.push(`listModels:${botId}`);
           return [{ id: `${botId}/one`, providerId: botId, modelId: 'one', label: `${botId} · one` }];
         },
+        async listJobs() { calls.push(`listJobs:${botId}`); return { data: [{ id: 'job-1' }] }; },
+        async createJob(body) { calls.push(`createJob:${botId}:${body?.name}`); return { id: 'job-2', name: body?.name }; },
         async sendMessage() {
           return { text: 'ok', message: { id: 'm', role: 'assistant', content: [{ type: 'text', text: 'ok' }] } };
         },
@@ -744,6 +747,22 @@ test('unknown bot is 404, unroutable is 409', async () => {
     assert.equal(unknown.status, 404);
     const silent = await fetch(`http://127.0.0.1:${gate.port}/v1/sessions?bot=silent`, { headers: auth(gate) });
     assert.equal(silent.status, 409);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('GET /v1/jobs?bot=researcher lists that Bot cron', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${gate.port}/v1/jobs?backendId=stub-local&bot=researcher`,
+      { headers: auth(gate) },
+    );
+    assert.equal(response.status, 200);
+    assert.ok(calls.includes('forBot:researcher'));
+    assert.ok(calls.includes('listJobs:researcher'));
   } finally {
     await gate.close();
   }

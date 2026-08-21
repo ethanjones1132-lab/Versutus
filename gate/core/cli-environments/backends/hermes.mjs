@@ -219,6 +219,10 @@ export function createHermesBackend({
       return call('/api/jobs');
     },
 
+    async createJob(body) {
+      return call('/api/jobs', { method: 'POST', body: JSON.stringify(body ?? {}) });
+    },
+
     async runJob(jobId) {
       return call(`/api/jobs/${encodeURIComponent(jobId)}/run`, { method: 'POST' });
     },
@@ -339,6 +343,40 @@ export function createHermesBackend({
       if (!profilesHome) return { object: 'list', data: [] };
       const records = await listHermesBots(profilesHome);
       return { object: 'list', data: records.map(toPublicBot) };
+    },
+
+    async deliverGroupMessage({ name, memberIds, mentionedIds, text } = {}) {
+      const { planGroupRounds, groupSessionTitle } = await import('../bot-groups.mjs');
+      const steps = planGroupRounds({ memberIds: memberIds ?? [], mentionedIds: mentionedIds ?? [] });
+      const replies = [];
+      for (const step of steps) {
+        const scoped = await this.forBot(step.botId);
+        const sessions = await scoped.listSessions();
+        const title = groupSessionTitle(name);
+        let session = sessions.find((entry) => entry.title === title);
+        if (!session) session = await scoped.createSession({ title });
+        const result = await scoped.sendMessage(session.id, { text: text ?? '' });
+        const reply = typeof result?.text === 'string' ? result.text.trim() : '';
+        if (!reply) break;
+        replies.push({ botId: step.botId, text: reply });
+      }
+      return { replies };
+    },
+
+    async handoffMention({ fromId, toId, text } = {}) {
+      if (!toId || !fromId) {
+        const error = new Error('fromId and toId are required');
+        error.code = 'invalid_handoff';
+        error.status = 400;
+        throw error;
+      }
+      const scoped = await this.forBot(toId);
+      const sessions = await scoped.listSessions();
+      let chat = sessions.find((session) => session.title === 'Bot Chat');
+      if (!chat) chat = await scoped.createSession({ title: 'Bot Chat' });
+      return scoped.sendMessage(chat.id, {
+        text: `Message from 🤖 ${fromId} (@${fromId}):\n\n${text ?? ''}`,
+      });
     },
 
     async forBot(botId) {
