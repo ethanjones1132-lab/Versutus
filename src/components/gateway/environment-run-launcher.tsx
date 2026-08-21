@@ -1,20 +1,13 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { BaseSheet, Button, Chip, Text, TextField } from '@/components/ui';
-import { Spacing } from '@/constants/tokens';
+import { BaseSheet, Badge, Button, Chip, Text, TextField } from '@/components/ui';
+import { Palette, Radius, Spacing } from '@/constants/tokens';
 import type { createEnvironmentClient } from '@/lib/gateway/environment-client';
 import type { EnvironmentRunEvent, EnvironmentSnapshot } from '@/lib/gateway/environment-types';
+import { environmentRunBadge, environmentRunView } from '@/lib/gateway/environment-run-view';
 
 type Client = ReturnType<typeof createEnvironmentClient>;
-
-/** Human text for a run event, falling back to the raw payload. */
-function describe(event: EnvironmentRunEvent): string {
-  const payload = event.payload ?? {};
-  const text = payload.text ?? payload.message ?? payload.delta ?? payload.output;
-  if (typeof text === 'string' && text) return text;
-  return `${event.type} ${JSON.stringify(payload)}`.trim();
-}
 
 function approvalFrom(event: EnvironmentRunEvent): { id: string; summary: string } | null {
   if (!/approval/i.test(event.type)) return null;
@@ -31,8 +24,10 @@ function approvalFrom(event: EnvironmentRunEvent): { id: string; summary: string
 }
 
 /**
- * Start a CLI run and watch it live. Interactive operations are excluded: the
- * adapter marks them non-machine-readable because they expect a real terminal.
+ * Start a CLI run and watch it live. Streamed output is folded into one reply
+ * bubble with a terminal-state badge, so the buyer sees a reply arrive — not
+ * an event log. Interactive operations are excluded: the adapter marks them
+ * non-machine-readable because they expect a real terminal.
  */
 export function EnvironmentRunLauncher({
   environment,
@@ -53,6 +48,9 @@ export function EnvironmentRunLauncher({
   const [approval, setApproval] = useState<{ id: string; summary: string } | null>(null);
   const runIdRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  const view = useMemo(() => environmentRunView(events), [events]);
+  const badge = environmentRunBadge(view, { starting: running && events.length === 0 });
 
   async function start() {
     if (!environment) return;
@@ -137,6 +135,11 @@ export function EnvironmentRunLauncher({
 
       {error ? <Text variant="caption">{error}</Text> : null}
 
+      <View style={styles.statusRow}>
+        {badge ? <Badge label={badge.label} tone={badge.tone} /> : null}
+        {view.failureDetail ? <Text variant="caption">{view.failureDetail}</Text> : null}
+      </View>
+
       {approval ? (
         <View style={styles.approval}>
           <Text variant="caption">{approval.summary}</Text>
@@ -148,12 +151,28 @@ export function EnvironmentRunLauncher({
       ) : null}
 
       <ScrollView style={styles.log}>
-        {events.map((event) => (
-          <Text key={`${event.runId}-${event.sequence}`} variant="caption">
-            {describe(event)}
+        <View style={[styles.bubble, view.replyText ? null : styles.bubblePending]}>
+          {view.replyText ? (
+            <Text variant="mono" selectable>
+              {view.replyText}
+            </Text>
+          ) : (
+            <Text variant="caption">{running && events.length === 0 ? 'Starting…' : 'No output yet.'}</Text>
+          )}
+        </View>
+        {view.stderrText ? (
+          <View style={styles.diagnostics}>
+            <Text variant="micro">stderr</Text>
+            <Text variant="mono" color="tertiary" selectable>
+              {view.stderrText}
+            </Text>
+          </View>
+        ) : null}
+        {view.notes.map((note, index) => (
+          <Text key={`${index}-${note}`} variant="caption" color="tertiary">
+            {note}
           </Text>
         ))}
-        {events.length === 0 && running ? <Text variant="caption">Starting…</Text> : null}
       </ScrollView>
 
       <View style={styles.row}>
@@ -176,5 +195,15 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two, marginTop: Spacing.two },
   prompt: { minHeight: 72, marginTop: Spacing.two },
   approval: { gap: Spacing.one, marginTop: Spacing.two },
+  statusRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: Spacing.two, marginTop: Spacing.two },
   log: { maxHeight: 240, marginTop: Spacing.two },
+  bubble: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Palette.border,
+    borderRadius: Radius.md,
+    padding: Spacing.two,
+    minHeight: 44,
+  },
+  bubblePending: { borderStyle: 'dashed', opacity: 0.7 },
+  diagnostics: { gap: Spacing.one, marginTop: Spacing.two },
 });
