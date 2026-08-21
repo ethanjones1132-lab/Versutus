@@ -3,6 +3,7 @@ import type {
   EnvironmentRunEvent,
   EnvironmentSnapshot,
 } from '@/lib/gateway/environment-types';
+import { messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 
 export type Rpc = <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
 
@@ -93,14 +94,7 @@ export function createEnvironmentClient(
   async function ensureOk(response: Response): Promise<Response> {
     if (response.ok) return response;
     const text = await response.text().catch(() => '');
-    let message = text || `HTTP ${response.status}`;
-    try {
-      const parsed = JSON.parse(text);
-      message = parsed?.error?.message ?? parsed?.error ?? message;
-    } catch {
-      // not JSON — keep the raw text
-    }
-    throw new Error(message);
+    throw new Error(messageFromHttpErrorBody(text, response.status));
   }
 
   return {

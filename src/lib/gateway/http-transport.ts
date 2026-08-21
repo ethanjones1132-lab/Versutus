@@ -1,4 +1,5 @@
 import { GatewayHttpError } from '@/lib/gateway/errors';
+import { messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 
 export const DEFAULT_TIMEOUT_MS = 30000;
 
@@ -79,14 +80,7 @@ export class HttpTransport {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
-        let message: string;
-        try {
-          const parsed = JSON.parse(errorText);
-          message = parsed?.error?.message || parsed?.error || errorText || `HTTP ${response.status}`;
-        } catch {
-          message = errorText || `HTTP ${response.status}`;
-        }
-        throw new GatewayHttpError(message, response.status);
+        throw new GatewayHttpError(messageFromHttpErrorBody(errorText, response.status), response.status);
       }
 
       const text = await response.text();

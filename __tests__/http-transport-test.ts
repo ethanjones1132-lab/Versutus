@@ -1,5 +1,6 @@
 import { HttpTransport } from '@/lib/gateway/http-transport';
 import { GatewayHttpError } from '@/lib/gateway/errors';
+import { messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 
 function jsonResponse(body: unknown, status = 200) {
   return {
@@ -56,5 +57,52 @@ describe('HttpTransport', () => {
   test('reports the host for operator-facing messages', () => {
     const transport = new HttpTransport({ baseUrl: 'https://ethanspc.tail3a1a8a.ts.net' });
     expect(transport.displayHost).toBe('ethanspc.tail3a1a8a.ts.net');
+  });
+
+  test('prefers JSON message when error is the generic HTTP phrase', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.resolve(
+        jsonResponse(
+          { error: 'Internal Server Error', message: 'hermes: boom' },
+          500,
+        ),
+      ),
+    );
+
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+    await expect(transport.request('GET', '/v1/sessions')).rejects.toMatchObject({
+      message: 'hermes: boom',
+      status: 500,
+    });
+  });
+});
+
+describe('messageFromHttpErrorBody', () => {
+  test('prefers JSON message when error is the generic HTTP phrase', () => {
+    expect(
+      messageFromHttpErrorBody(
+        JSON.stringify({
+          error: 'Internal Server Error',
+          message: 'hermes: An internal server error has occurred',
+        }),
+        500,
+      ),
+    ).toBe('hermes: An internal server error has occurred');
+  });
+
+  test('still reads nested error.message', () => {
+    expect(
+      messageFromHttpErrorBody(JSON.stringify({ error: { message: 'Invalid API key' } }), 401),
+    ).toBe('Invalid API key');
+  });
+
+  test('falls back to a string error when message is absent', () => {
+    expect(messageFromHttpErrorBody(JSON.stringify({ error: 'nope' }), 404)).toBe('nope');
+  });
+
+  test('non-JSON bodies stay as text', () => {
+    expect(messageFromHttpErrorBody('An internal server error has occurred', 500)).toBe(
+      'An internal server error has occurred',
+    );
   });
 });
