@@ -309,6 +309,44 @@ describe('ManifestClient.streamChat', () => {
     expect(capturedBody?.backendId).toBe('opencode-local');
     expect(capturedBody?.providerId).toBeUndefined();
   });
+
+  test('assembles live tool-call cards from streamed name then argument fragments', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/v1/chat/completions')) {
+        const body = new ReadableStream({
+          start(controller) {
+            const enc = new TextEncoder();
+            controller.enqueue(
+              enc.encode(
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"web_"}}]}}]}\n\n',
+              ),
+            );
+            controller.enqueue(
+              enc.encode(
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"search","arguments":"{\\"q\\":\\"x\\"}"}}]}}]}\n\n',
+              ),
+            );
+            controller.enqueue(enc.encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        });
+        return Promise.resolve({ ok: true, status: 200, body } as unknown as Response);
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    const tools: { name: string; detail?: string }[] = [];
+    await client.streamChat([{ role: 'user', content: 'hi' }], () => undefined, {
+      model: 'test-model',
+      onToolCall: (tool) => tools.push({ name: tool.name, detail: tool.detail }),
+    });
+
+    expect(tools[0]?.name).toBe('web_');
+    expect(tools[tools.length - 1]?.name).toBe('web_search');
+    expect(tools[tools.length - 1]?.detail).toBe('{"q":"x"}');
+  });
 });
 
 describe('ManifestClient — capabilities the manifest does not advertise', () => {

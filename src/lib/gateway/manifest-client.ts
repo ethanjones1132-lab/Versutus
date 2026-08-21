@@ -1,3 +1,4 @@
+import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/chat-stream-delta';
 import { isAuthRejection } from '@/lib/gateway/errors';
 import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
 import { HttpTransport } from '@/lib/gateway/http-transport';
@@ -325,36 +326,22 @@ export class ManifestClient implements PortalClient {
     // this stream was changed to stop producing. Captured here rather than
     // thrown, because the handler's own catch would swallow a throw.
     let streamError: string | null = null;
-    const toolNames = new Map<number, string>();
+    const acc = createChatStreamAcc();
     await this.transport.streamSSE(
       response,
       (data) => {
         try {
-          const chunk = JSON.parse(data);
-          if (chunk?.error) {
-            const reported = chunk.error?.message;
-            streamError =
-              typeof reported === 'string' && reported
-                ? reported
-                : `The gateway reported a failed turn (${chunk.error?.code ?? 'unknown'}).`;
+          const interpreted = interpretChatStreamChunk(JSON.parse(data), acc);
+          if (interpreted.streamError) {
+            streamError = interpreted.streamError;
             return;
           }
-          const delta = chunk?.choices?.[0]?.delta;
-          const content = delta?.content;
-          if (content) {
-            fullText += content;
-            onDelta(content);
+          if (interpreted.text) {
+            fullText += interpreted.text;
+            onDelta(interpreted.text);
           }
-          const toolCalls = delta?.tool_calls;
-          if (Array.isArray(toolCalls) && options?.onToolCall) {
-            for (const call of toolCalls) {
-              const index = typeof call?.index === 'number' ? call.index : 0;
-              const namePart = call?.function?.name;
-              if (typeof namePart === 'string' && namePart) {
-                toolNames.set(index, (toolNames.get(index) ?? '') + namePart);
-                options.onToolCall({ name: toolNames.get(index)!, status: 'running' });
-              }
-            }
+          if (options?.onToolCall) {
+            for (const tool of interpreted.toolCalls) options.onToolCall(tool);
           }
         } catch {
           // ignore malformed chunks — matches HermesGatewayClient's streamChat
