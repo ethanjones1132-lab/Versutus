@@ -1,6 +1,6 @@
 import * as Haptics from 'expo-haptics';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 
 import { MarkdownText } from '@/components/chat/markdown/markdown-text';
@@ -8,6 +8,7 @@ import { StreamingIndicator } from '@/components/chat/streaming-indicator';
 import { ToolCallCard } from '@/components/chat/tool-call-card';
 import { Badge, Card, PressableScale, Text } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
+import { bubbleMaxWidth } from '@/lib/motion/bubble-width';
 import { entering } from '@/lib/motion/presets';
 import { formatClockTime } from '@/lib/format';
 import { useTokens } from '@/hooks/use-tokens';
@@ -39,8 +40,11 @@ const COMMAND_STATUS_TONE = {
 
 export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPress, identity }: MessageBubbleProps) {
   const tokens = useTokens();
+  const { width: windowWidth } = useWindowDimensions();
   const isUser = message.role === 'user';
   const isCommand = !!message.command;
+  const hasMonogram = !isUser && !!identity;
+  const columnMaxWidth = bubbleMaxWidth(windowWidth, hasMonogram);
   const [rawOpen, setRawOpen] = useState(false);
   const commandStatus = message.command?.status;
 
@@ -72,11 +76,15 @@ export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPres
           </Text>
         </View>
       ) : null}
-      <View style={[styles.bubbleColumn, isUser ? styles.bubbleColumnUser : styles.bubbleColumnAssistant]}>
+      <View
+        style={[
+          styles.bubbleColumn,
+          isUser ? styles.bubbleColumnUser : styles.bubbleColumnAssistant,
+          { maxWidth: columnMaxWidth },
+        ]}>
         <PressableScale
           onLongPress={() => void handleLongPress()}
-          delayLongPress={350}
-          style={styles.bubblePress}>
+          delayLongPress={350}>
         <Card
           variant={isUser ? 'chip' : 'surface'}
           padding={Spacing.three}
@@ -229,6 +237,8 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'flex-end',
+    alignSelf: 'stretch',
+    width: '100%',
     gap: Spacing.two,
   },
   rowUser: {
@@ -261,9 +271,6 @@ const styles = StyleSheet.create({
   },
   bubbleColumnAssistant: {
     alignItems: 'flex-start',
-  },
-  bubblePress: {
-    maxWidth: '85%',
   },
   bubble: {
     borderRadius: Radius.lg,
