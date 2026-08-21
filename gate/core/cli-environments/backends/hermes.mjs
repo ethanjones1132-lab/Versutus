@@ -16,6 +16,11 @@
  * Verified against Hermes 0.20.3.
  */
 
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { runCli } from '../adapters/shared.mjs';
+import { createBotArgs, ensureDistinctListenKey, validateBotId } from '../hermes-bot-create.mjs';
 import { getHermesBot, listHermesBots, toPublicBot } from '../hermes-profiles.mjs';
 
 /** Hermes sessions are already gateway-shaped; fill only what may be absent. */
@@ -77,7 +82,14 @@ export function toGatewayMessage(message) {
 }
 
 /** Build a backend bound to a running Hermes API server. */
-export function createHermesBackend({ baseUrl, apiKey, fetchImpl = fetch, profilesHome } = {}) {
+export function createHermesBackend({
+  baseUrl,
+  apiKey,
+  fetchImpl = fetch,
+  profilesHome,
+  executablePath,
+  runCliImpl = runCli,
+} = {}) {
   const root = String(baseUrl).replace(/\/+$/, '');
 
   async function call(path, init = {}) {
@@ -354,7 +366,76 @@ export function createHermesBackend({ baseUrl, apiKey, fetchImpl = fetch, profil
         apiKey: record.listenKey,
         fetchImpl,
         profilesHome,
+        executablePath,
+        runCliImpl,
       });
+    },
+
+    async createBot({ name, soul, inheritKeys = false, description, modelId, providerId } = {}) {
+      const id = validateBotId(name);
+      if (!id) {
+        const error = new Error('invalid bot name');
+        error.code = 'invalid_bot_name';
+        error.status = 400;
+        throw error;
+      }
+      if (!profilesHome || !executablePath) {
+        const error = new Error('Hermes executable or home is not configured');
+        error.code = 'backend_unsupported';
+        error.status = 501;
+        throw error;
+      }
+      const existing = await getHermesBot(profilesHome, id);
+      if (existing) {
+        const error = new Error(`bot "${id}" already exists`);
+        error.code = 'bot_exists';
+        error.status = 409;
+        throw error;
+      }
+      const args = createBotArgs({ name: id, inheritKeys, description });
+      const result = await runCliImpl(executablePath, args, { timeoutMs: 60_000 });
+      if (result.code !== 0) {
+        const error = new Error(result.stderr || result.stdout || `hermes profile create exited ${result.code}`);
+        error.code = 'bot_create_failed';
+        error.status = 502;
+        throw error;
+      }
+      const botHome = join(profilesHome, 'profiles', id);
+      await mkdir(botHome, { recursive: true });
+      const defaultKey = (await getHermesBot(profilesHome, 'default'))?.listenKey ?? null;
+      let envText = '';
+      try {
+        envText = await readFile(join(botHome, '.env'), 'utf8');
+      } catch {
+        envText = '';
+      }
+      const ensured = ensureDistinctListenKey(envText, defaultKey);
+      await writeFile(join(botHome, '.env'), ensured.envText, 'utf8');
+      if (typeof soul === 'string' && soul.trim()) {
+        await writeFile(join(botHome, 'SOUL.md'), soul, 'utf8');
+      }
+      if (modelId) {
+        const pin = await runCliImpl(
+          executablePath,
+          ['-p', id, 'config', 'set', 'model.default', String(modelId)],
+          { timeoutMs: 15_000 },
+        );
+        if (pin.code !== 0) {
+          const error = new Error(pin.stderr || 'failed to pin model');
+          error.code = 'bot_create_failed';
+          error.status = 502;
+          throw error;
+        }
+      }
+      if (providerId) {
+        await runCliImpl(
+          executablePath,
+          ['-p', id, 'config', 'set', 'model.provider', String(providerId)],
+          { timeoutMs: 15_000 },
+        );
+      }
+      const record = await getHermesBot(profilesHome, id);
+      return toPublicBot(record ?? { id, displayName: id, listenKey: ensured.listenKey, home: botHome });
     },
   };
 }

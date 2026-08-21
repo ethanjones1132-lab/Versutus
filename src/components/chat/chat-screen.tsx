@@ -7,6 +7,7 @@ import { ApprovalSheet } from '@/components/chat/approval-sheet';
 import { BackendPickerSheet } from '@/components/chat/backend-picker-sheet';
 import { ChatComposer } from '@/components/chat/chat-composer';
 import { ChatRoster } from '@/components/chat/chat-roster';
+import { NewAgentSheet } from '@/components/chat/new-agent-sheet';
 import { DayDivider } from '@/components/chat/day-divider';
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
 import { ChatHeader } from '@/components/chat/chat-header';
@@ -112,6 +113,7 @@ export function ChatScreen() {
     selectedBackendId,
     selectBackend,
     listBots,
+    createBot,
     openBot,
     clearBot,
     selectedBotId,
@@ -129,6 +131,9 @@ export function ChatScreen() {
   const [rosterRows, setRosterRows] = useState<RosterRow[]>([{ kind: 'configurable' }]);
   const [rosterLoading, setRosterLoading] = useState(false);
   const [rosterError, setRosterError] = useState<string | undefined>();
+  const [newAgentVisible, setNewAgentVisible] = useState(false);
+  const [newAgentBusy, setNewAgentBusy] = useState(false);
+  const [newAgentError, setNewAgentError] = useState<string | undefined>();
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const pinnedRef = useRef(true);
@@ -315,6 +320,31 @@ export function ChatScreen() {
         }}
       />
 
+      <NewAgentSheet
+        visible={newAgentVisible}
+        busy={newAgentBusy}
+        error={newAgentError}
+        onClose={() => setNewAgentVisible(false)}
+        onSubmit={(draft) => {
+          setNewAgentBusy(true);
+          setNewAgentError(undefined);
+          void createBot(draft)
+            .then(async (bot) => {
+              setNewAgentVisible(false);
+              const bots = await listBots();
+              setRosterRows(buildRoster(bots));
+              if (bot.routable) {
+                await openBot(bot.id);
+                setSurface({ kind: 'bot', botId: bot.id });
+              }
+            })
+            .catch((error: unknown) => {
+              setNewAgentError(error instanceof Error ? error.message : String(error));
+            })
+            .finally(() => setNewAgentBusy(false));
+        }}
+      />
+
       <PairingSheet
         visible={showPairingSheet}
         deviceId={deviceId ?? ''}
@@ -346,6 +376,10 @@ export function ChatScreen() {
             void openBot(bot.id).catch(() => {
               setSurface({ kind: 'roster' });
             });
+          }}
+          onNewAgent={() => {
+            setNewAgentError(undefined);
+            setNewAgentVisible(true);
           }}
         />
       ) : (

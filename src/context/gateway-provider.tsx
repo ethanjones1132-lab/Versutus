@@ -156,6 +156,14 @@ type GatewayContextValue = {
   selectBackend: (backendId: string | undefined) => void;
   selectedBotId: string | undefined;
   listBots: () => Promise<PublicBot[]>;
+  createBot: (input: {
+    name: string;
+    soul?: string;
+    inheritKeys?: boolean;
+    description?: string;
+    modelId?: string;
+    providerId?: string;
+  }) => Promise<PublicBot>;
   openBot: (botId: string) => Promise<void>;
   clearBot: () => void;
   runAgentCommand: (command: string, options?: { onDelta?: (delta: string) => void }) => Promise<string>;
@@ -2239,6 +2247,21 @@ const response = await executeGatewaySlashCommand(trimmed, {
     return client.listBots();
   }, []);
 
+  const createBot = useCallback(async (input: {
+    name: string;
+    soul?: string;
+    inheritKeys?: boolean;
+    description?: string;
+    modelId?: string;
+    providerId?: string;
+  }): Promise<PublicBot> => {
+    const client = clientRef.current;
+    if (!client?.createBot) {
+      throw new Error('This gateway does not create bots.');
+    }
+    return client.createBot(input);
+  }, []);
+
   const clearBot = useCallback(() => {
     clientRef.current?.setBotId?.(undefined);
     setSelectedBotId(undefined);
@@ -2348,6 +2371,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       selectBackend,
       selectedBotId,
       listBots,
+      createBot,
       openBot,
       clearBot,
       runAgentCommand,
@@ -2401,7 +2425,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       messages, isSending, isCommandRunning, lastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, openBot, clearBot, runAgentCommand, setupFromPcAddress, retryAutoConnect,
+      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, openBot, clearBot, runAgentCommand, setupFromPcAddress, retryAutoConnect,
       setAutoConnect, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

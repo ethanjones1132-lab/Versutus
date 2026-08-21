@@ -395,6 +395,21 @@ export class ManifestClient implements PortalClient {
     return this.withBot(this.withBackend(path));
   }
 
+  async createBot(input: {
+    name: string;
+    soul?: string;
+    inheritKeys?: boolean;
+    description?: string;
+    modelId?: string;
+    providerId?: string;
+  }): Promise<{ id: string; displayName: string; routable: boolean }> {
+    const path = this.requireEndpoint('bots');
+    return this.rootTransport.request('POST', this.withBackend(path), {
+      ...input,
+      ...(this.backendId ? { backendId: this.backendId } : {}),
+    });
+  }
+
   async listBots(): Promise<{ id: string; displayName: string; routable: boolean }[]> {
     const path = this.endpoints.bots;
     if (!path) return [];

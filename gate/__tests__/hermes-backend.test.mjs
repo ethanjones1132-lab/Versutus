@@ -149,6 +149,43 @@ test('forBot rejects unknown and unroutable bots', async () => {
   await assert.rejects(() => hermes.forBot('silent'), (err) => err.code === 'bot_not_routable');
 });
 
+test('createBot runs bounded profile create, rotates listen key, writes soul', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\nOPENAI_API_KEY=sk-keep\n');
+  const argvLog = [];
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'default-listen',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    profilesHome: home,
+    executablePath: 'hermes',
+    runCliImpl: async (_exe, args) => {
+      argvLog.push(args);
+      if (args[0] === 'profile' && args[1] === 'create') {
+        const id = args[2];
+        await mkdir(join(home, 'profiles', id), { recursive: true });
+        await writeFile(join(home, 'profiles', id, '.env'), 'API_SERVER_KEY=default-listen\nOPENAI_API_KEY=sk-keep\n');
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  });
+  const bot = await hermes.createBot({
+    name: 'coder',
+    inheritKeys: true,
+    soul: 'You are a focused coding assistant.',
+    modelId: 'anthropic/claude-sonnet-4',
+  });
+  assert.equal(bot.id, 'coder');
+  assert.equal(bot.routable, true);
+  assert.deepEqual(argvLog[0], ['profile', 'create', 'coder', '--no-alias', '--clone-from', 'default']);
+  assert.ok(argvLog.some((a) => a.includes('model.default')));
+  const env = await (await import('node:fs/promises')).readFile(join(home, 'profiles', 'coder', '.env'), 'utf8');
+  assert.match(env, /OPENAI_API_KEY=sk-keep/);
+  assert.doesNotMatch(env, /API_SERVER_KEY=default-listen/);
+  const soul = await (await import('node:fs/promises')).readFile(join(home, 'profiles', 'coder', 'SOUL.md'), 'utf8');
+  assert.match(soul, /focused coding assistant/);
+});
+
 test('listBots returns every profile including default and never leaks listen keys', async () => {
   const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
   await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\nOPENAI_API_KEY=sk-nope\n');

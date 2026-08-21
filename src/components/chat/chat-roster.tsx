@@ -10,6 +10,7 @@ export type ChatRosterProps = {
   error?: string;
   onSelectConfigurable: () => void;
   onSelectBot: (bot: PublicBot) => void;
+  onNewAgent?: () => void;
 };
 
 export function ChatRoster({
@@ -18,6 +19,7 @@ export function ChatRoster({
   error,
   onSelectConfigurable,
   onSelectBot,
+  onNewAgent,
 }: ChatRosterProps) {
   if (loading && rows.length <= 1) {
     return (
@@ -60,6 +62,15 @@ export function ChatRoster({
           />
         );
       })}
+      {onNewAgent ? (
+        <ListRow
+          title="New Agent"
+          subtitle="Name, soul, keys, and model pin"
+          icon={{ ios: 'plus.circle', android: 'add_circle', web: 'add_circle' }}
+          onPress={onNewAgent}
+          style={styles.row}
+        />
+      ) : null}
       {rows.length === 1 ? (
         <EmptyState
           icon={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}

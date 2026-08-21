@@ -49,6 +49,14 @@ export interface PortalClient {
   createSession?(title?: string): Promise<HermesSession>;
   /** Hermes profile selector on a Gate. Omitted on adapters that are not the Gate. */
   listBots?(): Promise<{ id: string; displayName: string; routable: boolean }[]>;
+  createBot?(input: {
+    name: string;
+    soul?: string;
+    inheritKeys?: boolean;
+    description?: string;
+    modelId?: string;
+    providerId?: string;
+  }): Promise<{ id: string; displayName: string; routable: boolean }>;
   setBotId?(id: string | undefined): void;
   setBackendId?(id: string | undefined): void;
   readonly botId?: string;

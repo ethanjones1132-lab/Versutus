@@ -589,6 +589,10 @@ function stubFrontedRegistry(calls) {
       calls.push('listBots');
       return { object: 'list', data: [{ id: 'researcher', displayName: 'researcher', routable: true }] };
     },
+    async createBot(input) {
+      calls.push(`createBot:${input?.name}`);
+      return { id: input.name, displayName: input.name, routable: true };
+    },
     async forBot(botId) {
       calls.push(`forBot:${botId}`);
       if (botId === 'nope') {
@@ -674,6 +678,22 @@ test('the fronted routes proxy to the backend and are reachable', async () => {
     assert.equal(bots.status, 200);
     assert.equal((await bots.json()).data[0].id, 'researcher');
     assert.ok(calls.includes('listBots'));
+  } finally {
+    await gate.close();
+  }
+});
+
+test('POST /v1/bots creates via createBot', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/bots`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'coder', inheritKeys: true }),
+    });
+    assert.equal(response.status, 200);
+    assert.ok(calls.includes('createBot:coder'));
   } finally {
     await gate.close();
   }

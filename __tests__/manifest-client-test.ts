@@ -517,6 +517,23 @@ describe('ManifestClient sessions and runs when advertised', () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).title).toBe('scratch');
   });
 
+  test('createBot POSTs /v1/bots with name and inheritKeys', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ id: 'coder', displayName: 'coder', routable: true }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', bots: '/v1/bots' });
+    await client.createBot({ name: 'coder', inheritKeys: true, soul: 'Be brief.' });
+    expect(fetchMock.mock.calls[0][1].method).toBe('POST');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/v1/bots');
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.name).toBe('coder');
+    expect(body.inheritKeys).toBe(true);
+    expect(body.soul).toBe('Be brief.');
+  });
+
   test('listBots GETs endpoints.bots and does not resume a session', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

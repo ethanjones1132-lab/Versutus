@@ -138,7 +138,7 @@ export function createBackendManager({
           // raw stream to await its own turn.
           subscribe: (handler) => subscribe(environmentId, handler),
         })
-      : adapter.createBackend({ baseUrl: handle.baseUrl, credentials });
+      : adapter.createBackend({ baseUrl: handle.baseUrl, credentials, record });
     backends.set(environmentId, { key, backend });
     return backend;
   }

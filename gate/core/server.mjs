@@ -729,6 +729,7 @@ export async function createGate(config = {}) {
         (pathname === '/v1/terminal/input' && method === 'POST') ||
         (pathname === '/v1/skills' && method === 'GET') ||
         (pathname === '/v1/bots' && method === 'GET') ||
+        (pathname === '/v1/bots' && method === 'POST') ||
         // Note the divergence from plain /health, which is unauthenticated:
         // detailed diagnostics expose backend internals and need a token.
         (pathname === '/health/detailed' && method === 'GET') ||
@@ -1119,6 +1120,30 @@ export async function createGate(config = {}) {
         if (!backend) return;
         res.writeHead(200);
         res.end(JSON.stringify(await backend.listBots()));
+        return;
+      }
+
+      if (pathname === '/v1/bots' && method === 'POST') {
+        const body = (await readJsonBody(req)) ?? {};
+        const backend = await resolveBackendFor('createBot');
+        if (!backend) return;
+        try {
+          const created = await backend.createBot({
+            name: body.name,
+            soul: body.soul,
+            inheritKeys: Boolean(body.inheritKeys),
+            description: body.description,
+            modelId: body.modelId,
+            providerId: body.providerId,
+          });
+          res.writeHead(200);
+          res.end(JSON.stringify(created));
+        } catch (error) {
+          const code = error.code ?? 'bot_create_failed';
+          const status = error.status || (code === 'invalid_bot_name' ? 400 : code === 'bot_exists' ? 409 : 502);
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code } }));
+        }
         return;
       }
 

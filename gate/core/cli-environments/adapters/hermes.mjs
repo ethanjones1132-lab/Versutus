@@ -43,13 +43,14 @@ export const hermesAdapter = {
   },
 
   /** Sessions, the 47-provider model catalog, runs and skills, owned by Hermes. */
-  createBackend({ baseUrl, credentials } = {}) {
+  createBackend({ baseUrl, credentials, record } = {}) {
     // Hermes authenticates every route with API_SERVER_KEY. Without it the
     // backend attaches happily and then 401s on the first real call.
     return createHermesBackend({
       baseUrl,
       apiKey: credentials?.API_SERVER_KEY ?? credentials?.HERMES_API_SERVER_KEY,
       profilesHome: process.env.HERMES_HOME || join(homedir(), '.hermes'),
+      executablePath: record?.executable?.path,
     });
   },
 
