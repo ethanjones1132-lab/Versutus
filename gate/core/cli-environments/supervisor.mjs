@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 
 import { assertWorkspaceAccess } from './workspace-policy.mjs';
 import { ApprovalService } from './approvals.mjs';
@@ -63,6 +64,20 @@ function createOutputPump(emit) {
       for (const stream of decoders.keys()) decodeInto(stream, undefined, true);
     },
   };
+}
+
+/**
+ * Human wording for a spawn that never started. A missing cwd surfaces as a
+ * bare "spawn ENOENT" — true but useless on a phone. When the workspace the
+ * run was pinned to has vanished between the pre-flight check and the spawn
+ * (deleted while its approval card sat open, for instance), say so and name
+ * the path; otherwise pass the OS message through untouched.
+ */
+function spawnFailureMessage(error, workspacePath) {
+  if (error?.code === 'ENOENT' && !existsSync(workspacePath)) {
+    return `workspace directory disappeared before the task could start: ${workspacePath}`;
+  }
+  return error.message;
 }
 
 export class CliEnvironmentService {
@@ -132,6 +147,18 @@ export class CliEnvironmentService {
       record.workspacePolicy,
       request.workspacePath ?? record.workspacePolicy.defaultRoot,
     );
+    // A workspace root that is not on disk cannot host a spawn: node reports
+    // it as a bare "spawn ENOENT" after run.started, which reads as a mystery
+    // failure on the phone. Refuse here, by name, before anything is emitted —
+    // the same pre-flight honesty as the executable probe below.
+    if (!existsSync(workspace.canonical)) {
+      const error = new Error(
+        `workspace directory does not exist: ${workspace.canonical} — ` +
+        'create the folder or fix the environment\u2019s workspace root, then start again',
+      );
+      error.code = 'workspace_missing';
+      throw error;
+    }
     const adapter = this.registry.get(record.adapterId);
     const probe = await adapter.probe(record.executable.path);
     if (probe.state !== 'ready') {
@@ -319,7 +346,7 @@ export class CliEnvironmentService {
     child.stderr?.on('data', (chunk) => pump.push('stderr', chunk));
     child.on('error', (error) => {
       if (run.done || run.nativeCancel) return;
-      this.finish(run, 'run.failed', { message: error.message });
+      this.finish(run, 'run.failed', { message: spawnFailureMessage(error, run.workspace.canonical) });
     });
     child.on('close', (code) => {
       pump.flush();

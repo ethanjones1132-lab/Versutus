@@ -39,6 +39,10 @@ const execFileAsync = promisify(execFile);
  *                    variable + reference while the run still starts, and the
  *                    stored value never appears in any Gate-emitted event
  *                    (always hermetic — a real CLI cannot echo its env on cue)
+ *   9. workspace  — a registered environment whose workspace root is not on
+ *                    disk is refused at run start over HTTP: status 400,
+ *                    code workspace_missing, message naming the path and the
+ *                    fix, no run recorded, nothing spawned (always hermetic)
  *
  * Every workspace-writing run raises an approval card on its event stream;
  * the legs that need the CLI to actually run answer it like the phone does
@@ -683,9 +687,64 @@ try {
     `bound value reached the CLI (${JSON.stringify(boundStdout.trim())}); dead binding warned as ${notes[0].payload.variable}=${notes[0].payload.reference}; discovery + replay agree`,
   );
 
+  // ── Step 9: a missing workspace root is refused by name ───────────────────
+  /**
+   * The register form's one free-typed path is the workspace root, and a typo
+   * there used to survive registration, doctor, and the executable probe —
+   * then kill the first task as a bare "spawn ENOENT" on the phone. Now the
+   * run start refuses over HTTP with the path and the fix, and nothing is
+   * recorded. Always hermetic: the refusal precedes any CLI involvement.
+   */
+  const badWorkspace = join(root, 'never-created-workspace');
+  const badCreated = await fetch(`${base}/v1/capabilities/rpc`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      method: 'environments.create',
+      params: validEnvironment({
+        id: 'hermes-badws',
+        adapterId: 'hermes',
+        executable: { path: executable },
+        workspacePolicy: {
+          roots: [badWorkspace],
+          defaultRoot: badWorkspace,
+          defaultSandbox: 'read_only',
+          allowAdditionalRoots: false,
+        },
+      }),
+    }),
+  });
+  await authenticatedJson(badCreated, 'workspace');
+
+  const badStarted = await fetch(`${base}/v1/environments/hermes-badws/runs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ operation: 'prompt', input: { prompt: 'Reply with exactly: pong' } }),
+  });
+  if (badStarted.status !== 400) {
+    fail('workspace', `expected a 400 refusal, got ${badStarted.status}`);
+  }
+  const badBody = await badStarted.json();
+  if (badBody.error?.code !== 'workspace_missing') {
+    fail('workspace', `error code was ${badBody.error?.code}`);
+  }
+  if (!badBody.error.message.includes(badWorkspace)) {
+    fail('workspace', `refusal did not name the path: ${badBody.error.message}`);
+  }
+  if (!/create the folder|workspace root/.test(badBody.error.message)) {
+    fail('workspace', `refusal carries no fix: ${badBody.error.message}`);
+  }
+
+  const badList = await authenticatedJson(
+    await fetch(`${base}/v1/environments/hermes-badws/runs`, { headers }),
+    'workspace',
+  );
+  if ((badList.runs ?? []).length !== 0) fail('workspace', 'a run was recorded for a refused start');
+  pass('workspace', `start refused (400 workspace_missing) naming ${badWorkspace}; nothing spawned or recorded`);
+
   const proven = realExecutable
-    ? '5/5 wedge steps against the WEDGE_EXECUTABLE CLI + honest-failure + denied-consent + credential-binding legs (deterministic fixtures)'
-    : '8/8 wedge steps proven over HTTP+SSE (hermetic)';
+    ? '5/5 wedge steps against the WEDGE_EXECUTABLE CLI + honest-failure + denied-consent + credential-binding + workspace-refusal legs (deterministic fixtures)'
+    : '9/9 wedge steps proven over HTTP+SSE (hermetic)';
   console.log(`\nsmoke-wedge-loop: PASS (${proven})`);
 } finally {
   await gate.close();

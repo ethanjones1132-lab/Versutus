@@ -23,11 +23,23 @@ test('reports ok for a healthy record whose executable exists on disk', async ()
   const gateHome = await mkdtemp(join(tmpdir(), 'gate-doctor-'));
   const envDir = join(gateHome, 'config', 'environments');
   await mkdir(envDir, { recursive: true });
-  // The fixture's C:\Tools path does not exist here, so point the record at a
+  // The fixture's C:\\Tools path does not exist here, so point the record at a
   // real file inside the temp home — doctor must check the disk, not the string.
   const executable = join(gateHome, 'fake-cli.exe');
   await writeFile(executable, '', 'utf8');
-  const record = validEnvironment({ executable: { path: executable } });
+  // Same for the workspace: doctor checks its existence too, so the record
+  // must name a folder that is really on this machine.
+  const workspace = join(gateHome, 'workspace');
+  await mkdir(workspace, { recursive: true });
+  const record = validEnvironment({
+    executable: { path: executable },
+    workspacePolicy: {
+      roots: [workspace],
+      defaultRoot: workspace,
+      defaultSandbox: 'read_only',
+      allowAdditionalRoots: false,
+    },
+  });
   await writeFile(join(envDir, 'hermes-local.json'), JSON.stringify(record), 'utf8');
 
   const findings = await diagnoseEnvironmentRecords(envDir);
@@ -74,6 +86,56 @@ test('flags a record whose executable is missing from disk', async () => {
   assert.match(findings[0].message, /C:\\Tools\\hermes\.exe/);
 });
 
+test('errors when the default workspace root is missing from disk', async (t) => {
+  const gateHome = await mkdtemp(join(tmpdir(), 'gate-doctor-'));
+  t.after(() => rm(gateHome, { recursive: true, force: true }));
+  const envDir = join(gateHome, 'config', 'environments');
+  await mkdir(envDir, { recursive: true });
+  // The typo case: the operator fat-fingered the one folder the CLI may work
+  // in. Every run would die as a bare "spawn ENOENT" — doctor must say so
+  // before the demo, naming the path.
+  const missing = join(gateHome, 'workspae');
+  await writeHealthyRecord(envDir, gateHome, {
+    workspacePolicy: {
+      roots: [missing],
+      defaultRoot: missing,
+      defaultSandbox: 'read_only',
+      allowAdditionalRoots: false,
+    },
+  });
+
+  const findings = await diagnoseEnvironmentRecords(envDir);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 'error');
+  assert.match(findings[0].message, /defaultRoot does not exist on disk/);
+  assert.ok(findings[0].message.includes(missing), 'the finding names the bad path');
+  assert.match(findings[0].message, /every run would fail/);
+});
+
+test('warns when a non-default allowed root is missing but the default exists', async (t) => {
+  const gateHome = await mkdtemp(join(tmpdir(), 'gate-doctor-'));
+  t.after(() => rm(gateHome, { recursive: true, force: true }));
+  const envDir = join(gateHome, 'config', 'environments');
+  await mkdir(envDir, { recursive: true });
+  const workspace = join(gateHome, 'workspace'); // created by writeHealthyRecord
+  const missing = join(gateHome, 'archive');
+  await writeHealthyRecord(envDir, gateHome, {
+    workspacePolicy: {
+      roots: [workspace, missing],
+      defaultRoot: workspace,
+      defaultSandbox: 'read_only',
+      allowAdditionalRoots: false,
+    },
+  });
+
+  const findings = await diagnoseEnvironmentRecords(envDir);
+  assert.equal(findings.length, 2);
+  assert.equal(findings[0].severity, 'ok', 'a missing extra root does not sink the record');
+  assert.equal(findings[1].severity, 'warn');
+  assert.match(findings[1].message, /roots\[1\] does not exist on disk/);
+  assert.ok(findings[1].message.includes(missing), 'the warning names the bad path');
+});
+
 test('reports an absent environments directory as info, not failure', async () => {
   const gateHome = await mkdtemp(join(tmpdir(), 'gate-doctor-'));
   const findings = await diagnoseEnvironmentRecords(join(gateHome, 'config', 'environments'));
@@ -94,7 +156,20 @@ const passthroughBackend = {
 async function writeHealthyRecord(envDir, gateHome, overrides = {}) {
   const executable = join(gateHome, 'fake-cli.exe');
   await writeFile(executable, '', 'utf8');
-  const record = validEnvironment({ executable: { path: executable }, ...overrides });
+  // Doctor checks workspace existence too, so the healthy record names a
+  // folder created here rather than the fixture's machine-specific path.
+  const workspace = join(gateHome, 'workspace');
+  await mkdir(workspace, { recursive: true });
+  const record = validEnvironment({
+    executable: { path: executable },
+    workspacePolicy: {
+      roots: [workspace],
+      defaultRoot: workspace,
+      defaultSandbox: 'read_only',
+      allowAdditionalRoots: false,
+    },
+    ...overrides,
+  });
   await writeFile(join(envDir, 'hermes-local.json'), JSON.stringify(record), 'utf8');
   return record;
 }

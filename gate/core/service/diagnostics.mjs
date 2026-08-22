@@ -86,6 +86,14 @@ async function diagnoseRecord(file, id, vault) {
     }];
   }
 
+  // The spawn runs with cwd = workspacePolicy.defaultRoot, so a root that is
+  // not on disk fails every run as a bare "spawn ENOENT" — the same
+  // first-demo killer doctor exists to catch in the executable. A missing
+  // non-default root only matters when a run targets it, so that warns.
+  const workspaceFindings = diagnoseWorkspaceRoots(record, id);
+  const fatalWorkspace = workspaceFindings.filter((finding) => finding.severity === 'error');
+  if (fatalWorkspace.length > 0) return fatalWorkspace;
+
   const base = `record valid, executable present (${record.adapterId})`;
   const bindingCheck = await diagnoseCredentialBindings(record, id, vault);
   return [
@@ -94,8 +102,32 @@ async function diagnoseRecord(file, id, vault) {
       environment: id,
       message: bindingCheck.summary ? `${base}; ${bindingCheck.summary}` : base,
     },
+    ...workspaceFindings,
     ...bindingCheck.warnings,
   ];
+}
+
+function diagnoseWorkspaceRoots(record, id) {
+  const findings = [];
+  const policy = record.workspacePolicy ?? {};
+  if (policy.defaultRoot && !existsSync(policy.defaultRoot)) {
+    findings.push({
+      severity: 'error',
+      environment: id,
+      message: `workspacePolicy.defaultRoot does not exist on disk: ${policy.defaultRoot}`
+        + ' — every run would fail to start; create the folder or fix the environment\u2019s workspace root',
+    });
+  }
+  (policy.roots ?? []).forEach((root, index) => {
+    if (root === policy.defaultRoot || existsSync(root)) return;
+    findings.push({
+      severity: 'warn',
+      environment: id,
+      message: `workspacePolicy.roots[${index}] does not exist on disk: ${root}`
+        + ' — runs targeting it would fail; create the folder or remove it from the environment',
+    });
+  });
+  return findings;
 }
 
 /**

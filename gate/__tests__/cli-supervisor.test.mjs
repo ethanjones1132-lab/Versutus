@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -358,6 +359,92 @@ test('concurrent runs honor maxConcurrentRuns', async () => {
       sandbox: 'read_only',
       input: {},
     }), /busy|concurrent/i);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('a run whose workspace directory does not exist is refused by name', async () => {
+  // The typo case from the runbook's register step: the operator fat-fingers
+  // the one folder the CLI may work in. startRun must refuse before anything
+  // is emitted — no run id, no events, no spawn — with a message that names
+  // the path and the fix, not a bare "spawn ENOENT" after the fact.
+  const missing = join(tmpdir(), 'gate-cli-sup-does-not-exist-9x');
+  const { service, children, cleanup } = await makeService({
+    workspacePolicy: {
+      roots: [missing],
+      defaultRoot: missing,
+      defaultSandbox: 'read_only',
+      allowAdditionalRoots: false,
+    },
+  });
+  try {
+    await assert.rejects(
+      () => service.startRun({
+        environmentId: 'codex-local',
+        operation: 'status',
+        providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+        workspaceId: 'default',
+        sandbox: 'read_only',
+        input: {},
+      }),
+      (error) => {
+        assert.equal(error.code, 'workspace_missing');
+        assert.match(error.message, /workspace directory does not exist/);
+        assert.ok(error.message.includes(missing), 'the error names the bad path');
+        return true;
+      },
+    );
+    assert.equal(children.length, 0, 'nothing spawns for a missing workspace');
+    assert.equal(service.listRuns('codex-local').length, 0, 'no run is recorded');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('a workspace that vanishes mid-flight fails naming the folder, not ENOENT', async () => {
+  // The race the pre-flight check cannot close: the folder is deleted after
+  // startRun validated it (while its approval card sat open, say). node then
+  // reports a bare "spawn ENOENT"; the supervisor must translate that into
+  // the workspace truth when the pinned directory is really gone.
+  const doomed = await mkdtemp(join(tmpdir(), 'gate-ws-gone-'));
+  const { service, cleanup } = await makeService({
+    workspacePolicy: {
+      roots: [doomed],
+      defaultRoot: doomed,
+      defaultSandbox: 'read_only',
+      allowAdditionalRoots: false,
+    },
+  }, {
+    spawnImpl: () => {
+      // Simulate node's ASYNC spawn failure (a bad cwd does not throw
+      // synchronously): the error arrives on a timer, after execute() has
+      // registered its handlers and the test has deleted the directory.
+      const child = new EventEmitter();
+      // Deliberately NOT unref'd: an awaited async iterator does not hold the
+      // event loop, and an unref'd timer here would let node exit before the
+      // failure fires (the same trap as the approval-timeout test's note).
+      setTimeout(() => {
+        child.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
+      }, 50);
+      return child;
+    },
+  });
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'status',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: {},
+    });
+    await rm(doomed, { recursive: true, force: true });
+    const events = await collectEvents(service, handle.runId);
+    const terminal = events.at(-1);
+    assert.equal(terminal.type, 'run.failed');
+    assert.match(terminal.payload.message, /workspace directory disappeared/);
+    assert.ok(terminal.payload.message.includes(doomed), 'the failure names the vanished path');
   } finally {
     await cleanup();
   }

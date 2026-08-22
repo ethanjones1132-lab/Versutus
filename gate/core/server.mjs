@@ -1350,7 +1350,12 @@ export async function createGate(config = {}) {
           res.writeHead(200);
           res.end(JSON.stringify({ runId: handle.runId }));
         } catch (error) {
-          res.writeHead(error.code === 'workspace_policy_violation' ? 400 : 409);
+          // Both workspace rejections are operator-fixable request problems
+          // (a path outside the roots, or a root that is not on disk), not
+          // Gate-state conflicts — say so with 400, message verbatim.
+          res.writeHead(
+            error.code === 'workspace_policy_violation' || error.code === 'workspace_missing' ? 400 : 409,
+          );
           res.end(JSON.stringify({ error: { message: error.message, code: error.code || 'run_failed' } }));
         }
         return;
