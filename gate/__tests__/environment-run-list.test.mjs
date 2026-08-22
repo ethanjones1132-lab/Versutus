@@ -174,6 +174,11 @@ test('a run that has not finished reports a live state, and a finished one its o
       operation: 'status',
       input: {},
     });
+    // The auto-approval resolves in the background; wait for the spawn it
+    // releases before reading the mid-flight summary.
+    for (let waited = 0; waited < 2000 && children.length === 0; waited += 10) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     const [summary] = service.listRuns('codex-local');
     assert.equal(summary.runId, handle.runId);
     assert.ok(['starting', 'running'].includes(summary.state));

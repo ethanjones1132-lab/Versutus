@@ -28,6 +28,14 @@ const execFileAsync = promisify(execFile);
  *                    text, the error lands in stderr diagnostics, run.failed
  *                    carries the exit code, and discovery + replay agree
  *                    (always hermetic — a real CLI cannot fail on cue)
+ *   7. deny        — a denied consent card is a hard stop: the run ends
+ *                    run.cancelled "approval denied" before anything spawns,
+ *                    and discovery + replay agree (always hermetic — denial
+ *                    precedes any CLI involvement)
+ *
+ * Every workspace-writing run raises an approval card on its event stream;
+ * the legs that need the CLI to actually run answer it like the phone does
+ * (POST /runs/:id/approve).
  *
  * Hermetic by default: no real Hermes install needed — the executable is a
  * fake that speaks the adapter's verified argv (`--version`, `--acp`,
@@ -160,6 +168,25 @@ async function authenticatedJson(response, step) {
   return response.json();
 }
 
+/**
+ * Answer an approval card the way the phone does — POST the decision to the
+ * approve route. The promise is parked in `posts` so the caller can await
+ * the round-trip after the stream drains; a non-200 fails the step.
+ */
+function answerApproval(step, base, headers, environmentId, runId, approvalId, decision, posts) {
+  posts.push(
+    fetch(
+      `${base}/v1/environments/${encodeURIComponent(environmentId)}/runs/${encodeURIComponent(runId)}/approve`,
+      { method: 'POST', headers, body: JSON.stringify({ approvalId, decision }) },
+    ).then(async (response) => {
+      if (response.status !== 200) {
+        const body = await response.text();
+        fail(step, `approve (${decision}) status ${response.status}: ${body.slice(0, 200)}`);
+      }
+    }),
+  );
+}
+
 const kindModulePath = new URL('../gate/core/capabilities/provider/kind.mjs', import.meta.url);
 const root = await mkdtemp(join(tmpdir(), 'smoke-wedge-'));
 await mkdir(join(root, 'core', 'capabilities', 'provider'), { recursive: true });
@@ -207,13 +234,22 @@ try {
   if (!runId) fail('run', 'no runId returned');
 
   let stdoutText = '';
+  const approvalPosts = [];
   const events = await sseEvents(gate.port, gate.token, 'hermes-local', runId, (event) => {
+    if (event.type === 'approval.required') {
+      // A workspace-writing task asks first; the smoke answers like the phone.
+      answerApproval('run + reply', base, headers, 'hermes-local', runId, event.payload.approvalId, 'approve', approvalPosts);
+    }
     if (event.type === 'run.output' && event.payload?.stream === 'stdout') {
       stdoutText += event.payload.text;
     }
   });
+  await Promise.all(approvalPosts);
   assertMonotonicFromOne('run + reply', events);
   if (events[0]?.type !== 'run.started') fail('run + reply', `first event was ${events[0]?.type}`);
+  if (!events.some((event) => event.type === 'approval.required')) {
+    fail('run + reply', 'no approval card was raised for a workspace-writing run');
+  }
   if (realExecutable) {
     // A real agent answers in its own words; the proof is that a reply streamed at all.
     if (!stdoutText.trim()) fail('run + reply', 'no stdout ever streamed from the real CLI');
@@ -260,6 +296,8 @@ try {
      */
     let landed = null;
     let watched = new Set();
+    let landedStream = null;
+    let landedPosts = [];
     for (let attempt = 1; attempt <= 3 && !landed; attempt += 1) {
       const started = await fetch(`${base}/v1/environments/hermes-local/runs`, {
         method: 'POST',
@@ -267,6 +305,14 @@ try {
         body: JSON.stringify({ operation: 'prompt', input: { prompt: 'Reply with exactly: pong' } }),
       });
       const { runId: attemptRunId } = await authenticatedJson(started, 'stop');
+
+      // The consent card rides the same stream; answer it so the CLI spawns.
+      const attemptPosts = [];
+      const attemptStream = sseEvents(gate.port, gate.token, 'hermes-local', attemptRunId, (event) => {
+        if (event.type === 'approval.required') {
+          answerApproval('stop', base, headers, 'hermes-local', attemptRunId, event.payload.approvalId, 'approve', attemptPosts);
+        }
+      });
 
       let midflight = null;
       for (let waited = 0; waited < 10_000; waited += 50) {
@@ -282,7 +328,13 @@ try {
         }
         await sleep(50);
       }
-      if (!midflight) continue;
+      if (!midflight) {
+        // The answer beat the poll; drain the stream (and the approve POST)
+        // to free the single-run slot, then try again.
+        await attemptStream;
+        await Promise.all(attemptPosts);
+        continue;
+      }
 
       watched = new Set(await safeDescendants(midflight.pid));
       const cancelled = await authenticatedJson(
@@ -294,10 +346,11 @@ try {
       );
       if (cancelled.cancelled === true) {
         landed = { runId: attemptRunId, pid: midflight.pid };
+        landedStream = attemptStream;
+        landedPosts = attemptPosts;
       } else {
-        // The answer beat the cancel; drain the stream to free the
-        // single-run slot, then try again.
-        await sseEvents(gate.port, gate.token, 'hermes-local', attemptRunId).catch(() => {});
+        await attemptStream;
+        await Promise.all(attemptPosts);
       }
     }
     if (!landed) fail('stop', 'cancel never landed mid-flight in 3 attempts against the real CLI');
@@ -307,7 +360,8 @@ try {
     // scan catches processes the pre-cancel snapshot missed.
     for (const pid of await safeDescendants(landed.pid)) watched.add(pid);
 
-    const slowEvents = await sseEvents(gate.port, gate.token, 'hermes-local', landed.runId);
+    const slowEvents = await landedStream;
+    await Promise.all(landedPosts);
     const slowTerminal = slowEvents.at(-1);
     if (slowTerminal?.type !== 'run.cancelled') fail('stop', `terminal event was ${slowTerminal?.type}`);
     const cancelledOnce = slowEvents.filter((event) => event.type === 'run.cancelled');
@@ -332,8 +386,12 @@ try {
   const { runId: slowRunId } = await authenticatedJson(slowStart, 'stop');
 
   let sawOutput = false;
+  const approvalPosts = [];
   const slowPromise = sseEvents(gate.port, gate.token, 'hermes-local', slowRunId, (event) => {
     if (event.type === 'run.output') sawOutput = true;
+    if (event.type === 'approval.required') {
+      answerApproval('stop', base, headers, 'hermes-local', slowRunId, event.payload.approvalId, 'approve', approvalPosts);
+    }
   });
   for (let waited = 0; waited < 5000 && !sawOutput; waited += 50) {
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -358,6 +416,7 @@ try {
   if (cancelled.cancelled !== true) fail('stop', `cancel returned ${JSON.stringify(cancelled)}`);
 
   const slowEvents = await slowPromise;
+  await Promise.all(approvalPosts);
   const slowTerminal = slowEvents.at(-1);
   if (slowTerminal?.type !== 'run.cancelled') fail('stop', `terminal event was ${slowTerminal?.type}`);
   const cancelledAgain = slowEvents.filter((event) => event.type === 'run.cancelled');
@@ -413,13 +472,18 @@ try {
 
   let failStdout = '';
   let failStderr = '';
+  const failApprovalPosts = [];
   const failEvents = await sseEvents(gate.port, gate.token, 'hermes-fail', failRunId, (event) => {
+    if (event.type === 'approval.required') {
+      answerApproval('fail', base, headers, 'hermes-fail', failRunId, event.payload.approvalId, 'approve', failApprovalPosts);
+    }
     if (event.type === 'run.output' && event.payload?.stream === 'stderr') {
       failStderr += event.payload.text;
     } else if (event.type === 'run.output' && event.payload?.stream === 'stdout') {
       failStdout += event.payload.text;
     }
   });
+  await Promise.all(failApprovalPosts);
   assertMonotonicFromOne('fail', failEvents);
   if (failEvents[0]?.type !== 'run.started') fail('fail', `first event was ${failEvents[0]?.type}`);
   if (!failStdout.includes('par')) fail('fail', `partial stdout missing: ${JSON.stringify(failStdout)}`);
@@ -448,9 +512,74 @@ try {
     `run.failed exit 3 — stdout kept as reply (${JSON.stringify(failStdout)}), stderr as diagnostics; discovery + replay agree`,
   );
 
+  // ── Step 7: a denied consent never lets the task start ────────────────────
+  /**
+   * The other half of the safety story: Deny must be a hard stop. The card is
+   * answered from the run's own event stream — nothing spawns, the terminal
+   * state is run.cancelled "approval denied", the runs list reports it, and a
+   * reattaching phone replays the same refusal. Always hermetic: the denial
+   * happens before any CLI involvement, real or fake.
+   */
+  const deniedExecutable = await fakeHermesPromptExecutable('0.20.1');
+  const deniedCreated = await fetch(`${base}/v1/capabilities/rpc`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      method: 'environments.create',
+      params: validEnvironment({
+        id: 'hermes-denied',
+        adapterId: 'hermes',
+        executable: { path: deniedExecutable },
+        workspacePolicy: {
+          roots: [workspace],
+          defaultRoot: workspace,
+          defaultSandbox: 'read_only',
+          allowAdditionalRoots: false,
+        },
+      }),
+    }),
+  });
+  await authenticatedJson(deniedCreated, 'deny');
+
+  const deniedStarted = await fetch(`${base}/v1/environments/hermes-denied/runs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ operation: 'prompt', input: { prompt: 'DENY me before I start' } }),
+  });
+  const { runId: deniedRunId } = await authenticatedJson(deniedStarted, 'deny');
+  if (!deniedRunId) fail('deny', 'no runId returned');
+
+  const deniedPosts = [];
+  const deniedEvents = await sseEvents(gate.port, gate.token, 'hermes-denied', deniedRunId, (event) => {
+    if (event.type === 'approval.required') {
+      answerApproval('deny', base, headers, 'hermes-denied', deniedRunId, event.payload.approvalId, 'deny', deniedPosts);
+    }
+  });
+  await Promise.all(deniedPosts);
+  assertMonotonicFromOne('deny', deniedEvents);
+  const deniedCards = deniedEvents.filter((event) => event.type === 'approval.required');
+  if (deniedCards.length !== 1) fail('deny', `${deniedCards.length} approval cards`);
+  const deniedTerminal = deniedEvents.at(-1);
+  if (deniedTerminal?.type !== 'run.cancelled') fail('deny', `terminal event was ${deniedTerminal?.type}`);
+  if (deniedTerminal.payload?.reason !== 'approval denied') {
+    fail('deny', `terminal reason was ${JSON.stringify(deniedTerminal.payload?.reason)}`);
+  }
+
+  const deniedList = await authenticatedJson(
+    await fetch(`${base}/v1/environments/hermes-denied/runs`, { headers }),
+    'deny',
+  );
+  const deniedEntry = deniedList.runs?.find((run) => run.runId === deniedRunId);
+  if (deniedEntry?.state !== 'cancelled') fail('deny', `discovery state after denial was ${deniedEntry?.state}`);
+
+  const deniedReplay = await sseEvents(gate.port, gate.token, 'hermes-denied', deniedRunId);
+  if (deniedReplay.length !== deniedEvents.length) fail('deny', `${deniedReplay.length} replayed vs ${deniedEvents.length} live`);
+  if (deniedReplay.at(-1)?.type !== 'run.cancelled') fail('deny', `replay ended in ${deniedReplay.at(-1)?.type}`);
+  pass('deny', 'Deny stopped the run before anything spawned — run.cancelled "approval denied", discovery + replay agree');
+
   const proven = realExecutable
-    ? '5/5 wedge steps against the WEDGE_EXECUTABLE CLI + honest-failure leg (deterministic fixture)'
-    : '6/6 wedge steps proven over HTTP+SSE (hermetic)';
+    ? '5/5 wedge steps against the WEDGE_EXECUTABLE CLI + honest-failure + denied-consent legs (deterministic fixtures)'
+    : '7/7 wedge steps proven over HTTP+SSE (hermetic)';
   console.log(`\nsmoke-wedge-loop: PASS (${proven})`);
 } finally {
   await gate.close();

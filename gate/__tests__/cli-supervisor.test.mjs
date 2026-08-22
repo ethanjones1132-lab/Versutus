@@ -11,13 +11,23 @@ import { CliEnvironmentService } from '../core/cli-environments/supervisor.mjs';
 import { fakeRunner } from './fixtures/cli-protocols/fake-runner.mjs';
 import { validEnvironment } from './fixtures/cli-environment.mjs';
 
-async function collectEvents(service, runId) {
+async function collectEvents(service, runId, decision) {
   const events = [];
-  for await (const event of service.events(runId)) events.push(event);
+  for await (const event of service.events(runId)) {
+    events.push(event);
+    if (decision && event.type === 'approval.required') {
+      // Answer the card mid-stream, exactly like the phone's launcher does.
+      await service.approve(runId, event.payload.approvalId, decision);
+    }
+  }
   return events;
 }
 
-async function makeService(overrides = {}) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function makeService(recordOverrides = {}, serviceOverrides = {}) {
   const gateHome = await mkdtemp(join(tmpdir(), 'gate-cli-sup-'));
   const store = new CliEnvironmentStore(gateHome);
   const executable = await fakeRunner('0.142.1');
@@ -31,7 +41,7 @@ async function makeService(overrides = {}) {
       defaultSandbox: 'read_only',
       allowAdditionalRoots: false,
     },
-    ...overrides,
+    ...recordOverrides,
   });
   await store.put(record);
   const jobs = [];
@@ -60,6 +70,7 @@ async function makeService(overrides = {}) {
       children.push(child);
       return child;
     },
+    ...serviceOverrides,
   });
   return {
     service,
@@ -97,8 +108,11 @@ test('a status run really executes the CLI and completes once', async () => {
       sandbox: 'read_only',
       input: {},
     });
-    assert.equal(children.length, 1, 'even a status run spawns the executable');
+    // A read-only operation auto-approves, but the spawn resolves just
+    // behind that decision — the completed stream is what proves it ran.
     const events = await collectEvents(service, handle.runId);
+    assert.equal(children.length, 1, 'even a status run spawns the executable');
+    assert.equal(events.filter((event) => event.type === 'approval.required').length, 0, 'read-only runs never ask');
     assert.equal(events[0].type, 'run.started');
     assert.equal(events.filter((event) => /completed|failed|cancelled/.test(event.type)).length, 1);
     assert.deepEqual(events.map((event, index) => event.sequence), events.map((_, index) => index + 1));
@@ -121,7 +135,13 @@ test('a prompt run streams the reply as run.output events before completing', as
       sandbox: 'read_only',
       input: { prompt: 'say hello world back' },
     });
-    const events = await collectEvents(service, handle.runId);
+    const events = await collectEvents(service, handle.runId, 'approve');
+    const card = events.find((event) => event.type === 'approval.required');
+    assert.ok(card, 'a workspace-writing run asks before it starts');
+    const firstOutput = events.findIndex((event) => event.type === 'run.output');
+    assert.ok(firstOutput > events.indexOf(card), 'the card must precede any output');
+    assert.equal(card.payload.risk, 'workspace_write');
+    assert.equal(typeof card.payload.summary, 'string');
     const outputs = events.filter((event) => event.type === 'run.output');
     assert.ok(outputs.length > 0, 'the reply must arrive as streamed output, not only a terminal event');
     const joined = outputs.map((event) => event.payload.text).join('');
@@ -147,7 +167,7 @@ test('a nonzero exit surfaces as run.failed with the code and stderr text', asyn
       sandbox: 'read_only',
       input: { prompt: 'please FAIL loudly' },
     });
-    const events = await collectEvents(service, handle.runId);
+    const events = await collectEvents(service, handle.runId, 'approve');
     const terminal = events.at(-1);
     assert.equal(terminal.type, 'run.failed');
     assert.equal(terminal.payload.exitCode, 3);
@@ -194,13 +214,125 @@ test('cancel kills the spawned child and emits run.cancelled once', async () => 
       sandbox: 'read_only',
       input: { prompt: 'SLEEP:30000' },
     });
-    assert.equal(children.length, 1, 'a prompt run must spawn a real child process');
+    const drained = collectEvents(service, handle.runId, 'approve');
+    for (let waited = 0; waited < 2000 && children.length === 0; waited += 10) {
+      await sleep(10);
+    }
+    assert.equal(children.length, 1, 'a prompt run must spawn a real child process once approved');
     const result = await service.cancel(handle.runId);
     assert.equal(result.cancelled, true);
-    const events = await collectEvents(service, handle.runId);
+    const events = await drained;
     assert.equal(events.filter((event) => event.type === 'run.cancelled').length, 1);
     assert.equal(jobs[0].terminated, true);
   } finally {
+    await cleanup();
+  }
+});
+
+test('a workspace-writing run waits for an explicit approval before spawning', async () => {
+  const { service, children, cleanup } = await makeService();
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'prompt',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: { prompt: 'say hi after the gate' },
+    });
+    // startRun returns at once — the phone needs the runId to open the
+    // stream that carries the card — while the spawn waits on the decision.
+    await sleep(100);
+    assert.equal(children.length, 0, 'nothing spawns while the approval is pending');
+    const events = await collectEvents(service, handle.runId, 'approve');
+    assert.equal(children.length, 1, 'the approval releases the spawn');
+    assert.equal(events[0].type, 'run.started');
+    assert.equal(events[1].type, 'approval.required');
+    assert.equal(events.at(-1).type, 'run.completed');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('a denied approval ends the run cancelled without spawning', async () => {
+  const { service, children, cleanup } = await makeService();
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'prompt',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: { prompt: 'do not run me' },
+    });
+    const events = await collectEvents(service, handle.runId, 'deny');
+    const cards = events.filter((event) => event.type === 'approval.required');
+    assert.equal(cards.length, 1, 'exactly one card for one denied run');
+    const terminal = events.at(-1);
+    assert.equal(terminal.type, 'run.cancelled');
+    assert.equal(terminal.payload.reason, 'approval denied');
+    assert.equal(children.length, 0, 'a denied run never spawns');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('cancelling a run that is waiting for approval ends it cancelled', async () => {
+  const { service, children, cleanup } = await makeService();
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'prompt',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: { prompt: 'SLEEP:30000' },
+    });
+    await sleep(50);
+    assert.equal(children.length, 0, 'the run is still waiting for consent');
+    const result = await service.cancel(handle.runId);
+    assert.equal(result.cancelled, true);
+    const events = await collectEvents(service, handle.runId);
+    assert.equal(events.at(-1).type, 'run.cancelled');
+    assert.equal(events.filter((event) => event.type === 'approval.required').length, 1);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('an unanswered approval times out and frees the slot', async () => {
+  const { service, children, cleanup } = await makeService({}, { approvalTimeoutMs: 50 });
+  // The supervisor's timeout timer is unref'd (so a real Gate can always
+  // exit), which means it cannot keep this test's event loop alive on its
+  // own — hold the loop with a ref'd interval until the assertions are done.
+  const keepalive = setInterval(() => {}, 25);
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'prompt',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: { prompt: 'nobody is watching this card' },
+    });
+    const events = await collectEvents(service, handle.runId);
+    const terminal = events.at(-1);
+    assert.equal(terminal.type, 'run.cancelled');
+    assert.equal(terminal.payload.reason, 'approval timed out');
+    assert.equal(children.length, 0, 'a timed-out run never spawned');
+    // The slot is free again: a fresh read-only run completes normally.
+    const next = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'status',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: {},
+    });
+    const nextEvents = await collectEvents(service, next.runId);
+    assert.equal(nextEvents.at(-1).type, 'run.completed');
+  } finally {
+    clearInterval(keepalive);
     await cleanup();
   }
 });

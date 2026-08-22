@@ -17,6 +17,22 @@ import { spawnCommand } from './adapters/shared.mjs';
  */
 const MAX_OUTPUT_CHARS = 16_000;
 
+/**
+ * The one-line summary the phone's approval card shows, per risk class.
+ * Anything unmapped falls back to the launcher's generic text.
+ */
+const APPROVAL_SUMMARY = {
+  workspace_write: 'This task can modify files in its workspace — approve to let it start.',
+  host_write: 'This task can write outside its workspace — approve to let it start.',
+  credential: 'This task wants access to credentials — approve to let it start.',
+  install: 'This task wants to install software — approve to let it start.',
+  update: 'This task wants to update software — approve to let it start.',
+  plugin: 'This task wants to install a plugin — approve to let it start.',
+  system: 'This task wants to change system state — approve to let it start.',
+  destructive: 'This task may delete or overwrite data — approve to let it start.',
+  bypass: 'This task asks to bypass safety controls — approve only if you trust it.',
+};
+
 function createOutputPump(emit) {
   const decoders = new Map();
 
@@ -50,12 +66,22 @@ function createOutputPump(emit) {
 }
 
 export class CliEnvironmentService {
-  constructor({ store, registry, jobFactory = createWindowsJob, approvals = new ApprovalService(), spawnImpl = nodeSpawn } = {}) {
+  constructor({
+    store,
+    registry,
+    jobFactory = createWindowsJob,
+    approvals = new ApprovalService(),
+    spawnImpl = nodeSpawn,
+    approvalTimeoutMs = 120_000,
+  } = {}) {
     this.store = store;
     this.registry = registry;
     this.jobFactory = jobFactory;
     this.approvals = approvals;
     this.spawnImpl = spawnImpl;
+    // How long a run may sit in front of an unanswered approval card before
+    // it is ruled denied and its slot freed.
+    this.approvalTimeoutMs = approvalTimeoutMs;
     this.runs = new Map();
     this.environmentState = new Map();
   }
@@ -155,8 +181,88 @@ export class CliEnvironmentService {
       return { runId, completed: this.wait(runId) };
     }
 
-    this.execute(run, invocation.args);
+    /**
+     * Consent is resolved in the background: the caller gets the runId at
+     * once (the phone needs it to open the SSE stream that carries the
+     * approval card), while nothing spawns until the operator decides.
+     */
+    queueMicrotask(() => {
+      this.requestConsent(run, adapter)
+        .then((permitted) => {
+          if (permitted) this.execute(run, invocation.args);
+        })
+        .catch((error) => this.finish(run, 'run.failed', { message: error.message }));
+    });
     return { runId, completed: this.wait(runId) };
+  }
+
+  /**
+   * Human consent in front of the spawn. The operation's risk class goes
+   * through the ApprovalService: read-only operations auto-approve, anything
+   * that can write/execute/install emits `approval.required` and the run
+   * holds (slot included) until the phone's Approve/Deny card is answered or
+   * the timeout rules it denied.
+   *
+   * Risk comes from the adapter's declared operation table, but adapters name
+   * operations natively (`exec` for Codex) while callers speak the generic
+   * verbs the launcher offers (`prompt`). An undeclared verb is therefore not
+   * refused outright — it asks first: only a declared read-only operation
+   * skips the card, and the ApprovalService still fails closed on risk
+   * classes it does not know.
+   */
+  async requestConsent(run, adapter) {
+    const declared = adapter.operations?.[run.request.operation];
+    const risk =
+      typeof declared?.risk === 'string'
+        ? declared.risk
+        : run.request.operation === 'status'
+          ? 'read'
+          : 'workspace_write';
+    const verdict = await this.approvals.normalize({
+      type: risk,
+      environmentId: run.request.environmentId,
+      operation: run.request.operation,
+    });
+    if (verdict.decision === 'approve') return true;
+    if (verdict.decision === 'deny') {
+      this.finish(run, 'run.failed', {
+        message: `operation "${run.request.operation}" was refused by approval policy: ${verdict.reason ?? 'denied'}`,
+      });
+      return false;
+    }
+
+    run.approvalId = verdict.approvalId;
+    run.log.emit({
+      type: 'approval.required',
+      payload: {
+        approvalId: verdict.approvalId,
+        operation: run.request.operation,
+        risk: verdict.type,
+        summary: APPROVAL_SUMMARY[verdict.type] ?? 'This run needs your approval to continue.',
+      },
+    });
+
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      // Nobody answered: rule it denied so the slot frees and the run ends
+      // honestly instead of waiting forever.
+      timedOut = true;
+      this.approvals.decide(verdict.approvalId, 'deny');
+    }, this.approvalTimeoutMs);
+    timer.unref?.();
+    let ruling = null;
+    try {
+      ruling = await this.approvals.waitForDecision(verdict.approvalId);
+    } finally {
+      clearTimeout(timer);
+    }
+    run.approvalId = null;
+
+    if (ruling?.decision === 'approve') return true;
+    this.finish(run, 'run.cancelled', {
+      reason: timedOut ? 'approval timed out' : 'approval denied',
+    });
+    return false;
   }
 
   execute(run, args) {
@@ -245,6 +351,12 @@ export class CliEnvironmentService {
     const run = this.runs.get(runId);
     if (!run || run.done) return { cancelled: false };
     run.nativeCancel = true;
+    if (run.approvalId) {
+      // A run waiting for consent has no process to kill yet; ruling the
+      // approval denied releases the waiting supervisor, and finish() below
+      // emits the (single) terminal event.
+      this.approvals.decide(run.approvalId, 'deny');
+    }
     await run.job.terminate();
     this.finish(run, 'run.cancelled', { reason: 'cancelled' });
     return { cancelled: true };

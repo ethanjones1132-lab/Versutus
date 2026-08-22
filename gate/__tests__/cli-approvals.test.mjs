@@ -27,3 +27,13 @@ test('bypass and destructive actions never auto-approve', async () => {
     assert.notEqual(result.decision, 'approve', type);
   }
 });
+
+test('waitForDecision resolves with the ruling, or null for an unknown id', async () => {
+  const approvals = new ApprovalService();
+  assert.equal(await approvals.waitForDecision('never-issued'), null);
+  const cred = await approvals.normalize({ type: 'credential', command: 'login' });
+  const waiting = approvals.waitForDecision(cred.approvalId);
+  const ruled = await approvals.decide(cred.approvalId, 'approve');
+  assert.equal(ruled.decision, 'approve');
+  assert.equal((await waiting).decision, 'approve');
+});

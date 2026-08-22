@@ -16,6 +16,8 @@ const REQUIRE_DECISION = new Set([
 export class ApprovalService {
   constructor() {
     this.pending = new Map();
+    // Resolvers parked by waitForDecision, keyed by approvalId.
+    this.waiters = new Map();
   }
 
   async normalize(request = {}) {
@@ -32,6 +34,22 @@ export class ApprovalService {
     return entry;
   }
 
+  /**
+   * Resolves with the ruling once decide() answers it, or null for an id
+   * that was never (or is no longer) pending. This is the supervisor's seat
+   * while a risky operation sits in front of the operator's Approve/Deny
+   * card: nothing spawns until this resolves.
+   */
+  waitForDecision(approvalId) {
+    const entry = this.pending.get(approvalId);
+    if (!entry) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const waiters = this.waiters.get(approvalId) ?? new Set();
+      waiters.add(resolve);
+      this.waiters.set(approvalId, waiters);
+    });
+  }
+
   async decide(approvalId, decision) {
     const entry = this.pending.get(approvalId);
     if (!entry) {
@@ -39,6 +57,11 @@ export class ApprovalService {
     }
     entry.decision = decision === 'approve' ? 'approve' : 'deny';
     this.pending.delete(approvalId);
+    const waiters = this.waiters.get(approvalId);
+    if (waiters) {
+      this.waiters.delete(approvalId);
+      for (const resolve of waiters) resolve(entry);
+    }
     return entry;
   }
 }
