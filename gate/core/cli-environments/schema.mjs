@@ -171,7 +171,7 @@ export function validateCliEnvironmentRegistration(value) {
   }
 
   if (requireObject(value.lifecycle, 'lifecycle', errors)) {
-    rejectUnknown(value.lifecycle, new Set(['startup', 'idleTimeoutSeconds', 'maxConcurrentRuns']), 'lifecycle', errors);
+    rejectUnknown(value.lifecycle, new Set(['startup', 'idleTimeoutSeconds', 'maxConcurrentRuns', 'maxRunSeconds']), 'lifecycle', errors);
     if (!STARTUPS.has(value.lifecycle.startup)) {
       err(errors, 'lifecycle.startup', `must be one of [${[...STARTUPS].join(', ')}]`);
     }
@@ -180,6 +180,16 @@ export function validateCliEnvironmentRegistration(value) {
     }
     if (!Number.isInteger(value.lifecycle.maxConcurrentRuns) || value.lifecycle.maxConcurrentRuns < 1) {
       err(errors, 'lifecycle.maxConcurrentRuns', 'must be a positive integer');
+    }
+    // Optional run-time budget: when set, the Gate stops a task that has been
+    // running longer than this, instead of letting one hung CLI hold the
+    // environment's run slot forever. Absent = no limit (the historical
+    // behavior every existing record keeps).
+    if (
+      value.lifecycle.maxRunSeconds !== undefined &&
+      (!Number.isInteger(value.lifecycle.maxRunSeconds) || value.lifecycle.maxRunSeconds < 1)
+    ) {
+      err(errors, 'lifecycle.maxRunSeconds', 'must be a positive integer');
     }
   }
 

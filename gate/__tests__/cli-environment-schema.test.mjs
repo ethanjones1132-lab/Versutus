@@ -84,3 +84,26 @@ test('rejects non-string credential binding references', () => {
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((error) => error.field === 'credentialBindings.API_SERVER_KEY'));
 });
+
+test('accepts an optional lifecycle.maxRunSeconds and rejects a meaningless one', () => {
+  const accepted = validateCliEnvironmentRegistration(validEnvironment({
+    lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 300, maxConcurrentRuns: 1, maxRunSeconds: 900 },
+  }));
+  assert.deepEqual(accepted, { ok: true, errors: [] });
+
+  // Absent stays valid — no existing record changes meaning.
+  const absent = validateCliEnvironmentRegistration(validEnvironment());
+  assert.deepEqual(absent, { ok: true, errors: [] });
+
+  for (const bad of [0, -5, 1.5, '600', null]) {
+    const rejected = validateCliEnvironmentRegistration(validEnvironment({
+      lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 300, maxConcurrentRuns: 1, maxRunSeconds: bad },
+    }));
+    assert.equal(rejected.ok, false, `maxRunSeconds ${JSON.stringify(bad)} was accepted`);
+    assert.ok(
+      rejected.errors.some((error) => error.field === 'lifecycle.maxRunSeconds'),
+      `no named field error for maxRunSeconds ${JSON.stringify(bad)}`,
+    );
+  }
+});
+

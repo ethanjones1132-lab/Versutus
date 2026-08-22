@@ -50,6 +50,11 @@ const execFileAsync = promisify(execFile);
  *                    outcome, its event log still replays from sequence 1,
  *                    and the refused start of leg 9 is still recorded nowhere
  *                    (always hermetic)
+ *  11. time-limit — a hung task is stopped by the Gate when the environment's
+ *                    lifecycle.maxRunSeconds budget is spent: run.failed names
+ *                    the limit and the fix, discovery + replay agree, the run
+ *                    process is verified dead, and the freed slot takes a
+ *                    fresh task to completion (always hermetic)
  *
  * Every workspace-writing run raises an approval card on its event stream;
  * the legs that need the CLI to actually run answer it like the phone does
@@ -818,9 +823,117 @@ try {
   }
   pass('restart', `after killing the Gate: ${survivor.state} · exit ${survivor.exitCode} still listed, ${replayAfterRestart.length} events still replay from sequence 1, refusal still unrecorded`);
 
+  // ── Step 11: a hung task hits its time limit and is stopped by name ───────
+  /**
+   * The demo's quietest killer: a task that never finishes. An unanswered
+   * approval card times out on its own, but once the CLI was live nothing
+   * bounded it — one hung process held the environment's single run slot
+   * forever, and the operator's only escape was noticing. When the record
+   * sets lifecycle.maxRunSeconds the Gate itself stops the tree when the
+   * budget is spent: the terminal event names the limit and the fix,
+   * discovery reports the failure, replay agrees for the reattaching phone,
+   * the killed process is verified dead, and the freed slot accepts a fresh
+   * task that completes normally. Always hermetic (a real CLI cannot be
+   * made to hang on cue reliably): the fake's SLOW_REPLY stall outlives a
+   * two-second budget.
+   */
+  const timeoutExecutable = await fakeHermesPromptExecutable('0.20.1');
+  const timeoutCreated = await fetch(`${restartedBase}/v1/capabilities/rpc`, {
+    method: 'POST',
+    headers: restartedAuth,
+    body: JSON.stringify({
+      method: 'environments.create',
+      params: validEnvironment({
+        id: 'hermes-timeout',
+        adapterId: 'hermes',
+        executable: { path: timeoutExecutable },
+        workspacePolicy: {
+          roots: [workspace],
+          defaultRoot: workspace,
+          defaultSandbox: 'read_only',
+          allowAdditionalRoots: false,
+        },
+        lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 30, maxConcurrentRuns: 1, maxRunSeconds: 2 },
+      }),
+    }),
+  });
+  await authenticatedJson(timeoutCreated, 'time-limit');
+
+  const hungStarted = await fetch(`${restartedBase}/v1/environments/hermes-timeout/runs`, {
+    method: 'POST',
+    headers: { ...restartedAuth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ operation: 'prompt', input: { prompt: 'SLOW_REPLY hang forever' } }),
+  });
+  const { runId: hungRunId } = await authenticatedJson(hungStarted, 'time-limit');
+  if (!hungRunId) fail('time-limit', 'no runId returned');
+
+  let hungPid = null;
+  const hungPosts = [];
+  const hungStream = sseEvents(gate.port, gate.token, 'hermes-timeout', hungRunId, (event) => {
+    if (event.type === 'approval.required') {
+      answerApproval('time-limit', restartedBase, restartedAuth, 'hermes-timeout', hungRunId, event.payload.approvalId, 'approve', hungPosts);
+    }
+  });
+  for (let waited = 0; waited < 2000 && hungPid === null; waited += 25) {
+    const list = await authenticatedJson(
+      await fetch(`${restartedBase}/v1/environments/hermes-timeout/runs`, { headers: restartedAuth }),
+      'time-limit',
+    );
+    const entry = list.runs?.find((run) => run.runId === hungRunId);
+    if (entry?.state === 'running' && typeof entry.pid === 'number') hungPid = entry.pid;
+    else await sleep(25);
+  }
+  if (hungPid === null) fail('time-limit', 'the hung run never exposed a pid before its budget expired');
+
+  const hungEvents = await hungStream;
+  await Promise.all(hungPosts);
+  assertMonotonicFromOne('time-limit', hungEvents);
+  const hungTerminal = hungEvents.at(-1);
+  if (hungTerminal?.type !== 'run.failed') fail('time-limit', `terminal event was ${hungTerminal?.type}`);
+  if (!/2s time limit/.test(hungTerminal.payload?.message ?? '')) {
+    fail('time-limit', `terminal message does not name the limit: ${JSON.stringify(hungTerminal.payload?.message)}`);
+  }
+  if (!hungTerminal.payload.message.includes('lifecycle.maxRunSeconds')) {
+    fail('time-limit', `terminal message carries no fix: ${JSON.stringify(hungTerminal.payload?.message)}`);
+  }
+
+  const hungList = await authenticatedJson(
+    await fetch(`${restartedBase}/v1/environments/hermes-timeout/runs`, { headers: restartedAuth }),
+    'time-limit',
+  );
+  const hungEntry = hungList.runs?.find((run) => run.runId === hungRunId);
+  if (hungEntry?.state !== 'failed' || hungEntry.pid !== null) {
+    fail('time-limit', `discovery after the limit was ${hungEntry?.state}, pid ${hungEntry?.pid}`);
+  }
+  const hungReplay = await sseEvents(gate.port, gate.token, 'hermes-timeout', hungRunId);
+  if (hungReplay.at(-1)?.type !== 'run.failed') fail('time-limit', `replay ended in ${hungReplay.at(-1)?.type}`);
+  await assertEventuallyDead('time-limit', hungPid, 'hung run process');
+
+  // The point of the bound: the environment is usable again immediately.
+  const recoveryStarted = await fetch(`${restartedBase}/v1/environments/hermes-timeout/runs`, {
+    method: 'POST',
+    headers: { ...restartedAuth, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ operation: 'prompt', input: { prompt: 'Reply with exactly: pong' } }),
+  });
+  const { runId: recoveryRunId } = await authenticatedJson(recoveryStarted, 'time-limit');
+  const recoveryPosts = [];
+  const recoveryEvents = await sseEvents(gate.port, gate.token, 'hermes-timeout', recoveryRunId, (event) => {
+    if (event.type === 'approval.required') {
+      answerApproval('time-limit', restartedBase, restartedAuth, 'hermes-timeout', recoveryRunId, event.payload.approvalId, 'approve', recoveryPosts);
+    }
+  });
+  await Promise.all(recoveryPosts);
+  if (recoveryEvents.at(-1)?.type !== 'run.completed') {
+    fail('time-limit', `the follow-up run did not complete: ${recoveryEvents.at(-1)?.type}`);
+  }
+  pass(
+    'time-limit',
+    `hung task stopped at its 2s budget (pid ${hungPid} verified dead) as run.failed naming the fix; the slot took a fresh run to completion`,
+  );
+
   const proven = realExecutable
-    ? '5/5 wedge steps against the WEDGE_EXECUTABLE CLI + honest-failure + denied-consent (double-tap refusal incl.) + credential-binding + workspace-refusal + restart-persistence legs (deterministic fixtures)'
-    : '10/10 wedge steps proven over HTTP+SSE (hermetic)';
+    ? '5/5 wedge steps against the WEDGE_EXECUTABLE CLI + honest-failure + denied-consent (double-tap refusal incl.) + credential-binding + workspace-refusal + restart-persistence + time-limit legs (deterministic fixtures)'
+    : '11/11 wedge steps proven over HTTP+SSE (hermetic)';
   console.log(`\nsmoke-wedge-loop: PASS (${proven})`);
 } finally {
   await gate.close().catch(() => {});

@@ -364,6 +364,74 @@ test('concurrent runs honor maxConcurrentRuns', async () => {
   }
 });
 
+test('a run past lifecycle.maxRunSeconds is stopped by name and frees the slot', async () => {
+  const { service, children, cleanup } = await makeService({
+    lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 30, maxConcurrentRuns: 1, maxRunSeconds: 1 },
+  });
+  // The watchdog timer is unref'd (so a real Gate can always exit); the
+  // SLEEPING child holds the event loop until it is killed, but hold it
+  // explicitly too so the assertions below can never race a silent exit.
+  const keepalive = setInterval(() => {}, 25);
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'prompt',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: { prompt: 'SLEEP:30000' },
+    });
+    // Answer the card like the phone does, so the CLI actually spawns and
+    // the time budget starts counting from the spawn.
+    const events = await collectEvents(service, handle.runId, 'approve');
+    const terminal = events.at(-1);
+    assert.equal(terminal.type, 'run.failed');
+    assert.match(terminal.payload.message, /time limit/);
+    assert.match(terminal.payload.message, /maxRunSeconds/);
+    assert.ok(!('exitCode' in terminal.payload), 'the stop is not a CLI exit');
+    // The hung child was really killed, not left to run out its 30s sleep.
+    await sleep(100);
+    const child = children[0];
+    assert.ok(child.exitCode !== null || child.signalCode !== null, 'child survived the time limit');
+    // The slot is free again: a fresh read-only run completes normally.
+    const next = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'status',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: {},
+    });
+    const nextEvents = await collectEvents(service, next.runId);
+    assert.equal(nextEvents.at(-1).type, 'run.completed');
+  } finally {
+    clearInterval(keepalive);
+    await cleanup();
+  }
+});
+
+test('a fast task finishes under its time budget and no timer fires late', async () => {
+  const { service, cleanup } = await makeService({
+    lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 30, maxConcurrentRuns: 1, maxRunSeconds: 30 },
+  });
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'prompt',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: { prompt: 'quick answer' },
+    });
+    const events = await collectEvents(service, handle.runId, 'approve');
+    const terminal = events.at(-1);
+    assert.equal(terminal.type, 'run.completed');
+    assert.equal(terminal.payload.exitCode, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
 test('a refused start names a pending approval card as the holder of the slot', async () => {
   const { service, children, cleanup } = await makeService();
   try {

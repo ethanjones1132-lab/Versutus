@@ -444,6 +444,24 @@ export class CliEnvironmentService {
     // cancelled one proven dead — outside the Gate's own bookkeeping.
     run.child = child;
 
+    /**
+     * The one bound a running task has. An approval card times out on its
+     * own, but once the CLI is live nothing used to stop it: a hung task
+     * held the environment's single run slot forever, and the operator's
+     * only signal was a "busy" refusal naming it. When the record sets
+     * lifecycle.maxRunSeconds, the Gate itself stops the tree when that
+     * budget is spent and says so by name. Absent = no limit, exactly as
+     * before, so no existing record changes behavior.
+     */
+    const maxRunSeconds = run.record.lifecycle?.maxRunSeconds;
+    if (Number.isInteger(maxRunSeconds) && maxRunSeconds > 0) {
+      run.timeLimitTimer = setTimeout(() => {
+        if (run.done || run.nativeCancel) return;
+        this.stopTimedOutRun(run, maxRunSeconds);
+      }, maxRunSeconds * 1000);
+      run.timeLimitTimer.unref?.();
+    }
+
     const pump = createOutputPump((stream, text) => {
       run.log.emit({ type: 'run.output', payload: { stream, text } });
     });
@@ -543,6 +561,26 @@ export class CliEnvironmentService {
     return { cancelled: true };
   }
 
+  /**
+   * The time-limit twin of cancel(): same tree kill, different verdict. The
+   * run ends failed — the task did not finish — and the message names the
+   * budget and the way to change it, so the phone shows a reason instead of
+   * a mystery exit code. nativeCancel goes down first so the child's own
+   * close event can never win the race and report a bare nonzero exit.
+   */
+  async stopTimedOutRun(run, maxRunSeconds) {
+    run.nativeCancel = true;
+    try {
+      await run.job.terminate();
+    } finally {
+      this.finish(run, 'run.failed', {
+        message:
+          `task exceeded its ${maxRunSeconds}s time limit and was stopped — ` +
+          'raise or remove lifecycle.maxRunSeconds on the environment to allow longer tasks',
+      });
+    }
+  }
+
   async wait(runId) {
     const events = [];
     for await (const event of this.events(runId)) events.push(event);
@@ -551,6 +589,12 @@ export class CliEnvironmentService {
 
   finish(run, type, payload) {
     if (run.done) return;
+    // The run reached a verdict before its time budget: disarm the watchdog
+    // so a fast task never leaves a stray timer behind.
+    if (run.timeLimitTimer) {
+      clearTimeout(run.timeLimitTimer);
+      run.timeLimitTimer = null;
+    }
     run.done = true;
     run.log.emit({ type, payload });
     const remaining = [...this.runs.values()].filter((item) => item.request.environmentId === run.request.environmentId && !item.done);
