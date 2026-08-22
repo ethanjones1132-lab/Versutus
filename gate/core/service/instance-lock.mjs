@@ -1,4 +1,4 @@
-import { closeSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { mkdir, open, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -60,24 +60,39 @@ export async function acquireInstanceLock(gateHome) {
     async release() {
       if (released) return;
       released = true;
-      await handle.close();
+      // Never let a rejected close skip the unlink — a leaked gate.lock names
+      // our dead pid and blocks the next start.
+      await handle.close().catch(() => undefined);
       await rm(lockPath, { force: true });
     },
-    /** Synchronous release for 'exit' handlers, which cannot await: an async
+    /**
+     * Synchronous release for 'exit' handlers, which cannot await: an async
      * release there dies with the process mid-unlink and leaks gate.lock
-     * naming a dead pid. */
+     * naming a dead pid.
+     *
+     * Only the UNLINK must be synchronous — the OS reclaims every descriptor
+     * when the process dies. The descriptor itself is closed through the
+     * FileHandle API (never raw closeSync(handle.fd)): bypassing the
+     * bookkeeping leaves this handle believing it still owns the fd number,
+     * and its later GC finalizer closes that number again — by then it may
+     * belong to an unrelated open file, whose own close fails with EBADF
+     * (reproduced 2026-08-22 as flaky failures across the instance-lock
+     * suite; the DEP0137 "closing file descriptor 3" warning is the same
+     * finalizer). On the 'exit' path this close request may never run, which
+     * is fine for exactly that reason.
+     */
     releaseSync() {
       if (released) return;
       released = true;
       try {
-        closeSync(handle.fd);
-      } catch {
-        // Already closed by the async release; the unlink below still runs.
-      }
-      try {
         rmSync(lockPath, { force: true });
       } catch {
         // Nothing more an exiting process can do about a contested file.
+      }
+      try {
+        void handle.close().catch(() => undefined);
+      } catch {
+        // Exiting anyway — the OS closes whatever remains.
       }
     },
   };
