@@ -174,6 +174,10 @@ export class CliEnvironmentService {
     }
     // Registered before any event can fire so cancel() kills this child.
     run.job.add(child);
+    // Kept for the runs list: a mid-flight run advertises the OS pid of the
+    // process doing the work, so a stuck run can be identified — and a
+    // cancelled one proven dead — outside the Gate's own bookkeeping.
+    run.child = child;
 
     const pump = createOutputPump((stream, text) => {
       run.log.emit({ type: 'run.output', payload: { stream, text } });
@@ -226,6 +230,9 @@ export class CliEnvironmentService {
           startedAt: new Date(run.startedAtMs).toISOString(),
           endedAt: terminal ? terminal.timestamp : null,
           exitCode,
+          // OS pid of the spawned CLI while the run is mid-flight; null once
+          // finished so a stale pid is never mistaken for a live one.
+          pid: !run.done && run.child?.pid ? run.child.pid : null,
         };
       });
   }

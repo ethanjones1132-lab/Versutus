@@ -1,10 +1,14 @@
+import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, copyFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { createGate } from '../gate/core/server.mjs';
 import { validEnvironment } from '../gate/__tests__/fixtures/cli-environment.mjs';
 import { fakeHermesPromptExecutable } from '../gate/__tests__/fixtures/cli-protocols/fake-hermes-prompt.mjs';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Live proof of the commercial wedge (docs/commercial/concierge-pilot-packet-v1.md §1):
@@ -18,16 +22,19 @@ import { fakeHermesPromptExecutable } from '../gate/__tests__/fixtures/cli-proto
  *   4. replay      — the event log replays from sequence 1 for a reattaching
  *                    phone (dropped connection recovery)
  *   5. stop        — Cancel kills a mid-flight run: exactly one run.cancelled,
- *                    and discovery reports it
+ *                    discovery reports it, and the run's OS process is
+ *                    verified dead afterwards
  *
  * Hermetic by default: no real Hermes install needed — the executable is a
  * fake that speaks the adapter's verified argv (`--version`, `--acp`,
  * `-z <prompt>`), including a stalling mode so Cancel has a real window.
- * Set WEDGE_EXECUTABLE to prove steps 1–4 against a real CLI instead (e.g.
- * the Gate machine's hermes.exe before a demo); step 5's mid-flight stall is
- * a property of the fake, so with a real CLI the cancel path stays covered
- * by the hermetic run rather than being asserted against a chat that answers
- * on its own schedule.
+ * Set WEDGE_EXECUTABLE to prove all five steps against a real CLI instead
+ * (e.g. the Gate machine's hermes.exe before a demo): the recent-runs list
+ * exposes the spawned process's pid while a run is mid-flight, so the cancel
+ * leg polls until the real process is live, cancels it, and asserts that
+ * pid — plus every process observed beneath it — is gone. A fast answer
+ * races the cancel, so the leg retries; if it never lands mid-flight the
+ * smoke fails rather than passing on an unproven stop.
  * Run with: npm run smoke:wedge
  */
 
@@ -73,6 +80,72 @@ function assertMonotonicFromOne(step, events) {
       fail(step, `sequence ${event.sequence} at position ${index} (expected ${index + 1})`);
     }
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Polls until `pid` is gone. EPERM means the process exists but cannot be
+ * signalled, which counts as alive; anything other than EPERM/ESRCH is a
+ * probe error worth surfacing, not a silent pass.
+ */
+async function assertEventuallyDead(step, pid, label) {
+  for (let waited = 0; waited < 3000; waited += 100) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error.code !== 'EPERM') return;
+    }
+    await sleep(100);
+  }
+  fail(step, `${label} ${pid} still alive 3s after cancel`);
+}
+
+/**
+ * One snapshot of the process table, walked to every pid descending from
+ * `rootPid`. On Windows this is how the real-CLI cancel leg proves the whole
+ * tree died, not just the launcher — the exact bug class terminate()'s
+ * taskkill /T fix addressed. Elsewhere (or without PowerShell) returns []
+ * and the root-pid proof stands alone.
+ */
+async function processDescendants(rootPid) {
+  if (process.platform !== 'win32') return [];
+  const { stdout } = await execFileAsync(
+    'powershell.exe',
+    ['-NoProfile', '-Command',
+      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress'],
+    { timeout: 15_000 },
+  );
+  const rows = JSON.parse(stdout);
+  const childrenOf = new Map();
+  for (const row of Array.isArray(rows) ? rows : [rows]) {
+    const parent = Number(row.ParentProcessId);
+    if (!childrenOf.has(parent)) childrenOf.set(parent, []);
+    childrenOf.get(parent).push(Number(row.ProcessId));
+  }
+  const found = [];
+  const queue = [rootPid];
+  const seen = new Set(queue);
+  while (queue.length) {
+    for (const child of childrenOf.get(queue.shift()) ?? []) {
+      if (!seen.has(child)) {
+        seen.add(child);
+        found.push(child);
+        queue.push(child);
+      }
+    }
+  }
+  return found;
+}
+
+async function safeDescendants(rootPid) {
+  try {
+    return await processDescendants(rootPid);
+  } catch {
+    return [];
+  }
 }
 
 async function authenticatedJson(response, step) {
@@ -171,7 +244,81 @@ try {
 
   // ── Step 5: the explicit stop — cancel a mid-flight run ───────────────────
   if (realExecutable) {
-    console.log('  skip  stop — real-CLI mode: cancel is proven by the hermetic run (WEDGE_EXECUTABLE set)');
+    /**
+     * The fake's SLOW_REPLY stall gave the hermetic run its cancel window; a
+     * real CLI answers on its own schedule. Since terminate() kills the whole
+     * process tree, cancelling against the real CLI no longer risks an
+     * orphan, so the stop is now proven live too: poll the recent-runs list
+     * until the run is mid-flight with an exposed pid, snapshot its process
+     * subtree, cancel, then re-scan for anything the root spawned in the
+     * meantime and assert every watched pid is gone. A fast answer races the
+     * cancel — retry up to three times, and fail loudly if none lands.
+     */
+    let landed = null;
+    let watched = new Set();
+    for (let attempt = 1; attempt <= 3 && !landed; attempt += 1) {
+      const started = await fetch(`${base}/v1/environments/hermes-local/runs`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ operation: 'prompt', input: { prompt: 'Reply with exactly: pong' } }),
+      });
+      const { runId: attemptRunId } = await authenticatedJson(started, 'stop');
+
+      let midflight = null;
+      for (let waited = 0; waited < 10_000; waited += 50) {
+        const list = await authenticatedJson(
+          await fetch(`${base}/v1/environments/hermes-local/runs`, { headers: { Authorization: `Bearer ${gate.token}` } }),
+          'stop',
+        );
+        const entry = list.runs?.find((run) => run.runId === attemptRunId);
+        if (!entry || ['completed', 'failed', 'cancelled'].includes(entry.state)) break;
+        if (entry.state === 'running' && typeof entry.pid === 'number') {
+          midflight = entry;
+          break;
+        }
+        await sleep(50);
+      }
+      if (!midflight) continue;
+
+      watched = new Set(await safeDescendants(midflight.pid));
+      const cancelled = await authenticatedJson(
+        await fetch(`${base}/v1/environments/hermes-local/runs/${encodeURIComponent(attemptRunId)}/cancel`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${gate.token}` },
+        }),
+        'stop',
+      );
+      if (cancelled.cancelled === true) {
+        landed = { runId: attemptRunId, pid: midflight.pid };
+      } else {
+        // The answer beat the cancel; drain the stream to free the
+        // single-run slot, then try again.
+        await sseEvents(gate.port, gate.token, 'hermes-local', attemptRunId).catch(() => {});
+      }
+    }
+    if (!landed) fail('stop', 'cancel never landed mid-flight in 3 attempts against the real CLI');
+
+    // Windows does not reparent orphans: anything the killed root spawned in
+    // the meantime still lists the dead pid as its parent, so this second
+    // scan catches processes the pre-cancel snapshot missed.
+    for (const pid of await safeDescendants(landed.pid)) watched.add(pid);
+
+    const slowEvents = await sseEvents(gate.port, gate.token, 'hermes-local', landed.runId);
+    const slowTerminal = slowEvents.at(-1);
+    if (slowTerminal?.type !== 'run.cancelled') fail('stop', `terminal event was ${slowTerminal?.type}`);
+    const cancelledOnce = slowEvents.filter((event) => event.type === 'run.cancelled');
+    if (cancelledOnce.length !== 1) fail('stop', `${cancelledOnce.length} run.cancelled events`);
+
+    const afterList = await authenticatedJson(
+      await fetch(`${base}/v1/environments/hermes-local/runs`, { headers: { Authorization: `Bearer ${gate.token}` } }),
+      'stop',
+    );
+    const afterEntry = afterList.runs?.find((run) => run.runId === landed.runId);
+    if (afterEntry?.state !== 'cancelled') fail('stop', `discovery state after cancel was ${afterEntry?.state}`);
+
+    await assertEventuallyDead('stop', landed.pid, 'run process');
+    for (const pid of watched) await assertEventuallyDead('stop', pid, 'descendant process');
+    pass('stop', `cancel landed mid-flight; run pid ${landed.pid} + ${watched.size} watched descendant(s) verified gone`);
   } else {
   const slowStart = await fetch(`${base}/v1/environments/hermes-local/runs`, {
     method: 'POST',
@@ -195,6 +342,7 @@ try {
   );
   const liveEntry = liveList.runs?.find((run) => run.runId === slowRunId);
   if (liveEntry?.state !== 'running') fail('stop', `mid-flight state was ${liveEntry?.state}`);
+  if (typeof liveEntry.pid !== 'number') fail('stop', 'mid-flight entry exposes no pid');
 
   const cancelled = await authenticatedJson(
     await fetch(`${base}/v1/environments/hermes-local/runs/${encodeURIComponent(slowRunId)}/cancel`, {
@@ -217,10 +365,13 @@ try {
   );
   const afterEntry = afterList.runs?.find((run) => run.runId === slowRunId);
   if (afterEntry?.state !== 'cancelled') fail('stop', `discovery state after cancel was ${afterEntry?.state}`);
-  pass('stop', 'cancel killed the mid-flight run; exactly one run.cancelled, discovered as cancelled');
+  await assertEventuallyDead('stop', liveEntry.pid, 'run process');
+  pass('stop', 'cancel killed the mid-flight run; exactly one run.cancelled, discovered as cancelled, process verified dead');
   }
 
-  const proven = realExecutable ? '4/4 wedge steps proven over HTTP+SSE against a real CLI (cancel covered hermetically)' : '5/5 wedge steps proven over HTTP+SSE';
+  const proven = realExecutable
+    ? '5/5 wedge steps proven over HTTP+SSE against the WEDGE_EXECUTABLE CLI'
+    : '5/5 wedge steps proven over HTTP+SSE (hermetic)';
   console.log(`\nsmoke-wedge-loop: PASS (${proven})`);
 } finally {
   await gate.close();

@@ -178,10 +178,16 @@ test('a run that has not finished reports a live state, and a finished one its o
     assert.equal(summary.runId, handle.runId);
     assert.ok(['starting', 'running'].includes(summary.state));
     assert.equal(summary.endedAt, null);
+    // A mid-flight run advertises the OS pid actually doing the work, so an
+    // operator (and smoke:wedge) can identify it — and prove a cancelled one
+    // dead — outside the Gate's own bookkeeping.
+    assert.equal(summary.pid, children[0].pid);
     await collectEvents(service, handle.runId);
     const [after] = service.listRuns('codex-local');
     assert.equal(after.state, 'completed');
     assert.equal(after.exitCode, 0);
+    // Finished runs stop advertising: a stale pid must never read as live.
+    assert.equal(after.pid, null);
     assert.equal(children.length, 1);
   } finally {
     await cleanup();
