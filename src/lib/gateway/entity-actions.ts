@@ -33,3 +33,17 @@ export function environmentPrimaryAction(environment: EnvironmentSnapshot): Card
   if (environment.state === 'disabled') return { id: 'check', label: 'Check' };
   return { id: 'start', label: 'Start' };
 }
+
+/**
+ * The one-line statement of the environment's per-run time budget for its
+ * card. The edit form is where the budget CHANGES; this line is where it can
+ * be SEEN without opening Edit — including "none", because an operator whose
+ * task hangs needs to see that no budget will stop it. Older Gates and
+ * records without a limit both read as no limit (the Gate's default).
+ */
+export function environmentRunBudgetLine(environment: EnvironmentSnapshot): string {
+  const seconds = environment.lifecycle.maxRunSeconds;
+  return seconds !== undefined
+    ? `Time limit per run: ${seconds}s — the Gate stops a task past this.`
+    : 'No time limit per run — tasks run until finished.';
+}

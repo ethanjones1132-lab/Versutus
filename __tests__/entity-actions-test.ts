@@ -1,4 +1,4 @@
-import { environmentPrimaryAction, providerPrimaryAction } from '@/lib/gateway/entity-actions';
+import { environmentPrimaryAction, environmentRunBudgetLine, providerPrimaryAction } from '@/lib/gateway/entity-actions';
 import type { ProviderSnapshot } from '@/lib/gateway/provider-types';
 import type { EnvironmentSnapshot } from '@/lib/gateway/environment-types';
 
@@ -67,5 +67,22 @@ describe('environmentPrimaryAction', () => {
 
   it('offers a check when disabled', () => {
     expect(environmentPrimaryAction(environment('disabled'))).toEqual({ id: 'check', label: 'Check' });
+  });
+});
+
+describe('environmentRunBudgetLine', () => {
+  const environment = (lifecycle?: Partial<EnvironmentSnapshot['lifecycle']>) =>
+    ({ lifecycle: { startup: 'skip', maxConcurrentRuns: 1, ...lifecycle } }) as EnvironmentSnapshot;
+
+  it('names the budget when the record sets one', () => {
+    expect(environmentRunBudgetLine(environment({ maxRunSeconds: 600 }))).toBe(
+      'Time limit per run: 600s — the Gate stops a task past this.',
+    );
+  });
+
+  it('says tasks run unbounded when no budget is set', () => {
+    expect(environmentRunBudgetLine(environment())).toBe(
+      'No time limit per run — tasks run until finished.',
+    );
   });
 });

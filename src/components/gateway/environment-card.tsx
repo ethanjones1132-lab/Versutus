@@ -6,7 +6,7 @@ import * as Haptics from 'expo-haptics';
 import { EnvironmentActionsSheet } from '@/components/gateway/environment-actions-sheet';
 import { Badge, Button, Card, Icon, PressableScale, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
-import { environmentPrimaryAction } from '@/lib/gateway/entity-actions';
+import { environmentPrimaryAction, environmentRunBudgetLine } from '@/lib/gateway/entity-actions';
 import type { EnvironmentSnapshot } from '@/lib/gateway/environment-types';
 
 export type EnvironmentCardProps = {
@@ -47,6 +47,7 @@ export function EnvironmentCard({ environment, onCheck, onStart, onStop, onRun, 
           ? `Bound providers: ${environment.providerRefs.join(', ')}`
           : 'Uses its own credentials — no Gate provider bound.'}
       </Text>
+      <Text variant="caption" color="tertiary">{environmentRunBudgetLine(environment)}</Text>
 
       <View style={styles.actions}>
         <Button
