@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import { diagnoseEnvironmentRecords, probeLocalGate } from '../core/service/diagnostics.mjs';
 import { doctor } from '../core/service/doctor.mjs';
+import { CredentialVault } from '../core/credentials/vault.mjs';
 import { validEnvironment } from './fixtures/cli-environment.mjs';
 
 async function withEnvironmentsDir(recordFiles) {
@@ -79,6 +80,112 @@ test('reports an absent environments directory as info, not failure', async () =
   assert.equal(findings.length, 1);
   assert.equal(findings[0].severity, 'info');
   await rm(gateHome, { recursive: true, force: true });
+});
+
+/**
+ * Passthrough DPAPI stand-in: the vault bytes are stored and read back
+ * verbatim, so tests exercise real vault files without Windows DPAPI.
+ */
+const passthroughBackend = {
+  protect: async (buffer) => buffer,
+  unprotect: async (buffer) => buffer,
+};
+
+async function writeHealthyRecord(envDir, gateHome, overrides = {}) {
+  const executable = join(gateHome, 'fake-cli.exe');
+  await writeFile(executable, '', 'utf8');
+  const record = validEnvironment({ executable: { path: executable }, ...overrides });
+  await writeFile(join(envDir, 'hermes-local.json'), JSON.stringify(record), 'utf8');
+  return record;
+}
+
+test('reports resolved credential bindings on the ok line', async (t) => {
+  const gateHome = await mkdtemp(join(tmpdir(), 'gate-doctor-'));
+  t.after(() => rm(gateHome, { recursive: true, force: true }));
+  const envDir = join(gateHome, 'config', 'environments');
+  await mkdir(envDir, { recursive: true });
+  await writeHealthyRecord(envDir, gateHome, {
+    credentialBindings: {
+      ANTHROPIC_API_KEY: 'provider/anthropic/api-key',
+      OPENAI_API_KEY: 'provider/openai-main/api-key',
+    },
+  });
+  const vault = new CredentialVault({ gateHome, backend: passthroughBackend });
+  await vault.set('provider/anthropic/api-key', 'sk-test-anthropic');
+  await vault.set('provider/openai-main/api-key', 'sk-test-openai');
+
+  const findings = await diagnoseEnvironmentRecords(envDir, { vault });
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 'ok');
+  assert.match(findings[0].message, /2 credential bindings resolve/);
+  // The values themselves must never reach the report.
+  assert.equal(findings[0].message.includes('sk-test'), false);
+});
+
+test('warns when a bound reference has no value in the vault', async (t) => {
+  const gateHome = await mkdtemp(join(tmpdir(), 'gate-doctor-'));
+  t.after(() => rm(gateHome, { recursive: true, force: true }));
+  const envDir = join(gateHome, 'config', 'environments');
+  await mkdir(envDir, { recursive: true });
+  await writeHealthyRecord(envDir, gateHome, {
+    credentialBindings: {
+      ANTHROPIC_API_KEY: 'provider/anthropic/api-key',
+      OPENAI_API_KEY: 'provider/openai-main/api-key',
+    },
+  });
+  const vault = new CredentialVault({ gateHome, backend: passthroughBackend });
+  await vault.set('provider/anthropic/api-key', 'sk-test-anthropic');
+  // openai-main's key was never set — exactly the "chip showed no ✓" case.
+
+  const findings = await diagnoseEnvironmentRecords(envDir, { vault });
+  assert.equal(findings.length, 2);
+  assert.equal(findings[0].severity, 'ok');
+  assert.match(findings[0].message, /1 of 2 credential bindings resolve/);
+  assert.equal(findings[1].severity, 'warn');
+  assert.match(findings[1].message, /OPENAI_API_KEY=provider\/openai-main\/api-key/);
+  assert.match(findings[1].message, /has no value in the vault/);
+});
+
+test('treats an undecryptable vault entry as a missing value', async (t) => {
+  const gateHome = await mkdtemp(join(tmpdir(), 'gate-doctor-'));
+  t.after(() => rm(gateHome, { recursive: true, force: true }));
+  const envDir = join(gateHome, 'config', 'environments');
+  await mkdir(envDir, { recursive: true });
+  await writeHealthyRecord(envDir, gateHome, {
+    credentialBindings: { ANTHROPIC_API_KEY: 'provider/anthropic/api-key' },
+  });
+  // A cipher exists on disk but cannot be decrypted for this user/backend —
+  // resolveCredentials catches the throw and runs without it; doctor must too.
+  const vault = new CredentialVault({
+    gateHome,
+    backend: {
+      protect: async (buffer) => buffer,
+      unprotect: async () => { throw new Error('DPAPI decrypt failed'); },
+    },
+  });
+  await vault.set('provider/anthropic/api-key', 'sk-unreadable');
+
+  const findings = await diagnoseEnvironmentRecords(envDir, { vault });
+  assert.equal(findings.length, 2);
+  assert.equal(findings[0].severity, 'ok');
+  assert.match(findings[0].message, /0 of 1 credential bindings resolve/);
+  assert.equal(findings[1].severity, 'warn');
+  assert.match(findings[1].message, /ANTHROPIC_API_KEY=provider\/anthropic\/api-key/);
+});
+
+test('skips binding checks when no vault is passed (callers before this check)', async (t) => {
+  const gateHome = await mkdtemp(join(tmpdir(), 'gate-doctor-'));
+  t.after(() => rm(gateHome, { recursive: true, force: true }));
+  const envDir = join(gateHome, 'config', 'environments');
+  await mkdir(envDir, { recursive: true });
+  await writeHealthyRecord(envDir, gateHome, {
+    credentialBindings: { ANTHROPIC_API_KEY: 'provider/anthropic/api-key' },
+  });
+
+  const findings = await diagnoseEnvironmentRecords(envDir);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 'ok');
+  assert.equal(findings[0].message.includes('credential binding'), false);
 });
 
 test('doctor renders environment findings without leaking secrets', () => {

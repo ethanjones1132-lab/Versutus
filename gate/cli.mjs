@@ -16,6 +16,7 @@ import { buildTaskDefinition } from './core/service/windows-task.mjs';
 import { acquireInstanceLock } from './core/service/instance-lock.mjs';
 import { doctor } from './core/service/doctor.mjs';
 import { diagnoseEnvironmentRecords, probeLocalGate } from './core/service/diagnostics.mjs';
+import { CredentialVault } from './core/credentials/vault.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -396,7 +397,9 @@ async function handleDoctor() {
   const gateHome = resolveGateHome();
   const listen = 'http://127.0.0.1:8760';
   const [environmentFindings, serverProbe] = await Promise.all([
-    diagnoseEnvironmentRecords(join(gateHome, 'config', 'environments')),
+    diagnoseEnvironmentRecords(join(gateHome, 'config', 'environments'), {
+      vault: new CredentialVault({ gateHome }),
+    }),
     probeLocalGate(`${listen}/.well-known/gateway.json`),
   ]);
   console.log(doctor({
@@ -451,7 +454,8 @@ async function main() {
     console.log('');
     console.log('  doctor');
     console.log('    Inspect the Gate machine: local listener and every CLI');
-    console.log('    environment record (JSON, schema/corruption, executable on disk).');
+    console.log('    environment record (JSON, schema/corruption, executable on');
+    console.log('    disk, credential bindings resolvable in the vault).');
     console.log('    Exit code 1 when a record has a problem.');
     console.log('');
     console.log('Environment variables:');
