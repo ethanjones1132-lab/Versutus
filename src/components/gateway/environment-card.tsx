@@ -15,9 +15,11 @@ export type EnvironmentCardProps = {
   onStart: () => void;
   onStop: () => void;
   onRun: () => void;
+  onEdit: () => void;
+  onRemove: () => void;
 };
 
-export function EnvironmentCard({ environment, onCheck, onStart, onStop, onRun }: EnvironmentCardProps) {
+export function EnvironmentCard({ environment, onCheck, onStart, onStop, onRun, onEdit, onRemove }: EnvironmentCardProps) {
   const [actionsVisible, setActionsVisible] = useState(false);
   const primary = environmentPrimaryAction(environment);
   const handlers: Record<string, () => void> = { start: onStart, stop: onStop, check: onCheck };
@@ -74,6 +76,8 @@ export function EnvironmentCard({ environment, onCheck, onStart, onStop, onRun }
         onStart={onStart}
         onStop={onStop}
         onRun={onRun}
+        onEdit={onEdit}
+        onRemove={onRemove}
       />
     </Card>
   );

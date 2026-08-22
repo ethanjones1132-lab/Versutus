@@ -6,7 +6,7 @@ import { EnvironmentRunLauncher } from '@/components/gateway/environment-run-lau
 import { Button, EmptyState, ErrorCard, Skeleton } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
-import { createEnvironmentClient, type CreateEnvironmentInput } from '@/lib/gateway/environment-client';
+import { createEnvironmentClient, buildEnvironmentUpdatePatch, snapshotToEditInput, type CreateEnvironmentInput } from '@/lib/gateway/environment-client';
 import { createProviderClient } from '@/lib/gateway/provider-client';
 import type { EnvironmentAdapter, EnvironmentSnapshot } from '@/lib/gateway/environment-types';
 import type { ProviderSnapshot } from '@/lib/gateway/provider-types';
@@ -20,6 +20,7 @@ export function EnvironmentsSection() {
   const [adapters, setAdapters] = useState<EnvironmentAdapter[]>([]);
   const [providers, setProviders] = useState<ProviderSnapshot[]>([]);
   const [registering, setRegistering] = useState(false);
+  const [editing, setEditing] = useState<EnvironmentSnapshot | null>(null);
   const [busy, setBusy] = useState(false);
   const [runTarget, setRunTarget] = useState<EnvironmentSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +75,38 @@ export function EnvironmentsSection() {
     }
   }
 
+  /**
+   * Save an edited environment. Only the form-owned fields go over the wire
+   * (the Gate merges them), then the same immediate probe as registration —
+   * a fixed path should prove itself before the operator tries a run again.
+   */
+  async function saveEdit(input: CreateEnvironmentInput) {
+    const target = editing;
+    if (!target) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await client.update(target.id, buildEnvironmentUpdatePatch(input, target));
+      setEditing(null);
+      await client.check(target.id).catch(() => undefined);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeEnvironment(id: string) {
+    setError(null);
+    try {
+      await client.remove(id);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
   const canRegister = status === 'connected' && adapters.length > 0;
 
   return (
@@ -87,18 +120,19 @@ export function EnvironmentsSection() {
         />
       ) : null}
 
-      {canRegister && !registering ? (
+      {canRegister && !registering && !editing ? (
         <Button label="Add environment" onPress={() => setRegistering(true)} />
       ) : null}
 
-      {registering ? (
+      {registering || editing ? (
         <EnvironmentRegistrationForm
           adapters={adapters}
           providers={providers}
+          initial={editing ? snapshotToEditInput(editing) : undefined}
           busy={busy}
           error={error}
-          onSubmit={(input) => void register(input)}
-          onCancel={() => { setRegistering(false); setError(null); }}
+          onSubmit={(input) => void (editing ? saveEdit(input) : register(input))}
+          onCancel={() => { setRegistering(false); setEditing(null); setError(null); }}
         />
       ) : null}
 
@@ -109,7 +143,7 @@ export function EnvironmentsSection() {
         </>
       ) : null}
 
-      {loaded && environments.length === 0 && !registering && status === 'connected' ? (
+      {loaded && environments.length === 0 && !registering && !editing && status === 'connected' ? (
         <EmptyState
           icon={{ ios: 'terminal', android: 'terminal', web: 'terminal' }}
           title="No CLI environments yet"
@@ -127,6 +161,8 @@ export function EnvironmentsSection() {
           onStart={() => void client.start(environment.id).then(load)}
           onStop={() => void client.stop(environment.id).then(load)}
           onRun={() => setRunTarget(environment)}
+          onEdit={() => { setRegistering(false); setEditing(environment); }}
+          onRemove={() => void removeEnvironment(environment.id)}
         />
       ))}
 

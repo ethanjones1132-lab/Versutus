@@ -17,9 +17,13 @@ export type EnvironmentSnapshot = {
   state: string;
   executable: { path: string };
   protocolPreference: string[];
+  /** Version policy the adapter supplied at registration; absent on older Gates. */
+  versionPolicy?: { supported?: string; adapterRevision?: string };
   workspacePolicy: {
     defaultRoot: string;
     defaultSandbox: string;
+    roots?: string[];
+    allowAdditionalRoots?: boolean;
   };
   lifecycle: {
     startup: string;

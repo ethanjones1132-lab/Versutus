@@ -31,12 +31,33 @@ export type CreateEnvironmentInput = {
   providerRefs?: string[];
 };
 
+/** The CLI environment record shape this app builds — what the Gate's schema validates. */
+export type EnvironmentRecord = {
+  schemaVersion: number;
+  kind: 'cli-environment';
+  id: string;
+  label: string;
+  adapterId: string;
+  executable: { path: string };
+  protocolPreference: string[];
+  versionPolicy: { supported: string; adapterRevision: string };
+  providerRefs: string[];
+  workspacePolicy: {
+    roots: string[];
+    defaultRoot: string;
+    defaultSandbox: string;
+    allowAdditionalRoots: boolean;
+  };
+  lifecycle: { startup: string; idleTimeoutSeconds: number; maxConcurrentRuns: number };
+  enabled: boolean;
+};
+
 /**
  * Build the CLI environment record from an adapter choice. Version policy and
  * protocol preference come from the adapter itself, so an operator never has to
  * copy a version range by hand into JSON.
  */
-export function buildEnvironmentRecord(input: CreateEnvironmentInput): Record<string, unknown> {
+export function buildEnvironmentRecord(input: CreateEnvironmentInput): EnvironmentRecord {
   if (!ID_PATTERN.test(input.id)) {
     throw new Error(
       `Environment id "${input.id}" is not valid — use lowercase letters, numbers and hyphens.`,
@@ -68,6 +89,57 @@ export function buildEnvironmentRecord(input: CreateEnvironmentInput): Record<st
     },
     lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 300, maxConcurrentRuns: 1 },
     enabled: true,
+  };
+}
+
+/**
+ * Prefill an edit form from the environment as the Gate reports it. The
+ * adapter is synthesized from the snapshot's own advertised protocols and
+ * version policy, so editing works even when the Gate's adapter catalog is
+ * unavailable — the record already carries everything the form needs.
+ */
+export function snapshotToEditInput(environment: EnvironmentSnapshot): CreateEnvironmentInput {
+  return {
+    id: environment.id,
+    label: environment.label,
+    adapter: {
+      adapterId: environment.adapterId,
+      adapterRevision: environment.versionPolicy?.adapterRevision ?? '',
+      supportedCliVersions: environment.versionPolicy?.supported ?? '',
+      protocols: [...environment.protocolPreference],
+      capabilities: [],
+      operations: [],
+    },
+    executablePath: environment.executable.path,
+    workspaceRoot: environment.workspacePolicy.defaultRoot,
+    providerRefs: [...environment.providerRefs],
+  };
+}
+
+/**
+ * Fields the edit form owns, expressed as an `environments.update` patch. The
+ * Gate shallow-merges this over the stored record, so everything else —
+ * sandbox level, additional-roots flag, lifecycle, enabled — survives
+ * untouched: fixing a typo'd executable path must not silently reset a
+ * workspace policy an operator deliberately widened on the Gate machine.
+ */
+export function buildEnvironmentUpdatePatch(
+  input: CreateEnvironmentInput,
+  existing: Pick<EnvironmentSnapshot, 'workspacePolicy'>,
+): Record<string, unknown> {
+  const record = buildEnvironmentRecord(input);
+  return {
+    label: record.label,
+    adapterId: record.adapterId,
+    executable: record.executable,
+    protocolPreference: record.protocolPreference,
+    versionPolicy: record.versionPolicy,
+    providerRefs: record.providerRefs,
+    workspacePolicy: {
+      ...existing.workspacePolicy,
+      roots: record.workspacePolicy.roots,
+      defaultRoot: record.workspacePolicy.defaultRoot,
+    },
   };
 }
 
