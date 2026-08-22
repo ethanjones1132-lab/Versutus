@@ -62,6 +62,9 @@ test('flags the path-shredding corruption signature found on disk', async () => 
   assert.equal(findings.length, 1);
   assert.equal(findings[0].severity, 'error');
   assert.match(findings[0].message, /control characters/);
+  // Schema-invalid records are the path-shredding incident's signature — the
+  // finding must hand over the same one-line recovery as the other corruption.
+  assert.match(findings[0].message, /node gate\/cli\.mjs remove-environment hermes-local/);
 });
 
 test('flags an unparseable record', async () => {
@@ -72,6 +75,26 @@ test('flags an unparseable record', async () => {
   const findings = await diagnoseEnvironmentRecords(envDir);
   assert.equal(findings[0].severity, 'error');
   assert.match(findings[0].message, /does not parse as JSON/);
+  // The remedy must be copy-pasteable, not runbook archaeology: the finding
+  // names the exact removal command for THIS record id.
+  assert.match(findings[0].message, /node gate\/cli\.mjs remove-environment broken/);
+});
+
+test('names the removal command when a record cannot be read at all', async (t) => {
+  const gateHome = await mkdtemp(join(tmpdir(), 'gate-doctor-'));
+  t.after(() => rm(gateHome, { recursive: true, force: true }));
+  const envDir = join(gateHome, 'config', 'environments');
+  await mkdir(envDir, { recursive: true });
+  // A directory wearing a record's name is the portable way to make readFile
+  // throw (EISDIR/EPERM) — the "record could not be read" path that previously
+  // offered no recovery advice at all.
+  await mkdir(join(envDir, 'locked.json'));
+
+  const findings = await diagnoseEnvironmentRecords(envDir);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 'error');
+  assert.match(findings[0].message, /could not be read/);
+  assert.match(findings[0].message, /node gate\/cli\.mjs remove-environment locked/);
 });
 
 test('flags a record whose executable is missing from disk', async () => {

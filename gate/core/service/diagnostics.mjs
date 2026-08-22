@@ -48,12 +48,23 @@ export async function diagnoseEnvironmentRecords(environmentsDir, { vault } = {}
   return findings;
 }
 
+/**
+ * The one-line recovery for any record-level integrity failure. It must appear
+ * verbatim in the finding: an operator mid-demo copies the command out of the
+ * report instead of reconstructing it from the runbook (or hand-editing JSON).
+ */
+const removalRemedy = (id) => `remove it with: node gate/cli.mjs remove-environment ${id}`;
+
 async function diagnoseRecord(file, id, vault) {
   let raw;
   try {
     raw = await readFile(file, 'utf8');
   } catch (error) {
-    return [{ severity: 'error', environment: id, message: `record could not be read: ${error.message}` }];
+    return [{
+      severity: 'error',
+      environment: id,
+      message: `record could not be read: ${error.message} — fix access to the file, or ${removalRemedy(id)}`,
+    }];
   }
 
   let record;
@@ -63,7 +74,7 @@ async function diagnoseRecord(file, id, vault) {
     return [{
       severity: 'error',
       environment: id,
-      message: 'record does not parse as JSON — restore it or re-register the environment',
+      message: `record does not parse as JSON — restore it, re-register the environment, or ${removalRemedy(id)}`,
     }];
   }
 
@@ -74,7 +85,11 @@ async function diagnoseRecord(file, id, vault) {
       .map((error) => `${error.field} ${error.message}`)
       .join('; ');
     const more = validation.errors.length > 2 ? ` (+${validation.errors.length - 2} more)` : '';
-    return [{ severity: 'error', environment: id, message: `record failed validation: ${detail}${more}` }];
+    return [{
+      severity: 'error',
+      environment: id,
+      message: `record failed validation: ${detail}${more} — fix it, re-register the environment, or ${removalRemedy(id)}`,
+    }];
   }
 
   if (!existsSync(record.executable.path)) {
