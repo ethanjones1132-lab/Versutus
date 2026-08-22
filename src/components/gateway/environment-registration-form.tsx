@@ -11,7 +11,9 @@ import type { ProviderSnapshot } from '@/lib/gateway/provider-types';
  * Register a CLI environment from the phone. The adapter supplies its own
  * version policy and protocol preference, so the operator supplies the two
  * things only they know: where the executable lives and which folder it may
- * touch. Sandbox defaults to read_only — widening is a deliberate edit.
+ * touch. Sandbox defaults to read_only — widening is a deliberate edit. An
+ * optional per-run time budget (lifecycle.maxRunSeconds) lets the Gate stop
+ * a hung task on its own.
  *
  * With `initial` present the same form edits an existing environment: fields
  * prefill from the live snapshot, the id is fixed (an update cannot rename a
@@ -42,6 +44,11 @@ export function EnvironmentRegistrationForm({
   const [executablePath, setExecutablePath] = useState(initial?.executablePath ?? '');
   const [workspaceRoot, setWorkspaceRoot] = useState(initial?.workspaceRoot ?? '');
   const [providerRefs, setProviderRefs] = useState<string[]>(initial?.providerRefs ?? []);
+  // Kept as text so an in-progress edit is never a hidden invalid number; the
+  // parsed value rides to onSubmit only when it passes validation below.
+  const [maxRunSecondsText, setMaxRunSecondsText] = useState(
+    initial?.maxRunSeconds !== undefined ? String(initial.maxRunSeconds) : '',
+  );
   const [bindingRows, setBindingRows] = useState<{ key: number; envName: string; ref: string }[]>(() =>
     Object.entries(initial?.credentialBindings ?? {}).map(([envName, ref], index) => ({
       key: index,
@@ -80,6 +87,12 @@ export function EnvironmentRegistrationForm({
   }
 
   const idIsValid = /^[a-z0-9][a-z0-9-]*$/.test(id);
+  // Empty = no limit (the Gate's default). Anything else must be a positive
+  // whole number of seconds — the same rule the Gate's schema enforces.
+  const trimmedLimit = maxRunSecondsText.trim();
+  const maxRunSeconds = trimmedLimit.length === 0 ? undefined : Number(trimmedLimit);
+  const limitIsValid =
+    maxRunSeconds === undefined || (Number.isInteger(maxRunSeconds) && maxRunSeconds > 0);
   // Fully empty rows are ignored; half-filled or duplicate names are a mistake
   // that would silently resolve to nothing (or clobber) at run start.
   const bindingsProblem = (() => {
@@ -95,7 +108,13 @@ export function EnvironmentRegistrationForm({
     return null;
   })();
   const canSubmit =
-    !!adapter && idIsValid && !!executablePath.trim() && !!workspaceRoot.trim() && !bindingsProblem && !busy;
+    !!adapter &&
+    idIsValid &&
+    !!executablePath.trim() &&
+    !!workspaceRoot.trim() &&
+    limitIsValid &&
+    !bindingsProblem &&
+    !busy;
 
   function buildBindings(): Record<string, string> | undefined {
     if (!bindingsKnown) return undefined;
@@ -165,6 +184,20 @@ export function EnvironmentRegistrationForm({
             onChangeText={setWorkspaceRoot}
             placeholder="C:\\Projects\\Versutus"
           />
+          <Text variant="caption">Time limit per run in seconds (optional)</Text>
+          <TextField
+            value={maxRunSecondsText}
+            onChangeText={setMaxRunSecondsText}
+            placeholder="No limit"
+            validationState={
+              maxRunSecondsText.trim().length === 0 || limitIsValid ? 'default' : 'invalid'
+            }
+          />
+          <Text variant="caption">
+            When set, the Gate itself stops a task that runs past this budget and the run ends
+            Failed naming the limit — a hung task cannot hold the environment forever. Leave empty
+            for no limit.
+          </Text>
           {providers.length > 0 ? (
             <>
               <Text variant="caption">Providers this CLI may route through (optional)</Text>
@@ -240,7 +273,7 @@ export function EnvironmentRegistrationForm({
           <Text variant="caption">
             Starts read-only on demand. The CLI calls back into the Gate with a short-lived
             invocation token for model routing — provider keys flow only through bindings above.
-            Saving keeps the sandbox and other Gate-side settings exactly as they are.
+            Saving keeps the sandbox, startup mode and concurrency exactly as they are.
           </Text>
         </>
       ) : null}
@@ -261,6 +294,9 @@ export function EnvironmentRegistrationForm({
               workspaceRoot,
               providerRefs,
               ...(credentialBindings !== undefined ? { credentialBindings } : {}),
+              // Undefined when the field is empty: the record then carries no
+              // budget at all ("no limit"), and an edit's patch removes one.
+              ...(maxRunSeconds !== undefined ? { maxRunSeconds } : {}),
             });
           }}
           disabled={!canSubmit}

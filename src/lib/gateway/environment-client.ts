@@ -38,6 +38,14 @@ export type CreateEnvironmentInput = {
    * save must not wipe mappings it cannot see.
    */
   credentialBindings?: Record<string, string>;
+  /**
+   * Per-run time budget in seconds; when set, the Gate itself stops a task
+   * that has been running longer than this instead of letting one hung CLI
+   * hold the run slot forever. Absent/empty means no limit — the historical
+   * behavior. The one lifecycle knob this form owns: startup mode, idle
+   * timeout and concurrency stay Gate-side settings that an edit preserves.
+   */
+  maxRunSeconds?: number;
 };
 
 /** The CLI environment record shape this app builds — what the Gate's schema validates. */
@@ -57,7 +65,7 @@ export type EnvironmentRecord = {
     defaultSandbox: string;
     allowAdditionalRoots: boolean;
   };
-  lifecycle: { startup: string; idleTimeoutSeconds: number; maxConcurrentRuns: number };
+  lifecycle: { startup: string; idleTimeoutSeconds: number; maxConcurrentRuns: number; maxRunSeconds?: number };
   enabled: boolean;
   credentialBindings: Record<string, string>;
 };
@@ -96,6 +104,14 @@ export function buildEnvironmentRecord(input: CreateEnvironmentInput): Environme
   }
   if (!input.executablePath.trim()) throw new Error('The CLI executable path is required.');
   if (!input.workspaceRoot.trim()) throw new Error('A workspace root is required.');
+  if (
+    input.maxRunSeconds !== undefined &&
+    (!Number.isInteger(input.maxRunSeconds) || input.maxRunSeconds < 1)
+  ) {
+    // Same rule the Gate's schema enforces — fail here with a name, not as a
+    // remote validation error after the save is refused.
+    throw new Error('The run time limit must be a positive whole number of seconds.');
+  }
 
   const root = input.workspaceRoot.trim();
   return {
@@ -118,7 +134,14 @@ export function buildEnvironmentRecord(input: CreateEnvironmentInput): Environme
       defaultSandbox: 'read_only',
       allowAdditionalRoots: false,
     },
-    lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 300, maxConcurrentRuns: 1 },
+    lifecycle: {
+      startup: 'on_demand',
+      idleTimeoutSeconds: 300,
+      maxConcurrentRuns: 1,
+      // Absent unless the operator set a budget — "no limit" stays expressible
+      // on the wire, matching the Gate's schema where the key is optional.
+      ...(input.maxRunSeconds !== undefined ? { maxRunSeconds: input.maxRunSeconds } : {}),
+    },
     enabled: true,
     credentialBindings: normalizeCredentialBindings(input.credentialBindings),
   };
@@ -151,21 +174,40 @@ export function snapshotToEditInput(environment: EnvironmentSnapshot): CreateEnv
     ...(environment.credentialBindings
       ? { credentialBindings: { ...environment.credentialBindings } }
       : {}),
+    // Prefill the run budget when the record carries one; absence means "no
+    // limit", which is a real value here, not an unknown — the field stays
+    // editable so a no-limit environment can gain a budget from the phone.
+    ...(environment.lifecycle.maxRunSeconds !== undefined
+      ? { maxRunSeconds: environment.lifecycle.maxRunSeconds }
+      : {}),
   };
 }
 
 /**
  * Fields the edit form owns, expressed as an `environments.update` patch. The
  * Gate shallow-merges this over the stored record, so everything else —
- * sandbox level, additional-roots flag, lifecycle, enabled — survives
- * untouched: fixing a typo'd executable path must not silently reset a
- * workspace policy an operator deliberately widened on the Gate machine.
+ * sandbox level, additional-roots flag, enabled — survives untouched: fixing
+ * a typo'd executable path must not silently reset a workspace policy an
+ * operator deliberately widened on the Gate machine.
+ *
+ * Lifecycle travels as a COMPLETE object built from the live snapshot with
+ * only maxRunSeconds swapped for the form's value (a shallow merge replaces
+ * the whole object, so a partial one would drop startup/idle/concurrency).
+ * Clearing the field sends lifecycle without the key, which removes the
+ * budget; every other lifecycle field round-trips exactly as stored.
  */
 export function buildEnvironmentUpdatePatch(
   input: CreateEnvironmentInput,
-  existing: Pick<EnvironmentSnapshot, 'workspacePolicy'>,
+  existing: Pick<EnvironmentSnapshot, 'workspacePolicy' | 'lifecycle'>,
 ): Record<string, unknown> {
   const record = buildEnvironmentRecord(input);
+  const preservedLifecycle: Record<string, unknown> = { ...existing.lifecycle };
+  // The form's value wins in both directions — set or removed. Spreading
+  // existing.lifecycle alone would resurrect a budget the operator cleared.
+  delete preservedLifecycle.maxRunSeconds;
+  if (record.lifecycle.maxRunSeconds !== undefined) {
+    preservedLifecycle.maxRunSeconds = record.lifecycle.maxRunSeconds;
+  }
   const patch: Record<string, unknown> = {
     label: record.label,
     adapterId: record.adapterId,
@@ -178,6 +220,7 @@ export function buildEnvironmentUpdatePatch(
       roots: record.workspacePolicy.roots,
       defaultRoot: record.workspacePolicy.defaultRoot,
     },
+    lifecycle: preservedLifecycle,
   };
   // Bindings travel only when the form actually saw them. The Gate
   // shallow-merges the patch, so omitting the key preserves whatever an

@@ -40,7 +40,7 @@ const SNAPSHOT: EnvironmentSnapshot = {
     roots: ['C:\\Projects\\Demo'],
     allowAdditionalRoots: false,
   },
-  lifecycle: { startup: 'on_demand', maxConcurrentRuns: 1 },
+  lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 600, maxConcurrentRuns: 1, maxRunSeconds: 900 },
   // Reported by current Gates so edits can carry bindings; older Gates omit
   // the field and the form must treat that as "unknown", never "none".
   credentialBindings: { ANTHROPIC_API_KEY: 'provider/anthropic-main/api-key' },
@@ -83,6 +83,19 @@ describe('snapshotToEditInput', () => {
     // edit must say nothing about bindings rather than claim "none".
     const unreported: EnvironmentSnapshot = { ...SNAPSHOT, credentialBindings: undefined };
     expect(snapshotToEditInput(unreported).credentialBindings).toBeUndefined();
+  });
+
+  it('prefills the run budget when reported, and absence is a real "no limit"', () => {
+    expect(snapshotToEditInput(SNAPSHOT).maxRunSeconds).toBe(900);
+
+    // Unlike bindings, a missing budget is not an "unknown" to protect — it
+    // is the Gate's own default, and the edit form must still be able to ADD
+    // one (that is how a hung-task environment gains its limit from the phone).
+    const unlimited: EnvironmentSnapshot = {
+      ...SNAPSHOT,
+      lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 600, maxConcurrentRuns: 1 },
+    };
+    expect(snapshotToEditInput(unlimited).maxRunSeconds).toBeUndefined();
   });
 });
 
@@ -143,6 +156,55 @@ describe('buildEnvironmentUpdatePatch', () => {
     );
     expect(cleared.credentialBindings).toEqual({});
   });
+
+  it('sets the run budget with a complete lifecycle object the Gate can merge over the record', () => {
+    // The Gate shallow-merges top-level keys, so a partial lifecycle would
+    // drop startup/idle/concurrency — the patch must carry them all.
+    const raised = buildEnvironmentUpdatePatch(
+      { ...snapshotToEditInput(SNAPSHOT), maxRunSeconds: 1800 },
+      SNAPSHOT,
+    );
+    expect(raised.lifecycle).toEqual({
+      startup: 'on_demand',
+      idleTimeoutSeconds: 600,
+      maxConcurrentRuns: 1,
+      maxRunSeconds: 1800,
+    });
+  });
+
+  it('clears the run budget by omitting the key while every other lifecycle field survives', () => {
+    const unlimited = buildEnvironmentUpdatePatch(
+      // Prefilled from a 900s record, then the operator emptied the field.
+      { ...snapshotToEditInput(SNAPSHOT), maxRunSeconds: undefined },
+      SNAPSHOT,
+    );
+    expect(unlimited.lifecycle).toEqual({
+      startup: 'on_demand',
+      idleTimeoutSeconds: 600,
+      maxConcurrentRuns: 1,
+    });
+
+    // An untouched save round-trips the stored budget unchanged.
+    const untouched = buildEnvironmentUpdatePatch(snapshotToEditInput(SNAPSHOT), SNAPSHOT);
+    expect((untouched.lifecycle as { maxRunSeconds?: number }).maxRunSeconds).toBe(900);
+  });
+
+  it('adds a budget to an environment that never had one', () => {
+    const unlimitedSnapshot: EnvironmentSnapshot = {
+      ...SNAPSHOT,
+      lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 600, maxConcurrentRuns: 1 },
+    };
+    const budgeted = buildEnvironmentUpdatePatch(
+      { ...snapshotToEditInput(unlimitedSnapshot), maxRunSeconds: 900 },
+      unlimitedSnapshot,
+    );
+    expect(budgeted.lifecycle).toEqual({
+      startup: 'on_demand',
+      idleTimeoutSeconds: 600,
+      maxConcurrentRuns: 1,
+      maxRunSeconds: 900,
+    });
+  });
 });
 
 describe('buildEnvironmentRecord credential bindings', () => {
@@ -176,6 +238,30 @@ describe('buildEnvironmentRecord credential bindings', () => {
   it('defaults to no bindings when the input says nothing', () => {
     const record = buildEnvironmentRecord({ ...baseInput, credentialBindings: undefined });
     expect(record.credentialBindings).toEqual({});
+  });
+});
+
+describe('buildEnvironmentRecord run budget', () => {
+  const baseInput = snapshotToEditInput(SNAPSHOT);
+
+  it('stores maxRunSeconds inside lifecycle when set and omits it when not', () => {
+    expect(buildEnvironmentRecord({ ...baseInput, maxRunSeconds: 900 }).lifecycle.maxRunSeconds).toBe(
+      900,
+    );
+    // No limit stays expressible: the key is absent rather than zeroed.
+    const unlimited = buildEnvironmentRecord({ ...baseInput, maxRunSeconds: undefined });
+    expect(unlimited.lifecycle).not.toHaveProperty('maxRunSeconds');
+    expect(unlimited.lifecycle.startup).toBe('on_demand');
+    expect(unlimited.lifecycle.idleTimeoutSeconds).toBe(300);
+    expect(unlimited.lifecycle.maxConcurrentRuns).toBe(1);
+  });
+
+  it('rejects a budget that the Gate schema would refuse', () => {
+    for (const bad of [0, -5, 12.5, Number.NaN]) {
+      expect(() => buildEnvironmentRecord({ ...baseInput, maxRunSeconds: bad })).toThrow(
+        /positive whole number of seconds/,
+      );
+    }
   });
 });
 

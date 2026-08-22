@@ -34,6 +34,16 @@ export type EnvironmentSnapshot = {
   lifecycle: {
     startup: string;
     maxConcurrentRuns: number;
+    /** Present on records written by a schema that requires it; tolerate absence. */
+    idleTimeoutSeconds?: number;
+    /**
+     * Per-run time budget in seconds; the Gate stops a task that outlives it.
+     * Absent on older Gates AND on records with no limit set — for the edit
+     * form those are the same thing: an empty field means "no limit", and a
+     * save may add or remove the budget either way (an old Gate rejects the
+     * save loudly rather than losing data).
+     */
+    maxRunSeconds?: number;
   };
   probe?: { cliVersion?: string; protocol?: string; message?: string };
 };
