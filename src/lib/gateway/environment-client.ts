@@ -29,6 +29,15 @@ export type CreateEnvironmentInput = {
   workspaceRoot: string;
   /** Gate providers this environment may route model calls through. */
   providerRefs?: string[];
+  /**
+   * Environment variable → credential-vault reference (e.g.
+   * `provider/anthropic-main/api-key`). References only — the secret VALUE
+   * lives in the Gate's vault and is set once from the Providers screen, then
+   * resolved into the CLI's environment at run start. Absent means this form
+   * says nothing about bindings: an older Gate's snapshot carries none, and a
+   * save must not wipe mappings it cannot see.
+   */
+  credentialBindings?: Record<string, string>;
 };
 
 /** The CLI environment record shape this app builds — what the Gate's schema validates. */
@@ -50,7 +59,29 @@ export type EnvironmentRecord = {
   };
   lifecycle: { startup: string; idleTimeoutSeconds: number; maxConcurrentRuns: number };
   enabled: boolean;
+  credentialBindings: Record<string, string>;
 };
+
+/**
+ * Env-var name → vault reference, validated the way the Gate's schema is:
+ * structural only. Both sides must be non-empty after trimming; a half-filled
+ * binding would silently resolve to nothing at run start.
+ */
+function normalizeCredentialBindings(bindings?: Record<string, string>): Record<string, string> {
+  if (!bindings) return {};
+  const normalized: Record<string, string> = {};
+  for (const [envName, ref] of Object.entries(bindings)) {
+    const name = envName.trim();
+    const target = typeof ref === 'string' ? ref.trim() : '';
+    if (!name || !target) {
+      throw new Error(
+        'A credential binding needs both an environment variable name and a vault reference.',
+      );
+    }
+    normalized[name] = target;
+  }
+  return normalized;
+}
 
 /**
  * Build the CLI environment record from an adapter choice. Version policy and
@@ -89,6 +120,7 @@ export function buildEnvironmentRecord(input: CreateEnvironmentInput): Environme
     },
     lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 300, maxConcurrentRuns: 1 },
     enabled: true,
+    credentialBindings: normalizeCredentialBindings(input.credentialBindings),
   };
 }
 
@@ -113,6 +145,12 @@ export function snapshotToEditInput(environment: EnvironmentSnapshot): CreateEnv
     executablePath: environment.executable.path,
     workspaceRoot: environment.workspacePolicy.defaultRoot,
     providerRefs: [...environment.providerRefs],
+    // Only when the snapshot actually reports bindings. An older Gate omits
+    // the field entirely — prefilling "no bindings" there would let the next
+    // save wipe mappings the form never saw.
+    ...(environment.credentialBindings
+      ? { credentialBindings: { ...environment.credentialBindings } }
+      : {}),
   };
 }
 
@@ -128,7 +166,7 @@ export function buildEnvironmentUpdatePatch(
   existing: Pick<EnvironmentSnapshot, 'workspacePolicy'>,
 ): Record<string, unknown> {
   const record = buildEnvironmentRecord(input);
-  return {
+  const patch: Record<string, unknown> = {
     label: record.label,
     adapterId: record.adapterId,
     executable: record.executable,
@@ -141,6 +179,13 @@ export function buildEnvironmentUpdatePatch(
       defaultRoot: record.workspacePolicy.defaultRoot,
     },
   };
+  // Bindings travel only when the form actually saw them. The Gate
+  // shallow-merges the patch, so omitting the key preserves whatever an
+  // operator bound by hand on a Gate that does not report bindings yet.
+  if (input.credentialBindings !== undefined) {
+    patch.credentialBindings = record.credentialBindings;
+  }
+  return patch;
 }
 
 export function createEnvironmentClient(

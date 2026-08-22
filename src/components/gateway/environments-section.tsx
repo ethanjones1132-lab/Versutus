@@ -126,6 +126,7 @@ export function EnvironmentsSection() {
 
       {registering || editing ? (
         <EnvironmentRegistrationForm
+          key={editing ? `edit-${editing.id}` : 'register'}
           adapters={adapters}
           providers={providers}
           initial={editing ? snapshotToEditInput(editing) : undefined}

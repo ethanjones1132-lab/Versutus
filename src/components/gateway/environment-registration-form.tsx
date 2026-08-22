@@ -42,6 +42,20 @@ export function EnvironmentRegistrationForm({
   const [executablePath, setExecutablePath] = useState(initial?.executablePath ?? '');
   const [workspaceRoot, setWorkspaceRoot] = useState(initial?.workspaceRoot ?? '');
   const [providerRefs, setProviderRefs] = useState<string[]>(initial?.providerRefs ?? []);
+  const [bindingRows, setBindingRows] = useState<{ key: number; envName: string; ref: string }[]>(() =>
+    Object.entries(initial?.credentialBindings ?? {}).map(([envName, ref], index) => ({
+      key: index,
+      envName,
+      ref,
+    })),
+  );
+  /**
+   * Whether this form may speak about bindings at all. Fresh registrations
+   * always can; edits only when the snapshot reported them — an older Gate
+   * omits the field, and saving "none" there would wipe mappings the form
+   * never saw.
+   */
+  const bindingsKnown = !editing || initial.credentialBindings !== undefined;
 
   /** Prefill from the chosen adapter so only the machine-specific fields remain. */
   function chooseAdapter(next: EnvironmentAdapter) {
@@ -50,8 +64,49 @@ export function EnvironmentRegistrationForm({
     setLabel((current) => current || next.adapterId);
   }
 
+  function updateBindingRow(key: number, patch: Partial<{ envName: string; ref: string }>) {
+    setBindingRows((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  }
+
+  function addBindingRow() {
+    setBindingRows((rows) => [
+      ...rows,
+      { key: rows.reduce((max, row) => Math.max(max, row.key), -1) + 1, envName: '', ref: '' },
+    ]);
+  }
+
+  function removeBindingRow(key: number) {
+    setBindingRows((rows) => rows.filter((row) => row.key !== key));
+  }
+
   const idIsValid = /^[a-z0-9][a-z0-9-]*$/.test(id);
-  const canSubmit = !!adapter && idIsValid && !!executablePath.trim() && !!workspaceRoot.trim() && !busy;
+  // Fully empty rows are ignored; half-filled or duplicate names are a mistake
+  // that would silently resolve to nothing (or clobber) at run start.
+  const bindingsProblem = (() => {
+    const seen = new Set<string>();
+    for (const row of bindingRows) {
+      const name = row.envName.trim();
+      const ref = row.ref.trim();
+      if (!name && !ref) continue;
+      if (!name || !ref) return 'Each binding needs both a variable name and a vault reference.';
+      if (seen.has(name)) return `Duplicate binding for ${name} — merge or rename them.`;
+      seen.add(name);
+    }
+    return null;
+  })();
+  const canSubmit =
+    !!adapter && idIsValid && !!executablePath.trim() && !!workspaceRoot.trim() && !bindingsProblem && !busy;
+
+  function buildBindings(): Record<string, string> | undefined {
+    if (!bindingsKnown) return undefined;
+    const bindings: Record<string, string> = {};
+    for (const row of bindingRows) {
+      const name = row.envName.trim();
+      const ref = row.ref.trim();
+      if (name && ref) bindings[name] = ref;
+    }
+    return bindings;
+  }
 
   return (
     <Card padding={Spacing.three} style={styles.card}>
@@ -131,10 +186,61 @@ export function EnvironmentRegistrationForm({
               </View>
             </>
           ) : null}
+
+          <View style={styles.bindingsHeader}>
+            <Text variant="caption">Credential bindings (optional)</Text>
+            {bindingsKnown ? (
+              <Button label="Add binding" variant="secondary" onPress={addBindingRow} />
+            ) : null}
+          </View>
+          {bindingsKnown ? (
+            <>
+              <Text variant="caption">
+                Pass a secret from the Gate’s vault into this CLI’s environment — e.g.
+                ANTHROPIC_API_KEY → provider/anthropic-main/api-key. Set the value once on the
+                Providers screen; only variables you bind here reach the CLI.
+              </Text>
+              {bindingRows.map((row) => (
+                <View key={row.key} style={styles.bindingRow}>
+                  <TextField
+                    value={row.envName}
+                    onChangeText={(text) => updateBindingRow(row.key, { envName: text })}
+                    placeholder="ENV_VAR_NAME"
+                  />
+                  <TextField
+                    value={row.ref}
+                    onChangeText={(text) => updateBindingRow(row.key, { ref: text })}
+                    placeholder="provider/my-provider/api-key"
+                  />
+                  {providers.length > 0 ? (
+                    <View style={styles.row}>
+                      {providers.map((item) => (
+                        <Chip
+                          key={item.id}
+                          label={`${item.label}${item.auth.state === 'ready' ? ' ✓' : ''}`}
+                          selected={row.ref === `provider/${item.id}/api-key`}
+                          onPress={() =>
+                            updateBindingRow(row.key, { ref: `provider/${item.id}/api-key` })
+                          }
+                        />
+                      ))}
+                    </View>
+                  ) : null}
+                  <Button label="Remove binding" variant="secondary" onPress={() => removeBindingRow(row.key)} />
+                </View>
+              ))}
+              {bindingsProblem ? <Text variant="caption">{bindingsProblem}</Text> : null}
+            </>
+          ) : (
+            <Text variant="caption">
+              This Gate does not report existing credential bindings — any stored bindings are kept
+              exactly as they are.
+            </Text>
+          )}
           <Text variant="caption">
-            Starts read-only on demand. The CLI never receives your provider keys — it calls back
-            into the Gate with a short-lived invocation token. Saving keeps the sandbox and other
-            Gate-side settings exactly as they are.
+            Starts read-only on demand. The CLI calls back into the Gate with a short-lived
+            invocation token for model routing — provider keys flow only through bindings above.
+            Saving keeps the sandbox and other Gate-side settings exactly as they are.
           </Text>
         </>
       ) : null}
@@ -146,7 +252,16 @@ export function EnvironmentRegistrationForm({
           label={busy ? (editing ? 'Saving…' : 'Registering…') : editing ? 'Save changes' : 'Register'}
           onPress={() => {
             if (!adapter) return;
-            onSubmit({ id, label, adapter, executablePath, workspaceRoot, providerRefs });
+            const credentialBindings = buildBindings();
+            onSubmit({
+              id,
+              label,
+              adapter,
+              executablePath,
+              workspaceRoot,
+              providerRefs,
+              ...(credentialBindings !== undefined ? { credentialBindings } : {}),
+            });
           }}
           disabled={!canSubmit}
         />
@@ -159,5 +274,13 @@ export function EnvironmentRegistrationForm({
 const styles = StyleSheet.create({
   card: { gap: Spacing.two, marginBottom: Spacing.three },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
+  bindingsHeader: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  bindingRow: { gap: Spacing.two },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two, marginTop: Spacing.two },
 });

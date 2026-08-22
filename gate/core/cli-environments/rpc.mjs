@@ -71,6 +71,10 @@ export function sanitizeEnvironment(record, status = {}) {
     protocolPreference: record.protocolPreference,
     versionPolicy: record.versionPolicy,
     executable: { path: record.executable.path },
+    // Vault REFERENCES only (env var name -> ref like "provider/x/api-key").
+    // Secret values live in the DPAPI vault and are resolved at run start —
+    // clients need the names so they can bind more without hand-editing JSON.
+    credentialBindings: record.credentialBindings ?? {},
     state: status.state ?? (record.enabled ? 'stopped' : 'disabled'),
     probe: status.probe,
   };

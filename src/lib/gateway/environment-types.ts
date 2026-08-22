@@ -25,6 +25,12 @@ export type EnvironmentSnapshot = {
     roots?: string[];
     allowAdditionalRoots?: boolean;
   };
+  /**
+   * Env-var name → credential-vault reference. References only — secret
+   * values stay in the Gate's vault. Absent on Gates that predate binding
+   * support; treat absence as "unknown", never as "none".
+   */
+  credentialBindings?: Record<string, string>;
   lifecycle: {
     startup: string;
     maxConcurrentRuns: number;

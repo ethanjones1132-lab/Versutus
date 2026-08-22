@@ -146,6 +146,7 @@ describe('CLI environment registration from the app', () => {
       },
       lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 300, maxConcurrentRuns: 1 },
       enabled: true,
+      credentialBindings: {},
     });
   });
 
