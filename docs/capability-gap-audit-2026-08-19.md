@@ -7,6 +7,19 @@ touched, and attaches a concrete fix design — file, extension point, reuse
 pattern — to each finding. Live-service results are retained from the original
 session; everything else carries a `file:line` citation.
 
+> **RESOLVED AT HEAD — status pass 2026-08-22.** Every repo-side item in the
+> §7 execution plan has since shipped or been explicitly superseded. Read this
+> document as a record, not an open work list. Commit map: §7.1 + §7.2
+> `8cac635` (skills/diagnostics/cron fronted **with** their dispatch entries;
+> live dispatch-table filtering, `speaksHermesRpcDialect` deleted);
+> §7.3 + §7.4 `26fbdbc` (the conpty stub deleted, replaced by a real
+> piped-shell terminal endpoint, owner-bound); §7.5 `69dd4f2` (Hermes turns
+> stream token-by-token through the Gate); §7.6 `1ea2ae0` (runtime-environment
+> probe + denominator); §7.7 superseded by ADRs 0004–0006 — a Bot is a Hermes
+> profile reached through the Gate, not a fork of `runner.adapters`. The
+> §1c/§3b pairing rule ("ship advertisement and dispatch together") was obeyed:
+> all twelve ready groups route.
+
 ---
 
 ## 0. Verification ledger
@@ -322,24 +335,46 @@ After every item: `npm run verify` plus the gate tests.
    — so the newly-lit tiles have working commands behind them. Gate tests
    assert each route proxies and each method dispatches; `smoke:live` confirms
    all three groups flip ready against a running Gate.
+
+   → Shipped (`8cac635`).
 2. **Live dispatch-table filtering (§3b).** Gate enumerates its dispatch keys;
    `filterExecutableCommands` becomes the single filter;
    `speaksHermesRpcDialect` is deleted. The RPC tab renders exactly what the
    connected gateway can answer — on Hermes, Gate, or anything future.
+
+   → Shipped (`8cac635`, same change as item 1; `speaksHermesRpcDialect` no
+   longer exists anywhere in the repo).
 3. **Resolve `conpty.mjs` (§2c).** Delete or build, decided in writing. If
    build: it is the process half of the terminal endpoint.
+
+   → Resolved: deleted (`26fbdbc`), superseded by the real piped-shell
+   endpoint.
 4. **Terminal endpoint (§2b).** Three routes speaking the protocol the client
    already implements; ConPTY session behind the existing supervisor/windows-job
    patterns; advertise `terminal: true`. App-side work: none.
+
+   → Shipped (`26fbdbc`) — as a piped shell rather than a PTY, per the
+   recorded decision in the implementation plan.
 5. **Streaming chat (§5).** The most visible daily-use gap; adapter work in
    `backends/hermes.mjs`.
+
+   → Shipped (`69dd4f2`) — Hermes turns stream token-by-token through the
+   Gate, with a whole-turn fallback if the stream is refused.
 6. **Fix the denominator (§1a).** Either give the six aspirational groups real
    match keys (pattern already in-file at `dashboard.ts:856-857`) or split the
    snapshot into offered / not-offered / undefined so the headline number stops
    counting capabilities that exist nowhere. Do this after 1–2 so the improved
    number is real.
+
+   → Shipped (`1ea2ae0`) — undeclared groups report a distinct `undeclared`
+   status and are excluded from both halves of the ratio (see gap-and-bug
+   audit §2.2).
 7. **Bots Tier 1 (§4)** — only behind a Gate front, and only if the
    upstream-fork commitment is accepted.
+
+   → Superseded by ADRs 0004–0006 before it was ever a fork question: a Bot
+   is a Hermes **profile**, not an entry in `runner.adapters` (gap-and-bug
+   audit §2.4).
 
 Deliberately unranked (unchanged): `config`, `memory`, `voice` are off by
 Hermes' own choice; `artifacts`/`nodes` are undefined rather than missing.

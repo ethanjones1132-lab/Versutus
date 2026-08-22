@@ -45,7 +45,7 @@ Findings §1.1–§1.3 are the other members of that class I could find.
 
 ## 1. Bugs
 
-### 1.1 `btoa` / `atob` are assumed and provided by nothing I can find — UNVERIFIED
+### 1.1 `btoa` / `atob` are assumed and provided by nothing I can find — FIXED (`c0ca07f`)
 
 `src/lib/gateway/device-identity.ts:19,25` calls `btoa`/`atob` **unguarded**.
 This is the device identity path: key encoding and request signing for pairing.
@@ -66,7 +66,13 @@ that produced §0. It holds only for the Hermes engine version in this build.
 **Cost if wrong:** pairing and request signing throw. **Detectable by:** nothing
 currently in the repo.
 
-### 1.2 Terminal output above 64KB is silently discarded — MINE, this session
+**Fixed (`c0ca07f`).** Rather than detect-and-branch, the transforms are
+implemented directly in `src/lib/encoding.ts` — base64, base64url and UTF-8
+encoding with no engine-provided globals (no `btoa`/`atob`/`TextEncoder`) —
+and `device-identity.ts` imports them. Behaviour is identical on every engine
+and covered by ordinary Node tests (`__tests__/encoding-test.ts`).
+
+### 1.2 Terminal output above 64KB is silently discarded — MINE, this session — FIXED (`c0ca07f`)
 
 `gate/core/cli-environments/terminal.mjs:78`:
 
@@ -85,7 +91,13 @@ UTF-8 sequence, so the boundary character decodes to U+FFFD. `TextDecoder` with
 **Fix:** slice into multiple frames rather than truncating, and decode with a
 streaming decoder held per session.
 
-### 1.3 The Shell tab renders nothing, silently, if `atob` is missing
+**Fixed (`c0ca07f`).** The chunker slices into frames of at most 16K chars and
+sends each as its own frame — a large burst arrives whole — and each session
+holds a streaming `TextDecoder('utf-8')`, so a split multi-byte sequence rides
+to the next frame instead of decoding to U+FFFD. Gate tests assert the split
+and reassembly (`gate/__tests__/terminal.test.mjs`).
+
+### 1.3 The Shell tab renders nothing, silently, if `atob` is missing — FIXED (`c0ca07f`)
 
 `src/lib/terminal/client.ts:16-17`:
 
@@ -100,7 +112,13 @@ the Gate already went out of its way to eliminate for chat turns — see the
 here would render as a silent empty bubble with no indication anything went
 wrong."* The guard should surface, not swallow.
 
-### 1.4 `gate/` is not linted — `npm run verify` says otherwise
+**Fixed (`c0ca07f`).** Decoding no longer touches a global at all:
+`decodeBase64Utf8` uses the engine-independent `base64ToBytes` plus
+`TextDecoder` (`src/lib/terminal/client.ts`), with a comment recording the
+silent-empty-string behaviour it replaces. There is no engine left in which
+the guard can fire.
+
+### 1.4 `gate/` is not linted — `npm run verify` says otherwise — FIXED (`c0ca07f`)
 
 `npm run verify` runs `npm run lint` = `expo lint`, which covers `src/` and
 `app/` only. Running ESLint directly on the Gate finds real problems:
@@ -117,13 +135,23 @@ while the verification command implies whole-repo coverage. `eslint.config.js:8`
 ignores only `dist/*`, so this is `expo lint`'s target selection, not an
 explicit exclusion — nobody decided this.
 
-### 1.5 Terminal input is not bound to the session's owner
+**Fixed (`c0ca07f`).** `eslint.config.js` carries an explicit
+`gate/**/*.mjs` / `gate/**/*.js` block declaring Node globals (with a comment
+naming why), and `npm run lint` is now `expo lint && eslint gate
+--max-warnings 0` — the verify chain lints the Gate for real.
+
+### 1.5 Terminal input is not bound to the session's owner — FIXED (`c0ca07f`)
 
 `gate/core/server.mjs` — `POST /v1/terminal/input` looks up `sid` and writes.
 Any holder of any valid token can write to any live session id. Today every
 token is equally trusted so the practical severity is low, but it means a
 second paired device — or one whose device token has not yet been revoked —
 can type into a shell another device opened.
+
+**Fixed (`c0ca07f`; also recorded under §2.3).** Sessions open bound to
+`owner: callerId`, and `/v1/terminal/input` answers a non-owner's write with
+the same 404 `unknown_session` an unknown id gets — ownership enforced
+without confirming to the caller that the session exists.
 
 ### 1.6 33 swallowed rejections in app code
 
@@ -181,10 +209,13 @@ Verdicts, grouped by pattern:
   documented as deliberate: its callers only fire while the executeRun driver
   is alive, and the driver's `requestStop` outcome carries the refusal to the
   card.
-- **SURFACE — deferred to a bot slot.** `gateway-provider.tsx:1551,1554`:
-  a failed `listBots` or `handoffMention` silently drops a bot-to-bot
-  handoff the user explicitly @mentioned. Bot-stack surface, not the wedge
-  loop; scheduled against the B-ladder (B5 desktop-parity error states).
+- **SURFACE — deferred to a bot slot; SHIPPED 2026-08-22 (`d75e10c`).**
+  `gateway-provider.tsx:1551,1554`: a failed `listBots` or `handoffMention`
+  silently dropped a bot-to-bot handoff the user explicitly @mentioned.
+  Fixed: the failure now surfaces as a system note in the thread (mentions +
+  message-reducer changes, regression-tested). With this, every site from the
+  triage above is either kept with a recorded rationale or surfaced — the
+  swallowed-rejection pass is closed.
 
 ---
 
@@ -282,20 +313,22 @@ been checked at all.
 
 By expected cost of leaving it, not by effort. Ten findings; §2.4 is listed
 unranked because it is carried forward from the previous audit rather than
-found here, and is blocked on a decision this work cannot make.
+found here (since superseded by ADRs 0004–0006 — see §2.4). Statuses below
+were reconciled against HEAD on 2026-08-22: every repo-side finding from this
+audit is fixed, decided, or closed.
 
 | # | Finding | Severity | Effort |
 |---|---|---|---|
 | — | §2.1 Device-level verification loop | **Fixed** — Settings → Runtime environment | Closed |
-| 2 | §1.1 `btoa`/`atob`/`TextEncoder` unverified on device | **High if wrong** — pairing breaks | Trivial to check once §2.1 exists |
+| 2 | §1.1 `btoa`/`atob`/`TextEncoder` unverified on device | **Fixed** — engine-independent implementations (`c0ca07f`) | Closed |
 | — | §2.3 Terminal RCE posture | **Decided** — accepted as-is, 2026-08-19 | Closed |
-| 4 | §1.2 Terminal drops output past 64KB | Medium — silent data loss | Small |
-| 5 | §1.4 `gate/` unlinted while verify implies coverage | Medium — false assurance | Small |
-| 6 | §1.3 Shell tab fails silently | Medium | Trivial |
-| 7 | §1.5 Terminal input unbound to owner | Low today | Small; folds into §2.3 |
-| 8 | §1.6 Swallowed rejections | Low, diffuse | Medium |
+| 4 | §1.2 Terminal drops output past 64KB | **Fixed** — multi-frame + streaming decoder (`c0ca07f`) | Closed |
+| 5 | §1.4 `gate/` unlinted while verify implies coverage | **Fixed** — verify lints the Gate (`c0ca07f`) | Closed |
+| 6 | §1.3 Shell tab fails silently | **Fixed** — decode without `atob` (`c0ca07f`) | Closed |
+| 7 | §1.5 Terminal input unbound to owner | **Fixed** — input bound to owner (`c0ca07f`) | Closed |
+| 8 | §1.6 Swallowed rejections | **Closed** — triaged; both surface sites shipped (`fc7ce80`, `d75e10c`) | Done |
 | — | §2.2 Capability denominator | **Fixed** — undeclared groups excluded | Closed |
-| — | §2.4 Phase 7 (bots) | Carried forward — unranked | Blocked on the upstream-fork decision, not on effort |
+| — | §2.4 Phase 7 (bots) | **Superseded** by ADRs 0004–0006 (see §2.4) | Closed |
 
 ## 5. Deliberately not findings
 
