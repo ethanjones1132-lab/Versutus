@@ -18,6 +18,10 @@ import { join } from 'node:path';
  * diagnostic to stderr, and exits 3 — the wedge smoke's deterministic "the task
  * died" case, so honest failure visibility is provable without a real CLI
  * failing on cue.
+ *
+ * A prompt containing `ECHO_BOUND` replies with the value of the WEDGE_BOUND_VAR
+ * environment variable (`bound=<value>`) — how the credential-injection leg
+ * proves a bound vault secret actually reached the CLI process.
  */
 export async function fakeHermesPromptExecutable(version = '0.20.1') {
   const dir = await mkdtemp(join(tmpdir(), 'gate-fake-hermes-'));
@@ -40,6 +44,10 @@ if (argv[0] === '-z') {
     process.stdout.write('par');
     process.stderr.write('hermes: simulated failure: model unreachable\\n');
     process.exit(3);
+  }
+  if (prompt.includes('ECHO_BOUND')) {
+    process.stdout.write('bound=' + String(process.env.WEDGE_BOUND_VAR ?? '') + '\\n');
+    process.exit(0);
   }
   const slow = prompt.includes('SLOW_REPLY');
   process.stdout.write('po');

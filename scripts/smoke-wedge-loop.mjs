@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { createGate } from '../gate/core/server.mjs';
+import { CredentialVault } from '../gate/core/credentials/vault.mjs';
 import { validEnvironment } from '../gate/__tests__/fixtures/cli-environment.mjs';
 import { fakeHermesPromptExecutable } from '../gate/__tests__/fixtures/cli-protocols/fake-hermes-prompt.mjs';
 
@@ -32,6 +33,12 @@ const execFileAsync = promisify(execFile);
  *                    run.cancelled "approval denied" before anything spawns,
  *                    and discovery + replay agree (always hermetic — denial
  *                    precedes any CLI involvement)
+ *   8. credentials — a bound vault reference resolves into the spawned CLI's
+ *                    real process environment (the fake echoes it back), a
+ *                    reference with no value raises a run.note naming
+ *                    variable + reference while the run still starts, and the
+ *                    stored value never appears in any Gate-emitted event
+ *                    (always hermetic — a real CLI cannot echo its env on cue)
  *
  * Every workspace-writing run raises an approval card on its event stream;
  * the legs that need the CLI to actually run answer it like the phone does
@@ -577,9 +584,108 @@ try {
   if (deniedReplay.at(-1)?.type !== 'run.cancelled') fail('deny', `replay ended in ${deniedReplay.at(-1)?.type}`);
   pass('deny', 'Deny stopped the run before anything spawned — run.cancelled "approval denied", discovery + replay agree');
 
+  // ── Step 8: bound credentials reach the CLI; a dead binding warns ─────────
+  /**
+   * The setup path binds an env-var name to a credential-vault reference on
+   * the environment record. This leg proves both halves of that promise at
+   * run time, always hermetically (a real CLI cannot echo its environment on
+   * cue): a reference WITH a value resolves into the spawned CLI's actual
+   * process environment (the fake echoes WEDGE_BOUND_VAR as its reply), a
+   * reference with NO value raises a run.note naming variable + reference
+   * while the run still starts, and the stored value never appears in any
+   * Gate-emitted event — only in the CLI's own echoed output.
+   */
+  const wedgeMarker = 'wedge-bound-secret-2718';
+  await new CredentialVault({ gateHome }).set('provider/wedge/api-key', wedgeMarker);
+  const boundExecutable = await fakeHermesPromptExecutable('0.20.1');
+  const boundCreated = await fetch(`${base}/v1/capabilities/rpc`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      method: 'environments.create',
+      params: validEnvironment({
+        id: 'hermes-bound',
+        adapterId: 'hermes',
+        executable: { path: boundExecutable },
+        workspacePolicy: {
+          roots: [workspace],
+          defaultRoot: workspace,
+          defaultSandbox: 'read_only',
+          allowAdditionalRoots: false,
+        },
+        credentialBindings: {
+          WEDGE_BOUND_VAR: 'provider/wedge/api-key',
+          WEDGE_DEAD_VAR: 'provider/missing/api-key',
+        },
+      }),
+    }),
+  });
+  await authenticatedJson(boundCreated, 'credentials');
+
+  const boundStarted = await fetch(`${base}/v1/environments/hermes-bound/runs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ operation: 'prompt', input: { prompt: 'Reply with exactly: pong ECHO_BOUND' } }),
+  });
+  const { runId: boundRunId } = await authenticatedJson(boundStarted, 'credentials');
+  if (!boundRunId) fail('credentials', 'no runId returned');
+
+  let boundStdout = '';
+  const boundPosts = [];
+  const boundEvents = await sseEvents(gate.port, gate.token, 'hermes-bound', boundRunId, (event) => {
+    if (event.type === 'approval.required') {
+      answerApproval('credentials', base, headers, 'hermes-bound', boundRunId, event.payload.approvalId, 'approve', boundPosts);
+    }
+    if (event.type === 'run.output' && event.payload?.stream === 'stdout') {
+      boundStdout += event.payload.text;
+    }
+  });
+  await Promise.all(boundPosts);
+  assertMonotonicFromOne('credentials', boundEvents);
+
+  // The dead binding warns by name; the healthy one stays silent.
+  const notes = boundEvents.filter((event) => event.type === 'run.note');
+  if (notes.length !== 1) fail('credentials', `${notes.length} run.note events (expected exactly 1)`);
+  if (notes[0].payload?.variable !== 'WEDGE_DEAD_VAR') fail('credentials', `note named ${notes[0].payload?.variable}`);
+  if (notes[0].payload?.reference !== 'provider/missing/api-key') {
+    fail('credentials', `note referenced ${notes[0].payload?.reference}`);
+  }
+  if (JSON.stringify(notes[0]).includes(wedgeMarker)) fail('credentials', 'the note carried a secret value');
+  if (boundEvents.some((event) => event.type === 'run.note' && event.payload?.variable === 'WEDGE_BOUND_VAR')) {
+    fail('credentials', 'the resolved binding was reported as unresolved');
+  }
+
+  // The stored value reached the CLI's real process environment…
+  if (!boundStdout.includes(`bound=${wedgeMarker}`)) {
+    fail('credentials', `CLI never saw the bound value; stdout was ${JSON.stringify(boundStdout)}`);
+  }
+  // …and outside the CLI's own echoed output, no event carries it.
+  for (const event of boundEvents) {
+    if (event.type === 'run.output') continue;
+    if (JSON.stringify(event).includes(wedgeMarker)) fail('credentials', `secret leaked into ${event.type}`);
+  }
+
+  const boundTerminal = boundEvents.at(-1);
+  if (boundTerminal?.type !== 'run.completed') fail('credentials', `terminal event was ${boundTerminal?.type}`);
+  if (boundTerminal.payload?.exitCode !== 0) fail('credentials', `exitCode was ${boundTerminal.payload?.exitCode}`);
+
+  // Discovery + replay agree, like every other leg.
+  const boundList = await authenticatedJson(
+    await fetch(`${base}/v1/environments/hermes-bound/runs`, { headers }),
+    'credentials',
+  );
+  const boundEntry = boundList.runs?.find((run) => run.runId === boundRunId);
+  if (boundEntry?.state !== 'completed') fail('credentials', `discovery state was ${boundEntry?.state}`);
+  const boundReplay = await sseEvents(gate.port, gate.token, 'hermes-bound', boundRunId);
+  if (boundReplay.length !== boundEvents.length) fail('credentials', `${boundReplay.length} replayed vs ${boundEvents.length} live`);
+  pass(
+    'credentials',
+    `bound value reached the CLI (${JSON.stringify(boundStdout.trim())}); dead binding warned as ${notes[0].payload.variable}=${notes[0].payload.reference}; discovery + replay agree`,
+  );
+
   const proven = realExecutable
-    ? '5/5 wedge steps against the WEDGE_EXECUTABLE CLI + honest-failure + denied-consent legs (deterministic fixtures)'
-    : '7/7 wedge steps proven over HTTP+SSE (hermetic)';
+    ? '5/5 wedge steps against the WEDGE_EXECUTABLE CLI + honest-failure + denied-consent + credential-binding legs (deterministic fixtures)'
+    : '8/8 wedge steps proven over HTTP+SSE (hermetic)';
   console.log(`\nsmoke-wedge-loop: PASS (${proven})`);
 } finally {
   await gate.close();

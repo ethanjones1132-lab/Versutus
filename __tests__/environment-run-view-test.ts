@@ -84,6 +84,30 @@ describe('environment run view', () => {
     expect(view.notes).toEqual(['run.output {}']);
   });
 
+  it('shows a gate note as its message, not raw JSON', () => {
+    const view = environmentRunView([
+      event(1, 'run.started', { operation: 'prompt', sandbox: 'read_only' }),
+      event(2, 'run.note', {
+        level: 'warning',
+        variable: 'ANTHROPIC_API_KEY',
+        reference: 'provider/anthropic/api-key',
+        message:
+          'ANTHROPIC_API_KEY is bound to provider/anthropic/api-key but no value is stored for that reference — ' +
+          'set the key on the Providers screen or remove the binding; this task starts without it.',
+      }),
+      event(3, 'run.output', { stream: 'stdout', text: 'pong' }),
+    ]);
+    expect(view.notes).toHaveLength(1);
+    expect(view.notes[0]).toContain('no value is stored');
+    expect(view.notes[0]).not.toContain('run.note');
+    expect(view.replyText).toBe('pong');
+  });
+
+  it('falls back to raw JSON for a note without a message', () => {
+    const view = environmentRunView([event(1, 'run.note', { level: 'info' })]);
+    expect(view.notes).toEqual(['run.note {"level":"info"}']);
+  });
+
   it('starts idle and empty', () => {
     const view = environmentRunView([]);
     expect(view).toEqual({

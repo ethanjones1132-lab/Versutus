@@ -73,12 +73,17 @@ export class CliEnvironmentService {
     approvals = new ApprovalService(),
     spawnImpl = nodeSpawn,
     approvalTimeoutMs = 120_000,
+    // Resolves an environment's credentialBindings into the CLI's environment
+    // at run start. Optional so existing constructions keep working; without
+    // it no binding resolves and none is injected — matching backend-manager.
+    vault = null,
   } = {}) {
     this.store = store;
     this.registry = registry;
     this.jobFactory = jobFactory;
     this.approvals = approvals;
     this.spawnImpl = spawnImpl;
+    this.vault = vault;
     // How long a run may sit in front of an unanswered approval card before
     // it is ruled denied and its slot freed.
     this.approvalTimeoutMs = approvalTimeoutMs;
@@ -138,6 +143,10 @@ export class CliEnvironmentService {
 
     const runId = request.runId ?? `run-${randomBytes(6).toString('hex')}`;
     const startedAtMs = Date.now();
+    // Resolve the operator's deliberate bindings before the child environment
+    // is built, while a dead reference can still be named on the stream
+    // before anything runs.
+    const { credentials, unresolved } = await this.resolveRunCredentials(record);
     const log = createEventLog(runId);
     const job = this.jobFactory();
     const childEnv = buildCliEnvironment(process.env, {
@@ -146,6 +155,7 @@ export class CliEnvironmentService {
       providerRef: request.providerRef,
       audience: 'versutus-gate',
       endpoints: request.endpoints ?? { chat: 'http://127.0.0.1/v1/chat/completions' },
+      credentials,
     });
     const run = {
       runId,
@@ -162,6 +172,23 @@ export class CliEnvironmentService {
     this.runs.set(runId, run);
     this.environmentState.set(record.id, { state: 'busy' });
     log.emit({ type: 'run.started', payload: { operation: request.operation, sandbox: request.sandbox } });
+    // A dead binding is not fatal (model routing can ride invocation tokens)
+    // but the operator must see it in the run sheet at demo time — not only
+    // in Gate-machine `gate doctor` output. References are named, never
+    // values; resolved values travel only inside the child environment.
+    for (const { variable, reference } of unresolved) {
+      log.emit({
+        type: 'run.note',
+        payload: {
+          level: 'warning',
+          variable,
+          reference,
+          message:
+            `${variable} is bound to ${reference} but no value is stored for that reference — ` +
+            'set the key on the Providers screen or remove the binding; this task starts without it.',
+        },
+      });
+    }
 
     /**
      * The invocation is the adapter's own contract — `codex exec`, `claude -p`,
@@ -302,6 +329,27 @@ export class CliEnvironmentService {
       if (code === 0) this.finish(run, 'run.completed', { exitCode: 0 });
       else this.finish(run, 'run.failed', { exitCode: code ?? null });
     });
+  }
+
+  /**
+   * Credentials the operator deliberately bound to this environment, resolved
+   * exactly like backend-manager.resolveCredentials and doctor: a binding
+   * "resolves" only when the vault returns a non-empty string for its
+   * reference (an absent or undecryptable read is a missing value). The
+   * unresolved ones are reported, not fatal — each is named on the run
+   * stream so the operator sees it in the sheet during the demo.
+   */
+  async resolveRunCredentials(record) {
+    const bindings = Object.entries(record.credentialBindings ?? {});
+    if (!bindings.length || !this.vault) return { credentials: {}, unresolved: [] };
+    const credentials = {};
+    const unresolved = [];
+    for (const [variable, reference] of bindings) {
+      const value = await this.vault.get(reference).catch(() => undefined);
+      if (typeof value === 'string' && value) credentials[variable] = value;
+      else unresolved.push({ variable, reference });
+    }
+    return { credentials, unresolved };
   }
 
   events(runId) {

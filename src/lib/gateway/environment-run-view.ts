@@ -91,6 +91,12 @@ export function reduceEnvironmentRunEvent(view: EnvironmentRunView, event: Envir
   }
   // Approval requests render as their own action card in the launcher.
   if (/approval/i.test(event.type)) return view;
+  // A Gate-emitted note carries operator-facing text (e.g. a dead credential
+  // binding warning); show its message rather than raw JSON.
+  if (event.type === 'run.note') {
+    const message = event.payload?.message;
+    return { ...view, notes: [...view.notes, typeof message === 'string' && message ? message : noteFor(event)] };
+  }
   return { ...view, notes: [...view.notes, noteFor(event)] };
 }
 

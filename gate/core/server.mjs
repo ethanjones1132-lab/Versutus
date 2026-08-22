@@ -393,6 +393,9 @@ export async function createGate(config = {}) {
   const environmentService = new CliEnvironmentService({
     store: environmentStore,
     registry: environmentRegistry,
+    // Bound credential references resolve into the CLI's environment at run
+    // start — same vault the providers and backend-manager read.
+    vault,
   });
   const environmentRpc = createEnvironmentRpc({
     store: environmentStore,
