@@ -24,6 +24,10 @@ const execFileAsync = promisify(execFile);
  *   5. stop        — Cancel kills a mid-flight run: exactly one run.cancelled,
  *                    discovery reports it, and the run's OS process is
  *                    verified dead afterwards
+ *   6. fail        — a dying task fails honestly: partial stdout stays reply
+ *                    text, the error lands in stderr diagnostics, run.failed
+ *                    carries the exit code, and discovery + replay agree
+ *                    (always hermetic — a real CLI cannot fail on cue)
  *
  * Hermetic by default: no real Hermes install needed — the executable is a
  * fake that speaks the adapter's verified argv (`--version`, `--acp`,
@@ -369,9 +373,84 @@ try {
   pass('stop', 'cancel killed the mid-flight run; exactly one run.cancelled, discovered as cancelled, process verified dead');
   }
 
+  // ── Step 6: a dying task fails honestly ───────────────────────────────────
+  /**
+   * The demo killer is not a clean pong — it is a task that dies while the
+   * sheet shrugs. This leg always runs against a fresh deterministic fake
+   * (a real CLI cannot be made to fail on cue): the partial stdout fragment
+   * still streams as reply text, the error lands in stderr diagnostics,
+   * run.failed carries exit code 3, discovery lists the failure, and a
+   * reattaching phone replays the same truthful log.
+   */
+  const failExecutable = await fakeHermesPromptExecutable('0.20.1');
+  const failCreated = await fetch(`${base}/v1/capabilities/rpc`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      method: 'environments.create',
+      params: validEnvironment({
+        id: 'hermes-fail',
+        adapterId: 'hermes',
+        executable: { path: failExecutable },
+        workspacePolicy: {
+          roots: [workspace],
+          defaultRoot: workspace,
+          defaultSandbox: 'read_only',
+          allowAdditionalRoots: false,
+        },
+      }),
+    }),
+  });
+  await authenticatedJson(failCreated, 'fail');
+
+  const failStarted = await fetch(`${base}/v1/environments/hermes-fail/runs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ operation: 'prompt', input: { prompt: 'FAIL_REPLY break on purpose' } }),
+  });
+  const { runId: failRunId } = await authenticatedJson(failStarted, 'fail');
+  if (!failRunId) fail('fail', 'no runId returned');
+
+  let failStdout = '';
+  let failStderr = '';
+  const failEvents = await sseEvents(gate.port, gate.token, 'hermes-fail', failRunId, (event) => {
+    if (event.type === 'run.output' && event.payload?.stream === 'stderr') {
+      failStderr += event.payload.text;
+    } else if (event.type === 'run.output' && event.payload?.stream === 'stdout') {
+      failStdout += event.payload.text;
+    }
+  });
+  assertMonotonicFromOne('fail', failEvents);
+  if (failEvents[0]?.type !== 'run.started') fail('fail', `first event was ${failEvents[0]?.type}`);
+  if (!failStdout.includes('par')) fail('fail', `partial stdout missing: ${JSON.stringify(failStdout)}`);
+  if (!failStderr.includes('model unreachable')) fail('fail', `stderr diagnostics missing: ${JSON.stringify(failStderr)}`);
+  const failTerminal = failEvents.at(-1);
+  if (failTerminal?.type !== 'run.failed') fail('fail', `terminal event was ${failTerminal?.type}`);
+  if (failTerminal.payload?.exitCode !== 3) fail('fail', `exitCode was ${failTerminal.payload?.exitCode}`);
+
+  // Discovery reports the failure with its exit code…
+  const failList = await authenticatedJson(
+    await fetch(`${base}/v1/environments/hermes-fail/runs`, { headers }),
+    'fail',
+  );
+  const failEntry = failList.runs?.find((run) => run.runId === failRunId);
+  if (!failEntry) fail('fail', 'failed run missing from the list');
+  if (failEntry.state !== 'failed' || failEntry.exitCode !== 3) {
+    fail('fail', `state ${failEntry.state}, exitCode ${failEntry.exitCode}`);
+  }
+
+  // …and a reattaching phone replays the same truthful log.
+  const failReplay = await sseEvents(gate.port, gate.token, 'hermes-fail', failRunId);
+  if (failReplay.length !== failEvents.length) fail('fail', `${failReplay.length} replayed vs ${failEvents.length} live`);
+  if (failReplay.at(-1)?.type !== 'run.failed') fail('fail', `replay ended in ${failReplay.at(-1)?.type}`);
+  pass(
+    'fail',
+    `run.failed exit 3 — stdout kept as reply (${JSON.stringify(failStdout)}), stderr as diagnostics; discovery + replay agree`,
+  );
+
   const proven = realExecutable
-    ? '5/5 wedge steps proven over HTTP+SSE against the WEDGE_EXECUTABLE CLI'
-    : '5/5 wedge steps proven over HTTP+SSE (hermetic)';
+    ? '5/5 wedge steps against the WEDGE_EXECUTABLE CLI + honest-failure leg (deterministic fixture)'
+    : '6/6 wedge steps proven over HTTP+SSE (hermetic)';
   console.log(`\nsmoke-wedge-loop: PASS (${proven})`);
 } finally {
   await gate.close();

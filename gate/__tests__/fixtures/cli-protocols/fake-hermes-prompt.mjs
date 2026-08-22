@@ -13,6 +13,11 @@ import { join } from 'node:path';
  *
  * A prompt containing `SLOW_REPLY` writes one chunk and then stalls for 30s,
  * giving an HTTP cancel a real mid-flight window to land in.
+ *
+ * A prompt containing `FAIL_REPLY` streams a partial stdout fragment, writes a
+ * diagnostic to stderr, and exits 3 — the wedge smoke's deterministic "the task
+ * died" case, so honest failure visibility is provable without a real CLI
+ * failing on cue.
  */
 export async function fakeHermesPromptExecutable(version = '0.20.1') {
   const dir = await mkdtemp(join(tmpdir(), 'gate-fake-hermes-'));
@@ -31,6 +36,11 @@ if (argv.includes('--acp')) {
 }
 if (argv[0] === '-z') {
   const prompt = argv.slice(1).join(' ');
+  if (prompt.includes('FAIL_REPLY')) {
+    process.stdout.write('par');
+    process.stderr.write('hermes: simulated failure: model unreachable\\n');
+    process.exit(3);
+  }
   const slow = prompt.includes('SLOW_REPLY');
   process.stdout.write('po');
   setTimeout(() => {
