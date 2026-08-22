@@ -1,6 +1,28 @@
 export const BOT_CHAT_TITLE = 'Bot Chat';
 
-export type PublicBot = { id: string; displayName: string; routable: boolean };
+/** Profile pin written by `hermes -p <id> config set model.*` (ADR 0015). */
+export type BotPinnedModel = { default: string | null; provider: string | null };
+
+export type PublicBot = {
+  id: string;
+  displayName: string;
+  routable: boolean;
+  /** Reported by newer Gates; absent on older ones — the roster degrades gracefully. */
+  description?: string | null;
+  /** Present when the profile carries a model pin; null/absent when unpinned or unknown. */
+  model?: BotPinnedModel | null;
+};
+
+/**
+ * One-line roster subtitle: routing state, plus the pinned default model when
+ * the Gate reports one. Never renders the description here — that belongs to
+ * a detail surface, not every row.
+ */
+export function botRowSubtitle(bot: PublicBot): string {
+  if (!bot.routable) return 'No listen key';
+  const pin = bot.model?.default ?? null;
+  return pin ? `Bot · ${pin}` : 'Bot';
+}
 
 export type RosterRow =
   | { kind: 'configurable' }

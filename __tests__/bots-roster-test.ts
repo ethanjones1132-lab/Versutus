@@ -1,5 +1,6 @@
 import {
   BOT_CHAT_TITLE,
+  botRowSubtitle,
   buildRoster,
   ensureBotChat,
   findBotChat,
@@ -51,6 +52,39 @@ test('ensureBotChat creates Bot Chat when missing', async () => {
 test('the tab starts on the roster, not a session', () => {
   const initial: ChatSurface = { kind: 'roster' };
   expect(initial.kind).toBe('roster');
+});
+
+test('botRowSubtitle shows the pinned default model on routable rows', () => {
+  expect(
+    botRowSubtitle({
+      id: 'researcher',
+      displayName: 'researcher',
+      routable: true,
+      model: { default: 'anthropic/claude-sonnet-4', provider: 'kilo' },
+    }),
+  ).toBe('Bot · anthropic/claude-sonnet-4');
+});
+
+test('botRowSubtitle keeps the legacy line when the Gate reports no pin', () => {
+  expect(botRowSubtitle({ id: 'a', displayName: 'a', routable: true })).toBe('Bot');
+  expect(
+    botRowSubtitle({ id: 'b', displayName: 'b', routable: true, description: 'helper', model: null }),
+  ).toBe('Bot');
+  // Provider-only pin has no default to show — never render a bare separator.
+  expect(
+    botRowSubtitle({ id: 'c', displayName: 'c', routable: true, model: { default: null, provider: 'kilo' } }),
+  ).toBe('Bot');
+});
+
+test('botRowSubtitle still flags unroutable bots over any pin', () => {
+  expect(
+    botRowSubtitle({
+      id: 'silent',
+      displayName: 'silent',
+      routable: false,
+      model: { default: 'anthropic/claude-sonnet-4', provider: null },
+    }),
+  ).toBe('No listen key');
 });
 
 test('loadBotChat does not swallow a list failure', async () => {

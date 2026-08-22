@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 import { BotAvatar } from '@/components/chat/bot-avatar';
 import { EmptyState, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
-import type { PublicBot, RosterRow } from '@/lib/gateway/bots';
+import { botRowSubtitle, type PublicBot, type RosterRow } from '@/lib/gateway/bots';
 
 export type ChatRosterProps = {
   rows: RosterRow[];
@@ -56,7 +56,7 @@ export function ChatRoster({
           <ListRow
             key={row.bot.id}
             title={row.bot.displayName}
-            subtitle={row.bot.routable ? 'Bot' : 'No listen key'}
+            subtitle={botRowSubtitle(row.bot)}
             leading={<BotAvatar botId={row.bot.id} />}
             onPress={row.bot.routable ? () => onSelectBot(row.bot) : undefined}
             style={styles.row}

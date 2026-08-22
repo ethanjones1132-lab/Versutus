@@ -1,4 +1,5 @@
 import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/chat-stream-delta';
+import type { PublicBot } from '@/lib/gateway/bots';
 import { isAuthRejection } from '@/lib/gateway/errors';
 import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
 import { HttpTransport } from '@/lib/gateway/http-transport';
@@ -410,7 +411,7 @@ export class ManifestClient implements PortalClient {
     description?: string;
     modelId?: string;
     providerId?: string;
-  }): Promise<{ id: string; displayName: string; routable: boolean }> {
+  }): Promise<PublicBot> {
     const path = this.requireEndpoint('bots');
     return this.rootTransport.request('POST', this.withBackend(path), {
       ...input,
@@ -456,12 +457,10 @@ export class ManifestClient implements PortalClient {
     );
   }
 
-  async listBots(): Promise<{ id: string; displayName: string; routable: boolean }[]> {
+  async listBots(): Promise<PublicBot[]> {
     const path = this.endpoints.bots;
     if (!path) return [];
-    const result = await this.rootTransport.request<{
-      data?: { id: string; displayName: string; routable: boolean }[];
-    }>('GET', this.withBackend(path));
+    const result = await this.rootTransport.request<{ data?: PublicBot[] }>('GET', this.withBackend(path));
     return result.data ?? [];
   }
 

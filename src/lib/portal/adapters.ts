@@ -4,6 +4,7 @@
 // dialect underneath. See docs/portal-architecture.md §6.
 
 import { HermesGatewayClient, type GatewayClientCallbacks } from '@/lib/gateway/client';
+import type { PublicBot } from '@/lib/gateway/bots';
 import { ManifestClient } from '@/lib/gateway/manifest-client';
 import { OpenClawAdapterClient } from '@/lib/portal/openclaw-adapter';
 import type { GatewayIdentity } from '@/lib/portal/identify';
@@ -48,7 +49,7 @@ export interface PortalClient {
   getSessions(limit?: number): Promise<HermesSession[]>;
   createSession?(title?: string): Promise<HermesSession>;
   /** Hermes profile selector on a Gate. Omitted on adapters that are not the Gate. */
-  listBots?(): Promise<{ id: string; displayName: string; routable: boolean }[]>;
+  listBots?(): Promise<PublicBot[]>;
   createBot?(input: {
     name: string;
     soul?: string;
@@ -56,7 +57,7 @@ export interface PortalClient {
     description?: string;
     modelId?: string;
     providerId?: string;
-  }): Promise<{ id: string; displayName: string; routable: boolean }>;
+  }): Promise<PublicBot>;
   listJobs?(): Promise<{ id: string; name?: string; paused?: boolean }[]>;
   createJob?(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }>;
   runJob?(jobId: string): Promise<void>;
