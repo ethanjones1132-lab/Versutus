@@ -13,6 +13,7 @@ import {
   addStreamingPlaceholder,
   addUserMessage,
   appendStreamDelta,
+  appendSystemNote,
   appendToolCallDelta,
   convertStreamError,
   finalizeStreamingMessage,
@@ -32,7 +33,7 @@ import {
 } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { loadBotChat, type PublicBot } from '@/lib/gateway/bots';
-import { extractMentions } from '@/lib/gateway/mentions';
+import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
 import { effectiveModel, resolveSendModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   categorizeProbeError,
@@ -1547,11 +1548,32 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // Mark as complete
         setMessages((prev) => finalizeStreamingMessage(prev, runId));
         setLastError(null);
+        // Bot-to-bot handoff after a successful reply: deliver @mentions of
+        // other bots on the roster. Failures here used to be swallowed — the
+        // user believed the other bot received the handoff when it did not.
+        // Every failure now surfaces as a system note in the thread.
         if (selectedBotId && client.handoffMention && client.listBots) {
-          const roster = await client.listBots().catch(() => []);
-          const mentions = extractMentions(trimmed, roster.map((bot) => bot.id)).filter((id) => id !== selectedBotId);
-          for (const toId of mentions) {
-            await client.handoffMention({ fromId: selectedBotId, toId, text: trimmed }).catch(() => undefined);
+          let roster: PublicBot[] = [];
+          let rosterLoaded = true;
+          try {
+            roster = await client.listBots();
+          } catch (error) {
+            rosterLoaded = false;
+            const detail = error instanceof Error ? error.message : String(error);
+            setMessages((prev) => appendSystemNote(prev, rosterUnavailableNote(detail)));
+          }
+          if (rosterLoaded) {
+            const mentions = extractMentions(trimmed, roster.map((bot) => bot.id)).filter(
+              (id) => id !== selectedBotId,
+            );
+            for (const toId of mentions) {
+              try {
+                await client.handoffMention({ fromId: selectedBotId, toId, text: trimmed });
+              } catch (error) {
+                const detail = error instanceof Error ? error.message : String(error);
+                setMessages((prev) => appendSystemNote(prev, handoffFailedNote(toId, detail)));
+              }
+            }
           }
         }
       } catch (error) {

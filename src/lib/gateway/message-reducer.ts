@@ -118,6 +118,25 @@ export function markInterrupted(messages: readonly ChatMessage[], runId: string)
 }
 
 /**
+ * Append a system note to the thread (e.g. a failed bot-to-bot handoff).
+ * Notes are visible in the transcript but excluded from outgoing conversation
+ * context, so they inform the user without polluting the model's history.
+ */
+export function appendSystemNote(messages: readonly ChatMessage[], text: string): ChatMessage[] {
+  const note: ChatMessage = {
+    id: createNoteId(),
+    role: 'system',
+    text,
+    timestamp: Date.now(),
+  };
+  return appendBounded([...messages], note);
+}
+
+function createNoteId(): string {
+  return `system-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
  * Replace interrupted bubbles with authoritative history turns when possible.
  *
  * Matching is by text prefix: a history assistant turn whose text starts with

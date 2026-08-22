@@ -20,3 +20,17 @@ export function extractMentions(text: string, rosterIds: string[]): string[] {
 export function mentionPrefix(fromId: string, text: string): string {
   return `Message from 🤖 ${fromId} (@${fromId}):\n\n${text}`;
 }
+
+/**
+ * System-note wording shown when the bot roster could not be loaded after a
+ * reply, so @mention handoffs could not even be attempted. Honest by design:
+ * the user typed an @mention and must know it was not delivered.
+ */
+export function rosterUnavailableNote(error: string): string {
+  return `Handoff skipped: the bot roster could not be loaded (${error}). @mentions in your message were not delivered.`;
+}
+
+/** System-note wording shown when delivering an @mention handoff to a bot failed. */
+export function handoffFailedNote(toId: string, error: string): string {
+  return `Handoff to @${toId} failed: ${error}.`;
+}

@@ -3,6 +3,7 @@ import {
   addStreamingPlaceholder,
   addUserMessage,
   appendStreamDelta,
+  appendSystemNote,
   appendToolCallDelta,
   convertStreamError,
   finalizeStreamingMessage,
@@ -110,5 +111,17 @@ describe('message reducer regression locks', () => {
 
     const result = reconcileInterruptedMessages(current, []);
     expect(result[0].interrupted).toBe(true);
+  });
+
+  test('appendSystemNote appends a visible system-role note and stays bounded', () => {
+    let messages: ChatMessage[] = [];
+    for (let i = 0; i < MESSAGE_WINDOW_CAP + 3; i += 1) {
+      messages = appendSystemNote(messages, `handoff failed ${i}`);
+    }
+    expect(messages.length).toBe(MESSAGE_WINDOW_CAP);
+    expect(messages[MESSAGE_WINDOW_CAP - 1].role).toBe('system');
+    expect(messages[MESSAGE_WINDOW_CAP - 1].text).toBe(`handoff failed ${MESSAGE_WINDOW_CAP + 2}`);
+    expect(messages[MESSAGE_WINDOW_CAP - 1].id).toMatch(/^system-/);
+    expect(messages[MESSAGE_WINDOW_CAP - 1].timestamp).toBeDefined();
   });
 });
