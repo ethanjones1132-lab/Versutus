@@ -209,6 +209,51 @@ async function handleAddEnvironment(args) {
 }
 
 /**
+ * Handle 'remove-environment' command: delete a CLI environment record from
+ * Gate home — the headless counterpart of the phone's Remove, and the recovery
+ * path when a record is too corrupt for the app or doctor to read at all.
+ */
+async function handleRemoveEnvironment(args) {
+  const id = args[0];
+
+  if (!id) {
+    console.error('Error: environment id is required');
+    console.error('Usage: node gate/cli.mjs remove-environment <id>');
+    process.exit(1);
+  }
+
+  if (!validateId(id)) {
+    console.error(`Error: environment id must be lowercase alphanumeric with hyphens, got "${id}"`);
+    process.exit(1);
+  }
+
+  const gateHome = resolveGateHome();
+  const store = new CliEnvironmentStore(gateHome);
+  const file = join(store.dir, `${id}.json`);
+
+  // Presence by filename, not by parse: a corrupt record — the incident this
+  // command exists for — makes store.get() return null exactly like an absent
+  // one, and that record is precisely the one that must stay removable.
+  try {
+    await access(file);
+  } catch {
+    console.error(`Error: no environment "${id}" found in ${store.dir}`);
+    console.error('Run "node gate/cli.mjs doctor" to see what is registered.');
+    process.exit(1);
+  }
+
+  await store.delete(id);
+
+  console.log(`Removed CLI environment "${id}" (${file})`);
+  // Records are read from disk on every request, so a running Gate stops
+  // listing the environment immediately. What a disk delete cannot reach: a
+  // task already in flight keeps its process tree until it finishes or is
+  // cancelled from Recent runs.
+  console.log('The change takes effect immediately — no Gate restart needed.');
+  console.log('If a task was still running on it, cancel it from Recent runs.');
+}
+
+/**
  * Handle 'add-kind' command: scaffold a new capability kind module
  */
 async function handleAddKind(args) {
@@ -451,6 +496,10 @@ async function main() {
     console.log('  add-environment <id> --adapter <adapter-id> --path <executable> [--root <workspace>]');
     console.log('    Register a CLI environment (hermes, codex, claude-code, opencode) in Gate home');
     console.log('');
+    console.log('  remove-environment <id>');
+    console.log('    Delete a CLI environment record from Gate home — also the recovery');
+    console.log('    path when a record is too corrupt to read; no Gate restart needed');
+    console.log('');
     console.log('  start');
     console.log('    Start the Gate HTTP server on port 8760');
     console.log('');
@@ -480,6 +529,8 @@ async function main() {
     await handleAdd(args);
   } else if (command === 'add-environment') {
     await handleAddEnvironment(args);
+  } else if (command === 'remove-environment') {
+    await handleRemoveEnvironment(args);
   } else if (command === 'add-kind') {
     await handleAddKind(args);
   } else if (command === 'start') {
