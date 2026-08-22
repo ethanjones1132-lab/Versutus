@@ -15,6 +15,7 @@ import { CliAdapterRegistry } from './core/cli-environments/adapter-registry.mjs
 import { buildTaskDefinition } from './core/service/windows-task.mjs';
 import { acquireInstanceLock } from './core/service/instance-lock.mjs';
 import { doctor } from './core/service/doctor.mjs';
+import { diagnoseEnvironmentRecords, probeLocalGate } from './core/service/diagnostics.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -392,12 +393,24 @@ async function handleService(args) {
 
 async function handleDoctor() {
   const user = process.env.USERNAME ? `${process.env.USERDOMAIN || 'USER'}\\${process.env.USERNAME}` : process.env.USER;
+  const gateHome = resolveGateHome();
+  const listen = 'http://127.0.0.1:8760';
+  const [environmentFindings, serverProbe] = await Promise.all([
+    diagnoseEnvironmentRecords(join(gateHome, 'config', 'environments')),
+    probeLocalGate(`${listen}/.well-known/gateway.json`),
+  ]);
   console.log(doctor({
     user,
-    gateHome: resolveGateHome(),
-    listen: 'http://127.0.0.1:8760',
+    gateHome,
+    listen,
     pid: process.pid,
+    serverProbe,
+    environmentFindings,
   }));
+  // Scriptable verdict: a health check that always exits 0 cannot gate a demo.
+  if (environmentFindings.some((finding) => finding.severity === 'error')) {
+    process.exitCode = 1;
+  }
 }
 
 /**
@@ -437,7 +450,9 @@ async function main() {
     console.log('    Manage the per-user Windows Scheduled Task');
     console.log('');
     console.log('  doctor');
-    console.log('    Print identity, Gate home, listener, and probe status');
+    console.log('    Inspect the Gate machine: local listener and every CLI');
+    console.log('    environment record (JSON, schema/corruption, executable on disk).');
+    console.log('    Exit code 1 when a record has a problem.');
     console.log('');
     console.log('Environment variables:');
     console.log('  GATE_NAME  - Name of the Gate (defaults to "Versutus Gate")');

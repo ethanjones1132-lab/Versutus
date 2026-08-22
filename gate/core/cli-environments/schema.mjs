@@ -17,6 +17,11 @@ const TOP_FIELDS = new Set([
   'workspacePolicy',
   'lifecycle',
   'enabled',
+  // Operator-bound credential vault references (env var name -> vault ref),
+  // resolved by backend-manager.resolveCredentials at backend start. The
+  // schema previously rejected this field while the runtime read it, so any
+  // re-save of a bound record either dropped the binding or failed validation.
+  'credentialBindings',
 ]);
 const FORBIDDEN = new Set([
   'credentials',
@@ -48,6 +53,35 @@ function requireObject(value, field, errors) {
 function requireString(value, field, errors) {
   if (typeof value !== 'string' || value.length === 0) {
     err(errors, field, 'must be a non-empty string');
+    return false;
+  }
+  return true;
+}
+
+/**
+ * The known path-shredding corruption incident (2026-08): a Windows path was
+ * written with its backslashes dropped and escape sequences evaluated, leaving
+ * control characters (e.g. \u000b from "\venv") where folder names should be.
+ * Such records pass "is a string" checks but can never execute. Any C0 control
+ * character or DEL in a path is that signature — reject it at the write path.
+ */
+export function containsControlCharacter(value) {
+  for (const ch of value) {
+    const code = ch.codePointAt(0);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function requirePath(value, field, errors) {
+  if (!requireString(value, field, errors)) return false;
+  if (containsControlCharacter(value)) {
+    err(
+      errors,
+      field,
+      'contains control characters — the record looks corrupted by the known '
+        + 'path-shredding incident; re-register with the plain Windows path',
+    );
     return false;
   }
   return true;
@@ -87,7 +121,7 @@ export function validateCliEnvironmentRegistration(value) {
 
   if (requireObject(value.executable, 'executable', errors)) {
     rejectUnknown(value.executable, new Set(['path', 'expectedPublisher']), 'executable', errors);
-    requireString(value.executable.path, 'executable.path', errors);
+    requirePath(value.executable.path, 'executable.path', errors);
     if (value.executable.expectedPublisher !== undefined) {
       requireString(value.executable.expectedPublisher, 'executable.expectedPublisher', errors);
     }
@@ -125,9 +159,9 @@ export function validateCliEnvironmentRegistration(value) {
     if (!Array.isArray(value.workspacePolicy.roots) || value.workspacePolicy.roots.length === 0) {
       err(errors, 'workspacePolicy.roots', 'must be a non-empty array');
     } else {
-      value.workspacePolicy.roots.forEach((root, index) => requireString(root, `workspacePolicy.roots[${index}]`, errors));
+      value.workspacePolicy.roots.forEach((root, index) => requirePath(root, `workspacePolicy.roots[${index}]`, errors));
     }
-    requireString(value.workspacePolicy.defaultRoot, 'workspacePolicy.defaultRoot', errors);
+    requirePath(value.workspacePolicy.defaultRoot, 'workspacePolicy.defaultRoot', errors);
     if (!SANDBOXES.has(value.workspacePolicy.defaultSandbox)) {
       err(errors, 'workspacePolicy.defaultSandbox', `must be one of [${[...SANDBOXES].join(', ')}]`);
     }
@@ -146,6 +180,17 @@ export function validateCliEnvironmentRegistration(value) {
     }
     if (!Number.isInteger(value.lifecycle.maxConcurrentRuns) || value.lifecycle.maxConcurrentRuns < 1) {
       err(errors, 'lifecycle.maxConcurrentRuns', 'must be a positive integer');
+    }
+  }
+
+  // Bindings hold vault REFERENCES, never secret material: env var name ->
+  // vault ref (e.g. "environment/hermes-local/api-key"). Structural check only.
+  if (value.credentialBindings !== undefined && requireObject(value.credentialBindings, 'credentialBindings', errors)) {
+    for (const [envName, ref] of Object.entries(value.credentialBindings)) {
+      if (!requireString(ref, `credentialBindings.${envName}`, errors)) continue;
+      if (typeof envName !== 'string' || envName.length === 0) {
+        err(errors, 'credentialBindings', 'keys must be non-empty environment variable names');
+      }
     }
   }
 
