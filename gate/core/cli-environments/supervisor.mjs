@@ -20,6 +20,28 @@ import { spawnCommand } from './adapters/shared.mjs';
 const MAX_OUTPUT_CHARS = 16_000;
 
 /**
+ * Why startRun refused a start on an environment at its concurrency limit.
+ * A bare "environment is busy" reads as a mystery on the phone exactly when
+ * the operator taps Start again because nothing seems to be happening — the
+ * approval card sits unanswered above. Name what holds the slot and how to
+ * free it: a pending card names itself (and that silence ends it), anything
+ * else is a task that has not finished yet.
+ */
+function describeBusy(active) {
+  const pending = active.find((run) => run.approvalId);
+  if (pending) {
+    return (
+      `environment is busy — run ${pending.runId} is waiting for your approval; ` +
+      'approve or deny its card first (an unanswered card ends by itself)'
+    );
+  }
+  return (
+    `environment is busy — task ${active[0].runId} has not finished yet; ` +
+    'cancel it from Recent runs or wait for it to complete'
+  );
+}
+
+/**
  * The one-line summary the phone's approval card shows, per risk class.
  * Anything unmapped falls back to the launcher's generic text.
  */
@@ -199,7 +221,7 @@ export class CliEnvironmentService {
     const record = await this.require(request.environmentId);
     const active = [...this.runs.values()].filter((run) => run.request.environmentId === request.environmentId && !run.done);
     if (active.length >= (record.lifecycle?.maxConcurrentRuns ?? 1)) {
-      const error = new Error('environment is busy');
+      const error = new Error(describeBusy(active));
       error.code = 'busy';
       throw error;
     }

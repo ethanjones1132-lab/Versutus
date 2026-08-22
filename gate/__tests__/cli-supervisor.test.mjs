@@ -364,6 +364,95 @@ test('concurrent runs honor maxConcurrentRuns', async () => {
   }
 });
 
+test('a refused start names a pending approval card as the holder of the slot', async () => {
+  const { service, children, cleanup } = await makeService();
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'prompt',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: { prompt: 'SLEEP:30000' },
+    });
+    await sleep(100); // the card is up; nothing spawns until it is answered
+    assert.equal(children.length, 0, 'the run is still waiting for consent');
+    // The double-tap case: Start again while the card sits open. The refusal
+    // must name the card and how to clear it — not a bare "busy".
+    await assert.rejects(
+      () => service.startRun({
+        environmentId: 'codex-local',
+        operation: 'status',
+        providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+        workspaceId: 'default',
+        sandbox: 'read_only',
+        input: {},
+      }),
+      (error) => {
+        assert.equal(error.code, 'busy');
+        assert.match(error.message, new RegExp(`run ${handle.runId} is waiting for your approval`));
+        assert.match(error.message, /approve or deny/);
+        return true;
+      },
+    );
+    // Following the message's advice frees the slot.
+    const events = await collectEvents(service, handle.runId, 'deny');
+    assert.equal(events.at(-1).type, 'run.cancelled');
+    const next = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'status',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: {},
+    });
+    const nextEvents = await collectEvents(service, next.runId);
+    assert.equal(nextEvents.at(-1).type, 'run.completed');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('a refused start names the unfinished task when no card is pending', async () => {
+  const { service, children, cleanup } = await makeService();
+  try {
+    const first = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'prompt',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: { prompt: 'SLEEP:4000' },
+    });
+    // Approve the card out-of-band so the task actually spawns and holds the
+    // slot while running, then attempt a second start mid-flight.
+    const drain = collectEvents(service, first.runId, 'approve');
+    for (let waited = 0; waited < 2000 && children.length === 0; waited += 20) {
+      await sleep(20);
+    }
+    assert.equal(children.length, 1, 'the approved run spawned');
+    await assert.rejects(
+      () => service.startRun({
+        environmentId: 'codex-local',
+        operation: 'status',
+        providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+        workspaceId: 'default',
+        sandbox: 'read_only',
+        input: {},
+      }),
+      (error) => {
+        assert.equal(error.code, 'busy');
+        assert.doesNotMatch(error.message, /waiting for your approval/);
+        assert.match(error.message, new RegExp(`task ${first.runId} has not finished yet`));
+        return true;
+      },
+    );
+    await drain;
+  } finally {
+    await cleanup();
+  }
+});
+
 test('a run whose workspace directory does not exist is refused by name', async () => {
   // The typo case from the runbook's register step: the operator fat-fingers
   // the one folder the CLI may work in. startRun must refuse before anything

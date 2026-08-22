@@ -29,7 +29,9 @@ const execFileAsync = promisify(execFile);
  *                    text, the error lands in stderr diagnostics, run.failed
  *                    carries the exit code, and discovery + replay agree
  *                    (always hermetic — a real CLI cannot fail on cue)
- *   7. deny        — a denied consent card is a hard stop: the run ends
+ *   7. deny        — a denied consent card is a hard stop: while the card
+ *                    waits, a second Start is refused with 409 naming the
+ *                    waiting card (the double-tap case); denying then ends
  *                    run.cancelled "approval denied" before anything spawns,
  *                    and discovery + replay agree (always hermetic — denial
  *                    precedes any CLI involvement)
@@ -566,11 +568,32 @@ try {
   if (!deniedRunId) fail('deny', 'no runId returned');
 
   const deniedPosts = [];
-  const deniedEvents = await sseEvents(gate.port, gate.token, 'hermes-denied', deniedRunId, (event) => {
+  // The card is deliberately left open for a moment: before denying it, this
+  // leg replays the operator's double-tap — Start again while an approval
+  // waits — and proves the refusal over HTTP names the card as the holder of
+  // the slot (with the fix), not a bare "environment is busy".
+  let cardApprovalId = null;
+  const deniedDrain = sseEvents(gate.port, gate.token, 'hermes-denied', deniedRunId, (event) => {
     if (event.type === 'approval.required') {
-      answerApproval('deny', base, headers, 'hermes-denied', deniedRunId, event.payload.approvalId, 'deny', deniedPosts);
+      cardApprovalId = event.payload.approvalId;
     }
   });
+  for (let waited = 0; waited < 5000 && cardApprovalId === null; waited += 25) await sleep(25);
+  if (cardApprovalId === null) fail('deny', 'the approval card never appeared');
+
+  const busyStarted = await fetch(`${base}/v1/environments/hermes-denied/runs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ operation: 'prompt', input: { prompt: 'the second tap' } }),
+  });
+  const busyBody = await busyStarted.json().catch(() => ({}));
+  if (busyStarted.status !== 409) fail('deny', `a second start while the card was open answered ${busyStarted.status}`);
+  if (!/waiting for your approval/.test(busyBody?.error?.message ?? '')) {
+    fail('deny', `the busy refusal did not name the waiting card: ${JSON.stringify(busyBody)}`);
+  }
+
+  answerApproval('deny', base, headers, 'hermes-denied', deniedRunId, cardApprovalId, 'deny', deniedPosts);
+  const deniedEvents = await deniedDrain;
   await Promise.all(deniedPosts);
   assertMonotonicFromOne('deny', deniedEvents);
   const deniedCards = deniedEvents.filter((event) => event.type === 'approval.required');
@@ -796,7 +819,7 @@ try {
   pass('restart', `after killing the Gate: ${survivor.state} · exit ${survivor.exitCode} still listed, ${replayAfterRestart.length} events still replay from sequence 1, refusal still unrecorded`);
 
   const proven = realExecutable
-    ? '5/5 wedge steps against the WEDGE_EXECUTABLE CLI + honest-failure + denied-consent + credential-binding + workspace-refusal + restart-persistence legs (deterministic fixtures)'
+    ? '5/5 wedge steps against the WEDGE_EXECUTABLE CLI + honest-failure + denied-consent (double-tap refusal incl.) + credential-binding + workspace-refusal + restart-persistence legs (deterministic fixtures)'
     : '10/10 wedge steps proven over HTTP+SSE (hermetic)';
   console.log(`\nsmoke-wedge-loop: PASS (${proven})`);
 } finally {
