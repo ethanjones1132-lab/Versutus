@@ -396,6 +396,10 @@ export async function createGate(config = {}) {
     // Bound credential references resolve into the CLI's environment at run
     // start — same vault the providers and backend-manager read.
     vault,
+    // Run history outlives the process: every event is appended under
+    // <gateHome>/runs, and init() (below, before listen) reloads finished
+    // runs at startup so Recent runs + replay survive a Gate restart.
+    archiveDir: join(gateHome, 'runs'),
   });
   const environmentRpc = createEnvironmentRpc({
     store: environmentStore,
@@ -1697,6 +1701,11 @@ export async function createGate(config = {}) {
       });
     },
   };
+
+  // Reload archived run history before the first request can arrive: a
+  // replaying phone must find the runs that finished under the previous
+  // process, not an empty list.
+  await environmentService.init();
 
   // Start listening
   await gateObj.listen();

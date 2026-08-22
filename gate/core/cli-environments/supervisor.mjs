@@ -6,6 +6,7 @@ import { assertWorkspaceAccess } from './workspace-policy.mjs';
 import { ApprovalService } from './approvals.mjs';
 import { createWindowsJob } from './windows-job.mjs';
 import { createEventLog } from './run-protocol.mjs';
+import { createRunArchive } from './run-archive.mjs';
 import { buildCliEnvironment } from './process-environment.mjs';
 import { spawnCommand } from './adapters/shared.mjs';
 
@@ -92,6 +93,10 @@ export class CliEnvironmentService {
     // at run start. Optional so existing constructions keep working; without
     // it no binding resolves and none is injected — matching backend-manager.
     vault = null,
+    // Directory for the durable run archive (null = memory-only, as before).
+    // When set, every run's events are appended to disk and init() reloads
+    // finished history at startup, so discovery + replay survive a restart.
+    archiveDir = null,
   } = {}) {
     this.store = store;
     this.registry = registry;
@@ -104,6 +109,62 @@ export class CliEnvironmentService {
     this.approvalTimeoutMs = approvalTimeoutMs;
     this.runs = new Map();
     this.environmentState = new Map();
+    this.archive = archiveDir ? createRunArchive(archiveDir) : null;
+    this.initPromise = null;
+  }
+
+  /**
+   * Load archived run history back into the in-memory runs map so listRuns()
+   * and events() answer for runs that finished under a previous Gate process.
+   * A run whose process died with the Gate — no terminal event on disk — is
+   * closed honestly as run.failed naming what happened, and that verdict is
+   * persisted so later restarts see a stable, terminal record. Safe (and
+   * cheap) to call more than once; the server awaits it before listening.
+   */
+  async init() {
+    if (!this.archive) return;
+    if (!this.initPromise) this.initPromise = this.hydrateArchive();
+    await this.initPromise;
+  }
+
+  async hydrateArchive() {
+    const restored = await this.archive.load();
+    for (const { meta, events } of restored) {
+      if (this.runs.has(meta.runId)) continue;
+      const logEvents = [...events];
+      const last = logEvents.at(-1);
+      if (!last || !/^run\.(completed|failed|cancelled)$/.test(last.type)) {
+        logEvents.push({
+          runId: meta.runId,
+          sequence: (last?.sequence ?? 0) + 1,
+          timestamp: new Date().toISOString(),
+          type: 'run.failed',
+          payload: { message: 'the Gate went down before this task finished' },
+        });
+        // Persist the synthesized verdict too, so the file always ends in a
+        // terminal event no matter how many times the Gate restarts. Sync
+        // write: it lands before load() could ever be called again.
+        try {
+          this.archive.append(meta.environmentId, meta.runId, logEvents.at(-1));
+        } catch {
+          // A persistence hiccup must not stop history from loading.
+        }
+      }
+      this.runs.set(meta.runId, {
+        runId: meta.runId,
+        request: {
+          environmentId: meta.environmentId,
+          operation: meta.operation,
+          input: meta.input,
+          sandbox: meta.sandbox,
+        },
+        record: null,
+        log: createEventLog(meta.runId, { events: logEvents }),
+        startedAtMs: Number.isFinite(Date.parse(meta.startedAt)) ? Date.parse(meta.startedAt) : 0,
+        done: true,
+        archived: true,
+      });
+    }
   }
 
   async check(id) {
@@ -174,7 +235,29 @@ export class CliEnvironmentService {
     // is built, while a dead reference can still be named on the stream
     // before anything runs.
     const { credentials, unresolved } = await this.resolveRunCredentials(record);
-    const log = createEventLog(runId);
+    // Every emitted event is mirrored to the disk archive (fire-and-forget —
+    // persistence must never break or stall the live run; the write itself is
+    // synchronous so file order always equals emit order), so this run stays
+    // discoverable and replayable after the Gate restarts.
+    const log = createEventLog(runId, {
+      onEmit: this.archive
+        ? (event) => this.archive.append(request.environmentId, runId, event)
+        : undefined,
+    });
+    if (this.archive) {
+      try {
+        this.archive.record({
+          runId,
+          environmentId: request.environmentId,
+          operation: request.operation,
+          input: request.input,
+          sandbox: request.sandbox,
+          startedAt: new Date(startedAtMs).toISOString(),
+        });
+      } catch {
+        // Persistence must never block starting a run.
+      }
+    }
     const job = this.jobFactory();
     const childEnv = buildCliEnvironment(process.env, {
       environmentId: record.id,
@@ -389,8 +472,9 @@ export class CliEnvironmentService {
    * Summaries for the runs retained on an environment, newest first. This is
    * how a phone finds its way back to a run after the SSE connection dropped:
    * the event stream replays from sequence 0 to any subscriber, but only if
-   * the caller can rediscover the run id. Runs live in memory with the Gate,
-   * so this is a recovery window, not an archive.
+   * the caller can rediscover the run id. Runs finished under this process
+   * come from memory; runs from earlier Gate processes were rehydrated from
+   * the disk archive by init(), so history survives a restart.
    */
   listRuns(environmentId, limit = 50) {
     return [...this.runs.values()]

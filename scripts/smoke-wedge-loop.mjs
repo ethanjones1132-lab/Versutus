@@ -43,6 +43,11 @@ const execFileAsync = promisify(execFile);
  *                    disk is refused at run start over HTTP: status 400,
  *                    code workspace_missing, message naming the path and the
  *                    fix, no run recorded, nothing spawned (always hermetic)
+ *  10. restart    — the Gate process is killed and a new one started on the
+ *                    same gate home: the finished run is still listed with its
+ *                    outcome, its event log still replays from sequence 1,
+ *                    and the refused start of leg 9 is still recorded nowhere
+ *                    (always hermetic)
  *
  * Every workspace-writing run raises an approval card on its event stream;
  * the legs that need the CLI to actually run answer it like the phone does
@@ -205,7 +210,7 @@ await copyFile(kindModulePath, join(root, 'core', 'capabilities', 'provider', 'k
 await mkdir(join(root, 'registry'), { recursive: true });
 const gateHome = join(root, 'home');
 const workspace = await mkdtemp(join(tmpdir(), 'smoke-wedge-ws-'));
-const gate = await createGate({ root, gateHome, port: 0 });
+let gate = await createGate({ root, gateHome, port: 0 });
 
 try {
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` };
@@ -742,12 +747,60 @@ try {
   if ((badList.runs ?? []).length !== 0) fail('workspace', 'a run was recorded for a refused start');
   pass('workspace', `start refused (400 workspace_missing) naming ${badWorkspace}; nothing spawned or recorded`);
 
+  // ── Step 10: history survives a Gate restart ──────────────────────────────
+  /**
+   * Run history used to live only in the process: closing the console (or a
+   * crash) emptied Recent runs and broke replay, so the buyer's acceptance
+   * evidence died with the Gate. Every event is now archived under
+   * <gateHome>/runs and reloaded before a new process listens. This leg kills
+   * THIS gate, starts a fresh one on the same gate home, and demands the same
+   * answers over HTTP+SSE the phone would get after a restart: discovery
+   * still lists the completed run with its outcome, replay still returns the
+   * full event history from sequence 1, and leg 9's refused start is still
+   * recorded nowhere.
+   */
+  await gate.close();
+  gate = await createGate({ root, gateHome, port: 0 });
+  const restartedAuth = { Authorization: `Bearer ${gate.token}` };
+  const restartedBase = `http://127.0.0.1:${gate.port}`;
+
+  const afterRestart = await authenticatedJson(
+    await fetch(`${restartedBase}/v1/environments/hermes-local/runs`, { headers: restartedAuth }),
+    'restart',
+  );
+  const survivor = afterRestart.runs?.find((run) => run.runId === runId);
+  if (!survivor) fail('restart', 'the finished run vanished from discovery after a restart');
+  if (survivor.state !== 'completed' || survivor.exitCode !== 0) {
+    fail('restart', `archived state ${survivor.state}, exitCode ${survivor.exitCode}`);
+  }
+  if (survivor.pid !== null) fail('restart', 'an archived run advertised a pid');
+
+  const replayAfterRestart = await sseEvents(gate.port, gate.token, 'hermes-local', runId);
+  if (replayAfterRestart.length !== events.length) {
+    fail('restart', `${replayAfterRestart.length} events after restart vs ${events.length} live`);
+  }
+  if (replayAfterRestart.some((event, index) => event.type !== events[index].type)) {
+    fail('restart', 'event types differ from the original live stream');
+  }
+  if (replayAfterRestart[0]?.sequence !== 1) {
+    fail('restart', `replay did not start at sequence 1 (${replayAfterRestart[0]?.sequence})`);
+  }
+
+  const badListAfterRestart = await authenticatedJson(
+    await fetch(`${restartedBase}/v1/environments/hermes-badws/runs`, { headers: restartedAuth }),
+    'restart',
+  );
+  if ((badListAfterRestart.runs ?? []).length !== 0) {
+    fail('restart', 'the refused start of leg 9 appeared in history after a restart');
+  }
+  pass('restart', `after killing the Gate: ${survivor.state} · exit ${survivor.exitCode} still listed, ${replayAfterRestart.length} events still replay from sequence 1, refusal still unrecorded`);
+
   const proven = realExecutable
-    ? '5/5 wedge steps against the WEDGE_EXECUTABLE CLI + honest-failure + denied-consent + credential-binding + workspace-refusal legs (deterministic fixtures)'
-    : '9/9 wedge steps proven over HTTP+SSE (hermetic)';
+    ? '5/5 wedge steps against the WEDGE_EXECUTABLE CLI + honest-failure + denied-consent + credential-binding + workspace-refusal + restart-persistence legs (deterministic fixtures)'
+    : '10/10 wedge steps proven over HTTP+SSE (hermetic)';
   console.log(`\nsmoke-wedge-loop: PASS (${proven})`);
 } finally {
-  await gate.close();
+  await gate.close().catch(() => {});
   await rm(root, { recursive: true, force: true }).catch(() => {});
   await rm(workspace, { recursive: true, force: true }).catch(() => {});
 }
