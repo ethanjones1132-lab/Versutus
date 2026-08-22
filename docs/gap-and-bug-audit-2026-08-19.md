@@ -137,6 +137,55 @@ Others are the mechanism by which a broken path stays invisible — §0's bug
 reached the user as "no live feed" rather than an error partly because failures
 in this area do not surface. Worth a pass to separate the two.
 
+**Triaged 2026-08-22.** Every site read in context at HEAD (count is now 32 —
+one of the 33 was already reworked into `requestStop`'s honest reporting).
+Verdicts, grouped by pattern:
+
+- **KEEP — teardown cancels.** `reader.cancel().catch(() => undefined)` at
+  `environment-client.ts:324`, `terminal/client.ts:132`,
+  `runtime-environment.ts:117`. Cleanup during teardown; there is no caller
+  left to inform and nothing user-visible depends on the cancel ack.
+- **KEEP — haptics ×6** (`haptics.ts:8-13`). Feedback must never crash the
+  app over feedback.
+- **KEEP — reconnect schedulers** (`client.ts:79,188`,
+  `manifest-client.ts:176`, and `client.ts`'s monitor callback). A failed
+  reconnect attempt is reported through `onStatus`, not the promise; the
+  swallow only keeps the scheduler free of unhandled rejections.
+- **KEEP — history/paging fallbacks** (`gateway-provider.tsx:589,609,685,701`).
+  The audit's own carve-out: empty-list degradation is the designed behavior,
+  and paging falls through to the limit-growing heuristic.
+- **KEEP — manifest identify cascade** (`gateway-provider.tsx:749,962,2195`,
+  `probe.ts:124`). `null` here *means* something: "no well-known manifest" is
+  the branch that routes a gateway to its correct adapter. Background
+  re-fetches are opportunistic enrichment.
+- **KEEP — portal JSON tolerance** (`access.ts:198`, `identify.ts:151,171`).
+  Each null feeds an explicit failure branch: `denied` with the HTTP status,
+  or an `unknown`-source identity. Nothing is silently dropped.
+- **KEEP — capability enrichment** (`openclaw-adapter.ts:59`,
+  `gateway-provider.tsx:2187`). Absence renders as absence in diagnostics;
+  no false positive is created.
+- **KEEP — device identity bootstrap** (`gateway-provider.tsx:1190`).
+  Access requests re-load the identity themselves (`access.ts:156`) and
+  surface failures in the access flow; the bootstrap swallow only delays a
+  Settings display.
+- **KEEP — run polling internals** (`runs.ts:207,225,244,283`), each already
+  carrying its rationale comment; nulls map through `safeStatus` into the
+  honest `unresolved` channel.
+- **SURFACE — FIXED this pass.** `outcomeToActivityStatus` checked
+  `cancelled` before `unresolved`, so the one outcome that is *only* produced
+  by a stop the gateway refused (`requestStop`) still rendered as a clean
+  "Cancelled" on the activity card — the exact lie `requestStop` was written
+  to prevent, and it excluded the run from `settleUnresolvedRuns`' reconnect
+  re-poll. Unresolved now wins; regression test added
+  (`__tests__/runs-test.ts`). `cancel.ts`'s fire-and-forget swallow is
+  documented as deliberate: its callers only fire while the executeRun driver
+  is alive, and the driver's `requestStop` outcome carries the refusal to the
+  card.
+- **SURFACE — deferred to a bot slot.** `gateway-provider.tsx:1551,1554`:
+  a failed `listBots` or `handoffMention` silently drops a bot-to-bot
+  handoff the user explicitly @mentioned. Bot-stack surface, not the wedge
+  loop; scheduled against the B-ladder (B5 desktop-parity error states).
+
 ---
 
 ## 2. Gaps

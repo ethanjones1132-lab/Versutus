@@ -133,8 +133,14 @@ export function runStatusToActivityStatus(status: string): ActivityRun['status']
  * terminal state must not be presented as finished.
  */
 export function outcomeToActivityStatus(outcome: RunOutcome): ActivityRun['status'] {
-  if (outcome.cancelled) return 'cancelled';
+  // A stop the gateway did not confirm arrives as both cancelled and
+  // unresolved. Unresolved wins: the only honest thing that outcome says is
+  // that the run's fate is unknown. Rendering it as a plain 'cancelled'
+  // repeats the exact lie requestStop exists to prevent, and would exclude
+  // the run from settleUnresolvedRuns' reconnect re-poll — the mechanism
+  // that eventually learns the truth.
   if (outcome.unresolved) return 'unresolved';
+  if (outcome.cancelled) return 'cancelled';
   return runStatusToActivityStatus(outcome.status);
 }
 

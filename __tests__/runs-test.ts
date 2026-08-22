@@ -209,6 +209,15 @@ describe('A2 regression lock — outcome-to-activity mapping', () => {
     expect(outcomeToActivityStatus({ runId: 'r1', status: 'cancelled', cancelled: true })).toBe('cancelled');
   });
 
+  it('a stop the gateway never confirms renders as unconfirmed, not cancelled', () => {
+    // requestStop marks a refused stop unresolved precisely so this mapping
+    // cannot present it as a finished cancellation — and so the run stays in
+    // settleUnresolvedRuns' reconnect re-poll until the truth is known.
+    expect(
+      outcomeToActivityStatus({ runId: 'r1', status: 'cancelled', cancelled: true, unresolved: true }),
+    ).toBe('unresolved');
+  });
+
   it('a terminal success renders as complete', () => {
     expect(outcomeToActivityStatus({ runId: 'r1', status: 'completed' })).toBe('complete');
     expect(outcomeToActivityStatus({ runId: 'r1', status: 'succeeded' })).toBe('complete');

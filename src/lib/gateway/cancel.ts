@@ -12,6 +12,11 @@ export type CancellableClient = {
  * Ask the gateway to stop an agentic run that originated from a slash command.
  * Returns the best-effort promise so callers can fire-and-forget, or `undefined`
  * when there is nothing to cancel.
+ *
+ * The swallow here is deliberate and compensated: every caller fires only while
+ * the run's own executeRun driver is still alive, and that driver's abort
+ * branch re-asks via requestStop — whose failure lands on the activity card as
+ * `unresolved` with the gateway's refusal explained, rather than vanishing.
  */
 export function serverSideCancelForCommand(
   client: CancellableClient | null,
