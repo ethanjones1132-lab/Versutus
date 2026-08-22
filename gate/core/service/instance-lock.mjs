@@ -1,3 +1,4 @@
+import { closeSync, rmSync } from 'node:fs';
 import { mkdir, open, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -61,6 +62,23 @@ export async function acquireInstanceLock(gateHome) {
       released = true;
       await handle.close();
       await rm(lockPath, { force: true });
+    },
+    /** Synchronous release for 'exit' handlers, which cannot await: an async
+     * release there dies with the process mid-unlink and leaks gate.lock
+     * naming a dead pid. */
+    releaseSync() {
+      if (released) return;
+      released = true;
+      try {
+        closeSync(handle.fd);
+      } catch {
+        // Already closed by the async release; the unlink below still runs.
+      }
+      try {
+        rmSync(lockPath, { force: true });
+      } catch {
+        // Nothing more an exiting process can do about a contested file.
+      }
     },
   };
 

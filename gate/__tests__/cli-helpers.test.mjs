@@ -6,6 +6,7 @@ import {
   templateValueForField,
   buildInstanceConfigTemplate,
   getKindTemplate,
+  describeStartFailure,
 } from '../core/cli-helpers.mjs';
 
 test('validateId accepts lowercase alphanumeric with hyphens', () => {
@@ -99,4 +100,30 @@ test('getKindTemplate safely escapes a label containing a quote and apostrophe',
 
   const module = await import(pathToFileURL(filePath).href);
   assert.equal(module.default.label, `O'Brien's "Notes"`);
+});
+
+test('describeStartFailure turns a held port into guidance naming the port and the check URL', () => {
+  const text = describeStartFailure(
+    Object.assign(new Error('listen EADDRINUSE: address already in use :::8760'), { code: 'EADDRINUSE' }),
+  );
+  assert.match(text, /port 8760/);
+  assert.match(text, /gateway\.json/);
+  assert.match(text, /Gate that is still running/);
+});
+
+test('describeStartFailure appends the check URL to the lock-held refusal', () => {
+  const text = describeStartFailure(
+    new Error('Gate instance lock is already held — another Gate is already running'),
+  );
+  assert.match(text, /another Gate is already running/);
+  assert.match(text, /gateway\.json/);
+});
+
+test('describeStartFailure passes any other failure through with its message', () => {
+  const text = describeStartFailure(new Error('LOCALAPPDATA is required'));
+  assert.equal(text, 'Error starting gate: LOCALAPPDATA is required');
+});
+
+test('describeStartFailure survives a nullish error', () => {
+  assert.match(describeStartFailure(null), /Error starting gate:/);
 });

@@ -64,3 +64,28 @@ test('releasing twice does not throw', async () => {
     await lock.release();
   });
 });
+
+/**
+ * The CLI's 'exit' handler cannot await: a failed start used to register an
+ * async release inside process.on('exit'), which dies with the process
+ * mid-unlink and leaks gate.lock naming a dead pid. releaseSync exists so the
+ * exit path actually removes the file.
+ */
+test('releaseSync removes the lock so the next start can take it immediately', async () => {
+  await withHome(async (dir) => {
+    const first = await acquireInstanceLock(dir);
+    first.releaseSync();
+    await assert.rejects(() => readFile(join(dir, 'gate.lock'), 'utf8'), /ENOENT/);
+    const second = await acquireInstanceLock(dir);
+    await second.release();
+  });
+});
+
+test('releaseSync after an async release (or repeated) does not throw', async () => {
+  await withHome(async (dir) => {
+    const lock = await acquireInstanceLock(dir);
+    await lock.release();
+    lock.releaseSync();
+    lock.releaseSync();
+  });
+});

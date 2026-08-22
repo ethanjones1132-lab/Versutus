@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createGate } from './core/server.mjs';
 import { PairingStore } from './core/pairing.mjs';
 import { DeviceTokenStore } from './core/device-tokens.mjs';
-import { validateId, buildInstanceConfigTemplate, getKindTemplate } from './core/cli-helpers.mjs';
+import { validateId, buildInstanceConfigTemplate, getKindTemplate, describeStartFailure } from './core/cli-helpers.mjs';
 import { resolveGateHome } from './core/paths.mjs';
 import { ProviderStore } from './core/providers/store.mjs';
 import { migrateLegacyProviders } from './core/providers/migrate-v1.mjs';
@@ -275,11 +275,20 @@ async function handleAddKind(args) {
 async function handleStart() {
   const gateName = process.env.GATE_NAME || 'Versutus Gate';
 
+  console.log(`Starting ${gateName}...`);
+  const gateHome = resolveGateHome();
+  let lock;
   try {
-    console.log(`Starting ${gateName}...`);
-    const gateHome = resolveGateHome();
-    const lock = await acquireInstanceLock(gateHome);
-    process.on('exit', () => { void lock.release(); });
+    lock = await acquireInstanceLock(gateHome);
+  } catch (err) {
+    console.error(describeStartFailure(err));
+    process.exit(1);
+  }
+  // 'exit' handlers must finish synchronously: an async release here dies with
+  // the process mid-unlink and leaks gate.lock naming a dead pid (reproduced
+  // 2026-08-22 — every failed start left debris behind).
+  process.on('exit', () => { lock.releaseSync(); });
+  try {
     await migrateLegacyProviders({ sourceRoot: __dirname, gateHome });
     const gate = await createGate({
       root: __dirname,
@@ -299,7 +308,10 @@ async function handleStart() {
       process.exit(0);
     });
   } catch (err) {
-    console.error(`Error starting gate: ${err.message}`);
+    // Outside 'exit' the async release completes; releaseSync in the exit
+    // handler above is then a no-op thanks to the shared released guard.
+    await lock.release().catch(() => {});
+    console.error(describeStartFailure(err));
     process.exit(1);
   }
 }

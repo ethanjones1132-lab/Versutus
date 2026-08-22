@@ -35,6 +35,26 @@ export function buildInstanceConfigTemplate(configFields) {
   return config;
 }
 
+/** Human text for a failed `gate start`. The two common refusals — someone
+ *  already listening on the port, or another Gate's instance lock — name what
+ *  to check next instead of surfacing a bare errno string, because they fire
+ *  exactly when the operator retries and nothing seems to be happening. */
+export function describeStartFailure(error, port = 8760) {
+  if (error?.code === 'EADDRINUSE') {
+    return [
+      `Error starting gate: something is already listening on port ${port} — likely a Versutus Gate that is still running.`,
+      `Check whether it answers: curl http://127.0.0.1:${port}/.well-known/gateway.json — then use that Gate or stop it before starting again.`,
+    ].join('\n');
+  }
+  if (typeof error?.message === 'string' && error.message.startsWith('Gate instance lock')) {
+    return [
+      `Error starting gate: ${error.message}`,
+      `Verify the running one: http://127.0.0.1:${port}/.well-known/gateway.json`,
+    ].join('\n');
+  }
+  return `Error starting gate: ${error?.message ?? String(error)}`;
+}
+
 /** Source text for a newly-scaffolded kind.mjs — the required fields
  *  as empty holes, matching how `add` scaffolds a provider config's holes. */
 export function getKindTemplate(kindId, label, family) {
