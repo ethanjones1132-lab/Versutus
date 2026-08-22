@@ -1,5 +1,6 @@
 import { ScrollView, StyleSheet, View } from 'react-native';
 
+import { BotAvatar } from '@/components/chat/bot-avatar';
 import { EmptyState, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import type { PublicBot, RosterRow } from '@/lib/gateway/bots';
@@ -56,7 +57,7 @@ export function ChatRoster({
             key={row.bot.id}
             title={row.bot.displayName}
             subtitle={row.bot.routable ? 'Bot' : 'No listen key'}
-            icon={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}
+            leading={<BotAvatar botId={row.bot.id} />}
             onPress={row.bot.routable ? () => onSelectBot(row.bot) : undefined}
             style={styles.row}
           />

@@ -16,6 +16,8 @@ export type ListRowProps = {
   icon?: IconName;
   /** Leading status dot color (semantic key or raw). Overrides icon halo when set. */
   statusColor?: string;
+  /** Fully custom leading element (e.g. a generated avatar). Overrides icon/statusColor when set. */
+  leading?: React.ReactNode;
   trailing?: React.ReactNode;
   onPress?: () => void;
   /** Show a trailing chevron. Default true when onPress is set. */
@@ -29,6 +31,7 @@ export function ListRow({
   subtitle,
   icon,
   statusColor,
+  leading,
   trailing,
   onPress,
   chevron,
@@ -49,7 +52,9 @@ export function ListRow({
       accessibilityRole={onPress ? 'button' : undefined}
       accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
       style={[styles.row, style]}>
-      {statusColor ? (
+      {leading ? (
+        leading
+      ) : statusColor ? (
         <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
       ) : icon ? (
         <GlassSurface variant="chip" radius={Radius.full} padding={0} style={styles.iconHalo}>
