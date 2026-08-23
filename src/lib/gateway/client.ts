@@ -3,7 +3,7 @@ import { isAuthRejection } from '@/lib/gateway/errors';
 import { HttpTransport } from '@/lib/gateway/http-transport';
 import {
   ConnectionMonitor,
-  HEALTH_INTERVAL_MS,
+  hasRecentContact,
 } from '@/lib/gateway/connection-monitor';
 import { METHOD_GUIDANCE, METHOD_TO_ROUTE, resolveRoute } from '@/lib/gateway/rpc-routes';
 
@@ -73,9 +73,7 @@ export class HermesGatewayClient {
     });
     this.monitor = new ConnectionMonitor({
       probe: async () => (await this.healthCheck()) !== null,
-      recentlyServedUs: () =>
-        this.transport.lastContactAt > 0 &&
-        Date.now() - this.transport.lastContactAt < HEALTH_INTERVAL_MS,
+      recentlyServedUs: () => hasRecentContact(this.transport.lastContactAt, Date.now()),
       onStatus: (status, detail) => this.setStatus(status, detail),
       reconnect: () => this.connect().catch(() => undefined),
     });

@@ -1,6 +1,24 @@
 export const HEALTH_INTERVAL_MS = 30000;
 
 /**
+ * DECIDED (2026-08-23, Rook design review): a failed health probe is excused
+ * when ANY completed response arrived within one probe interval — recency
+ * ("at all"), not only completions newer than the failure window.
+ * HttpTransport.contactAt advances only when the gateway actually answered
+ * us, so recent contact is direct reachability evidence; /health failing
+ * against it means contention on a single-threaded server or a lost radio
+ * sample. The rejected alternative ("completions after the failure window
+ * opened") produces the same detection timelines except during long
+ * single-request stalls — exactly where NO completion lands after the
+ * window opens and failures would accumulate toward `reconnecting` while
+ * the operator's real task is still legitimately running. That false
+ * positive is what this mask exists to prevent.
+ */
+export function hasRecentContact(lastContactAt: number, now: number): boolean {
+  return lastContactAt > 0 && now - lastContactAt < HEALTH_INTERVAL_MS;
+}
+
+/**
  * A mobile radio waking up loses a request routinely. Only a run of failures
  * means the gateway is actually gone — one lost sample must not tear down a
  * working session, because every tool is gated on `status === 'connected'`.
@@ -91,8 +109,15 @@ export class ConnectionMonitor {
 
     if (this.down) return;
     // A single-threaded gateway stalls /health while serving a slow request.
-    // If it answered anything else recently it is busy, not gone.
-    if (this.callbacks.recentlyServedUs()) return;
+    // If it answered anything else recently it is busy, not gone — and that
+    // answer is positive liveness evidence, so it FORGIVES the streak too:
+    // a masked probe that neither counts nor forgives would let two failures
+    // separated by minutes of successful traffic read as a "run" and declare
+    // the gateway down after a single unevidenced probe once traffic stops.
+    if (this.callbacks.recentlyServedUs()) {
+      this.failures = 0;
+      return;
+    }
 
     this.failures += 1;
     if (this.failures < HEALTH_FAILURE_THRESHOLD) return;

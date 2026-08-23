@@ -3,7 +3,7 @@ import type { PublicBot } from '@/lib/gateway/bots';
 import { isAuthRejection } from '@/lib/gateway/errors';
 import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
 import { HttpTransport } from '@/lib/gateway/http-transport';
-import { ConnectionMonitor, HEALTH_INTERVAL_MS } from '@/lib/gateway/connection-monitor';
+import { ConnectionMonitor, hasRecentContact } from '@/lib/gateway/connection-monitor';
 import { streamingFetch } from '@/lib/net/streaming-fetch';
 import type { GatewayIdentity } from '@/lib/portal/identify';
 import type { GatewayBackend } from '@/lib/portal/manifest';
@@ -71,9 +71,7 @@ export class ManifestClient implements PortalClient {
     });
     this.monitor = new ConnectionMonitor({
       probe: async () => (await this.healthCheck()) !== null,
-      recentlyServedUs: () =>
-        this.transport.lastContactAt > 0 &&
-        Date.now() - this.transport.lastContactAt < HEALTH_INTERVAL_MS,
+      recentlyServedUs: () => hasRecentContact(this.transport.lastContactAt, Date.now()),
       onStatus: (status, detail) => this.setStatus(status, detail),
       reconnect: () => this.connect().catch(() => undefined),
     });
