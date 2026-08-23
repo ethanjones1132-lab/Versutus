@@ -30,12 +30,27 @@ const RECONNECT_MAX_DELAY_MS = 15000;
 const RECONNECT_JITTER_MIN = 0.75;
 const RECONNECT_JITTER_RANGE = 0.5;
 
+/**
+ * Consecutive failed retries one dialect may burn on a single dead address
+ * before it stops and hands recovery back to the app's auto-connect loop,
+ * which re-probes candidates instead of hammering the same URL forever.
+ */
+export const RECONNECT_ESCALATION_ATTEMPTS = 5;
+
 export type ConnectionMonitorCallbacks = {
-  /** Resolves true when the gateway answered a health probe. */
-  probe: () => Promise<boolean>;
+  /**
+   * Resolves true when the gateway answered a health probe. Omit for a
+   * scheduler-only monitor: a dialect with no verified health wire (the
+   * OpenClaw WebSocket) never starts the interval and only owns retry
+   * scheduling.
+   */
+  probe?: () => Promise<boolean>;
   /** True when some other request came back recently. */
-  recentlyServedUs: () => boolean;
-  onStatus: (status: 'connected' | 'reconnecting', detail?: string) => void;
+  recentlyServedUs?: () => boolean;
+  onStatus: (
+    status: 'connected' | 'reconnecting' | 'disconnected',
+    detail?: string,
+  ) => void;
   /** Attempt a full reconnect. Must not throw. */
   reconnect: () => Promise<void>;
 };
@@ -67,6 +82,8 @@ export class ConnectionMonitor {
     this.timer = null;
     this.clearReconnect();
     this.failures = 0;
+    this.attempts = 0;
+    this.down = false;
   }
 
   suspend() {
@@ -91,7 +108,7 @@ export class ConnectionMonitor {
   }
 
   private async tick() {
-    if (this.suspended) return;
+    if (this.suspended || !this.callbacks.probe) return;
     const healthy = await this.callbacks.probe();
 
     if (healthy) {
@@ -114,7 +131,7 @@ export class ConnectionMonitor {
     // a masked probe that neither counts nor forgives would let two failures
     // separated by minutes of successful traffic read as a "run" and declare
     // the gateway down after a single unevidenced probe once traffic stops.
-    if (this.callbacks.recentlyServedUs()) {
+    if (this.callbacks.recentlyServedUs?.()) {
       this.failures = 0;
       return;
     }
@@ -128,6 +145,23 @@ export class ConnectionMonitor {
 
   scheduleReconnect(reason: string) {
     if (this.suspended) return;
+    if (this.attempts >= RECONNECT_ESCALATION_ATTEMPTS) {
+      // Sustained failure: stop re-opening the same connection on our own and
+      // report an honest 'disconnected'. The provider's phase table maps that
+      // status onto its scheduled auto-retry, which re-probes candidates
+      // instead of this ladder hammering one URL forever. The ladder resets,
+      // so whatever fires next starts politely; `down` stays set so the probe
+      // interval cannot start a rival wave, and a gateway that returns is
+      // still caught by the next successful probe's self-heal.
+      this.attempts = 0;
+      this.clearReconnect();
+      this.down = true;
+      this.callbacks.onStatus(
+        'disconnected',
+        `${reason} · paused after ${RECONNECT_ESCALATION_ATTEMPTS} failed retries`,
+      );
+      return;
+    }
     this.attempts += 1;
     const base = Math.min(RECONNECT_BASE_DELAY_MS * 2 ** (this.attempts - 1), RECONNECT_MAX_DELAY_MS);
     // Jitter keeps a fleet of clients from retrying in lockstep after an outage.

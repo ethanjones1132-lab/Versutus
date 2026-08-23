@@ -1,6 +1,7 @@
 import {
   ConnectionMonitor,
   HEALTH_INTERVAL_MS,
+  RECONNECT_ESCALATION_ATTEMPTS,
   hasRecentContact,
 } from '@/lib/gateway/connection-monitor';
 import type { ConnectionMonitorCallbacks } from '@/lib/gateway/connection-monitor';
@@ -12,11 +13,13 @@ describe('ConnectionMonitor', () => {
   function build(overrides: Partial<ConnectionMonitorCallbacks> = {}) {
     const state = { healthy: true, servedRecently: false, reconnects: 0 };
     const statuses: string[] = [];
+    const details: string[] = [];
     const monitor = new ConnectionMonitor({
       probe: () => Promise.resolve(state.healthy),
       recentlyServedUs: () => state.servedRecently,
-      onStatus: (status) => {
+      onStatus: (status, detail) => {
         statuses.push(status);
+        if (detail) details.push(detail);
       },
       reconnect: () => {
         state.reconnects += 1;
@@ -24,7 +27,7 @@ describe('ConnectionMonitor', () => {
       },
       ...overrides,
     });
-    return { monitor, state, statuses };
+    return { monitor, state, statuses, details };
   }
 
   test('one failed probe does not declare the gateway down', async () => {
@@ -142,6 +145,138 @@ describe('ConnectionMonitor', () => {
       monitor.stop();
     },
   );
+});
+
+describe('ConnectionMonitor retry ladder', () => {
+  // Pinned so every rung's delay is exactly its base (jitter factor 1.0) —
+  // the timing assertions below read deterministically.
+  let randomSpy: jest.SpyInstance<number>;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
+  });
+  afterEach(() => {
+    randomSpy.mockRestore();
+    jest.useRealTimers();
+  });
+
+  function countingMonitor() {
+    const statuses: string[] = [];
+    const details: string[] = [];
+    let reconnects = 0;
+    const monitor = new ConnectionMonitor({
+      onStatus: (status, detail) => {
+        statuses.push(status);
+        if (detail) details.push(detail);
+      },
+      reconnect: () => {
+        reconnects += 1;
+        return Promise.resolve();
+      },
+    });
+    return { monitor, statuses, details, reconnects: () => reconnects };
+  }
+
+  test('a scheduler-only monitor never probes but still schedules retries', async () => {
+    const { monitor, statuses, reconnects } = countingMonitor();
+    monitor.start();
+
+    // No probe wired → no interval work, no phantom statuses.
+    await jest.advanceTimersByTimeAsync(HEALTH_INTERVAL_MS * 3);
+    expect(statuses).toEqual([]);
+    expect(reconnects()).toBe(0);
+
+    monitor.scheduleReconnect('socket lost');
+    expect(statuses).toContain('reconnecting');
+    await jest.advanceTimersByTimeAsync(999);
+    expect(reconnects()).toBe(0);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(reconnects()).toBe(1); // fired exactly at the 1000ms base
+    monitor.stop();
+  });
+
+  test('retry delays carry jitter so a fleet does not retry in lockstep', () => {
+    // Fresh monitor per extreme so both rungs sit on the same 1000ms base.
+    randomSpy.mockReturnValue(0); // jitter factor 0.75 → 750ms
+    const low = countingMonitor();
+    low.monitor.scheduleReconnect('gateway gone');
+    jest.advanceTimersByTime(749);
+    expect(low.reconnects()).toBe(0);
+    jest.advanceTimersByTime(1);
+    expect(low.reconnects()).toBe(1);
+
+    randomSpy.mockReturnValue(0.99); // jitter factor 1.245 → 1245ms
+    const high = countingMonitor();
+    high.monitor.scheduleReconnect('gateway gone');
+    jest.advanceTimersByTime(1244);
+    expect(high.reconnects()).toBe(0);
+    jest.advanceTimersByTime(1);
+    expect(high.reconnects()).toBe(1);
+  });
+
+  test('sustained failure escalates to an honest disconnect instead of retrying forever', () => {
+    const { monitor, statuses, details, reconnects } = countingMonitor();
+
+    for (let rung = 0; rung < RECONNECT_ESCALATION_ATTEMPTS; rung += 1) {
+      monitor.scheduleReconnect('gateway gone');
+      jest.advanceTimersByTime(60_000); // each rung fires its retry
+    }
+    expect(reconnects()).toBe(RECONNECT_ESCALATION_ATTEMPTS);
+
+    // One failure too many: stop the ladder, report honestly.
+    monitor.scheduleReconnect('gateway gone');
+    expect(statuses[statuses.length - 1]).toBe('disconnected');
+    expect(details[details.length - 1]).toMatch(/paused after 5 failed retries/);
+
+    jest.advanceTimersByTime(600_000);
+    expect(reconnects()).toBe(RECONNECT_ESCALATION_ATTEMPTS); // stopped, not slowed
+
+    // Whatever fires next starts a fresh ladder instead of inheriting the burn.
+    monitor.scheduleReconnect('gateway gone');
+    jest.advanceTimersByTime(999);
+    expect(reconnects()).toBe(RECONNECT_ESCALATION_ATTEMPTS);
+    jest.advanceTimersByTime(1);
+    expect(reconnects()).toBe(RECONNECT_ESCALATION_ATTEMPTS + 1); // base 1000ms again
+  });
+
+  test('escalation does not block a later recovery through the probe', async () => {
+    const state = { healthy: false };
+    const statuses: string[] = [];
+    let reconnects = 0;
+    const monitor = new ConnectionMonitor({
+      probe: () => Promise.resolve(state.healthy),
+      onStatus: (status) => statuses.push(status),
+      reconnect: () => {
+        reconnects += 1;
+        return Promise.resolve();
+      },
+    });
+    monitor.start();
+
+    // Burn two full waves into escalation without ever recovering.
+    state.healthy = false;
+    for (let wave = 0; wave < 2; wave += 1) {
+      await jest.advanceTimersByTimeAsync(HEALTH_INTERVAL_MS * 2); // declare down
+      for (let rung = 0; rung < RECONNECT_ESCALATION_ATTEMPTS; rung += 1) {
+        monitor.scheduleReconnect('gateway became unreachable');
+        await jest.advanceTimersByTimeAsync(60_000);
+      }
+      monitor.scheduleReconnect('gateway became unreachable'); // escalates this wave
+    }
+    expect(statuses).toContain('disconnected');
+
+    // The gateway returns: the next successful probe self-heals to connected.
+    state.healthy = true;
+    await jest.advanceTimersByTimeAsync(HEALTH_INTERVAL_MS);
+    expect(statuses[statuses.length - 1]).toBe('connected');
+
+    // And the healed connection schedules from scratch afterwards.
+    state.healthy = false;
+    await jest.advanceTimersByTimeAsync(HEALTH_INTERVAL_MS * 2);
+    expect(statuses.filter((s) => s === 'reconnecting').length).toBeGreaterThan(0);
+    monitor.stop();
+  });
 });
 
 describe('hasRecentContact', () => {

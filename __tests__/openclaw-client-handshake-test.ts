@@ -105,10 +105,14 @@ const flush = async () => {
 
 describe('OpenClawGatewayClient handshake', () => {
   const realWebSocket = globalThis.WebSocket;
+  // Pinned so every retry rung's delay is exactly its base (jitter factor
+  // 1.0) — the timing advances below read deterministically.
+  let randomSpy: jest.SpyInstance<number>;
   let client: OpenClawGatewayClient;
 
   beforeEach(() => {
     jest.useFakeTimers();
+    randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.5);
     FakeWebSocket.instances = [];
     mockLoadToken.mockReset().mockResolvedValue(null);
     mockSign.mockReset().mockResolvedValue('signature');
@@ -118,6 +122,7 @@ describe('OpenClawGatewayClient handshake', () => {
   });
 
   afterEach(() => {
+    randomSpy.mockRestore();
     client.disconnect();
     jest.useRealTimers();
     (globalThis as { WebSocket: unknown }).WebSocket = realWebSocket;
@@ -323,5 +328,62 @@ describe('OpenClawGatewayClient handshake', () => {
     jest.advanceTimersByTime(60_000);
     expect(FakeWebSocket.instances).toHaveLength(2);
     expect(client.connectionStatus).toBe('connected');
+  });
+
+  // The drift this file's client used to carry: a private retry ladder with
+  // no jitter and no ceiling, hammering one dead URL every 15s forever. The
+  // shared monitor escalates instead — five failed retries end in an honest
+  // 'disconnected', which the provider's phase table maps onto its scheduled
+  // auto-retry (a plain connect() that re-probes candidates).
+  test('sustained failures escalate to an honest disconnect, then auto-retry starts fresh', () => {
+    const statuses: Array<[string, string]> = [];
+    const c = new OpenClawGatewayClient(PROFILE, {
+      onStatus: (status, detail) => statuses.push([status, detail ?? '']),
+    });
+    c.connect();
+
+    // Five failed retries burn the ladder: close → backoff → fresh socket → close …
+    for (let rung = 0; rung < 5; rung += 1) {
+      FakeWebSocket.instances[FakeWebSocket.instances.length - 1].serverClose(1006);
+      jest.advanceTimersByTime(60_000); // fires that rung's scheduled retry
+    }
+    expect(FakeWebSocket.instances).toHaveLength(6); // initial + 5 retries
+
+    FakeWebSocket.instances[5].serverClose(1006); // one failure too many
+    jest.advanceTimersByTime(600_000);
+
+    const [lastStatus, lastDetail] = statuses[statuses.length - 1];
+    expect(lastStatus).toBe('disconnected');
+    expect(lastDetail).toMatch(/paused after 5 failed retries/);
+    expect(FakeWebSocket.instances).toHaveLength(6); // the ladder stopped
+
+    // The provider's auto-retry path is an ordinary connect(): it gets a
+    // fresh socket immediately instead of inheriting the burnt ladder.
+    c.connect();
+    expect(FakeWebSocket.instances).toHaveLength(7);
+    expect(c.connectionStatus).toBe('connecting');
+    c.disconnect();
+  });
+
+  test('a queued retry sleeps through backgrounding; foregrounding resumes immediately', async () => {
+    client.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.serverOpen();
+    ws.serverFrame(challenge('n1'));
+    await flush();
+    ws.serverFrame(helloOk());
+    await flush();
+    expect(client.connectionStatus).toBe('connected');
+
+    ws.serverClose(1006); // mid-session drop → a retry is queued
+    expect(client.connectionStatus).toBe('reconnecting');
+
+    client.suspendReconnect(); // app backgrounded
+    jest.advanceTimersByTime(600_000);
+    expect(FakeWebSocket.instances).toHaveLength(1); // slept, did not hammer
+
+    client.resumeReconnect(); // foregrounded → immediate fresh attempt
+    expect(client.connectionStatus).toBe('connecting');
+    expect(FakeWebSocket.instances).toHaveLength(2);
   });
 });

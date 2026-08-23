@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import { buildDeviceAuthPayloadV3 } from '@/lib/gateway/auth-payload';
 import { clearDeviceAuthToken, loadDeviceAuthToken, saveDeviceAuthToken } from '@/lib/gateway/device-auth-token';
 import { loadOrCreateDeviceIdentity, signDevicePayload } from '@/lib/gateway/device-identity';
+import { ConnectionMonitor } from '@/lib/gateway/connection-monitor';
 import type { ChatEventPayload, GatewayFrame } from '@/lib/gateway/openclaw-types';
 import type { ConnectionStatus, GatewayHelloOk, GatewayProfile, PairingDetails } from '@/lib/gateway/types';
 
@@ -64,9 +65,6 @@ export class OpenClawGatewayClient {
   private connectNonce = '';
   private connectSent = false;
   private connectInFlight = false;
-  private reconnectAttempts = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private reconnectSuspended = false;
   private challengeTimer: ReturnType<typeof setTimeout> | null = null;
   private connectUsedStoredDeviceToken = false;
   private staleTokenRetryUsed = false;
@@ -74,11 +72,24 @@ export class OpenClawGatewayClient {
   private identityPromise: ReturnType<typeof loadOrCreateDeviceIdentity> | null = null;
   private status: ConnectionStatus = 'disconnected';
   private detail = '';
+  private readonly monitor: ConnectionMonitor;
 
   constructor(
     private profile: GatewayProfile,
     private callbacks: GatewayClientCallbacks = {},
-  ) {}
+  ) {
+    // Reconnect policy is the shared monitor's (jittered backoff, escalation
+    // to the provider's auto-retry after sustained failure), not a private
+    // copy — roadmap 1.5. Scheduler-only: the OpenClaw wire has no health
+    // endpoint we have verified, so liveness comes from the socket lifecycle
+    // itself and no probe interval is armed.
+    this.monitor = new ConnectionMonitor({
+      onStatus: (status, detail) => this.setStatus(status, detail),
+      reconnect: async () => {
+        if (!this.closed) this.openSocket();
+      },
+    });
+  }
 
   get connectionStatus(): ConnectionStatus {
     return this.status;
@@ -94,20 +105,20 @@ export class OpenClawGatewayClient {
 
   connect() {
     this.closed = false;
-    this.clearReconnectTimer();
+    this.monitor.stop(); // an explicit attempt starts a fresh retry ladder
     this.setStatus('connecting');
     this.openSocket();
   }
 
   disconnect() {
     this.closed = true;
-    this.clearReconnectTimer();
+    this.monitor.stop();
+    this.monitor.resume(); // an explicit close clears any background suspension
     this.clearChallengeTimer();
     this.flushPending(new Error('Disconnected'));
     this.socket?.close();
     this.socket = null;
     this.staleTokenRetryUsed = false;
-    this.reconnectSuspended = false;
     this.setStatus('disconnected');
   }
 
@@ -116,8 +127,7 @@ export class OpenClawGatewayClient {
    * is left alone; recovery happens on resumeReconnect()/foreground.
    */
   suspendReconnect() {
-    this.reconnectSuspended = true;
-    this.clearReconnectTimer();
+    this.monitor.suspend();
     this.clearChallengeTimer();
   }
 
@@ -125,7 +135,7 @@ export class OpenClawGatewayClient {
    * Resume automatic reconnect and, if not connected, attempt immediately.
    */
   resumeReconnect() {
-    this.reconnectSuspended = false;
+    this.monitor.resume();
     if (!this.closed && this.status !== 'connected') {
       this.connect();
     }
@@ -364,7 +374,7 @@ export class OpenClawGatewayClient {
     if (frame.id === 'connect') {
       this.clearChallengeTimer();
       if (frame.ok) {
-        this.reconnectAttempts = 0;
+        this.monitor.noteConnected();
         this.staleTokenRetryUsed = false;
         this.setStatus('connected');
         const hello = frame.payload as GatewayHelloOk;
@@ -403,20 +413,20 @@ export class OpenClawGatewayClient {
     }
   }
 
+  /**
+   * Retry scheduling rides the shared ConnectionMonitor (roadmap 1.5): the
+   * same jittered backoff and escalation-to-auto-retry policy as the Hermes
+   * dialect, instead of a private fixed-ladder copy. Suspension is the
+   * monitor's concern; closure is ours.
+   */
   private scheduleReconnect(reason: string) {
-    if (this.closed || this.reconnectSuspended) return;
-    this.reconnectAttempts += 1;
-    const delay = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 15000);
-    this.setStatus('reconnecting', `${reason} · retry in ${Math.round(delay / 1000)}s`);
-    this.clearReconnectTimer();
-    this.reconnectTimer = setTimeout(() => {
-      if (!this.closed && !this.reconnectSuspended) this.openSocket();
-    }, delay);
+    if (this.closed) return;
+    this.monitor.scheduleReconnect(reason);
   }
 
   private handleTerminalFailure(message: string) {
     this.closed = true;
-    this.clearReconnectTimer();
+    this.monitor.stop();
     this.clearChallengeTimer();
     this.flushPending(new Error(message));
     this.callbacks.onError?.(message);
@@ -449,11 +459,6 @@ export class OpenClawGatewayClient {
       pending.reject(error);
     }
     this.pending.clear();
-  }
-
-  private clearReconnectTimer() {
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
   }
 
   private clearChallengeTimer() {
