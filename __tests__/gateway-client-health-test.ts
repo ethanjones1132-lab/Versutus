@@ -211,3 +211,92 @@ describe('HermesGatewayClient health monitoring', () => {
     client.disconnect();
   });
 });
+
+describe('HermesGatewayClient connect concurrency', () => {
+  const realFetch = globalThis.fetch;
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => {
+    // Fake timers so a monitor interval started by a test that fails before
+    // its disconnect() cannot leak a real handle and stall the worker.
+    jest.useRealTimers();
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+  });
+
+  const flushMicrotasks = async () => {
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  };
+
+  test('resumeReconnect during an in-flight connect joins it instead of refetching everything', async () => {
+    let releaseHealth!: (response: Response) => void;
+    const healthHold = new Promise<Response>((resolve) => {
+      releaseHealth = resolve;
+    });
+    const urls: string[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes('/health')) return healthHold;
+      return Promise.resolve(jsonResponse(CAPABILITIES));
+    });
+
+    const client = new HermesGatewayClient(PROFILE, {});
+    const first = client.connect();
+    // Fires while the attempt above is still parked on /health — this used to
+    // stack a second full attempt (health + capabilities again) that raced its
+    // sibling through the status machine.
+    client.resumeReconnect();
+
+    releaseHealth(jsonResponse(HEALTH));
+    await first;
+    await flushMicrotasks();
+
+    expect(client.connectionStatus).toBe('connected');
+    expect(urls.filter((u) => u.includes('/health'))).toHaveLength(1);
+    expect(urls.filter((u) => u.includes('/v1/capabilities'))).toHaveLength(1);
+    client.disconnect();
+  });
+
+  test('two simultaneous connect() calls share one attempt', async () => {
+    const urls: string[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes('/health')) return Promise.resolve(jsonResponse(HEALTH));
+      return Promise.resolve(jsonResponse(CAPABILITIES));
+    });
+
+    const client = new HermesGatewayClient(PROFILE, {});
+    await Promise.all([client.connect(), client.connect()]);
+
+    expect(client.connectionStatus).toBe('connected');
+    expect(urls.filter((u) => u.includes('/health'))).toHaveLength(1);
+    expect(urls.filter((u) => u.includes('/v1/capabilities'))).toHaveLength(1);
+    client.disconnect();
+  });
+
+  test('after a failed attempt a later connect starts fresh rather than joining the corpse', async () => {
+    // Pins the clear-on-settle semantics: if the handle ever went sticky after
+    // a rejection, every later connect() would re-throw the stale failure and
+    // the session could never recover without an app restart.
+    const state = { capabilitiesStatus: 401 };
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.includes('/health')) return Promise.resolve(jsonResponse(HEALTH));
+      if (url.includes('/v1/capabilities')) {
+        return state.capabilitiesStatus === 200
+          ? Promise.resolve(jsonResponse(CAPABILITIES))
+          : Promise.resolve(jsonResponse(UNAUTHORIZED, 401));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const client = new HermesGatewayClient(PROFILE, {});
+    await expect(client.connect()).rejects.toThrow(/api key/i);
+
+    state.capabilitiesStatus = 200;
+    await client.connect();
+
+    expect(client.connectionStatus).toBe('connected');
+    client.disconnect();
+  });
+});

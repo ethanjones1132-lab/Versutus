@@ -60,6 +60,7 @@ export class HermesGatewayClient {
   private readonly pendingRuns = new Map<string, PendingRun>();
   private transport: HttpTransport;
   private monitor: ConnectionMonitor;
+  private connectAttempt: Promise<void> | null = null;
 
   constructor(
     private profile: GatewayProfile,
@@ -109,8 +110,24 @@ export class HermesGatewayClient {
    * Connect: check reachability via /health, then prove the bearer key with an
    * authenticated call. Throws on auth rejection so the caller can stop and ask
    * for a new key; other failures fall through to backoff reconnect.
+   *
+   * Concurrent callers join the attempt already in flight rather than stack a
+   * duplicate one: resumeReconnect() and the monitor's reconnect hook can both
+   * fire while an earlier connect() is still awaiting health or capabilities,
+   * and each duplicate re-fetched everything and raced its sibling through the
+   * status machine. The handle clears once settled, so a connect() after a
+   * real failure starts fresh.
    */
-  async connect() {
+  async connect(): Promise<void> {
+    if (this.connectAttempt) return this.connectAttempt;
+    const attempt = this.attemptConnect().finally(() => {
+      this.connectAttempt = null;
+    });
+    this.connectAttempt = attempt;
+    return attempt;
+  }
+
+  private async attemptConnect(): Promise<void> {
     this.closed = false;
     this.setStatus('connecting');
 
