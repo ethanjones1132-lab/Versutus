@@ -3,10 +3,12 @@ import {
   botRowSubtitle,
   buildRoster,
   ensureBotChat,
+  filterRosterRows,
   findBotChat,
   isBotChat,
   loadBotChat,
   type ChatSurface,
+  type RosterRow,
 } from '@/lib/gateway/bots';
 
 test('roster is configurable chat first, then every bot including default', () => {
@@ -85,6 +87,64 @@ test('botRowSubtitle still flags unroutable bots over any pin', () => {
       model: { default: 'anthropic/claude-sonnet-4', provider: null },
     }),
   ).toBe('No listen key');
+});
+
+test('unroutable subtitles name the cause: missing key vs refused default key', () => {
+  expect(
+    botRowSubtitle({
+      id: 'silent',
+      displayName: 'silent',
+      routable: false,
+      routingIssue: 'listen_key_missing',
+    }),
+  ).toBe('No listen key');
+  // A copied default listen key is a DIFFERENT fix (set a distinct one), so it
+  // must not hide behind the generic "no key" line.
+  expect(
+    botRowSubtitle({
+      id: 'echo',
+      displayName: 'echo',
+      routable: false,
+      routingIssue: 'default_key_refused',
+      model: { default: 'anthropic/claude-sonnet-4', provider: null },
+    }),
+  ).toBe('Default listen key refused');
+});
+
+test('routingIssue wins over a stale routable boolean, older Gates degrade', () => {
+  expect(
+    botRowSubtitle({ id: 'e', displayName: 'e', routable: true, routingIssue: 'default_key_refused' }),
+  ).toBe('Default listen key refused');
+  expect(botRowSubtitle({ id: 'x', displayName: 'x', routable: false })).toBe('No listen key');
+});
+
+test('filterRosterRows keeps navigation rows and ignores blank queries', () => {
+  const rows: RosterRow[] = buildRoster([
+    { id: 'researcher', displayName: 'Researcher', routable: true },
+    { id: 'coder', displayName: 'Coder', routable: true },
+  ]);
+  expect(filterRosterRows(rows, '')).toEqual(rows);
+  expect(filterRosterRows(rows, '   ')).toEqual(rows);
+  const filtered = filterRosterRows(rows, 'cod');
+  expect(filtered).toHaveLength(2); // configurable row + Coder
+  expect(filtered[0].kind).toBe('configurable');
+  expect(filtered.some((row) => row.kind === 'bot' && row.bot.id === 'coder')).toBe(true);
+});
+
+test('filterRosterRows matches name, id, and description case-insensitively', () => {
+  const rows: RosterRow[] = buildRoster([
+    { id: 'researcher', displayName: 'Deep Diver', routable: true, description: 'Runs long research' },
+    { id: 'coder', displayName: 'Pilot', routable: true },
+    { id: 'scout', displayName: 'Scout', routable: false, routingIssue: 'default_key_refused' },
+  ]);
+  const byDescription = filterRosterRows(rows, 'LONG RESEARCH');
+  expect(byDescription.map((row) => (row.kind === 'bot' ? row.bot.id : row.kind))).toContain('researcher');
+  expect(byDescription).toHaveLength(2);
+  const byId = filterRosterRows(rows, 'SCOUT');
+  expect(byId).toHaveLength(2);
+  const byName = filterRosterRows(rows, 'diver');
+  expect(byName).toHaveLength(2);
+  expect(filterRosterRows(rows, 'nomatch')).toHaveLength(1); // only the Chat row
 });
 
 test('loadBotChat does not swallow a list failure', async () => {

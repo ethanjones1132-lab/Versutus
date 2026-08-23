@@ -94,15 +94,36 @@ export function parseModelPin(configText) {
   return pin;
 }
 
-export function toPublicBot(record) {
+/**
+ * Why a listed Bot cannot carry chat traffic right now, or null when it can.
+ *  - 'listen_key_missing': the profile .env carries no API_SERVER_KEY.
+ *  - 'default_key_refused': the profile still holds the default profile's
+ *    listen key — Hermes multiplex rejects that key on every named prefix
+ *    (ADR 0005), so promising routing would fail at chat time.
+ */
+export function describeRouting(record, defaultListenKey = null) {
+  if (!record.listenKey) return { routable: false, routingIssue: 'listen_key_missing' };
+  if (
+    record.id !== 'default'
+    && typeof defaultListenKey === 'string'
+    && record.listenKey === defaultListenKey
+  ) {
+    return { routable: false, routingIssue: 'default_key_refused' };
+  }
+  return { routable: true, routingIssue: null };
+}
+
+export function toPublicBot(record, defaultListenKey = null) {
   const model = record.model ?? {};
   const pinned = model.default || model.provider
     ? { default: model.default ?? null, provider: model.provider ?? null }
     : null;
+  const { routable, routingIssue } = describeRouting(record, defaultListenKey);
   return {
     id: record.id,
     displayName: record.displayName,
-    routable: Boolean(record.listenKey),
+    routable,
+    routingIssue,
     description: record.description ?? null,
     model: pinned,
   };

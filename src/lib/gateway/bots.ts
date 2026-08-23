@@ -3,10 +3,22 @@ export const BOT_CHAT_TITLE = 'Bot Chat';
 /** Profile pin written by `hermes -p <id> config set model.*` (ADR 0015). */
 export type BotPinnedModel = { default: string | null; provider: string | null };
 
+/**
+ * Why a Bot cannot route. Reported by newer Gates alongside the boolean:
+ *   - 'listen_key_missing': the profile .env carries no API_SERVER_KEY.
+ *   - 'default_key_refused': the profile still holds the default profile's
+ *     listen key, which Hermes multiplex refuses on any named prefix
+ *     (ADR 0005) — a distinct fix (set a distinct key), so it gets its own
+ *     indicator instead of sharing "no key".
+ */
+export type BotRoutingIssue = 'listen_key_missing' | 'default_key_refused';
+
 export type PublicBot = {
   id: string;
   displayName: string;
   routable: boolean;
+  /** Reported by newer Gates; absent/null on older ones — degrade to the boolean. */
+  routingIssue?: BotRoutingIssue | null;
   /** Reported by newer Gates; absent on older ones — the roster degrades gracefully. */
   description?: string | null;
   /** Present when the profile carries a model pin; null/absent when unpinned or unknown. */
@@ -19,7 +31,8 @@ export type PublicBot = {
  * a detail surface, not every row.
  */
 export function botRowSubtitle(bot: PublicBot): string {
-  if (!bot.routable) return 'No listen key';
+  if (bot.routingIssue === 'default_key_refused') return 'Default listen key refused';
+  if (!bot.routable || bot.routingIssue === 'listen_key_missing') return 'No listen key';
   const pin = bot.model?.default ?? null;
   return pin ? `Bot · ${pin}` : 'Bot';
 }
@@ -77,6 +90,24 @@ export type ChatSurface =
 
 export function buildRoster(bots: PublicBot[]): RosterRow[] {
   return [{ kind: 'configurable' }, ...bots.map((bot) => ({ kind: 'bot' as const, bot }))];
+}
+
+/**
+ * Roster search. Navigation rows (configurable chat) always survive so the
+ * operator never loses the way back; Bot rows match a case-insensitive
+ * substring over display name, id, and description. A blank query is "no
+ * filter", not "nothing matches".
+ */
+export function filterRosterRows(rows: RosterRow[], query: string): RosterRow[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return rows;
+  return rows.filter((row) => {
+    if (row.kind !== 'bot') return true;
+    const bot = row.bot;
+    return [bot.displayName, bot.id, bot.description].some(
+      (value) => typeof value === 'string' && value.toLowerCase().includes(needle),
+    );
+  });
 }
 
 export function isBotChat(session: { title?: string | null }): boolean {

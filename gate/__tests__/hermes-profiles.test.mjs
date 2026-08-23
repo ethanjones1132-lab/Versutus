@@ -94,6 +94,7 @@ test('listHermesBots includes default and every profiles/ directory', async () =
     id: 'silent',
     displayName: 'silent',
     routable: false,
+    routingIssue: 'listen_key_missing',
     description: null,
     model: null,
   });
@@ -106,4 +107,30 @@ test('listHermesBots includes default and every profiles/ directory', async () =
   assert.equal(JSON.stringify(toPublicBot(byId.default)).includes('def-key'), false);
   assert.equal(await getHermesBot(home, 'researcher').then((b) => b.listenKey), 'res-key');
   assert.equal(await getHermesBot(home, 'nope'), null);
+});
+
+test('a profile copying the default listen key lists as refused, default keeps its own door', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-home-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=def-key\n');
+  // `echo` was created by cloning default without the distinct-key fix: same
+  // key. Multiplex refuses it on /p/echo/ (ADR 0005) — the roster must not
+  // promise routing the listener will refuse.
+  await mkdir(join(home, 'profiles', 'echo'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'echo', '.env'), 'API_SERVER_KEY=def-key\n');
+  await mkdir(join(home, 'profiles', 'researcher'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'researcher', '.env'), 'API_SERVER_KEY=res-key\n');
+
+  const bots = await listHermesBots(home);
+  const defaultKey = bots.find((bot) => bot.id === 'default')?.listenKey ?? null;
+  const byId = Object.fromEntries(bots.map((bot) => [bot.id, toPublicBot(bot, defaultKey)]));
+
+  assert.equal(byId.echo.routable, false);
+  assert.equal(byId.echo.routingIssue, 'default_key_refused');
+  assert.equal(byId.researcher.routable, true);
+  assert.equal(byId.researcher.routingIssue, null);
+  // The default profile's key IS the unprefixed listener's — never flagged.
+  assert.equal(byId.default.routable, true);
+  assert.equal(byId.default.routingIssue, null);
+  // The comparison happens behind the wire; keys still never travel.
+  assert.equal(JSON.stringify(byId).includes('def-key'), false);
 });

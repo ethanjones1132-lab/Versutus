@@ -207,6 +207,46 @@ test('listBots returns every profile including default and never leaks listen ke
   assert.equal(JSON.stringify(body).includes('sk-nope'), false);
 });
 
+test('a bot holding the default listen key is refused with the fix named', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');
+  await mkdir(join(home, 'profiles', 'echo'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'echo', '.env'), 'API_SERVER_KEY=default-listen\n');
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'gate-key',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    profilesHome: home,
+  });
+  await assert.rejects(
+    () => hermes.forBot('echo'),
+    (err) =>
+      err.code === 'bot_not_routable'
+      && err.status === 409
+      && /default listen key/.test(err.message)
+      && /API_SERVER_KEY/.test(err.message),
+  );
+});
+
+test('listBots reports a default-key copy as unroutable without leaking keys', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');
+  await mkdir(join(home, 'profiles', 'echo'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'echo', '.env'), 'API_SERVER_KEY=default-listen\n');
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'gate-key',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    profilesHome: home,
+  });
+  const body = await hermes.listBots();
+  const echo = body.data.find((row) => row.id === 'echo');
+  assert.equal(echo.routable, false);
+  assert.equal(echo.routingIssue, 'default_key_refused');
+  assert.equal(body.data.find((row) => row.id === 'default').routingIssue, null);
+  assert.equal(JSON.stringify(body).includes('default-listen'), false);
+});
+
 test('updateBot rewrites only what the request carries, on the CLI writer\'s own terms', async () => {
   const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
   await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');

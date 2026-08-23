@@ -343,7 +343,10 @@ export function createHermesBackend({
     async listBots() {
       if (!profilesHome) return { object: 'list', data: [] };
       const records = await listHermesBots(profilesHome);
-      return { object: 'list', data: records.map(toPublicBot) };
+      // Named prefixes reject the default listen key (ADR 0005): flag profiles
+      // that merely copied it so the roster can say why they will not route.
+      const defaultKey = records.find((record) => record.id === 'default')?.listenKey ?? null;
+      return { object: 'list', data: records.map((record) => toPublicBot(record, defaultKey)) };
     },
 
     async deliverGroupMessage({ name, memberIds, mentionedIds, text } = {}) {
@@ -399,6 +402,19 @@ export function createHermesBackend({
         error.code = 'bot_not_routable';
         error.status = 409;
         throw error;
+      }
+      if (botId !== 'default') {
+        // A named prefix refuses the default listen key (ADR 0005); refuse
+        // here with the fix instead of letting the chat 401 speak for it.
+        const defaultKey = (await getHermesBot(profilesHome, 'default'))?.listenKey ?? null;
+        if (record.listenKey === defaultKey) {
+          const error = new Error(
+            `bot "${botId}" still uses the default listen key; /p/${botId}/ rejects it — give the profile its own API_SERVER_KEY`,
+          );
+          error.code = 'bot_not_routable';
+          error.status = 409;
+          throw error;
+        }
       }
       return createHermesBackend({
         baseUrl: `${root}/p/${encodeURIComponent(botId)}`,
@@ -474,7 +490,10 @@ export function createHermesBackend({
         );
       }
       const record = await getHermesBot(profilesHome, id);
-      return toPublicBot(record ?? { id, displayName: id, listenKey: ensured.listenKey, home: botHome });
+      return toPublicBot(
+        record ?? { id, displayName: id, listenKey: ensured.listenKey, home: botHome },
+        defaultKey,
+      );
     },
 
     /**
@@ -556,7 +575,10 @@ export function createHermesBackend({
       }
 
       const record = await getHermesBot(profilesHome, botId);
-      return toPublicBot(record ?? existing);
+      // updateBot never touches keys, but the response should agree with the
+      // roster: a copied default listen key is reported, not promised.
+      const defaultKey = (await getHermesBot(profilesHome, 'default'))?.listenKey ?? null;
+      return toPublicBot(record ?? existing, defaultKey);
     },
   };
 }
