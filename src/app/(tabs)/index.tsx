@@ -11,6 +11,7 @@ import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayDiscovery } from '@/hooks/use-gateway-discovery';
 import { useTokens } from '@/hooks/use-tokens';
+import { describeAutoRetry } from '@/lib/connection/retry-ladder';
 import { isGatewayTokenRequiredMessage } from '@/lib/gateway/errors';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
@@ -28,6 +29,7 @@ export default function HomeScreen() {
     pairingDetails,
     lastError,
     retryAutoConnect,
+    autoRetry,
     refreshCapabilities,
     refreshGateways,
     reloadHistory,
@@ -77,6 +79,7 @@ export default function HomeScreen() {
               status={status}
               statusDetail={statusDetail}
               probeMessage={probeMessage}
+              autoRetryNote={autoRetry ? describeAutoRetry(autoRetry) : undefined}
               onConnect={() => void retryAutoConnect()}
               onOpenChat={() => router.push('/chat')}
             />

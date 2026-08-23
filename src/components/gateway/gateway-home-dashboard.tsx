@@ -13,6 +13,7 @@ import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
 import { useTokens } from '@/hooks/use-tokens';
+import { describeAutoRetry } from '@/lib/connection/retry-ladder';
 import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
@@ -29,6 +30,7 @@ export function GatewayHomeDashboard() {
     connectGateway,
     deleteGateway,
     retryAutoConnect,
+    autoRetry,
     capabilitySnapshot,
     refreshCapabilities,
     activityRuns,
@@ -105,6 +107,12 @@ export function GatewayHomeDashboard() {
         {!connected && statusDetail ? (
           <Text variant="caption" numberOfLines={3} style={styles.onGlassTertiary}>
             {statusDetail}
+          </Text>
+        ) : null}
+
+        {!connected && autoRetry ? (
+          <Text variant="caption" numberOfLines={2} style={styles.onGlassTertiary}>
+            {describeAutoRetry(autoRetry)}
           </Text>
         ) : null}
 

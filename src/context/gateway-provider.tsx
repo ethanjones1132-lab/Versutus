@@ -6,7 +6,12 @@ import { GatewayDiscoveryScanner, isNativeDiscoveryAvailable } from '@/lib/disco
 import { buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/lib/gateway/candidates';
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
 import { decideConnectionPhase } from '@/lib/connection/phase';
-import { AUTO_RETRY_BASE_DELAY_MS, autoRetryDelayMs } from '@/lib/connection/retry-ladder';
+import {
+  AUTO_RETRY_BASE_DELAY_MS,
+  autoRetryDelayMs,
+  autoRetryPulse,
+  type AutoRetryPulse,
+} from '@/lib/connection/retry-ladder';
 import { abortAndClear } from '@/lib/gateway/abort';
 import { serverSideCancelForCommand } from '@/lib/gateway/cancel';
 import { isConnectionError, isUserAbort } from '@/lib/gateway/errors';
@@ -208,6 +213,8 @@ type GatewayContextValue = {
   reloadHistory: () => Promise<void>;
   setupFromPcAddress: (pcAddress: string, token?: string) => Promise<boolean>;
   retryAutoConnect: () => Promise<void>;
+  /** A pending automatic cool-down retry, or null when none is scheduled. */
+  autoRetry: AutoRetryPulse | null;
   setAutoConnect: (enabled: boolean) => Promise<void>;
   recentCommands: string[];
   retryCommand: (entry: Partial<CommandTranscriptEntry> & { input: string }) => void;
@@ -569,6 +576,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const bootstrapStartedRef = useRef(false);
   const autoConnectInFlightRef = useRef(false);
   const autoRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Mirrors any PENDING automatic retry so the UI can show what is waiting. */
+  const [autoRetry, setAutoRetry] = useState<AutoRetryPulse | null>(null);
   /** Consecutive failed auto-retries without an intervening success — drives the cool-down ladder. */
   const autoRetryFailureStreakRef = useRef(0);
   const scheduleAutoRetryRef = useRef<(delayMs?: number) => void>(() => undefined);
@@ -823,6 +832,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               if (autoRetryTimerRef.current) {
                 clearTimeout(autoRetryTimerRef.current);
                 autoRetryTimerRef.current = null;
+                setAutoRetry(null);
               }
               // Connected again: the failure streak that led here is forgiven.
               autoRetryFailureStreakRef.current = 0;
@@ -1065,6 +1075,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (autoRetryTimerRef.current) {
         clearTimeout(autoRetryTimerRef.current);
         autoRetryTimerRef.current = null;
+        setAutoRetry(null);
       }
       const currentPhase = connectionPhaseRef.current;
       if (currentPhase === 'connected') {
@@ -1113,6 +1124,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               if (autoRetryTimerRef.current) {
                 clearTimeout(autoRetryTimerRef.current);
                 autoRetryTimerRef.current = null;
+                setAutoRetry(null);
               }
               await saveAppSettings({ lastSuccessfulUrl: saved.url });
               setSettings((prev) => ({ ...prev, lastSuccessfulUrl: saved.url }));
@@ -1475,6 +1487,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (autoRetryTimerRef.current) {
         clearTimeout(autoRetryTimerRef.current);
         autoRetryTimerRef.current = null;
+        setAutoRetry(null);
       }
       clientRef.current?.disconnect();
       clientRef.current = null;
@@ -1502,6 +1515,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     if (autoRetryTimerRef.current) {
       clearTimeout(autoRetryTimerRef.current);
       autoRetryTimerRef.current = null;
+      setAutoRetry(null);
     }
     clientRef.current?.disconnect();
     clientRef.current = null;
@@ -2072,6 +2086,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       if (autoRetryTimerRef.current) {
         clearTimeout(autoRetryTimerRef.current);
         autoRetryTimerRef.current = null;
+        setAutoRetry(null);
       }
       await connectGateway(gateway);
       return true;
@@ -2086,6 +2101,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
     if (autoRetryTimerRef.current) {
       clearTimeout(autoRetryTimerRef.current);
       autoRetryTimerRef.current = null;
+      setAutoRetry(null);
     }
     const [freshSettings, freshGateways, activeId] = await Promise.all([
       loadAppSettings(),
@@ -2108,10 +2124,14 @@ const response = await executeGatewaySlashCommand(trimmed, {
     // Escalate per consecutive failure — 12s doubling up to a 5-minute cap —
     // instead of re-probing a down gateway on the same flat interval forever.
     const delayMs = autoRetryDelayMs(autoRetryFailureStreakRef.current, floorMs);
+    // Mirror the pending schedule into state so the UI can show what is
+    // waiting — including when the ladder has stopped accelerating.
+    setAutoRetry(autoRetryPulse(autoRetryFailureStreakRef.current, floorMs));
     autoRetryFailureStreakRef.current += 1;
     if (autoRetryTimerRef.current) clearTimeout(autoRetryTimerRef.current);
     autoRetryTimerRef.current = setTimeout(() => {
       autoRetryTimerRef.current = null;
+      setAutoRetry(null);
       const currentPhase = connectionPhaseRef.current;
       if (currentPhase === 'failed' || currentPhase === 'idle') {
         void runAutoConnectCycle();
@@ -2165,6 +2185,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
         if (autoRetryTimerRef.current) {
           clearTimeout(autoRetryTimerRef.current);
           autoRetryTimerRef.current = null;
+          setAutoRetry(null);
         }
         return;
       }
@@ -2195,6 +2216,12 @@ const response = await executeGatewaySlashCommand(trimmed, {
       // Re-enabling is a human decision — pacing restarts from the base
       // interval instead of inheriting a stale failure streak.
       autoRetryFailureStreakRef.current = 0;
+    } else if (autoRetryTimerRef.current) {
+      // Turning auto-connect OFF cancels anything already queued: a visible
+      // cool-down must never promise a retry that will not happen.
+      clearTimeout(autoRetryTimerRef.current);
+      autoRetryTimerRef.current = null;
+      setAutoRetry(null);
     }
     const next = await saveAppSettings({ autoConnect: enabled });
     setSettings(next);
@@ -2533,6 +2560,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       dynamicCommands,
       setupFromPcAddress,
       retryAutoConnect,
+      autoRetry,
       setAutoConnect,
       recentCommands,
       retryCommand,
@@ -2580,7 +2608,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       messages, isSending, isCommandRunning, lastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, openBot, clearBot, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect,
+      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, openBot, clearBot, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
       setAutoConnect, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

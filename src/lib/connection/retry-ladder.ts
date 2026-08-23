@@ -28,3 +28,42 @@ export function autoRetryDelayMs(
   );
   return Math.min(AUTO_RETRY_MAX_DELAY_MS, Math.max(rung, floorMs));
 }
+
+/** What the UI needs to know about ONE pending automatic retry. */
+export type AutoRetryPulse = {
+  /** Human ordinal of the upcoming attempt (1 = the first retry). */
+  attempt: number;
+  /** Cool-down that must elapse before that attempt fires. */
+  delayMs: number;
+  /** True once the ladder has settled on its five-minute cadence. */
+  capped: boolean;
+};
+
+/**
+ * Computed whenever the provider schedules an automatic retry so the UI can
+ * show what is WAITING instead of a bare "disconnected" - without it a capped
+ * ladder looks identical to a dead app while it quietly keeps trying every
+ * five minutes.
+ */
+export function autoRetryPulse(
+  consecutiveFailures: number,
+  floorMs: number = AUTO_RETRY_BASE_DELAY_MS,
+): AutoRetryPulse {
+  const delayMs = autoRetryDelayMs(consecutiveFailures, floorMs);
+  return {
+    attempt: Math.max(0, Math.floor(consecutiveFailures)) + 1,
+    delayMs,
+    capped: delayMs >= AUTO_RETRY_MAX_DELAY_MS,
+  };
+}
+
+/**
+ * One honest line about the pending retry: short waits name the exact
+ * next-try delay, a capped ladder admits it has stopped accelerating.
+ */
+export function describeAutoRetry(pulse: AutoRetryPulse): string {
+  if (pulse.capped) {
+    return 'Gateway unreachable - Versutus keeps trying automatically every five minutes.';
+  }
+  return `Reconnecting automatically - next try in ${Math.max(1, Math.round(pulse.delayMs / 1000))}s.`;
+}

@@ -17,6 +17,7 @@ export function HomeStatusCard({
   status,
   statusDetail,
   probeMessage,
+  autoRetryNote,
   onConnect,
   onOpenChat,
 }: {
@@ -25,6 +26,7 @@ export function HomeStatusCard({
   status: ConnectionStatus;
   statusDetail: string;
   probeMessage?: string;
+  autoRetryNote?: string;
   onConnect: () => void;
   onOpenChat?: () => void;
 }) {
@@ -67,6 +69,12 @@ export function HomeStatusCard({
         <Text color="secondary" style={styles.subtitle}>
           {message}
         </Text>
+
+        {!isBusy && !isConnected && !needsPairing && autoRetryNote ? (
+          <Text variant="caption" color="tertiary">
+            {autoRetryNote}
+          </Text>
+        ) : null}
 
         {isBusy ? (
           <View style={styles.loadingRow}>
