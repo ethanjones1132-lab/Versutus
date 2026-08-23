@@ -594,6 +594,15 @@ function stubFrontedRegistry(calls) {
       calls.push(`createBot:${input?.name}`);
       return { id: input.name, displayName: input.name, routable: true };
     },
+    async updateBot(input) {
+      calls.push(`updateBot:${input?.id}`);
+      if (input?.id === 'nope') {
+        const error = new Error('unknown bot "nope"');
+        error.code = 'unknown_bot';
+        throw error;
+      }
+      return { id: input?.id, displayName: input?.id, routable: true, description: input?.description ?? null };
+    },
     async forBot(botId) {
       calls.push(`forBot:${botId}`);
       if (botId === 'nope') {
@@ -697,6 +706,39 @@ test('POST /v1/bots creates via createBot', async () => {
     });
     assert.equal(response.status, 200);
     assert.ok(calls.includes('createBot:coder'));
+  } finally {
+    await gate.close();
+  }
+});
+
+test('PATCH /v1/bots/:id edits through updateBot and maps its errors', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    const edited = await fetch(`${base}/v1/bots/coder`, {
+      method: 'PATCH',
+      headers: auth(gate),
+      body: JSON.stringify({ description: 'Ships reviews' }),
+    });
+    assert.equal(edited.status, 200);
+    assert.equal((await edited.json()).description, 'Ships reviews');
+    assert.ok(calls.includes('updateBot:coder'));
+
+    const unknown = await fetch(`${base}/v1/bots/nope`, {
+      method: 'PATCH',
+      headers: auth(gate),
+      body: JSON.stringify({ description: 'x' }),
+    });
+    assert.equal(unknown.status, 404);
+    assert.equal((await unknown.json()).error.code, 'unknown_bot');
+
+    const unauthenticated = await fetch(`${base}/v1/bots/coder`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: 'x' }),
+    });
+    assert.equal(unauthenticated.status, 401);
   } finally {
     await gate.close();
   }

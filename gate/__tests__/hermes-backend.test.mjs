@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -205,4 +205,116 @@ test('listBots returns every profile including default and never leaks listen ke
   assert.equal(body.data.find((row) => row.id === 'researcher').routable, true);
   assert.equal(JSON.stringify(body).includes('res-listen'), false);
   assert.equal(JSON.stringify(body).includes('sk-nope'), false);
+});
+
+test('updateBot rewrites only what the request carries, on the CLI writer\'s own terms', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');
+  await mkdir(join(home, 'profiles', 'coder'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'coder', '.env'), 'API_SERVER_KEY=own-key\n');
+  // The CLI writes CRLF profiles and may fold the description across lines.
+  await writeFile(
+    join(home, 'profiles', 'coder', 'profile.yaml'),
+    'display_name: coder\r\ndescription: one\r\n  two.\r\ncreated: 2026-08-22\r\n',
+  );
+
+  const argvLog = [];
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'k',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    profilesHome: home,
+    executablePath: 'hermes',
+    runCliImpl: async (_exe, args) => {
+      argvLog.push(args);
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  const bot = await hermes.updateBot({
+    id: 'coder',
+    description: 'Ships reviews',
+    soul: 'You are terse.',
+    modelId: 'opencode-go/deepseek-v4-flash',
+  });
+
+  assert.equal(bot.id, 'coder');
+  assert.equal(bot.description, 'Ships reviews');
+
+  const yaml = await readFile(join(home, 'profiles', 'coder', 'profile.yaml'), 'utf8');
+  // The folded continuation is gone; every untouched line keeps its CRLF bytes.
+  assert.equal(yaml, 'display_name: coder\r\ndescription: Ships reviews\r\ncreated: 2026-08-22\r\n');
+  const soul = await readFile(join(home, 'profiles', 'coder', 'SOUL.md'), 'utf8');
+  assert.equal(soul, 'You are terse.');
+  assert.deepEqual(argvLog, [
+    ['-p', 'coder', 'config', 'set', 'model.default', 'opencode-go/deepseek-v4-flash'],
+  ]);
+});
+
+test('updateBot with no editable field changes nothing at all', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');
+  await mkdir(join(home, 'profiles', 'coder'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'coder', '.env'), 'API_SERVER_KEY=own-key\n');
+  await writeFile(join(home, 'profiles', 'coder', 'profile.yaml'), 'display_name: coder\n');
+  const argvLog = [];
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'k',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    profilesHome: home,
+    executablePath: 'hermes',
+    runCliImpl: async (_exe, args) => {
+      argvLog.push(args);
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  const bot = await hermes.updateBot({ id: 'coder' });
+
+  assert.equal(bot.id, 'coder');
+  assert.deepEqual(argvLog, []);
+  const yaml = await readFile(join(home, 'profiles', 'coder', 'profile.yaml'), 'utf8');
+  assert.equal(yaml, 'display_name: coder\n');
+  await assert.rejects(
+    () => readFile(join(home, 'profiles', 'coder', 'SOUL.md'), 'utf8'),
+    /ENOENT/,
+  );
+});
+
+test('updateBot refuses default, invalid and unknown bots before touching disk', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');
+  await mkdir(join(home, 'profiles', 'real'), { recursive: true });
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'k',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    profilesHome: home,
+    executablePath: 'hermes',
+    runCliImpl: async () => ({ code: 0, stdout: '', stderr: '' }),
+  });
+
+  // "default" is not a bot (ADR 0011) and must never be editable here.
+  await assert.rejects(
+    () => hermes.updateBot({ id: 'default', soul: 'x' }),
+    (error) => error.code === 'invalid_bot_name' && error.status === 400,
+  );
+  await assert.rejects(
+    () => hermes.updateBot({ id: '../etc', soul: 'x' }),
+    (error) => error.code === 'invalid_bot_name',
+  );
+  await assert.rejects(
+    () => hermes.updateBot({ id: 'ghost', description: 'x' }),
+    (error) => error.code === 'unknown_bot' && error.status === 404,
+  );
+  await assert.rejects(() => readFile(join(home, 'SOUL.md'), 'utf8'), /ENOENT/);
+});
+
+test('updateBot without an executable or home is an honest 501', async () => {
+  const { hermes } = backend();
+  await assert.rejects(
+    () => hermes.updateBot({ id: 'coder', description: 'x' }),
+    (error) => error.code === 'backend_unsupported' && error.status === 501,
+  );
 });

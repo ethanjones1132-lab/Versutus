@@ -739,6 +739,7 @@ export async function createGate(config = {}) {
         (pathname === '/v1/skills' && method === 'GET') ||
         (pathname === '/v1/bots' && method === 'GET') ||
         (pathname === '/v1/bots' && method === 'POST') ||
+        (method === 'PATCH' && /^\/v1\/bots\/[^/]+$/.test(pathname)) ||
         (pathname === '/v1/bots/handoff' && method === 'POST') ||
         (pathname === '/v1/bot-groups' && (method === 'GET' || method === 'POST')) ||
         /^\/v1\/bot-groups\/[^/]+\/messages$/.test(pathname) ||
@@ -1190,6 +1191,31 @@ export async function createGate(config = {}) {
         } catch (error) {
           const code = error.code ?? 'bot_create_failed';
           const status = error.status || (code === 'invalid_bot_name' ? 400 : code === 'bot_exists' ? 409 : 502);
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code } }));
+        }
+        return;
+      }
+
+      const botEditMatch = pathname.match(/^\/v1\/bots\/([^/]+)$/);
+      if (botEditMatch && method === 'PATCH') {
+        const body = (await readJsonBody(req)) ?? {};
+        const backend = await resolveBackendFor('updateBot');
+        if (!backend) return;
+        try {
+          const updated = await backend.updateBot({
+            id: decodeURIComponent(botEditMatch[1]),
+            soul: body.soul,
+            description: body.description,
+            modelId: body.modelId,
+            providerId: body.providerId,
+          });
+          res.writeHead(200);
+          res.end(JSON.stringify(updated));
+        } catch (error) {
+          const code = error.code ?? 'bot_update_failed';
+          const status = error.status
+            || (code === 'invalid_bot_name' ? 400 : code === 'unknown_bot' ? 404 : 502);
           res.writeHead(status, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: error.message, code } }));
         }

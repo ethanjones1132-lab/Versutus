@@ -21,6 +21,7 @@ import { join } from 'node:path';
 
 import { runCli } from '../adapters/shared.mjs';
 import { createBotArgs, ensureDistinctListenKey, validateBotId } from '../hermes-bot-create.mjs';
+import { upsertProfileDescription } from '../hermes-bot-edit.mjs';
 import { getHermesBot, listHermesBots, toPublicBot } from '../hermes-profiles.mjs';
 
 /** Hermes sessions are already gateway-shaped; fill only what may be absent. */
@@ -474,6 +475,88 @@ export function createHermesBackend({
       }
       const record = await getHermesBot(profilesHome, id);
       return toPublicBot(record ?? { id, displayName: id, listenKey: ensured.listenKey, home: botHome });
+    },
+
+    /**
+     * Edit an existing Bot (ADR 0015 write path). Same bounded ownership as
+     * createBot: SOUL.md and the one-line profile.yaml description are file
+     * writes inside the bot's home; the model pin is the fixed
+     * `hermes -p <id> config set` argv. Fields left absent are untouched;
+     * only what the request carries is applied.
+     */
+    async updateBot({ id, soul, description, modelId, providerId } = {}) {
+      const botId = validateBotId(id);
+      if (!botId) {
+        // validateBotId also rejects "default": the default profile is not a
+        // bot (ADR 0011) and must never be edited through this surface.
+        const error = new Error('invalid bot name');
+        error.code = 'invalid_bot_name';
+        error.status = 400;
+        throw error;
+      }
+      if (!profilesHome || !executablePath) {
+        const error = new Error('Hermes executable or home is not configured');
+        error.code = 'backend_unsupported';
+        error.status = 501;
+        throw error;
+      }
+      const existing = await getHermesBot(profilesHome, botId);
+      if (!existing) {
+        const error = new Error(`unknown bot "${botId}"`);
+        error.code = 'unknown_bot';
+        error.status = 404;
+        throw error;
+      }
+      const botHome = join(profilesHome, 'profiles', botId);
+
+      if (typeof description === 'string') {
+        const profilePath = join(botHome, 'profile.yaml');
+        let yamlText = '';
+        try {
+          yamlText = await readFile(profilePath, 'utf8');
+        } catch {
+          yamlText = '';
+        }
+        const next = upsertProfileDescription(yamlText, description);
+        if (next !== yamlText) {
+          await writeFile(profilePath, next, 'utf8');
+        }
+      }
+
+      if (typeof soul === 'string') {
+        await mkdir(botHome, { recursive: true });
+        await writeFile(join(botHome, 'SOUL.md'), soul, 'utf8');
+      }
+
+      if (typeof modelId === 'string' && modelId.trim()) {
+        const pin = await runCliImpl(
+          executablePath,
+          ['-p', botId, 'config', 'set', 'model.default', modelId.trim()],
+          { timeoutMs: 15_000 },
+        );
+        if (pin.code !== 0) {
+          const error = new Error(pin.stderr || 'failed to pin model');
+          error.code = 'bot_update_failed';
+          error.status = 502;
+          throw error;
+        }
+      }
+      if (typeof providerId === 'string' && providerId.trim()) {
+        const pin = await runCliImpl(
+          executablePath,
+          ['-p', botId, 'config', 'set', 'model.provider', providerId.trim()],
+          { timeoutMs: 15_000 },
+        );
+        if (pin.code !== 0) {
+          const error = new Error(pin.stderr || 'failed to pin provider');
+          error.code = 'bot_update_failed';
+          error.status = 502;
+          throw error;
+        }
+      }
+
+      const record = await getHermesBot(profilesHome, botId);
+      return toPublicBot(record ?? existing);
     },
   };
 }

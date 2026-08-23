@@ -42,7 +42,10 @@ function stripQuotes(value) {
     (value.startsWith('"') && value.endsWith('"') && value.length >= 2)
     || (value.startsWith("'") && value.endsWith("'") && value.length >= 2)
   ) {
-    return value.slice(1, -1);
+    const inner = value.slice(1, -1);
+    // A double-quoted YAML scalar carries backslash escapes; undo the two the
+    // bounded writer can emit so a written description reads back verbatim.
+    return inner.replace(/\\(["\\])/g, '$1');
   }
   return value;
 }
