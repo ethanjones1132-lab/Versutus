@@ -63,6 +63,7 @@ export class OpenClawGatewayClient {
   private closed = false;
   private connectNonce = '';
   private connectSent = false;
+  private connectInFlight = false;
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectSuspended = false;
@@ -167,6 +168,7 @@ export class OpenClawGatewayClient {
     this.clearChallengeTimer();
     this.connectNonce = '';
     this.connectSent = false;
+    this.connectInFlight = false;
     this.connectUsedStoredDeviceToken = false;
 
     try {
@@ -206,73 +208,104 @@ export class OpenClawGatewayClient {
     }
   }
 
+  /**
+   * Answer a connect.challenge with the signed connect frame.
+   *
+   * `connectSent` means "the connect frame is on the wire" and is claimed
+   * only after every identity/token read and the signature succeeded, on a
+   * socket that is still the live one. It used to be set before those
+   * awaits, so a single rejected read left the client claiming a connect it
+   * never sent: every later challenge was dropped (handleMessage) and the
+   * handshake timeout disarmed itself against the same lying flag — the
+   * session sat in "connecting" until the app restarted.
+   */
   private async sendConnect(nonce: string) {
-    if (this.connectSent || !this.socket) return;
+    if (this.connectSent || this.connectInFlight || !this.socket) return;
+    const socket = this.socket;
     this.connectNonce = nonce;
-    this.connectSent = true;
+    this.connectInFlight = true;
 
-    const identity = await this.getIdentity();
-    const signedAtMs = Date.now();
-    const role = 'operator';
-    const storedAuth = await loadDeviceAuthToken(identity.deviceId, role);
-    const deviceToken = storedAuth?.token;
-    const setupToken = this.profile.token;
-    const resolvedToken = deviceToken ?? setupToken;
-    const bootstrapToken = resolvedToken ? undefined : this.profile.bootstrapToken;
-    const signatureToken = resolvedToken ?? bootstrapToken;
-    const usingStoredDeviceToken = !!deviceToken;
-    const scopes = usingStoredDeviceToken && storedAuth.scopes.length > 0 ? storedAuth.scopes : SCOPES;
-    this.connectUsedStoredDeviceToken = usingStoredDeviceToken;
+    try {
+      const identity = await this.getIdentity();
+      const signedAtMs = Date.now();
+      const role = 'operator';
+      const storedAuth = await loadDeviceAuthToken(identity.deviceId, role);
+      const deviceToken = storedAuth?.token;
+      const setupToken = this.profile.token;
+      const resolvedToken = deviceToken ?? setupToken;
+      const bootstrapToken = resolvedToken ? undefined : this.profile.bootstrapToken;
+      const signatureToken = resolvedToken ?? bootstrapToken;
+      const usingStoredDeviceToken = !!deviceToken;
+      const scopes = usingStoredDeviceToken && storedAuth.scopes.length > 0 ? storedAuth.scopes : SCOPES;
+      this.connectUsedStoredDeviceToken = usingStoredDeviceToken;
 
-    const payload = buildDeviceAuthPayloadV3({
-      deviceId: identity.deviceId,
-      clientId: CLIENT_ID,
-      clientMode: CLIENT_MODE,
-      role,
-      scopes,
-      signedAtMs,
-      token: signatureToken,
-      nonce,
-      platform: Platform.OS,
-    });
-    const signature = await signDevicePayload(identity, payload);
-
-    const frame = {
-      type: 'req',
-      id: 'connect',
-      method: 'connect',
-      params: {
-        minProtocol: 4,
-        maxProtocol: 4,
-        client: {
-          id: CLIENT_ID,
-          version: '1.0.0',
-          platform: Platform.OS,
-          mode: CLIENT_MODE,
-        },
+      const payload = buildDeviceAuthPayloadV3({
+        deviceId: identity.deviceId,
+        clientId: CLIENT_ID,
+        clientMode: CLIENT_MODE,
         role,
         scopes,
-        caps: [],
-        auth: resolvedToken || bootstrapToken
-          ? {
-              token: usingStoredDeviceToken ? undefined : setupToken,
-              bootstrapToken,
-              deviceToken: usingStoredDeviceToken ? deviceToken : undefined,
-            }
-          : undefined,
-        locale: 'en-US',
-        userAgent: 'versutus/1.0.0',
-        device: {
-          id: identity.deviceId,
-          publicKey: identity.publicKeyB64Url,
-          signature,
-          signedAt: signedAtMs,
-          nonce: this.connectNonce,
-        },
-      },
-    };
+        signedAtMs,
+        token: signatureToken,
+        nonce,
+        platform: Platform.OS,
+      });
+      const signature = await signDevicePayload(identity, payload);
 
-    this.socket.send(JSON.stringify(frame));
+      const frame = {
+        type: 'req',
+        id: 'connect',
+        method: 'connect',
+        params: {
+          minProtocol: 4,
+          maxProtocol: 4,
+          client: {
+            id: CLIENT_ID,
+            version: '1.0.0',
+            platform: Platform.OS,
+            mode: CLIENT_MODE,
+          },
+          role,
+          scopes,
+          caps: [],
+          auth: resolvedToken || bootstrapToken
+            ? {
+                token: usingStoredDeviceToken ? undefined : setupToken,
+                bootstrapToken,
+                deviceToken: usingStoredDeviceToken ? deviceToken : undefined,
+              }
+            : undefined,
+          locale: 'en-US',
+          userAgent: 'versutus/1.0.0',
+          device: {
+            id: identity.deviceId,
+            publicKey: identity.publicKeyB64Url,
+            signature,
+            signedAt: signedAtMs,
+            nonce: this.connectNonce,
+          },
+        },
+      };
+
+      if (this.socket !== socket || this.closed) {
+        // The wire moved on mid-handshake; its close handler owns recovery.
+        return;
+      }
+      this.connectSent = true;
+      socket.send(JSON.stringify(frame));
+    } catch (error) {
+      // Nothing went out, so release the claim — the next challenge must be
+      // able to retry instead of being dropped forever.
+      this.connectSent = false;
+      const message = error instanceof Error ? error.message : String(error);
+      this.callbacks.onError?.(`Gateway handshake failed: ${message}`);
+      if (this.socket === socket && !this.closed) {
+        // A dead socket's close handler already scheduled the retry.
+        this.scheduleReconnect(`Handshake failed: ${message}`);
+      }
+    } finally {
+      this.connectInFlight = false;
+    }
   }
 
   private handleMessage(raw: string) {

@@ -51,6 +51,7 @@ export class ManifestClient implements PortalClient {
   private rootTransport: HttpTransport;
   private monitor: ConnectionMonitor;
   private endpoints: Record<string, string>;
+  private connectAttempt: Promise<void> | null = null;
 
   constructor(
     private profile: GatewayProfile,
@@ -113,7 +114,24 @@ export class ManifestClient implements PortalClient {
     return path;
   }
 
-  async connect() {
+  /**
+   * Concurrent callers join the attempt already in flight rather than stack
+   * a duplicate one: resumeReconnect() and the monitor's reconnect hook can
+   * both fire while an earlier connect() is still awaiting health, models,
+   * or capabilities, and each duplicate re-fetched everything and raced its
+   * sibling through the status machine. The handle clears once settled, so
+   * a connect() after a real failure starts fresh.
+   */
+  async connect(): Promise<void> {
+    if (this.connectAttempt) return this.connectAttempt;
+    const attempt = this.attemptConnect().finally(() => {
+      this.connectAttempt = null;
+    });
+    this.connectAttempt = attempt;
+    return attempt;
+  }
+
+  private async attemptConnect(): Promise<void> {
     this.closed = false;
     this.setStatus('connecting');
 

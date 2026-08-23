@@ -616,3 +616,85 @@ describe('rpcMethods pass-through', () => {
     expect(caps.rpcMethods).toEqual(['skills.list']);
   });
 });
+
+describe('ManifestClient connect concurrency', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+  });
+
+  const flushMicrotasks = async () => {
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  };
+
+  test('resumeReconnect during an in-flight connect joins it instead of refetching everything', async () => {
+    let releaseHealth!: (response: Response) => void;
+    const healthHold = new Promise<Response>((resolve) => {
+      releaseHealth = resolve;
+    });
+    const urls: string[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith('/health')) return healthHold;
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    const first = client.connect();
+    // Fires while the attempt above is still parked on /health — this used to
+    // stack a second full attempt (health + capabilities + models again).
+    client.resumeReconnect();
+
+    releaseHealth(jsonResponse({ status: 'ok' }));
+    await first;
+    await flushMicrotasks();
+
+    expect(client.connectionStatus).toBe('connected');
+    expect(urls.filter((u) => u.endsWith('/health'))).toHaveLength(1);
+    expect(urls.filter((u) => u.endsWith('/v1/models'))).toHaveLength(1);
+    client.disconnect();
+  });
+
+  test('two simultaneous connect() calls share one attempt', async () => {
+    const urls: string[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith('/health')) return Promise.resolve(jsonResponse({ status: 'ok' }));
+      if (url.endsWith('/v1/models')) return Promise.resolve(jsonResponse({ data: [{ id: 'm1', object: 'model' }] }));
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    await Promise.all([client.connect(), client.connect()]);
+
+    expect(client.connectionStatus).toBe('connected');
+    expect(urls.filter((u) => u.endsWith('/health'))).toHaveLength(1);
+    expect(urls.filter((u) => u.endsWith('/v1/models'))).toHaveLength(1);
+    client.disconnect();
+  });
+
+  test('after a failed attempt a later connect starts fresh rather than joining the corpse', async () => {
+    let failModels = true;
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/health')) return Promise.resolve(jsonResponse({ status: 'ok' }));
+      if (url.endsWith('/v1/models')) {
+        return failModels
+          ? Promise.resolve(jsonResponse({ error: { message: 'Invalid token' } }, 401))
+          : Promise.resolve(jsonResponse({ data: [] }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    await expect(client.connect()).rejects.toThrow(/token/i);
+
+    failModels = false;
+    await client.connect();
+
+    expect(client.connectionStatus).toBe('connected');
+    client.disconnect();
+  });
+});
