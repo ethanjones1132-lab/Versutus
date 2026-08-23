@@ -38,6 +38,30 @@ describe('humanizeGatewayError', () => {
     const result = humanizeGatewayError(new Error('connection aborted by peer'));
     expect(result.action).not.toBe('dismiss');
   });
+
+  it('maps a Bot-routing refusal to the desktop-parity verdict, not a network error', () => {
+    const gate = 'bot "echo" still uses the default listen key; /p/echo/ rejects it — give the profile its own API_SERVER_KEY';
+    const result = humanizeGatewayError(new GatewayHttpError(gate, 409));
+    expect(result.title).toBe('Bot listen key refused');
+    expect(result.affected).toBe('bot routing');
+    expect(result.action).toBe('copy'); // nothing on the phone fixes this — host-side
+    expect(result.cause).toContain('/p/echo/ rejects it');
+  });
+
+  it('maps an unreachable CLI environment to a remote-task verdict', () => {
+    const result = humanizeGatewayError(
+      new Error('hermes server exited with code 1 before becoming reachable.'),
+    );
+    expect(result.title).toBe('Environment unreachable');
+    expect(result.affected).toBe('remote task');
+    expect(result.action).not.toBe('reconnect'); // not the gateway transport's fault
+  });
+
+  it('keeps generic HTTP failures on the existing reconnect path', () => {
+    const result = humanizeGatewayError(new GatewayHttpError('upstream exploded', 502));
+    expect(result.title).toBe('Gateway error 502');
+    expect(result.action).toBe('reconnect');
+  });
 });
 
 describe('parseStructuredError', () => {

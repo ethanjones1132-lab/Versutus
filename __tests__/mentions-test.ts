@@ -26,3 +26,13 @@ test('handoffFailedNote names the target bot and the failure', () => {
     'Handoff to @researcher failed: connection refused.',
   );
 });
+
+test('handoffFailedNote appends the desktop-parity fix for classifiable refusals', () => {
+  const note = handoffFailedNote(
+    'echo',
+    'bot "echo" has no API_SERVER_KEY',
+  );
+  expect(note).toContain('Handoff to @echo failed:');
+  expect(note).toContain('Bot has no listen key');
+  expect(note).toContain("Set API_SERVER_KEY in the profile's .env on the host, then retry.");
+});

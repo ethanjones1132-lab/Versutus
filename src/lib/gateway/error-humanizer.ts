@@ -1,4 +1,5 @@
 import { GatewayHttpError, isAuthRejection, isGatewayTokenRequiredMessage, isUserAbort } from '@/lib/gateway/errors';
+import { describeRunFailure } from '@/lib/gateway/run-failures';
 
 export type HumanizedErrorAction = 'reconnect' | 'setup' | 'copy' | 'dismiss';
 
@@ -44,6 +45,23 @@ export function humanizeGatewayError(error: unknown): HumanizedError {
       affected: 'gateway connection',
       next: 'Open gateway setup and paste the token.',
       action: 'setup',
+    };
+  }
+
+  // Run/Bot-send failures carry their own verdict — the Gate names the host
+  // state (multiplex off, refused key, dead environment, spent budget) in the
+  // message it forwards. Classify before the network heuristic so e.g. a
+  // spawn failure is not mistaken for a transport problem.
+  const failureView = describeRunFailure(error instanceof Error ? error.message : String(error));
+  if (failureView.kind !== 'generic') {
+    return {
+      title: failureView.title,
+      cause: failureView.cause,
+      affected: failureView.kind === 'environment_unreachable' || failureView.kind === 'time_limit' || failureView.kind === 'expired'
+        ? 'remote task'
+        : 'bot routing',
+      next: failureView.next,
+      action: 'copy',
     };
   }
 

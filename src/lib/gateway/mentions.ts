@@ -1,3 +1,5 @@
+import { formatRunFailure } from '@/lib/gateway/run-failures';
+
 export function extractMentions(text: string, rosterIds: string[]): string[] {
   const allowed = new Set(rosterIds.map((id) => id.toLowerCase()));
   const found: string[] = [];
@@ -30,7 +32,14 @@ export function rosterUnavailableNote(error: string): string {
   return `Handoff skipped: the bot roster could not be loaded (${error}). @mentions in your message were not delivered.`;
 }
 
-/** System-note wording shown when delivering an @mention handoff to a bot failed. */
+/**
+ * System-note wording shown when delivering an @mention handoff to a bot
+ * failed. Handoff refusals are Bot-routing failures (the Gate's `forBot`
+ * refuses with the same messages a direct send gets), so a classifiable
+ * failure appends the desktop-parity verdict + fix instead of leaving the
+ * operator to decode raw text.
+ */
 export function handoffFailedNote(toId: string, error: string): string {
-  return `Handoff to @${toId} failed: ${error}.`;
+  const fix = formatRunFailure(error);
+  return fix ? `Handoff to @${toId} failed: ${fix}` : `Handoff to @${toId} failed: ${error}.`;
 }

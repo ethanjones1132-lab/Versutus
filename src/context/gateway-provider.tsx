@@ -35,6 +35,7 @@ import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { loadBotChat, type PublicBot } from '@/lib/gateway/bots';
 import type { BotGroupRoom, GroupReply } from '@/lib/gateway/groups';
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
+import { formatRunFailure } from '@/lib/gateway/run-failures';
 import { effectiveModel, resolveSendModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   categorizeProbeError,
@@ -1604,7 +1605,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           setMessages((prev) => markInterrupted(prev, runId));
           setLastError(message);
         } else {
-          setMessages((prev) => convertStreamError(prev, runId, message, false));
+          // Desktop-parity failure state: when the Gate names the host state
+          // (multiplex off, refused key, dead environment, spent budget), the
+          // bubble shows verdict + fix instead of a raw exception dump. The
+          // banner still gets the raw message for anyone who wants details.
+          const shown = formatRunFailure(message) ?? message;
+          setMessages((prev) => convertStreamError(prev, runId, shown, false));
           setLastError(message);
         }
       } finally {
