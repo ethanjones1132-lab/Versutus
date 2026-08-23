@@ -1,6 +1,10 @@
 import { ManifestClient } from '@/lib/gateway/manifest-client';
 import { createEnvironmentClient } from '@/lib/gateway/environment-client';
-import { installStreamingFetch, streamingFetch } from '@/lib/net/streaming-fetch';
+import {
+  installStreamingFetch,
+  resetStreamingFetchForTests,
+  streamingFetch,
+} from '@/lib/net/streaming-fetch';
 import type { GatewayIdentity } from '@/lib/portal/identify';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
@@ -46,8 +50,9 @@ function sseResponse(frames: string[]): Response {
 }
 
 afterEach(() => {
-  // Reset the module-level installation so tests cannot leak into each other.
-  installStreamingFetch(globalThis.fetch);
+  // Back to the pristine state so tests cannot leak into each other. A bare
+  // reinstall of globalThis.fetch would mask the uninstalled paths below.
+  resetStreamingFetchForTests();
 });
 
 describe('streamingFetch', () => {
@@ -127,5 +132,87 @@ describe('streaming call sites', () => {
     expect(globalFetch).not.toHaveBeenCalled();
     expect(types).toEqual(['run.started', 'run.output', 'run.completed']);
     globalFetch.mockRestore();
+  });
+});
+
+describe('before any installation', () => {
+  /**
+   * Stands in for whatwg-fetch's Response under React Native — its prototype
+   * has no `body` (the exact shape recorded in streaming-fetch.ts). This is
+   * the half of the fb46406 bug that Node cannot reproduce by default: there
+   * the global CAN stream, so a blind fallback was indistinguishable from a
+   * correct one and every test stayed green while device streams came empty.
+   */
+  function bodylessResponseCtor(): { new (): Response } {
+    const ctor = function (this: { bodyUsed: boolean }) {
+      this.bodyUsed = false;
+    } as unknown as { new (): Response };
+    Object.defineProperty(ctor, 'prototype', { value: { bodyUsed: false } });
+    return ctor;
+  }
+
+  function useDeviceClassGlobals(): () => void {
+    const original = globalThis.Response;
+    Object.defineProperty(globalThis, 'Response', {
+      value: bodylessResponseCtor(),
+      configurable: true,
+      writable: true,
+    });
+    return () => {
+      Object.defineProperty(globalThis, 'Response', {
+        value: original,
+        configurable: true,
+        writable: true,
+      });
+    };
+  }
+
+  test('a device-class global fails named instead of returning a body-less response', () => {
+    const restoreGlobals = useDeviceClassGlobals();
+    try {
+      expect(() => streamingFetch('http://x.test')).toThrow(/installStreamingFetch/);
+    } finally {
+      restoreGlobals();
+    }
+  });
+
+  test('an uninstalled call still rides the global fetch where the global can stream', async () => {
+    // Node/web: undici's Response exposes `body`, so delegation stays correct.
+    const globalFetch = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('ok'));
+    try {
+      const res = await streamingFetch('http://x.test');
+      expect(await res.text()).toBe('ok');
+      expect(globalFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      globalFetch.mockRestore();
+    }
+  });
+
+  test('resetting returns to the pristine delegate-to-global state', async () => {
+    installStreamingFetch((async () => new Response('installed')) as unknown as typeof globalThis.fetch);
+    expect(await (await streamingFetch('http://x.test')).text()).toBe('installed');
+
+    resetStreamingFetchForTests();
+    const globalFetch = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('global'));
+    try {
+      expect(await (await streamingFetch('http://x.test')).text()).toBe('global');
+      expect(globalFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      globalFetch.mockRestore();
+    }
+  });
+
+  test('streamChat refuses to run uninstalled on a device-class fetch instead of bubbling silence', async () => {
+    const restoreGlobals = useDeviceClassGlobals();
+    try {
+      const client = new ManifestClient(PROFILE, IDENTITY, {});
+      await expect(
+        client.streamChat([{ role: 'user', content: 'hi' }], () => undefined, {
+          model: 'test/model',
+        }),
+      ).rejects.toThrow(/installStreamingFetch/);
+    } finally {
+      restoreGlobals();
+    }
   });
 });
