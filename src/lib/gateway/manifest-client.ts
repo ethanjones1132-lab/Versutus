@@ -419,6 +419,32 @@ export class ManifestClient implements PortalClient {
     });
   }
 
+  /**
+   * Edit an existing Bot through the manifest-declared bots endpoint. Only
+   * the fields present in `input` travel — the Gate leaves absent fields
+   * untouched — so a partial edit from the phone can never wipe what the
+   * form did not show.
+   */
+  async updateBot(input: {
+    id: string;
+    soul?: string;
+    description?: string;
+    modelId?: string;
+    providerId?: string;
+  }): Promise<PublicBot> {
+    const path = this.requireEndpoint('bots');
+    const body: Record<string, unknown> = {};
+    if (input.soul !== undefined) body.soul = input.soul;
+    if (input.description !== undefined) body.description = input.description;
+    if (input.modelId !== undefined) body.modelId = input.modelId;
+    if (input.providerId !== undefined) body.providerId = input.providerId;
+    return this.rootTransport.request(
+      'PATCH',
+      this.withBackend(`${path.replace(/\/+$/, '')}/${encodeURIComponent(input.id)}`),
+      body,
+    );
+  }
+
   async listJobs(): Promise<{ id: string; name?: string; paused?: boolean }[]> {
     const path = this.endpoints.jobs;
     if (!path) return [];

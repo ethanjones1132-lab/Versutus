@@ -25,6 +25,8 @@ export type ChatOverflowSheetProps = {
   onStartRun?: () => void;
   runsSupported?: boolean;
   sessions?: SessionUsageInput[];
+  /** Present on a Bot's own chat — opens the edit sheet for that agent. */
+  onEditAgent?: () => void;
 };
 
 /** Chat header overflow: session usage at a glance + session/connection actions. */
@@ -38,6 +40,7 @@ export function ChatOverflowSheet({
   onStartRun,
   runsSupported = false,
   sessions = [],
+  onEditAgent,
 }: ChatOverflowSheetProps) {
   if (!visible) return null;
 
@@ -65,6 +68,18 @@ export function ChatOverflowSheet({
       ) : null}
 
       <View style={styles.actions}>
+        {onEditAgent ? (
+          <ListRow
+            title="Edit agent"
+            subtitle="Description, soul, and model pin"
+            icon={{ ios: 'pencil', android: 'edit', web: 'edit' }}
+            chevron={false}
+            onPress={() => {
+              onEditAgent();
+              onClose();
+            }}
+          />
+        ) : null}
         {runsSupported && onStartRun ? (
           <ListRow
             title="Run task"

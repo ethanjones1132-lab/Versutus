@@ -28,7 +28,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDivider } from '@/lib/format';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
-import { buildRoster, type ChatSurface, type RosterRow } from '@/lib/gateway/bots';
+import { botToEditInput, buildBotUpdatePatch, buildRoster, type ChatSurface, type PublicBot, type RosterRow } from '@/lib/gateway/bots';
 import { routineName } from '@/lib/gateway/routines';
 import { effectiveModel } from '@/lib/gateway/model-selection';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
@@ -116,6 +116,7 @@ export function ChatScreen() {
     selectBackend,
     listBots,
     createBot,
+    updateBot,
     openBot,
     clearBot,
     botJobs,
@@ -137,6 +138,8 @@ export function ChatScreen() {
   const [newAgentVisible, setNewAgentVisible] = useState(false);
   const [newAgentBusy, setNewAgentBusy] = useState(false);
   const [newAgentError, setNewAgentError] = useState<string | undefined>();
+  // The Bot being edited, if any — keys the shared agent sheet so its state resets per target.
+  const [editingBot, setEditingBot] = useState<PublicBot | null>(null);
   const [routineJobs, setRoutineJobs] = useState<RoutineJob[]>([]);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const listRef = useRef<FlatList<ChatMessage>>(null);
@@ -339,19 +342,30 @@ export function ChatScreen() {
       />
 
       <NewAgentSheet
+        key={editingBot ? `edit-${editingBot.id}` : 'create'}
         visible={newAgentVisible}
         busy={newAgentBusy}
         error={newAgentError}
-        onClose={() => setNewAgentVisible(false)}
-        onSubmit={(draft) => {
+        initial={editingBot ? botToEditInput(editingBot) : undefined}
+        onClose={() => {
+          setNewAgentVisible(false);
+          setEditingBot(null);
+        }}
+        onSubmit={(form) => {
           setNewAgentBusy(true);
           setNewAgentError(undefined);
-          void createBot(draft)
+          const target = editingBot;
+          // Edit sends only what the form owns; the Gate leaves absent fields untouched.
+          const request = target
+            ? updateBot({ id: target.id, ...buildBotUpdatePatch(form) })
+            : createBot(form);
+          void request
             .then(async (bot) => {
               setNewAgentVisible(false);
+              setEditingBot(null);
               const bots = await listBots();
               setRosterRows(buildRoster(bots));
-              if (bot.routable) {
+              if (!target && bot.routable) {
                 await openBot(bot.id);
                 setSurface({ kind: 'bot', botId: bot.id });
               }
@@ -424,6 +438,7 @@ export function ChatScreen() {
           }}
           onNewAgent={() => {
             setNewAgentError(undefined);
+            setEditingBot(null);
             setNewAgentVisible(true);
           }}
         />
@@ -563,6 +578,20 @@ export function ChatScreen() {
           setDraft('/run ');
           setOverflowVisible(false);
         }}
+        onEditAgent={
+          surface.kind === 'bot'
+            ? () => {
+                const row = rosterRows.find(
+                  (candidate): candidate is Extract<RosterRow, { kind: 'bot' }> =>
+                    candidate.kind === 'bot' && candidate.bot.id === surface.botId,
+                );
+                if (!row) return;
+                setNewAgentError(undefined);
+                setEditingBot(row.bot);
+                setNewAgentVisible(true);
+              }
+            : undefined
+        }
       />
 
       <BackendPickerSheet

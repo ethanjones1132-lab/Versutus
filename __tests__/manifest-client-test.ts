@@ -534,6 +534,28 @@ describe('ManifestClient sessions and runs when advertised', () => {
     expect(body.soul).toBe('Be brief.');
   });
 
+  test('updateBot PATCHes /v1/bots/:id with only the fields present', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ id: 'coder', displayName: 'coder', routable: true }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', bots: '/v1/bots' });
+    const bot = await client.updateBot({ id: 'coder', description: 'Reads code' });
+    expect(bot.id).toBe('coder');
+    expect(fetchMock.mock.calls[0][1].method).toBe('PATCH');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/v1/bots/coder');
+    // Absent fields are left out of the body entirely, not sent as nulls —
+    // the Gate treats a missing field as "leave untouched".
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ description: 'Reads code' });
+  });
+
+  test('updateBot refuses to guess the path when the manifest omits bots', async () => {
+    const client = clientWithEndpoints({ health: '/health' });
+    await expect(client.updateBot({ id: 'coder' })).rejects.toThrow(/bots/);
+  });
+
   test('listBots GETs endpoints.bots and does not resume a session', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

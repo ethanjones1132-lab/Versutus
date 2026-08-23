@@ -9,30 +9,48 @@ export type NewAgentDraft = {
   soul?: string;
   inheritKeys: boolean;
   description?: string;
+  modelId?: string;
+  providerId?: string;
+};
+
+/** Prefill for an existing Bot — the same sheet doubles as the edit form. */
+export type EditAgentInitial = {
+  name: string;
+  description: string;
+  modelId: string;
+  providerId: string;
 };
 
 export function NewAgentSheet({
   visible,
   busy,
   error,
+  initial,
   onClose,
   onSubmit,
 }: {
   visible: boolean;
   busy?: boolean;
   error?: string;
+  /** Present when editing an existing Bot; the parent keys this sheet by target so state resets. */
+  initial?: EditAgentInitial;
   onClose: () => void;
   onSubmit: (draft: NewAgentDraft) => void;
 }) {
-  const [name, setName] = useState('');
+  const editing = Boolean(initial);
+  const [name, setName] = useState(initial?.name ?? '');
   const [soul, setSoul] = useState('');
-  const [description, setDescription] = useState('');
+  const [description, setDescription] = useState(initial?.description ?? '');
+  const [modelId, setModelId] = useState(initial?.modelId ?? '');
+  const [providerId, setProviderId] = useState(initial?.providerId ?? '');
   const [inheritKeys, setInheritKeys] = useState(true);
 
   const reset = () => {
     setName('');
     setSoul('');
     setDescription('');
+    setModelId('');
+    setProviderId('');
     setInheritKeys(true);
   };
 
@@ -40,7 +58,7 @@ export function NewAgentSheet({
     <BaseSheet
       visible={visible}
       eyebrow="BOTS"
-      title="New Agent"
+      title={editing ? 'Edit Agent' : 'New Agent'}
       onClose={() => {
         reset();
         onClose();
@@ -48,12 +66,15 @@ export function NewAgentSheet({
       closeLabel="Dismiss">
       <View style={styles.pad}>
         <Text variant="caption" color="tertiary" style={styles.blurb}>
-          Creates a Hermes profile on the host. Inherit copies default provider keys; empty starts with none.
+          {editing
+            ? 'Applies only the fields you fill in — a blank field leaves what the Gate holds untouched.'
+            : 'Creates a Hermes profile on the host. Inherit copies default provider keys; empty starts with none.'}
         </Text>
         <Text variant="micro" color="secondary">
           Name
         </Text>
-        <TextField value={name} onChangeText={setName} placeholder="researcher" autoCapitalize="none" />
+        {/* The name is the profile's identity — editing renames nothing, so it stays read-only here. */}
+        <TextField value={name} onChangeText={setName} placeholder="researcher" autoCapitalize="none" editable={!editing} />
         <Text variant="micro" color="secondary" style={styles.gap}>
           Description
         </Text>
@@ -64,21 +85,31 @@ export function NewAgentSheet({
         <TextField
           value={soul}
           onChangeText={setSoul}
-          placeholder="Standing personality and instructions"
+          placeholder={editing ? 'Leave unchanged' : 'Standing personality and instructions'}
           multiline
         />
-        <Button
-          label={inheritKeys ? 'Inherit keys from default' : 'Empty key set'}
-          variant="ghost"
-          onPress={() => setInheritKeys((value) => !value)}
-        />
+        <Text variant="micro" color="secondary" style={styles.gap}>
+          Model pin
+        </Text>
+        <TextField value={modelId} onChangeText={setModelId} placeholder="provider/model-id" autoCapitalize="none" />
+        <Text variant="micro" color="secondary" style={styles.gap}>
+          Provider pin
+        </Text>
+        <TextField value={providerId} onChangeText={setProviderId} placeholder="provider-id" autoCapitalize="none" />
+        {!editing ? (
+          <Button
+            label={inheritKeys ? 'Inherit keys from default' : 'Empty key set'}
+            variant="ghost"
+            onPress={() => setInheritKeys((value) => !value)}
+          />
+        ) : null}
         {error ? (
           <Text variant="caption" color="statusDisconnected">
             {error}
           </Text>
         ) : null}
         <Button
-          label={busy ? 'Creating…' : 'Create'}
+          label={busy ? (editing ? 'Saving…' : 'Creating…') : editing ? 'Save' : 'Create'}
           disabled={busy || !name.trim()}
           onPress={() =>
             onSubmit({
@@ -86,6 +117,8 @@ export function NewAgentSheet({
               soul: soul.trim() || undefined,
               inheritKeys,
               description: description.trim() || undefined,
+              modelId: modelId.trim() || undefined,
+              providerId: providerId.trim() || undefined,
             })
           }
         />

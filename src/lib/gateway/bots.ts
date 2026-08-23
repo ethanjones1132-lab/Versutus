@@ -24,6 +24,48 @@ export function botRowSubtitle(bot: PublicBot): string {
   return pin ? `Bot · ${pin}` : 'Bot';
 }
 
+/** What the phone's bot edit form can change. The name is identity (ADR 0011) and is not editable. */
+export type BotEditDraft = {
+  soul?: string;
+  description?: string;
+  modelId?: string;
+  providerId?: string;
+};
+
+/**
+ * Prefill an edit form from what the Gate reports. SOUL.md's current text is
+ * not part of the roster payload, so the soul field starts empty — there it
+ * means "leave unchanged", never "clear".
+ */
+export function botToEditInput(bot: PublicBot): {
+  name: string;
+  description: string;
+  modelId: string;
+  providerId: string;
+} {
+  return {
+    name: bot.displayName,
+    description: bot.description ?? '',
+    modelId: bot.model?.default ?? '',
+    providerId: bot.model?.provider ?? '',
+  };
+}
+
+/**
+ * Fields the edit form owns, expressed as an update patch. The Gate applies
+ * only what the request carries and leaves absent fields untouched, so a
+ * blank field means "leave unchanged" — fixing a typo'd description must
+ * never wipe a model pin the form did not show.
+ */
+export function buildBotUpdatePatch(input: BotEditDraft): BotEditDraft {
+  const patch: BotEditDraft = {};
+  for (const key of ['soul', 'description', 'modelId', 'providerId'] as const) {
+    const value = input[key];
+    if (typeof value === 'string' && value.trim()) patch[key] = value.trim();
+  }
+  return patch;
+}
+
 export type RosterRow =
   | { kind: 'configurable' }
   | { kind: 'bot'; bot: PublicBot };

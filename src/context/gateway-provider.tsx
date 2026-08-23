@@ -166,6 +166,14 @@ type GatewayContextValue = {
     modelId?: string;
     providerId?: string;
   }) => Promise<PublicBot>;
+  /** Edit an existing Bot's soul, description or model pin — Gate adapters only. */
+  updateBot: (input: {
+    id: string;
+    soul?: string;
+    description?: string;
+    modelId?: string;
+    providerId?: string;
+  }) => Promise<PublicBot>;
   openBot: (botId: string) => Promise<void>;
   clearBot: () => void;
   botJobs: {
@@ -2321,6 +2329,20 @@ const response = await executeGatewaySlashCommand(trimmed, {
     return client.createBot(input);
   }, []);
 
+  const updateBot = useCallback(async (input: {
+    id: string;
+    soul?: string;
+    description?: string;
+    modelId?: string;
+    providerId?: string;
+  }): Promise<PublicBot> => {
+    const client = clientRef.current;
+    if (!client?.updateBot) {
+      throw new Error('This gateway does not edit bots.');
+    }
+    return client.updateBot(input);
+  }, []);
+
   const clearBot = useCallback(() => {
     clientRef.current?.setBotId?.(undefined);
     setSelectedBotId(undefined);
@@ -2431,6 +2453,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       selectedBotId,
       listBots,
       createBot,
+      updateBot,
       openBot,
       clearBot,
       botJobs,
@@ -2485,7 +2508,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       messages, isSending, isCommandRunning, lastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, openBot, clearBot, botJobs, runAgentCommand, setupFromPcAddress, retryAutoConnect,
+      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, openBot, clearBot, botJobs, runAgentCommand, setupFromPcAddress, retryAutoConnect,
       setAutoConnect, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,
