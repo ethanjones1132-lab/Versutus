@@ -170,6 +170,7 @@ export class OpenClawGatewayClient {
     this.connectSent = false;
     this.connectInFlight = false;
     this.connectUsedStoredDeviceToken = false;
+    this.retireSocket();
 
     try {
       const socket = new WebSocket(this.profile.url);
@@ -205,6 +206,33 @@ export class OpenClawGatewayClient {
       };
     } catch (error) {
       this.handleTerminalFailure(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /**
+   * Close out a lingering socket before its replacement opens.
+   *
+   * A second connect() (double-tap, resumeReconnect while still connecting)
+   * used to overwrite `this.socket` and orphan the previous WebSocket — still
+   * open, still delivering frames into shared handlers, still holding native
+   * resources, and visible to the gateway as a phantom operator session.
+   * Retirement detaches its handlers FIRST: its late close report must neither
+   * flush the replacement's pending work nor schedule a ghost reconnect behind
+   * the new attempt's back — the survivor owns recovery from here on.
+   */
+  private retireSocket() {
+    const prior = this.socket;
+    if (!prior) return;
+    this.socket = null;
+    prior.onopen = null;
+    prior.onmessage = null;
+    prior.onclose = null;
+    prior.onerror = null;
+    this.flushPending(new Error('Connection replaced by a newer attempt'));
+    try {
+      prior.close();
+    } catch {
+      // Already dead — there is nothing left to release.
     }
   }
 

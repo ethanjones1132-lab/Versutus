@@ -84,6 +84,20 @@ function challenge(nonce: string) {
   return { type: 'event', event: 'connect.challenge', payload: { nonce } };
 }
 
+function helloOk() {
+  return {
+    type: 'res',
+    id: 'connect',
+    ok: true,
+    payload: {
+      type: 'hello-ok',
+      protocol: 4,
+      server: {},
+      auth: { deviceToken: 'dt-1', role: 'operator', scopes: ['operator.read'] },
+    },
+  };
+}
+
 /** Drain pending microtasks so an async sendConnect reaches its next await. */
 const flush = async () => {
   for (let i = 0; i < 10; i += 1) await Promise.resolve();
@@ -250,5 +264,64 @@ describe('OpenClawGatewayClient handshake', () => {
     expect(mockSaveToken).toHaveBeenCalledWith(
       expect.objectContaining({ deviceId: 'device-1', token: 'dt-1' }),
     );
+  });
+
+  // The regression: a second connect() overwrote `this.socket` and orphaned
+  // the first WebSocket — still open, still delivering frames, holding native
+  // resources, and visible to the gateway as a phantom operator session.
+  test('a second connect retires the first socket instead of leaking it', async () => {
+    client.connect();
+    client.connect(); // double-tap / resumeReconnect while still connecting
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(FakeWebSocket.instances[0].closedByClient).toBe(true); // retired, not orphaned
+    expect(FakeWebSocket.instances[1].closedByClient).toBe(false);
+
+    // The survivor speaks for the client; the buried socket never does.
+    const ws = FakeWebSocket.instances[1];
+    ws.serverOpen();
+    ws.serverFrame(challenge('n1'));
+    await flush();
+    expect(ws.sentFrames()).toHaveLength(1);
+    expect(FakeWebSocket.instances[0].sent).toHaveLength(0);
+
+    // Its late close report changes nothing — its handlers were detached.
+    FakeWebSocket.instances[0].serverClose(1006);
+    expect(client.connectionStatus).toBe('connecting');
+    jest.advanceTimersByTime(60_000);
+    expect(FakeWebSocket.instances).toHaveLength(2); // no ghost retry materialised
+  });
+
+  test('reconnecting over a live session keeps exactly one socket and fails stranded requests honestly', async () => {
+    client.connect();
+    const first = FakeWebSocket.instances[0];
+    first.serverOpen();
+    first.serverFrame(challenge('n1'));
+    await flush();
+    first.serverFrame(helloOk());
+    await flush();
+    expect(client.connectionStatus).toBe('connected');
+
+    const inFlight = client.request('session.list');
+    await flush(); // the request registers its pending entry while still connected
+    client.connect(); // operator-driven reconnect over the live session
+
+    await expect(inFlight).rejects.toThrow('Connection replaced');
+
+    const second = FakeWebSocket.instances[1];
+    expect(first.closedByClient).toBe(true);
+    expect(second.closedByClient).toBe(false);
+
+    // The replacement completes a normal handshake and holds the line.
+    second.serverOpen();
+    second.serverFrame(challenge('n2'));
+    await flush();
+    second.serverFrame(helloOk());
+    await flush();
+    expect(client.connectionStatus).toBe('connected');
+
+    jest.advanceTimersByTime(60_000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(client.connectionStatus).toBe('connected');
   });
 });
