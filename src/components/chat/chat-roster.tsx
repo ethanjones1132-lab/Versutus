@@ -25,6 +25,8 @@ export type ChatRosterProps = {
   groups?: BotGroupRoom[];
   onSelectConfigurable: () => void;
   onSelectBot: (bot: PublicBot) => void;
+  /** Long-press a roster row: the detail surface (description, pin, routing fix, id). */
+  onBotDetail?: (bot: PublicBot) => void;
   onSelectGroup?: (group: BotGroupRoom) => void;
   onNewAgent?: () => void;
   /** Present only when the gateway can create rooms (bots endpoint + groups advertised). */
@@ -38,6 +40,7 @@ export function ChatRoster({
   groups = [],
   onSelectConfigurable,
   onSelectBot,
+  onBotDetail,
   onSelectGroup,
   onNewAgent,
   onNewGroup,
@@ -97,6 +100,7 @@ export function ChatRoster({
             subtitle={botRowSubtitle(row.bot)}
             leading={<BotAvatar botId={row.bot.id} />}
             onPress={row.bot.routable ? () => onSelectBot(row.bot) : undefined}
+            onLongPress={onBotDetail ? () => onBotDetail(row.bot) : undefined}
             style={styles.row}
           />
         );

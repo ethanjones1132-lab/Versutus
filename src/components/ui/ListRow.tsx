@@ -20,6 +20,13 @@ export type ListRowProps = {
   leading?: React.ReactNode;
   trailing?: React.ReactNode;
   onPress?: () => void;
+  /**
+   * Long-press action, independent of onPress — this is how a row can carry
+   * a secondary surface (e.g. a Bot detail sheet) while the tap keeps its
+   * primary meaning, and how an otherwise-disabled row (unroutable Bot)
+   * still responds to touch.
+   */
+  onLongPress?: () => void;
   /** Show a trailing chevron. Default true when onPress is set. */
   chevron?: boolean;
   style?: StyleProp<ViewStyle>;
@@ -34,22 +41,30 @@ export function ListRow({
   leading,
   trailing,
   onPress,
+  onLongPress,
   chevron,
   style,
 }: ListRowProps) {
   const tokens = useTokens();
   const showChevron = chevron ?? !!onPress;
+  const interactive = !!onPress || !!onLongPress;
 
   const handlePress = async () => {
     await haptics.selection();
     onPress?.();
   };
 
+  const handleLongPress = async () => {
+    await haptics.selection();
+    onLongPress?.();
+  };
+
   return (
     <PressableScale
       onPress={onPress ? handlePress : undefined}
-      disabled={!onPress}
-      accessibilityRole={onPress ? 'button' : undefined}
+      onLongPress={onLongPress ? handleLongPress : undefined}
+      disabled={!interactive}
+      accessibilityRole={interactive ? 'button' : undefined}
       accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
       style={[styles.row, style]}>
       {leading ? (

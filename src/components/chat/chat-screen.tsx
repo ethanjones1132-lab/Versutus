@@ -5,6 +5,7 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { ApprovalSheet } from '@/components/chat/approval-sheet';
 import { BackendPickerSheet } from '@/components/chat/backend-picker-sheet';
+import { BotDetailSheet } from '@/components/chat/bot-detail-sheet';
 import { ChatComposer } from '@/components/chat/chat-composer';
 import { ChatRoster } from '@/components/chat/chat-roster';
 import { CreateGroupSheet } from '@/components/chat/create-group-sheet';
@@ -144,6 +145,8 @@ export function ChatScreen() {
   const [newAgentError, setNewAgentError] = useState<string | undefined>();
   // The Bot being edited, if any — keys the shared agent sheet so its state resets per target.
   const [editingBot, setEditingBot] = useState<PublicBot | null>(null);
+  // Long-press target on the roster: which Bot's detail sheet is open.
+  const [detailBot, setDetailBot] = useState<PublicBot | null>(null);
   const [routineJobs, setRoutineJobs] = useState<RoutineJob[]>([]);
   const [groups, setGroups] = useState<BotGroupRoom[]>([]);
   const [newGroupVisible, setNewGroupVisible] = useState(false);
@@ -452,6 +455,8 @@ export function ChatScreen() {
         }}
       />
 
+      <BotDetailSheet bot={detailBot} onClose={() => setDetailBot(null)} />
+
       <PairingSheet
         visible={showPairingSheet}
         deviceId={deviceId ?? ''}
@@ -512,6 +517,7 @@ export function ChatScreen() {
               setSurface({ kind: 'roster' });
             });
           }}
+          onBotDetail={setDetailBot}
           onSelectGroup={(group) => {
             setSurface({ kind: 'group', groupId: group.id });
           }}

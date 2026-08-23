@@ -101,6 +101,19 @@ const TITLES: Record<Exclude<RunFailureKind, 'generic'>, Pick<RunFailureView, 't
   },
 };
 
+/**
+ * Routing-state verdicts share the run-failure vocabulary: "no listen key"
+ * and "default key refused" are the same host states whether the Gate
+ * reported them as a send failure or as roster routing state, so both
+ * surfaces must show the same title and the same fix. Kept here — not
+ * re-declared by callers — so the strings stay pinned in one place.
+ */
+export function routingFailureView(
+  kind: Extract<RunFailureKind, 'listen_key_missing' | 'default_key_refused'>,
+): Pick<RunFailureView, 'title' | 'next'> {
+  return TITLES[kind];
+}
+
 /** Classify and render the full view in one call. */
 export function describeRunFailure(message: string): RunFailureView {
   const cause = message ?? '';

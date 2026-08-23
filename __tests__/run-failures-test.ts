@@ -1,4 +1,4 @@
-import { classifyRunFailure, describeRunFailure, formatRunFailure } from '@/lib/gateway/run-failures';
+import { classifyRunFailure, describeRunFailure, formatRunFailure, routingFailureView } from '@/lib/gateway/run-failures';
 
 // Every raw string below is one the Gate actually emits — pinned verbatim so
 // a Gate wording change shows up here as a test failure instead of silently
@@ -73,4 +73,18 @@ test('formatRunFailure composes verdict, verbatim cause, and fix without doubled
   const punctuated = formatRunFailure('hermes server exited with code 1 before becoming reachable.');
   expect(punctuated).not.toContain('..');
   expect(punctuated?.startsWith('Environment unreachable — hermes server exited with code 1 before becoming reachable. Check')).toBe(true);
+});
+
+test('routingFailureView hands the roster the same verdicts a failed send gets', () => {
+  // The detail surface must not re-declare these strings — if the send-side
+  // wording changes, the routing state follows in the same commit or this
+  // test fails.
+  expect(routingFailureView('listen_key_missing')).toEqual({
+    title: 'Bot has no listen key',
+    next: "Set API_SERVER_KEY in the profile's .env on the host, then retry.",
+  });
+  expect(routingFailureView('default_key_refused')).toEqual({
+    title: 'Bot listen key refused',
+    next: "Give this profile its own API_SERVER_KEY — named Bots reject the default profile's key.",
+  });
 });
