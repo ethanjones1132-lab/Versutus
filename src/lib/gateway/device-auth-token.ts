@@ -59,6 +59,27 @@ async function writeRawTokenStore(value: string | null): Promise<void> {
   else await secureKeyValueStorage.setItem(DEVICE_AUTH_TOKEN_KEY, value);
 }
 
+// Save/clear are read-modify-write over the whole token blob. Two overlapping
+// mutations would each read the same base state and the second write would
+// erase everything the first changed — last-writer-wins on the entire store,
+// not just the role it touched. Serialize mutations through a single promise
+// chain so each one reads what the previous one wrote. Reads stay lock-free:
+// a load racing a write may observe the pre-write state, which is acceptable,
+// while keeping loadDeviceAuthToken off the queue avoids adding latency to the
+// handshake path.
+let mutationQueueTail: Promise<void> = Promise.resolve();
+
+function enqueueStoreMutation<T>(task: () => Promise<T>): Promise<T> {
+  const result = mutationQueueTail.then(task);
+  // A failed mutation must reject its own caller without poisoning the queue:
+  // the tail always settles resolved so the next mutation still runs.
+  mutationQueueTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
 export async function loadDeviceAuthToken(
   deviceId: string,
   role: string,
@@ -76,32 +97,36 @@ export async function saveDeviceAuthToken(params: {
   const token = params.token.trim();
   if (!token) return;
 
-  const existing = parseStore(await readRawTokenStore(), params.deviceId);
-  const store: DeviceAuthStore = existing ?? {
-    version: 1,
-    deviceId: params.deviceId,
-    tokens: {},
-  };
+  await enqueueStoreMutation(async () => {
+    const existing = parseStore(await readRawTokenStore(), params.deviceId);
+    const store: DeviceAuthStore = existing ?? {
+      version: 1,
+      deviceId: params.deviceId,
+      tokens: {},
+    };
 
-  store.tokens[params.role] = {
-    token,
-    role: params.role,
-    scopes: normalizeScopes(params.scopes),
-    updatedAtMs: Date.now(),
-  };
+    store.tokens[params.role] = {
+      token,
+      role: params.role,
+      scopes: normalizeScopes(params.scopes),
+      updatedAtMs: Date.now(),
+    };
 
-  await writeRawTokenStore(JSON.stringify(store));
+    await writeRawTokenStore(JSON.stringify(store));
+  });
 }
 
 export async function clearDeviceAuthToken(deviceId: string, role: string): Promise<void> {
-  const store = parseStore(await readRawTokenStore(), deviceId);
-  if (!store?.tokens[role]) return;
+  await enqueueStoreMutation(async () => {
+    const store = parseStore(await readRawTokenStore(), deviceId);
+    if (!store?.tokens[role]) return;
 
-  delete store.tokens[role];
-  if (Object.keys(store.tokens).length === 0) {
-    await writeRawTokenStore(null);
-    return;
-  }
+    delete store.tokens[role];
+    if (Object.keys(store.tokens).length === 0) {
+      await writeRawTokenStore(null);
+      return;
+    }
 
-  await writeRawTokenStore(JSON.stringify(store));
+    await writeRawTokenStore(JSON.stringify(store));
+  });
 }
