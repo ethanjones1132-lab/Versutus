@@ -1,5 +1,6 @@
 import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/chat-stream-delta';
 import type { PublicBot } from '@/lib/gateway/bots';
+import type { BotGroupRoom, GroupReply } from '@/lib/gateway/groups';
 import { isAuthRejection } from '@/lib/gateway/errors';
 import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
 import { HttpTransport } from '@/lib/gateway/http-transport';
@@ -504,6 +505,60 @@ export class ManifestClient implements PortalClient {
     if (!path) return [];
     const result = await this.rootTransport.request<{ data?: PublicBot[] }>('GET', this.withBackend(path));
     return result.data ?? [];
+  }
+
+  /**
+   * Group rooms are Gate-level (shared across environments), so unlike bots
+   * and jobs these calls carry no bot/backend scoping — the room store lives
+   * in the Gate home, not behind a backend. A gate that does not advertise
+   * `botGroups` simply has no rooms: list degrades to empty, the rest name
+   * the missing capability through requireEndpoint.
+   */
+  async listGroups(): Promise<BotGroupRoom[]> {
+    const path = this.endpoints.botGroups;
+    if (!path) return [];
+    const result = await this.rootTransport.request<{ data?: BotGroupRoom[] }>('GET', path);
+    return result.data ?? [];
+  }
+
+  async createGroup(input: { name: string; memberIds: string[] }): Promise<BotGroupRoom> {
+    const path = this.requireEndpoint('botGroups');
+    return this.rootTransport.request<BotGroupRoom>('POST', path, input);
+  }
+
+  /**
+   * One send runs the whole planned round-robin server-side and returns every
+   * reply with its author, so a silent bot ends the plan early instead of
+   * hanging the phone mid-round.
+   */
+  async sendGroupMessage(
+    groupId: string,
+    input: { text: string; mentionedIds?: string[] },
+  ): Promise<{ replies: GroupReply[] }> {
+    const path = this.requireEndpoint('botGroups');
+    return this.rootTransport.request(
+      'POST',
+      `${path.replace(/\/+$/, '')}/${encodeURIComponent(groupId)}/messages`,
+      input,
+    );
+  }
+
+  async renameGroup(groupId: string, name: string): Promise<BotGroupRoom> {
+    const path = this.requireEndpoint('botGroups');
+    return this.rootTransport.request(
+      'PATCH',
+      `${path.replace(/\/+$/, '')}/${encodeURIComponent(groupId)}`,
+      { name },
+    );
+  }
+
+  async leaveGroup(groupId: string, memberId: string): Promise<BotGroupRoom> {
+    const path = this.requireEndpoint('botGroups');
+    return this.rootTransport.request(
+      'POST',
+      `${path.replace(/\/+$/, '')}/${encodeURIComponent(groupId)}/leave`,
+      { memberId },
+    );
   }
 
   async getSessions(limit = 20): Promise<HermesSession[]> {

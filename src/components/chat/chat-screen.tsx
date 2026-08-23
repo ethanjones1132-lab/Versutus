@@ -7,6 +7,8 @@ import { ApprovalSheet } from '@/components/chat/approval-sheet';
 import { BackendPickerSheet } from '@/components/chat/backend-picker-sheet';
 import { ChatComposer } from '@/components/chat/chat-composer';
 import { ChatRoster } from '@/components/chat/chat-roster';
+import { CreateGroupSheet } from '@/components/chat/create-group-sheet';
+import { GroupRoomView } from '@/components/chat/group-room-view';
 import { NewAgentSheet } from '@/components/chat/new-agent-sheet';
 import { RoutinesPane, type RoutineJob } from '@/components/chat/routines-pane';
 import { DayDivider } from '@/components/chat/day-divider';
@@ -29,6 +31,7 @@ import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDivider } from '@/lib/format';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { botToEditInput, buildBotUpdatePatch, buildRoster, type ChatSurface, type PublicBot, type RosterRow } from '@/lib/gateway/bots';
+import type { BotGroupRoom } from '@/lib/gateway/groups';
 import { routineName } from '@/lib/gateway/routines';
 import { effectiveModel } from '@/lib/gateway/model-selection';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
@@ -120,6 +123,7 @@ export function ChatScreen() {
     openBot,
     clearBot,
     botJobs,
+    botGroups,
     selectedBotId,
   } = useGateway();
 
@@ -141,6 +145,10 @@ export function ChatScreen() {
   // The Bot being edited, if any — keys the shared agent sheet so its state resets per target.
   const [editingBot, setEditingBot] = useState<PublicBot | null>(null);
   const [routineJobs, setRoutineJobs] = useState<RoutineJob[]>([]);
+  const [groups, setGroups] = useState<BotGroupRoom[]>([]);
+  const [newGroupVisible, setNewGroupVisible] = useState(false);
+  const [newGroupBusy, setNewGroupBusy] = useState(false);
+  const [newGroupError, setNewGroupError] = useState<string | undefined>();
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const pinnedRef = useRef(true);
@@ -264,6 +272,41 @@ export function ChatScreen() {
     };
   }, [botSurfaceId, status, botJobs]);
 
+  // Group rooms load alongside the roster. A gateway that does not advertise
+  // them answers with an empty list — no error, just no section.
+  const groupsOnRoster = surface.kind === 'roster';
+  const refreshGroups = useCallback(() => {
+    return botGroups
+      .list()
+      .then((rooms) => {
+        setGroups(rooms);
+        return rooms;
+      })
+      .catch(() => {
+        setGroups([]);
+        return [] as BotGroupRoom[];
+      });
+  }, [botGroups]);
+
+  useEffect(() => {
+    // refreshGroups stores the rooms itself; React ignores a store after
+    // unmount, so no cancellation plumbing is needed here.
+    if (!groupsOnRoster || status !== 'connected') return;
+    void refreshGroups();
+  }, [groupsOnRoster, status, refreshGroups]);
+
+  const rosterBots = useMemo(
+    () =>
+      rosterRows.flatMap((row) => (row.kind === 'bot' ? [row.bot] : [])),
+    [rosterRows],
+  );
+  const activeGroup = surface.kind === 'group'
+    ? groups.find((group) => group.id === surface.groupId)
+    : undefined;
+  // Thread surfaces ride the provider message pipeline; a group room and the
+  // roster do not (the room owns its transcript locally).
+  const threadSurface = surface.kind === 'configurable' || surface.kind === 'bot';
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     const started = Date.now();
@@ -321,11 +364,17 @@ export function ChatScreen() {
         status={status}
         statusDetail={status === 'connected' ? undefined : statusDetail || probeMessage}
         streaming={isStreaming}
-        sessionLabel={surface.kind === 'roster' ? undefined : sessionLabel}
-        modelLabel={surface.kind === 'roster' ? undefined : modelLabel}
-        onSessionPress={surface.kind === 'roster' ? undefined : () => void openSessionSelector()}
-        onModelPress={surface.kind === 'roster' ? undefined : () => openModelPicker('default')}
-        onOverflowPress={surface.kind === 'roster' ? undefined : () => setOverflowVisible(true)}
+        sessionLabel={
+          surface.kind === 'group'
+            ? activeGroup?.name
+            : threadSurface
+              ? sessionLabel
+              : undefined
+        }
+        modelLabel={threadSurface ? modelLabel : undefined}
+        onSessionPress={threadSurface ? () => void openSessionSelector() : undefined}
+        onModelPress={threadSurface ? () => openModelPicker('default') : undefined}
+        onOverflowPress={threadSurface ? () => setOverflowVisible(true) : undefined}
         backendLabel={
           surface.kind === 'bot'
             ? rosterRows.find((row): row is Extract<RosterRow, { kind: 'bot' }> => row.kind === 'bot' && row.bot.id === surface.botId)?.bot.displayName
@@ -374,6 +423,32 @@ export function ChatScreen() {
               setNewAgentError(error instanceof Error ? error.message : String(error));
             })
             .finally(() => setNewAgentBusy(false));
+        }}
+      />
+
+      <CreateGroupSheet
+        // Keyed by visibility so every open remounts with clean fields —
+        // a half-typed name from a cancelled attempt never leaks back in.
+        key={newGroupVisible ? 'new-group-open' : 'new-group-closed'}
+        visible={newGroupVisible}
+        busy={newGroupBusy}
+        error={newGroupError}
+        bots={rosterBots}
+        onClose={() => setNewGroupVisible(false)}
+        onCreate={({ name, memberIds }) => {
+          setNewGroupBusy(true);
+          setNewGroupError(undefined);
+          void botGroups
+            .create({ name, memberIds })
+            .then(async (room) => {
+              setNewGroupVisible(false);
+              await refreshGroups();
+              setSurface({ kind: 'group', groupId: room.id });
+            })
+            .catch((error: unknown) => {
+              setNewGroupError(error instanceof Error ? error.message : String(error));
+            })
+            .finally(() => setNewGroupBusy(false));
         }}
       />
 
@@ -426,6 +501,7 @@ export function ChatScreen() {
           rows={rosterRows}
           loading={rosterLoading}
           error={rosterError}
+          groups={groups}
           onSelectConfigurable={() => {
             clearBot();
             setSurface({ kind: 'configurable' });
@@ -436,12 +512,53 @@ export function ChatScreen() {
               setSurface({ kind: 'roster' });
             });
           }}
+          onSelectGroup={(group) => {
+            setSurface({ kind: 'group', groupId: group.id });
+          }}
           onNewAgent={() => {
             setNewAgentError(undefined);
             setEditingBot(null);
             setNewAgentVisible(true);
           }}
+          onNewGroup={status === 'connected' ? () => {
+            setNewGroupError(undefined);
+            setNewGroupVisible(true);
+          } : undefined}
         />
+      ) : surface.kind === 'group' ? (
+        <View style={styles.listWrap}>
+          {activeGroup ? (
+            <GroupRoomView
+              key={activeGroup.id}
+              group={activeGroup}
+              members={rosterBots}
+              onSend={(text, mentionedIds) => botGroups.send(activeGroup.id, { text, mentionedIds })}
+              onRename={(name) =>
+                botGroups.rename(activeGroup.id, name).then((room) => {
+                  void refreshGroups();
+                  return room;
+                })
+              }
+              onLeave={(memberId) =>
+                botGroups.leave(activeGroup.id, memberId).then((room) => {
+                  void refreshGroups();
+                  // Leaving may drop the room to the two-member floor on an
+                  // older Gate that has no floor guard; either way the roster
+                  // copy is now authoritative.
+                  return room;
+                })
+              }
+            />
+          ) : (
+            <EmptyState
+              icon={{ ios: 'person.3', android: 'groups', web: 'groups' }}
+              title="This room is gone"
+              description="The Gate no longer lists this group room."
+              actionLabel="Back to the roster"
+              onAction={() => setSurface({ kind: 'roster' })}
+            />
+          )}
+        </View>
       ) : (
       <View style={styles.listWrap}>
         <FlatList
@@ -514,7 +631,7 @@ export function ChatScreen() {
 
       )}
 
-      {surface.kind === 'roster' ? null : (
+      {threadSurface ? (
       <ChatComposer
         draft={draft}
         onChangeText={setDraft}
@@ -535,7 +652,7 @@ export function ChatScreen() {
         // provider flushes on reconnect. Block only when no gateway exists.
         canSend={!!activeGateway && !isCommandRunning}
       />
-      )}
+      ) : null}
 
       <SlashCommandPalette
         visible={paletteVisible}

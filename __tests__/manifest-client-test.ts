@@ -572,6 +572,59 @@ describe('ManifestClient sessions and runs when advertised', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain('/v1/bots');
   });
 
+  test('group rooms: list, create, send, rename, and leave ride botGroups without bot scoping', async () => {
+    const room = { id: 'room1', name: 'crew', memberIds: ['a', 'b'] };
+    const fetchMock = jest.fn((input: unknown) => {
+      const url = String(input);
+      const body = url.endsWith('/messages')
+        ? { replies: [{ botId: 'b', text: 'all good' }] }
+        : url.endsWith('/leave')
+          ? { ...room, memberIds: ['a'] }
+          : { object: 'list', data: [room] };
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(body),
+      });
+    }) as unknown as jest.Mock;
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', botGroups: '/v1/bot-groups' });
+
+    const rooms = await client.listGroups();
+    expect(rooms[0].name).toBe('crew');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/v1/bot-groups');
+    // Rooms are Gate-level: no bot= / backendId query may be appended even
+    // though the client carries bot/backend state.
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('bot=');
+
+    await client.createGroup({ name: 'bridge', memberIds: ['a', 'b'] });
+    expect(fetchMock.mock.calls[1][1].method).toBe('POST');
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ name: 'bridge', memberIds: ['a', 'b'] });
+
+    const sent = await client.sendGroupMessage('room1', { text: 'status?', mentionedIds: ['b'] });
+    expect(sent.replies).toEqual([{ botId: 'b', text: 'all good' }]);
+    expect(String(fetchMock.mock.calls[2][0])).toContain('/v1/bot-groups/room1/messages');
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ text: 'status?', mentionedIds: ['b'] });
+
+    await client.renameGroup('room1', 'bridge crew');
+    expect(fetchMock.mock.calls[3][1].method).toBe('PATCH');
+    expect(String(fetchMock.mock.calls[3][0])).toContain('/v1/bot-groups/room1');
+    expect(JSON.parse(fetchMock.mock.calls[3][1].body)).toEqual({ name: 'bridge crew' });
+
+    await client.leaveGroup('room1', 'b');
+    expect(String(fetchMock.mock.calls[4][0])).toContain('/v1/bot-groups/room1/leave');
+    expect(JSON.parse(fetchMock.mock.calls[4][1].body)).toEqual({ memberId: 'b' });
+  });
+
+  test('listGroups degrades to empty on a gate that advertises no rooms', async () => {
+    const fetchMock = jest.fn();
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health' });
+    await expect(client.listGroups()).resolves.toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(client.sendGroupMessage('x', { text: 'hi' })).rejects.toThrow(/botGroups/);
+  });
+
   test('stopRun POSTs the advertised stopRun path with the run id', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

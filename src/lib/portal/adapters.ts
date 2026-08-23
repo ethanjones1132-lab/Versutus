@@ -5,6 +5,7 @@
 
 import { HermesGatewayClient, type GatewayClientCallbacks } from '@/lib/gateway/client';
 import type { PublicBot } from '@/lib/gateway/bots';
+import type { BotGroupRoom, GroupReply } from '@/lib/gateway/groups';
 import { ManifestClient } from '@/lib/gateway/manifest-client';
 import { OpenClawAdapterClient } from '@/lib/portal/openclaw-adapter';
 import type { GatewayIdentity } from '@/lib/portal/identify';
@@ -70,6 +71,15 @@ export interface PortalClient {
   createJob?(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }>;
   runJob?(jobId: string): Promise<void>;
   setJobPaused?(jobId: string, paused: boolean): Promise<void>;
+  /** Gate-owned group rooms. Omitted when the manifest advertises no botGroups endpoint. */
+  listGroups?(): Promise<BotGroupRoom[]>;
+  createGroup?(input: { name: string; memberIds: string[] }): Promise<BotGroupRoom>;
+  sendGroupMessage?(
+    groupId: string,
+    input: { text: string; mentionedIds?: string[] },
+  ): Promise<{ replies: GroupReply[] }>;
+  renameGroup?(groupId: string, name: string): Promise<BotGroupRoom>;
+  leaveGroup?(groupId: string, memberId: string): Promise<BotGroupRoom>;
   handoffMention?(input: { fromId: string; toId: string; text: string }): Promise<unknown>;
   setBotId?(id: string | undefined): void;
   setBackendId?(id: string | undefined): void;

@@ -86,7 +86,8 @@ export type RosterRow =
 export type ChatSurface =
   | { kind: 'roster' }
   | { kind: 'configurable' }
-  | { kind: 'bot'; botId: string };
+  | { kind: 'bot'; botId: string }
+  | { kind: 'group'; groupId: string };
 
 export function buildRoster(bots: PublicBot[]): RosterRow[] {
   return [{ kind: 'configurable' }, ...bots.map((bot) => ({ kind: 'bot' as const, bot }))];

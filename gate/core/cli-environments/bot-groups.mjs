@@ -68,5 +68,50 @@ export function createBotGroupStore(gateHome) {
     async get(id) {
       return (await read()).groups.find((group) => group.id === id) ?? null;
     },
+    async rename(id, name) {
+      const trimmed = String(name ?? '').trim();
+      if (!trimmed) {
+        const error = new Error('name required');
+        error.code = 'invalid_group';
+        error.status = 400;
+        throw error;
+      }
+      const data = await read();
+      const group = data.groups.find((entry) => entry.id === id);
+      if (!group) {
+        const error = new Error('group not found');
+        error.code = 'unknown_group';
+        error.status = 404;
+        throw error;
+      }
+      group.name = trimmed;
+      await write(data);
+      return group;
+    },
+    async leave(id, memberId) {
+      const data = await read();
+      const group = data.groups.find((entry) => entry.id === id);
+      if (!group) {
+        const error = new Error('group not found');
+        error.code = 'unknown_group';
+        error.status = 404;
+        throw error;
+      }
+      if (!group.memberIds.includes(memberId)) {
+        const error = new Error('member not in group');
+        error.code = 'unknown_member';
+        error.status = 404;
+        throw error;
+      }
+      if (group.memberIds.length <= 2) {
+        const error = new Error('a room needs at least 2 members');
+        error.code = 'too_few_members';
+        error.status = 400;
+        throw error;
+      }
+      group.memberIds = group.memberIds.filter((entry) => entry !== memberId);
+      await write(data);
+      return group;
+    },
   };
 }

@@ -1317,3 +1317,71 @@ test('a shell session only accepts input from the credential that opened it', as
     await gate.close();
   }
 });
+
+test('bot groups: manifest advertisement, rename, and leave round-trips', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    // The room endpoints ride the bots capability: same gate that fronts bots.
+    const manifest = await (await fetch(`${base}/.well-known/gateway.json`)).json();
+    assert.equal(manifest.endpoints.botGroups, '/v1/bot-groups');
+
+    const created = await (await fetch(`${base}/v1/bot-groups`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'crew', memberIds: ['researcher', 'coder', 'writer'] }),
+    })).json();
+    assert.deepEqual(created.memberIds, ['researcher', 'coder', 'writer']);
+
+    const renamed = await fetch(`${base}/v1/bot-groups/${created.id}`, {
+      method: 'PATCH',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'bridge crew' }),
+    });
+    assert.equal(renamed.status, 200);
+    assert.equal((await renamed.json()).name, 'bridge crew');
+
+    const left = await fetch(`${base}/v1/bot-groups/${created.id}/leave`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ memberId: 'writer' }),
+    });
+    assert.equal(left.status, 200);
+    assert.deepEqual((await left.json()).memberIds, ['researcher', 'coder']);
+
+    // At the two-member floor a leave would dissolve the room — refused with
+    // the named reason instead of silently breaking the minimum.
+    const floored = await fetch(`${base}/v1/bot-groups/${created.id}/leave`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ memberId: 'coder' }),
+    });
+    assert.equal(floored.status, 400);
+    assert.equal((await floored.json()).error.code, 'too_few_members');
+
+    const unknownGroup = await fetch(`${base}/v1/bot-groups/nope`, {
+      method: 'PATCH',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'x' }),
+    });
+    assert.equal(unknownGroup.status, 404);
+
+    const blankName = await fetch(`${base}/v1/bot-groups/${created.id}`, {
+      method: 'PATCH',
+      headers: auth(gate),
+      body: JSON.stringify({ name: '   ' }),
+    });
+    assert.equal(blankName.status, 400);
+
+    // Both new routes sit behind the token like every other room route.
+    const unauthenticated = await fetch(`${base}/v1/bot-groups/${created.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'x' }),
+    });
+    assert.equal(unauthenticated.status, 401);
+  } finally {
+    await gate.close();
+  }
+});

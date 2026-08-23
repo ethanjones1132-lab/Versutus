@@ -33,6 +33,7 @@ import {
 } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { loadBotChat, type PublicBot } from '@/lib/gateway/bots';
+import type { BotGroupRoom, GroupReply } from '@/lib/gateway/groups';
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
 import { effectiveModel, resolveSendModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
@@ -181,6 +182,16 @@ type GatewayContextValue = {
     create: (input: { name: string; prompt: string; schedule: string }) => Promise<void>;
     run: (jobId: string) => Promise<void>;
     pause: (jobId: string, paused: boolean) => Promise<void>;
+  };
+  botGroups: {
+    list: () => Promise<BotGroupRoom[]>;
+    create: (input: { name: string; memberIds: string[] }) => Promise<BotGroupRoom>;
+    send: (
+      groupId: string,
+      input: { text: string; mentionedIds?: string[] },
+    ) => Promise<{ replies: GroupReply[] }>;
+    rename: (groupId: string, name: string) => Promise<BotGroupRoom>;
+    leave: (groupId: string, memberId: string) => Promise<BotGroupRoom>;
   };
   runAgentCommand: (command: string, options?: { onDelta?: (delta: string) => void }) => Promise<string>;
   dynamicCommands: GatewayCapabilityCommand[];
@@ -2314,6 +2325,34 @@ const response = await executeGatewaySlashCommand(trimmed, {
     },
   }), []);
 
+  const botGroups = useMemo(() => ({
+    list: async () => {
+      const client = clientRef.current;
+      if (!client?.listGroups) return [];
+      return client.listGroups();
+    },
+    create: async (input: { name: string; memberIds: string[] }) => {
+      const client = clientRef.current;
+      if (!client?.createGroup) throw new Error('This gateway does not manage group rooms.');
+      return client.createGroup(input);
+    },
+    send: async (groupId: string, input: { text: string; mentionedIds?: string[] }) => {
+      const client = clientRef.current;
+      if (!client?.sendGroupMessage) throw new Error('This gateway does not manage group rooms.');
+      return client.sendGroupMessage(groupId, input);
+    },
+    rename: async (groupId: string, name: string) => {
+      const client = clientRef.current;
+      if (!client?.renameGroup) throw new Error('This gateway does not manage group rooms.');
+      return client.renameGroup(groupId, name);
+    },
+    leave: async (groupId: string, memberId: string) => {
+      const client = clientRef.current;
+      if (!client?.leaveGroup) throw new Error('This gateway does not manage group rooms.');
+      return client.leaveGroup(groupId, memberId);
+    },
+  }), []);
+
   const createBot = useCallback(async (input: {
     name: string;
     soul?: string;
@@ -2457,6 +2496,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       openBot,
       clearBot,
       botJobs,
+      botGroups,
       runAgentCommand,
       dynamicCommands,
       setupFromPcAddress,
@@ -2508,7 +2548,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       messages, isSending, isCommandRunning, lastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, openBot, clearBot, botJobs, runAgentCommand, setupFromPcAddress, retryAutoConnect,
+      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, openBot, clearBot, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect,
       setAutoConnect, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

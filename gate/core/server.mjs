@@ -743,6 +743,8 @@ export async function createGate(config = {}) {
         (pathname === '/v1/bots/handoff' && method === 'POST') ||
         (pathname === '/v1/bot-groups' && (method === 'GET' || method === 'POST')) ||
         /^\/v1\/bot-groups\/[^/]+\/messages$/.test(pathname) ||
+        /^\/v1\/bot-groups\/[^/]+\/leave$/.test(pathname) ||
+        (method === 'PATCH' && /^\/v1\/bot-groups\/[^/]+$/.test(pathname)) ||
         // Note the divergence from plain /health, which is unauthenticated:
         // detailed diagnostics expose backend internals and need a token.
         (pathname === '/health/detailed' && method === 'GET') ||
@@ -1237,6 +1239,34 @@ export async function createGate(config = {}) {
         } catch (error) {
           res.writeHead(error.status || 400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: error.message, code: error.code ?? 'invalid_group' } }));
+        }
+        return;
+      }
+
+      const groupEditMatch = pathname.match(/^\/v1\/bot-groups\/([^/]+)$/);
+      if (groupEditMatch && method === 'PATCH') {
+        const body = (await readJsonBody(req)) ?? {};
+        try {
+          const group = await botGroups.rename(decodeURIComponent(groupEditMatch[1]), body.name);
+          res.writeHead(200);
+          res.end(JSON.stringify(group));
+        } catch (error) {
+          res.writeHead(error.status || 400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code: error.code ?? 'invalid_group' } }));
+        }
+        return;
+      }
+
+      const groupLeaveMatch = pathname.match(/^\/v1\/bot-groups\/([^/]+)\/leave$/);
+      if (groupLeaveMatch && method === 'POST') {
+        const body = (await readJsonBody(req)) ?? {};
+        try {
+          const group = await botGroups.leave(decodeURIComponent(groupLeaveMatch[1]), body.memberId);
+          res.writeHead(200);
+          res.end(JSON.stringify(group));
+        } catch (error) {
+          res.writeHead(error.status || 400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code: error.code ?? 'group_leave_failed' } }));
         }
         return;
       }
