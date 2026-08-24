@@ -30,7 +30,7 @@ import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDivider } from '@/lib/format';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { botToEditInput, buildBotUpdatePatch, buildRoster, type ChatSurface, type PublicBot, type RosterRow } from '@/lib/gateway/bots';
-import type { BotGroupRoom } from '@/lib/gateway/groups';
+import { rosterInventoryVerified, type BotGroupRoom } from '@/lib/gateway/groups';
 import { routineName } from '@/lib/gateway/routines';
 import { effectiveModel } from '@/lib/gateway/model-selection';
 import { resolveThreadConfigMode, threadConfigOfferedModes, type ThreadConfigMode } from '@/lib/gateway/thread-config';
@@ -632,11 +632,16 @@ export function ChatScreen() {
                           key={activeGroup.id}
                           group={activeGroup}
                           members={rosterBots}
-                          // The phone has an inventory read once a load finished OR rows
-                          // survive from an earlier success (a failed refresh keeps the
-                          // last-known tags live, like the roster screen itself). Only a
-                          // never-completed read leaves routing unverified.
-                          inventoryLoaded={!rosterLoading || rosterBots.length > 0}
+                          // Verified-inventory honesty: only a completed, error-free read
+                          // counts, plus rows that survive from an earlier success. A FAILED
+                          // read verifies nothing even though its spinner stopped — the room
+                          // names the unread roster instead of asserting routing verdicts
+                          // from zero knowledge (rook 2026-08-24T20:51).
+                          inventoryLoaded={rosterInventoryVerified({
+                            loading: rosterLoading,
+                            error: rosterError,
+                            botCount: rosterBots.length,
+                          })}
                           onSend={(text, mentionedIds) => botGroups.send(activeGroup.id, { text, mentionedIds })}
               loadHistory={() => botGroups.history(activeGroup.id)}
               onRename={(name) =>

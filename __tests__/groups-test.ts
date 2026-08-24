@@ -12,6 +12,7 @@ import {
   MAX_GROUP_MESSAGES,
   MAX_GROUP_ROUNDS,
   planGroupRounds,
+  rosterInventoryVerified,
   transcriptToRoomEntries,
   validateGroup,
 } from '@/lib/gateway/groups';
@@ -264,4 +265,24 @@ test('formatGroupMessageTime renders clock time today and a short date older', (
   // Unrenderable stamps degrade to '' so the view skips the line entirely.
   expect(formatGroupMessageTime(Number.NaN, now)).toBe('');
   expect(formatGroupMessageTime(Number.POSITIVE_INFINITY, now)).toBe('');
+});
+
+test('rosterInventoryVerified: a FAILED first read is not loaded, even though its spinner stopped', () => {
+  // The exact lie rook 2026-08-24T20:51 flagged: the load-failure path wipes
+  // the roster and stops the spinner, so `!loading || count > 0` read TRUE
+  // from zero knowledge and the room asserted verdicts it could not prove.
+  expect(rosterInventoryVerified({ loading: false, error: 'HTTP 500', botCount: 0 })).toBe(false);
+});
+
+test('rosterInventoryVerified: a completed clean read verifies even at zero bots', () => {
+  // An empty gateway is a fact, not a gap — a clean read with no rows is proof.
+  expect(rosterInventoryVerified({ loading: false, error: undefined, botCount: 0 })).toBe(true);
+});
+
+test('rosterInventoryVerified: an in-flight first read stays unverified', () => {
+  expect(rosterInventoryVerified({ loading: true, error: undefined, botCount: 0 })).toBe(false);
+});
+
+test('rosterInventoryVerified: rows surviving an earlier success keep verdicts provable after a failed refresh', () => {
+  expect(rosterInventoryVerified({ loading: false, error: 'timeout', botCount: 3 })).toBe(true);
 });

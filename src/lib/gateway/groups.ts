@@ -221,6 +221,27 @@ export function describeRoundOutcome({
   return 'No replies — every bot stayed silent.';
 }
 
+/**
+ * Whether the phone holds VERIFIED bot-inventory knowledge: a completed,
+ * error-free roster read, or rows that survived from an earlier success.
+ * A FAILED read verifies nothing even though it is no longer loading —
+ * its wiped roster must not let plan/outcome lines assert routing
+ * verdicts from zero knowledge (the fake-verdict class B19 exists to
+ * kill; rook 2026-08-24T20:51). Zero bots from a CLEAN read is still
+ * verified: an empty gateway is a fact, not a gap.
+ */
+export function rosterInventoryVerified({
+  loading,
+  error,
+  botCount,
+}: {
+  loading: boolean;
+  error?: string;
+  botCount: number;
+}): boolean {
+  return (!loading && !error) || botCount > 0;
+}
+
 /** Roster subtitle for a group row. */
 export function groupMemberLine(group: Pick<BotGroupRoom, 'memberIds'>): string {
   const count = group.memberIds.length;
