@@ -12,6 +12,7 @@ import { useGateway } from '@/context/gateway-provider';
 import { useGatewayDiscovery } from '@/hooks/use-gateway-discovery';
 import { useTokens } from '@/hooks/use-tokens';
 import { describeAutoRetry } from '@/lib/connection/retry-ladder';
+import { describeGatewayError } from '@/lib/gateway/error-humanizer';
 import { isGatewayTokenRequiredMessage } from '@/lib/gateway/errors';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
@@ -96,7 +97,7 @@ export default function HomeScreen() {
                   the phone{'\n'}- If Hermes reports running but nothing answers: restart the gateway on the PC
                 </Text>
                 <Text variant="caption" color="tertiary">
-                  {lastError}
+                  {describeGatewayError(lastError)}
                 </Text>
               </GlassCollapsible>
             ) : null}
