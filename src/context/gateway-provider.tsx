@@ -865,15 +865,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             }
             if (decision.clearGatewayDownNotified) {
               gatewayDownNotifiedRef.current = false;
-              // Connected again: the posted down notice retires itself instead
-              // of haunting the tray long after the gateway answered.
-              void dismissGatewayDown();
+              // Connected again: this gateway's posted down notice retires
+              // itself instead of haunting the tray long after the gateway
+              // answered — scoped to the gateway that actually answered, so a
+              // still-down alternate gateway keeps its notice.
+              void dismissGatewayDown(gateway.id);
             }
             if (decision.clearProbeMessage) setProbeMessage('');
             if (decision.clearLastError) setLastError(null);
             if (decision.notifyGatewayDown && !gatewayDownNotifiedRef.current) {
               gatewayDownNotifiedRef.current = true;
-              void notifyGatewayDown(gatewayHostForDisplay(gateway.url));
+              void notifyGatewayDown(gateway.id, gatewayHostForDisplay(gateway.url));
             }
             if (decision.scheduleAutoRetry && activeGatewayRef.current && !authFailureRef.current) {
               scheduleAutoRetryRef.current(AUTO_RETRY_BASE_DELAY_MS);
