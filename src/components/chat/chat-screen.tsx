@@ -33,7 +33,7 @@ import { botToEditInput, buildBotUpdatePatch, buildRoster, type ChatSurface, typ
 import type { BotGroupRoom } from '@/lib/gateway/groups';
 import { routineName } from '@/lib/gateway/routines';
 import { effectiveModel } from '@/lib/gateway/model-selection';
-import { resolveThreadConfigMode, threadConfigBackendsAllowed, type ThreadConfigMode } from '@/lib/gateway/thread-config';
+import { resolveThreadConfigMode, threadConfigOfferedModes, type ThreadConfigMode } from '@/lib/gateway/thread-config';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
 const PIN_THRESHOLD_PX = 96;
@@ -213,25 +213,25 @@ export function ChatScreen() {
   const backendLabel = activeBackend?.label;
 
   // One consolidated thread-config sheet (roadmap 2.2): sessions, models and
-  // backends share a single host. Visibility stays owned where it always was —
-  // provider modelPicker/sessionSelector flags plus the screen-local backend
-  // flag — and the sheet renders whichever section they resolve to.
-  const threadConfigMode = resolveThreadConfigMode({
-    sessionsVisible: sessionSelector.visible,
-    modelsVisible: modelPicker.visible,
-    backendsVisible: backendPickerVisible,
-  });
-  const threadConfigModes = useMemo<ThreadConfigMode[]>(() => {
-    const modes: ThreadConfigMode[] = ['sessions', 'models'];
-    // Availability gates NEW opens, but a section that is already open stays
-    // offered even if its list empties underneath it: the mode and the
-    // switcher must agree by construction, so an active 'backends' mode can
-    // never lack its own option in the segmented control.
-    if (backendPickerVisible || threadConfigBackendsAllowed(surface.kind, backends.length)) {
-      modes.push('backends');
-    }
-    return modes;
-  }, [backendPickerVisible, surface.kind, backends.length]);
+    // backends share a single host. Visibility stays owned where it always was —
+    // provider modelPicker/sessionSelector flags plus the screen-local backend
+    // flag — and the sheet renders whichever section they resolve to. The
+    // offered modes come from the same pure contract (thread-config.ts) the
+    // jest pins test, so mode and options cannot silently disagree.
+    const threadConfigMode = resolveThreadConfigMode({
+      sessionsVisible: sessionSelector.visible,
+      modelsVisible: modelPicker.visible,
+      backendsVisible: backendPickerVisible,
+    });
+    const threadConfigModes = useMemo<ThreadConfigMode[]>(
+      () =>
+        threadConfigOfferedModes({
+          backendsVisible: backendPickerVisible,
+          surfaceKind: surface.kind,
+          backendsCount: backends.length,
+        }),
+      [backendPickerVisible, surface.kind, backends.length],
+    );
 
   const handleThreadConfigSwitch = useCallback(
     (next: ThreadConfigMode) => {

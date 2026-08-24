@@ -51,6 +51,34 @@ export function threadConfigBackendsAllowed(
   return surfaceKind === 'configurable' && backendsCount > 0;
 }
 
+/**
+ * The section list the sheet's segmented switcher offers, in render order.
+ *
+ * Availability gates NEW opens (`threadConfigBackendsAllowed`), but a section
+ * that is ALREADY OPEN stays offered even if its list empties underneath it
+ * (`backendsVisible`): the active mode and the offered options must agree by
+ * construction, so a `SegmentedControl` can never hold a selectedKey that is
+ * missing from its options (rook 2026-08-24: an open sheet during a surface
+ * flip rendered an index-0 highlight over the backends body and taps did
+ * nothing until the sheet closed). chat-screen renders from this exact
+ * function, and the jest pin asserts the invariant over the whole input
+ * space, so a future refactor cannot silently break the agreement.
+ */
+export function threadConfigOfferedModes(options: {
+  backendsVisible: boolean;
+  surfaceKind: string;
+  backendsCount: number;
+}): ThreadConfigMode[] {
+  const modes: ThreadConfigMode[] = ['sessions', 'models'];
+  if (
+    options.backendsVisible ||
+    threadConfigBackendsAllowed(options.surfaceKind, options.backendsCount)
+  ) {
+    modes.push('backends');
+  }
+  return modes;
+}
+
 /** The sheet title per section; the models section keeps the picker's modes. */
 export function threadConfigTitle(
   mode: ThreadConfigMode,
