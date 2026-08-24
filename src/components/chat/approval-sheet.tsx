@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import { StyleSheet, TextInput, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
-import { BaseSheet, Button, Text } from '@/components/ui';
-import { FontFamily, Radius, Spacing } from '@/constants/tokens';
-import { useTokens } from '@/hooks/use-tokens';
+import { BaseSheet, Button, Text, TextField } from '@/components/ui';
+import { Spacing } from '@/constants/tokens';
 import { haptics } from '@/lib/haptics';
 
 export function ApprovalSheet({
@@ -21,7 +20,6 @@ export function ApprovalSheet({
   onApprove: (feedback?: string) => void;
   onDeny: (feedback?: string) => void;
 }) {
-  const tokens = useTokens();
   const [feedback, setFeedback] = useState('');
 
   if (!visible || !runId) return null;
@@ -49,20 +47,17 @@ export function ApprovalSheet({
         <Text variant="caption" color="tertiary">
           Feedback (optional)
         </Text>
-        <TextInput
-          style={[
-            styles.input,
-            {
-              color: tokens.textPrimary,
-              backgroundColor: tokens.backgroundInset,
-              borderColor: tokens.glassBorder,
-            },
-          ]}
+        <TextField
           value={feedback}
           onChangeText={setFeedback}
           placeholder="Why this action is safe, or what to change…"
-          placeholderTextColor={tokens.textTertiary}
           multiline
+          // Feedback is prose — keep the platform typing defaults; the kit's
+          // form defaults (none / no autocorrect) are for URLs and tokens.
+          autoCapitalize="sentences"
+          autoCorrect={true}
+          accessibilityLabel="Approval feedback"
+          style={styles.input}
         />
       </View>
 
@@ -102,14 +97,10 @@ const styles = StyleSheet.create({
     marginTop: Spacing.three,
   },
   input: {
+    // The kit owns the chrome and typography; the sheet only pins the room
+    // the field gets so the bottom sheet stays compact and bounded.
     minHeight: 64,
     maxHeight: 120,
-    fontSize: 13,
-    fontFamily: FontFamily.sans,
-    padding: Spacing.two,
-    borderRadius: Radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    textAlignVertical: 'top',
   },
   footer: {
     flexDirection: 'row',
