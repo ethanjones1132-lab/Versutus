@@ -6,6 +6,7 @@ import * as Haptics from 'expo-haptics';
 
 import { PulsingDot, statusColor } from '@/components/connection-badge';
 import { CapabilityHive } from '@/components/gateway/capability-hive';
+import { ChannelStatusRow } from '@/components/gateway/channel-status-row';
 import { CompactGatewayList } from '@/components/gateway/compact-gateway-list';
 import { GatewayCapabilities } from '@/components/gateway/gateway-capabilities';
 import { GlassCollapsible } from '@/components/glass-collapsible';
@@ -117,6 +118,9 @@ export function GatewayHomeDashboard() {
   const capabilityCount = capabilitySnapshot.groups.filter((group) =>
     ['available', 'ready', 'fresh'].includes(group.status),
   ).length;
+  // Persistent channel glance (Tier 2.6): the row itself decides whether the
+  // snapshot says anything about channels at all.
+  const channelGroup = capabilitySnapshot.groups.find((group) => group.id === 'channels');
   const runsSupported =
     connected && capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'ready';
   const orbColor = statusColor(tokens, status);
@@ -251,6 +255,16 @@ export function GatewayHomeDashboard() {
           />
         ) : null}
       </Card>
+
+      {/* Channels stay on the first screen even when healthy — repair only
+          ever appeared after something already broke. */}
+      <ChannelStatusRow
+        group={channelGroup}
+        onPress={async () => {
+          await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          router.push('/chat');
+        }}
+      />
 
       {pendingRunApproval ? (
         <Card variant="hero" padding={Spacing.three} style={[styles.approvalCard, { borderColor: tokens.accentWarm }]}>
