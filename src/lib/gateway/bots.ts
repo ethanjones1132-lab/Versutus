@@ -37,6 +37,16 @@ export function botRowSubtitle(bot: PublicBot): string {
   return pin ? `Bot · ${pin}` : 'Bot';
 }
 
+/**
+ * The micro model label on a group-room member chip: the pinned default when
+ * the Gate reports one, '' otherwise — an unpinned member (or an older Gate
+ * that reports no pins) renders silence, never 'null' or an empty pill.
+ */
+export function botChipModelPin(bot: PublicBot): string {
+  const pin = bot.model?.default?.trim();
+  return pin || '';
+}
+
 /** What the phone's bot edit form can change. The name is identity (ADR 0011) and is not editable. */
 export type BotEditDraft = {
   soul?: string;

@@ -1,5 +1,6 @@
 import {
   BOT_CHAT_TITLE,
+  botChipModelPin,
   botRowSubtitle,
   buildRoster,
   ensureBotChat,
@@ -8,6 +9,7 @@ import {
   isBotChat,
   loadBotChat,
   type ChatSurface,
+  type PublicBot,
   type RosterRow,
 } from '@/lib/gateway/bots';
 
@@ -87,6 +89,48 @@ test('botRowSubtitle still flags unroutable bots over any pin', () => {
       model: { default: 'anthropic/claude-sonnet-4', provider: null },
     }),
   ).toBe('No listen key');
+});
+
+test('botChipModelPin shows the pinned default and stays silent without one', () => {
+  expect(
+    botChipModelPin({
+      id: 'researcher',
+      displayName: 'researcher',
+      routable: true,
+      model: { default: 'anthropic/claude-sonnet-4', provider: 'kilo' },
+    }),
+  ).toBe('anthropic/claude-sonnet-4');
+  // Older Gates report no pins at all; unpinned and provider-only stay silent.
+  expect(botChipModelPin({ id: 'a', displayName: 'a', routable: true })).toBe('');
+  expect(botChipModelPin({ id: 'b', displayName: 'b', routable: true, model: null })).toBe('');
+  expect(
+    botChipModelPin({ id: 'c', displayName: 'c', routable: true, model: { default: null, provider: 'kilo' } }),
+  ).toBe('');
+  // A whitespace-only pin from the Gate must not render an empty pill segment.
+  expect(
+    botChipModelPin({ id: 'd', displayName: 'd', routable: true, model: { default: '   ', provider: null } }),
+  ).toBe('');
+});
+
+test('every member chip resolves its pin across a full six-member room', () => {
+  // Max-size room (6 members). The view resolves each chip's pin by mapping
+  // memberIds over the roster exactly like this, so every chip must get a
+  // defined string — '' means silent, never undefined rendered into a Text.
+  const memberIds = ['a', 'b', 'c', 'd', 'e', 'f'];
+  const members: PublicBot[] = [
+    { id: 'a', displayName: 'A', routable: true, model: { default: 'm-a', provider: null } },
+    { id: 'b', displayName: 'B', routable: true },
+    { id: 'c', displayName: 'C', routable: true, model: null },
+    { id: 'd', displayName: 'D', routable: true, model: { default: null, provider: 'kilo' } },
+    { id: 'e', displayName: 'E', routable: true, model: { default: '  m-e  ', provider: null } },
+    { id: 'f', displayName: 'F', routable: false },
+  ];
+  const byId = new Map(members.map((bot) => [bot.id, botChipModelPin(bot)]));
+  const pins = memberIds.map((id) => byId.get(id) ?? '');
+  expect(pins).toHaveLength(6);
+  expect(pins.every((pin) => typeof pin === 'string')).toBe(true);
+  // Only the two pinned members show a pin, displayed trimmed.
+  expect(pins.filter((pin) => pin)).toEqual(['m-a', 'm-e']);
 });
 
 test('unroutable subtitles name the cause: missing key vs refused default key', () => {

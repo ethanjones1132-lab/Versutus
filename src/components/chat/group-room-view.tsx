@@ -5,7 +5,7 @@ import { BotAvatar } from '@/components/chat/bot-avatar';
 import { BaseSheet, Button, ConfirmSheet, Icon, PressableScale, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
-import type { PublicBot } from '@/lib/gateway/bots';
+import { botChipModelPin, type PublicBot } from '@/lib/gateway/bots';
 import {
   canRemoveMember,
   describeGroupPlan,
@@ -86,6 +86,13 @@ export function GroupRoomView({
   const displayNameOf = useMemo(() => {
     const byId = new Map(members.map((bot) => [bot.id, bot.displayName]));
     return (id: string) => byId.get(id) ?? id;
+  }, [members]);
+
+  // Pinned default model per member ('' = unpinned / older Gate) for the
+  // micro pin beside each member's name. Same roster copy the chips use.
+  const pinnedModelOf = useMemo(() => {
+    const byId = new Map(members.map((bot) => [bot.id, botChipModelPin(bot)]));
+    return (id: string) => byId.get(id) ?? '';
   }, [members]);
 
   // Live round feedback: what you are about to send scopes the plan. Mentions
@@ -247,6 +254,11 @@ export function GroupRoomView({
                 <Text variant="caption" color="primary" numberOfLines={1}>
                   {displayNameOf(memberId)}
                 </Text>
+                {pinnedModelOf(memberId) ? (
+                  <Text variant="micro" color="tertiary" numberOfLines={1} style={styles.memberChipPin}>
+                    {pinnedModelOf(memberId)}
+                  </Text>
+                ) : null}
                 {removable ? (
                   <Icon name={{ ios: 'xmark', android: 'close', web: 'close' }} size={10} color="textTertiary" />
                 ) : null}
@@ -407,6 +419,9 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full,
     borderWidth: StyleSheet.hairlineWidth,
   },
+  // Bounded so a long model id can never stretch one chip past half the row
+  // even at the six-member cap — the wrap stays two-plus chips per line.
+  memberChipPin: { maxWidth: 120 },
   emptyHint: { textAlign: 'center', paddingVertical: Spacing.four },
   userRow: { flexDirection: 'row', justifyContent: 'flex-end' },
   userBubble: {
