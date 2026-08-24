@@ -23,6 +23,7 @@ export function TextField({
   editable = true,
   onSubmitEditing,
   returnKeyType,
+  onKeyPress,
   onFocus,
   onBlur,
   accessibilityLabel,
@@ -61,6 +62,7 @@ export function TextField({
       editable={editable}
       onFocus={onFocus}
       onBlur={onBlur}
+      onKeyPress={onKeyPress}
       onSubmitEditing={onSubmitEditing}
       returnKeyType={returnKeyType}
       accessibilityLabel={

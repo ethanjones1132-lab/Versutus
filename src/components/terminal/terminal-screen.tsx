@@ -6,7 +6,6 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from 'react-native';
 
@@ -18,7 +17,16 @@ import { CommandLogSheet } from '@/components/terminal/command-log-sheet';
 import { CommandResultView } from '@/components/terminal/command-result-view';
 import { TerminalModePicker, type TerminalMode } from '@/components/terminal/mode-picker';
 import { TerminalOutput } from '@/components/terminal/terminal-output';
-import { Button, Card, Chip, EmptyState, ErrorCard, Screen, Text } from '@/components/ui';
+import {
+  Button,
+  Card,
+  Chip,
+  EmptyState,
+  ErrorCard,
+  Screen,
+  Text,
+  TextField,
+} from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
@@ -305,16 +313,18 @@ export function TerminalScreen() {
               padding={Spacing.two}
               style={[styles.inputCard, { borderColor: tokens.accentWarmMuted }]}
             >
-              <TextInput
-                style={[styles.input, { color: tokens.textPrimary }]}
+              <TextField
                 value={input}
                 onChangeText={setInput}
                 onKeyPress={handleInputKeyPress}
                 placeholder="Shell input (Enter sends)"
-                placeholderTextColor={tokens.textTertiary}
                 onSubmitEditing={() => void sendToTerminal()}
                 returnKeyType="send"
+                // Shell commands are not prose: the kit's form defaults
+                // (autoCapitalize none / autoCorrect off) are right here,
+                // where the raw field used to inherit platform prose keys.
                 accessibilityLabel="Terminal input"
+                style={styles.input}
               />
               <Button label="Send" size="sm" onPress={() => void sendToTerminal()} />
             </Card>
@@ -432,6 +442,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     paddingHorizontal: Spacing.two,
     paddingVertical: Spacing.one,
+    // The input card owns the chrome (accent border, Radius.xl); the kit
+    // field renders bare inside it, same idiom as the chat composer.
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    borderRadius: 0,
   },
   commandContent: {
     flex: 1,

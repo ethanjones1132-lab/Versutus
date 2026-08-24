@@ -8,6 +8,13 @@ import { useTokens } from '@/hooks/use-tokens';
 
 import type { TextFieldProps } from './types';
 
+// Platform contract, kept honest instead of silent: the SwiftUI-backed field
+// has no native events or modifiers wired for submit, hardware-key presses,
+// masked entry, keyboard flags, or editability, so onSubmitEditing,
+// returnKeyType, onKeyPress, secureTextEntry, autoCapitalize, autoCorrect and
+// editable are accepted by the shared prop type but have no effect here.
+// Surfaces that depend on those behaviors must keep an explicit on-screen
+// affordance (a send button, e.g.) so the action stays reachable on iOS.
 export function TextField({
   value,
   onChangeText,

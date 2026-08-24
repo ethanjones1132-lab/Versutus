@@ -73,6 +73,13 @@ export type TextFieldProps = {
   editable?: boolean;
   onSubmitEditing?: () => void;
   returnKeyType?: 'done' | 'go' | 'next' | 'search' | 'send';
+  /**
+   * Hardware-key press hook for fields that own keyboard behaviors (the
+   * terminal's arrow-key history, e.g.). Delivered by the base field; the
+   * SwiftUI-backed iOS field has no key events, so iOS surfaces pair such
+   * fields with on-screen affordances instead of relying on keys.
+   */
+  onKeyPress?: (event: { nativeEvent: { key: string } }) => void;
   style?: StyleProp<ViewStyle>;
   /** Called when the field gains focus (lets a host own its focus ring). */
   onFocus?: () => void;
