@@ -32,6 +32,7 @@ import {
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { appendTerminalChunk, type TerminalLine } from '@/lib/terminal/output';
 import { openTerminalSession, sendTerminalInput, type TerminalSession } from '@/lib/terminal/client';
+import { describeShellUnavailable, resolveShellSupport } from '@/lib/terminal/shell-support';
 
 const HISTORY_LIMIT = 40;
 
@@ -50,15 +51,15 @@ export function TerminalScreen() {
     capabilitySnapshot,
   } = useGateway();
   // Hermes exposes no terminal endpoint; attempting the stream just 404s and
-  // surfaces as a connection error. Only offer the shell when advertised.
-  const shellSupported =
-    capabilitySnapshot.groups.find((group) => group.id === 'terminal')?.status === 'ready';
-  // Default to RPC on Hermes-like gateways so Tools doesn't open on a dead shell.
-  // Derive effective mode so unsupported shell never sticks without an effect.
-  const [modePreference, setModePreference] = useState<TerminalMode>('rpc');
-  const mode: TerminalMode =
-    !shellSupported && modePreference === 'shell' ? 'rpc' : modePreference;
-  const setMode = setModePreference;
+  // surfaces as a connection error. The snapshot decides — but a snapshot
+  // that has not finished its first fetch must read as "unknown", never as
+  // "this gateway has no shell".
+  const shellSupport = resolveShellSupport(capabilitySnapshot);
+  const shellReady = shellSupport === 'ready';
+  // Default to RPC so Tools never OPENS on a dead shell. Choosing Shell on a
+  // gateway without one is honored as a choice: the honest no-shell notice
+  // renders below instead of the old silent substitution of RPC.
+  const [mode, setMode] = useState<TerminalMode>('rpc');
   const [terminalLines, setTerminalLines] = useState<TerminalLine[]>([]);
   const [commandOutput, setCommandOutput] = useState('');
   const [input, setInput] = useState('');
@@ -77,7 +78,7 @@ export function TerminalScreen() {
   }, []);
 
   const startTerminal = useCallback(async () => {
-    if (!activeGateway || status !== 'connected' || !shellSupported) return;
+    if (!activeGateway || status !== 'connected' || !shellReady) return;
     sessionRef.current?.close();
     sessionRef.current = null;
     setTerminalLines([]);
@@ -109,7 +110,7 @@ export function TerminalScreen() {
       setTerminalError(message);
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
-  }, [activeGateway, appendOutput, shellSupported, status]);
+  }, [activeGateway, appendOutput, shellReady, status]);
 
   const gatewayId = activeGateway?.id ?? null;
 
@@ -123,12 +124,12 @@ export function TerminalScreen() {
   }, [gatewayId, status]);
 
   useEffect(() => {
-    if (gatewayId && status === 'connected' && shellSupported && mode === 'shell' && !sessionRef.current) {
+    if (gatewayId && status === 'connected' && shellReady && mode === 'shell' && !sessionRef.current) {
       // Deliberately establish the session from the effect when the gateway is
       // ready; callbacks settle the connected state asynchronously.
       void startTerminal();
     }
-  }, [gatewayId, mode, shellSupported, startTerminal, status]);
+  }, [gatewayId, mode, shellReady, startTerminal, status]);
 
   const sendToTerminal = useCallback(async () => {
     const session = sessionRef.current;
@@ -226,7 +227,7 @@ export function TerminalScreen() {
             {settings.pcName ?? activeGateway.name}
           </Text>
           <Text color="secondary" variant="caption">
-            {modeLabel} · {mode === 'shell' ? (terminalConnected ? 'live' : 'starting…') : status}
+            {modeLabel} · {mode === 'shell' && shellReady ? (terminalConnected ? 'live' : 'starting…') : status}
           </Text>
         </View>
         <ConnectionBadge status={status} detail={statusDetail} />
@@ -236,7 +237,7 @@ export function TerminalScreen() {
         <TerminalModePicker mode={mode} onModeChange={setMode} />
       </View>
 
-      {terminalError && shellSupported ? (
+      {terminalError && shellReady ? (
         <View style={styles.bannerWrap}>
           <ErrorCard
             cause={terminalError}
@@ -248,12 +249,13 @@ export function TerminalScreen() {
         </View>
       ) : null}
 
-      {mode === 'shell' && !shellSupported ? (
+      {mode === 'shell' && shellSupport !== 'ready' ? (
         <View style={styles.commandContent}>
           <EmptyState
             icon={{ ios: 'terminal', android: 'terminal', web: 'terminal' }}
-            title="No shell on this gateway"
-            description={`${activeGateway.name} does not offer a terminal endpoint. Use RPC or Agent commands, or open a shell on the gateway host.`}
+            {...describeShellUnavailable(shellSupport, activeGateway.name)}
+            actionLabel="Use Gateway RPC"
+            onAction={() => setMode('rpc')}
           />
         </View>
       ) : mode === 'shell' ? (
