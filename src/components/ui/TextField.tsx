@@ -23,6 +23,9 @@ export function TextField({
   editable = true,
   onSubmitEditing,
   returnKeyType,
+  onFocus,
+  onBlur,
+  accessibilityLabel,
   style,
 }: TextFieldSharedProps) {
   const tokens = useTokens();
@@ -56,14 +59,17 @@ export function TextField({
       autoCapitalize={autoCapitalize}
       autoCorrect={autoCorrect}
       editable={editable}
+      onFocus={onFocus}
+      onBlur={onBlur}
       onSubmitEditing={onSubmitEditing}
       returnKeyType={returnKeyType}
       accessibilityLabel={
-        validationState === 'invalid'
+        accessibilityLabel ??
+        (validationState === 'invalid'
           ? 'Invalid input'
           : validationState === 'valid'
             ? 'Valid input'
-            : undefined
+            : undefined)
       }
     />
   );

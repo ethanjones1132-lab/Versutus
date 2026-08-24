@@ -16,6 +16,9 @@ export function TextField({
   multiline,
   editable = true,
   autoCapitalize = 'none',
+  onFocus,
+  onBlur,
+  accessibilityLabel,
   style,
 }: TextFieldProps) {
   const tokens = useTokens();
@@ -26,6 +29,14 @@ export function TextField({
       textState.set(value);
     }
   }, [textState, value]);
+
+  const handleFocusChange = (focused: boolean) => {
+    if (focused) {
+      onFocus?.();
+    } else {
+      onBlur?.();
+    }
+  };
 
   const borderColor =
     validationState === 'valid'
@@ -45,17 +56,19 @@ export function TextField({
         style,
       ]}
       accessibilityLabel={
-        validationState === 'invalid'
+        accessibilityLabel ??
+        (validationState === 'invalid'
           ? 'Invalid input'
           : validationState === 'valid'
             ? 'Valid input'
-            : undefined
+            : undefined)
       }>
       <Host matchContents={{ horizontal: true, vertical: true }}>
         <SwiftTextField
           text={textState}
           placeholder={placeholder}
           onTextChange={onChangeText}
+          onFocusChange={handleFocusChange}
           axis={multiline ? 'vertical' : 'horizontal'}
           modifiers={[
             padding({ all: 14 }),

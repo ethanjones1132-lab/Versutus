@@ -74,6 +74,15 @@ export type TextFieldProps = {
   onSubmitEditing?: () => void;
   returnKeyType?: 'done' | 'go' | 'next' | 'search' | 'send';
   style?: StyleProp<ViewStyle>;
+  /** Called when the field gains focus (lets a host own its focus ring). */
+  onFocus?: () => void;
+  /** Called when the field loses focus. */
+  onBlur?: () => void;
+  /**
+   * Overrides the validationState-derived label when a surface names its
+   * field precisely (e.g. "Message input" instead of "Valid input").
+   */
+  accessibilityLabel?: string;
 };
 
 export type CardProps = {

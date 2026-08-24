@@ -1,10 +1,10 @@
 import * as Haptics from 'expo-haptics';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
-import { Badge, Card, Icon, PressableScale, Text, type IconName } from '@/components/ui';
+import { Badge, Card, Icon, PressableScale, Text, TextField, type IconName } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
 import { springSnappy } from '@/lib/motion/presets';
@@ -236,17 +236,20 @@ export function ChatComposer({
             styles.composer,
             { borderColor: focused ? tokens.borderStrong : tokens.glassBorder },
           ]}>
-          <TextInput
-            style={[styles.input, { color: tokens.textPrimary }]}
+          <TextField
             value={draft}
             onChangeText={onChangeText}
             placeholder={canSend ? 'Message or /command' : 'Connect a gateway to chat'}
-            placeholderTextColor={tokens.textTertiary}
             multiline
             editable={inputEditable}
+            // Chat keeps the platform typing defaults — the kit's form defaults
+            // (none / no autocorrect) are for URLs and tokens, not prose.
+            autoCapitalize="sentences"
+            autoCorrect={true}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             accessibilityLabel="Message input"
+            style={styles.input}
           />
           <Animated.View style={sendAnimatedStyle}>
             <PressableScale
@@ -370,10 +373,13 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 40,
     maxHeight: 140,
-    fontSize: 16,
-    fontFamily: FontFamily.sans,
     paddingHorizontal: Spacing.two,
     paddingVertical: Spacing.one,
+    // The composer's Card owns the chrome (focus-driven border, Radius.xl);
+    // the kit field renders bare inside it.
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    borderRadius: 0,
   },
   sendButton: {
     borderRadius: Radius.md,
