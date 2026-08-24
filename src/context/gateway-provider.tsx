@@ -76,7 +76,12 @@ import {
 } from '@/lib/gateway/session-persistence';
 import { syncChildProfiles } from '@/lib/gateway/child-sync';
 import { checkTlsFingerprintTofu } from '@/lib/gateway/security';
-import { notifyApprovalRequired, notifyGatewayDown, notifyRunComplete } from '@/lib/notifications/local';
+import {
+  dismissGatewayDown,
+  notifyApprovalRequired,
+  notifyGatewayDown,
+  notifyRunComplete,
+} from '@/lib/notifications/local';
 import type {
   ChatMessage,
   CommandTranscriptEntry,

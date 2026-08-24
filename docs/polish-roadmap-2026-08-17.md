@@ -14,18 +14,22 @@ Compiled from a full sweep of `src/`, `__tests__/`, and prior audit docs. Each i
 ### 1.1 Unbounded message list in memory
 - **Why:** Every send/delta appends to `messages` with no bound (`gateway-provider.tsx:1113,1254,1263`); only a history reload (limit 80) trims it. Long sessions grow the FlatList data unboundedly — jank, memory pressure, and eventual OOM on exactly the long-running agent tasks this app exists for.
 - **Fix:** Cap the in-memory window (e.g. last 200 messages) with a "load earlier" prepend from persisted history. Same pattern already used for transcripts (`transcript.ts:27`), runs and events.
+- **Progress (2026-08-24): DONE** (hardening commits 6131089/d664d83). `MESSAGE_WINDOW_CAP = 200` lives in `src/lib/gateway/messages.ts` (`boundWindow`/`appendBounded`) and every append site routes through it; history pages through `HISTORY_PAGE_SIZE = 80` with an oldest-id cursor, `prependEarlier` dedupe, and a "Load earlier messages" header button in `chat-screen.tsx`. Pinned by `message-window-test` / `messages-test`.
 
 ### 1.2 Partial streams never reconciled on reconnect
 - **Why:** Mid-stream disconnect leaves a partial assistant bubble; `onHealthCheck` deliberately skips history reload on reconnect (`gateway-provider.tsx:670-675`), so partial text is never merged with gateway history — duplicates or gaps on the next reload. User sees a ghost message that disagrees with the session.
 - **Fix:** On reconnect with an in-flight assistant message, mark it "interrupted" (distinct visual state, offer resume/retry) and reconcile against history on next reload by message/run id.
+- **Progress (2026-08-24): DONE** (same hardening pass). In-flight assistant messages are marked interrupted on stream loss, preserved across the reconnect history reload, then settled from real run statuses (`markInterrupted`/`preserveInterruptedAfterReload`/`settleInterruptedFromRuns`). Pinned by `interrupted-stream-test`.
 
 ### 1.3 `executeRun` can report a false finish
 - **Why:** If the SSE event stream closes while run status is unchanged, the loop breaks and reports a non-terminal status as final (`runs.ts:128-136`). Conversely a never-closing stream blocks until abort. Runs are the core remote-work primitive — misreporting "done" is a trust killer.
 - **Fix:** Define terminal states explicitly; only exit on a terminal status or explicit abort; on unexpected stream close, poll the run status endpoint once before deciding.
+- **Progress (2026-08-24): DONE** (same hardening pass). `executeRun` polls to explicit terminal states with unchanged-status backoff, reports `unresolved` when the run never finished, and `settleUnresolvedRuns` re-polls after reconnect; a stop the gateway does not confirm also lands as `unresolved`, never as a fake cancel (`requestStop`). Pinned by `runs-test` / `run-orchestration-test` / `unresolved-settle-test`.
 
 ### 1.4 Approval detection is regex string-matching
 - **Why:** `/approv/i` on status/event types (`runs.ts:64-70`). A gateway wording change silently drops approval prompts — the single worst silent failure this app can have.
 - **Fix:** Contract work with the gate/Hermes: typed approval signals (structured event type or status enum), keep the regex as fallback only. Update `docs/opencode-backend-contract.md`.
+- **Progress (2026-08-24): DONE.** The gate normalizes backend permission events to a typed `approval.required`; the client matches the typed spelling set first (`APPROVAL_REQUIRED_SIGNALS` in `runs.ts`) with resolved-decision exclusion, keeping the loose test only for pre-contract gateways. Contract documented in `docs/opencode-backend-contract.md` ("Client-side approval matching"). Pinned by `approval-exit-test`.
 
 ### 1.5 Reconnect policy drift between dialects
 - **Why:** Hermes path uses `ConnectionMonitor` (jittered backoff, no cap); `openclaw-client.ts:345-349` has its own backoff with **no jitter** and no cap. Neither escalates reconnect → auto-connect retry after sustained failure, and the auto-connect retry loop re-probes forever every 12–30s (`gateway-provider.tsx:657,891,902,975`) — battery and thundering-herd concerns.
@@ -35,6 +39,7 @@ Compiled from a full sweep of `src/`, `__tests__/`, and prior audit docs. Each i
 ### 1.6 Small correctness leaks
 - **Why (each):** `cancelCommand` doesn't abort in-flight work — transcript says cancelled, server keeps running, completion re-updates the message (`gateway-provider.tsx:1921-1931`). Abort detection is `message.includes('abort')` — conflates user cancel with any error mentioning "abort" (:1336). `clearTranscriptsForGateway` is an empty stub — deleting a gateway profile leaks its transcript keys forever (`transcript.ts:54-58`). `gatewayRequest` throws based on stale React `status` state — same-tick race on disconnect (:1014-1038).
 - **Fix:** Send a real cancel RPC where the dialect supports it; typed abort reasons; implement transcript key cleanup on profile delete; track connection state in a ref consulted by request functions.
+- **Progress (2026-08-24): DONE** (hardening pass). `cancelCommand` aborts the chat and run controllers and issues a best-effort server-side stop (`serverSideCancelForCommand`); abort reasons are typed (pinned by `abort-detection-test`, `cancel-command-test`); `clearTranscriptsForGateway` removes its prefix-scoped keys (pinned by `transcript-cleanup-test`); `gatewayRequest` consults `statusRef` instead of stale React state.
 
 ---
 
@@ -78,8 +83,9 @@ Compiled from a full sweep of `src/`, `__tests__/`, and prior audit docs. Each i
   4. `environment-run-launcher.tsx:105` stops hardcoding `['prompt','status']` and renders from adapter `operations` schemas.
 
 ### 2.9 QoL sweep (small, high-feel fixes)
-- **Why (each):** "Gateway down" local notification is never dismissed on recovery and there's no reconnect-success signal (`gateway-provider.tsx:648-651`). Terminal can open on a dead shell with only a silent fallback (`terminal-screen.tsx:49-55`). Reachability probes run sequentially — 1.8s × N gateways per wave (`use-gateway-reachability.ts:59-107`). Onboarding and `/gateway/add` are two overlapping URL+token flows.
+- **Why:** "Gateway down" local notification is never dismissed on recovery and there's no reconnect-success signal (`gateway-provider.tsx:648-651`). Terminal can open on a dead shell with only a silent fallback (`terminal-screen.tsx:49-55`). Reachability probes run sequentially — 1.8s × N gateways per wave (`use-gateway-reachability.ts:59-107`). Onboarding and `/gateway/add` are two overlapping URL+token flows.
 - **Fix:** Dismiss the down-notification on reconnect (optionally replace with a transient "reconnected" toast); surface unsupported-shell as a proper EmptyState with a switch-to-RPC action; parallelize probes with a small concurrency cap; merge onboarding into the add flow (onboarding = add + first-run framing).
+- **Progress (2026-08-24):** The stale down-notification now retires itself: `dismissGatewayDown` (notifications/local) dismisses the posted identifier and sweeps the tray by title for notices that outlived an app restart; the provider calls it whenever the connection decision lands back on connected. The in-app reconnect-success signal already exists as the `ConnectedToast` ceremony. Pinned by `gateway-down-notification-test`. Remaining: unsupported-shell EmptyState, probe concurrency cap, onboarding/add merge.
 
 ---
 
@@ -116,7 +122,7 @@ Compiled from a full sweep of `src/`, `__tests__/`, and prior audit docs. Each i
 ## Suggested execution order
 
 1. ~~Tier 2.7 (model picker provider grouping)~~ — done (d85cbe3; grouping logic extracted to `model-selection.ts` and pinned 2026-08-24).
-2. Tier 1.1–1.3 (message bound, stream reconcile, run terminal states) — one focused pass on the chat/run pipeline.
+2. ~~Tier 1.1–1.3 (message bound, stream reconcile, run terminal states) — one focused pass on the chat/run pipeline.~~ — done (hardening commits through d664d83; annotated above 2026-08-24, along with Tier 1.4 and Tier 1.6).
 3. Tier 3.1 (extract + test reducers) — de-risks everything after.
 4. Tier 2.1–2.3 (IA consolidation, sheet reduction, error humanization) — the visible "luxury minimal" jump.
 5. Remaining Tier 1, Tier 2.4–2.6, 2.9, Tier 3.2–3.4 in parallel as screens get touched.
