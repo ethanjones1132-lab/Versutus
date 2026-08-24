@@ -45,6 +45,55 @@ describe('HttpTransport', () => {
     expect(transport.lastContactAt).toBeGreaterThan(0);
   });
 
+  test('frames arriving on an SSE stream count as contact', async () => {
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+    expect(transport.lastContactAt).toBe(0);
+
+    const frames = [
+      new TextEncoder().encode('data: {"delta":"he"}\n\n'),
+      new TextEncoder().encode('data: [DONE]\n\n'),
+    ];
+    const response = {
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: () =>
+            Promise.resolve(
+              frames.length ? { done: false, value: frames.shift() } : { done: true },
+            ),
+          cancel: () => undefined,
+        }),
+      },
+    } as unknown as Response;
+
+    await transport.streamSSE(response, () => undefined);
+
+    // A frame landing is the gateway answering us — direct liveness evidence
+    // for the connection monitor during long chat / run-event streams.
+    expect(transport.lastContactAt).toBeGreaterThan(0);
+  });
+
+  test('a stream that opens but never delivers bytes is not contact', async () => {
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+
+    const response = {
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: () => Promise.resolve({ done: true }),
+          cancel: () => undefined,
+        }),
+      },
+    } as unknown as Response;
+
+    await transport.streamSSE(response, () => undefined);
+
+    // Opening a body proves nothing; only delivered bytes do.
+    expect(transport.lastContactAt).toBe(0);
+  });
+
   test('surfaces the HTTP status on the error', async () => {
     (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
       Promise.resolve(jsonResponse({ error: { message: 'nope' } }, 404)),

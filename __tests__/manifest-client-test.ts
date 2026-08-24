@@ -1,4 +1,5 @@
 import { ManifestClient } from '@/lib/gateway/manifest-client';
+import { HEALTH_INTERVAL_MS } from '@/lib/gateway/connection-monitor';
 import type { GatewayIdentity } from '@/lib/portal/identify';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
@@ -137,6 +138,52 @@ describe('ManifestClient', () => {
     });
     await client.connect();
     expect(errors.some((message) => /Network request failed/i.test(message))).toBe(true);
+    client.disconnect();
+  });
+
+  test('a busy gate keeps answering root-origin traffic without being declared down', async () => {
+    let healthUp = true;
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/health')) {
+        return healthUp
+          ? Promise.resolve(jsonResponse({ status: 'ok' }))
+          : Promise.reject(new TypeError('timed out'));
+      }
+      if (url.endsWith('/v1/models')) {
+        return Promise.resolve(jsonResponse({ data: [{ id: 'm1', object: 'model' }] }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const statuses: string[] = [];
+    const client = new ManifestClient(PROFILE, IDENTITY, {
+      onStatus: (status) => statuses.push(status),
+    });
+    await client.connect();
+    expect(client.connectionStatus).toBe('connected');
+    statuses.length = 0;
+
+    // The gate turns busy: every /health probe times out while real work
+    // (models, bots, groups, sessions, runs) keeps being served off the
+    // root origin.
+    healthUp = false;
+    await jest.advanceTimersByTimeAsync(HEALTH_INTERVAL_MS); // tick 1: first silent failure
+    await jest.advanceTimersByTimeAsync(20_000);
+    await client.getModels(); // the gate answers us 10s before tick 2
+    await jest.advanceTimersByTimeAsync(10_000); // tick 2
+
+    // The down-decision must weigh BOTH transports. Before the dual-transport
+    // fix the monitor only saw the profile-scoped health transport, whose
+    // last contact was the connect-time probe — 60s stale by tick 2 — so
+    // this second failure declared the gate down mid-session.
+    expect(statuses).not.toContain('reconnecting');
+
+    // And once every transport goes quiet, detection still happens.
+    await jest.advanceTimersByTimeAsync(HEALTH_INTERVAL_MS); // fresh streak, failure one
+    await jest.advanceTimersByTimeAsync(HEALTH_INTERVAL_MS); // failure two
+    expect(statuses).toContain('reconnecting');
+
     client.disconnect();
   });
 });

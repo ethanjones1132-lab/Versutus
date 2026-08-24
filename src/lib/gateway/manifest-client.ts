@@ -72,7 +72,17 @@ export class ManifestClient implements PortalClient {
     });
     this.monitor = new ConnectionMonitor({
       probe: async () => (await this.healthCheck()) !== null,
-      recentlyServedUs: () => hasRecentContact(this.transport.lastContactAt, Date.now()),
+      // Both transports carry evidence: the profile-scoped transport only
+      // ever serves /health here, while every real answer (models, bots,
+      // groups, sessions, jobs, runs) lands on the root transport. Watching
+      // the profile transport alone made recentlyServedUs blind to all of
+      // it, so a gate busy enough to stall /health got declared down
+      // mid-session even while it kept answering the phone.
+      recentlyServedUs: () =>
+        hasRecentContact(
+          Math.max(this.transport.lastContactAt, this.rootTransport.lastContactAt),
+          Date.now(),
+        ),
       onStatus: (status, detail) => this.setStatus(status, detail),
       reconnect: () => this.connect().catch(() => undefined),
     });

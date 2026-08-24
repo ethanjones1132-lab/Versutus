@@ -115,6 +115,12 @@ export class HttpTransport {
         if (signal?.aborted) break;
         const { done, value } = await reader.read();
         if (done) break;
+        // Bytes just arrived from the gateway — the same class of liveness
+        // evidence as a completed request(). Without this a long-running
+        // chat or run-event stream produces no contact at all, and the
+        // connection monitor can declare the gate down while frames are
+        // still landing in the operator's hands.
+        this.contactAt = Date.now();
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
