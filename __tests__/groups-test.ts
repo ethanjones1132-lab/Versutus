@@ -1,6 +1,7 @@
 import {
   canRemoveMember,
   describeGroupPlan,
+  describeRoomPlan,
   filterGroupRooms,
   formatGroupMessageTime,
   GROUP_MEMBER_FLOOR_REASON,
@@ -48,6 +49,34 @@ test('describeGroupPlan is derived from the planner constants, not hand-copied n
   expect(line).toContain(`up to ${MAX_GROUP_ROUNDS} rounds`);
   expect(line).toContain(`stops at ${MAX_GROUP_MESSAGES} messages`);
   expect(describeGroupPlan(1)).toContain('1 bot speaks per round');
+});
+
+test('describeRoomPlan stops counting unroutable members as speakers', () => {
+  // Everyone routable (or an older Gate reporting nothing): the classic line.
+  expect(describeRoomPlan({ speakerCount: 3, routableCount: 3, silentNames: [] })).toBe(
+    describeGroupPlan(3),
+  );
+  // One silent member: the count drops and the cause is named, caps intact.
+  const partial = describeRoomPlan({ speakerCount: 3, routableCount: 2, silentNames: ['Echo'] });
+  expect(partial).toContain('2 of 3 bots speak per round');
+  expect(partial).toContain('Echo cannot route');
+  expect(partial).toContain(`up to ${MAX_GROUP_ROUNDS} rounds`);
+  expect(partial).toContain(`stops at ${MAX_GROUP_MESSAGES} messages`);
+  // Several silent members fold into one clause.
+  expect(
+    describeRoomPlan({ speakerCount: 4, routableCount: 2, silentNames: ['Echo', 'Foxtrot'] }),
+  ).toContain('Echo and Foxtrot cannot route');
+  expect(
+    describeRoomPlan({ speakerCount: 5, routableCount: 2, silentNames: ['Echo', 'Foxtrot', 'Golf'] }),
+  ).toContain('Echo, Foxtrot and Golf cannot route');
+  // A round where nobody can route says so instead of promising replies.
+  const dead = describeRoomPlan({ speakerCount: 2, routableCount: 0, silentNames: ['Echo', 'Foxtrot'] });
+  expect(dead).toContain('Nothing will speak');
+  expect(dead).toContain('Echo and Foxtrot cannot route');
+  // Caller drift (counts without names) still reads like a sentence.
+  expect(describeRoomPlan({ speakerCount: 3, routableCount: 1, silentNames: [] })).toContain(
+    'a member cannot route',
+  );
 });
 
 test('roster copy helpers stay honest about size and search', () => {

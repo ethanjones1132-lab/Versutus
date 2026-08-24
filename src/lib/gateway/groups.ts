@@ -129,6 +129,35 @@ export function describeGroupPlan(speakerCount: number): string {
   return `${speakerCount} ${noun} per round · up to ${MAX_GROUP_ROUNDS} rounds · stops at ${MAX_GROUP_MESSAGES} messages`;
 }
 
+function joinAnd(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? '';
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/**
+ * The honest variant of the plan line: a member that cannot route is not a
+ * speaker. When every speaker routes (or reports nothing — older Gates),
+ * this is exactly describeGroupPlan. Silent members are named so the
+ * operator reads the cause before sending, and the caps segment never moves.
+ */
+export function describeRoomPlan({
+  speakerCount,
+  routableCount,
+  silentNames,
+}: {
+  speakerCount: number;
+  routableCount: number;
+  silentNames: string[];
+}): string {
+  const caps = `up to ${MAX_GROUP_ROUNDS} rounds · stops at ${MAX_GROUP_MESSAGES} messages`;
+  if (routableCount >= Math.max(speakerCount, 0)) return describeGroupPlan(speakerCount);
+  const names = silentNames.filter((name) => typeof name === 'string' && name.trim());
+  const who = `${joinAnd(names.length ? names : ['a member'])} cannot route`;
+  if (routableCount <= 0) return `Nothing will speak — ${who} · ${caps}`;
+  return `${routableCount} of ${speakerCount} bots speak per round · ${who} · ${caps}`;
+}
+
 /** Roster subtitle for a group row. */
 export function groupMemberLine(group: Pick<BotGroupRoom, 'memberIds'>): string {
   const count = group.memberIds.length;

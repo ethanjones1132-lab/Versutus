@@ -8,7 +8,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import { botChipModelPin, botChipRoutingTag, type PublicBot } from '@/lib/gateway/bots';
 import {
   canRemoveMember,
-  describeGroupPlan,
+  describeRoomPlan,
   formatGroupMessageTime,
   GROUP_MEMBER_FLOOR_REASON,
   groupSpeakers,
@@ -108,6 +108,16 @@ export function GroupRoomView({
   const mentioned = extractMentions(draft, group.memberIds);
   const speakers = groupSpeakers(group.memberIds, mentioned);
   const removable = canRemoveMember(group);
+
+  // The plan line tells the truth about silence: a member that cannot route
+  // is not a speaker, so the count says who answers and the line names who
+  // stays silent — the same verdict the chips below carry.
+  const silentSpeakerNames: string[] = [];
+  let routableSpeakerCount = 0;
+  for (const id of speakers) {
+    if (routingTagOf(id)) silentSpeakerNames.push(displayNameOf(id));
+    else routableSpeakerCount += 1;
+  }
 
   const scrollToBottom = () => {
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
@@ -222,7 +232,11 @@ export function GroupRoomView({
           style={[styles.roomCard, { backgroundColor: tokens.backgroundRaised, borderColor: tokens.glassBorder }]}>
           <View style={styles.roomCardHead}>
             <Text variant="caption" color="secondary" numberOfLines={1}>
-              {describeGroupPlan(speakers.length)}
+              {describeRoomPlan({
+                speakerCount: speakers.length,
+                routableCount: routableSpeakerCount,
+                silentNames: silentSpeakerNames,
+              })}
             </Text>
             <PressableScale
               onPress={() => {
