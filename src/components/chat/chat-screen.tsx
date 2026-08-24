@@ -610,7 +610,9 @@ export function ChatScreen() {
           }}
           // Honesty gating: gateways whose client cannot manage agents or
           // host rooms never see these rows at all — the refusal must not
-          // wait until after the operator fills the sheet.
+          // wait until after the operator fills the sheet. The same verdicts
+          // feed the roster's capability notes, so a shrunken roster still
+          // says why instead of just being smaller.
           onNewAgent={hasBotManagement ? () => {
             setNewAgentError(undefined);
             setEditingBot(null);
@@ -620,6 +622,8 @@ export function ChatScreen() {
             setNewGroupError(undefined);
             setNewGroupVisible(true);
           } : undefined}
+          canManageAgents={hasBotManagement}
+          canHostGroups={status === 'connected' && hasGroupRooms}
         />
       ) : surface.kind === 'group' ? (
         <View style={styles.listWrap}>

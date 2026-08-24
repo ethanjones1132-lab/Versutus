@@ -173,6 +173,33 @@ export function rosterEmptyView({
   return { kind: 'none' };
 }
 
+/**
+ * Why creation rows are missing from this roster, in the order they would
+ * have sat. Hiding "New Agent" / "New Group Room" on gateways that cannot
+ * manage agents or host rooms was honest about the refusal — it hid the rows
+ * instead of springing one after the sheet was filled — but hiding is not
+ * explaining: an operator staring at a shrunken roster with no words
+ * concludes the app is broken. One caption per missing capability, honest
+ * about what still works. Client-only: decided from probes already made,
+ * zero new Gate calls.
+ */
+export function rosterCapabilityNotes({
+  hasBotManagement,
+  hasGroupRooms,
+}: {
+  hasBotManagement: boolean;
+  hasGroupRooms: boolean;
+}): string[] {
+  const notes: string[] = [];
+  if (!hasBotManagement) {
+    notes.push('This gateway does not create agents — chat and runs still work.');
+  }
+  if (!hasGroupRooms) {
+    notes.push('This gateway does not host group rooms.');
+  }
+  return notes;
+}
+
 export function isBotChat(session: { title?: string | null }): boolean {
   return session.title === BOT_CHAT_TITLE;
 }

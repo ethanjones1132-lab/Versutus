@@ -7,6 +7,7 @@ import { Spacing } from '@/constants/tokens';
 import {
   botRowSubtitle,
   filterRosterRows,
+  rosterCapabilityNotes,
   rosterEmptyView,
   type PublicBot,
   type RosterRow,
@@ -33,6 +34,10 @@ export type ChatRosterProps = {
   onNewAgent?: () => void;
   /** Present only when the gateway can create rooms (bots endpoint + groups advertised). */
   onNewGroup?: () => void;
+  /** Whether the client can manage agents at all — drives the honest capability note when "New Agent" is hidden. */
+  canManageAgents?: boolean;
+  /** Whether the gateway can host Gate-owned group rooms right now — drives the note when "New Group Room" is hidden. */
+  canHostGroups?: boolean;
 };
 
 export function ChatRoster({
@@ -46,6 +51,8 @@ export function ChatRoster({
   onSelectGroup,
   onNewAgent,
   onNewGroup,
+  canManageAgents = false,
+  canHostGroups = false,
 }: ChatRosterProps) {
   const [query, setQuery] = useState('');
 
@@ -69,6 +76,12 @@ export function ChatRoster({
     visibleGroups: visibleGroups.length,
     query,
     error,
+  });
+  // Same verdicts that gate the creation rows: a hidden row gets one honest
+  // line about why, exactly where the row would have sat.
+  const capabilityNotes = rosterCapabilityNotes({
+    hasBotManagement: canManageAgents,
+    hasGroupRooms: canHostGroups,
   });
   const routableBots = rows.filter(
     (row): row is Extract<RosterRow, { kind: 'bot' }> => row.kind === 'bot' && row.bot.routable,
@@ -148,6 +161,11 @@ export function ChatRoster({
           style={styles.row}
         />
       ) : null}
+      {capabilityNotes.map((note) => (
+        <Text key={note} variant="caption" color="secondary" style={styles.capability}>
+          {note}
+        </Text>
+      ))}
       {emptyView.kind === 'zero-bots' ? (
         <EmptyState
           icon={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}
@@ -182,4 +200,5 @@ const styles = StyleSheet.create({
   gap: { marginTop: Spacing.two },
   error: { marginBottom: Spacing.two },
   sectionLabel: { marginTop: Spacing.three, marginBottom: Spacing.one + 2, paddingHorizontal: Spacing.one },
+  capability: { marginTop: Spacing.two },
 });
