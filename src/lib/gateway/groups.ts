@@ -13,6 +13,38 @@ export type BotGroupRoom = {
 /** One bot's reply inside a group send (wire shape of deliverGroupMessage). */
 export type GroupReply = { botId: string; text: string };
 
+/** One stored room exchange line (wire shape of GET /v1/bot-groups/:id/messages). */
+export type GroupTranscriptEntry = {
+  id: string;
+  role: 'user' | 'bot';
+  text: string;
+  botId?: string;
+  at?: number;
+};
+
+/** What the room view renders for one transcript line. */
+export type RoomTranscriptRow =
+  | { id: string; role: 'user'; text: string }
+  | { id: string; role: 'bot'; botId: string; text: string };
+
+/**
+ * Fold stored transcript lines into room rows, oldest-first as stored. Rows
+ * the view cannot render honestly (unknown roles, bot lines without an
+ * author) are dropped rather than drawn broken.
+ */
+export function transcriptToRoomEntries(entries: GroupTranscriptEntry[]): RoomTranscriptRow[] {
+  const rows: RoomTranscriptRow[] = [];
+  for (const entry of entries) {
+    if (!entry || typeof entry.id !== 'string' || typeof entry.text !== 'string') continue;
+    if (entry.role === 'user') {
+      rows.push({ id: entry.id, role: 'user', text: entry.text });
+    } else if (entry.role === 'bot' && typeof entry.botId === 'string') {
+      rows.push({ id: entry.id, role: 'bot', botId: entry.botId, text: entry.text });
+    }
+  }
+  return rows;
+}
+
 export function GROUP_SESSION_TITLE(name: string): string {
   return `Group: ${name}`;
 }

@@ -5,7 +5,7 @@
 
 import { HermesGatewayClient, type GatewayClientCallbacks } from '@/lib/gateway/client';
 import type { PublicBot } from '@/lib/gateway/bots';
-import type { BotGroupRoom, GroupReply } from '@/lib/gateway/groups';
+import type { BotGroupRoom, GroupReply, GroupTranscriptEntry } from '@/lib/gateway/groups';
 import { ManifestClient } from '@/lib/gateway/manifest-client';
 import { OpenClawAdapterClient } from '@/lib/portal/openclaw-adapter';
 import type { GatewayIdentity } from '@/lib/portal/identify';
@@ -78,6 +78,8 @@ export interface PortalClient {
     groupId: string,
     input: { text: string; mentionedIds?: string[] },
   ): Promise<{ replies: GroupReply[] }>;
+  /** Stored room transcript; omitted when the gate has no rooms endpoint. */
+  groupHistory?(groupId: string): Promise<GroupTranscriptEntry[]>;
   renameGroup?(groupId: string, name: string): Promise<BotGroupRoom>;
   leaveGroup?(groupId: string, memberId: string): Promise<BotGroupRoom>;
   handoffMention?(input: { fromId: string; toId: string; text: string }): Promise<unknown>;

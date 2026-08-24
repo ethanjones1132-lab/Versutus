@@ -569,6 +569,7 @@ export function ChatScreen() {
               group={activeGroup}
               members={rosterBots}
               onSend={(text, mentionedIds) => botGroups.send(activeGroup.id, { text, mentionedIds })}
+              loadHistory={() => botGroups.history(activeGroup.id)}
               onRename={(name) =>
                 botGroups.rename(activeGroup.id, name).then((room) => {
                   void refreshGroups();

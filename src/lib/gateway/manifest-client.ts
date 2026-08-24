@@ -1,6 +1,6 @@
 import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/chat-stream-delta';
 import type { PublicBot } from '@/lib/gateway/bots';
-import type { BotGroupRoom, GroupReply } from '@/lib/gateway/groups';
+import type { BotGroupRoom, GroupReply, GroupTranscriptEntry } from '@/lib/gateway/groups';
 import { isAuthRejection } from '@/lib/gateway/errors';
 import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
 import { HttpTransport } from '@/lib/gateway/http-transport';
@@ -551,6 +551,21 @@ export class ManifestClient implements PortalClient {
       `${path.replace(/\/+$/, '')}/${encodeURIComponent(groupId)}/messages`,
       input,
     );
+  }
+
+  /**
+   * The Gate keeps each room's transcript so a revisit replays the
+   * conversation instead of starting blank. Gates without the rooms
+   * capability degrade to empty, like listGroups does.
+   */
+  async groupHistory(groupId: string): Promise<GroupTranscriptEntry[]> {
+    const path = this.endpoints.botGroups;
+    if (!path) return [];
+    const result = await this.rootTransport.request<{ data?: GroupTranscriptEntry[] }>(
+      'GET',
+      `${path.replace(/\/+$/, '')}/${encodeURIComponent(groupId)}/messages`,
+    );
+    return result.data ?? [];
   }
 
   async renameGroup(groupId: string, name: string): Promise<BotGroupRoom> {

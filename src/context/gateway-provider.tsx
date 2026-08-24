@@ -39,7 +39,7 @@ import {
 } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { loadBotChat, type PublicBot } from '@/lib/gateway/bots';
-import type { BotGroupRoom, GroupReply } from '@/lib/gateway/groups';
+import type { BotGroupRoom, GroupReply, GroupTranscriptEntry } from '@/lib/gateway/groups';
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
 import { formatRunFailure } from '@/lib/gateway/run-failures';
 import { effectiveModel, resolveSendModel, withSelectedModel } from '@/lib/gateway/model-selection';
@@ -202,6 +202,7 @@ type GatewayContextValue = {
       groupId: string,
       input: { text: string; mentionedIds?: string[] },
     ) => Promise<{ replies: GroupReply[] }>;
+    history: (groupId: string) => Promise<GroupTranscriptEntry[]>;
     rename: (groupId: string, name: string) => Promise<BotGroupRoom>;
     leave: (groupId: string, memberId: string) => Promise<BotGroupRoom>;
   };
@@ -2404,6 +2405,13 @@ const response = await executeGatewaySlashCommand(trimmed, {
       const client = clientRef.current;
       if (!client?.sendGroupMessage) throw new Error('This gateway does not manage group rooms.');
       return client.sendGroupMessage(groupId, input);
+    },
+    history: async (groupId: string) => {
+      const client = clientRef.current;
+      // A gate without rooms (or an older client surface) simply has no
+      // replayable transcript — degrade to empty like list does.
+      if (!client?.groupHistory) return [];
+      return client.groupHistory(groupId);
     },
     rename: async (groupId: string, name: string) => {
       const client = clientRef.current;

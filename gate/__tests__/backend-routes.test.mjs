@@ -633,6 +633,13 @@ function stubFrontedRegistry(calls) {
         },
       };
     },
+    async deliverGroupMessage(input) {
+      calls.push(`deliverGroupMessage:${input?.name}:${input?.text}`);
+      // Mirrors the real backend: a silent first speaker ends the plan with
+      // zero replies.
+      if ((input?.memberIds ?? []).includes('silent')) return { replies: [] };
+      return { replies: [{ botId: input?.memberIds?.[0] ?? 'coder', text: `echo ${input?.text}` }] };
+    },
   });
   return registry;
 }
@@ -1380,6 +1387,70 @@ test('bot groups: manifest advertisement, rename, and leave round-trips', async 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'x' }),
     });
+    assert.equal(unauthenticated.status, 401);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('bot groups: sends are recorded Gate-side and replayed as room history', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    const created = await (await fetch(`${base}/v1/bot-groups`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'crew', memberIds: ['researcher', 'coder'] }),
+    })).json();
+
+    // A fresh room replays nothing.
+    const empty = await (await fetch(`${base}/v1/bot-groups/${created.id}/messages`, { headers: auth(gate) })).json();
+    assert.deepEqual(empty, { object: 'list', data: [] });
+
+    const sent = await (await fetch(`${base}/v1/bot-groups/${created.id}/messages`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ text: 'status?', mentionedIds: ['researcher'] }),
+    })).json();
+    assert.deepEqual(sent.replies, [{ botId: 'researcher', text: 'echo status?' }]);
+
+    // The send is now the room's transcript: operator line first, then each
+    // reply attributed to its bot — so a revisit replays instead of starting
+    // blank.
+    const historyResponse = await fetch(`${base}/v1/bot-groups/${created.id}/messages`, { headers: auth(gate) });
+    assert.equal(historyResponse.status, 200);
+    const history = (await historyResponse.json()).data;
+    assert.equal(history.length, 2);
+    assert.equal(history[0].role, 'user');
+    assert.equal(history[0].text, 'status?');
+    assert.equal(history[1].role, 'bot');
+    assert.equal(history[1].botId, 'researcher');
+    assert.equal(history[1].text, 'echo status?');
+
+    // A silent round (first speaker silent → zero replies) still records the
+    // operator's line.
+    const hushed = await (await fetch(`${base}/v1/bot-groups`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'hush', memberIds: ['silent', 'coder'] }),
+    })).json();
+    const hushedSent = await (await fetch(`${base}/v1/bot-groups/${hushed.id}/messages`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ text: 'anyone there?' }),
+    })).json();
+    assert.deepEqual(hushedSent.replies, []);
+    const hushedHistory = (await (await fetch(`${base}/v1/bot-groups/${hushed.id}/messages`, { headers: auth(gate) })).json()).data;
+    assert.equal(hushedHistory.length, 1);
+    assert.equal(hushedHistory[0].role, 'user');
+    assert.equal(hushedHistory[0].text, 'anyone there?');
+
+    const unknownRoom = await fetch(`${base}/v1/bot-groups/nope/messages`, { headers: auth(gate) });
+    assert.equal(unknownRoom.status, 404);
+    assert.equal((await unknownRoom.json()).error.code, 'unknown_group');
+
+    const unauthenticated = await fetch(`${base}/v1/bot-groups/${created.id}/messages`);
     assert.equal(unauthenticated.status, 401);
   } finally {
     await gate.close();

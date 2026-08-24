@@ -27,14 +27,44 @@ export function planGroupRounds({ memberIds, mentionedIds = [], maxRounds = 3, m
   return steps;
 }
 
+/** Oldest entries beyond this are dropped — a transcript is recent truth, not an archive. */
+export const MAX_GROUP_HISTORY = 200;
+
+function makeEntryId() {
+  return randomBytes(6).toString('hex');
+}
+
+/**
+ * The transcript record of one room send: the operator's line followed by
+ * each reply in arrival order. A silent round still keeps the user's line —
+ * "nobody answered" is part of the room's history too.
+ */
+export function transcriptEntriesForSend({ text, replies = [], makeId = makeEntryId, now = Date.now() } = {}) {
+  const entries = [{ id: makeId(), role: 'user', text: String(text ?? ''), at: now }];
+  for (const reply of replies) {
+    entries.push({
+      id: makeId(),
+      role: 'bot',
+      botId: String(reply.botId ?? ''),
+      text: String(reply.text ?? ''),
+      at: now,
+    });
+  }
+  return entries;
+}
+
 export function createBotGroupStore(gateHome) {
   const file = join(gateHome, 'bot-groups.json');
 
   async function read() {
     try {
-      return JSON.parse(await readFile(file, 'utf8'));
+      const parsed = JSON.parse(await readFile(file, 'utf8'));
+      // Rooms written before transcripts existed keep working: the transcript
+      // map materialises on first append.
+      if (!parsed.transcripts) parsed.transcripts = {};
+      return parsed;
     } catch {
-      return { groups: [] };
+      return { groups: [], transcripts: {} };
     }
   }
 
@@ -112,6 +142,33 @@ export function createBotGroupStore(gateHome) {
       group.memberIds = group.memberIds.filter((entry) => entry !== memberId);
       await write(data);
       return group;
+    },
+    async appendMessages(id, entries) {
+      if (!Array.isArray(entries) || entries.length === 0) return 0;
+      const data = await read();
+      const group = data.groups.find((entry) => entry.id === id);
+      if (!group) {
+        const error = new Error('group not found');
+        error.code = 'unknown_group';
+        error.status = 404;
+        throw error;
+      }
+      const room = data.transcripts[id] ?? (data.transcripts[id] = []);
+      room.push(...entries);
+      if (room.length > MAX_GROUP_HISTORY) room.splice(0, room.length - MAX_GROUP_HISTORY);
+      await write(data);
+      return room.length;
+    },
+    async history(id) {
+      const data = await read();
+      const group = data.groups.find((entry) => entry.id === id);
+      if (!group) {
+        const error = new Error('group not found');
+        error.code = 'unknown_group';
+        error.status = 404;
+        throw error;
+      }
+      return data.transcripts[id] ?? [];
     },
   };
 }

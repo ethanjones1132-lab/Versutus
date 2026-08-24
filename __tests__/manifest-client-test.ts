@@ -672,6 +672,34 @@ describe('ManifestClient sessions and runs when advertised', () => {
     await expect(client.sendGroupMessage('x', { text: 'hi' })).rejects.toThrow(/botGroups/);
   });
 
+  test('groupHistory GETs the room transcript and degrades without rooms', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          object: 'list',
+          data: [
+            { id: 'e1', role: 'user', text: 'plan the launch', at: 1 },
+            { id: 'e2', role: 'bot', botId: 'b', text: 'on it', at: 1 },
+          ],
+        }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', botGroups: '/v1/bot-groups' });
+
+    const history = await client.groupHistory('room1');
+    expect(history.map((entry) => entry.id)).toEqual(['e1', 'e2']);
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/v1/bot-groups/room1/messages');
+    expect(fetchMock.mock.calls[0][1].method).toBe('GET');
+    // Gate-level route: no bot/backend scoping may be appended.
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('bot=');
+
+    // A gate that advertises no rooms has no replayable transcript either.
+    const bare = clientWithEndpoints({ health: '/health' });
+    await expect(bare.groupHistory('room1')).resolves.toEqual([]);
+  });
+
   test('stopRun POSTs the advertised stopRun path with the run id', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

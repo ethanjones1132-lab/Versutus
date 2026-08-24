@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
@@ -14,6 +14,8 @@ import {
   MAX_GROUP_MESSAGES,
   type BotGroupRoom,
   type GroupReply,
+  type GroupTranscriptEntry,
+  transcriptToRoomEntries,
 } from '@/lib/gateway/groups';
 import { extractMentions } from '@/lib/gateway/mentions';
 
@@ -32,16 +34,19 @@ export function GroupRoomView({
   onSend,
   onRename,
   onLeave,
+  loadHistory,
 }: {
   group: BotGroupRoom;
   members: PublicBot[];
   onSend: (text: string, mentionedIds: string[]) => Promise<{ replies: GroupReply[] }>;
   onRename: (name: string) => Promise<BotGroupRoom>;
   onLeave: (memberId: string) => Promise<BotGroupRoom>;
+  loadHistory?: () => Promise<GroupTranscriptEntry[]>;
 }) {
   const tokens = useTokens();
   const scrollRef = useRef<ScrollView>(null);
   const [entries, setEntries] = useState<RoomEntry[]>([]);
+  const [historyError, setHistoryError] = useState(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | undefined>();
@@ -64,6 +69,34 @@ export function GroupRoomView({
   const scrollToBottom = () => {
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
   };
+
+  // Replay the Gate-stored transcript once per room visit, so a revisit
+  // continues the conversation instead of starting blank. Stored lines are
+  // merged by id BEFORE anything typed this session — a send that lands while
+  // history is in flight is never clobbered.
+  const historyRequested = useRef(false);
+  useEffect(() => {
+    if (!loadHistory || historyRequested.current) return;
+    historyRequested.current = true;
+    let alive = true;
+    loadHistory()
+      .then((stored) => {
+        if (!alive) return;
+        setEntries((prev) => {
+          const known = new Set(prev.map((entry) => entry.id));
+          const replayed = transcriptToRoomEntries(stored).filter((row) => !known.has(row.id));
+          return [...replayed, ...prev];
+        });
+      })
+      .catch(() => {
+        // Fail honest: say earlier replies may be missing instead of showing
+        // a silently truncated room.
+        if (alive) setHistoryError(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [loadHistory]);
 
   const handleSend = () => {
     const text = draft.trim();
@@ -192,6 +225,12 @@ export function GroupRoomView({
             <Text variant="micro" color="tertiary">{GROUP_MEMBER_FLOOR_REASON} — members are pinned.</Text>
           ) : null}
         </View>
+
+        {historyError ? (
+          <Text variant="micro" color="tertiary" style={styles.emptyHint}>
+            Could not load earlier replies from the Gate — this visit may be missing older lines.
+          </Text>
+        ) : null}
 
         {entries.length === 0 ? (
           <Text variant="caption" color="tertiary" style={styles.emptyHint}>

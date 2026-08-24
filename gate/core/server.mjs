@@ -21,7 +21,7 @@ import { CliAdapterRegistry } from './cli-environments/adapter-registry.mjs';
 import { CliEnvironmentService } from './cli-environments/supervisor.mjs';
 import { createEnvironmentRpc, sanitizeEnvironment } from './cli-environments/rpc.mjs';
 import { createBackendManager } from './cli-environments/backend-manager.mjs';
-import { createBotGroupStore } from './cli-environments/bot-groups.mjs';
+import { createBotGroupStore, transcriptEntriesForSend } from './cli-environments/bot-groups.mjs';
 import { buildCliEnvironment } from './cli-environments/process-environment.mjs';
 import { TokenStore } from './tokens.mjs';
 import { PairingStore } from './pairing.mjs';
@@ -1272,6 +1272,17 @@ export async function createGate(config = {}) {
       }
 
       const groupMessageMatch = pathname.match(/^\/v1\/bot-groups\/([^/]+)\/messages$/);
+      if (groupMessageMatch && method === 'GET') {
+        try {
+          const entries = await botGroups.history(decodeURIComponent(groupMessageMatch[1]));
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ object: 'list', data: entries }));
+        } catch (error) {
+          res.writeHead(error.status || 400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code: error.code ?? 'group_history_failed' } }));
+        }
+        return;
+      }
       if (groupMessageMatch && method === 'POST') {
         const body = (await readJsonBody(req)) ?? {};
         const group = await botGroups.get(decodeURIComponent(groupMessageMatch[1]));
@@ -1289,6 +1300,17 @@ export async function createGate(config = {}) {
             mentionedIds: body.mentionedIds,
             text: body.text,
           });
+          // The transcript is Gate-owned so the conversation survives the
+          // visit; a persistence failure must not fail a send that already
+          // succeeded — the replies are the response contract.
+          try {
+            await botGroups.appendMessages(
+              group.id,
+              transcriptEntriesForSend({ text: body.text, replies: result.replies }),
+            );
+          } catch (historyError) {
+            console.warn(`bot-groups: transcript append failed for ${group.id}:`, historyError?.message ?? historyError);
+          }
           res.writeHead(200);
           res.end(JSON.stringify(result));
         } catch (error) {

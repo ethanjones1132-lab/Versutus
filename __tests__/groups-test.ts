@@ -9,9 +9,10 @@ import {
   MAX_GROUP_MESSAGES,
   MAX_GROUP_ROUNDS,
   planGroupRounds,
+  transcriptToRoomEntries,
   validateGroup,
 } from '@/lib/gateway/groups';
-import type { BotGroupRoom } from '@/lib/gateway/groups';
+import type { BotGroupRoom, GroupTranscriptEntry } from '@/lib/gateway/groups';
 
 const ROOM: BotGroupRoom = { id: 'room1', name: 'crew', memberIds: ['coder', 'researcher'] };
 
@@ -62,4 +63,26 @@ test('roster copy helpers stay honest about size and search', () => {
   // Member ids are searchable too — operators think in handles.
   expect(filterGroupRooms(rooms, 'researcher').map((room) => room.id)).toEqual(['room1']);
   expect(filterGroupRooms(rooms, 'zzz')).toEqual([]);
+});
+
+test('transcriptToRoomEntries folds stored history into renderable rows, oldest-first', () => {
+  // Wire order from the Gate: operator line first, then each reply of the send.
+  const stored: GroupTranscriptEntry[] = [
+    { id: 'a1', role: 'user', text: 'plan the launch', at: 1 },
+    { id: 'a2', role: 'bot', botId: 'coder', text: 'on it', at: 1 },
+    { id: 'a3', role: 'bot', text: 'no author — dropped' },
+    { id: 'a4', role: 'mystery', text: '?' } as unknown as GroupTranscriptEntry,
+    { id: 'a5', role: 'user', text: '' },
+    null as unknown as GroupTranscriptEntry,
+  ];
+
+  expect(transcriptToRoomEntries(stored)).toEqual([
+    { id: 'a1', role: 'user', text: 'plan the launch' },
+    { id: 'a2', role: 'bot', botId: 'coder', text: 'on it' },
+    // An empty line is still history — kept.
+    { id: 'a5', role: 'user', text: '' },
+  ]);
+
+  // A gate without transcripts answers empty; the fold of nothing is nothing.
+  expect(transcriptToRoomEntries([])).toEqual([]);
 });
