@@ -137,51 +137,84 @@ function joinAnd(names: string[]): string {
 
 /**
  * The honest variant of the plan line: a member that cannot route is not a
- * speaker. When every speaker routes (or reports nothing — older Gates),
- * this is exactly describeGroupPlan. Silent members are named so the
- * operator reads the cause before sending, and the caps segment never moves.
+ * speaker, and neither is one the phone has never seen on the loaded roster
+ * ('not on this gateway') — only roster-confirmed routable members count.
+ * When the inventory itself never loaded (rosterLoaded false) the line names
+ * the unread roster instead of asserting round counts the phone cannot
+ * prove. Every speaker routable (or reporting nothing — older Gates) makes
+ * this exactly describeGroupPlan. Silent members are named so the operator
+ * reads the cause before sending, and the caps segment never moves.
  */
 export function describeRoomPlan({
   speakerCount,
   routableCount,
   silentNames,
+  unknownNames = [],
+  rosterLoaded = true,
 }: {
   speakerCount: number;
   routableCount: number;
   silentNames: string[];
+  unknownNames?: string[];
+  rosterLoaded?: boolean;
 }): string {
   const caps = `up to ${MAX_GROUP_ROUNDS} rounds · stops at ${MAX_GROUP_MESSAGES} messages`;
-  if (routableCount >= Math.max(speakerCount, 0)) return describeGroupPlan(speakerCount);
-  const names = silentNames.filter((name) => typeof name === 'string' && name.trim());
-  const who = `${joinAnd(names.length ? names : ['a member'])} cannot route`;
-  if (routableCount <= 0) return `Nothing will speak — ${who} · ${caps}`;
-  return `${routableCount} of ${speakerCount} bots speak per round · ${who} · ${caps}`;
+  if (!rosterLoaded) return `Roster not loaded — routing unverified · ${caps}`;
+  const silent = silentNames.filter((name) => typeof name === 'string' && name.trim());
+  const unknown = unknownNames.filter((name) => typeof name === 'string' && name.trim());
+  if (routableCount >= Math.max(speakerCount, 0) && unknown.length === 0) return describeGroupPlan(speakerCount);
+  const clauses: string[] = [];
+  // The legacy drift fallback ('a member cannot route') fires only when no
+  // unknown member explains the count shortfall — a named cause is better.
+  if (silent.length > 0 || (unknown.length === 0 && routableCount < Math.max(speakerCount, 0))) {
+    clauses.push(`${joinAnd(silent.length ? silent : ['a member'])} cannot route`);
+  }
+  if (unknown.length > 0) clauses.push(`${joinAnd(unknown)} not on this gateway`);
+  const causes = clauses.join(' · ');
+  if (routableCount <= 0) return `Nothing will speak — ${causes} · ${caps}`;
+  return `${routableCount} of ${speakerCount} bots speak per round · ${causes} · ${caps}`;
 }
 
 /**
  * The honest outcome line under a sent message: how many replies came back,
  * or — when none did — WHY. A zero-reply round only blames choice when every
  * scoped speaker could actually route; structural silence names who could
- * not, and a mixed room says both truths instead of accusing reachable bots
- * of ignoring the room. Counts are the SEND-time scope, not the live draft.
+ * not, members missing from the loaded roster are named as unknown rather
+ * than blamed, and a roster that never loaded is named itself (no routing
+ * verdict can be drawn from an inventory the phone never read). Counts are
+ * the SEND-time scope, not the live draft.
  */
 export function describeRoundOutcome({
   replyCount,
   speakerCount,
   routableCount,
   silentNames,
+  unknownNames = [],
+  rosterLoaded = true,
 }: {
   replyCount: number;
   speakerCount: number;
   routableCount: number;
   silentNames: string[];
+  unknownNames?: string[];
+  rosterLoaded?: boolean;
 }): string {
   if (replyCount > 0) {
+    // Replies that landed are real whatever the inventory said — count them.
     return `${replyCount} repl${replyCount === 1 ? 'y' : 'ies'} this round`;
   }
+  if (!rosterLoaded) return 'No replies — the roster never loaded, so routing was never verified.';
+  const silent = silentNames.filter((name) => typeof name === 'string' && name.trim());
+  const unknown = unknownNames.filter((name) => typeof name === 'string' && name.trim());
+  if (unknown.length > 0) {
+    const parts = [`No replies — ${joinAnd(unknown)} not on this gateway`];
+    if (silent.length > 0) parts.push(`${joinAnd(silent)} cannot route`);
+    if (routableCount > 0) parts.push('the rest stayed silent');
+    return `${parts.join(' · ')}.`;
+  }
   if (routableCount < Math.max(speakerCount, 0)) {
-    const names = silentNames.filter((name) => typeof name === 'string' && name.trim());
-    const who = `${joinAnd(names.length ? names : ['a member'])} cannot route`;
+    const names = silent.length ? silent : ['a member'];
+    const who = `${joinAnd(names)} cannot route`;
     if (routableCount <= 0) return `No replies — ${who}.`;
     return `No replies — ${who} · the rest stayed silent.`;
   }

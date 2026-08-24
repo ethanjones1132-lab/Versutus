@@ -110,6 +110,105 @@ test('describeRoundOutcome never blames choice when routing was impossible', () 
   );
 });
 
+test('describeRoomPlan counts only roster-confirmed speakers', () => {
+  // A member the phone has never seen on the loaded inventory is not a
+  // speaker: the count drops and the member says it is missing.
+  const partial = describeRoomPlan({
+    speakerCount: 3,
+    routableCount: 2,
+    silentNames: [],
+    unknownNames: ['Ghost'],
+  });
+  expect(partial).toContain('2 of 3 bots speak per round');
+  expect(partial).toContain('Ghost not on this gateway');
+  expect(partial).toContain(`up to ${MAX_GROUP_ROUNDS} rounds`);
+  expect(partial).toContain(`stops at ${MAX_GROUP_MESSAGES} messages`);
+  // Missing AND confirmed-unroutable members: both causes are named in order.
+  const mixed = describeRoomPlan({
+    speakerCount: 4,
+    routableCount: 1,
+    silentNames: ['Echo'],
+    unknownNames: ['Foxtrot', 'Ghost'],
+  });
+  expect(mixed).toContain('1 of 4 bots speak per round');
+  expect(mixed).toContain('Echo cannot route');
+  expect(mixed).toContain('Foxtrot and Ghost not on this gateway');
+  // Nobody verified can speak: no promise of replies.
+  const dead = describeRoomPlan({
+    speakerCount: 2,
+    routableCount: 0,
+    silentNames: [],
+    unknownNames: ['Ghost'],
+  });
+  expect(dead).toContain('Nothing will speak');
+  expect(dead).toContain('Ghost not on this gateway');
+  // Omitted unknowns keep the legacy line byte-for-byte.
+  expect(describeRoomPlan({ speakerCount: 3, routableCount: 3, silentNames: [] })).toBe(describeGroupPlan(3));
+});
+
+test('describeRoomPlan names an unread roster instead of asserting round counts', () => {
+  const unverified = describeRoomPlan({
+    speakerCount: 3,
+    routableCount: 3,
+    silentNames: [],
+    rosterLoaded: false,
+  });
+  expect(unverified).toContain('Roster not loaded');
+  expect(unverified).toContain('routing unverified');
+  expect(unverified).not.toContain('speak per round');
+  expect(unverified).toContain(`up to ${MAX_GROUP_ROUNDS} rounds`);
+  expect(unverified).toContain(`stops at ${MAX_GROUP_MESSAGES} messages`);
+});
+
+test('describeRoundOutcome never blames choice when the roster never loaded', () => {
+  expect(
+    describeRoundOutcome({ replyCount: 0, speakerCount: 2, routableCount: 2, silentNames: [], rosterLoaded: false }),
+  ).toBe('No replies — the roster never loaded, so routing was never verified.');
+  // Replies that DID land are real whatever the inventory said — they count.
+  expect(
+    describeRoundOutcome({ replyCount: 2, speakerCount: 2, routableCount: 2, silentNames: [], rosterLoaded: false }),
+  ).toBe('2 replies this round');
+});
+
+test('describeRoundOutcome names roster-missing members instead of blaming choice', () => {
+  // All speakers missing from the inventory: structural, not a choice.
+  expect(
+    describeRoundOutcome({ replyCount: 0, speakerCount: 2, routableCount: 0, silentNames: [], unknownNames: ['Ghost'] }),
+  ).toBe('No replies — Ghost not on this gateway.');
+  // Missing AND confirmed-unroutable: both structural causes, then the
+  // routable survivors' silence is still called out.
+  expect(
+    describeRoundOutcome({
+      replyCount: 0,
+      speakerCount: 3,
+      routableCount: 1,
+      silentNames: ['Echo'],
+      unknownNames: ['Ghost'],
+    }),
+  ).toBe('No replies — Ghost not on this gateway · Echo cannot route · the rest stayed silent.');
+  // Missing members alongside confirmed-routable ones who chose silence.
+  expect(
+    describeRoundOutcome({
+      replyCount: 0,
+      speakerCount: 3,
+      routableCount: 1,
+      silentNames: [],
+      unknownNames: ['Ghost', 'Foxtrot'],
+    }),
+  ).toBe('No replies — Ghost and Foxtrot not on this gateway · the rest stayed silent.');
+  // Junk unknown names degrade to the legacy reading rather than inventing
+  // a missing member.
+  expect(
+    describeRoundOutcome({
+      replyCount: 0,
+      speakerCount: 3,
+      routableCount: 1,
+      silentNames: [],
+      unknownNames: ['', '   '],
+    }),
+  ).toContain('a member cannot route');
+});
+
 test('roster copy helpers stay honest about size and search', () => {
   expect(groupMemberLine(ROOM)).toBe('2 members');
   expect(groupMemberLine({ ...ROOM, memberIds: ['solo'] })).toBe('1 member');

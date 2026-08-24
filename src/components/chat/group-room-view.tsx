@@ -38,6 +38,12 @@ type RoomEntry =
       speakerCount?: number;
       routableCount?: number;
       silentNames?: string[];
+      /** Roster-confirmed unroutable names are in silentNames; these are the
+       *  members this phone has never seen on the loaded inventory. */
+      unknownNames?: string[];
+      /** False when the roster inventory had not been read at send time —
+       *  the outcome line must never claim a routing verdict it lacks. */
+      rosterLoaded?: boolean;
     }
   | { id: string; role: 'bot'; botId: string; text: string; at?: number };
 
@@ -63,6 +69,8 @@ function userMetaLine(entry: Extract<RoomEntry, { role: 'user' }>): string {
         speakerCount: entry.speakerCount ?? 0,
         routableCount: entry.routableCount ?? 0,
         silentNames: entry.silentNames ?? [],
+        unknownNames: entry.unknownNames ?? [],
+        rosterLoaded: entry.rosterLoaded,
       }),
     );
   }
@@ -81,6 +89,7 @@ export function GroupRoomView({
   onRename,
   onLeave,
   loadHistory,
+  inventoryLoaded = true,
 }: {
   group: BotGroupRoom;
   members: PublicBot[];
@@ -88,6 +97,9 @@ export function GroupRoomView({
   onRename: (name: string) => Promise<BotGroupRoom>;
   onLeave: (memberId: string) => Promise<BotGroupRoom>;
   loadHistory?: () => Promise<GroupTranscriptEntry[]>;
+  /** False when the phone has never completed a bot-inventory read — no
+   *  routing verdicts can be drawn, so plan/outcome lines say so. */
+  inventoryLoaded?: boolean;
 }) {
   const tokens = useTokens();
   const scrollRef = useRef<ScrollView>(null);
@@ -113,12 +125,13 @@ export function GroupRoomView({
     return (id: string) => byId.get(id) ?? '';
   }, [members]);
 
-  // Why a member cannot route ('' = routable / older Gate), so the operator
-  // reads the cause on the chip BEFORE sending and the round coming back
-  // short is never a surprise.
+  // Why a member cannot route ('' = routable / older Gate), read from the
+  // loaded roster only: undefined = the member is NOT on the inventory, so
+  // the phone has never verified its routing — never claim it routable, and
+  // never blame it for staying silent.
   const routingTagOf = useMemo(() => {
     const byId = new Map(members.map((bot) => [bot.id, botChipRoutingTag(bot)]));
-    return (id: string) => byId.get(id) ?? '';
+    return (id: string) => byId.get(id);
   }, [members]);
 
   // Live round feedback: what you are about to send scopes the plan. Mentions
@@ -128,12 +141,17 @@ export function GroupRoomView({
   const removable = canRemoveMember(group);
 
   // The plan line tells the truth about silence: a member that cannot route
-  // is not a speaker, so the count says who answers and the line names who
-  // stays silent — the same verdict the chips below carry.
+  // is not a speaker, and a member the phone has never seen on the loaded
+  // roster counts neither as a speaker nor as a silent choice. Only
+  // roster-confirmed routable members make the count — the same verdict the
+  // chips below carry.
   const silentSpeakerNames: string[] = [];
+  const unknownSpeakerNames: string[] = [];
   let routableSpeakerCount = 0;
   for (const id of speakers) {
-    if (routingTagOf(id)) silentSpeakerNames.push(displayNameOf(id));
+    const tag = routingTagOf(id);
+    if (tag === undefined) unknownSpeakerNames.push(displayNameOf(id));
+    else if (tag) silentSpeakerNames.push(displayNameOf(id));
     else routableSpeakerCount += 1;
   }
 
@@ -179,8 +197,15 @@ export function GroupRoomView({
     // time — not whatever the draft holds by the time replies land. Same
     // routing truth the plan line and chips already show.
     const roundSpeakers = groupSpeakers(group.memberIds, mentionedIds);
-    const roundSilentNames = roundSpeakers.filter((id) => routingTagOf(id)).map((id) => displayNameOf(id));
-    const roundRoutableCount = roundSpeakers.length - roundSilentNames.length;
+    const roundSilentNames: string[] = [];
+    const roundUnknownNames: string[] = [];
+    let roundRoutableCount = 0;
+    for (const id of roundSpeakers) {
+      const tag = routingTagOf(id);
+      if (tag === undefined) roundUnknownNames.push(displayNameOf(id));
+      else if (tag) roundSilentNames.push(displayNameOf(id));
+      else roundRoutableCount += 1;
+    }
     setEntries((prev) => [
       ...prev,
       {
@@ -191,6 +216,8 @@ export function GroupRoomView({
         speakerCount: roundSpeakers.length,
         routableCount: roundRoutableCount,
         silentNames: roundSilentNames,
+        unknownNames: roundUnknownNames,
+        rosterLoaded: inventoryLoaded,
       },
     ]);
     setDraft('');
@@ -220,6 +247,8 @@ export function GroupRoomView({
               speakerCount: roundSpeakers.length,
               routableCount: roundRoutableCount,
               silentNames: roundSilentNames,
+              unknownNames: roundUnknownNames,
+              rosterLoaded: inventoryLoaded,
             });
             replies.forEach((reply, index) => {
               next.push({
@@ -274,6 +303,8 @@ export function GroupRoomView({
                 speakerCount: speakers.length,
                 routableCount: routableSpeakerCount,
                 silentNames: silentSpeakerNames,
+                unknownNames: unknownSpeakerNames,
+                rosterLoaded: inventoryLoaded,
               })}
             </Text>
             <PressableScale
@@ -297,9 +328,12 @@ export function GroupRoomView({
           <View style={styles.chipWrap}>
             {group.memberIds.map((memberId) => {
               // Routing state outranks the pin: an unroutable chip shows WHY
-              // it will stay silent instead of what a silent bot is pinned to.
+              // it will stay silent instead of what a silent bot is pinned to,
+              // and a member this phone has never seen on the roster says so
+              // instead of masquerading as a verified speaker.
               const routingTag = routingTagOf(memberId);
               const modelPin = routingTag ? '' : pinnedModelOf(memberId);
+              const missingFromRoster = routingTag === undefined;
               return (
                 <PressableScale
                   key={memberId}
@@ -322,6 +356,10 @@ export function GroupRoomView({
                   {routingTag ? (
                     <Text variant="micro" color="accentWarm" numberOfLines={1} style={styles.memberChipPin}>
                       {routingTag}
+                    </Text>
+                  ) : missingFromRoster ? (
+                    <Text variant="micro" color="accentWarm" numberOfLines={1} style={styles.memberChipPin}>
+                      Not on gateway
                     </Text>
                   ) : modelPin ? (
                     <Text variant="micro" color="tertiary" numberOfLines={1} style={styles.memberChipPin}>

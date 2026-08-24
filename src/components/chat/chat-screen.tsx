@@ -629,10 +629,15 @@ export function ChatScreen() {
         <View style={styles.listWrap}>
           {activeGroup ? (
             <GroupRoomView
-              key={activeGroup.id}
-              group={activeGroup}
-              members={rosterBots}
-              onSend={(text, mentionedIds) => botGroups.send(activeGroup.id, { text, mentionedIds })}
+                          key={activeGroup.id}
+                          group={activeGroup}
+                          members={rosterBots}
+                          // The phone has an inventory read once a load finished OR rows
+                          // survive from an earlier success (a failed refresh keeps the
+                          // last-known tags live, like the roster screen itself). Only a
+                          // never-completed read leaves routing unverified.
+                          inventoryLoaded={!rosterLoading || rosterBots.length > 0}
+                          onSend={(text, mentionedIds) => botGroups.send(activeGroup.id, { text, mentionedIds })}
               loadHistory={() => botGroups.history(activeGroup.id)}
               onRename={(name) =>
                 botGroups.rename(activeGroup.id, name).then((room) => {
