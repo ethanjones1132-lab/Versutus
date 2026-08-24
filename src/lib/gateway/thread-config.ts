@@ -35,6 +35,22 @@ export function resolveThreadConfigMode(
   return null;
 }
 
+/**
+ * The backends section exists only on a configurable thread with a loaded
+ * backend list. The sheet's offered modes AND chat-screen's guard that closes
+ * an open backends section both derive from this one predicate: a single
+ * source is what stops an active mode from outliving its availability (the
+ * screen auto-navigating into a bot room, or a gateway refresh emptying the
+ * list under an open sheet) and rendering a section its switcher no longer
+ * offers.
+ */
+export function threadConfigBackendsAllowed(
+  surfaceKind: string,
+  backendsCount: number,
+): boolean {
+  return surfaceKind === 'configurable' && backendsCount > 0;
+}
+
 /** The sheet title per section; the models section keeps the picker's modes. */
 export function threadConfigTitle(
   mode: ThreadConfigMode,

@@ -33,7 +33,7 @@ import { botToEditInput, buildBotUpdatePatch, buildRoster, type ChatSurface, typ
 import type { BotGroupRoom } from '@/lib/gateway/groups';
 import { routineName } from '@/lib/gateway/routines';
 import { effectiveModel } from '@/lib/gateway/model-selection';
-import { resolveThreadConfigMode, type ThreadConfigMode } from '@/lib/gateway/thread-config';
+import { resolveThreadConfigMode, threadConfigBackendsAllowed, type ThreadConfigMode } from '@/lib/gateway/thread-config';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
 const PIN_THRESHOLD_PX = 96;
@@ -156,6 +156,16 @@ export function ChatScreen() {
   const pinnedRef = useRef(true);
   const jumpVisibleRef = useRef(false);
 
+  // Every surface change funnels through here so the screen-local backends
+  // section cannot outlive the configurable thread it belongs to (rook
+  // 2026-08-24): navigating to a bot room, group room or the roster closes
+  // it together with everything else that thread owned. Provider-owned
+  // session/model flags are untouched — they stay valid on every surface.
+  const showSurface = useCallback((next: ChatSurface) => {
+    setBackendPickerVisible(false);
+    setSurface(next);
+  }, []);
+
   const pairingKey = `${deviceId ?? ''}:${pairingDetails?.requestId ?? ''}`;
   const isStreaming = isSending || messages.some((message) => message.streaming);
   const showPairingSheet = status === 'pairing' && !!deviceId && dismissedPairingKey !== pairingKey;
@@ -207,9 +217,15 @@ export function ChatScreen() {
   });
   const threadConfigModes = useMemo<ThreadConfigMode[]>(() => {
     const modes: ThreadConfigMode[] = ['sessions', 'models'];
-    if (surface.kind === 'configurable' && backends.length > 0) modes.push('backends');
+    // Availability gates NEW opens, but a section that is already open stays
+    // offered even if its list empties underneath it: the mode and the
+    // switcher must agree by construction, so an active 'backends' mode can
+    // never lack its own option in the segmented control.
+    if (backendPickerVisible || threadConfigBackendsAllowed(surface.kind, backends.length)) {
+      modes.push('backends');
+    }
     return modes;
-  }, [surface.kind, backends.length]);
+  }, [backendPickerVisible, surface.kind, backends.length]);
 
   const handleThreadConfigSwitch = useCallback(
     (next: ThreadConfigMode) => {
@@ -424,7 +440,7 @@ export function ChatScreen() {
         onBackendPress={surface.kind === 'configurable' && backends.length > 0 ? () => setBackendPickerVisible(true) : undefined}
         onRosterPress={surface.kind === 'roster' ? undefined : () => {
           clearBot();
-          setSurface({ kind: 'roster' });
+          showSurface({ kind: 'roster' });
         }}
       />
 
@@ -454,7 +470,7 @@ export function ChatScreen() {
               setRosterRows(buildRoster(bots));
               if (!target && bot.routable) {
                 await openBot(bot.id);
-                setSurface({ kind: 'bot', botId: bot.id });
+                showSurface({ kind: 'bot', botId: bot.id });
               }
             })
             .catch((error: unknown) => {
@@ -481,7 +497,7 @@ export function ChatScreen() {
             .then(async (room) => {
               setNewGroupVisible(false);
               await refreshGroups();
-              setSurface({ kind: 'group', groupId: room.id });
+              showSurface({ kind: 'group', groupId: room.id });
             })
             .catch((error: unknown) => {
               setNewGroupError(error instanceof Error ? error.message : String(error));
@@ -500,10 +516,10 @@ export function ChatScreen() {
                 // closes first so the chat owns the stage, and a failed open
                 // falls back to the roster exactly like a row tap does.
                 const id = detailBot.id;
-                setSurface({ kind: 'bot', botId: id });
+                showSurface({ kind: 'bot', botId: id });
                 setDetailBot(null);
                 void openBot(id).catch(() => {
-                  setSurface({ kind: 'roster' });
+                  showSurface({ kind: 'roster' });
                 });
               }
             : undefined
@@ -574,17 +590,17 @@ export function ChatScreen() {
           groups={groups}
           onSelectConfigurable={() => {
             clearBot();
-            setSurface({ kind: 'configurable' });
+            showSurface({ kind: 'configurable' });
           }}
           onSelectBot={(bot) => {
-            setSurface({ kind: 'bot', botId: bot.id });
+            showSurface({ kind: 'bot', botId: bot.id });
             void openBot(bot.id).catch(() => {
-              setSurface({ kind: 'roster' });
+              showSurface({ kind: 'roster' });
             });
           }}
           onBotDetail={setDetailBot}
           onSelectGroup={(group) => {
-            setSurface({ kind: 'group', groupId: group.id });
+            showSurface({ kind: 'group', groupId: group.id });
           }}
           onNewAgent={() => {
             setNewAgentError(undefined);
@@ -627,7 +643,7 @@ export function ChatScreen() {
               title="This room is gone"
               description="The Gate no longer lists this group room."
               actionLabel="Back to the roster"
-              onAction={() => setSurface({ kind: 'roster' })}
+              onAction={() => showSurface({ kind: 'roster' })}
             />
           )}
         </View>

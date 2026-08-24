@@ -1,5 +1,6 @@
 import {
   resolveThreadConfigMode,
+  threadConfigBackendsAllowed,
   threadConfigTitle,
 } from '@/lib/gateway/thread-config';
 
@@ -57,4 +58,24 @@ test('models title keeps the picker mode wording, including agent targeting', ()
   // An agent-mode open without an id falls back to the plain title rather
   // than rendering "for agent undefined".
   expect(threadConfigTitle('models', 'agent')).toBe('Apply model');
+});
+
+// The backends section's availability gate (rook 2026-08-24): chat-screen's
+// offered modes and its close-an-orphaned-section guard share this predicate,
+// so an active 'backends' mode can never outlive a list that went away.
+describe('threadConfigBackendsAllowed', () => {
+  test('configurable thread with loaded backends offers the section', () => {
+    expect(threadConfigBackendsAllowed('configurable', 2)).toBe(true);
+    expect(threadConfigBackendsAllowed('configurable', 1)).toBe(true);
+  });
+
+  test('no backends, no section — even on the configurable thread', () => {
+    expect(threadConfigBackendsAllowed('configurable', 0)).toBe(false);
+  });
+
+  test('any other surface refuses the section regardless of backends', () => {
+    for (const kind of ['bot', 'roster', 'group']) {
+      expect(threadConfigBackendsAllowed(kind, 3)).toBe(false);
+    }
+  });
 });
