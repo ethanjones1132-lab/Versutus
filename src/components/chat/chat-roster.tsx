@@ -29,6 +29,7 @@ export type ChatRosterProps = {
   /** Long-press a roster row: the detail surface (description, pin, routing fix, id). */
   onBotDetail?: (bot: PublicBot) => void;
   onSelectGroup?: (group: BotGroupRoom) => void;
+  /** Present only when the gateway's client can create and edit agents at all. */
   onNewAgent?: () => void;
   /** Present only when the gateway can create rooms (bots endpoint + groups advertised). */
   onNewGroup?: () => void;

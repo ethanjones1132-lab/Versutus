@@ -120,6 +120,8 @@ export function ChatScreen() {
     listBots,
     createBot,
     updateBot,
+    hasBotManagement,
+    hasGroupRooms,
     openBot,
     clearBot,
     botJobs,
@@ -529,7 +531,7 @@ export function ChatScreen() {
             : undefined
         }
         onEdit={
-          detailBot
+          detailBot && hasBotManagement
             ? () => {
                 // Same prefill path as the overflow menu's Edit agent — one form,
                 // two doors. The detail sheet closes so the form owns the stage.
@@ -606,12 +608,15 @@ export function ChatScreen() {
           onSelectGroup={(group) => {
             showSurface({ kind: 'group', groupId: group.id });
           }}
-          onNewAgent={() => {
+          // Honesty gating: gateways whose client cannot manage agents or
+          // host rooms never see these rows at all — the refusal must not
+          // wait until after the operator fills the sheet.
+          onNewAgent={hasBotManagement ? () => {
             setNewAgentError(undefined);
             setEditingBot(null);
             setNewAgentVisible(true);
-          }}
-          onNewGroup={status === 'connected' ? () => {
+          } : undefined}
+          onNewGroup={status === 'connected' && hasGroupRooms ? () => {
             setNewGroupError(undefined);
             setNewGroupVisible(true);
           } : undefined}
@@ -788,7 +793,7 @@ export function ChatScreen() {
           setOverflowVisible(false);
         }}
         onEditAgent={
-          surface.kind === 'bot'
+          surface.kind === 'bot' && hasBotManagement
             ? () => {
                 const row = rosterRows.find(
                   (candidate): candidate is Extract<RosterRow, { kind: 'bot' }> =>

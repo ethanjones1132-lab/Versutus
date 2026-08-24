@@ -38,9 +38,18 @@ import {
   prependEarlier,
 } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
-import { loadBotChat, type PublicBot } from '@/lib/gateway/bots';
+import {
+  hasBotManagement as probeBotManagement,
+  loadBotChat,
+  type PublicBot,
+} from '@/lib/gateway/bots';
 import { onboardingCompletionForAddedGateway } from '@/lib/onboarding/completion-from-add';
-import type { BotGroupRoom, GroupReply, GroupTranscriptEntry } from '@/lib/gateway/groups';
+import {
+  hasGroupRooms as probeGroupRooms,
+  type BotGroupRoom,
+  type GroupReply,
+  type GroupTranscriptEntry,
+} from '@/lib/gateway/groups';
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
 import { formatRunFailure } from '@/lib/gateway/run-failures';
 import { effectiveModel, resolveSendModel, withSelectedModel } from '@/lib/gateway/model-selection';
@@ -188,6 +197,10 @@ type GatewayContextValue = {
     modelId?: string;
     providerId?: string;
   }) => Promise<PublicBot>;
+  /** Whether this gateway can create and edit Bots at all — creation affordances gate on it. */
+  hasBotManagement: boolean;
+  /** Whether this gateway hosts Gate-owned group rooms at all — room creation gates on it. */
+  hasGroupRooms: boolean;
   openBot: (botId: string) => Promise<void>;
   clearBot: () => void;
   botJobs: {
@@ -492,6 +505,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [selectedBackendId, setSelectedBackendId] = useState<string | undefined>(undefined);
   const [selectedBotId, setSelectedBotId] = useState<string | undefined>(undefined);
+  // Client-derived honesty verdicts, decided when a client is installed and
+  // cleared when it goes away: does this client speak bots / group rooms at
+  // all? The pure decisions live in lib/gateway so the UI hides creation
+  // affordances instead of refusing after the operator fills the sheet.
+  const [hasBotManagement, setHasBotManagement] = useState(false);
+  const [hasGroupRooms, setHasGroupRooms] = useState(false);
   const [pairingDetails, setPairingDetails] = useState<PairingDetails | null>(null);
   const [liveCapabilities, setLiveCapabilities] = useState<GatewayCapabilities | null>(null);
   const [activeManifest, setActiveManifest] = useState<GatewayManifest | null>(null);
@@ -969,6 +988,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
       clientRef.current = client;
       historyLoadedForRef.current = null;
+      // Capability verdicts ride the client install: manifest clients answer
+      // from their declared endpoints, every other adapter from method
+      // presence — both known before any call is made.
+      setHasBotManagement(probeBotManagement(client));
+      setHasGroupRooms(probeGroupRooms(client));
       applyConnectionPhase('connecting');
       // connect() rejects only on auth rejection; unreachable gateways are left
       // in 'reconnecting' with backoff running.
@@ -1514,6 +1538,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
       clientRef.current?.disconnect();
       clientRef.current = null;
+      setHasBotManagement(false);
+      setHasGroupRooms(false);
       setActiveGateway(null);
       setActiveHello(null);
       setActiveManifest(null);
@@ -1547,6 +1573,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setActiveHello(null);
     setActiveManifest(null);
     applyStatus('disconnected');
+    setHasBotManagement(false);
+    setHasGroupRooms(false);
     setMessages([]);
     setIsSending(false);
     applyConnectionPhase('idle');
@@ -2582,6 +2610,8 @@ const response = await executeGatewaySlashCommand(trimmed, {
       listBots,
       createBot,
       updateBot,
+      hasBotManagement,
+      hasGroupRooms,
       openBot,
       clearBot,
       botJobs,
@@ -2638,7 +2668,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       messages, isSending, isCommandRunning, lastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, openBot, clearBot, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
+      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
       setAutoConnect, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

@@ -95,8 +95,12 @@ test('a stale session id is an error response, not a dead Gate', async () => {
       `http://127.0.0.1:${gate.port}/v1/sessions/ses_gone/messages?backendId=stub-local`,
       { headers: auth(gate) },
     );
-    assert.equal(response.status, 500);
-    await response.text();
+    // c0ca07f made a refused session id an answer about the request, not a
+    // crash: 404 with the named unknown_session code, so the phone can tell
+    // "this session is gone, start a new one" from "the Gate is broken".
+    assert.equal(response.status, 404);
+    const body = await response.json();
+    assert.equal(body.error?.code, 'unknown_session');
 
     // The real regression: the Gate must still be serving afterwards.
     const health = await fetch(`http://127.0.0.1:${gate.port}/health`);

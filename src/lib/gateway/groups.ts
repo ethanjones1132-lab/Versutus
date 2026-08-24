@@ -215,3 +215,28 @@ export function filterGroupRooms(rooms: BotGroupRoom[], query: string): BotGroup
       (value) => typeof value === 'string' && value.toLowerCase().includes(needle),
     ));
 }
+
+/**
+ * What the probe looks for on a client surface: a manifest client's own word
+ * (`canManageGroups`) about whether its document advertises botGroups, or
+ * failing that, the rooms-dialect call itself. Loosely typed on purpose —
+ * adapters are probed structurally, not by importing portal types.
+ */
+export type GroupRoomSurface = {
+  canManageGroups?: unknown;
+  createGroup?: unknown;
+};
+
+/**
+ * Can this gateway host Gate-owned group rooms? Decided BEFORE the operator
+ * names a room and picks members: adapters without the rooms dialect omit
+ * createGroup entirely, and a manifest client whose document declares no
+ * botGroups endpoint says so through canManageGroups — so the roster hides
+ * "New Group Room" instead of refusing after the sheet is filled.
+ */
+export function hasGroupRooms(client?: object | null): boolean {
+  if (!client) return false;
+  const surface = client as GroupRoomSurface;
+  if (typeof surface.canManageGroups === 'boolean') return surface.canManageGroups;
+  return typeof surface.createGroup === 'function';
+}

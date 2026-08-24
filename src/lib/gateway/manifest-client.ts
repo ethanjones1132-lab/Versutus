@@ -122,6 +122,18 @@ export class ManifestClient implements PortalClient {
     }
     return path;
   }
+  /**
+   * Up-front capability verdicts read straight off the document this client
+   * was built from — no call, no throw. The provider probes them when the
+   * client is installed so creation affordances hide themselves on gateways
+   * that would only refuse after their sheet is filled.
+   */
+  get canManageBots(): boolean {
+    return Boolean(this.endpoints.bots);
+  }
+
+  get canManageGroups(): boolean {
+
 
   /**
    * Concurrent callers join the attempt already in flight rather than stack

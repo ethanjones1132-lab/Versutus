@@ -195,3 +195,28 @@ export async function loadBotChat<T extends { title?: string | null }>(
   const sessions = await list();
   return ensureBotChat(sessions, create);
 }
+
+/**
+ * What the probe looks for on a client surface: a manifest client's own word
+ * (`canManageBots`) about whether its document advertises a bots endpoint, or
+ * failing that, the bots-dialect call itself. Loosely typed on purpose —
+ * adapters are probed structurally, not by importing portal types.
+ */
+export type BotManagementSurface = {
+  canManageBots?: unknown;
+  createBot?: unknown;
+};
+
+/**
+ * Can this gateway create and edit Bots? Decided BEFORE the operator fills
+ * the form: adapters that never speak bots (OpenClaw, plain Hermes HTTP)
+ * omit createBot entirely, and a manifest client whose document declares no
+ * bots endpoint says so through canManageBots. Either way the roster hides
+ * "New Agent" instead of springing the refusal after the sheet is filled.
+ */
+export function hasBotManagement(client?: object | null): boolean {
+  if (!client) return false;
+  const surface = client as BotManagementSurface;
+  if (typeof surface.canManageBots === 'boolean') return surface.canManageBots;
+  return typeof surface.createBot === 'function';
+}
