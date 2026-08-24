@@ -73,4 +73,32 @@ describe('describeChannelStatusRow', () => {
       'Channels',
     );
   });
+
+  test('a bridge-level note is more specific truth than the static degraded copy', () => {
+    const partial = describeChannelStatusRow(group('partial', { note: '1 of 3 channel bridges healthy' }));
+    expect(partial.tone).toBe('attention');
+    expect(partial.detail).toBe('1 of 3 channel bridges healthy');
+
+    const unhealthy = describeChannelStatusRow(group('unhealthy', { note: '0 of 2 channel bridges healthy' }));
+    expect(unhealthy.detail).toBe('0 of 2 channel bridges healthy');
+
+    const unknown = describeChannelStatusRow(
+      group('unknown', { note: '2 declared - bridge states not confirmed' }),
+    );
+    expect(unknown.tone).toBe('quiet');
+    expect(unknown.detail).toBe('2 declared - bridge states not confirmed');
+  });
+
+  test('without a note the static copy stands, ready never repeats a tally', () => {
+    expect(describeChannelStatusRow(group('partial')).detail).toBe(
+      'Some channels degraded - open chat to repair',
+    );
+    expect(describeChannelStatusRow(group('unhealthy')).detail).toBe(
+      'Channels degraded - open chat to repair',
+    );
+    expect(describeChannelStatusRow(group('unknown')).detail).toBe('Not confirmed yet');
+    expect(describeChannelStatusRow(group('ready', { note: '4 of 4 channel bridges healthy' })).detail).toBe(
+      'Ready - manage from chat',
+    );
+  });
 });

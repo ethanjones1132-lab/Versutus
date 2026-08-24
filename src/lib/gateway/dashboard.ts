@@ -1,6 +1,7 @@
 import type { ConnectionStatus, GatewayHelloOk } from '@/lib/gateway/types';
 import type { GatewayBackend, GatewayCapabilityInstance } from '@/lib/portal/manifest';
 import { capabilitiesForBackend } from '@/lib/gateway/backend-capabilities';
+import { channelGroupHealth } from '@/lib/gateway/channel-status';
 import { METHOD_TO_ROUTE } from '@/lib/gateway/rpc-routes';
 
 export type GatewayReachabilityState =
@@ -1007,6 +1008,28 @@ export function buildCapabilitySnapshot(
           totalCount: providerRecords.length,
           note: `${readyProviders} of ${providerRecords.length} ready`,
         };
+      }
+
+      // Channels declare no features/endpoints, so their only health signal is
+      // what a declaring manifest says per bridge. Without this the group could
+      // only ever read ready or undeclared, leaving the row's attention tones
+      // and the Channel Repair card unreachable (Rook LOW 2026-08-24T15:30).
+      // Null (nothing declared) falls through to the undeclared path below.
+      if (definition.id === 'channels') {
+        const channelInstances = capabilityInstances.filter(
+          (instance) => instance.family === 'channels',
+        );
+        const health = channelGroupHealth(channelInstances);
+        if (health) {
+          return {
+            id: definition.id,
+            label: definition.label,
+            status: health.status,
+            availableCount: totalCount,
+            totalCount,
+            note: health.note,
+          };
+        }
       }
 
       // Six groups (channels, plugins, logs, devices, artifacts, nodes) declare
