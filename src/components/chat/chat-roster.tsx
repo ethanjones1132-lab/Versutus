@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
 import { EmptyState, ListRow, Skeleton, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
+import { useTokens } from '@/hooks/use-tokens';
 import {
   botRowSubtitle,
   filterRosterRows,
@@ -38,6 +39,12 @@ export type ChatRosterProps = {
   canManageAgents?: boolean;
   /** Whether the gateway can host Gate-owned group rooms right now — drives the note when "New Group Room" is hidden. */
   canHostGroups?: boolean;
+  /**
+   * Pull-to-refresh: re-read the inventories (agents + rooms). Absent when
+   * there is nothing to re-read (gateway not connected) — then no spinner
+   * is offered at all instead of one that always fails.
+   */
+  onRefresh?: () => Promise<void> | void;
 };
 
 export function ChatRoster({
@@ -53,8 +60,24 @@ export function ChatRoster({
   onNewGroup,
   canManageAgents = false,
   canHostGroups = false,
+  onRefresh,
 }: ChatRosterProps) {
   const [query, setQuery] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const tokens = useTokens();
+
+  // The spinner holds for a beat even on fast reads so the gesture always
+  // feels acknowledged — same floor as the thread surface's refresh.
+  const handleRefresh = onRefresh
+    ? () => {
+        setRefreshing(true);
+        const started = Date.now();
+        void Promise.resolve(onRefresh()).finally(() => {
+          const elapsed = Date.now() - started;
+          setTimeout(() => setRefreshing(false), elapsed < 400 ? 400 - elapsed : 0);
+        });
+      }
+    : undefined;
 
   if (loading && rows.length <= 1) {
     return (
@@ -88,7 +111,21 @@ export function ChatRoster({
   );
 
   return (
-    <ScrollView contentContainerStyle={styles.pad} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      contentContainerStyle={styles.pad}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={
+        handleRefresh ? (
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={tokens.accentWarm}
+            colors={[tokens.accentWarm]}
+            progressBackgroundColor={tokens.backgroundElevated}
+          />
+        ) : undefined
+      }
+    >
       {rows.length > 1 ? (
         <TextField
           value={query}

@@ -29,6 +29,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDivider } from '@/lib/format';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
+import { applyRosterRead } from '@/lib/gateway/roster-read';
 import { botToEditInput, buildBotUpdatePatch, buildRoster, type ChatSurface, type PublicBot, type RosterRow } from '@/lib/gateway/bots';
 import { rosterInventoryVerified, type BotGroupRoom } from '@/lib/gateway/groups';
 import { routineName } from '@/lib/gateway/routines';
@@ -355,6 +356,26 @@ export function ChatScreen() {
     void refreshGroups();
   }, [groupsOnRoster, status, refreshGroups]);
 
+  // Pull-to-refresh on the roster: re-read BOTH inventories — agents and
+  // rooms — without leaving the surface. A failed RE-read never wipes rows
+  // the operator was just looking at (applyRosterRead keeps the last good
+  // inventory; the error line explains the staleness). Only a SUCCESSFUL
+  // read may clear or replace the list.
+  const refreshRoster = useCallback(async () => {
+    const [read] = await Promise.all([
+      listBots()
+        .then((bots) => ({ ok: true as const, bots }))
+        .catch((refreshError: unknown) => ({
+          ok: false as const,
+          reason: refreshError instanceof Error ? refreshError.message : String(refreshError),
+        })),
+      refreshGroups(),
+    ]);
+    setRosterRows((previous) => applyRosterRead(previous, read));
+    if (read.ok) setRosterError(undefined);
+    else setRosterError(read.reason);
+  }, [listBots, refreshGroups]);
+
   const rosterBots = useMemo(
     () =>
       rosterRows.flatMap((row) => (row.kind === 'bot' ? [row.bot] : [])),
@@ -624,6 +645,7 @@ export function ChatScreen() {
           } : undefined}
           canManageAgents={hasBotManagement}
           canHostGroups={status === 'connected' && hasGroupRooms}
+          onRefresh={status === 'connected' ? refreshRoster : undefined}
         />
       ) : surface.kind === 'group' ? (
         <View style={styles.listWrap}>
