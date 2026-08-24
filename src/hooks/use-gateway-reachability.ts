@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { probeGatewayUrl } from '@/lib/gateway/probe';
+import {
+  PROBE_WAVE_CONCURRENCY,
+  planProbeWave,
+  runCapped,
+} from '@/lib/gateway/reachability-wave';
 import type {
   GatewayReachability,
   GatewayReachabilityState,
@@ -61,15 +66,31 @@ export function useGatewayReachability({
 
     async function probeSavedGateways() {
       const now = Date.now();
-      for (const gateway of gateways) {
-        const active = activeGateway?.id === gateway.id;
-        if (cancelled || (active && status === 'connected')) continue;
+      // Which gateways this wave owes a probe, by the same rules the
+      // sequential loop always applied (skip the connected-active gateway,
+      // debounce anything probed within MIN_PROBE_INTERVAL_MS).
+      const due = planProbeWave({
+        gateways,
+        activeGatewayId: activeGateway?.id ?? null,
+        activeConnected: status === 'connected',
+        lastProbeAt: lastProbeAtRef.current,
+        now,
+        minIntervalMs: MIN_PROBE_INTERVAL_MS,
+      });
+      // Stamp the whole wave's debounce ledger up front — the old loop
+      // reused this same `now` for every stamp too, so a committed wave
+      // never re-probes within the interval no matter how fast it drains.
+      lastProbeAtRef.current = {
+        ...lastProbeAtRef.current,
+        ...Object.fromEntries(due.map((gateway) => [gateway.id, now])),
+      };
 
-        const last = lastProbeAtRef.current[gateway.id] ?? 0;
-        if (now - last < MIN_PROBE_INTERVAL_MS) continue;
-
+      // Probes ride a small concurrency cap instead of one-at-a-time: the
+      // sequential wave held every row's verdict hostage to 1.8s x N of
+      // lossy hops before it reached the end of the roster.
+      await runCapped(due, PROBE_WAVE_CONCURRENCY, async (gateway) => {
+        if (cancelled) return;
         setReachability(gateway, 'checking');
-        lastProbeAtRef.current = { ...lastProbeAtRef.current, [gateway.id]: now };
 
         const result = await probeGatewayUrl(gateway.url, PROBE_TIMEOUT_MS);
         if (cancelled) return;
@@ -97,7 +118,7 @@ export function useGatewayReachability({
             },
           }));
         }
-      }
+      });
     }
 
     void probeSavedGateways();
