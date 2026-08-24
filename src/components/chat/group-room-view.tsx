@@ -5,7 +5,7 @@ import { BotAvatar } from '@/components/chat/bot-avatar';
 import { BaseSheet, Button, ConfirmSheet, Icon, PressableScale, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
-import { botChipModelPin, type PublicBot } from '@/lib/gateway/bots';
+import { botChipModelPin, botChipRoutingTag, type PublicBot } from '@/lib/gateway/bots';
 import {
   canRemoveMember,
   describeGroupPlan,
@@ -92,6 +92,14 @@ export function GroupRoomView({
   // micro pin beside each member's name. Same roster copy the chips use.
   const pinnedModelOf = useMemo(() => {
     const byId = new Map(members.map((bot) => [bot.id, botChipModelPin(bot)]));
+    return (id: string) => byId.get(id) ?? '';
+  }, [members]);
+
+  // Why a member cannot route ('' = routable / older Gate), so the operator
+  // reads the cause on the chip BEFORE sending and the round coming back
+  // short is never a surprise.
+  const routingTagOf = useMemo(() => {
+    const byId = new Map(members.map((bot) => [bot.id, botChipRoutingTag(bot)]));
     return (id: string) => byId.get(id) ?? '';
   }, [members]);
 
@@ -235,35 +243,45 @@ export function GroupRoomView({
             </Text>
           ) : null}
           <View style={styles.chipWrap}>
-            {group.memberIds.map((memberId) => (
-              <PressableScale
-                key={memberId}
-                onPress={removable ? () => setPendingRemoval(memberId) : undefined}
-                disabled={!removable}
-                accessibilityRole="button"
-                accessibilityLabel={
-                  removable
-                    ? `Remove ${displayNameOf(memberId)} from the room`
-                    : `${displayNameOf(memberId)}. ${GROUP_MEMBER_FLOOR_REASON}.`
-                }
-                style={[
-                  styles.memberChip,
-                  { backgroundColor: tokens.glassHighlight, borderColor: tokens.border },
-                ]}>
-                <BotAvatar botId={memberId} size={22} />
-                <Text variant="caption" color="primary" numberOfLines={1}>
-                  {displayNameOf(memberId)}
-                </Text>
-                {pinnedModelOf(memberId) ? (
-                  <Text variant="micro" color="tertiary" numberOfLines={1} style={styles.memberChipPin}>
-                    {pinnedModelOf(memberId)}
+            {group.memberIds.map((memberId) => {
+              // Routing state outranks the pin: an unroutable chip shows WHY
+              // it will stay silent instead of what a silent bot is pinned to.
+              const routingTag = routingTagOf(memberId);
+              const modelPin = routingTag ? '' : pinnedModelOf(memberId);
+              return (
+                <PressableScale
+                  key={memberId}
+                  onPress={removable ? () => setPendingRemoval(memberId) : undefined}
+                  disabled={!removable}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    removable
+                      ? `Remove ${displayNameOf(memberId)} from the room`
+                      : `${displayNameOf(memberId)}. ${GROUP_MEMBER_FLOOR_REASON}.`
+                  }
+                  style={[
+                    styles.memberChip,
+                    { backgroundColor: tokens.glassHighlight, borderColor: tokens.border },
+                  ]}>
+                  <BotAvatar botId={memberId} size={22} />
+                  <Text variant="caption" color="primary" numberOfLines={1}>
+                    {displayNameOf(memberId)}
                   </Text>
-                ) : null}
-                {removable ? (
-                  <Icon name={{ ios: 'xmark', android: 'close', web: 'close' }} size={10} color="textTertiary" />
-                ) : null}
-              </PressableScale>
-            ))}
+                  {routingTag ? (
+                    <Text variant="micro" color="accentWarm" numberOfLines={1} style={styles.memberChipPin}>
+                      {routingTag}
+                    </Text>
+                  ) : modelPin ? (
+                    <Text variant="micro" color="tertiary" numberOfLines={1} style={styles.memberChipPin}>
+                      {modelPin}
+                    </Text>
+                  ) : null}
+                  {removable ? (
+                    <Icon name={{ ios: 'xmark', android: 'close', web: 'close' }} size={10} color="textTertiary" />
+                  ) : null}
+                </PressableScale>
+              );
+            })}
           </View>
           {!removable ? (
             <Text variant="micro" color="tertiary">{GROUP_MEMBER_FLOOR_REASON} — members are pinned.</Text>

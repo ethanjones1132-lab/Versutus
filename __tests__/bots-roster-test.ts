@@ -1,6 +1,7 @@
 import {
   BOT_CHAT_TITLE,
   botChipModelPin,
+  botChipRoutingTag,
   botRowSubtitle,
   buildRoster,
   ensureBotChat,
@@ -131,6 +132,45 @@ test('every member chip resolves its pin across a full six-member room', () => {
   expect(pins.every((pin) => typeof pin === 'string')).toBe(true);
   // Only the two pinned members show a pin, displayed trimmed.
   expect(pins.filter((pin) => pin)).toEqual(['m-a', 'm-e']);
+});
+
+test('botChipRoutingTag names the routing cause or stays silent', () => {
+  // Routable members render silence — never an empty pill segment.
+  expect(botChipRoutingTag({ id: 'a', displayName: 'a', routable: true })).toBe('');
+  expect(botChipRoutingTag({ id: 'b', displayName: 'b', routable: true, routingIssue: null })).toBe('');
+  // No key at all and a refused default key are different fixes, so they
+  // stay the same two verdict words the roster row uses.
+  expect(botChipRoutingTag({ id: 'c', displayName: 'c', routable: false })).toBe('No listen key');
+  expect(
+    botChipRoutingTag({ id: 'd', displayName: 'd', routable: true, routingIssue: 'listen_key_missing' }),
+  ).toBe('No listen key');
+  expect(
+    botChipRoutingTag({ id: 'e', displayName: 'e', routable: true, routingIssue: 'default_key_refused' }),
+  ).toBe('Default listen key refused');
+});
+
+test('routing tag outranks the model pin on a member chip', () => {
+  // Exactly what the view resolves per chip: a member carrying a routing
+  // issue shows the tag INSTEAD of its model pin — the operator reads why
+  // the round will come back short, not what a silent bot is pinned to.
+  const members: PublicBot[] = [
+    {
+      id: 'echo',
+      displayName: 'Echo',
+      routable: true,
+      routingIssue: 'default_key_refused',
+      model: { default: 'anthropic/claude-sonnet-4', provider: null },
+    },
+    { id: 'live', displayName: 'Live', routable: true, model: { default: 'm-live', provider: null } },
+    { id: 'mute', displayName: 'Mute', routable: false, model: { default: 'm-mute', provider: null } },
+  ];
+  const chips = members.map((bot) => {
+    const tag = botChipRoutingTag(bot);
+    return { id: bot.id, tag, pin: tag ? '' : botChipModelPin(bot) };
+  });
+  expect(chips[0]).toEqual({ id: 'echo', tag: 'Default listen key refused', pin: '' });
+  expect(chips[1]).toEqual({ id: 'live', tag: '', pin: 'm-live' });
+  expect(chips[2]).toEqual({ id: 'mute', tag: 'No listen key', pin: '' });
 });
 
 test('unroutable subtitles name the cause: missing key vs refused default key', () => {

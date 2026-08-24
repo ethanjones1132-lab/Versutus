@@ -47,6 +47,19 @@ export function botChipModelPin(bot: PublicBot): string {
   return pin || '';
 }
 
+/**
+ * The unroutable tag on a group-room member chip: '' when the member can
+ * route, else the same verdict words the roster row uses ('No listen key' /
+ * 'Default listen key refused'). Same precedence as botRowSubtitle — a
+ * reported routingIssue wins over a stale routable boolean, and older Gates
+ * that report neither degrade to the boolean alone.
+ */
+export function botChipRoutingTag(bot: PublicBot): string {
+  if (bot.routingIssue === 'default_key_refused') return 'Default listen key refused';
+  if (!bot.routable || bot.routingIssue === 'listen_key_missing') return 'No listen key';
+  return '';
+}
+
 /** What the phone's bot edit form can change. The name is identity (ADR 0011) and is not editable. */
 export type BotEditDraft = {
   soul?: string;
