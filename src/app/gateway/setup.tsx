@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { Link, type Href } from 'expo-router';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
+import { CapabilitiesSection } from '@/components/gateway/capabilities-section';
 import { EnvironmentsSection } from '@/components/gateway/environments-section';
 import { GatewayManagementSection } from '@/components/gateway/gateway-management-section';
 import { ProvidersSection } from '@/components/gateway/providers-section';
-import { Button, Card, Chip, Screen, SegmentedControl, Text } from '@/components/ui';
+import { Card, Chip, Screen, SegmentedControl, Text } from '@/components/ui';
 import { useGateway } from '@/context/gateway-provider';
 import { Spacing } from '@/constants/tokens';
 
@@ -78,16 +78,13 @@ export default function GatewaySetupScreen() {
         ) : null}
 
         {section === 'capabilities' ? (
-          <Card padding={Spacing.three} style={styles.card}>
-            <Text variant="title">Capability registry</Text>
+          <>
             <Text variant="caption">
               Instances of non-provider capability kinds. Providers are managed on the Providers
               tab — the registry no longer creates them, so a provider has exactly one home.
             </Text>
-            <Link href={"/gateway/capabilities" as Href} asChild>
-              <Button label="Open capability editor" variant="secondary" />
-            </Link>
-          </Card>
+            <CapabilitiesSection />
+          </>
         ) : null}
 
         {section === 'management' ? (
