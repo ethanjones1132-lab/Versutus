@@ -34,6 +34,14 @@ export type BotDetailView = {
    * hides the affordance there instead of inviting a guaranteed refusal.
    */
   editable: boolean;
+  /**
+   * Whether this surface offers "Message <name>". Same verdict the routing
+   * section shows: a Bot the Gate reports as unable to route gets no message
+   * row — the fix sits right there instead of inviting a guaranteed failure.
+   * Unlike Edit, the default profile IS messagable (it is a real agent;
+   * ADR 0011 only refuses writes against it).
+   */
+  messagable: boolean;
 };
 
 /**
@@ -70,6 +78,10 @@ export function describeBotDetail(bot: PublicBot): BotDetailView {
     modelPin: modelPinLine(bot),
     routingTitle: routing.title,
     routingNext: routing.next,
+    // No fix offered == messagable. Stronger than the roster row's
+    // boolean-only tap check: a reported routingIssue wins over a stale
+    // `routable: true` here, because this surface shows the verdict itself.
+    messagable: routing.next === undefined,
     editable: bot.id !== 'default',
   };
 }

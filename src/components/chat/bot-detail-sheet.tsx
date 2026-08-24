@@ -12,6 +12,12 @@ export type BotDetailSheetProps = {
   bot: PublicBot | null;
   onClose: () => void;
   /**
+   * Opens this Bot's chat — the parent owns that navigation (same path a
+   * roster tap takes). Hidden for Bots the routing verdict refuses, so the
+   * row never invites a guaranteed send failure.
+   */
+  onMessage?: () => void;
+  /**
    * Opens the edit form prefilled with this Bot — the parent owns that sheet.
    * The row hides itself for the default profile, which the Gate refuses to
    * edit (ADR 0011).
@@ -23,9 +29,10 @@ export type BotDetailSheetProps = {
  * The roster row's detail surface: description, model pin, routing state
  * with its fix, and the profile id. Everything here was already on the
  * roster payload — long-press a row to read what one line cannot carry,
- * then act: copy the id for host-side commands, or edit what the Gate holds.
+ * then act: message the agent, copy the id for host-side commands, or edit
+ * what the Gate holds.
  */
-export function BotDetailSheet({ bot, onClose, onEdit }: BotDetailSheetProps) {
+export function BotDetailSheet({ bot, onClose, onMessage, onEdit }: BotDetailSheetProps) {
   if (!bot) return null;
   const detail = describeBotDetail(bot);
 
@@ -87,6 +94,15 @@ export function BotDetailSheet({ bot, onClose, onEdit }: BotDetailSheetProps) {
           <Text variant="mono">{detail.id}</Text>
         </View>
 
+        {onMessage && detail.messagable ? (
+          <ListRow
+            title={`Message ${detail.name}`}
+            subtitle="Open this agent's chat"
+            icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
+            chevron={false}
+            onPress={onMessage}
+          />
+        ) : null}
         <ListRow
           title="Copy profile id"
           subtitle="For host-side hermes -p commands"

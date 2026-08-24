@@ -19,6 +19,7 @@ test('describeBotDetail renders the full Gate payload', () => {
   expect(view.modelPin).toBe('anthropic/claude-sonnet-4 · kilo');
   expect(view.routingTitle).toBe('Routable');
   expect(view.routingNext).toBeUndefined();
+  expect(view.messagable).toBe(true);
 });
 
 test('absent fields degrade to nulls, never invented text', () => {
@@ -102,4 +103,39 @@ test('named bots are offered the edit affordance; default never is', () => {
   expect(
     describeBotDetail({ id: 'default', displayName: 'Default', routable: true }).editable,
   ).toBe(false);
+});
+
+test('Bots without a route get no message affordance', () => {
+  // The sheet shows the routing verdict and its fix directly above where a
+  // Message row would sit — offering the row there invites a send the Gate
+  // has already refused. A reported issue wins over a stale routable:true,
+  // matching the verdict the surface itself renders.
+  expect(
+    describeBotDetail({ id: 'nokey', displayName: 'NoKey', routable: false }).messagable,
+  ).toBe(false);
+  expect(
+    describeBotDetail({
+      id: 'refused',
+      displayName: 'Refused',
+      routable: true,
+      routingIssue: 'default_key_refused',
+    }).messagable,
+  ).toBe(false);
+  expect(
+    describeBotDetail({
+      id: 'missing',
+      displayName: 'Missing',
+      routable: true,
+      routingIssue: 'listen_key_missing',
+    }).messagable,
+  ).toBe(false);
+});
+
+test('the default profile is messagable even though it is not editable', () => {
+  // Two independent guards: Edit hides because ADR 0011 refuses writes to
+  // "default"; Message stays because chatting with the default agent is a
+  // real, supported path.
+  const view = describeBotDetail({ id: 'default', displayName: 'Default', routable: true });
+  expect(view.messagable).toBe(true);
+  expect(view.editable).toBe(false);
 });

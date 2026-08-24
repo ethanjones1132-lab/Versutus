@@ -458,6 +458,21 @@ export function ChatScreen() {
       <BotDetailSheet
         bot={detailBot}
         onClose={() => setDetailBot(null)}
+        onMessage={
+          detailBot
+            ? () => {
+                // Same path as tapping the roster row itself; the detail sheet
+                // closes first so the chat owns the stage, and a failed open
+                // falls back to the roster exactly like a row tap does.
+                const id = detailBot.id;
+                setSurface({ kind: 'bot', botId: id });
+                setDetailBot(null);
+                void openBot(id).catch(() => {
+                  setSurface({ kind: 'roster' });
+                });
+              }
+            : undefined
+        }
         onEdit={
           detailBot
             ? () => {
