@@ -410,6 +410,33 @@ test('a run past lifecycle.maxRunSeconds is stopped by name and frees the slot',
   }
 });
 
+test('a refused probe names the reason and the path, not a bare state word', async () => {
+  const { service, cleanup } = await makeService({
+    executable: { path: join(tmpdir(), 'gate-cli-sup-missing', 'no-such-cli.exe') },
+  });
+  try {
+    await assert.rejects(
+      () => service.startRun({
+        environmentId: 'codex-local',
+        operation: 'status',
+        providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+        workspaceId: 'default',
+        sandbox: 'read_only',
+        input: {},
+      }),
+      (error) => {
+        assert.equal(error.code, 'not_installed');
+        assert.match(error.message, /environment not_installed/);
+        assert.match(error.message, /executable not found/);
+        assert.match(error.message, /no-such-cli\.exe/);
+        return true;
+      },
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
 test('a fast task finishes under its time budget and no timer fires late', async () => {
   const { service, cleanup } = await makeService({
     lifecycle: { startup: 'on_demand', idleTimeoutSeconds: 30, maxConcurrentRuns: 1, maxRunSeconds: 30 },

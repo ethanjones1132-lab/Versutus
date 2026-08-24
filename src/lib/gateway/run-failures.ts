@@ -44,6 +44,12 @@ export function classifyRunFailure(message: string): RunFailureKind {
   if (/default listen key|default_key_refused/i.test(text)) return 'default_key_refused';
   if (/multiplex/i.test(text)) return 'multiplex_disabled';
   if (/\bunknown bot\b/i.test(text)) return 'unknown_bot';
+  // Refused pre-start probe: the supervisor throws `environment <state>` and,
+  // since the desktop-parity audit, appends the probe's reason + path. The
+  // busy refusal ("environment is busy — …") deliberately does NOT match.
+  if (/environment (?:not_installed|incompatible|degraded)\b/i.test(text)) {
+    return 'environment_unreachable';
+  }
   if (/hermes home is not configured|cannot act as a chat backend|does not implement bots|no attached backend/i.test(
     text,
   )) {

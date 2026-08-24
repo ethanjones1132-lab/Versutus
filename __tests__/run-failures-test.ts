@@ -57,6 +57,26 @@ test('expired authorization windows classify as expired', () => {
   expect(view.next).toMatch(/resubmit/i);
 });
 
+test('a refused environment probe classifies even as a bare state word', () => {
+  // Older Gates throw the bare state word; newer ones append the probe's own
+  // reason and the executable path. Both must read as an unreachable
+  // environment, never as a generic error.
+  expect(classifyRunFailure('environment not_installed')).toBe('environment_unreachable');
+  expect(
+    classifyRunFailure('environment incompatible: unsupported CLI version 0.9.1 (C:\\tools\\codex.exe)'),
+  ).toBe('environment_unreachable');
+  const view = describeRunFailure('environment not_installed: executable not found (C:\\bots\\hermes.exe)');
+  expect(view.title).toBe('Environment unreachable');
+  expect(view.next).toContain('executable path');
+});
+
+test('a busy refusal stays honest raw instead of reading as unreachable', () => {
+  const busy =
+    'environment is busy — task run-1 has not finished yet; cancel it from Recent runs or wait for it to complete';
+  expect(classifyRunFailure(busy)).toBe('generic');
+  expect(formatRunFailure(busy)).toBeNull();
+});
+
 test('generic text stays generic and formatRunFailure falls back to null', () => {
   expect(classifyRunFailure('internal server error')).toBe('generic');
   expect(describeRunFailure('internal server error').next).toBeUndefined();

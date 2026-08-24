@@ -246,7 +246,12 @@ export class CliEnvironmentService {
     const probe = await adapter.probe(record.executable.path);
     if (probe.state !== 'ready') {
       this.environmentState.set(record.id, { state: probe.state, probe });
-      const error = new Error(`environment ${probe.state}`);
+      // A bare state word ("environment not_installed") reads as a mystery on
+      // the phone exactly when the operator must fix it blind. The probe
+      // already named the reason — say it, plus the path it refers to.
+      const error = new Error(
+        `environment ${probe.state}: ${probe.message ?? 'not ready'} (${record.executable.path})`,
+      );
       error.code = probe.state;
       throw error;
     }

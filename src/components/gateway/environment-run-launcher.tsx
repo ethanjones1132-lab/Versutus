@@ -10,6 +10,7 @@ import type {
   EnvironmentSnapshot,
 } from '@/lib/gateway/environment-types';
 import { environmentRunBadge, environmentRunView } from '@/lib/gateway/environment-run-view';
+import { formatRunFailure } from '@/lib/gateway/run-failures';
 
 type Client = ReturnType<typeof createEnvironmentClient>;
 
@@ -212,11 +213,17 @@ export function EnvironmentRunLauncher({
         />
       ) : null}
 
-      {error ? <Text variant="caption">{error}</Text> : null}
+      {/* Desktop-parity failure state: when the Gate names the host state,
+          show verdict + fix and keep the raw text as the cause. */}
+      {error ? (
+        <Text variant="caption">{formatRunFailure(error) ?? error}</Text>
+      ) : null}
 
       <View style={styles.statusRow}>
         {badge ? <Badge label={badge.label} tone={badge.tone} /> : null}
-        {view.failureDetail ? <Text variant="caption">{view.failureDetail}</Text> : null}
+        {view.failureDetail ? (
+          <Text variant="caption">{formatRunFailure(view.failureDetail) ?? view.failureDetail}</Text>
+        ) : null}
       </View>
 
       {detached ? (
