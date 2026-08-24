@@ -1,4 +1,4 @@
-import { type Href, useRouter } from 'expo-router';
+import { type Href, Link, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
@@ -8,14 +8,19 @@ import { PulsingDot, statusColor } from '@/components/connection-badge';
 import { CapabilityHive } from '@/components/gateway/capability-hive';
 import { CompactGatewayList } from '@/components/gateway/compact-gateway-list';
 import { GatewayCapabilities } from '@/components/gateway/gateway-capabilities';
+import { GlassCollapsible } from '@/components/glass-collapsible';
+import { HomeStatusCard } from '@/components/home-status-card';
+import { PairingPanel } from '@/components/pairing-panel';
 import { Badge, Button, Card, ConfirmSheet, ErrorCard, Icon, StatTile, Text } from '@/components/ui';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { useGatewayDiscovery } from '@/hooks/use-gateway-discovery';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
 import { useTokens } from '@/hooks/use-tokens';
 import { describeAutoRetry } from '@/lib/connection/retry-ladder';
-import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
+import { describeGatewayError, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import type { GatewayProfile } from '@/lib/gateway/types';
+import { describeHomeEmptyState } from '@/lib/home/home-empty-state';
 
 export function GatewayHomeDashboard() {
   const router = useRouter();
@@ -35,9 +40,76 @@ export function GatewayHomeDashboard() {
     refreshCapabilities,
     activityRuns,
     pendingRunApproval,
+    settings,
+    connectionPhase,
+    probeMessage,
+    deviceId,
+    pairingDetails,
   } = useGateway();
   const reachability = useGatewayReachability({ gateways, activeGateway, status });
+  const discovery = useGatewayDiscovery(true);
   const [deleteCandidate, setDeleteCandidate] = useState<GatewayProfile | null>(null);
+
+  // One surface rule: with nothing saved yet this component is STILL the home
+  // screen — the hero slot becomes the connect empty state (HomeStatusCard)
+  // and pairing/troubleshooting/setup hang directly off it, instead of the
+  // screen forking between two different bodies.
+  if (gateways.length === 0) {
+    const model = describeHomeEmptyState({
+      status,
+      connectionPhase,
+      lastError,
+      deviceId,
+      tailscaleHost: settings.tailscaleHost,
+      discoveredCount: discovery.gateways.length,
+    });
+    return (
+      <>
+        <HomeStatusCard
+          pcName={settings.pcName}
+          phase={connectionPhase}
+          status={status}
+          statusDetail={statusDetail}
+          probeMessage={probeMessage}
+          autoRetryNote={autoRetry ? describeAutoRetry(autoRetry) : undefined}
+          onConnect={() => void retryAutoConnect()}
+          onOpenChat={() => router.push('/chat')}
+        />
+
+        {model.showPairing && deviceId ? (
+          <PairingPanel deviceId={deviceId} pairingDetails={pairingDetails} />
+        ) : null}
+
+        {model.showTroubleshooting ? (
+          <GlassCollapsible title="Troubleshooting">
+            <Text color="secondary">
+              - Hermes (or Gate) listening on the PC{'\n'}- API key matches API_SERVER_KEY (or Gate token)
+              {'\n'}- Phone and PC on the same Tailscale tailnet{'\n'}- Tailscale Serve / LAN URL reachable from
+              the phone{'\n'}- If Hermes reports running but nothing answers: restart the gateway on the PC
+            </Text>
+            <Text variant="caption" color="tertiary">
+              {describeGatewayError(lastError)}
+            </Text>
+          </GlassCollapsible>
+        ) : null}
+
+        {model.showDiscovered ? (
+          <GlassCollapsible title="Found on your network">
+            <Text color="secondary">
+              {discovery.gateways.length} gateway{discovery.gateways.length === 1 ? '' : 's'} nearby - Versutus
+              will use them automatically when connecting.
+            </Text>
+          </GlassCollapsible>
+        ) : null}
+
+        {model.showSetupAction ? (
+          <Link href="/onboarding" asChild>
+            <Button label={model.setupLabel} variant="secondary" />
+          </Link>
+        ) : null}
+      </>
+    );
+  }
 
   const connected = status === 'connected' && !!activeGateway;
   const activeLabel = activeGateway?.name ?? 'No active gateway';
