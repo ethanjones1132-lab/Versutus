@@ -1,13 +1,13 @@
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import { AgentTargets } from '@/components/activity/agent-targets';
 import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
 import { RunCard } from '@/components/activity/run-card';
-import { Badge, Button, Card, EmptyState, Screen, Text } from '@/components/ui';
-import { FontFamily, Radius, Spacing } from '@/constants/tokens';
+import { Badge, Button, Card, EmptyState, Screen, Text, TextField } from '@/components/ui';
+import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
@@ -107,20 +107,15 @@ export default function ActivityScreen() {
             <Text variant="body" color="secondary">
               Agentic task with live events and approval gates. Tracks here while it runs.
             </Text>
-            <TextInput
+            <TextField
               value={runPrompt}
               onChangeText={setRunPrompt}
               placeholder="Describe the task…"
-              placeholderTextColor={tokens.textTertiary}
               multiline
-              style={[
-                styles.runInput,
-                {
-                  color: tokens.textPrimary,
-                  borderColor: tokens.glassBorder,
-                  backgroundColor: tokens.backgroundInset,
-                },
-              ]}
+              // A run prompt is prose — keep the platform typing defaults; the
+              // kit's form defaults (none / no autocorrect) are for URLs and tokens.
+              autoCapitalize="sentences"
+              autoCorrect={true}
               editable={!starting && status === 'connected'}
               accessibilityLabel="Run prompt"
             />
@@ -210,16 +205,6 @@ const styles = StyleSheet.create({
   },
   startCard: {
     gap: Spacing.two,
-  },
-  runInput: {
-    minHeight: 72,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: Radius.md,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
-    fontFamily: FontFamily.sans,
-    fontSize: 15,
-    textAlignVertical: 'top',
   },
   section: {
     gap: Spacing.two,
