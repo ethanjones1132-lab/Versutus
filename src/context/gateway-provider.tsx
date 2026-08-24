@@ -844,7 +844,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               // Connected again: the failure streak that led here is forgiven.
               autoRetryFailureStreakRef.current = 0;
             }
-            if (decision.clearGatewayDownNotified) gatewayDownNotifiedRef.current = false;
+            if (decision.clearGatewayDownNotified) {
+              gatewayDownNotifiedRef.current = false;
+              // Connected again: the posted down notice retires itself instead
+              // of haunting the tray long after the gateway answered.
+              void dismissGatewayDown();
+            }
             if (decision.clearProbeMessage) setProbeMessage('');
             if (decision.clearLastError) setLastError(null);
             if (decision.notifyGatewayDown && !gatewayDownNotifiedRef.current) {
