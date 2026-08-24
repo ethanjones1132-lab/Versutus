@@ -38,9 +38,20 @@ export type RequestGatewayAccessOptions = {
 // mid-flow. Name the exact command instead, and the exact requestId when
 // the Gate returned one, so no cross-referencing `pair list` by hand.
 
+/**
+ * The requestId comes straight off the wire from an unverified gateway and is
+ * rendered as a shell command a human is expected to paste into their Gate
+ * machine — so only plain id characters may ever be embedded. Anything else
+ * (shell metacharacters, quotes, newlines that would smuggle a second
+ * command into a copy-paste block) falls back to the pair-list walk, which
+ * is always safe to show (rook 2026-08-24). Real gate ids are UUIDs or short
+ * slugs; this pattern admits both.
+ */
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
 export function pendingApprovalHint(requestId?: string): string {
   const id = requestId?.trim();
-  if (!id) {
+  if (!id || !REQUEST_ID_PATTERN.test(id)) {
     return [
       'Access request sent — waiting for approval. On the Gate machine run:',
       '',
