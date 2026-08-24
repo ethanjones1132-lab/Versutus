@@ -4,7 +4,6 @@ import { FlatList, RefreshControl, StyleSheet, View, type NativeScrollEvent, typ
 import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { ApprovalSheet } from '@/components/chat/approval-sheet';
-import { BackendPickerSheet } from '@/components/chat/backend-picker-sheet';
 import { BotDetailSheet } from '@/components/chat/bot-detail-sheet';
 import { ChatComposer } from '@/components/chat/chat-composer';
 import { ChatRoster } from '@/components/chat/chat-roster';
@@ -19,9 +18,8 @@ import { ChatOverflowSheet, type ChatSessionStats } from '@/components/chat/chat
 import { ConfirmationSheet } from '@/components/chat/confirmation-sheet';
 import { MessageActionsSheet } from '@/components/chat/message-actions-sheet';
 import { MessageBubble } from '@/components/chat/message-bubble';
-import { ModelPickerSheet } from '@/components/chat/model-picker-sheet';
 import { PairingSheet } from '@/components/chat/pairing-sheet';
-import { SessionSelectorSheet, type SessionItem } from '@/components/chat/session-selector-sheet';
+import { ThreadConfigSheet, type SessionItem } from '@/components/chat/thread-config-sheet';
 import { SlashCommandPalette } from '@/components/chat/slash-command-palette';
 import { Button, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text } from '@/components/ui';
 import { Motion, Radius, Spacing } from '@/constants/tokens';
@@ -35,6 +33,7 @@ import { botToEditInput, buildBotUpdatePatch, buildRoster, type ChatSurface, typ
 import type { BotGroupRoom } from '@/lib/gateway/groups';
 import { routineName } from '@/lib/gateway/routines';
 import { effectiveModel } from '@/lib/gateway/model-selection';
+import { resolveThreadConfigMode, type ThreadConfigMode } from '@/lib/gateway/thread-config';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
 const PIN_THRESHOLD_PX = 96;
@@ -196,6 +195,42 @@ export function ChatScreen() {
   const identity = settings.pcName ?? activeGateway?.name;
   const activeBackend = backends.find((backend) => backend.id === selectedBackendId) ?? backends[0];
   const backendLabel = activeBackend?.label;
+
+  // One consolidated thread-config sheet (roadmap 2.2): sessions, models and
+  // backends share a single host. Visibility stays owned where it always was —
+  // provider modelPicker/sessionSelector flags plus the screen-local backend
+  // flag — and the sheet renders whichever section they resolve to.
+  const threadConfigMode = resolveThreadConfigMode({
+    sessionsVisible: sessionSelector.visible,
+    modelsVisible: modelPicker.visible,
+    backendsVisible: backendPickerVisible,
+  });
+  const threadConfigModes = useMemo<ThreadConfigMode[]>(() => {
+    const modes: ThreadConfigMode[] = ['sessions', 'models'];
+    if (surface.kind === 'configurable' && backends.length > 0) modes.push('backends');
+    return modes;
+  }, [surface.kind, backends.length]);
+
+  const handleThreadConfigSwitch = useCallback(
+    (next: ThreadConfigMode) => {
+      // Hop sections without dismissing: close whichever is open, open the
+      // next. The openers fetch first, so the sheet re-lands with fresh data.
+      if (next === 'models') {
+        closeSessionSelector();
+        setBackendPickerVisible(false);
+        void openModelPicker('default');
+      } else if (next === 'sessions') {
+        closeModelPicker();
+        setBackendPickerVisible(false);
+        void openSessionSelector();
+      } else {
+        closeModelPicker();
+        closeSessionSelector();
+        setBackendPickerVisible(true);
+      }
+    },
+    [closeModelPicker, closeSessionSelector, openModelPicker, openSessionSelector],
+  );
 
   const handleSend = useCallback(async () => {
     const text = draft;
@@ -748,14 +783,6 @@ export function ChatScreen() {
         }
       />
 
-      <BackendPickerSheet
-        visible={backendPickerVisible}
-        backends={backends}
-        selectedBackendId={activeBackend?.id}
-        onSelect={selectBackend}
-        onClose={() => setBackendPickerVisible(false)}
-      />
-
       <MessageActionsSheet
         visible={!!actionMessage}
         message={actionMessage}
@@ -764,8 +791,21 @@ export function ChatScreen() {
         onDelete={deleteLocalMessage}
       />
 
-      <ModelPickerSheet
-        visible={modelPicker.visible}
+      <ThreadConfigSheet
+        mode={threadConfigMode}
+        availableModes={threadConfigModes}
+        onModeChange={handleThreadConfigSwitch}
+        onClose={() => {
+          closeModelPicker();
+          closeSessionSelector();
+          setBackendPickerVisible(false);
+        }}
+        sessions={sessions}
+        currentSessionId={currentSessionId}
+        onSelectSession={selectSession}
+        onRefreshSessions={() => void openSessionSelector()}
+        onNewSession={() => void createNewSession()}
+        onDeleteSession={(sessionId) => void deleteSessionById(sessionId)}
         models={modelCatalog.map((model: Record<string, unknown>) => ({
           id: String(model.id || model.model || model.name || ''),
           provider: model.provider as string | undefined,
@@ -777,26 +817,17 @@ export function ChatScreen() {
           auth: (model.authStatus ?? model.auth) as string | undefined,
           usage: model.usage as string | undefined,
         }))}
-        currentDefault={activeGateway.model}
-        mode={modelPicker.mode}
-        agentId={modelPicker.agentId}
-        onSelect={selectModel}
-        onClose={closeModelPicker}
-        onRefresh={async () => {
+        currentModel={activeGateway.model}
+        modelMode={modelPicker.mode}
+        modelAgentId={modelPicker.agentId}
+        onSelectModel={selectModel}
+        onRefreshModels={() => {
           closeModelPicker();
           void openModelPicker(modelPicker.mode, modelPicker.agentId);
         }}
-      />
-
-      <SessionSelectorSheet
-        visible={sessionSelector.visible}
-        sessions={sessions}
-        currentSessionId={currentSessionId}
-        onSelect={selectSession}
-        onClose={closeSessionSelector}
-        onRefresh={() => void openSessionSelector()}
-        onNewSession={() => void createNewSession()}
-        onDeleteSession={(sessionId) => void deleteSessionById(sessionId)}
+        backends={backends}
+        selectedBackendId={activeBackend?.id}
+        onSelectBackend={selectBackend}
       />
     </Screen>
   );
