@@ -7,6 +7,7 @@ import { Spacing } from '@/constants/tokens';
 import {
   botRowSubtitle,
   filterRosterRows,
+  rosterEmptyView,
   type PublicBot,
   type RosterRow,
 } from '@/lib/gateway/bots';
@@ -60,6 +61,14 @@ export function ChatRoster({
   const visibleRows = filterRosterRows(rows, query);
   const visibleGroups = filterGroupRooms(groups, query);
   const visibleBotCount = visibleRows.filter((row) => row.kind === 'bot').length;
+  const totalBotCount = rows.filter((row) => row.kind === 'bot').length;
+  const emptyView = rosterEmptyView({
+    totalBotRows: totalBotCount,
+    visibleBotRows: visibleBotCount,
+    visibleGroups: visibleGroups.length,
+    query,
+    error,
+  });
   const routableBots = rows.filter(
     (row): row is Extract<RosterRow, { kind: 'bot' }> => row.kind === 'bot' && row.bot.routable,
   );
@@ -138,17 +147,24 @@ export function ChatRoster({
           style={styles.row}
         />
       ) : null}
-      {rows.length === 1 ? (
+      {emptyView.kind === 'zero-bots' ? (
         <EmptyState
           icon={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}
           title="No bots on this gateway"
           description="Named Hermes profiles appear here once the Gate can inventory them."
         />
       ) : null}
-      {rows.length > 1 && visibleBotCount === 0 ? (
+      {emptyView.kind === 'load-failed' ? (
+        <EmptyState
+          icon={{ ios: 'exclamationmark.triangle', android: 'warning', web: 'warning' }}
+          title="Couldn't load agents"
+          description="The roster could not read this gateway's agent inventory — the reason is named above."
+        />
+      ) : null}
+      {emptyView.kind === 'no-match' ? (
         <EmptyState
           icon={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
-          title={`No agents match "${query.trim()}"`}
+          title={`No agents match "${emptyView.query}"`}
           description="Names, ids, and descriptions are searched."
           actionLabel="Clear search"
           onAction={() => setQuery('')}

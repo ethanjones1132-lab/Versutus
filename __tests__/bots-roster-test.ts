@@ -9,6 +9,7 @@ import {
   findBotChat,
   isBotChat,
   loadBotChat,
+  rosterEmptyView,
   type ChatSurface,
   type PublicBot,
   type RosterRow,
@@ -253,4 +254,67 @@ test('loadBotChat reuses Bot Chat when list succeeds', async () => {
   );
   expect(session.id).toBe('s2');
   expect(created).toEqual([]);
+});
+
+test('rosterEmptyView claims zero bots only when the inventory truly answered empty', () => {
+  expect(
+    rosterEmptyView({ totalBotRows: 0, visibleBotRows: 0, visibleGroups: 0, query: '' }),
+  ).toEqual({ kind: 'zero-bots' });
+  // A FAILED inventory is not "zero bots" — the phone does not know what the
+  // host has. The failure names itself and carries the reason verbatim.
+  expect(
+    rosterEmptyView({
+      totalBotRows: 0,
+      visibleBotRows: 0,
+      visibleGroups: 0,
+      query: '',
+      error: 'hermes: An internal server error has occurred',
+    }),
+  ).toEqual({ kind: 'load-failed', reason: 'hermes: An internal server error has occurred' });
+});
+
+test('rosterEmptyView never calls a group match "no match"', () => {
+  // The operator can see a matched room right below the banner — claiming no
+  // agents match while a room row renders would contradict the screen.
+  expect(
+    rosterEmptyView({
+      totalBotRows: 3,
+      visibleBotRows: 0,
+      visibleGroups: 1,
+      query: 'research',
+    }),
+  ).toEqual({ kind: 'none' });
+  // With rooms present but unmatched too, the banner is honest again.
+  expect(
+    rosterEmptyView({
+      totalBotRows: 3,
+      visibleBotRows: 0,
+      visibleGroups: 0,
+      query: '  nomatch  ',
+    }),
+  ).toEqual({ kind: 'no-match', query: 'nomatch' });
+});
+
+test('rosterEmptyView stays silent for blank queries and visible bots', () => {
+  // Nothing was filtered, so nothing can have failed to match.
+  expect(
+    rosterEmptyView({ totalBotRows: 3, visibleBotRows: 3, visibleGroups: 2, query: '' }),
+  ).toEqual({ kind: 'none' });
+  expect(
+    rosterEmptyView({ totalBotRows: 1, visibleBotRows: 1, visibleGroups: 0, query: '   ' }),
+  ).toEqual({ kind: 'none' });
+});
+
+test('rosterEmptyView keeps stale rows silent even while an error is reported', () => {
+  // A refresh error with rows still on screen must not swap the footer for a
+  // failure card over live data — the caption line carries the reason.
+  expect(
+    rosterEmptyView({
+      totalBotRows: 2,
+      visibleBotRows: 2,
+      visibleGroups: 0,
+      query: '',
+      error: 'gateway unreachable',
+    }),
+  ).toEqual({ kind: 'none' });
 });

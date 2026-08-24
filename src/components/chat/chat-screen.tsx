@@ -137,7 +137,11 @@ export function ChatScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [surface, setSurface] = useState<ChatSurface>({ kind: 'roster' });
   const [rosterRows, setRosterRows] = useState<RosterRow[]>([{ kind: 'configurable' }]);
-  const [rosterLoading, setRosterLoading] = useState(false);
+  // Starts true: nothing has loaded yet. The roster effect's resolve/reject
+  // callbacks clear it — the flag is never written synchronously in an effect
+  // body (react-hooks/set-state-in-effect), and the skeleton only renders for
+  // a CONNECTED roster, so a gateway that never connects cannot pin it.
+  const [rosterLoading, setRosterLoading] = useState(true);
   const [rosterError, setRosterError] = useState<string | undefined>();
   const [newAgentVisible, setNewAgentVisible] = useState(false);
   const [newAgentBusy, setNewAgentBusy] = useState(false);
@@ -585,7 +589,7 @@ export function ChatScreen() {
       {surface.kind === 'roster' ? (
         <ChatRoster
           rows={rosterRows}
-          loading={rosterLoading}
+          loading={rosterLoading && status === 'connected'}
           error={rosterError}
           groups={groups}
           onSelectConfigurable={() => {

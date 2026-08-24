@@ -134,6 +134,45 @@ export function filterRosterRows(rows: RosterRow[], query: string): RosterRow[] 
   });
 }
 
+/**
+ * What the roster's footer may honestly claim when the visible list comes up
+ * short. Three truths it must not blur:
+ *   - A FAILED inventory is not "zero bots" — the phone does not know what
+ *     the host has, so the failure names itself instead of asserting emptiness.
+ *   - A query that matched group rooms but no agents is not "no match" — the
+ *     operator is looking at a match right below the banner.
+ *   - A blank query is never "no match" — nothing was filtered.
+ */
+export type RosterEmptyView =
+  | { kind: 'none' }
+  | { kind: 'zero-bots' }
+  | { kind: 'load-failed'; reason: string }
+  | { kind: 'no-match'; query: string };
+
+export function rosterEmptyView({
+  totalBotRows,
+  visibleBotRows,
+  visibleGroups,
+  query,
+  error,
+}: {
+  totalBotRows: number;
+  visibleBotRows: number;
+  visibleGroups: number;
+  query: string;
+  error?: string;
+}): RosterEmptyView {
+  if (totalBotRows <= 0) {
+    return typeof error === 'string' && error.trim()
+      ? { kind: 'load-failed', reason: error }
+      : { kind: 'zero-bots' };
+  }
+  const needle = query.trim();
+  if (!needle) return { kind: 'none' };
+  if (visibleBotRows <= 0 && visibleGroups <= 0) return { kind: 'no-match', query: needle };
+  return { kind: 'none' };
+}
+
 export function isBotChat(session: { title?: string | null }): boolean {
   return session.title === BOT_CHAT_TITLE;
 }
