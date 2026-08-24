@@ -9,6 +9,7 @@ import type { PublicBot } from '@/lib/gateway/bots';
 import {
   canRemoveMember,
   describeGroupPlan,
+  formatGroupMessageTime,
   GROUP_MEMBER_FLOOR_REASON,
   groupSpeakers,
   MAX_GROUP_MESSAGES,
@@ -25,8 +26,35 @@ import { extractMentions } from '@/lib/gateway/mentions';
  * attributed bubble in arrival order.
  */
 type RoomEntry =
-  | { id: string; role: 'user'; text: string; replyCount?: number; capped?: boolean }
-  | { id: string; role: 'bot'; botId: string; text: string };
+  | { id: string; role: 'user'; text: string; replyCount?: number; capped?: boolean; at?: number }
+  | { id: string; role: 'bot'; botId: string; text: string; at?: number };
+
+/**
+ * Bubble meta lines. The user bubble keeps ONE micro line that grows with the
+ * round's feedback (stamp · reply count · cap note); a bot bubble appends its
+ * stamp to the author line. A missing/corrupt stamp simply renders nothing —
+ * never a literal 'Invalid Date'.
+ */
+function userMetaLine(entry: Extract<RoomEntry, { role: 'user' }>): string {
+  const parts: string[] = [];
+  if (typeof entry.at === 'number') {
+    const time = formatGroupMessageTime(entry.at);
+    if (time) parts.push(time);
+  }
+  if (typeof entry.replyCount === 'number') {
+    parts.push(
+      entry.replyCount === 0
+        ? 'No replies — every bot stayed silent.'
+        : `${entry.replyCount} repl${entry.replyCount === 1 ? 'y' : 'ies'} this round`,
+    );
+  }
+  return parts.join(' · ');
+}
+
+function botByline(name: string, at?: number): string {
+  const time = typeof at === 'number' ? formatGroupMessageTime(at) : '';
+  return time ? `${name} · ${time}` : name;
+}
 
 export function GroupRoomView({
   group,
@@ -101,15 +129,17 @@ export function GroupRoomView({
   const handleSend = () => {
     const text = draft.trim();
     if (!text || sending) return;
-    const entryId = `u-${Date.now()}`;
+    const sentAt = Date.now();
+    const entryId = `u-${sentAt}`;
     const mentionedIds = extractMentions(text, group.memberIds);
-    setEntries((prev) => [...prev, { id: entryId, role: 'user', text }]);
+    setEntries((prev) => [...prev, { id: entryId, role: 'user', text, at: sentAt }]);
     setDraft('');
     setSending(true);
     setError(undefined);
     scrollToBottom();
     onSend(text, mentionedIds)
       .then(({ replies }) => {
+        const repliedAt = Date.now();
         setEntries((prev) => {
           const next: RoomEntry[] = [];
           for (const entry of prev) {
@@ -126,6 +156,7 @@ export function GroupRoomView({
               text,
               replyCount: replies.length,
               capped: replies.length >= MAX_GROUP_MESSAGES,
+              at: sentAt,
             });
             replies.forEach((reply, index) => {
               next.push({
@@ -133,6 +164,7 @@ export function GroupRoomView({
                 role: 'bot',
                 botId: reply.botId,
                 text: reply.text,
+                at: repliedAt,
               });
             });
           }
@@ -243,11 +275,9 @@ export function GroupRoomView({
             <View key={entry.id} style={styles.userRow}>
               <View style={[styles.userBubble, { backgroundColor: tokens.accentMuted }]}>
                 <Text variant="body" color="primary">{entry.text}</Text>
-                {typeof entry.replyCount === 'number' ? (
+                {typeof entry.at === 'number' || typeof entry.replyCount === 'number' ? (
                   <Text variant="micro" color="secondary" style={styles.metaLine}>
-                    {entry.replyCount === 0
-                      ? 'No replies — every bot stayed silent.'
-                      : `${entry.replyCount} repl${entry.replyCount === 1 ? 'y' : 'ies'} this round`}
+                    {userMetaLine(entry)}
                     {entry.capped ? ' · stopped at the message cap' : ''}
                   </Text>
                 ) : null}
@@ -257,7 +287,7 @@ export function GroupRoomView({
             <View key={entry.id} style={styles.botRow}>
               <BotAvatar botId={entry.botId} size={26} />
               <View style={[styles.botBubble, { backgroundColor: tokens.backgroundElevated }]}>
-                <Text variant="micro" color="tertiary">{displayNameOf(entry.botId)}</Text>
+                <Text variant="micro" color="tertiary">{botByline(displayNameOf(entry.botId), entry.at)}</Text>
                 <Text variant="body" color="primary">{entry.text}</Text>
               </View>
             </View>

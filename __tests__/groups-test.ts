@@ -2,6 +2,7 @@ import {
   canRemoveMember,
   describeGroupPlan,
   filterGroupRooms,
+  formatGroupMessageTime,
   GROUP_MEMBER_FLOOR_REASON,
   GROUP_SESSION_TITLE,
   groupMemberLine,
@@ -73,16 +74,35 @@ test('transcriptToRoomEntries folds stored history into renderable rows, oldest-
     { id: 'a3', role: 'bot', text: 'no author — dropped' },
     { id: 'a4', role: 'mystery', text: '?' } as unknown as GroupTranscriptEntry,
     { id: 'a5', role: 'user', text: '' },
+    { id: 'a6', role: 'bot', botId: 'writer', text: 'corrupt stamp dropped', at: 'nope' } as unknown as GroupTranscriptEntry,
     null as unknown as GroupTranscriptEntry,
   ];
 
   expect(transcriptToRoomEntries(stored)).toEqual([
-    { id: 'a1', role: 'user', text: 'plan the launch' },
-    { id: 'a2', role: 'bot', botId: 'coder', text: 'on it' },
+    { id: 'a1', role: 'user', text: 'plan the launch', at: 1 },
+    { id: 'a2', role: 'bot', botId: 'coder', text: 'on it', at: 1 },
     // An empty line is still history — kept.
     { id: 'a5', role: 'user', text: '' },
+    // A non-numeric stamp never reaches the UI as garbage…
+    { id: 'a6', role: 'bot', botId: 'writer', text: 'corrupt stamp dropped' },
   ]);
 
   // A gate without transcripts answers empty; the fold of nothing is nothing.
   expect(transcriptToRoomEntries([])).toEqual([]);
+});
+
+test('formatGroupMessageTime renders clock time today and a short date older', () => {
+  const now = new Date(2026, 7, 24, 15, 30).getTime(); // Aug 24 2026, local
+  // Today's lines are clock time, zero-padded.
+  expect(formatGroupMessageTime(new Date(2026, 7, 24, 14, 2).getTime(), now)).toBe('14:02');
+  expect(formatGroupMessageTime(new Date(2026, 7, 24, 9, 5).getTime(), now)).toBe('09:05');
+  expect(formatGroupMessageTime(new Date(2026, 7, 24, 0, 0).getTime(), now)).toBe('00:00');
+  // One minute before the rollover already reads as a date — day boundaries,
+  // not "24h ago", decide the form.
+  expect(formatGroupMessageTime(new Date(2026, 7, 23, 23, 59).getTime(), now)).toBe('Aug 23');
+  // Same calendar day in a previous year stays the date form.
+  expect(formatGroupMessageTime(new Date(2025, 7, 24, 10, 0).getTime(), now)).toBe('Aug 24');
+  // Unrenderable stamps degrade to '' so the view skips the line entirely.
+  expect(formatGroupMessageTime(Number.NaN, now)).toBe('');
+  expect(formatGroupMessageTime(Number.POSITIVE_INFINITY, now)).toBe('');
 });

@@ -22,27 +22,56 @@ export type GroupTranscriptEntry = {
   at?: number;
 };
 
-/** What the room view renders for one transcript line. */
+/**
+ * What the room view renders for one transcript line. `at` is the Gate's
+ * epoch-ms stamp when the line was recorded (absent on older gates).
+ */
 export type RoomTranscriptRow =
-  | { id: string; role: 'user'; text: string }
-  | { id: string; role: 'bot'; botId: string; text: string };
+  | { id: string; role: 'user'; text: string; at?: number }
+  | { id: string; role: 'bot'; botId: string; text: string; at?: number };
 
 /**
  * Fold stored transcript lines into room rows, oldest-first as stored. Rows
  * the view cannot render honestly (unknown roles, bot lines without an
- * author) are dropped rather than drawn broken.
+ * author) are dropped rather than drawn broken. A timestamp survives only
+ * when it is a real finite number — a corrupted stamp must not reach the UI.
  */
 export function transcriptToRoomEntries(entries: GroupTranscriptEntry[]): RoomTranscriptRow[] {
   const rows: RoomTranscriptRow[] = [];
   for (const entry of entries) {
     if (!entry || typeof entry.id !== 'string' || typeof entry.text !== 'string') continue;
+    const at = typeof entry.at === 'number' && Number.isFinite(entry.at) ? entry.at : undefined;
     if (entry.role === 'user') {
-      rows.push({ id: entry.id, role: 'user', text: entry.text });
+      rows.push({ id: entry.id, role: 'user', text: entry.text, at });
     } else if (entry.role === 'bot' && typeof entry.botId === 'string') {
-      rows.push({ id: entry.id, role: 'bot', botId: entry.botId, text: entry.text });
+      rows.push({ id: entry.id, role: 'bot', botId: entry.botId, text: entry.text, at });
     }
   }
   return rows;
+}
+
+const GROUP_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * Micro timestamp for a room line: clock time ('14:02') on today's lines,
+ * short date ('Aug 23') for anything older — rooms rarely span years, so no
+ * year form. Local time, plain date math (no Intl variance across JS
+ * engines). Returns '' for a stamp that cannot be rendered.
+ */
+export function formatGroupMessageTime(at: number, now: number = Date.now()): string {
+  if (!Number.isFinite(at) || !Number.isFinite(now)) return '';
+  const atDate = new Date(at);
+  const nowDate = new Date(now);
+  const sameDay =
+    atDate.getFullYear() === nowDate.getFullYear() &&
+    atDate.getMonth() === nowDate.getMonth() &&
+    atDate.getDate() === nowDate.getDate();
+  if (!sameDay) {
+    return `${GROUP_MONTHS[atDate.getMonth()]} ${atDate.getDate()}`;
+  }
+  const hours = String(atDate.getHours()).padStart(2, '0');
+  const minutes = String(atDate.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
 }
 
 export function GROUP_SESSION_TITLE(name: string): string {
