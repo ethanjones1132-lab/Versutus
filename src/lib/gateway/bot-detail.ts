@@ -28,6 +28,12 @@ export type BotDetailView = {
   routingTitle: string;
   /** The fix, present only when the Bot cannot route. */
   routingNext?: string;
+  /**
+   * Whether this surface offers "Edit agent". The Gate refuses every write
+   * against the default profile (ADR 0011: it is not a bot), so the sheet
+   * hides the affordance there instead of inviting a guaranteed refusal.
+   */
+  editable: boolean;
 };
 
 /**
@@ -64,5 +70,6 @@ export function describeBotDetail(bot: PublicBot): BotDetailView {
     modelPin: modelPinLine(bot),
     routingTitle: routing.title,
     routingNext: routing.next,
+    editable: bot.id !== 'default',
   };
 }

@@ -455,7 +455,22 @@ export function ChatScreen() {
         }}
       />
 
-      <BotDetailSheet bot={detailBot} onClose={() => setDetailBot(null)} />
+      <BotDetailSheet
+        bot={detailBot}
+        onClose={() => setDetailBot(null)}
+        onEdit={
+          detailBot
+            ? () => {
+                // Same prefill path as the overflow menu's Edit agent — one form,
+                // two doors. The detail sheet closes so the form owns the stage.
+                setNewAgentError(undefined);
+                setEditingBot(detailBot);
+                setNewAgentVisible(true);
+                setDetailBot(null);
+              }
+            : undefined
+        }
+      />
 
       <PairingSheet
         visible={showPairingSheet}

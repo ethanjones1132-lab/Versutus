@@ -92,3 +92,14 @@ test('older Gates without routingIssue degrade on the boolean alone', () => {
   expect(botRoutingView({ routable: false }).title).toBe('Bot has no listen key');
   expect(botRoutingView({ routable: true }).title).toBe('Routable');
 });
+
+test('named bots are offered the edit affordance; default never is', () => {
+  // The Gate refuses every write against "default" (ADR 0011 — it is not a
+  // bot), so the sheet hides Edit there instead of inviting a guaranteed
+  // refusal. Every roster id came from this same Gate list, so id is the
+  // whole decision.
+  expect(describeBotDetail({ id: 'coder', displayName: 'Coder', routable: true }).editable).toBe(true);
+  expect(
+    describeBotDetail({ id: 'default', displayName: 'Default', routable: true }).editable,
+  ).toBe(false);
+});
