@@ -38,6 +38,17 @@ export function humanizeGatewayError(error: unknown): HumanizedError {
   }
 
   const message = error instanceof Error ? error.message : String(error);
+  // The manual-add screen throws this shape when the typed/pasted address
+  // cannot be canonicalized at all — an entry mistake, not a gateway fault.
+  if (message.startsWith('Invalid gateway URL:')) {
+    return {
+      title: 'Gateway address looks wrong',
+      cause: message,
+      affected: 'gateway address',
+      next: 'Fix the address and save again.',
+      action: 'dismiss',
+    };
+  }
   if (isGatewayTokenRequiredMessage(message)) {
     return {
       title: 'Setup token required',

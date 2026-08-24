@@ -34,10 +34,27 @@ export function normalizeGatewayUrl(
   const trimmed = input.trim();
   if (!trimmed) throw new Error('Gateway URL is required');
 
-  const hasScheme = /^https?:\/\//i.test(trimmed);
-  const withScheme = hasScheme ? trimmed : `http://${trimmed}`;
-  const parsed = new URL(withScheme);
+  // WebSocket-style entries (ws:// / wss://) identify fine but cannot be
+  // fetched by the HTTP-side probes, and every consumer re-derives its ws://
+  // from the http base via httpToWsBase anyway — so the canonical form is
+  // always http(s), with any path dropped.
+  const schemeMapped = trimmed.replace(/^wss:\/\//i, 'https://').replace(/^ws:\/\//i, 'http://');
+  const hasScheme = /^https?:\/\//i.test(schemeMapped);
+  const withScheme = hasScheme ? schemeMapped : `http://${schemeMapped}`;
+
+  const invalid = (detail: string) =>
+    new Error(
+      `Invalid gateway URL: "${trimmed}" ${detail} — include host and port, e.g. http://yourpc.tailnet.ts.net:8760`,
+    );
+
+  let parsed: URL;
+  try {
+    parsed = new URL(withScheme);
+  } catch {
+    throw invalid('does not parse');
+  }
   const host = parsed.hostname;
+  if (!host) throw invalid('has no host');
 
   // Hermes listens on plain HTTP :8642. When a host is fronted by Tailscale
   // Serve or another TLS reverse proxy, HTTPS uses its standard :443 port.

@@ -22,6 +22,18 @@ describe('humanizeGatewayError', () => {
     expect(result.action).toBe('setup');
   });
 
+  it('maps an unparseable gateway address to an entry-mistake verdict, not a network error', () => {
+    const result = humanizeGatewayError(
+      new Error(
+        'Invalid gateway URL: "http://" does not parse — include host and port, e.g. http://yourpc.tailnet.ts.net:8760',
+      ),
+    );
+    expect(result.title).toBe('Gateway address looks wrong');
+    expect(result.affected).toBe('gateway address');
+    expect(result.action).toBe('dismiss'); // nothing to reconnect — fix the text
+    expect(result.cause).toContain('include host and port');
+  });
+
   it('maps network failures to reconnect action', () => {
     const result = humanizeGatewayError(new Error('Network request failed'));
     expect(result.title).toBe('Could not reach the gateway');

@@ -7,6 +7,7 @@ import { Button, Card, ErrorCard, Screen, Text, TextField } from '@/components/u
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
+import { normalizeGatewayUrl } from '@/lib/gateway/url';
 import { requestGatewayAccess, type AccessRequestResult } from '@/lib/portal/access';
 import { identifyGateway, type GatewayIdentity } from '@/lib/portal/identify';
 
@@ -42,13 +43,21 @@ export default function AddGatewayScreen() {
     setAccessStatus(null);
     setSaveError(null);
     try {
+      // 0. Canonicalize once: every probe, the access handshake, and the saved
+      // profile must use the SAME base, or a paste artifact (stray space,
+      // missing scheme, ws:// form) identifies fine and then saves wrong.
+      // normalizeGatewayUrl throws the honest "Invalid gateway URL:" message
+      // instead of letting a bad entry fall into the misleading "token
+      // required" dead end.
+      const normalizedUrl = normalizeGatewayUrl(url);
+
       // 1. Identify the gateway regardless of origin (manifest → fingerprints).
-      const identity = await identifyGateway({ baseUrl: url });
+      const identity = await identifyGateway({ baseUrl: normalizedUrl });
       setIdentified(identity);
 
       // 2. Request access through the kind-appropriate handshake.
       if (identity.kind === 'openclaw' || identity.kind === 'custom') {
-        const result = await requestGatewayAccess({ baseUrl: url, identity, token: token || undefined });
+        const result = await requestGatewayAccess({ baseUrl: normalizedUrl, identity, token: token || undefined });
         setAccessStatus(result.status);
         if (result.status === 'granted' && result.token) setToken(result.token);
         if (result.status === 'pending-approval') setAccessNote(result.hint ?? 'Approval requested — approve this device on the gateway.');
@@ -71,10 +80,13 @@ export default function AddGatewayScreen() {
       }
 
       // 3. Save the identified profile and connect through the kind's adapter.
-      const discoverySource = url.includes('.ts.net') || url.startsWith('wss://') ? 'tailscale' : 'manual';
+      const discoverySource =
+        normalizedUrl.includes('.ts.net') || url.trim().toLowerCase().startsWith('wss://')
+          ? 'tailscale'
+          : 'manual';
       const gateway = await addGateway({
         name,
-        url,
+        url: normalizedUrl,
         kind: identity.kind,
         token: token || undefined,
         sessionKey: showAdvanced ? sessionKey : undefined,
