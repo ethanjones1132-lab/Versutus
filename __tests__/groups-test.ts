@@ -2,6 +2,7 @@ import {
   canRemoveMember,
   describeGroupPlan,
   describeRoomPlan,
+  describeRoundOutcome,
   filterGroupRooms,
   formatGroupMessageTime,
   GROUP_MEMBER_FLOOR_REASON,
@@ -75,6 +76,36 @@ test('describeRoomPlan stops counting unroutable members as speakers', () => {
   expect(dead).toContain('Echo and Foxtrot cannot route');
   // Caller drift (counts without names) still reads like a sentence.
   expect(describeRoomPlan({ speakerCount: 3, routableCount: 1, silentNames: [] })).toContain(
+    'a member cannot route',
+  );
+});
+
+test('describeRoundOutcome never blames choice when routing was impossible', () => {
+  // Replies came back: the plain count line, byte-for-byte as before.
+  expect(describeRoundOutcome({ replyCount: 1, speakerCount: 2, routableCount: 2, silentNames: [] })).toBe(
+    '1 reply this round',
+  );
+  expect(describeRoundOutcome({ replyCount: 3, speakerCount: 3, routableCount: 3, silentNames: [] })).toBe(
+    '3 replies this round',
+  );
+  // Every scoped speaker could route and none answered: NOW choice is the story.
+  expect(describeRoundOutcome({ replyCount: 0, speakerCount: 2, routableCount: 2, silentNames: [] })).toBe(
+    'No replies — every bot stayed silent.',
+  );
+  // Nobody could route: the silence was structural, not a choice.
+  expect(describeRoundOutcome({ replyCount: 0, speakerCount: 2, routableCount: 0, silentNames: ['Echo'] })).toBe(
+    'No replies — Echo cannot route.',
+  );
+  expect(
+    describeRoundOutcome({ replyCount: 0, speakerCount: 3, routableCount: 0, silentNames: ['Echo', 'Foxtrot'] }),
+  ).toBe('No replies — Echo and Foxtrot cannot route.');
+  // Mixed: naming routing alone would slander the bots that simply chose quiet.
+  expect(describeRoundOutcome({ replyCount: 0, speakerCount: 3, routableCount: 2, silentNames: ['Echo'] })).toBe(
+    'No replies — Echo cannot route · the rest stayed silent.',
+  );
+  // Caller drift (counts say someone unroutable existed but the name is lost)
+  // still reads like a sentence instead of blaming choice.
+  expect(describeRoundOutcome({ replyCount: 0, speakerCount: 3, routableCount: 1, silentNames: [] })).toContain(
     'a member cannot route',
   );
 });

@@ -8,6 +8,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import { botChipModelPin, botChipRoutingTag, type PublicBot } from '@/lib/gateway/bots';
 import {
   canRemoveMember,
+  describeRoundOutcome,
   describeRoomPlan,
   formatGroupMessageTime,
   GROUP_MEMBER_FLOOR_REASON,
@@ -26,14 +27,26 @@ import { extractMentions } from '@/lib/gateway/mentions';
  * attributed bubble in arrival order.
  */
 type RoomEntry =
-  | { id: string; role: 'user'; text: string; replyCount?: number; capped?: boolean; at?: number }
+  | {
+      id: string;
+      role: 'user';
+      text: string;
+      replyCount?: number;
+      capped?: boolean;
+      at?: number;
+      /** Send-time scope truth for the outcome line (see describeRoundOutcome). */
+      speakerCount?: number;
+      routableCount?: number;
+      silentNames?: string[];
+    }
   | { id: string; role: 'bot'; botId: string; text: string; at?: number };
 
 /**
  * Bubble meta lines. The user bubble keeps ONE micro line that grows with the
- * round's feedback (stamp · reply count · cap note); a bot bubble appends its
+ * round's feedback (stamp · outcome · cap note); a bot bubble appends its
  * stamp to the author line. A missing/corrupt stamp simply renders nothing —
- * never a literal 'Invalid Date'.
+ * never a literal 'Invalid Date'. The outcome segment comes from the pure
+ * helper so a round that died on routing never reads as bot choice.
  */
 function userMetaLine(entry: Extract<RoomEntry, { role: 'user' }>): string {
   const parts: string[] = [];
@@ -43,9 +56,14 @@ function userMetaLine(entry: Extract<RoomEntry, { role: 'user' }>): string {
   }
   if (typeof entry.replyCount === 'number') {
     parts.push(
-      entry.replyCount === 0
-        ? 'No replies — every bot stayed silent.'
-        : `${entry.replyCount} repl${entry.replyCount === 1 ? 'y' : 'ies'} this round`,
+      describeRoundOutcome({
+        replyCount: entry.replyCount,
+        // Missing scope fields (future writer drift) degrade to the legacy
+        // all-routable reading instead of dropping or inventing a verdict.
+        speakerCount: entry.speakerCount ?? 0,
+        routableCount: entry.routableCount ?? 0,
+        silentNames: entry.silentNames ?? [],
+      }),
     );
   }
   return parts.join(' · ');
@@ -157,7 +175,24 @@ export function GroupRoomView({
     const sentAt = Date.now();
     const entryId = `u-${sentAt}`;
     const mentionedIds = extractMentions(text, group.memberIds);
-    setEntries((prev) => [...prev, { id: entryId, role: 'user', text, at: sentAt }]);
+    // The outcome line must reflect THIS message's scope, frozen at send
+    // time — not whatever the draft holds by the time replies land. Same
+    // routing truth the plan line and chips already show.
+    const roundSpeakers = groupSpeakers(group.memberIds, mentionedIds);
+    const roundSilentNames = roundSpeakers.filter((id) => routingTagOf(id)).map((id) => displayNameOf(id));
+    const roundRoutableCount = roundSpeakers.length - roundSilentNames.length;
+    setEntries((prev) => [
+      ...prev,
+      {
+        id: entryId,
+        role: 'user',
+        text,
+        at: sentAt,
+        speakerCount: roundSpeakers.length,
+        routableCount: roundRoutableCount,
+        silentNames: roundSilentNames,
+      },
+    ]);
     setDraft('');
     setSending(true);
     setError(undefined);
@@ -182,6 +217,9 @@ export function GroupRoomView({
               replyCount: replies.length,
               capped: replies.length >= MAX_GROUP_MESSAGES,
               at: sentAt,
+              speakerCount: roundSpeakers.length,
+              routableCount: roundRoutableCount,
+              silentNames: roundSilentNames,
             });
             replies.forEach((reply, index) => {
               next.push({

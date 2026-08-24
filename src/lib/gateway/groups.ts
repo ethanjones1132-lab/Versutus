@@ -158,6 +158,36 @@ export function describeRoomPlan({
   return `${routableCount} of ${speakerCount} bots speak per round · ${who} · ${caps}`;
 }
 
+/**
+ * The honest outcome line under a sent message: how many replies came back,
+ * or — when none did — WHY. A zero-reply round only blames choice when every
+ * scoped speaker could actually route; structural silence names who could
+ * not, and a mixed room says both truths instead of accusing reachable bots
+ * of ignoring the room. Counts are the SEND-time scope, not the live draft.
+ */
+export function describeRoundOutcome({
+  replyCount,
+  speakerCount,
+  routableCount,
+  silentNames,
+}: {
+  replyCount: number;
+  speakerCount: number;
+  routableCount: number;
+  silentNames: string[];
+}): string {
+  if (replyCount > 0) {
+    return `${replyCount} repl${replyCount === 1 ? 'y' : 'ies'} this round`;
+  }
+  if (routableCount < Math.max(speakerCount, 0)) {
+    const names = silentNames.filter((name) => typeof name === 'string' && name.trim());
+    const who = `${joinAnd(names.length ? names : ['a member'])} cannot route`;
+    if (routableCount <= 0) return `No replies — ${who}.`;
+    return `No replies — ${who} · the rest stayed silent.`;
+  }
+  return 'No replies — every bot stayed silent.';
+}
+
 /** Roster subtitle for a group row. */
 export function groupMemberLine(group: Pick<BotGroupRoom, 'memberIds'>): string {
   const count = group.memberIds.length;
