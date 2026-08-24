@@ -31,6 +31,37 @@ export type RequestGatewayAccessOptions = {
   timeoutMs?: number;
 };
 
+// ─── Pending-approval hint ────────────────────────────────────────
+// Pairing Order B: the request sits on the Gate until a human approves it.
+// The operator is holding the phone while the approval command runs on the
+// Gate machine — "approve it on the gateway" sends them to the runbook
+// mid-flow. Name the exact command instead, and the exact requestId when
+// the Gate returned one, so no cross-referencing `pair list` by hand.
+
+export function pendingApprovalHint(requestId?: string): string {
+  const id = requestId?.trim();
+  if (!id) {
+    return [
+      'Access request sent — waiting for approval. On the Gate machine run:',
+      '',
+      'node gate/cli.mjs pair list',
+      '',
+      'to see open requests, then run:',
+      '',
+      'node gate/cli.mjs pair approve <requestId>',
+      '',
+      'then tap Save & connect again.',
+    ].join('\n');
+  }
+  return [
+    'Access request sent — waiting for approval. On the Gate machine run:',
+    '',
+    `node gate/cli.mjs pair approve ${id}`,
+    '',
+    'then tap Save & connect again.',
+  ].join('\n');
+}
+
 const CLIENT_ID = 'versutus-mobile';
 const CLIENT_MODE = 'ui';
 const DEFAULT_SCOPES = ['chat:send', 'chat:read', 'runs:start', 'runs:read', 'terminal:use', 'sessions:manage'];
@@ -206,10 +237,11 @@ async function postSignedAccessRequest(
         };
       }
       if (response.status === 202 || status === 'pending') {
+        const requestId = typeof body?.requestId === 'string' ? body.requestId : undefined;
         return {
           status: 'pending-approval',
-          requestId: typeof body?.requestId === 'string' ? body.requestId : undefined,
-          hint: 'Access request sent — approve it on the gateway.',
+          requestId,
+          hint: pendingApprovalHint(requestId),
         };
       }
       if (status === 'token-required') {
