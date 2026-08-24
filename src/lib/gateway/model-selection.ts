@@ -78,3 +78,37 @@ export function resolveSendModel(
   const model = effectiveModel(gateway, selectedBackendId, selectedBotId);
   return model ? { model } : {};
 }
+
+/** One collapsible provider group in the picker's section list. */
+export type ModelSection<T extends ModelSearchable = ModelSearchable> = {
+  key: string;
+  title: string;
+  data: T[];
+};
+
+/** Group key (and section key) for models reporting no provider identity. */
+export const OTHER_GROUP_KEY = 'other';
+
+/**
+ * Group a flat catalog into per-provider sections for the model picker.
+ *
+ * A gateway catalog runs to hundreds of entries once several providers are
+ * registered, so the picker renders collapsible provider sections instead of
+ * one flat list. `providerId` is the stable group key and `provider` is its
+ * display name; models reporting neither land in one explicit "Other" group,
+ * because dropping unattributed entries would hide real, selectable models.
+ */
+export function groupByProvider<T extends ModelSearchable>(models: T[]): ModelSection<T>[] {
+  const groups = new Map<string, ModelSection<T>>();
+  for (const model of models) {
+    const key = model.providerId ?? model.provider ?? OTHER_GROUP_KEY;
+    const title = model.provider ?? model.providerId ?? 'Other';
+    const existing = groups.get(key);
+    if (existing) {
+      existing.data.push(model);
+    } else {
+      groups.set(key, { key, title, data: [model] });
+    }
+  }
+  return [...groups.values()].sort((a, b) => a.title.localeCompare(b.title));
+}

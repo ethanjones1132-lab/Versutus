@@ -4,7 +4,12 @@ import { SectionList, StyleSheet, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 
 import { Badge, BaseSheet, Button, EmptyState, Icon, PressableScale, Text, TextField } from '@/components/ui';
-import { filterModels } from '@/lib/gateway/model-selection';
+import {
+  filterModels,
+  groupByProvider,
+  OTHER_GROUP_KEY,
+  type ModelSection,
+} from '@/lib/gateway/model-selection';
 import { Radius, Spacing } from '@/constants/tokens';
 import { entering } from '@/lib/motion/presets';
 import { useTokens } from '@/hooks/use-tokens';
@@ -21,33 +26,12 @@ type ModelItem = {
   catalogState?: string;
 };
 
-type ModelSection = {
-  key: string;
-  title: string;
-  data: ModelItem[];
-};
-
-const OTHER_GROUP_KEY = 'other';
+type PickerSection = ModelSection<ModelItem>;
 
 function formatContext(context?: number): string | undefined {
   if (!context) return undefined;
   if (context >= 1000) return `${Math.round(context / 1000)}k ctx`;
   return `${context} ctx`;
-}
-
-function groupByProvider(models: ModelItem[]): ModelSection[] {
-  const groups = new Map<string, ModelSection>();
-  for (const model of models) {
-    const key = model.providerId ?? model.provider ?? OTHER_GROUP_KEY;
-    const title = model.provider ?? model.providerId ?? 'Other';
-    const existing = groups.get(key);
-    if (existing) {
-      existing.data.push(model);
-    } else {
-      groups.set(key, { key, title, data: [model] });
-    }
-  }
-  return [...groups.values()].sort((a, b) => a.title.localeCompare(b.title));
 }
 
 export function ModelPickerSheet({
@@ -159,7 +143,7 @@ export function ModelPickerSheet({
   );
 
   const renderSectionHeader = useCallback(
-    ({ section }: { section: ModelSection }) => {
+    ({ section }: { section: PickerSection }) => {
       const open = isExpanded(section.key);
       return (
         <PressableScale

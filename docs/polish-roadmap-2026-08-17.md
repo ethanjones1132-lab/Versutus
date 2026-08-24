@@ -67,6 +67,7 @@ Compiled from a full sweep of `src/`, `__tests__/`, and prior audit docs. Each i
 ### 2.7 Model picker: collapse by provider
 - **Why:** The picker renders one flat `FlatList` of every model the gateway knows (`model-picker-sheet.tsx:132-138`) — a gigantic, unscannable list once multiple providers are registered. Models already carry `provider`/`providerId`; the grouping data exists but is unused.
 - **Fix:** Group into collapsible provider sections (SectionList or flat list with section headers + expanded state): provider header with count, current model's group auto-expanded, others collapsed by default. Keep per-model cards as-is inside sections.
+- **Progress (2026-08-24): DONE.** Shipped at d85cbe3 — collapsible provider sections with counts, the current model's group open by default, and search opening every group. The grouping itself now lives in `src/lib/gateway/model-selection.ts` (`groupByProvider`), pinned by `__tests__/model-grouping-test.ts`. Nothing left here.
 
 ### 2.8 Capabilities derived from the selected backend/CLI — comprehensively
 - **Why:** Today the app's capability surface is mostly **hardcoded Hermes-RPC assumptions**: 51 static slash commands (`dashboard.ts:66+`), `capabilitiesForBackend` collapsing every backend to `{sessions, tools}` (`backend-capabilities.ts:16-27`), chat approvals wired only to Hermes runs, and the model catalog fetched gate-wide instead of per-backend. Meanwhile the gate's machinery for the real thing already exists but is unused: kind-declared `commands`→manifest plumbing (`registry.mjs:159-187`), adapter `operations` with JSON schemas (never serialized into the manifest), and normalized `approval.required`/`usage`/`diagnostic` backend events that the SSE relay **drops on the floor** (`server.mjs:52-119`). Result: most of what a backend/CLI can actually do is missing or not cleanly usable in chat.
@@ -114,7 +115,7 @@ Compiled from a full sweep of `src/`, `__tests__/`, and prior audit docs. Each i
 
 ## Suggested execution order
 
-1. Tier 2.7 (model picker provider grouping) — immediate visible win, self-contained.
+1. ~~Tier 2.7 (model picker provider grouping)~~ — done (d85cbe3; grouping logic extracted to `model-selection.ts` and pinned 2026-08-24).
 2. Tier 1.1–1.3 (message bound, stream reconcile, run terminal states) — one focused pass on the chat/run pipeline.
 3. Tier 3.1 (extract + test reducers) — de-risks everything after.
 4. Tier 2.1–2.3 (IA consolidation, sheet reduction, error humanization) — the visible "luxury minimal" jump.
