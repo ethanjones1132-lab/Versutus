@@ -68,6 +68,7 @@
     "smoke:providers": "node ./scripts/smoke-provider-runtime.mjs",
     "smoke:environments": "node ./scripts/smoke-cli-environments.mjs",
     "smoke:wedge": "node ./scripts/smoke-wedge-loop.mjs",
+    "smoke:signoff": "node ./scripts/smoke-signoff.mjs",
     "build:android:preview": "eas build --profile preview --platform android",
     "build:android:preview:local": "eas build --profile preview --platform android --local"
   },
