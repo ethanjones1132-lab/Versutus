@@ -39,6 +39,7 @@ import {
 } from '@/lib/gateway/messages';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { loadBotChat, type PublicBot } from '@/lib/gateway/bots';
+import { onboardingCompletionForAddedGateway } from '@/lib/onboarding/completion-from-add';
 import type { BotGroupRoom, GroupReply, GroupTranscriptEntry } from '@/lib/gateway/groups';
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
 import { formatRunFailure } from '@/lib/gateway/run-failures';
@@ -1293,6 +1294,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const profile = createGatewayProfile(input);
       const next = await upsertGateway(profile);
       setGateways(next);
+
+      // Adding a gateway IS completing onboarding: without this, a first-run
+      // manual or deep-link add saved a profile yet left needsOnboarding set,
+      // and AppBootstrap bounced the user from chat back to onboarding. The
+      // derived tailnet host feeds future auto-connect candidate probing.
+      const completionPatch = onboardingCompletionForAddedGateway(input.url, settingsRef.current);
+      const nextSettings = await saveAppSettings(completionPatch);
+      settingsRef.current = nextSettings;
+      setSettings(nextSettings);
+      setNeedsOnboarding(false);
+
       return profile;
     },
     [],

@@ -15,7 +15,7 @@ import { ConnectedToast } from '@/components/connected-toast';
 import { FontProvider } from '@/components/font-provider';
 import { TlsFingerprintGuard } from '@/components/gateway/tls-fingerprint-guard';
 import { VersutusDarkTheme } from '@/constants/navigation-theme';
-import { GatewayProvider } from '@/context/gateway-provider';
+import { GatewayProvider, useGateway } from '@/context/gateway-provider';
 import { installStreamingFetch } from '@/lib/net/streaming-fetch';
 
 // React Native's global fetch cannot stream a response body, so SSE readers
@@ -39,10 +39,14 @@ function NotificationRouter() {
 function GatewayDeepLinkRouter() {
   const router = useRouter();
   const url = Linking.useURL();
+  const { isBootstrapped } = useGateway();
   const handledRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!url || handledRef.current === url) return;
+    // Wait for bootstrap before pushing: the Stack is not mounted until then,
+    // and needsOnboarding has not settled — a cold-start deep link used to
+    // race the boot overlay and lose to the first-run redirect.
+    if (!isBootstrapped || !url || handledRef.current === url) return;
     const parsed = Linking.parse(url);
     const path = (parsed.path ?? '').replace(/^\/+/, '');
     if (path !== 'add' && path !== 'gateway/add') return;
@@ -57,7 +61,7 @@ function GatewayDeepLinkRouter() {
     );
 
     router.push({ pathname: '/gateway/add', params });
-  }, [router, url]);
+  }, [router, url, isBootstrapped]);
 
   return null;
 }
