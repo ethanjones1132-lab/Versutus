@@ -8,6 +8,7 @@ import { BotDetailSheet } from '@/components/chat/bot-detail-sheet';
 import { ChatComposer } from '@/components/chat/chat-composer';
 import { ChatRoster } from '@/components/chat/chat-roster';
 import { CreateGroupSheet } from '@/components/chat/create-group-sheet';
+import { GroupRoomActionSheet } from '@/components/chat/group-room-action-sheet';
 import { GroupRoomView } from '@/components/chat/group-room-view';
 import { NewAgentSheet } from '@/components/chat/new-agent-sheet';
 import { RoutinesPane, type RoutineJob } from '@/components/chat/routines-pane';
@@ -158,6 +159,8 @@ export function ChatScreen() {
   const [editingBot, setEditingBot] = useState<PublicBot | null>(null);
   // Long-press target on the roster: which Bot's detail sheet is open.
   const [detailBot, setDetailBot] = useState<PublicBot | null>(null);
+  // Long-press target on the roster: which room's action sheet is open.
+  const [detailGroup, setDetailGroup] = useState<BotGroupRoom | null>(null);
   const [routineJobs, setRoutineJobs] = useState<RoutineJob[]>([]);
   const [groups, setGroups] = useState<BotGroupRoom[]>([]);
   const [newGroupVisible, setNewGroupVisible] = useState(false);
@@ -582,6 +585,47 @@ export function ChatScreen() {
         }
       />
 
+      <GroupRoomActionSheet
+        room={detailGroup}
+        members={rosterBots}
+        onClose={() => setDetailGroup(null)}
+        onOpen={
+          detailGroup
+            ? () => {
+                // Same path as tapping the roster row itself; the sheet
+                // closes first so the room owns the stage.
+                const id = detailGroup.id;
+                showSurface({ kind: 'group', groupId: id });
+                setDetailGroup(null);
+              }
+            : undefined
+        }
+        onRename={
+          detailGroup
+            ? (name) =>
+                botGroups.rename(detailGroup.id, name).then((room) => {
+                  // The Gate's answer is the truth: refresh the roster copy
+                  // AND feed the returned room back so the open sheet shows
+                  // the new name, not the stale snapshot.
+                  setDetailGroup(room);
+                  void refreshGroups();
+                  return room;
+                })
+            : undefined
+        }
+        onDisband={
+          detailGroup
+            ? () =>
+                botGroups.deleteGroup(detailGroup.id).then((result) => {
+                  // The room is gone from the Gate; the roster copy is now
+                  // authoritative.
+                  void refreshGroups();
+                  return result;
+                })
+            : undefined
+        }
+      />
+
       <PairingSheet
         visible={showPairingSheet}
         deviceId={deviceId ?? ''}
@@ -646,6 +690,7 @@ export function ChatScreen() {
           onSelectGroup={(group) => {
             showSurface({ kind: 'group', groupId: group.id });
           }}
+          onGroupDetail={setDetailGroup}
           // Honesty gating: gateways whose client cannot manage agents or
           // host rooms never see these rows at all — the refusal must not
           // wait until after the operator fills the sheet. The same verdicts

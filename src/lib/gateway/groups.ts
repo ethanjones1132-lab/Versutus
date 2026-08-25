@@ -323,6 +323,32 @@ export function groupMemberLine(group: Pick<BotGroupRoom, 'memberIds'>): string 
 }
 
 /**
+ * Roster long-press sheet facts for one room: every member id resolved
+ * through the loaded bot inventory, and how many had no name on it. A
+ * member the phone has never seen on the roster shows its raw id rather
+ * than an invented name — the roster copy is the ONLY name source, and
+ * `unknown` lets the sheet say "n not on this gateway" out loud, the same
+ * honesty rule as the room view's routing chips.
+ */
+export function roomMemberNames(
+  group: Pick<BotGroupRoom, 'memberIds'>,
+  namesById: ReadonlyMap<string, string>,
+): { names: string[]; unknown: number } {
+  const names: string[] = [];
+  let unknown = 0;
+  for (const memberId of group.memberIds) {
+    const name = namesById.get(memberId);
+    if (typeof name === 'string' && name.length > 0) {
+      names.push(name);
+    } else {
+      names.push(memberId);
+      unknown += 1;
+    }
+  }
+  return { names, unknown };
+}
+
+/**
  * A member may be removed while the room stays viable. At the two-member
  * floor every remaining member is structural — refuse with the reason.
  */

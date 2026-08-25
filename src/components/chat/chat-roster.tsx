@@ -31,6 +31,11 @@ export type ChatRosterProps = {
   /** Long-press a roster row: the detail surface (description, pin, routing fix, id). */
   onBotDetail?: (bot: PublicBot) => void;
   onSelectGroup?: (group: BotGroupRoom) => void;
+  /**
+   * Long-press a group row: the room action sheet (member line, open, rename,
+   * disband) without entering the room first.
+   */
+  onGroupDetail?: (group: BotGroupRoom) => void;
   /** Present only when the gateway's client can create and edit agents at all. */
   onNewAgent?: () => void;
   /** Present only when the gateway can create rooms (bots endpoint + groups advertised). */
@@ -56,6 +61,7 @@ export function ChatRoster({
   onSelectBot,
   onBotDetail,
   onSelectGroup,
+  onGroupDetail,
   onNewAgent,
   onNewGroup,
   canManageAgents = false,
@@ -177,6 +183,7 @@ export function ChatRoster({
           subtitle={groupMemberLine(group)}
           leading={<BotAvatar botId={group.id} />}
           onPress={onSelectGroup ? () => onSelectGroup(group) : undefined}
+          onLongPress={onGroupDetail ? () => onGroupDetail(group) : undefined}
           style={styles.row}
         />
       ))}

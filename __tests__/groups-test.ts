@@ -13,6 +13,7 @@ import {
   MAX_GROUP_ROUNDS,
   mergeTranscriptRows,
   planGroupRounds,
+  roomMemberNames,
   rosterInventoryVerified,
   TRANSCRIPT_DEDUPE_WINDOW_MS,
   transcriptToRoomEntries,
@@ -226,6 +227,27 @@ test('roster copy helpers stay honest about size and search', () => {
   // Member ids are searchable too — operators think in handles.
   expect(filterGroupRooms(rooms, 'researcher').map((room) => room.id)).toEqual(['room1']);
   expect(filterGroupRooms(rooms, 'zzz')).toEqual([]);
+});
+
+test('roomMemberNames resolves names from the loaded roster copy and names nothing it lacks', () => {
+  const byId = new Map([
+    ['coder', 'Coder'],
+    ['researcher', 'Researcher'],
+  ]);
+  expect(roomMemberNames(ROOM, byId)).toEqual({ names: ['Coder', 'Researcher'], unknown: 0 });
+});
+
+test('roomMemberNames falls back to the raw id and counts a member never seen on the roster', () => {
+  // A member missing from the loaded inventory has no verified name — the
+  // sheet must show the raw id and say how many are unverified, never
+  // invent a display name (same honesty rule as the room view's chips).
+  const byId = new Map([['coder', 'Coder']]);
+  expect(roomMemberNames(ROOM, byId)).toEqual({ names: ['Coder', 'researcher'], unknown: 1 });
+});
+
+test('roomMemberNames handles an empty room and an empty inventory', () => {
+  expect(roomMemberNames({ memberIds: [] }, new Map())).toEqual({ names: [], unknown: 0 });
+  expect(roomMemberNames(ROOM, new Map())).toEqual({ names: ['coder', 'researcher'], unknown: 2 });
 });
 
 test('transcriptToRoomEntries folds stored history into renderable rows, oldest-first', () => {
