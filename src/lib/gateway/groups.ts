@@ -93,7 +93,14 @@ function sameStoredLine<T extends TranscriptRowLike>(local: T, stored: RoomTrans
  *  - corrupt lines never enter the view (dropped in transcriptToRoomEntries);
  *  - a failed or empty read never removes anything: the transcript is the
  *    conversation in front of the operator, not a cached inventory, so no
- *    refresh wipes it.
+ *    refresh wipes it;
+ *  - the fold stays CHRONOLOGICAL, not positional: a fresh read can carry
+ *    lines OLDER than everything shown (first replay) or NEWER (another
+ *    device sent since the last read). Rows sort by stamp, so a newer line
+ *    lands below the conversation at the reading position — prepending
+ *    every addition inverted it to the top (rook 2026-08-25). A line
+ *    without a stamp (older gates) reads as oldest, so stored replay lines
+ *    still land above this visit's optimistic sends.
  */
 export function mergeTranscriptRows<T extends TranscriptRowLike>(
   current: T[],
@@ -103,7 +110,9 @@ export function mergeTranscriptRows<T extends TranscriptRowLike>(
   const additions = transcriptToRoomEntries(stored).filter(
     (row) => !known.has(row.id) && !current.some((local) => sameStoredLine(local, row)),
   );
-  return [...additions, ...current] as T[];
+  return [...current, ...additions].sort(
+    (a, b) => (a.at ?? Number.NEGATIVE_INFINITY) - (b.at ?? Number.NEGATIVE_INFINITY),
+  ) as T[];
 }
 
 const GROUP_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

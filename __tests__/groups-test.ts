@@ -304,16 +304,46 @@ test('mergeTranscriptRows folds new stored lines in oldest-first, before the liv
   ]);
 });
 
-test('mergeTranscriptRows never re-adds a stored line the view already shows', () => {
+test('mergeTranscriptRows keeps reading order when a re-read brings lines NEWER than the view (pull-to-refresh)', () => {
   const current = [{ id: 'g-1', role: 'user', text: 'seen', at: NOW } as const];
-  // The Gate returns the same line again (plus one genuinely new line).
+  // The Gate returns the same line again (deduped) plus a line another device
+  // sent after this phone's last read. The newer line must land BELOW the
+  // older conversation at the reading position — prepending it put the newest
+  // message at the top of the transcript (rook 2026-08-25).
   const stored: GroupTranscriptEntry[] = [
     { id: 'g-1', role: 'user', text: 'seen', at: NOW },
     { id: 'g-2', role: 'bot', botId: 'writer', text: 'fresh', at: NOW + 5_000 },
   ];
   expect(mergeTranscriptRows(current, stored)).toEqual([
-    { id: 'g-2', role: 'bot', botId: 'writer', text: 'fresh', at: NOW + 5_000 },
     { id: 'g-1', role: 'user', text: 'seen', at: NOW },
+    { id: 'g-2', role: 'bot', botId: 'writer', text: 'fresh', at: NOW + 5_000 },
+  ]);
+});
+
+test('mergeTranscriptRows interleaves older and newer additions chronologically, not by read order', () => {
+  const current = [{ id: 'u-1', role: 'user', text: 'go', at: NOW } as const];
+  // One stored line predates the whole view (first replay), the other
+  // postdates it (another device answered since the last read). The merged
+  // fold reads oldest-first regardless of the order the Gate returned them.
+  const stored: GroupTranscriptEntry[] = [
+    { id: 'n-1', role: 'bot', botId: 'coder', text: 'done just now', at: NOW + 30_000 },
+    { id: 'o-1', role: 'user', text: 'earlier exchange', at: NOW - 30_000 },
+  ];
+  expect(mergeTranscriptRows(current, stored)).toEqual([
+    { id: 'o-1', role: 'user', text: 'earlier exchange', at: NOW - 30_000 },
+    { id: 'u-1', role: 'user', text: 'go', at: NOW },
+    { id: 'n-1', role: 'bot', botId: 'coder', text: 'done just now', at: NOW + 30_000 },
+  ]);
+});
+
+test('mergeTranscriptRows sorts a stamp-less stored line as oldest, so replay keeps its place above the live rows', () => {
+  const current = [{ id: 'u-1', role: 'user', text: 'go', at: NOW } as const];
+  // Older gates do not stamp lines; without a stamp the stored replay line
+  // reads as oldest and still lands above this visit's optimistic send.
+  const stored: GroupTranscriptEntry[] = [{ id: 'x-1', role: 'user', text: 'legacy line' }];
+  expect(mergeTranscriptRows(current, stored)).toEqual([
+    { id: 'x-1', role: 'user', text: 'legacy line' },
+    { id: 'u-1', role: 'user', text: 'go', at: NOW },
   ]);
 });
 
@@ -371,8 +401,8 @@ test('mergeTranscriptRows treats an identical line stamped outside the send wind
     { id: 'g-9', role: 'user', text: 'again?', at: NOW + TRANSCRIPT_READ_WINDOW_MS + 1 },
   ];
   expect(mergeTranscriptRows(current, stored)).toEqual([
-    { id: 'g-9', role: 'user', text: 'again?', at: NOW + TRANSCRIPT_READ_WINDOW_MS + 1 },
     { id: 'u-1', role: 'user', text: 'again?', at: NOW },
+    { id: 'g-9', role: 'user', text: 'again?', at: NOW + TRANSCRIPT_READ_WINDOW_MS + 1 },
   ]);
 });
 
