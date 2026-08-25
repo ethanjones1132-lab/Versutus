@@ -7,10 +7,11 @@ import { describeChannelStatusRow } from '@/lib/gateway/channel-status';
 import type { GatewayCapabilityGroup } from '@/lib/gateway/types';
 
 /**
- * The persistent glance line Tier 2.6 asked for: channels stay visible on the
- * dashboard even when nothing is wrong, instead of surfacing only through the
- * degraded-only Channel Repair card. Tapping opens chat, where /channel and
- * its repair commands live.
+ * The persistent glance line Tier 2.6 asked for: channels stay visible on
+ * the dashboard whenever the snapshot says anything about them — hidden on
+ * gateways that declare none, an attention verdict when a declaring gateway
+ * reports degraded bridges. Tapping opens chat, where live channel state or
+ * honest host-side guidance answers.
  */
 export function ChannelStatusRow({
   group,

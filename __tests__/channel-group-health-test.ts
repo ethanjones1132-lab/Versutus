@@ -123,7 +123,7 @@ describe('buildCapabilitySnapshot drives the channels group from bridge truth', 
     expect(group.note).toBe('1 of 2 channel bridges healthy');
   });
 
-  test('an all-down fleet goes unhealthy, giving the Channel Repair card a real trigger', () => {
+  test('an all-down fleet goes unhealthy, driving the row attention verdict', () => {
     const group = channelsGroup([bridge('discord', { healthy: false }), bridge('telegram', { state: 'error' })]);
     expect(group.status).toBe('unhealthy');
   });

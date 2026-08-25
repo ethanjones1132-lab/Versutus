@@ -1,9 +1,18 @@
 /**
  * Pure model for the dashboard's persistent channel-status row (Tier 2.6).
- * Channels — the operator's live bridges (Discord, Telegram, ...) — used to
- * surface only when something broke, via the degraded-only Channel Repair
- * card. This row keeps them visible on every dashboard render where the
- * connected gateway's snapshot says anything at all about channels.
+ * Channels — the operator's live bridges (Discord, Telegram, ...) — stay
+ * visible on every dashboard render where the connected gateway's snapshot
+ * says anything at all about them. There is deliberately no second repair
+ * card: a gateway that declares broken bridges gets this row's attention
+ * verdict, and chat answers any /channel attempt with host-side guidance.
+ *
+ * Reachability contract (Rook 2026-08-24T20:51 resolved): no shipped gateway
+ * kind produces channel instances — the Gate registers agent/provider kinds
+ * only and the Hermes API server exposes no channel routes — so against the
+ * shipped fleet this group reads `undeclared` and the row stays hidden. The
+ * attention tones are reachable only through the manifest contract itself:
+ * a gateway whose /.well-known/gateway.json declares channels-family
+ * capability instances. That is forward-compat by design, not dead code.
  *
  * Honesty boundary: the capability snapshot carries family-level truth only —
  * whether the channels family is offered and healthy as a whole. The group's
@@ -50,14 +59,14 @@ export function describeChannelStatusRow(
         visible: true,
         tone: 'attention',
         label,
-        detail: detail('Some channels degraded - open chat to repair'),
+        detail: detail('Some channels degraded - open chat to inspect'),
       };
     case 'unhealthy':
       return {
         visible: true,
         tone: 'attention',
         label,
-        detail: detail('Channels degraded - open chat to repair'),
+        detail: detail('Channels degraded - open chat to inspect'),
       };
     case 'missing-scope':
       return { visible: true, tone: 'quiet', label, detail: 'No permission to check channels' };
@@ -115,10 +124,10 @@ export type ChannelGroupHealth = {
 /**
  * Aggregate per-bridge verdicts into the channels group's family status.
  *
- * This is the real channel-surface signal behind the row's attention tones
- * and the Channel Repair card: without it the group could only ever read
- * ready or undeclared, so both were unreachable code. The copy contract
- * matches describeChannelStatusRow's wording — `partial` means SOME bridges
+ * This is the real channel-surface signal behind the row's attention tones:
+ * without it the group could only ever read ready or undeclared, leaving
+ * those tones unreachable even for a gateway that honestly declares broken
+ * bridges. The copy contract matches describeChannelStatusRow's wording — `partial` means SOME bridges
  * degraded, `unhealthy` means the whole family reads degraded — and a
  * declared-but-unconfirmed fleet stays `unknown` rather than pretending.
  * Null means "no channels declared at all": the caller keeps its existing

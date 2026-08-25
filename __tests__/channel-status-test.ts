@@ -19,14 +19,37 @@ describe('describeChannelStatusRow', () => {
     expect(describeChannelStatusRow(group('available')).tone).toBe('live');
   });
 
-  test('degraded families demand attention and point at the repair path in chat', () => {
+  test('degraded families demand attention and offer inspection, not a promised repair', () => {
     const partial = describeChannelStatusRow(group('partial'));
     expect(partial.tone).toBe('attention');
-    expect(partial.detail).toBe('Some channels degraded - open chat to repair');
+    expect(partial.detail).toBe('Some channels degraded - open chat to inspect');
 
     const unhealthy = describeChannelStatusRow(group('unhealthy'));
     expect(unhealthy.tone).toBe('attention');
-    expect(unhealthy.detail).toBe('Channels degraded - open chat to repair');
+    expect(unhealthy.detail).toBe('Channels degraded - open chat to inspect');
+  });
+
+  test('no channel status ever promises a repair action chat cannot perform', () => {
+    // The retired Channel Repair card prescribed /channel start|stop|logout —
+    // commands no shipped gateway dispatches. The row's copy must never
+    // resurrect that promise in any tone or state.
+    const statuses = [
+      'ready',
+      'available',
+      'partial',
+      'unhealthy',
+      'missing-scope',
+      'unsupported',
+      'warming',
+      'stale',
+      'unavailable',
+      'experimental',
+      'unknown',
+      'undeclared',
+    ] as const;
+    for (const status of statuses) {
+      expect(JSON.stringify(describeChannelStatusRow(group(status)))).not.toMatch(/repair/i);
+    }
   });
 
   test('a gateway that declares no channels says so instead of going quiet', () => {
@@ -91,10 +114,10 @@ describe('describeChannelStatusRow', () => {
 
   test('without a note the static copy stands, ready never repeats a tally', () => {
     expect(describeChannelStatusRow(group('partial')).detail).toBe(
-      'Some channels degraded - open chat to repair',
+      'Some channels degraded - open chat to inspect',
     );
     expect(describeChannelStatusRow(group('unhealthy')).detail).toBe(
-      'Channels degraded - open chat to repair',
+      'Channels degraded - open chat to inspect',
     );
     expect(describeChannelStatusRow(group('unknown')).detail).toBe('Not confirmed yet');
     expect(describeChannelStatusRow(group('ready', { note: '4 of 4 channel bridges healthy' })).detail).toBe(

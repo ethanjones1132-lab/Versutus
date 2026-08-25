@@ -1013,8 +1013,10 @@ export function buildCapabilitySnapshot(
       // Channels declare no features/endpoints, so their only health signal is
       // what a declaring manifest says per bridge. Without this the group could
       // only ever read ready or undeclared, leaving the row's attention tones
-      // and the Channel Repair card unreachable (Rook LOW 2026-08-24T15:30).
-      // Null (nothing declared) falls through to the undeclared path below.
+      // unreachable even for a gateway that declares broken bridges
+      // (Rook LOW 2026-08-24T15:30). Null (nothing declared) falls through to
+      // the undeclared path below — where every shipped gateway sits, since
+      // none registers a channels kind.
       if (definition.id === 'channels') {
         const channelInstances = capabilityInstances.filter(
           (instance) => instance.family === 'channels',

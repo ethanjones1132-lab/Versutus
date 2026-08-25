@@ -256,8 +256,8 @@ export function GatewayHomeDashboard() {
         ) : null}
       </Card>
 
-      {/* Channels stay on the first screen even when healthy — repair only
-          ever appeared after something already broke. */}
+      {/* Channels stay on the first screen even when healthy — when a declaring
+          gateway reports degraded bridges, the row itself carries the verdict. */}
       <ChannelStatusRow
         group={channelGroup}
         onPress={async () => {
@@ -353,18 +353,6 @@ export function GatewayHomeDashboard() {
         }}
         style={{ alignSelf: 'flex-end', marginTop: -Spacing.one }}
       />
-
-      {/* Only for gateways that actually offer channels and report them degraded —
-          on a gateway without channel admin these commands do not exist. */}
-      {capabilitySnapshot.groups.find(g => g.id === 'channels' && ['unhealthy', 'partial'].includes(g.status)) && (
-        <Card padding={Spacing.two} style={{ marginTop: Spacing.two }}>
-          <Text variant="caption" color="accentWarm">Channel Repair</Text>
-          <Text color="secondary" style={{ marginTop: Spacing.one }}>
-            Some channels are degraded. Use /channel start &lt;name&gt;, /channel stop, or /channel logout.
-          </Text>
-          <Button label="Open chat to manage channels" variant="ghost" onPress={() => router.push('/chat')} style={{ marginTop: Spacing.one }} />
-        </Card>
-      )}
 
       <ConfirmSheet
         visible={deleteCandidate !== null}
