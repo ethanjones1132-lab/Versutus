@@ -14,7 +14,7 @@ import {
   mergeTranscriptRows,
   planGroupRounds,
   rosterInventoryVerified,
-  TRANSCRIPT_READ_WINDOW_MS,
+  TRANSCRIPT_DEDUPE_WINDOW_MS,
   transcriptToRoomEntries,
   validateGroup,
 } from '@/lib/gateway/groups';
@@ -398,11 +398,11 @@ test('mergeTranscriptRows skips the Gate copy of a bot reply from this visit', (
 test('mergeTranscriptRows treats an identical line stamped outside the send window as a NEW message', () => {
   const current = [{ id: 'u-1', role: 'user', text: 'again?', at: NOW } as const];
   const stored: GroupTranscriptEntry[] = [
-    { id: 'g-9', role: 'user', text: 'again?', at: NOW + TRANSCRIPT_READ_WINDOW_MS + 1 },
+    { id: 'g-9', role: 'user', text: 'again?', at: NOW + TRANSCRIPT_DEDUPE_WINDOW_MS + 1 },
   ];
   expect(mergeTranscriptRows(current, stored)).toEqual([
     { id: 'u-1', role: 'user', text: 'again?', at: NOW },
-    { id: 'g-9', role: 'user', text: 'again?', at: NOW + TRANSCRIPT_READ_WINDOW_MS + 1 },
+    { id: 'g-9', role: 'user', text: 'again?', at: NOW + TRANSCRIPT_DEDUPE_WINDOW_MS + 1 },
   ]);
 });
 
@@ -430,4 +430,63 @@ test('mergeTranscriptRows: a successful empty read and a failed read both leave 
   // transcript in front of the operator is the conversation, not a cached
   // inventory, so no refresh wipes it.
   expect(mergeTranscriptRows(current, [])).toEqual(current);
+});
+
+test('mergeTranscriptRows dedupes the Gate copy when the Gate clock runs AHEAD of the phone (skew > send window)', () => {
+  // The Gate stamps this phone's send with its own clock; a desktop clock
+  // minutes ahead of the phone made the copy fall OUTSIDE the old 60s window,
+  // so every refresh duplicated the operator's own bubble (rook 2026-08-25).
+  // A +2min skew is still "the same message" — nothing is added.
+  const local = {
+    id: 'u-1752000001000',
+    role: 'user',
+    text: 'status?',
+    at: NOW,
+    replyCount: 2,
+    speakerCount: 2,
+    routableCount: 2,
+    silentNames: [],
+    unknownNames: [],
+    rosterLoaded: true,
+  } as const;
+  const localReplies: TranscriptRowLike[] = [
+    { id: 'u-1752000001000-r0', role: 'bot', botId: 'coder', text: 'all green', at: NOW + 40 },
+    { id: 'u-1752000001000-r1', role: 'bot', botId: 'writer', text: 'copy checks out', at: NOW + 40 },
+  ];
+  const current = [local, ...localReplies];
+  const skewMs = 120_000; // far past the old 60s window, inside the 5min budget
+  const stored: GroupTranscriptEntry[] = [
+    { id: 'cafe01', role: 'user', text: 'status?', at: NOW + skewMs },
+    { id: 'cafe02', role: 'bot', botId: 'coder', text: 'all green', at: NOW + skewMs },
+    { id: 'cafe03', role: 'bot', botId: 'writer', text: 'copy checks out', at: NOW + skewMs },
+  ];
+  expect(mergeTranscriptRows(current, stored)).toEqual(current);
+});
+
+test('mergeTranscriptRows dedupes the Gate copy when the Gate clock runs BEHIND the phone', () => {
+  // Mirror case: the Gate stamps the copy BEFORE the phone's optimistic row.
+  // Same role/text/botId within the budget — still one message, not two.
+  const current: TranscriptRowLike[] = [
+    { id: 'u-1', role: 'user', text: 'go', at: NOW },
+    { id: 'u-1-r0', role: 'bot', botId: 'coder', text: 'on it', at: NOW + 1_000 },
+  ];
+  const stored: GroupTranscriptEntry[] = [
+    { id: 'beef01', role: 'user', text: 'go', at: NOW - 120_000 },
+    { id: 'beef02', role: 'bot', botId: 'coder', text: 'on it', at: NOW - 120_000 + 2 },
+  ];
+  expect(mergeTranscriptRows(current, stored)).toEqual(current);
+});
+
+test('mergeTranscriptRows keeps an identical line stamped BEYOND the skew budget as a new message', () => {
+  // The budget stays finite on both sides: a line stamped further out than
+  // the window cannot be told apart from a genuinely new one, so it keeps
+  // its own place instead of being swallowed. (10 minutes either way.)
+  const current = [{ id: 'u-1', role: 'user', text: 'again?', at: NOW } as const];
+  const stored: GroupTranscriptEntry[] = [
+    { id: 'g-10', role: 'user', text: 'again?', at: NOW - TRANSCRIPT_DEDUPE_WINDOW_MS - 60_000 },
+  ];
+  expect(mergeTranscriptRows(current, stored)).toEqual([
+    { id: 'g-10', role: 'user', text: 'again?', at: NOW - TRANSCRIPT_DEDUPE_WINDOW_MS - 60_000 },
+    { id: 'u-1', role: 'user', text: 'again?', at: NOW },
+  ]);
 });

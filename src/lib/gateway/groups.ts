@@ -64,10 +64,19 @@ export type TranscriptRowLike = {
  * How close two stamps must be for a stored line to read as the Gate's copy
  * of a line this phone already shows. The Gate records the send moment with
  * its own clock and id (random hex, never the phone's `u-<ts>`), so a re-read
- * cannot dedupe by id alone; a byte-identical line stamped within the send
- * window is the same message, not a new one.
+ * cannot dedupe by id alone; a byte-identical line stamped within the window
+ * is the same message, not a new one.
+ *
+ * The window does DOUBLE duty: it is the send window (a copy is stamped a few
+ * ms after the phone's optimistic row) AND the clock-skew budget. The phone
+ * and the Gate rarely share a clock; a desktop drifted minutes ahead or
+ * behind stamps the copy `local.at ± skew`, and a window that only covered
+ * the send latency duplicated the operator's own bubbles on every refresh
+ * past the skew (rook 2026-08-25). 5 minutes tolerates both directions while
+ * staying finite — an identical line stamped beyond it cannot be told apart
+ * from a genuinely new one and keeps its own place.
  */
-export const TRANSCRIPT_READ_WINDOW_MS = 60_000;
+export const TRANSCRIPT_DEDUPE_WINDOW_MS = 300_000;
 
 function sameStoredLine<T extends TranscriptRowLike>(local: T, stored: RoomTranscriptRow): boolean {
   if (local.role !== stored.role || local.text !== stored.text) return false;
@@ -77,7 +86,7 @@ function sameStoredLine<T extends TranscriptRowLike>(local: T, stored: RoomTrans
     if (stored.role !== 'bot' || local.botId !== stored.botId) return false;
   }
   if (typeof local.at !== 'number' || typeof stored.at !== 'number') return false;
-  return Math.abs(local.at - stored.at) < TRANSCRIPT_READ_WINDOW_MS;
+  return Math.abs(local.at - stored.at) < TRANSCRIPT_DEDUPE_WINDOW_MS;
 }
 
 /**
@@ -86,7 +95,7 @@ function sameStoredLine<T extends TranscriptRowLike>(local: T, stored: RoomTrans
  * reads:
  *  - a stored line already shown (same id) is never re-added;
  *  - a stored line that is the Gate's copy of a line this phone sent this
- *    visit (same role/text, stamped within TRANSCRIPT_READ_WINDOW_MS) is
+ *    visit (same role/text, stamped within TRANSCRIPT_DEDUPE_WINDOW_MS) is
  *    skipped so a re-read cannot duplicate the optimistic copy — the local
  *    row stays because it carries the send-time meta (reply counts, routing
  *    verdicts, cap note) the storage row lacks;
