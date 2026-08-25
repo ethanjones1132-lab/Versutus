@@ -8,6 +8,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import { botChipModelPin, botChipRoutingTag, type PublicBot } from '@/lib/gateway/bots';
 import {
   canRemoveMember,
+  describeRoomError,
   describeRoundOutcome,
   describeRoomPlan,
   formatGroupMessageTime,
@@ -285,10 +286,12 @@ export function GroupRoomView({
       })
       .catch((cause: unknown) => {
         // Fail honest AND fail restorative: the draft comes back so nothing
-        // typed into a busy room is lost.
+        // typed into a busy room is lost, and the refusal speaks the same
+        // desktop-parity verdict + fix every other failure surface shows
+        // instead of raw wire text.
         setDraft(text);
         setEntries((prev) => prev.filter((entry) => entry.id !== entryId));
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(describeRoomError(cause));
       })
       .finally(() => setSending(false));
   };
@@ -303,7 +306,7 @@ export function GroupRoomView({
         setRenameDraft('');
       })
       .catch((cause: unknown) => {
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(describeRoomError(cause));
       })
       .finally(() => setRenaming(false));
   };
@@ -314,10 +317,11 @@ export function GroupRoomView({
     onDisband()
       .then(() => setDisbandVisible(false))
       .catch((cause: unknown) => {
-        // Fail honest: the room is still here; say why instead of pretending
+        // Fail honest: the room is still here; say why (desktop-parity
+        // verdict + fix for classifiable refusals) instead of pretending
         // it disbanded.
         setDisbandVisible(false);
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(describeRoomError(cause));
       })
       .finally(() => setDisbanding(false));
   };
@@ -506,7 +510,7 @@ export function GroupRoomView({
           setPendingRemoval(null);
           if (!memberId) return;
           onLeave(memberId).catch((cause: unknown) => {
-            setError(cause instanceof Error ? cause.message : String(cause));
+            setError(describeRoomError(cause));
           });
         }}
       />

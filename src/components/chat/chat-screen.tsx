@@ -33,7 +33,7 @@ import { resolvePullRefreshAction } from '@/lib/gateway/messages';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
 import { botToEditInput, buildBotUpdatePatch, buildRoster, type ChatSurface, type PublicBot, type RosterRow } from '@/lib/gateway/bots';
-import { rosterInventoryVerified, type BotGroupRoom } from '@/lib/gateway/groups';
+import { describeRoomError, rosterInventoryVerified, type BotGroupRoom } from '@/lib/gateway/groups';
 import { routineName } from '@/lib/gateway/routines';
 import { effectiveModel } from '@/lib/gateway/model-selection';
 import { resolveThreadConfigMode, threadConfigOfferedModes, type ThreadConfigMode } from '@/lib/gateway/thread-config';
@@ -547,7 +547,9 @@ export function ChatScreen() {
               showSurface({ kind: 'group', groupId: room.id });
             })
             .catch((error: unknown) => {
-              setNewGroupError(error instanceof Error ? error.message : String(error));
+              // Desktop-parity: a refused create speaks verdict + fix, not
+              // raw wire text (same rule as every other room surface).
+              setNewGroupError(describeRoomError(error));
             })
             .finally(() => setNewGroupBusy(false));
         }}

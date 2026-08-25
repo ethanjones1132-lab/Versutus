@@ -1,3 +1,5 @@
+import { formatRunFailure } from './run-failures';
+
 export const MAX_GROUP_MEMBERS = 6;
 export const MIN_GROUP_MEMBERS = 2;
 /**
@@ -463,6 +465,24 @@ export type GroupRoomSurface = {
   canManageGroups?: unknown;
   createGroup?: unknown;
 };
+
+/**
+ * The operator-facing text for ANY group-room refusal: create, send, rename,
+ * remove-member, disband. The Gate's refusal reaches these surfaces verbatim
+ * (e.g. a room send with one unroutable member throws `forBot`'s refusal out
+ * of the whole POST) and used to land as raw wire text — true, and exactly as
+ * actionable as the desktop's raw stderr, but a desktop operator decodes that
+ * from memory on the host machine and a phone operator has neither. A failure
+ * the run-failure classifiers know (multiplex off, default-key refused,
+ * missing listen key, unknown bot, unreachable environment, time limit, …)
+ * therefore renders the same desktop-parity verdict + fix every other surface
+ * shows; anything unclassifiable falls back to the raw message unchanged — a
+ * misfire can only cost us the nicer wording, never the truth.
+ */
+export function describeRoomError(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return formatRunFailure(message) ?? message;
+}
 
 /**
  * Can this gateway host Gate-owned group rooms? Decided BEFORE the operator

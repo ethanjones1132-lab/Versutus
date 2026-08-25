@@ -3,6 +3,7 @@ import {
   canAddMember,
   canRemoveMember,
   describeGroupPlan,
+  describeRoomError,
   describeRoomPlan,
   describeRoundOutcome,
   filterGroupRooms,
@@ -611,4 +612,51 @@ test('removableMembers offers nothing at the two-member floor', () => {
   // false at 2, so the picker shows the floor reason instead of chips.
   expect(removableMembers(ROOM, new Map())).toEqual([]);
   expect(removableMembers(ROOM, new Map([['coder', 'Coder']]))).toEqual([]);
+});
+
+// ── describeRoomError: desktop-parity verdicts on room refusals ─────────
+// Every classified input below is a string the Gate actually throws out of
+// deliverGroupMessage/forBot (gate/core/cli-environments/backends/hermes.mjs)
+// — never an invented wire shape. The room surfaces used to render these
+// verbatim; they must now speak the same verdict + fix as every other
+// failure surface while unknown text keeps today's raw behavior.
+
+test('describeRoomError renders the multiplex-off refusal as verdict + cause + fix', () => {
+  // hermes.mjs forBot, hostMultiplexEnabled() === false branch.
+  const wire =
+    'bot "atlas" cannot be addressed: gateway.multiplex_profiles is off, so /p/atlas/ serves the default profile — enable multiplex on the host, then give the profile its own API_SERVER_KEY';
+  const shown = describeRoomError(new Error(wire));
+  expect(shown).toContain('Multiplex is off');
+  expect(shown).toContain(wire); // cause stays verbatim, never paraphrased away
+  expect(shown).toContain('Enable multiplex on the host (set gateway.multiplex_profiles true), then retry.');
+});
+
+test('describeRoomError classifies the default-key and missing-key refusals', () => {
+  // hermes.mjs forBot: named profile still carrying the default listen key.
+  expect(describeRoomError('bot "coder" still uses the default listen key; /p/coder/ rejects it — give the profile its own API_SERVER_KEY')).toContain(
+    'Bot listen key refused',
+  );
+  // hermes.mjs forBot: profile .env has no key at all.
+  expect(describeRoomError(new Error('bot "writer" has no API_SERVER_KEY'))).toContain(
+    'Bot has no listen key',
+  );
+});
+
+test('describeRoomError classifies unknown-bot and unreachable-environment refusals', () => {
+  expect(describeRoomError(new Error('unknown bot "ghost"'))).toContain('Bot not found');
+  // hermes.mjs forBot when profilesHome is absent — the environment cannot
+  // act as a chat backend at all.
+  expect(describeRoomError('Hermes home is not configured')).toContain('Environment unreachable');
+});
+
+test('describeRoomError keeps unclassifiable refusals raw (never boilerplate around unknown truth)', () => {
+  // Gate group-store validation/refusal texts (bot-groups.mjs): generic by
+  // design — the fallback is exactly the pre-parity rendering.
+  expect(describeRoomError(new Error('name required'))).toBe('name required');
+  expect(describeRoomError('group not found')).toBe('group not found');
+});
+
+test('describeRoomError accepts Error instances and plain strings alike', () => {
+  expect(describeRoomError(new Error('name required'))).toBe('name required');
+  expect(describeRoomError('name required')).toBe('name required');
 });
