@@ -678,6 +678,145 @@ describe('ManifestClient sessions and runs when advertised', () => {
     await expect(client.updateBot({ id: 'coder' })).rejects.toThrow(/bots/);
   });
 
+  test('bots are Gate-level: the defaulted chat backend never scopes the roster', async () => {
+    // A Gate fronting several environments advertises endpoints.bots when ANY
+    // of them can inventory Hermes profiles, and picks that one by capability
+    // when the caller names none. Pinning backends[0] — usually Claude Code,
+    // which has no bots — turned the whole roster into a 501.
+    const identity: GatewayIdentity = {
+      ...IDENTITY,
+      manifest: {
+        ...IDENTITY.manifest!,
+        endpoints: { health: '/health', bots: '/v1/bots' },
+        backends: [
+          { id: 'claude-local', label: 'Claude Code', kind: 'environment' },
+          { id: 'hermes-local', label: 'Hermes', kind: 'environment' },
+        ],
+      },
+    };
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ object: 'list', data: [{ id: 'default', displayName: 'default', routable: true }] }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = new ManifestClient(PROFILE, identity, {});
+    const bots = await client.listBots();
+
+    expect(bots[0].id).toBe('default');
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('backendId=');
+  });
+
+  test('bots stay Gate-level even after the operator pins a chat backend', async () => {
+    // Choosing Claude Code for the *conversation* says nothing about where the
+    // Bots live — a Bot is a Hermes profile (CONTEXT.md), not a property of the
+    // thread's environment.
+    const identity: GatewayIdentity = {
+      ...IDENTITY,
+      manifest: {
+        ...IDENTITY.manifest!,
+        endpoints: { health: '/health', bots: '/v1/bots' },
+        backends: [
+          { id: 'claude-local', label: 'Claude Code', kind: 'environment' },
+          { id: 'hermes-local', label: 'Hermes', kind: 'environment' },
+        ],
+      },
+    };
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ id: 'scribe', displayName: 'scribe', routable: true }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = new ManifestClient(PROFILE, identity, {});
+    client.setBackendId('claude-local');
+
+    await client.createBot({ name: 'scribe' });
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('backendId=');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).backendId).toBeUndefined();
+
+    await client.updateBot({ id: 'scribe', description: 'writes' });
+    expect(String(fetchMock.mock.calls[1][0])).not.toContain('backendId=');
+
+    await client.handoffMention({ fromId: 'a', toId: 'b', text: 'over to you' });
+    expect(String(fetchMock.mock.calls[2][0])).not.toContain('backendId=');
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body).backendId).toBeUndefined();
+  });
+
+  test('a Bot conversation is scoped by the Bot, never by the thread chat backend', async () => {
+    // Opening a Bot asks for its sessions, its history and its models. Sending
+    // the defaulted chat backend alongside pinned those to an environment with
+    // no Bots, and the Gate answered 501 "This backend does not implement
+    // bots" — so tapping an agent bounced straight back to the roster.
+    const identity: GatewayIdentity = {
+      ...IDENTITY,
+      manifest: {
+        ...IDENTITY.manifest!,
+        endpoints: {
+          health: '/health',
+          models: '/v1/models',
+          chat: '/v1/chat/completions',
+          sessions: '/v1/sessions',
+          sessionMessages: '/v1/sessions/{id}/messages',
+        },
+        backends: [
+          { id: 'claude-local', label: 'Claude Code', kind: 'environment' },
+          { id: 'hermes-local', label: 'Hermes', kind: 'environment' },
+        ],
+      },
+    };
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ object: 'list', data: [], id: 's1' }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = new ManifestClient(PROFILE, identity, {});
+    client.setBotId('default');
+
+    await client.getSessions(20);
+    await client.getSessionMessages('s1', 10);
+    await client.createSession('Bot Chat');
+
+    // The two reads carry the Bot in the query; the create carries it in the
+    // body. None of the three may carry the thread's chat backend.
+    for (const call of fetchMock.mock.calls) {
+      expect(String(call[0])).not.toContain('backendId=');
+    }
+    expect(String(fetchMock.mock.calls[0][0])).toContain('bot=default');
+    expect(String(fetchMock.mock.calls[1][0])).toContain('bot=default');
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body).backendId).toBeUndefined();
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body).bot).toBe('default');
+  });
+
+  test('a thread with no Bot still runs in the chosen chat backend', async () => {
+    const identity: GatewayIdentity = {
+      ...IDENTITY,
+      manifest: {
+        ...IDENTITY.manifest!,
+        endpoints: { health: '/health', sessions: '/v1/sessions' },
+        backends: [
+          { id: 'claude-local', label: 'Claude Code', kind: 'environment' },
+          { id: 'hermes-local', label: 'Hermes', kind: 'environment' },
+        ],
+      },
+    };
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ object: 'list', data: [] }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = new ManifestClient(PROFILE, identity, {});
+    client.setBackendId('claude-local');
+    await client.getSessions(20);
+    expect(String(fetchMock.mock.calls[0][0])).toContain('backendId=claude-local');
+  });
+
   test('listBots GETs endpoints.bots and does not resume a session', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

@@ -335,8 +335,8 @@ export class ManifestClient implements PortalClient {
     const body: Record<string, unknown> = { messages, stream: true };
     if (model) body.model = model;
     if (backendId || this.botId) {
-      // A Bot names its own environment: sending the thread's chat backend
-      // alongside it would pin the turn to an environment with no Bots.
+      // A Bot names its own environment (see withScope) — naming the thread's
+      // backend too would send the turn to an environment with no Bots.
       if (this.botId) body.bot = this.botId;
       else body.backendId = backendId;
       // The native session holds the history; without it every turn is orphaned.
@@ -442,16 +442,43 @@ export class ManifestClient implements PortalClient {
     return `${path}${separator}bot=${encodeURIComponent(botId)}`;
   }
 
+  /**
+   * Scope a conversation route.
+   *
+   * A Bot names its own environment — it is a Hermes profile, and the Gate
+   * resolves `bot=` to the environment that actually has Bots. Sending the
+   * thread's chat backend alongside it overrode that with a deliberate pin,
+   * usually onto Claude Code, and the Gate answered 501 "This backend does
+   * not implement bots": tapping an agent bounced straight back to the
+   * roster. With no Bot selected the chosen environment is exactly right —
+   * that is what configurable chat means.
+   */
   private withScope(path: string): string {
-    return this.withBot(this.withBackend(path));
+    return this.botId ? this.withBot(path) : this.withBackend(path);
+  }
+
+  /**
+   * Bot and routine surfaces are Gate-level, not thread-level.
+   *
+   * A Bot is a Hermes profile (CONTEXT.md); Claude Code, Codex and OpenCode
+   * are not Bots and cannot inventory them. The Gate already resolves these
+   * routes by capability — but only for a caller that names no backend, since
+   * an explicit `?backendId=` is treated as a deliberate pin. `backendId`
+   * defaults to `backends[0]`, which on a four-environment Gate is Claude
+   * Code, so every bots/jobs call arrived pinned to the one environment that
+   * could not serve it and came back 501 ("This backend does not implement
+   * listBots") — the whole roster, from a Gate that had four Bots.
+   *
+   * So these paths carry the Bot scope and nothing else: the chat backend the
+   * operator picked for *this thread* has no say in where the Bots live.
+   */
+  private withBotOnly(path: string): string {
+    return this.withBot(path);
   }
 
   async handoffMention(input: { fromId: string; toId: string; text: string }): Promise<unknown> {
     const path = this.requireEndpoint('bots');
-    return this.rootTransport.request('POST', this.withBackend(`${path.replace(/\/+$/, '')}/handoff`), {
-      ...input,
-      ...(this.backendId ? { backendId: this.backendId } : {}),
-    });
+    return this.rootTransport.request('POST', `${path.replace(/\/+$/, '')}/handoff`, input);
   }
 
   async createBot(input: {
@@ -463,10 +490,7 @@ export class ManifestClient implements PortalClient {
     providerId?: string;
   }): Promise<PublicBot> {
     const path = this.requireEndpoint('bots');
-    return this.rootTransport.request('POST', this.withBackend(path), {
-      ...input,
-      ...(this.backendId ? { backendId: this.backendId } : {}),
-    });
+    return this.rootTransport.request('POST', path, input);
   }
 
   /**
@@ -490,7 +514,7 @@ export class ManifestClient implements PortalClient {
     if (input.providerId !== undefined) body.providerId = input.providerId;
     return this.rootTransport.request(
       'PATCH',
-      this.withBackend(`${path.replace(/\/+$/, '')}/${encodeURIComponent(input.id)}`),
+      `${path.replace(/\/+$/, '')}/${encodeURIComponent(input.id)}`,
       body,
     );
   }
@@ -500,16 +524,15 @@ export class ManifestClient implements PortalClient {
     if (!path) return [];
     const result = await this.rootTransport.request<{ data?: { id: string; name?: string; paused?: boolean }[] }>(
       'GET',
-      this.withScope(path),
+      this.withBotOnly(path),
     );
     return result.data ?? [];
   }
 
   async createJob(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }> {
     const path = this.requireEndpoint('jobs');
-    return this.rootTransport.request('POST', this.withBackend(path), {
+    return this.rootTransport.request('POST', this.withBotOnly(path), {
       ...input,
-      ...(this.backendId ? { backendId: this.backendId } : {}),
       ...(this.botId ? { bot: this.botId } : {}),
     });
   }
@@ -518,7 +541,7 @@ export class ManifestClient implements PortalClient {
     const path = this.requireEndpoint('jobs');
     await this.rootTransport.request(
       'POST',
-      this.withScope(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/run`),
+      this.withBotOnly(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/run`),
       this.botId ? { bot: this.botId } : {},
     );
   }
@@ -528,7 +551,7 @@ export class ManifestClient implements PortalClient {
     const action = paused ? 'pause' : 'resume';
     await this.rootTransport.request(
       'POST',
-      this.withScope(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/${action}`),
+      this.withBotOnly(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}/${action}`),
       this.botId ? { bot: this.botId } : {},
     );
   }
@@ -536,7 +559,7 @@ export class ManifestClient implements PortalClient {
   async listBots(): Promise<PublicBot[]> {
     const path = this.endpoints.bots;
     if (!path) return [];
-    const result = await this.rootTransport.request<{ data?: PublicBot[] }>('GET', this.withBackend(path));
+    const result = await this.rootTransport.request<{ data?: PublicBot[] }>('GET', path);
     return result.data ?? [];
   }
 
@@ -644,9 +667,10 @@ export class ManifestClient implements PortalClient {
    */
   async createSession(title?: string): Promise<HermesSession> {
     const path = this.requireEndpoint('sessions');
+    // Same rule as withScope: the Bot names the environment, so its own
+    // chat must not be pinned to whichever backend the thread was using.
     return this.rootTransport.request<HermesSession>('POST', path, {
-      ...(this.backendId ? { backendId: this.backendId } : {}),
-      ...(this.botId ? { bot: this.botId } : {}),
+      ...(this.botId ? { bot: this.botId } : this.backendId ? { backendId: this.backendId } : {}),
       ...(title ? { title } : {}),
     });
   }
