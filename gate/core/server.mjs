@@ -23,6 +23,7 @@ import { CliEnvironmentService } from './cli-environments/supervisor.mjs';
 import { createEnvironmentRpc, sanitizeEnvironment } from './cli-environments/rpc.mjs';
 import { createBackendManager } from './cli-environments/backend-manager.mjs';
 import { createBotGroupStore, transcriptEntriesForSend } from './cli-environments/bot-groups.mjs';
+import { createBackendRunStreams } from './cli-environments/backend-run-streams.mjs';
 import { buildCliEnvironment } from './cli-environments/process-environment.mjs';
 import { TokenStore } from './tokens.mjs';
 import { PairingStore } from './pairing.mjs';
@@ -390,6 +391,12 @@ export async function createGate(config = {}) {
   });
   const environmentStore = new CliEnvironmentStore(gateHome);
   const botGroups = createBotGroupStore(gateHome);
+  // Live Hermes-kind run streams are teed here so a finished run still
+  // replays after Hermes drops its live-only event buffer — and across a
+  // Gate restart. Separate from the environments archive (<gateHome>/runs):
+  // that one is JSONL keyed by environment, this one is raw SSE bytes keyed
+  // by run id.
+  const runStreams = createBackendRunStreams(join(gateHome, 'run-streams'));
   const environmentRegistry = injectedRegistry ?? new CliAdapterRegistry();
   const environmentService = new CliEnvironmentService({
     store: environmentStore,
@@ -995,24 +1002,77 @@ export async function createGate(config = {}) {
 
       const runEventsMatch = pathname.match(/^\/v1\/runs\/([^/]+)\/events$/);
       if (runEventsMatch && method === 'GET') {
+        const runId = decodeURIComponent(runEventsMatch[1]);
+        // Replay answers from the Gate's own archive when one exists: Hermes
+        // buffers a run's events only while it is live, so replaying a
+        // finished run upstream 404s. The archived bytes are exactly what was
+        // relayed, and they stay readable after a Gate restart or while
+        // Hermes is down. An actively-teed run is still live, so it proxies
+        // through (the archive would only be a growing snapshot).
+        const archived = runStreams.isActive(runId) ? null : await runStreams.read(runId);
+        if (archived !== null) {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+          });
+          res.write(archived);
+          res.end();
+          return;
+        }
         const backend = await resolveRunBackend();
         if (!backend) return;
         if (!requireBackendMethod(backend, 'runEvents')) return;
-        const upstream = await backend.runEvents(decodeURIComponent(runEventsMatch[1]));
+        let upstream;
+        try {
+          upstream = await backend.runEvents(runId);
+        } catch (error) {
+          // FAIL-HONEST: an upstream refusal is a real status, never a 500.
+          // Hermes answering 404 means the run is finished or unknown and its
+          // live buffer is gone — the caller should hear exactly that.
+          const status = Number.isInteger(error.status) && error.status >= 400 && error.status <= 599
+            ? error.status
+            : 502;
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: {
+              message: error.message,
+              code: error.code ?? (status === 404 ? 'run_events_unavailable' : 'upstream_error'),
+            },
+          }));
+          return;
+        }
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
           Connection: 'keep-alive',
         });
         // Relay bytes unchanged: the app already parses Hermes run events.
+        // The single tee-holder also archives them (backend-run-streams.mjs)
+        // so a completed run replays from disk after the live buffer is gone.
+        const tee = runStreams.begin(runId);
         const reader = upstream.body?.getReader?.();
-        if (!reader) { res.end(); return; }
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          res.write(Buffer.from(value));
+        if (!reader) {
+          res.end();
+          if (tee) runStreams.end(runId);
+          return;
         }
-        res.end();
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = Buffer.from(value);
+            res.write(chunk);
+            if (tee) runStreams.append(runId, chunk);
+          }
+          res.end();
+        } catch {
+          // A torn relay closes the response; the partial archive stays
+          // readable (the client drops one malformed trailing frame).
+          try { res.end(); } catch { /* socket already gone */ }
+        } finally {
+          if (tee) runStreams.end(runId);
+        }
         return;
       }
 
