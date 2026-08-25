@@ -89,7 +89,9 @@ async function resolveFile(urlPath) {
     return null;
   }
   const resolved = path.normalize(path.join(ROOT, pathname));
-  if (!resolved.startsWith(ROOT)) return null; // traversal guard
+  // traversal guard: the separator suffix is required so a SIBLING directory
+  // whose name merely extends ours (dist vs dist-evil) cannot pass the check
+  if (!resolved.startsWith(ROOT + path.sep)) return null;
 
   const attempts = [resolved];
   if (pathname.endsWith('/')) attempts.push(path.join(resolved, 'index.html'));

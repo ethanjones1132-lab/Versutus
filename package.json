@@ -61,7 +61,7 @@
     "coverage:ratchet": "tsx ./scripts/coverage-ratchet.mts",
     "test": "jest --runInBand && npm run test:gate",
     "test:coverage": "jest --runInBand --coverage",
-    "test:gate": "cd gate && node --test \"__tests__/*.test.mjs\"",
+    "test:gate": "cd gate && node --test \"__tests__/*.test.mjs\" \"../scripts/__tests__/*.test.mjs\"",
     "smoke:gateway-commands": "tsx ./scripts/smoke-gateway-commands.mts",
     "smoke:portal": "tsx ./scripts/smoke-portal.mts",
     "smoke:live": "tsx ./scripts/smoke-live-gateway.mts",
