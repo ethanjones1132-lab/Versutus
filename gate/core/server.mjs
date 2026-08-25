@@ -1008,9 +1008,13 @@ export async function createGate(config = {}) {
         // finished run upstream 404s. The archived bytes are exactly what was
         // relayed, and they stay readable after a Gate restart or while
         // Hermes is down. An actively-teed run is still live, so it proxies
-        // through (the archive would only be a growing snapshot).
+        // through (the archive would only be a growing snapshot). And a file
+        // WITHOUT its completeness marker is a partial from a relay that
+        // never reached the stream's end — serving it as the verdict would
+        // silently truncate the run, so an unmarked file re-streams live
+        // (and heals) instead.
         const archived = runStreams.isActive(runId) ? null : await runStreams.read(runId);
-        if (archived !== null) {
+        if (archived !== null && runStreams.isComplete(runId)) {
           res.writeHead(200, {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
@@ -1027,6 +1031,22 @@ export async function createGate(config = {}) {
         try {
           upstream = await backend.runEvents(runId);
         } catch (error) {
+          if (archived !== null) {
+            // Best evidence fallback: a partial archive exists but the
+            // upstream refuses to re-stream (the run finished and its live
+            // buffer is gone, or Hermes is down). Serve what was captured —
+            // but FLAGGED, so a truncated history can never read as a
+            // complete verdict.
+            res.writeHead(200, {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              Connection: 'keep-alive',
+              'X-Run-Archive-Incomplete': 'true',
+            });
+            res.write(archived);
+            res.end();
+            return;
+          }
           // FAIL-HONEST: an upstream refusal is a real status, never a 500.
           // Hermes answering 404 means the run is finished or unknown and its
           // live buffer is gone — the caller should hear exactly that.
@@ -1065,10 +1085,16 @@ export async function createGate(config = {}) {
             res.write(chunk);
             if (tee) runStreams.append(runId, chunk);
           }
+          // Clean end of the upstream stream: the archive now holds the whole
+          // story and may be served as a verdict later. A torn relay (catch
+          // below) leaves the file unmarked, so a truncated snapshot can
+          // never read as complete.
+          if (tee) runStreams.markComplete(runId);
           res.end();
         } catch {
           // A torn relay closes the response; the partial archive stays
-          // readable (the client drops one malformed trailing frame).
+          // readable but UNMARKED (the client drops one malformed trailing
+          // frame, and a later replay re-streams live instead of trusting it).
           try { res.end(); } catch { /* socket already gone */ }
         } finally {
           if (tee) runStreams.end(runId);
