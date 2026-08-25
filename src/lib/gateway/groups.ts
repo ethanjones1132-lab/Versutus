@@ -1,6 +1,18 @@
 export const MAX_GROUP_MEMBERS = 6;
 export const MIN_GROUP_MEMBERS = 2;
-export const MAX_GROUP_ROUNDS = 3;
+/**
+ * How many rounds ONE phone send runs. The Gate's planner default is a
+ * single round (gate/core/cli-environments/bot-groups.mjs): three rounds
+ * produced nine near-identical replies on a three-bot room, so rounds are
+ * a server-side power feature the phone never asks for — another turn is
+ * another message, or an @mention. The client mirror must teach the same
+ * plan so UI copy ("one round") and any future caller cannot drift back to
+ * a multi-round send the wire does not run.
+ */
+export const GROUP_ROUNDS_ON_SEND = 1;
+/** The Gate's own planner guard (maxMessages default): multiple rounds stop
+ *  here. It can never bind a one-round send of at most six members — it is
+ *  documented, never claimed as an outcome the phone could hit. */
 export const MAX_GROUP_MESSAGES = 10;
 
 /** A Gate-owned group room (wire shape of GET/POST /v1/bot-groups). */
@@ -160,10 +172,17 @@ export function validateGroup({ name, memberIds }: { name: string; memberIds: st
   return { ok: true };
 }
 
+/**
+ * Mirror of the Gate's planGroupRounds (gate/core/cli-environments/
+ * bot-groups.mjs) kept for pure tests and UI scoping. Defaults must match
+ * what a phone send actually runs: ONE round over the active set, with the
+ * Gate's own message-count guard as an upper bound for callers that ask for
+ * more rounds.
+ */
 export function planGroupRounds({
   memberIds,
   mentionedIds = [],
-  maxRounds = MAX_GROUP_ROUNDS,
+  maxRounds = GROUP_ROUNDS_ON_SEND,
   maxMessages = MAX_GROUP_MESSAGES,
 }: {
   memberIds: string[];
@@ -194,13 +213,16 @@ export function groupSpeakers(memberIds: string[], mentionedIds: string[] = []):
 }
 
 /**
- * The one-line contract shown above the composer: how many bots speak per
- * round and where the caps bite. Derived from the same constants as the
- * planner, never hand-copied numbers.
+ * The one-line contract shown above the composer: how many bots speak on a
+ * send. Derived from the same planner default as the Gate runs, never
+ * hand-copied numbers. ONE round: the Gate's deliverGroupMessage plans a
+ * single round for a phone send (maxRounds default), so the line says what
+ * the wire will do and never promises a multi-round exchange or a message
+ * cap that cannot bind on a six-member room.
  */
 export function describeGroupPlan(speakerCount: number): string {
   const noun = speakerCount === 1 ? 'bot speaks' : 'bots speak';
-  return `${speakerCount} ${noun} per round · up to ${MAX_GROUP_ROUNDS} rounds · stops at ${MAX_GROUP_MESSAGES} messages`;
+  return `${speakerCount} ${noun} · one round`;
 }
 
 function joinAnd(names: string[]): string {
@@ -217,7 +239,7 @@ function joinAnd(names: string[]): string {
  * the unread roster instead of asserting round counts the phone cannot
  * prove. Every speaker routable (or reporting nothing — older Gates) makes
  * this exactly describeGroupPlan. Silent members are named so the operator
- * reads the cause before sending, and the caps segment never moves.
+ * reads the cause before sending, and the round fact never moves.
  */
 export function describeRoomPlan({
   speakerCount,
@@ -232,8 +254,8 @@ export function describeRoomPlan({
   unknownNames?: string[];
   rosterLoaded?: boolean;
 }): string {
-  const caps = `up to ${MAX_GROUP_ROUNDS} rounds · stops at ${MAX_GROUP_MESSAGES} messages`;
-  if (!rosterLoaded) return `Roster not loaded — routing unverified · ${caps}`;
+  const rounds = `one round`;
+  if (!rosterLoaded) return `Roster not loaded — routing unverified · ${rounds}`;
   const silent = silentNames.filter((name) => typeof name === 'string' && name.trim());
   const unknown = unknownNames.filter((name) => typeof name === 'string' && name.trim());
   if (routableCount >= Math.max(speakerCount, 0) && unknown.length === 0) return describeGroupPlan(speakerCount);
@@ -245,8 +267,8 @@ export function describeRoomPlan({
   }
   if (unknown.length > 0) clauses.push(`${joinAnd(unknown)} not on this gateway`);
   const causes = clauses.join(' · ');
-  if (routableCount <= 0) return `Nothing will speak — ${causes} · ${caps}`;
-  return `${routableCount} of ${speakerCount} bots speak per round · ${causes} · ${caps}`;
+  if (routableCount <= 0) return `Nothing will speak — ${causes} · ${rounds}`;
+  return `${routableCount} of ${speakerCount} bots speak · ${causes} · ${rounds}`;
 }
 
 /**
@@ -257,6 +279,12 @@ export function describeRoomPlan({
  * than blamed, and a roster that never loaded is named itself (no routing
  * verdict can be drawn from an inventory the phone never read). Counts are
  * the SEND-time scope, not the live draft.
+ *
+ * Partial silence is a WIRE fact, not an inference: the Gate's one-round plan
+ * asks every scoped speaker exactly once and returns the audible replies, so
+ * on a successful send `speakerCount - replyCount` is exactly how many asked
+ * bots stayed quiet. The outcome line says so instead of hiding the early
+ * round behind a bare reply count.
  */
 export function describeRoundOutcome({
   replyCount,
@@ -275,6 +303,14 @@ export function describeRoundOutcome({
 }): string {
   if (replyCount > 0) {
     // Replies that landed are real whatever the inventory said — count them.
+    // A successful send asked every scoped speaker once (the Gate's one-round
+    // plan), so anything short of the full scope was asked and stayed quiet.
+    // Missing scope fields (future writer drift) degrade to the legacy
+    // bare-count reading instead of inventing a silence verdict.
+    if (speakerCount > 0 && replyCount < speakerCount) {
+      const silent = speakerCount - replyCount;
+      return `${replyCount} of ${speakerCount} asked answered · ${silent} ${silent === 1 ? 'bot' : 'bots'} stayed silent`;
+    }
     return `${replyCount} repl${replyCount === 1 ? 'y' : 'ies'} this round`;
   }
   if (!rosterLoaded) return 'No replies — the roster never loaded, so routing was never verified.';

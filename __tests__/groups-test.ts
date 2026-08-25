@@ -8,11 +8,11 @@ import {
   filterGroupRooms,
   formatGroupMessageTime,
   GROUP_MEMBER_FLOOR_REASON,
+  GROUP_ROUNDS_ON_SEND,
   GROUP_SESSION_TITLE,
   groupMemberLine,
   groupSpeakers,
   MAX_GROUP_MESSAGES,
-  MAX_GROUP_ROUNDS,
   mergeTranscriptRows,
   planGroupRounds,
   removableMembers,
@@ -32,14 +32,28 @@ test('validateGroup enforces 2–6 members', () => {
   expect(validateGroup({ name: 'crew', memberIds: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] }).ok).toBe(false);
 });
 
-test('planGroupRounds mentions subset and caps at 10', () => {
+test('planGroupRounds defaults to ONE round (the Gate\'s wire plan)', () => {
   const planned = planGroupRounds({
     memberIds: ['coder', 'researcher', 'writer'],
     mentionedIds: ['researcher'],
   });
-  expect(planned.every((step) => step.botId === 'researcher')).toBe(true);
-  expect(planned.length).toBeLessThanOrEqual(10);
+  // The phone send runs a single round: the mention subset, once each.
+  expect(planned.map((step) => step.botId)).toEqual(['researcher']);
+  expect(planned.length).toBe(1);
+  // The ONE-round default is the same constant the plan copy quotes.
+  expect(GROUP_ROUNDS_ON_SEND).toBe(1);
   expect(GROUP_SESSION_TITLE('crew')).toBe('Group: crew');
+});
+
+test('planGroupRounds multi-round callers still stop at the Gate message guard', () => {
+  const six = ['a', 'b', 'c', 'd', 'e', 'f'];
+  const planned = planGroupRounds({ memberIds: six, maxRounds: 3 });
+  expect(planned.length).toBe(MAX_GROUP_MESSAGES);
+  // Round boundaries are positional in the mirror: round two starts at
+  // index 6, so the first six steps are the room once and the seventh is
+  // the first member again.
+  expect(planned.slice(0, 6).map((step) => step.botId)).toEqual(six);
+  expect(planned[6].botId).toBe('a');
 });
 
 test('groupSpeakers mirrors the planner active-set rule', () => {
@@ -53,10 +67,14 @@ test('groupSpeakers mirrors the planner active-set rule', () => {
 
 test('describeGroupPlan is derived from the planner constants, not hand-copied numbers', () => {
   const line = describeGroupPlan(3);
-  expect(line).toContain('3 bots speak per round');
-  expect(line).toContain(`up to ${MAX_GROUP_ROUNDS} rounds`);
-  expect(line).toContain(`stops at ${MAX_GROUP_MESSAGES} messages`);
-  expect(describeGroupPlan(1)).toContain('1 bot speaks per round');
+  expect(line).toContain('3 bots speak');
+  expect(line).toContain('one round');
+  expect(describeGroupPlan(1)).toContain('1 bot speaks');
+  // The plan line tells what the wire runs: ONE round, never a multi-round
+  // promise or a message cap that cannot bind a six-member send.
+  expect(line).not.toContain('rounds');
+  expect(line).not.toContain('stops at');
+  expect(line).not.toContain('cap');
 });
 
 test('describeRoomPlan stops counting unroutable members as speakers', () => {
@@ -64,12 +82,11 @@ test('describeRoomPlan stops counting unroutable members as speakers', () => {
   expect(describeRoomPlan({ speakerCount: 3, routableCount: 3, silentNames: [] })).toBe(
     describeGroupPlan(3),
   );
-  // One silent member: the count drops and the cause is named, caps intact.
+  // One silent member: the count drops and the cause is named, round fact intact.
   const partial = describeRoomPlan({ speakerCount: 3, routableCount: 2, silentNames: ['Echo'] });
-  expect(partial).toContain('2 of 3 bots speak per round');
+  expect(partial).toContain('2 of 3 bots speak');
   expect(partial).toContain('Echo cannot route');
-  expect(partial).toContain(`up to ${MAX_GROUP_ROUNDS} rounds`);
-  expect(partial).toContain(`stops at ${MAX_GROUP_MESSAGES} messages`);
+  expect(partial).toContain('one round');
   // Several silent members fold into one clause.
   expect(
     describeRoomPlan({ speakerCount: 4, routableCount: 2, silentNames: ['Echo', 'Foxtrot'] }),
@@ -81,6 +98,7 @@ test('describeRoomPlan stops counting unroutable members as speakers', () => {
   const dead = describeRoomPlan({ speakerCount: 2, routableCount: 0, silentNames: ['Echo', 'Foxtrot'] });
   expect(dead).toContain('Nothing will speak');
   expect(dead).toContain('Echo and Foxtrot cannot route');
+  expect(dead).toContain('one round');
   // Caller drift (counts without names) still reads like a sentence.
   expect(describeRoomPlan({ speakerCount: 3, routableCount: 1, silentNames: [] })).toContain(
     'a member cannot route',
@@ -88,9 +106,10 @@ test('describeRoomPlan stops counting unroutable members as speakers', () => {
 });
 
 test('describeRoundOutcome never blames choice when routing was impossible', () => {
-  // Replies came back: the plain count line, byte-for-byte as before.
+  // Replies came back short of the asked scope: the early round is named,
+  // not hidden behind a bare count.
   expect(describeRoundOutcome({ replyCount: 1, speakerCount: 2, routableCount: 2, silentNames: [] })).toBe(
-    '1 reply this round',
+    '1 of 2 asked answered · 1 bot stayed silent',
   );
   expect(describeRoundOutcome({ replyCount: 3, speakerCount: 3, routableCount: 3, silentNames: [] })).toBe(
     '3 replies this round',
@@ -117,6 +136,39 @@ test('describeRoundOutcome never blames choice when routing was impossible', () 
   );
 });
 
+test('describeRoundOutcome names the silence when a round ends early', () => {
+  // Every scoped speaker asked, some stayed quiet: the wire-provable gap
+  // between the send scope and the replies is surfaced, never hidden.
+  expect(
+    describeRoundOutcome({ replyCount: 2, speakerCount: 5, routableCount: 5, silentNames: [] }),
+  ).toBe('2 of 5 asked answered · 3 bots stayed silent');
+  expect(
+    describeRoundOutcome({ replyCount: 1, speakerCount: 4, routableCount: 4, silentNames: [] }),
+  ).toBe('1 of 4 asked answered · 3 bots stayed silent');
+  // Singular silence reads as a sentence.
+  expect(
+    describeRoundOutcome({ replyCount: 2, speakerCount: 3, routableCount: 3, silentNames: [] }),
+  ).toBe('2 of 3 asked answered · 1 bot stayed silent');
+  // Full scope answered: the legacy bare count, byte-for-byte.
+  expect(
+    describeRoundOutcome({ replyCount: 4, speakerCount: 4, routableCount: 4, silentNames: [] }),
+  ).toBe('4 replies this round');
+  // A reply count that drifts ABOVE the recorded scope (stale send-time
+  // field) never fabricates a negative silence count — replies are real.
+  expect(
+    describeRoundOutcome({ replyCount: 3, speakerCount: 2, routableCount: 2, silentNames: [] }),
+  ).toBe('3 replies this round');
+  // Missing scope fields degrade to the bare count, not an invented verdict.
+  expect(describeRoundOutcome({ replyCount: 1, speakerCount: 0, routableCount: 0, silentNames: [] })).toBe(
+    '1 reply this round',
+  );
+  // The invented cap note is gone: nothing claims the plan stopped at a
+  // message limit the wire never reported.
+  expect(describeRoundOutcome({ replyCount: 10, speakerCount: 10, routableCount: 10, silentNames: [] })).toBe(
+    '10 replies this round',
+  );
+});
+
 test('describeRoomPlan counts only roster-confirmed speakers', () => {
   // A member the phone has never seen on the loaded inventory is not a
   // speaker: the count drops and the member says it is missing.
@@ -126,10 +178,9 @@ test('describeRoomPlan counts only roster-confirmed speakers', () => {
     silentNames: [],
     unknownNames: ['Ghost'],
   });
-  expect(partial).toContain('2 of 3 bots speak per round');
+  expect(partial).toContain('2 of 3 bots speak');
   expect(partial).toContain('Ghost not on this gateway');
-  expect(partial).toContain(`up to ${MAX_GROUP_ROUNDS} rounds`);
-  expect(partial).toContain(`stops at ${MAX_GROUP_MESSAGES} messages`);
+  expect(partial).toContain('one round');
   // Missing AND confirmed-unroutable members: both causes are named in order.
   const mixed = describeRoomPlan({
     speakerCount: 4,
@@ -137,7 +188,7 @@ test('describeRoomPlan counts only roster-confirmed speakers', () => {
     silentNames: ['Echo'],
     unknownNames: ['Foxtrot', 'Ghost'],
   });
-  expect(mixed).toContain('1 of 4 bots speak per round');
+  expect(mixed).toContain('1 of 4 bots speak');
   expect(mixed).toContain('Echo cannot route');
   expect(mixed).toContain('Foxtrot and Ghost not on this gateway');
   // Nobody verified can speak: no promise of replies.
@@ -162,9 +213,8 @@ test('describeRoomPlan names an unread roster instead of asserting round counts'
   });
   expect(unverified).toContain('Roster not loaded');
   expect(unverified).toContain('routing unverified');
-  expect(unverified).not.toContain('speak per round');
-  expect(unverified).toContain(`up to ${MAX_GROUP_ROUNDS} rounds`);
-  expect(unverified).toContain(`stops at ${MAX_GROUP_MESSAGES} messages`);
+  expect(unverified).not.toContain('speak');
+  expect(unverified).toContain('one round');
 });
 
 test('describeRoundOutcome never blames choice when the roster never loaded', () => {

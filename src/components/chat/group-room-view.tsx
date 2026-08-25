@@ -13,7 +13,6 @@ import {
   formatGroupMessageTime,
   GROUP_MEMBER_FLOOR_REASON,
   groupSpeakers,
-  MAX_GROUP_MESSAGES,
   mergeTranscriptRows,
   type BotGroupRoom,
   type GroupReply,
@@ -32,7 +31,6 @@ type RoomEntry =
       role: 'user';
       text: string;
       replyCount?: number;
-      capped?: boolean;
       at?: number;
       /** Send-time scope truth for the outcome line (see describeRoundOutcome). */
       speakerCount?: number;
@@ -49,10 +47,10 @@ type RoomEntry =
 
 /**
  * Bubble meta lines. The user bubble keeps ONE micro line that grows with the
- * round's feedback (stamp · outcome · cap note); a bot bubble appends its
- * stamp to the author line. A missing/corrupt stamp simply renders nothing —
- * never a literal 'Invalid Date'. The outcome segment comes from the pure
- * helper so a round that died on routing never reads as bot choice.
+ * round's feedback (stamp · outcome); a bot bubble appends its stamp to the
+ * author line. A missing/corrupt stamp simply renders nothing — never a
+ * literal 'Invalid Date'. The outcome segment comes from the pure helper so
+ * a round that died on routing never reads as bot choice.
  */
 function userMetaLine(entry: Extract<RoomEntry, { role: 'user' }>): string {
   const parts: string[] = [];
@@ -257,14 +255,13 @@ export function GroupRoomView({
               continue;
             }
             // The user bubble keeps its text but now carries the round's
-            // visible feedback: how many bots answered and whether the cap
-            // stopped the plan early.
+            // visible feedback: how many asked bots answered, or — short of
+            // the full scope — exactly how many of them stayed silent.
             next.push({
               id: entryId,
               role: 'user',
               text,
               replyCount: replies.length,
-              capped: replies.length >= MAX_GROUP_MESSAGES,
               at: sentAt,
               speakerCount: roundSpeakers.length,
               routableCount: roundRoutableCount,
@@ -456,7 +453,6 @@ export function GroupRoomView({
                 {typeof entry.at === 'number' || typeof entry.replyCount === 'number' ? (
                   <Text variant="micro" color="secondary" style={styles.metaLine}>
                     {userMetaLine(entry)}
-                    {entry.capped ? ' · stopped at the message cap' : ''}
                   </Text>
                 ) : null}
               </View>
