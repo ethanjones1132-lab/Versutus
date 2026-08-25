@@ -656,6 +656,29 @@ test('describeRoomError keeps unclassifiable refusals raw (never boilerplate aro
   expect(describeRoomError('group not found')).toBe('group not found');
 });
 
+test('describeRoomError classifies the new-agent sheet refusals (create/edit)', () => {
+  // REAL createBot/updateBot refusal strings. A missing CLI executable
+  // surfaces as Node's raw spawn error out of runCli (gate/core/
+  // cli-environments/adapters/shared.mjs) — neither createBot nor updateBot
+  // catches it, so it reaches the phone verbatim.
+  expect(describeRoomError(new Error('spawn hermes ENOENT'))).toContain('Environment unreachable');
+  // gate/core/server.mjs POST /v1/bots: no resolved backend implements bots.
+  expect(describeRoomError(new Error('This backend does not implement bots'))).toContain(
+    'Environment unreachable',
+  );
+  // hermes.mjs updateBot 404: editing a bot the host no longer has.
+  expect(describeRoomError(new Error('unknown bot "ghost"'))).toContain('Bot not found');
+});
+
+test('describeRoomError keeps unclassifiable bot-create/edit refusals raw', () => {
+  // REAL Gate strings (hermes-bot-create.mjs validateBotId, backends/hermes.mjs
+  // createBot duplicate guard and model-pin failure) that no classifier knows:
+  // they stay verbatim — true and readable beats invented boilerplate.
+  expect(describeRoomError(new Error('invalid bot name'))).toBe('invalid bot name');
+  expect(describeRoomError(new Error('bot "coder" already exists'))).toBe('bot "coder" already exists');
+  expect(describeRoomError(new Error('failed to pin model'))).toBe('failed to pin model');
+});
+
 test('describeRoomError accepts Error instances and plain strings alike', () => {
   expect(describeRoomError(new Error('name required'))).toBe('name required');
   expect(describeRoomError('name required')).toBe('name required');

@@ -521,7 +521,10 @@ export function ChatScreen() {
               }
             })
             .catch((error: unknown) => {
-              setNewAgentError(error instanceof Error ? error.message : String(error));
+              // Desktop-parity: a refused create or edit speaks verdict +
+              // fix, not raw wire text — the new-agent sheet was the last
+              // bots-stack surface still rendering the Gate's raw stderr.
+              setNewAgentError(describeRoomError(error));
             })
             .finally(() => setNewAgentBusy(false));
         }}
