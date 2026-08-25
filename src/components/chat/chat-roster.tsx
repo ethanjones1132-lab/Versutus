@@ -19,6 +19,7 @@ import {
   MIN_GROUP_MEMBERS,
   type BotGroupRoom,
 } from '@/lib/gateway/groups';
+import { rosterBotTap } from '@/lib/gateway/roster-tap';
 
 export type ChatRosterProps = {
   rows: RosterRow[];
@@ -28,7 +29,11 @@ export type ChatRosterProps = {
   groups?: BotGroupRoom[];
   onSelectConfigurable: () => void;
   onSelectBot: (bot: PublicBot) => void;
-  /** Long-press a roster row: the detail surface (description, pin, routing fix, id). */
+  /**
+   * Long-press a roster row: the detail surface (description, pin, routing fix, id).
+   * Also opened by TAPPING an unroutable row — the subtitle names the verdict,
+   * so the tap must hand over the fix instead of doing nothing.
+   */
   onBotDetail?: (bot: PublicBot) => void;
   onSelectGroup?: (group: BotGroupRoom) => void;
   /**
@@ -165,7 +170,10 @@ export function ChatRoster({
             title={row.bot.displayName}
             subtitle={botRowSubtitle(row.bot)}
             leading={<BotAvatar botId={row.bot.id} />}
-            onPress={row.bot.routable ? () => onSelectBot(row.bot) : undefined}
+            onPress={rosterBotTap(row.bot, {
+              onChat: () => onSelectBot(row.bot),
+              onDetail: onBotDetail ? () => onBotDetail(row.bot) : undefined,
+            })}
             onLongPress={onBotDetail ? () => onBotDetail(row.bot) : undefined}
             style={styles.row}
           />
