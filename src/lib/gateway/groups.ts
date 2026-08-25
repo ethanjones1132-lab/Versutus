@@ -377,6 +377,34 @@ export function addableMembers<T extends { id: string; routable?: boolean }>(
   return bots.filter((bot) => Boolean(bot.routable) && !members.has(bot.id));
 }
 
+/** One remove-picker option: a current member and its roster-resolved label. */
+export type RemovableMemberOption = {
+  id: string;
+  /** Display name when the loaded inventory knows this member, else raw id. */
+  label: string;
+  /** True when the inventory had no name — the chip shows the raw id. */
+  unknown: boolean;
+};
+
+/**
+ * Who the remove picker offers: every current member, in room order, labeled
+ * through the loaded bot inventory (raw id when never seen — never an
+ * invented name, the same rule as the sheet's member line). Empty at the
+ * two-member floor: every remaining member is structural, so there is
+ * nothing honest to offer.
+ */
+export function removableMembers(
+  group: Pick<BotGroupRoom, 'memberIds'>,
+  namesById: ReadonlyMap<string, string>,
+): RemovableMemberOption[] {
+  if (!canRemoveMember(group)) return [];
+  return group.memberIds.map((id) => {
+    const name = namesById.get(id);
+    const known = typeof name === 'string' && name.length > 0;
+    return { id, label: known ? (name as string) : id, unknown: !known };
+  });
+}
+
 /**
  * Room search over name, id, and member ids. A blank query is "no filter".
  */

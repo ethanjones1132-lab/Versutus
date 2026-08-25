@@ -637,6 +637,19 @@ export function ChatScreen() {
                 })
             : undefined
         }
+        onRemoveMember={
+          detailGroup
+            ? (memberId) =>
+                botGroups.leave(detailGroup.id, memberId).then((room) => {
+                  // The Gate's answer is the truth: feed the returned room
+                  // back so the open sheet shows the shrunken roster, and
+                  // refresh the roster copy behind it.
+                  setDetailGroup(room);
+                  void refreshGroups();
+                  return room;
+                })
+            : undefined
+        }
       />
 
       <PairingSheet

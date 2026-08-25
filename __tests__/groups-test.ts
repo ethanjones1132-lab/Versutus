@@ -15,6 +15,7 @@ import {
   MAX_GROUP_ROUNDS,
   mergeTranscriptRows,
   planGroupRounds,
+  removableMembers,
   roomMemberNames,
   rosterInventoryVerified,
   TRANSCRIPT_DEDUPE_WINDOW_MS,
@@ -538,4 +539,26 @@ test('addableMembers offers routable bots not already in the room, in roster ord
     'researcher',
     'reviewer',
   ]);
+});
+
+test('removableMembers offers every current member in room order, labeled through the inventory', () => {
+  const names = new Map([
+    ['coder', 'Coder'],
+    ['researcher', 'Researcher'],
+  ]);
+  const three: BotGroupRoom = { id: 'r', name: 'n', memberIds: ['coder', 'ghost', 'researcher'] };
+  // Room order, resolved labels; a member the inventory has never seen keeps
+  // its raw id and is flagged unknown — never an invented name.
+  expect(removableMembers(three, names)).toEqual([
+    { id: 'coder', label: 'Coder', unknown: false },
+    { id: 'ghost', label: 'ghost', unknown: true },
+    { id: 'researcher', label: 'Researcher', unknown: false },
+  ]);
+});
+
+test('removableMembers offers nothing at the two-member floor', () => {
+  // The floor makes every remaining member structural: canRemoveMember is
+  // false at 2, so the picker shows the floor reason instead of chips.
+  expect(removableMembers(ROOM, new Map())).toEqual([]);
+  expect(removableMembers(ROOM, new Map([['coder', 'Coder']]))).toEqual([]);
 });

@@ -5,9 +5,12 @@ import { BaseSheet, Button, Chip, ConfirmSheet, Divider, ListRow, Text, TextFiel
 import { Spacing } from '@/constants/tokens';
 import type { PublicBot } from '@/lib/gateway/bots';
 import {
+  GROUP_MEMBER_FLOOR_REASON,
   MAX_GROUP_MEMBERS,
   addableMembers,
   canAddMember,
+  canRemoveMember,
+  removableMembers,
   roomMemberNames,
   type BotGroupRoom,
 } from '@/lib/gateway/groups';
@@ -35,17 +38,23 @@ export type GroupRoomActionSheetProps = {
    * returned room back so the member line reflects the new membership.
    */
   onAddMembers?: (memberIds: string[]) => Promise<BotGroupRoom>;
+  /**
+   * Removes one member from the room on the Gate; the parent feeds the
+   * Gate's returned room back so the member line reflects the shrunken
+   * roster.
+   */
+  onRemoveMember?: (memberId: string) => Promise<BotGroupRoom>;
 };
 
 /**
  * The roster group row's action surface: member line, then the room verbs —
- * open, rename, add members, disband — without entering the room first. A
- * port of the bot detail-sheet pattern (bot-detail-sheet.tsx): the rows are
- * decided by the parent's capability gates, and every write keeps the Gate's
- * answer as the truth (rename/add show the returned room; disband leaves
- * only after the Gate confirms). Members the loaded inventory has never seen
- * are named by raw id with a "not on this gateway" count — never an invented
- * name.
+ * open, rename, add members, remove member, disband — without entering the
+ * room first. A port of the bot detail-sheet pattern (bot-detail-sheet.tsx):
+ * the rows are decided by the parent's capability gates, and every write
+ * keeps the Gate's answer as the truth (rename/add/remove show the returned
+ * room; disband leaves only after the Gate confirms). Members the loaded
+ * inventory has never seen are named by raw id with a "not on this gateway"
+ * count — never an invented name.
  */
 export function GroupRoomActionSheet({
   room,
@@ -55,6 +64,7 @@ export function GroupRoomActionSheet({
   onRename,
   onDisband,
   onAddMembers,
+  onRemoveMember,
 }: GroupRoomActionSheetProps) {
   const [renameDraft, setRenameDraft] = useState('');
   const [renaming, setRenaming] = useState(false);
@@ -62,22 +72,24 @@ export function GroupRoomActionSheet({
   const [adding, setAdding] = useState(false);
   const [addSelection, setAddSelection] = useState<string[]>([]);
   const [addingBusy, setAddingBusy] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [removeSelection, setRemoveSelection] = useState<string | null>(null);
+  const [removingBusy, setRemovingBusy] = useState(false);
   const [disbandVisible, setDisbandVisible] = useState(false);
   const [disbanding, setDisbanding] = useState(false);
   const [error, setError] = useState<string | undefined>();
 
   if (!room) return null;
 
-  const busy = renamingBusy || addingBusy || disbanding;
+  const busy = renamingBusy || addingBusy || removingBusy || disbanding;
   const close = () => {
     if (busy) return;
     onClose();
   };
-  const memberFacts = roomMemberNames(
-    room,
-    new Map(members.map((bot) => [bot.id, bot.displayName])),
-  );
+  const namesById = new Map(members.map((bot) => [bot.id, bot.displayName]));
+  const memberFacts = roomMemberNames(room, namesById);
   const candidates = addableMembers(room, members);
+  const removeOptions = removableMembers(room, namesById);
 
   const openRename = () => {
     setError(undefined);
@@ -132,6 +144,30 @@ export function GroupRoomActionSheet({
       .finally(() => setAddingBusy(false));
   };
 
+  const openRemove = () => {
+    setError(undefined);
+    setRemoveSelection(null);
+    setRemoving(true);
+  };
+
+  const submitRemove = () => {
+    if (!removeSelection || removingBusy || !onRemoveMember) return;
+    setRemovingBusy(true);
+    void Promise.resolve(onRemoveMember(removeSelection))
+      .then(() => {
+        // The parent fed the Gate's returned room back through props, so the
+        // member line above now shows the shrunken roster; leave the picker.
+        setRemoving(false);
+        setRemoveSelection(null);
+      })
+      .catch((cause: unknown) => {
+        // Fail honest: the membership is unchanged; keep the selection so a
+        // transient failure can be retried without picking again.
+        setError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => setRemovingBusy(false));
+  };
+
   const confirmDisband = () => {
     if (disbanding) return;
     setDisbanding(true);
@@ -154,7 +190,53 @@ export function GroupRoomActionSheet({
         title={room.name}
         onClose={close}
         closeLabel="Dismiss">
-        {adding ? (
+        {removing ? (
+          <View style={styles.facts}>
+            <Text variant="caption" color="secondary" style={styles.hint}>
+              Removed members stop speaking in future sends — history stays as it was.
+            </Text>
+            <Text variant="caption" color="tertiary">
+              {room.memberIds.length} members · {removeSelection ? 1 : 0} selected
+            </Text>
+            {removeOptions.length > 0 ? (
+              <View style={styles.chipWrap}>
+                {removeOptions.map((option) => (
+                  <Chip
+                    key={option.id}
+                    label={option.label}
+                    selected={removeSelection === option.id}
+                    onPress={() =>
+                      setRemoveSelection((prev) => (prev === option.id ? null : option.id))
+                    }
+                  />
+                ))}
+              </View>
+            ) : (
+              <Text variant="caption" color="secondary">
+                {GROUP_MEMBER_FLOOR_REASON} — members are pinned.
+              </Text>
+            )}
+            {error ? (
+              <Text variant="caption" color="accentWarm" style={styles.sheetError}>
+                {error}
+              </Text>
+            ) : null}
+            <View style={styles.sheetActions}>
+              <Button
+                label="Cancel"
+                variant="ghost"
+                onPress={() => setRemoving(false)}
+                disabled={removingBusy}
+              />
+              <Button
+                label={removingBusy ? 'Removing…' : 'Remove from room'}
+                variant="primary"
+                disabled={removingBusy || !removeSelection}
+                onPress={submitRemove}
+              />
+            </View>
+          </View>
+        ) : adding ? (
           <View style={styles.facts}>
             <Text variant="caption" color="secondary" style={styles.hint}>
               New members join future sends — history stays as it was.
@@ -278,6 +360,15 @@ export function GroupRoomActionSheet({
                 onPress={openAdd}
               />
             ) : null}
+            {onRemoveMember && canRemoveMember(room) ? (
+              <ListRow
+                title="Remove member"
+                subtitle="Current members leave without deleting history"
+                icon={{ ios: 'person.badge.minus', android: 'person_remove', web: 'person-remove' }}
+                chevron={false}
+                onPress={openRemove}
+              />
+            ) : null}
             {onDisband ? (
               <ListRow
                 title="Disband room"
@@ -300,7 +391,7 @@ export function GroupRoomActionSheet({
       </BaseSheet>
 
       <ConfirmSheet
-        visible={disbandVisible && !renaming && !adding}
+        visible={disbandVisible && !renaming && !adding && !removing}
         title="Disband room"
         message={`${room.name} leaves the roster and its transcript is deleted from the Gate. This cannot be undone.`}
         confirmLabel={disbanding ? 'Disbanding…' : 'Disband'}
