@@ -358,6 +358,25 @@ export function canRemoveMember(group: Pick<BotGroupRoom, 'memberIds'>): boolean
 
 export const GROUP_MEMBER_FLOOR_REASON = `A room needs at least ${MIN_GROUP_MEMBERS} members`;
 
+/** Whether the room can take even one more member (six-member ceiling). */
+export function canAddMember(group: Pick<BotGroupRoom, 'memberIds'>): boolean {
+  return group.memberIds.length < MAX_GROUP_MEMBERS;
+}
+
+/**
+ * Who a room can still take: the loaded inventory's routable bots that are
+ * not already members — the same eligibility the create-room chips follow,
+ * minus the current roster. Order follows the caller's list (the phone
+ * renders roster order, not set order).
+ */
+export function addableMembers<T extends { id: string; routable?: boolean }>(
+  group: Pick<BotGroupRoom, 'memberIds'>,
+  bots: readonly T[],
+): T[] {
+  const members = new Set(group.memberIds);
+  return bots.filter((bot) => Boolean(bot.routable) && !members.has(bot.id));
+}
+
 /**
  * Room search over name, id, and member ids. A blank query is "no filter".
  */

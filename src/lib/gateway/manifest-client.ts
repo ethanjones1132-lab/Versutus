@@ -646,6 +646,21 @@ export class ManifestClient implements PortalClient {
     );
   }
 
+  /**
+   * Appends members to a room and returns the Gate's updated roster — the
+   * same PATCH endpoint rename uses, carrying memberIds instead of a name.
+   * Ids already in the room are skipped server-side; an add that names no
+   * new member is refused there, and this surfaces that refusal.
+   */
+  async addGroupMembers(groupId: string, memberIds: string[]): Promise<BotGroupRoom> {
+    const path = this.requireEndpoint('botGroups');
+    return this.rootTransport.request(
+      'PATCH',
+      `${path.replace(/\/+$/, '')}/${encodeURIComponent(groupId)}`,
+      { memberIds },
+    );
+  }
+
   async getSessions(limit = 20): Promise<HermesSession[]> {
     const path = this.endpoints.sessions;
     if (!path) {

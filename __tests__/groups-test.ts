@@ -1,4 +1,6 @@
 import {
+  addableMembers,
+  canAddMember,
   canRemoveMember,
   describeGroupPlan,
   describeRoomPlan,
@@ -510,5 +512,30 @@ test('mergeTranscriptRows keeps an identical line stamped BEYOND the skew budget
   expect(mergeTranscriptRows(current, stored)).toEqual([
     { id: 'g-10', role: 'user', text: 'again?', at: NOW - TRANSCRIPT_DEDUPE_WINDOW_MS - 60_000 },
     { id: 'u-1', role: 'user', text: 'again?', at: NOW },
+  ]);
+});
+
+test('canAddMember holds the six-member ceiling', () => {
+  const two: BotGroupRoom = { id: 'r', name: 'n', memberIds: ['a', 'b'] };
+  const full: BotGroupRoom = { id: 'r', name: 'n', memberIds: ['1', '2', '3', '4', '5', '6'] };
+  expect(canAddMember(two)).toBe(true);
+  expect(canAddMember(full)).toBe(false);
+});
+
+test('addableMembers offers routable bots not already in the room, in roster order', () => {
+  const bots = [
+    { id: 'coder', displayName: 'Coder', routable: true },
+    { id: 'researcher', displayName: 'Researcher', routable: true },
+    { id: 'reviewer', displayName: 'Reviewer', routable: true },
+    { id: 'ghost', displayName: 'Ghost', routable: false },
+  ];
+  const emptyRoom: BotGroupRoom = { id: 'r', name: 'n', memberIds: [] };
+  // The room's own members never come back as addable, and unroutable bots
+  // are excluded — the same eligibility the create-room chips follow.
+  expect(addableMembers(ROOM, bots).map((bot) => bot.id)).toEqual(['reviewer']);
+  expect(addableMembers(emptyRoom, bots).map((bot) => bot.id)).toEqual([
+    'coder',
+    'researcher',
+    'reviewer',
   ]);
 });

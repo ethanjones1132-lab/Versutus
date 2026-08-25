@@ -136,6 +136,44 @@ export function createBotGroupStore(gateHome) {
       await write(data);
       return group;
     },
+    async addMembers(id, memberIds) {
+      // Append semantics: ids already in the room are skipped, so a retry of
+      // an interrupted add cannot double-book a member. An add that names no
+      // NEW member is refused rather than silently returning "success" —
+      // the caller asked for a change and got none.
+      const requested = Array.isArray(memberIds) ? memberIds : [];
+      if (!requested.every((memberId) => typeof memberId === 'string' && memberId.trim())) {
+        const error = new Error('memberIds must be non-empty strings');
+        error.code = 'invalid_group';
+        error.status = 400;
+        throw error;
+      }
+      const fresh = [...new Set(requested.map((memberId) => memberId.trim()))];
+      const data = await read();
+      const group = data.groups.find((entry) => entry.id === id);
+      if (!group) {
+        const error = new Error('group not found');
+        error.code = 'unknown_group';
+        error.status = 404;
+        throw error;
+      }
+      const additions = fresh.filter((memberId) => !group.memberIds.includes(memberId));
+      if (additions.length === 0) {
+        const error = new Error('every named member is already in the room');
+        error.code = 'no_new_members';
+        error.status = 400;
+        throw error;
+      }
+      if (group.memberIds.length + additions.length > 6) {
+        const error = new Error('at most 6 bots per room');
+        error.code = 'too_many_members';
+        error.status = 400;
+        throw error;
+      }
+      group.memberIds.push(...additions);
+      await write(data);
+      return group;
+    },
     async leave(id, memberId) {
       const data = await read();
       const group = data.groups.find((entry) => entry.id === id);
@@ -213,6 +251,7 @@ export function createBotGroupStore(gateHome) {
     ...store,
     create: (payload) => serialized(() => store.create(payload)),
     rename: (id, name) => serialized(() => store.rename(id, name)),
+    addMembers: (id, memberIds) => serialized(() => store.addMembers(id, memberIds)),
     leave: (id, memberId) => serialized(() => store.leave(id, memberId)),
     appendMessages: (id, entries) => serialized(() => store.appendMessages(id, entries)),
     delete: (id) => serialized(() => store.delete(id)),

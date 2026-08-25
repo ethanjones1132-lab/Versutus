@@ -83,6 +83,7 @@ export interface PortalClient {
   renameGroup?(groupId: string, name: string): Promise<BotGroupRoom>;
   leaveGroup?(groupId: string, memberId: string): Promise<BotGroupRoom>;
   deleteGroup?(groupId: string): Promise<{ ok: boolean }>;
+  addGroupMembers?(groupId: string, memberIds: string[]): Promise<BotGroupRoom>;
   handoffMention?(input: { fromId: string; toId: string; text: string }): Promise<unknown>;
   setBotId?(id: string | undefined): void;
   setBackendId?(id: string | undefined): void;

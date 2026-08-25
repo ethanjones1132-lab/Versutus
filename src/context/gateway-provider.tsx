@@ -220,6 +220,7 @@ type GatewayContextValue = {
     rename: (groupId: string, name: string) => Promise<BotGroupRoom>;
     leave: (groupId: string, memberId: string) => Promise<BotGroupRoom>;
     deleteGroup: (groupId: string) => Promise<{ ok: boolean }>;
+    addMembers: (groupId: string, memberIds: string[]) => Promise<BotGroupRoom>;
   };
   runAgentCommand: (command: string, options?: { onDelta?: (delta: string) => void }) => Promise<string>;
   dynamicCommands: GatewayCapabilityCommand[];
@@ -2468,6 +2469,11 @@ const response = await executeGatewaySlashCommand(trimmed, {
       const client = clientRef.current;
       if (!client?.deleteGroup) throw new Error('This gateway does not manage group rooms.');
       return client.deleteGroup(groupId);
+    },
+    addMembers: async (groupId: string, memberIds: string[]) => {
+      const client = clientRef.current;
+      if (!client?.addGroupMembers) throw new Error('This gateway does not manage group rooms.');
+      return client.addGroupMembers(groupId, memberIds);
     },
   }), []);
 

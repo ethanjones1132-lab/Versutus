@@ -1331,8 +1331,22 @@ export async function createGate(config = {}) {
       const groupEditMatch = pathname.match(/^\/v1\/bot-groups\/([^/]+)$/);
       if (groupEditMatch && method === 'PATCH') {
         const body = (await readJsonBody(req)) ?? {};
+        // PATCH carries whichever room fields the caller is changing: name
+        // (rename) and/or memberIds (append members). A request naming
+        // neither is refused rather than answered with an unchanged room.
+        if (!Array.isArray(body.memberIds) && typeof body.name !== 'string') {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'nothing to update', code: 'invalid_group' } }));
+          return;
+        }
         try {
-          const group = await botGroups.rename(decodeURIComponent(groupEditMatch[1]), body.name);
+          let group = null;
+          if (Array.isArray(body.memberIds)) {
+            group = await botGroups.addMembers(decodeURIComponent(groupEditMatch[1]), body.memberIds);
+          }
+          if (typeof body.name === 'string') {
+            group = await botGroups.rename(decodeURIComponent(groupEditMatch[1]), body.name);
+          }
           res.writeHead(200);
           res.end(JSON.stringify(group));
         } catch (error) {
