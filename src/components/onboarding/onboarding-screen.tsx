@@ -19,6 +19,7 @@ import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import { phaseToTimelineStep } from '@/lib/connection/phase';
 import { entering } from '@/lib/motion/presets';
+import { deriveWizardCta } from '@/lib/onboarding/wizard-cta';
 import { validatePcAddress } from '@/lib/onboarding/validate-pc-address';
 
 export function OnboardingScreen() {
@@ -31,7 +32,14 @@ export function OnboardingScreen() {
   const [working, setWorking] = useState(false);
 
   const validation = useMemo(() => validatePcAddress(pcAddress), [pcAddress]);
-  const busy = working || connectionPhase === 'searching' || connectionPhase === 'connecting';
+  // The manual Connect CTA must stay reachable while the background
+  // auto-connect ceremony parks the phase in 'searching' for 30–60 s probe
+  // rounds (retry ladder re-fires them), or the typed manual connect becomes
+  // unreachable for minutes on a machine where discovery only gets 403s.
+  // `locked` follows only this form's own submit; the scan theater keeps
+  // animating for any probe/connect in flight (matrix §G finding 2).
+  const cta = deriveWizardCta(working, connectionPhase);
+  const busy = cta.theaterBusy;
   const activeTimelineStep = phaseToTimelineStep(connectionPhase);
   const fieldState = !pcAddress.trim() ? 'default' : validation.valid ? 'valid' : 'invalid';
 
@@ -102,7 +110,7 @@ export function OnboardingScreen() {
             </Card>
           </Animated.View>
 
-          <Card variant="surface" padding={Spacing.four} style={[styles.formCard, busy && styles.formDimmed]}>
+          <Card variant="surface" padding={Spacing.four} style={[styles.formCard, cta.locked && styles.formDimmed]}>
             <Text variant="title">Connect your gateway</Text>
             <Text color="secondary" style={styles.lead}>
               Give Versutus the address and API key for the gateway running on your PC. Your credentials are stored in
@@ -173,9 +181,9 @@ export function OnboardingScreen() {
             ) : null}
 
             <Button
-              label={busy ? 'Connecting…' : 'Connect gateway'}
+              label={cta.label}
               onPress={() => void handleContinue()}
-              disabled={busy || !validation.valid}
+              disabled={cta.locked || !validation.valid}
             />
           </Card>
 
