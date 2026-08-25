@@ -29,6 +29,8 @@ export type RunFailureKind =
   | 'time_limit'
   /** The job/run's authorization window elapsed before it completed. */
   | 'expired'
+  /** A finished run's event stream cannot be replayed — the Gate has no archive for it. */
+  | 'run_events_unavailable'
   | 'generic';
 
 /**
@@ -41,6 +43,11 @@ export type RunFailureKind =
 export function classifyRunFailure(message: string): RunFailureKind {
   const text = message ?? '';
   if (/has no api_server_key/i.test(text)) return 'listen_key_missing';
+  // The Gate's own code for a replay miss (d1acb9d): the run-events route
+  // answers 404 {error:{code:'run_events_unavailable'}} and the clients
+  // prefix it. Anchored on the code, which dominates whatever the upstream
+  // said — the reason text may itself name a state this classifier knows.
+  if (/run_events_unavailable\b/i.test(text)) return 'run_events_unavailable';
   if (/default listen key|default_key_refused/i.test(text)) return 'default_key_refused';
   if (/multiplex/i.test(text)) return 'multiplex_disabled';
   if (/\bunknown bot\b/i.test(text)) return 'unknown_bot';
@@ -104,6 +111,10 @@ const TITLES: Record<Exclude<RunFailureKind, 'generic'>, Pick<RunFailureView, 't
   expired: {
     title: 'Task expired',
     next: 'Resubmit it — the host considers this job past its valid window.',
+  },
+  run_events_unavailable: {
+    title: 'Replay unavailable',
+    next: 'The Gate has no archived stream for this run, so its output cannot be replayed. Its status and result still show in Recent runs — run it again from there to see output.',
   },
 };
 

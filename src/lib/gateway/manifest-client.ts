@@ -3,6 +3,7 @@ import type { PublicBot } from '@/lib/gateway/bots';
 import type { BotGroupRoom, GroupReply, GroupTranscriptEntry } from '@/lib/gateway/groups';
 import { isAuthRejection } from '@/lib/gateway/errors';
 import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
+import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 import { HttpTransport } from '@/lib/gateway/http-transport';
 import { ConnectionMonitor, hasRecentContact } from '@/lib/gateway/connection-monitor';
 import { streamingFetch } from '@/lib/net/streaming-fetch';
@@ -839,7 +840,16 @@ export class ManifestClient implements PortalClient {
       headers: this.rootTransport.headers,
       signal,
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      // The Gate answers a replay miss fail-honestly (404 run_events_unavailable
+      // since d1acb9d). Carry the code forward so the run-failure classifiers
+      // render a desktop-parity verdict; without one, keep the message every
+      // other surface shows — never a bare status when the body said more.
+      const errorText = await response.text().catch(() => '');
+      const message = messageFromHttpErrorBody(errorText, response.status);
+      const code = errorCodeFromHttpBody(errorText);
+      throw new Error(code === 'run_events_unavailable' ? `run_events_unavailable: ${message}` : message);
+    }
 
     await this.rootTransport.streamSSE(
       response,

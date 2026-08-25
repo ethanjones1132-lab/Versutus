@@ -1,5 +1,6 @@
 import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/chat-stream-delta';
 import { isAuthRejection } from '@/lib/gateway/errors';
+import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 import { HttpTransport } from '@/lib/gateway/http-transport';
 import {
   ConnectionMonitor,
@@ -401,7 +402,14 @@ export class HermesGatewayClient {
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      // The Gate answers a replay miss fail-honestly (404 run_events_unavailable
+      // since d1acb9d). Carry the code forward so the run-failure classifiers
+      // render a desktop-parity verdict; without one, keep the message every
+      // other surface shows — never a bare status when the body said more.
+      const errorText = await response.text().catch(() => '');
+      const message = messageFromHttpErrorBody(errorText, response.status);
+      const code = errorCodeFromHttpBody(errorText);
+      throw new Error(code === 'run_events_unavailable' ? `run_events_unavailable: ${message}` : message);
     }
 
     await this.transport.streamSSE(response, (data) => {

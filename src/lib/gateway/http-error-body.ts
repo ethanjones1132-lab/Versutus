@@ -17,3 +17,15 @@ export function messageFromHttpErrorBody(errorText: string, status: number): str
   }
   return fallback;
 }
+
+/** The Gate's machine-readable code for a refusal, when its body carries one. */
+export function errorCodeFromHttpBody(errorText: string): string | undefined {
+  try {
+    const parsed = JSON.parse(errorText) as { error?: { code?: unknown } };
+    const code = parsed?.error?.code;
+    if (typeof code === 'string' && code.trim()) return code.trim();
+  } catch {
+    // not JSON
+  }
+  return undefined;
+}
