@@ -28,6 +28,7 @@ import { describeGatewayError, humanizeGatewayError } from '@/lib/gateway/error-
 import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDivider } from '@/lib/format';
+import { resolvePullRefreshAction } from '@/lib/gateway/messages';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
 import { botToEditInput, buildBotUpdatePatch, buildRoster, type ChatSurface, type PublicBot, type RosterRow } from '@/lib/gateway/bots';
@@ -39,6 +40,10 @@ import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
 const PIN_THRESHOLD_PX = 96;
 const JUMP_PILL_THRESHOLD_PX = 260;
+// Any offset within this of the true top counts as "at top" so the pull
+// gesture pages back instead of reloading the same window (bounce rounding
+// and the header button keep tiny offsets live).
+const AT_TOP_PX = 8;
 
 type SessionRecord = HermesSession & { sessionId?: string; name?: string };
 
@@ -161,6 +166,7 @@ export function ChatScreen() {
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const pinnedRef = useRef(true);
+  const atTopRef = useRef(true);
   const jumpVisibleRef = useRef(false);
 
   // Every surface change funnels through here so the screen-local backends
@@ -280,6 +286,7 @@ export function ChatScreen() {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
     pinnedRef.current = distanceFromBottom < PIN_THRESHOLD_PX;
+    atTopRef.current = contentOffset.y <= AT_TOP_PX;
     const shouldShowJump = distanceFromBottom > JUMP_PILL_THRESHOLD_PX;
     if (shouldShowJump !== jumpVisibleRef.current) {
       jumpVisibleRef.current = shouldShowJump;
@@ -388,14 +395,24 @@ export function ChatScreen() {
   // roster do not (the room owns its transcript locally).
   const threadSurface = surface.kind === 'configurable' || surface.kind === 'bot';
 
+  // Pull-to-refresh at the top pages back into earlier history when the
+  // gateway reports more (the natural "more messages" gesture — the explicit
+  // header control stays as a fallback). Anywhere else, or when history is
+  // exhausted or a page is already loading, it re-reads the current window.
+  // `prependEarlier` id-dedupes the fold, so an overlapping pull cannot render
+  // a message twice (same merge rule as group-room pull-to-refresh).
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     const started = Date.now();
-    await reloadHistory().catch(() => undefined);
+    if (resolvePullRefreshAction({ atTop: atTopRef.current, hasMoreHistory, loadingEarlierHistory }) === 'earlier') {
+      await loadEarlierMessages().catch(() => undefined);
+    } else {
+      await reloadHistory().catch(() => undefined);
+    }
     const elapsed = Date.now() - started;
     if (elapsed < 400) await new Promise((resolve) => setTimeout(resolve, 400 - elapsed));
     setRefreshing(false);
-  }, [reloadHistory]);
+  }, [hasMoreHistory, loadEarlierMessages, loadingEarlierHistory, reloadHistory]);
 
   const renderMessage = useCallback(
     ({ item, index }: { item: ChatMessage; index: number }) => {

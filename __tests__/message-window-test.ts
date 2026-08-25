@@ -4,6 +4,7 @@ import {
   boundWindow,
   hasEarlierHistory,
   prependEarlier,
+  resolvePullRefreshAction,
 } from '@/lib/gateway/messages';
 
 const seq = (n: number) => Array.from({ length: n }, (_, i) => i);
@@ -69,6 +70,32 @@ describe('hasEarlierHistory', () => {
 
   test('an empty session has no earlier history', () => {
     expect(hasEarlierHistory(0, 80)).toBe(false);
+  });
+});
+
+describe('resolvePullRefreshAction', () => {
+  test('a pull at the top pages back while older history exists', () => {
+    expect(
+      resolvePullRefreshAction({ atTop: true, hasMoreHistory: true, loadingEarlierHistory: false }),
+    ).toBe('earlier');
+  });
+
+  test('a pull in the middle of the thread re-reads the window instead', () => {
+    expect(
+      resolvePullRefreshAction({ atTop: false, hasMoreHistory: true, loadingEarlierHistory: false }),
+    ).toBe('reload');
+  });
+
+  test('a pull with no older pages left re-reads the window', () => {
+    expect(
+      resolvePullRefreshAction({ atTop: true, hasMoreHistory: false, loadingEarlierHistory: false }),
+    ).toBe('reload');
+  });
+
+  test('a pull while an earlier page is in flight does not double-fetch', () => {
+    expect(
+      resolvePullRefreshAction({ atTop: true, hasMoreHistory: true, loadingEarlierHistory: true }),
+    ).toBe('reload');
   });
 });
 

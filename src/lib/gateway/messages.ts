@@ -184,3 +184,23 @@ export function prependEarlier<T extends { id: string }>(current: T[], earlier: 
   // Same reference when the page was entirely overlap — no needless re-render.
   return fresh.length === 0 ? current : [...fresh, ...current];
 }
+
+/** What a pull-to-refresh at the top of a thread should do. */
+export type PullRefreshAction = 'earlier' | 'reload';
+
+/**
+ * A pull at the very top of a thread that still has older pages pages back
+ * (load earlier history) instead of re-reading the same window — the natural
+ * "more history" gesture, mirroring the group-room/roster in-place re-read
+ * discipline. Falls back to a plain reload when the thread is exhausted or an
+ * earlier page is already in flight, so two overlapping gestures cannot run a
+ * second page fetch (the merge itself is id-deduped in `prependEarlier`).
+ */
+export function resolvePullRefreshAction(args: {
+  atTop: boolean;
+  hasMoreHistory: boolean;
+  loadingEarlierHistory: boolean;
+}): PullRefreshAction {
+  if (args.atTop && args.hasMoreHistory && !args.loadingEarlierHistory) return 'earlier';
+  return 'reload';
+}
