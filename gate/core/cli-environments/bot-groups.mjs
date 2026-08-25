@@ -53,8 +53,34 @@ export function transcriptEntriesForSend({ text, replies = [], makeId = makeEntr
   return entries;
 }
 
-export function createBotGroupStore(gateHome) {
+export function createBotGroupStore(gateHome, { listBotIds } = {}) {
   const file = join(gateHome, 'bot-groups.json');
+
+  // Membership writes trust the caller's ids only as far as the roster
+  // confirms them. When the Gate wires a roster resolver, every id a create
+  // or an add names must be a bot this Gate can actually address — a typo'd
+  // id dies here, at the door, instead of surviving until the room's first
+  // message fails wholesale with "unknown bot". Without a resolver nothing
+  // changes: verification is claimed only when it actually ran.
+  async function assertKnownMembers(requestedIds) {
+    if (typeof listBotIds !== 'function') return;
+    let known;
+    try {
+      known = new Set(await listBotIds());
+    } catch (cause) {
+      const error = new Error(`cannot verify group members: ${cause?.message ?? cause}`);
+      error.code = 'roster_unavailable';
+      error.status = 502;
+      throw error;
+    }
+    const unknown = requestedIds.filter((id) => !known.has(id));
+    if (unknown.length > 0) {
+      const error = new Error(`unknown bot${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}`);
+      error.code = 'unknown_member';
+      error.status = 400;
+      throw error;
+    }
+  }
 
   // Every mutating operation below is a read-modify-write of ONE json file.
   // Two overlapping operations interleave their read and write halves and the
@@ -103,6 +129,9 @@ export function createBotGroupStore(gateHome) {
         error.status = 400;
         throw error;
       }
+      // The door check: no room is ever persisted naming a bot this Gate
+      // cannot address.
+      await assertKnownMembers(checked.memberIds);
       const group = {
         id: randomBytes(8).toString('hex'),
         name: checked.name,
@@ -157,6 +186,11 @@ export function createBotGroupStore(gateHome) {
         error.status = 404;
         throw error;
       }
+      // The whole room must stay addressable, not just the newcomers: an
+      // add to a room already carrying a dead id would bless the broken
+      // roster by association. The refusal names the dead id so the operator
+      // can remove it (leave) instead of meeting it on first send.
+      await assertKnownMembers([...group.memberIds, ...fresh]);
       const additions = fresh.filter((memberId) => !group.memberIds.includes(memberId));
       if (additions.length === 0) {
         const error = new Error('every named member is already in the room');

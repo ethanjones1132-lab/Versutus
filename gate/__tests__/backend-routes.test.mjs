@@ -1327,7 +1327,7 @@ test('a shell session only accepts input from the credential that opened it', as
 
 test('bot groups: manifest advertisement, rename, and leave round-trips', async () => {
   const calls = [];
-  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  const { gate } = await makeGate({ calls, registry: groupRosterRegistry(calls) });
   const base = `http://127.0.0.1:${gate.port}`;
   try {
     // The room endpoints ride the bots capability: same gate that fronts bots.
@@ -1395,7 +1395,7 @@ test('bot groups: manifest advertisement, rename, and leave round-trips', async 
 
 test('bot groups: sends are recorded Gate-side and replayed as room history', async () => {
   const calls = [];
-  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  const { gate } = await makeGate({ calls, registry: groupRosterRegistry(calls) });
   const base = `http://127.0.0.1:${gate.port}`;
   try {
     const created = await (await fetch(`${base}/v1/bot-groups`, {
@@ -1452,6 +1452,120 @@ test('bot groups: sends are recorded Gate-side and replayed as room history', as
 
     const unauthenticated = await fetch(`${base}/v1/bot-groups/${created.id}/messages`);
     assert.equal(unauthenticated.status, 401);
+  } finally {
+    await gate.close();
+  }
+});
+
+/**
+ * Group rooms are roster-guarded since the unknown-member refusal: writes
+ * verify every requested id against what the fronted backend's listBots
+ * reports. This variant widens the shared stub roster so room fixtures can
+ * name coder / writer / silent without changing what the other suites pin
+ * about listBots payloads.
+ */
+function groupRosterRegistry(calls) {
+  const registry = stubFrontedRegistry(calls);
+  const adapter = registry.get('stubcli');
+  const createBackend = adapter.createBackend.bind(adapter);
+  adapter.createBackend = (...args) => {
+    const backend = createBackend(...args);
+    const listBots = backend.listBots.bind(backend);
+    backend.listBots = async () => {
+      const result = await listBots();
+      return {
+        ...result,
+        data: [...result.data, { id: 'coder' }, { id: 'writer' }, { id: 'silent' }],
+      };
+    };
+    return backend;
+  };
+  return registry;
+}
+
+test('bot groups: a member no bot answers to dies at the door, not on first send', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: groupRosterRegistry(calls) });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    const refused = await fetch(`${base}/v1/bot-groups`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'crew', memberIds: ['researcher', 'ghost'] }),
+    });
+    assert.equal(refused.status, 400);
+    const body = await refused.json();
+    assert.equal(body.error.code, 'unknown_member');
+    assert.match(body.error.message, /ghost/);
+
+    // Nothing was persisted: the room list stays empty, so nobody ever meets
+    // this room again as a mid-demo 404 on its first message.
+    const rooms = await (await fetch(`${base}/v1/bot-groups`, { headers: auth(gate) })).json();
+    assert.deepEqual(rooms.data, []);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('bot groups: an unreachable roster refuses the write instead of guessing', async () => {
+  const calls = [];
+  // Default stub registry: its backend implements no listBots, so membership
+  // cannot be verified — the honest answer is a refusal, not a room built on
+  // hope that would die wholesale on its first send anyway.
+  const { gate } = await makeGate({ calls });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    const refused = await fetch(`${base}/v1/bot-groups`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'crew', memberIds: ['researcher', 'coder'] }),
+    });
+    assert.equal(refused.status, 502);
+    assert.equal((await refused.json()).error.code, 'roster_unavailable');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('bot groups: a patch that names members AND a blank name lands nowhere', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: groupRosterRegistry(calls) });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    const created = await (await fetch(`${base}/v1/bot-groups`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'crew', memberIds: ['researcher', 'coder'] }),
+    })).json();
+
+    // Historically the add landed, THEN the blank-name rename threw — a
+    // half-applied patch. The name is validated before anything mutates now,
+    // so the room keeps both its name and its original roster.
+    const patched = await fetch(`${base}/v1/bot-groups/${created.id}`, {
+      method: 'PATCH',
+      headers: auth(gate),
+      body: JSON.stringify({ name: '   ', memberIds: ['writer'] }),
+    });
+    assert.equal(patched.status, 400);
+    assert.equal((await patched.json()).error.code, 'invalid_group');
+
+    const room = await (await fetch(`${base}/v1/bot-groups`, { headers: auth(gate) })).json();
+    assert.equal(room.data[0].name, 'crew');
+    assert.deepEqual(room.data[0].memberIds, ['researcher', 'coder']);
+
+    // An unknown member in a patch is equally all-or-nothing: members are
+    // applied first, so their refusal must stop the valid name from landing
+    // either.
+    const poisoned = await fetch(`${base}/v1/bot-groups/${created.id}`, {
+      method: 'PATCH',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'renamed', memberIds: ['ghost'] }),
+    });
+    assert.equal(poisoned.status, 400);
+    assert.equal((await poisoned.json()).error.code, 'unknown_member');
+    const after = await (await fetch(`${base}/v1/bot-groups`, { headers: auth(gate) })).json();
+    assert.deepEqual(after.data[0].memberIds, ['researcher', 'coder']);
+    assert.equal(after.data[0].name, 'crew', 'the good half of a poisoned patch must not land');
   } finally {
     await gate.close();
   }

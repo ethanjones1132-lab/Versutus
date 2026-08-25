@@ -390,7 +390,28 @@ export async function createGate(config = {}) {
     onChanged: () => reload(),
   });
   const environmentStore = new CliEnvironmentStore(gateHome);
-  const botGroups = createBotGroupStore(gateHome);
+  // Group membership writes cross-check the same roster the Bots screen
+  // reads, so a typo'd or stale bot id dies at the door (400 naming it)
+  // instead of surviving until the room's first message fails wholesale.
+  // Walked capability-first like resolveBackendFor, but response-free: the
+  // store turns an unreachable roster into its own honest refusal. The
+  // backendManager binding is declared below; resolution happens per write,
+  // long after setup finishes.
+  const botGroups = createBotGroupStore(gateHome, {
+    listBotIds: async () => {
+      for (const entry of await backendManager.list()) {
+        const backend = await backendManager.get(entry.id).catch(() => null);
+        if (backend && typeof backend.listBots === 'function') {
+          // listBots speaks the wire shape ({ object: 'list', data: [...] });
+          // a bare array is accepted too, but never guessed from anything else.
+          const roster = await backend.listBots();
+          const rows = Array.isArray(roster) ? roster : Array.isArray(roster?.data) ? roster.data : [];
+          return rows.map((bot) => String(bot?.id ?? '')).filter(Boolean);
+        }
+      }
+      throw new Error('no attached backend can list bots');
+    },
+  });
   // Live Hermes-kind run streams are teed here so a finished run still
   // replays after Hermes drops its live-only event buffer — and across a
   // Gate restart. Separate from the environments archive (<gateHome>/runs):
@@ -1363,6 +1384,15 @@ export async function createGate(config = {}) {
         if (!Array.isArray(body.memberIds) && typeof body.name !== 'string') {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: 'nothing to update', code: 'invalid_group' } }));
+          return;
+        }
+        // Validate BOTH halves of a patch before either mutates: a request
+        // that adds members AND renames must never land half-applied because
+        // the name turned out blank — the rename would have refused anyway,
+        // just after the members were already written.
+        if (typeof body.name === 'string' && !body.name.trim()) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'name required', code: 'invalid_group' } }));
           return;
         }
         try {

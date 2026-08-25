@@ -105,3 +105,64 @@ test('concurrent adds both land through the mutation queue', async () => {
   const final = await store.get(created.id);
   assert.deepEqual([...final.memberIds].sort(), ['anchor1x', 'b', 'c', 'd']);
 });
+
+test('create refuses members the wired roster does not know, persisting nothing', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'gate-groups-'));
+  const store = createBotGroupStore(home, { listBotIds: async () => ['a', 'b'] });
+
+  await assert.rejects(store.create({ name: 'crew', memberIds: ['a', 'ghost'] }), (error) => {
+    assert.equal(error.code, 'unknown_member');
+    assert.equal(error.status, 400);
+    assert.match(error.message, /ghost/);
+    return true;
+  });
+  // The refused create wrote nothing: no doomed room lingers on disk waiting
+  // to 404 on its first message.
+  const disk = await readFile(join(home, 'bot-groups.json'), 'utf8').catch(() => null);
+  assert.equal(disk, null, 'the refused create must not persist a room');
+});
+
+test('an unreachable roster refuses membership writes honestly instead of guessing', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'gate-groups-'));
+  const store = createBotGroupStore(home, {
+    listBotIds: async () => {
+      throw new Error('hermes down');
+    },
+  });
+
+  await assert.rejects(store.create({ name: 'crew', memberIds: ['a', 'b'] }), (error) => {
+    assert.equal(error.code, 'roster_unavailable');
+    assert.equal(error.status, 502);
+    assert.match(error.message, /hermes down/);
+    return true;
+  });
+});
+
+test('a roster-resolved room still creates and adds when every id verifies', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'gate-groups-'));
+  const store = createBotGroupStore(home, { listBotIds: async () => ['a', 'b', 'c'] });
+  const created = await store.create({ name: 'crew', memberIds: ['a', 'b'] });
+  const updated = await store.addMembers(created.id, ['c']);
+  assert.deepEqual(updated.memberIds, ['a', 'b', 'c']);
+});
+
+test('adds keep the WHOLE room addressable, exposing a legacy dead member', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'gate-groups-'));
+  // A room from before the roster guard existed carries a dead id.
+  const unverified = createBotGroupStore(home);
+  const legacy = await unverified.create({ name: 'legacy', memberIds: ['a', 'ghost'] });
+
+  // Reopened WITH the roster (as the Gate wires it), an add to that room must
+  // refuse and name the dead member rather than bless the broken roster.
+  const verified = createBotGroupStore(home, { listBotIds: async () => ['a', 'b'] });
+  await assert.rejects(verified.addMembers(legacy.id, ['b']), (error) => {
+    assert.equal(error.code, 'unknown_member');
+    assert.match(error.message, /ghost/);
+    return true;
+  });
+  assert.deepEqual(
+    (await verified.get(legacy.id)).memberIds,
+    ['a', 'ghost'],
+    'the refused add changed nothing',
+  );
+});
