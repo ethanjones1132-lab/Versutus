@@ -57,9 +57,15 @@ export function classifyRunFailure(message: string): RunFailureKind {
   if (/environment (?:not_installed|incompatible|degraded)\b/i.test(text)) {
     return 'environment_unreachable';
   }
-  if (/hermes home is not configured|cannot act as a chat backend|does not implement bots|no attached backend/i.test(
-    text,
-  )) {
+  // gate/core/cli-environments/backends/hermes.mjs (:521/:600) throws
+  // `Hermes executable or home is not configured` when either half of the
+  // CLI environment is missing; older surfaces emit the same refusal without
+  // the executable clause. Both wordings are one verdict.
+  if (
+    /hermes (?:executable or )?home is not configured|cannot act as a chat backend|does not implement bots|no attached backend/i.test(
+      text,
+    )
+  ) {
     return 'environment_unreachable';
   }
   if (/exceeded its \d+s time limit|maxrunseconds|run time limit/i.test(text)) return 'time_limit';

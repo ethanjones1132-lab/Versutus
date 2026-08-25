@@ -38,6 +38,12 @@ test('spawn failures read as an unreachable environment, not a network blip', ()
 
 test('backend misconfigurations count as environment failures', () => {
   expect(classifyRunFailure('Hermes home is not configured')).toBe('environment_unreachable');
+  // The exact string backends/hermes.mjs throws when the CLI binary or its
+  // home is missing — the wider wording must reach the same verdict instead
+  // of falling through to generic and showing raw wire text.
+  expect(classifyRunFailure('Hermes executable or home is not configured')).toBe(
+    'environment_unreachable',
+  );
   expect(classifyRunFailure('This backend does not implement bots')).toBe('environment_unreachable');
 });
 
