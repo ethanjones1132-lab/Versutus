@@ -352,7 +352,7 @@ async function handleStart(args = []) {
   try {
     lock = await acquireInstanceLock(gateHome);
   } catch (err) {
-    console.error(describeStartFailure(err));
+    console.error(describeStartFailure(err, port));
     process.exit(1);
   }
   // 'exit' handlers must finish synchronously: an async release here dies with

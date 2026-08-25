@@ -10,6 +10,7 @@ import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { normalizeGatewayUrl } from '@/lib/gateway/url';
 import { requestGatewayAccess, type AccessRequestResult } from '@/lib/portal/access';
 import { identifyGateway, type GatewayIdentity } from '@/lib/portal/identify';
+import { connectToken } from '@/lib/gateway/connect-token';
 
 function firstParam(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -38,69 +39,77 @@ export default function AddGatewayScreen() {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   async function handleSave() {
-    setSaving(true);
-    setAccessNote(null);
-    setAccessStatus(null);
-    setSaveError(null);
-    try {
-      // 0. Canonicalize once: every probe, the access handshake, and the saved
-      // profile must use the SAME base, or a paste artifact (stray space,
-      // missing scheme, ws:// form) identifies fine and then saves wrong.
-      // normalizeGatewayUrl throws the honest "Invalid gateway URL:" message
-      // instead of letting a bad entry fall into the misleading "token
-      // required" dead end.
-      const normalizedUrl = normalizeGatewayUrl(url);
+      setSaving(true);
+      setAccessNote(null);
+      setAccessStatus(null);
+      setSaveError(null);
+      try {
+        // 0. Canonicalize once: every probe, the access handshake, and the saved
+        // profile must use the SAME base, or a paste artifact (stray space,
+        // missing scheme, ws:// form) identifies fine and then saves wrong.
+        // normalizeGatewayUrl throws the honest "Invalid gateway URL:" message
+        // instead of letting a bad entry fall into the misleading "token
+        // required" dead end.
+        const normalizedUrl = normalizeGatewayUrl(url);
 
-      // 1. Identify the gateway regardless of origin (manifest → fingerprints).
-      const identity = await identifyGateway({ baseUrl: normalizedUrl });
-      setIdentified(identity);
+        // 1. Identify the gateway regardless of origin (manifest → fingerprints).
+        const identity = await identifyGateway({ baseUrl: normalizedUrl });
+        setIdentified(identity);
 
-      // 2. Request access through the kind-appropriate handshake.
-      if (identity.kind === 'openclaw' || identity.kind === 'custom') {
-        const result = await requestGatewayAccess({ baseUrl: normalizedUrl, identity, token: token || undefined });
-        setAccessStatus(result.status);
-        if (result.status === 'granted' && result.token) setToken(result.token);
-        if (result.status === 'pending-approval') setAccessNote(result.hint ?? 'Approval requested — approve this device on the gateway.');
-        if (result.status === 'denied') {
-          setAccessNote(result.reason);
-          setSaving(false);
-          return;
-        }
-        if (result.status === 'token-required') {
-          setAccessNote(result.hint ?? 'This gateway requires a token.');
+        // 2. Request access through the kind-appropriate handshake.
+        // The granted device token must survive into the saved profile even
+        // though `token` (state) still holds the pre-update value here — a
+        // setState does not change this closure. Drop it on the floor and the
+        // connect retries without a token and 401s (pair-grant never connects).
+        let grantedToken: string | undefined;
+        if (identity.kind === 'openclaw' || identity.kind === 'custom') {
+          const result = await requestGatewayAccess({ baseUrl: normalizedUrl, identity, token: token || undefined });
+          setAccessStatus(result.status);
+          if (result.status === 'granted' && result.token) {
+            grantedToken = result.token;
+            setToken(result.token);
+          }
+          if (result.status === 'pending-approval') setAccessNote(result.hint ?? 'Approval requested — approve this device on the gateway.');
+          if (result.status === 'denied') {
+            setAccessNote(result.reason);
+            setSaving(false);
+            return;
+          }
+          if (result.status === 'token-required') {
+            setAccessNote(result.hint ?? 'This gateway requires a token.');
+            setShowAdvanced(true);
+            setSaving(false);
+            return;
+          }
+        } else if (identity.auth.requiresToken && !token.trim()) {
+          setAccessNote('This gateway requires an access token — paste it below to connect.');
           setShowAdvanced(true);
           setSaving(false);
           return;
         }
-      } else if (identity.auth.requiresToken && !token.trim()) {
-        setAccessNote('This gateway requires an access token — paste it below to connect.');
-        setShowAdvanced(true);
-        setSaving(false);
-        return;
-      }
 
-      // 3. Save the identified profile and connect through the kind's adapter.
-      const discoverySource =
-        normalizedUrl.includes('.ts.net') || url.trim().toLowerCase().startsWith('wss://')
-          ? 'tailscale'
-          : 'manual';
-      const gateway = await addGateway({
-        name,
-        url: normalizedUrl,
-        kind: identity.kind,
-        token: token || undefined,
-        sessionKey: showAdvanced ? sessionKey : undefined,
-        agentId: showAdvanced ? agentId : undefined,
-        discoverySource,
-      });
-      await connectGateway(gateway);
-      router.replace('/chat');
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setSaving(false);
+        // 3. Save the identified profile and connect through the kind's adapter.
+        const discoverySource =
+          normalizedUrl.includes('.ts.net') || url.trim().toLowerCase().startsWith('wss://')
+            ? 'tailscale'
+            : 'manual';
+        const gateway = await addGateway({
+          name,
+          url: normalizedUrl,
+          kind: identity.kind,
+          token: connectToken(grantedToken, token),
+          sessionKey: showAdvanced ? sessionKey : undefined,
+          agentId: showAdvanced ? agentId : undefined,
+          discoverySource,
+        });
+        await connectGateway(gateway);
+        router.replace('/chat');
+      } catch (error) {
+        setSaveError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setSaving(false);
+      }
     }
-  }
 
   function handleUrlChange(text: string) {
     setUrl(text);
