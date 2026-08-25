@@ -348,6 +348,7 @@ describe('ManifestClient.streamChat', () => {
       },
     };
     const client = new ManifestClient(PROFILE, identityWithBackend, {});
+    client.setBackendId('opencode-local');
     await client.streamChat([{ role: 'user', content: 'hi' }], () => undefined, {
       model: 'kilo/deepcogito/cogito-v2.1-671b',
       providerId: 'nvidia',
@@ -355,6 +356,44 @@ describe('ManifestClient.streamChat', () => {
 
     expect(capturedBody?.backendId).toBe('opencode-local');
     expect(capturedBody?.providerId).toBeUndefined();
+  });
+
+  test('a chat with no explicit backend leaves the body unpinned so the Gate resolves', async () => {
+    let capturedBody: Record<string, unknown> | undefined;
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/v1/chat/completions')) {
+        capturedBody = JSON.parse(String(init?.body));
+        const body = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        });
+        return Promise.resolve({ ok: true, status: 200, body } as unknown as Response);
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    // Claude Code advertises first — the default pin that made the production
+    // Gate answer 501 must not be sent when the operator chose nothing.
+    const identityWithBackends: GatewayIdentity = {
+      ...IDENTITY,
+      manifest: {
+        ...IDENTITY.manifest!,
+        backends: [
+          { id: 'claude-local', label: 'Claude Code', kind: 'environment' },
+          { id: 'hermes-local', label: 'Hermes', kind: 'environment' },
+        ],
+      },
+    };
+    const client = new ManifestClient(PROFILE, identityWithBackends, {});
+    await client.streamChat([{ role: 'user', content: 'hi' }], () => undefined, {
+      model: 'some-model',
+    });
+
+    expect(capturedBody?.backendId).toBeUndefined();
+    expect(JSON.stringify(capturedBody)).not.toContain('claude-local');
   });
 
   test('assembles live tool-call cards from streamed name then argument fragments', async () => {

@@ -323,8 +323,10 @@ export class ManifestClient implements PortalClient {
     const backendId = this.backendId;
     const model = options?.model || this.defaultModelId();
     // A backend supplies its own model catalog and default, so a turn routed to
-    // one does not need the app to have picked a model first.
-    if (!model && !backendId) {
+    // one does not need the app to have picked a model first. When the Gate
+    // advertises backends but none was chosen, the turn goes unpinned and the
+    // Gate resolves the environment — the backend still owns its default.
+    if (!model && !backendId && this.backends.length === 0) {
       throw new Error(
         `${this.identity.kindLabel} has no model selected and advertises none. Pick a model or configure a provider.`,
       );
@@ -399,9 +401,15 @@ export class ManifestClient implements PortalClient {
     return this.identity.manifest?.backends ?? [];
   }
 
-  /** The backend sessions and chat are scoped to; the first unless chosen. */
+  /**
+   * The backend an operator has explicitly chosen for this conversation; nothing
+   * until one is picked. A default here is a silent pin: on a four-environment
+   * Gate it was whichever advertised first (usually Claude Code), and the Gate
+   * answered 501 for the surfaces that environment does not implement. Leaving
+   * the route unpinned lets the Gate resolve it by capability.
+   */
   get backendId(): string | undefined {
-    return this.selectedBackendId ?? this.backends[0]?.id;
+    return this.selectedBackendId;
   }
 
   setBackendId(id: string | undefined) {
@@ -739,14 +747,12 @@ export class ManifestClient implements PortalClient {
 
   /**
    * Scopes a run route to the backend the operator explicitly chose — and only
-   * then. The plain `backendId` getter falls back to `backends[0]`, which on a
-   * multi-environment Gate is whatever happened to advertise first (usually
-   * Claude Code). Runs are a capability the Gate resolves like Bots and jobs
-   * (see withBotOnly): naming that default turns every run into a deliberate
-   * pin on the one environment that refuses runs (501 runs_unsupported).
-   * An explicit pick is different — the operator said where the run goes — and
-   * that pin survives. Nothing selected leaves the route unpinned so the Gate
-   * resolves the runnable environment by capability.
+   * then (same rule as `withBackend` now that `backendId` carries no default).
+   * Runs are a capability the Gate resolves like Bots and jobs: naming the
+   * default environment turned every run into a deliberate pin on the one that
+   * refuses runs (501 runs_unsupported). An explicit pick survives; nothing
+   * selected leaves the route unpinned so the Gate resolves the runnable
+   * environment by capability.
    */
   private withExplicitBackend(path: string): string {
     const backendId = this.selectedBackendId;

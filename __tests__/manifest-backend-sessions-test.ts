@@ -52,15 +52,16 @@ function stub(responses: Record<string, unknown>) {
 }
 
 describe('ManifestClient against a backend-capable Gate', () => {
-  it('exposes the backends the Gate advertises and defaults to the first', () => {
+  it('exposes the backends the Gate advertises; none is chosen until the operator picks', () => {
     const client = new ManifestClient(PROFILE, IDENTITY);
     expect(client.backends.map((b) => b.id)).toEqual(['opencode-local']);
-    expect(client.backendId).toBe('opencode-local');
+    expect(client.backendId).toBeUndefined();
   });
 
   it('creates a session on the selected backend', async () => {
     const calls = stub({ '/v1/sessions': { id: 'ses_1', title: 'New' } });
     const client = new ManifestClient(PROFILE, IDENTITY);
+    client.setBackendId('opencode-local');
     const created = await client.createSession('New');
     expect(created.id).toBe('ses_1');
     expect(calls[0].method).toBe('POST');
@@ -70,6 +71,7 @@ describe('ManifestClient against a backend-capable Gate', () => {
   it('deletes a session on the selected backend', async () => {
     const calls = stub({ '/v1/sessions': { deleted: true } });
     const client = new ManifestClient(PROFILE, IDENTITY);
+    client.setBackendId('opencode-local');
     await client.deleteSession('ses_1');
     expect(calls[0].method).toBe('DELETE');
     expect(calls[0].url).toContain('/v1/sessions/ses_1');
@@ -81,6 +83,7 @@ describe('ManifestClient against a backend-capable Gate', () => {
       '/v1/sessions': { object: 'list', data: [{ id: 'ses_1' }] },
     });
     const client = new ManifestClient(PROFILE, IDENTITY);
+    client.setBackendId('opencode-local');
     await client.getSessions(10);
     expect(calls[0].url).toContain('backendId=opencode-local');
     expect(calls[0].url).toContain('limit=10');
@@ -89,9 +92,18 @@ describe('ManifestClient against a backend-capable Gate', () => {
   it('interpolates the session id into the messages endpoint', async () => {
     const calls = stub({ '/messages': { object: 'list', data: [] } });
     const client = new ManifestClient(PROFILE, IDENTITY);
+    client.setBackendId('opencode-local');
     await client.getSessionMessages('ses_1', 20);
     expect(calls[0].url).toContain('/v1/sessions/ses_1/messages');
     expect(calls[0].url).toContain('backendId=opencode-local');
+  });
+
+  it('leaves session routes unpinned for the Gate to resolve until a backend is chosen', async () => {
+    const calls = stub({ '/v1/sessions': { object: 'list', data: [{ id: 'ses_1' }] } });
+    const client = new ManifestClient(PROFILE, IDENTITY);
+    await client.getSessions(10);
+    expect(calls[0].url).toContain('/v1/sessions');
+    expect(calls[0].url).not.toContain('backendId=');
   });
 
   it('switching backend changes where sessions are read from', async () => {
