@@ -69,6 +69,8 @@
     "smoke:environments": "node ./scripts/smoke-cli-environments.mjs",
     "smoke:wedge": "node ./scripts/smoke-wedge-loop.mjs",
     "smoke:signoff": "node ./scripts/smoke-signoff.mjs",
+    "export:web": "expo export --platform web",
+    "serve:web": "node ./scripts/serve-web-demo.mjs",
     "build:android:preview": "eas build --profile preview --platform android",
     "build:android:preview:local": "eas build --profile preview --platform android --local"
   },
