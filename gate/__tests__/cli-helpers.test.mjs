@@ -7,6 +7,7 @@ import {
   buildInstanceConfigTemplate,
   getKindTemplate,
   describeStartFailure,
+  resolveStartPort,
 } from '../core/cli-helpers.mjs';
 
 test('validateId accepts lowercase alphanumeric with hyphens', () => {
@@ -126,4 +127,34 @@ test('describeStartFailure passes any other failure through with its message', (
 
 test('describeStartFailure survives a nullish error', () => {
   assert.match(describeStartFailure(null), /Error starting gate:/);
+});
+
+test('resolveStartPort defaults to 8760 with no flag and no env', () => {
+  assert.deepEqual(resolveStartPort([], {}), { port: 8760 });
+});
+
+test('resolveStartPort honors the --port flag', () => {
+  assert.deepEqual(resolveStartPort(['--port', '8765'], {}), { port: 8765 });
+});
+
+test('resolveStartPort falls back to VERSUTUS_GATE_PORT when no flag is given', () => {
+  assert.deepEqual(resolveStartPort([], { VERSUTUS_GATE_PORT: '9000' }), { port: 9000 });
+});
+
+test('resolveStartPort lets the --port flag win over the env override', () => {
+  assert.deepEqual(resolveStartPort(['--port', '8765'], { VERSUTUS_GATE_PORT: '9000' }), { port: 8765 });
+});
+
+test('resolveStartPort rejects non-integer, out-of-range, and missing values', () => {
+  assert.ok(resolveStartPort(['--port', 'abc'], {}).error);
+  assert.ok(resolveStartPort(['--port', '0'], {}).error);
+  assert.ok(resolveStartPort(['--port', '70000'], {}).error);
+  assert.ok(resolveStartPort(['--port', '8.5'], {}).error);
+  // A bare flag with no value must be refused, not silently defaulted.
+  assert.ok(resolveStartPort(['--port'], {}).error);
+  assert.ok(resolveStartPort([], { VERSUTUS_GATE_PORT: 'not-a-port' }).error);
+});
+
+test('resolveStartPort treats an empty env override as unset', () => {
+  assert.deepEqual(resolveStartPort([], { VERSUTUS_GATE_PORT: '' }), { port: 8760 });
 });

@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createGate } from './core/server.mjs';
 import { PairingStore } from './core/pairing.mjs';
 import { DeviceTokenStore } from './core/device-tokens.mjs';
-import { validateId, buildInstanceConfigTemplate, getKindTemplate, describeStartFailure } from './core/cli-helpers.mjs';
+import { validateId, buildInstanceConfigTemplate, getKindTemplate, describeStartFailure, resolveStartPort } from './core/cli-helpers.mjs';
 import { resolveGateHome } from './core/paths.mjs';
 import { ProviderStore } from './core/providers/store.mjs';
 import { migrateLegacyProviders } from './core/providers/migrate-v1.mjs';
@@ -337,6 +337,15 @@ async function handleStart(args = []) {
     console.log(`Web CORS: browser calls allowed from ${origins.join(', ')}`);
   }
 
+  // Named port: a demo/sandbox Gate can run beside the production one instead
+  // of fighting over 8760. Flag wins over VERSUTUS_GATE_PORT, default 8760.
+  const portResolution = resolveStartPort(args);
+  if (portResolution.error) {
+    console.error(`Error: ${portResolution.error}`);
+    process.exit(1);
+  }
+  const port = portResolution.port;
+
   console.log(`Starting ${gateName}...`);
   const gateHome = resolveGateHome();
   let lock;
@@ -354,7 +363,7 @@ async function handleStart(args = []) {
     await migrateLegacyProviders({ sourceRoot: __dirname, gateHome });
     const gate = await createGate({
       root: __dirname,
-      port: 8760,
+      port,
       name: gateName,
       gateHome,
     });
@@ -373,7 +382,7 @@ async function handleStart(args = []) {
     // Outside 'exit' the async release completes; releaseSync in the exit
     // handler above is then a no-op thanks to the shared released guard.
     await lock.release().catch(() => {});
-    console.error(describeStartFailure(err));
+    console.error(describeStartFailure(err, port));
     process.exit(1);
   }
 }
@@ -466,10 +475,15 @@ async function handleService(args) {
   process.exit(1);
 }
 
-async function handleDoctor() {
+async function handleDoctor(args = []) {
   const user = process.env.USERNAME ? `${process.env.USERDOMAIN || 'USER'}\\${process.env.USERNAME}` : process.env.USER;
   const gateHome = resolveGateHome();
-  const listen = 'http://127.0.0.1:8760';
+  const portResolution = resolveStartPort(args);
+  if (portResolution.error) {
+    console.error(`Error: ${portResolution.error}`);
+    process.exit(1);
+  }
+  const listen = `http://127.0.0.1:${portResolution.port}`;
   const [environmentFindings, serverProbe] = await Promise.all([
     diagnoseEnvironmentRecords(join(gateHome, 'config', 'environments'), {
       vault: new CredentialVault({ gateHome }),
@@ -517,8 +531,10 @@ async function main() {
     console.log('    Delete a CLI environment record from Gate home — also the recovery');
     console.log('    path when a record is too corrupt to read; no Gate restart needed');
     console.log('');
-    console.log('  start [--allow-origin <origin>[,<origin>...]]');
-    console.log('    Start the Gate HTTP server on port 8760');
+    console.log('  start [--allow-origin <origin>[,<origin>...]] [--port <n>]');
+    console.log('    Start the Gate HTTP server (default port 8760; --port or');
+    console.log('    VERSUTUS_GATE_PORT names another, e.g. a demo Gate beside a');
+    console.log('    running production one)');
     console.log('    --allow-origin names browser origins (web demo target) that may');
     console.log('    call this Gate cross-origin; off by default');
     console.log('');
@@ -540,6 +556,8 @@ async function main() {
     console.log('');
     console.log('Environment variables:');
     console.log('  GATE_NAME  - Name of the Gate (defaults to "Versutus Gate")');
+    console.log('  VERSUTUS_GATE_PORT - Listen port for start/doctor (default 8760;');
+    console.log('    a --port flag wins over this)');
     console.log('  VERSUTUS_GATE_ALLOW_ORIGIN - Browser origins allowed to call this');
     console.log('    Gate cross-origin (web demo target), comma-separated');
     console.log('');
@@ -561,7 +579,7 @@ async function main() {
   } else if (command === 'service') {
     await handleService(args);
   } else if (command === 'doctor') {
-    await handleDoctor();
+    await handleDoctor(args);
   } else {
     console.error(`Error: unknown command "${command}"`);
     console.error('Run "node gate/cli.mjs help" for usage');

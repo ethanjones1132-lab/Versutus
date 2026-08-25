@@ -55,6 +55,34 @@ export function describeStartFailure(error, port = 8760) {
   return `Error starting gate: ${error?.message ?? String(error)}`;
 }
 
+/**
+ * Resolve the Gate listen port for `cli.mjs start` / `doctor`:
+ * an explicit `--port <n>` flag wins over the VERSUTUS_GATE_PORT env
+ * override, which wins over the default 8760. Returns { port } or { error }
+ * with a human reason — callers print it and exit non-zero (fail honest).
+ * A named port lets a demo/sandbox Gate run beside a production one instead
+ * of fighting over 8760 (see pilot-runbook-v1.md §1, web demo target).
+ */
+export function resolveStartPort(args = [], env = process.env) {
+  const flagIndex = args.indexOf('--port');
+  let raw;
+  if (flagIndex !== -1) {
+    const next = args[flagIndex + 1];
+    if (next === undefined) {
+      return { error: '--port expects a value (an integer between 1 and 65535)' };
+    }
+    raw = String(next);
+  } else {
+    raw = env.VERSUTUS_GATE_PORT;
+  }
+  if (raw === undefined || raw === '') return { port: 8760 };
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return { error: '--port expects an integer between 1 and 65535' };
+  }
+  return { port };
+}
+
 /** Source text for a newly-scaffolded kind.mjs — the required fields
  *  as empty holes, matching how `add` scaffolds a provider config's holes. */
 export function getKindTemplate(kindId, label, family) {
