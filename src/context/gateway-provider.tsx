@@ -34,9 +34,9 @@ import {
   createMessageId,
   hasEarlierHistory,
   historyToChatMessages,
-  pickAppSession,
   prependEarlier,
 } from '@/lib/gateway/messages';
+import { resolveResumeSession } from '@/lib/gateway/session-resume';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import {
   hasBotManagement as probeBotManagement,
@@ -639,24 +639,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // A deliberate session switch updates the ref; do not let the profile's
       // initial session override it on every history reload.
       let sessionId = sessionIdRef.current ?? gateway.sessionId;
-      let sessionsPromise: Promise<HermesSession[]> | null = null;
-      let availableSessions: HermesSession[] = [];
 
       // Resume this app's own most recent session, or start a fresh one. The
       // session selector still lists every session for deliberate switching.
+      // A gate that cannot manage sessions (no `/v1/sessions` endpoint in its
+      // manifest) degrades to stateless chat instead of failing the whole
+      // reload — an operator connecting to such a gate still gets the
+      // dashboard and every environment run.
       if (!sessionId) {
-        sessionsPromise = client.getSessions(20).catch(() => [] as HermesSession[]);
-        void sessionsPromise.then((sessions) => {
-          if (requestId === historyRequestRef.current) setSessionList(sessions);
-        });
-        availableSessions = await sessionsPromise;
-        const own = pickAppSession(availableSessions);
-        if (own) {
-          sessionId = own.id;
-        } else if (client.createSession) {
-          const created = await client.createSession();
-          sessionId = created.id;
-        }
+        const outcome = await resolveResumeSession(client);
+        if (requestId === historyRequestRef.current) setSessionList(outcome.sessions);
+        sessionId = outcome.sessionId;
       }
 
       sessionIdRef.current = sessionId;
