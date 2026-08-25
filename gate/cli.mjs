@@ -534,7 +534,10 @@ async function main() {
     console.log('  start [--allow-origin <origin>[,<origin>...]] [--port <n>]');
     console.log('    Start the Gate HTTP server (default port 8760; --port or');
     console.log('    VERSUTUS_GATE_PORT names another, e.g. a demo Gate beside a');
-    console.log('    running production one)');
+    console.log('    running production one). A second instance also needs its own');
+    console.log('    home: set VERSUTUS_GATE_HOME to a different folder — the');
+    console.log('    instance lock is taken per home, so two Gates sharing one');
+    console.log('    home cannot run at the same time.');
     console.log('    --allow-origin names browser origins (web demo target) that may');
     console.log('    call this Gate cross-origin; off by default');
     console.log('');
@@ -556,6 +559,10 @@ async function main() {
     console.log('');
     console.log('Environment variables:');
     console.log('  GATE_NAME  - Name of the Gate (defaults to "Versutus Gate")');
+    console.log('  VERSUTUS_GATE_HOME - Where this Gate keeps its records and state');
+    console.log('    (default %LOCALAPPDATA%\\Versutus\\Gate on Windows). Give a');
+    console.log('    second/demo Gate its OWN folder here, or the instance lock');
+    console.log('    refuses to start beside a running one.');
     console.log('  VERSUTUS_GATE_PORT - Listen port for start/doctor (default 8760;');
     console.log('    a --port flag wins over this)');
     console.log('  VERSUTUS_GATE_ALLOW_ORIGIN - Browser origins allowed to call this');
