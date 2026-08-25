@@ -2,16 +2,19 @@ export function doctor({
   user,
   gateHome,
   listen,
-  pid,
   dpapi = true,
   serverProbe,
   environmentFindings,
 } = {}) {
+  // No `pid` line on purpose: this command used to print its own ephemeral
+  // process id, which every reader took for the running Gate's pid (observed
+  // 2026-08-25 — doctor printed 90428 while the listener was 28160). The
+  // wire-true liveness fact is the server probe below; process identity lives
+  // in netstat/Task Manager, not here.
   const lines = [
     `user: ${user}`,
     `gateHome: ${gateHome}`,
     `listen: ${listen}`,
-    `pid: ${pid}`,
     `dpapi: ${dpapi ? 'usable' : 'unavailable'}`,
   ];
 

@@ -464,7 +464,7 @@ async function handleService(args) {
     return;
   }
   if (sub === 'status') {
-    console.log(doctor({ user, gateHome, listen: 'http://127.0.0.1:8760', pid: process.pid }));
+    console.log(doctor({ user, gateHome, listen: 'http://127.0.0.1:8760' }));
     return;
   }
   if (sub === 'start' || sub === 'stop' || sub === 'uninstall') {
@@ -494,7 +494,6 @@ async function handleDoctor(args = []) {
     user,
     gateHome,
     listen,
-    pid: process.pid,
     serverProbe,
     environmentFindings,
   }));

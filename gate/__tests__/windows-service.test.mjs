@@ -49,9 +49,9 @@ test('doctor reports identity, home, and listener without secrets', () => {
     user: 'DESKTOP\\ethan',
     gateHome: 'C:\\Users\\ethan\\AppData\\Local\\Versutus\\Gate',
     listen: 'http://127.0.0.1:8760',
-    pid: 4242,
   });
   assert.match(report, /DESKTOP\\ethan/);
   assert.match(report, /8760/);
+  assert.doesNotMatch(report, /\bpid\b/i);
   assert.equal(report.includes('token'), false);
 });

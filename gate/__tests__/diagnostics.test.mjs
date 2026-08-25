@@ -291,7 +291,6 @@ test('doctor renders environment findings without leaking secrets', () => {
     user: 'DESKTOP\\ethan',
     gateHome: 'C:\\Users\\ethan\\AppData\\Local\\Versutus\\Gate',
     listen: 'http://127.0.0.1:8760',
-    pid: 4242,
     serverProbe: { reachable: false, detail: 'ECONNREFUSED' },
     environmentFindings: [
       { severity: 'ok', environment: 'hermes-local', message: 'record valid, executable present (hermes)' },
@@ -303,6 +302,22 @@ test('doctor renders environment findings without leaking secrets', () => {
   assert.match(report, /codex-dev: ERROR — record failed validation/);
   assert.match(report, /NOT REACHABLE/);
   assert.equal(report.includes('token'), false);
+});
+
+test('doctor never names a process id it cannot know', () => {
+  // The command's own ephemeral pid used to be printed as `pid:` and was read
+  // as the running Gate's pid (observed 2026-08-25: printed 90428, listener
+  // was 28160). Liveness truth is the server probe; keep the lie dead.
+  const report = doctor({
+    user: 'DESKTOP\\ethan',
+    gateHome: 'C:\\Users\\ethan\\AppData\\Local\\Versutus\\Gate',
+    listen: 'http://127.0.0.1:8760',
+    serverProbe: { reachable: true, detail: 'manifest answered 200' },
+    environmentFindings: [
+      { severity: 'ok', environment: 'hermes-local', message: 'record valid' },
+    ],
+  });
+  assert.doesNotMatch(report, /\bpid\b/i);
 });
 
 test('doctor keeps the legacy report shape when no diagnostics are passed', () => {
