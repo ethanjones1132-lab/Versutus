@@ -62,4 +62,9 @@ gate/credentials/
 
 # Commercial/pricing working documents — not for the public repo.
 docs/commercial/
+
+# Scratch/probe scripts and logs (relay-replay-probe.mjs, stop/restart-gate.mjs,
+# gate-restart.log). Cited by the pilot packet's sign-off sheet but machine-local;
+# never commit them.
+temp/
 Python/_cache/
