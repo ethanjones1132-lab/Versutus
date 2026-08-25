@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 
+import { webCors } from './cors.mjs';
 import { loadCapabilities, describeKinds, resolveManifestInstances } from './capabilities/registry.mjs';
 import { buildInstanceHandlers } from './capabilities/dispatch.mjs';
 import { createRegistryMethods } from './capabilities/registry-methods.mjs';
@@ -625,6 +626,10 @@ export async function createGate(config = {}) {
 
   // Create HTTP server
   const server = createServer(async (req, res) => {
+    // Web CORS: opt-in via --allow-origin / VERSUTUS_GATE_ALLOW_ORIGIN. Until
+    // the operator names origins this handles nothing at all (core/cors.mjs).
+    if (webCors(req, res)) return;
+
     // Set common headers
     res.setHeader('Content-Type', 'application/json');
 

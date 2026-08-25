@@ -317,8 +317,25 @@ async function handleAddKind(args) {
 /**
  * Handle 'start' command: start the Gate server
  */
-async function handleStart() {
+async function handleStart(args = []) {
   const gateName = process.env.GATE_NAME || 'Versutus Gate';
+
+  // Web demo target: let named browser origins call this Gate cross-origin
+  // (the app in a phone browser sits on Metro's port, not this one). Off by
+  // default — see docs/commercial/pilot-runbook-v1.md §0.
+  const flagIndex = args.indexOf('--allow-origin');
+  if (flagIndex !== -1) {
+    const origins = String(args[flagIndex + 1] ?? '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    if (origins.length === 0 || origins.some((entry) => !/^https?:\/\//i.test(entry))) {
+      console.error('Error: --allow-origin expects http(s)://host:port origins, comma-separated');
+      process.exit(1);
+    }
+    process.env.VERSUTUS_GATE_ALLOW_ORIGIN = origins.join(',');
+    console.log(`Web CORS: browser calls allowed from ${origins.join(', ')}`);
+  }
 
   console.log(`Starting ${gateName}...`);
   const gateHome = resolveGateHome();
@@ -500,8 +517,10 @@ async function main() {
     console.log('    Delete a CLI environment record from Gate home — also the recovery');
     console.log('    path when a record is too corrupt to read; no Gate restart needed');
     console.log('');
-    console.log('  start');
+    console.log('  start [--allow-origin <origin>[,<origin>...]]');
     console.log('    Start the Gate HTTP server on port 8760');
+    console.log('    --allow-origin names browser origins (web demo target) that may');
+    console.log('    call this Gate cross-origin; off by default');
     console.log('');
     console.log('  pair <open|approve|revoke|list>');
     console.log('    Manage device pairing and access tokens');
@@ -521,6 +540,8 @@ async function main() {
     console.log('');
     console.log('Environment variables:');
     console.log('  GATE_NAME  - Name of the Gate (defaults to "Versutus Gate")');
+    console.log('  VERSUTUS_GATE_ALLOW_ORIGIN - Browser origins allowed to call this');
+    console.log('    Gate cross-origin (web demo target), comma-separated');
     console.log('');
     process.exit(0);
   }
@@ -534,7 +555,7 @@ async function main() {
   } else if (command === 'add-kind') {
     await handleAddKind(args);
   } else if (command === 'start') {
-    await handleStart();
+    await handleStart(args);
   } else if (command === 'pair') {
     await handlePair(args);
   } else if (command === 'service') {
