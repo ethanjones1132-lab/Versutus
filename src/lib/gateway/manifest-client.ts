@@ -734,7 +734,25 @@ export class ManifestClient implements PortalClient {
     const body: Record<string, unknown> = { input: prompt };
     if (options?.sessionId) body.session_id = options.sessionId;
     if (options?.model) body.model = options.model;
-    return this.rootTransport.request<RunResponse>('POST', this.withBackend(runs), body);
+    return this.rootTransport.request<RunResponse>('POST', this.withExplicitBackend(runs), body);
+  }
+
+  /**
+   * Scopes a run route to the backend the operator explicitly chose — and only
+   * then. The plain `backendId` getter falls back to `backends[0]`, which on a
+   * multi-environment Gate is whatever happened to advertise first (usually
+   * Claude Code). Runs are a capability the Gate resolves like Bots and jobs
+   * (see withBotOnly): naming that default turns every run into a deliberate
+   * pin on the one environment that refuses runs (501 runs_unsupported).
+   * An explicit pick is different — the operator said where the run goes — and
+   * that pin survives. Nothing selected leaves the route unpinned so the Gate
+   * resolves the runnable environment by capability.
+   */
+  private withExplicitBackend(path: string): string {
+    const backendId = this.selectedBackendId;
+    if (!backendId) return path;
+    const separator = path.includes('?') ? '&' : '?';
+    return `${path}${separator}backendId=${encodeURIComponent(backendId)}`;
   }
 
   async getRunStatus(runId: string): Promise<RunStatus> {
