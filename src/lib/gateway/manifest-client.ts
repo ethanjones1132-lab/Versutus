@@ -133,7 +133,8 @@ export class ManifestClient implements PortalClient {
   }
 
   get canManageGroups(): boolean {
-
+    return Boolean(this.endpoints.botGroups);
+  }
 
   /**
    * Concurrent callers join the attempt already in flight rather than stack
@@ -333,12 +334,14 @@ export class ManifestClient implements PortalClient {
     }
     const body: Record<string, unknown> = { messages, stream: true };
     if (model) body.model = model;
-    if (backendId) {
-      body.backendId = backendId;
+    if (backendId || this.botId) {
+      // A Bot names its own environment: sending the thread's chat backend
+      // alongside it would pin the turn to an environment with no Bots.
+      if (this.botId) body.bot = this.botId;
+      else body.backendId = backendId;
       // The native session holds the history; without it every turn is orphaned.
       const sessionId = options?.sessionId ?? this.currentSessionId;
       if (sessionId) body.sessionId = sessionId;
-      if (this.botId) body.bot = this.botId;
     } else if (options?.providerId) {
       // Unqualified, the Gate refuses to guess between providers that declare
       // the same model id (409 ambiguous_model) — a backend owns its catalog

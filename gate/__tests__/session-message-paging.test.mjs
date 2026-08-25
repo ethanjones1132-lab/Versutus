@@ -36,7 +36,7 @@ const ALL_MESSAGES = Array.from({ length: 25 }, (_, i) => ({
   timestamp: i + 1,
 }));
 
-function pagingRegistry(calls) {
+function pagingRegistry(calls, listMessagesImpl) {
   const adapter = {
     adapterId: 'stubcli',
     adapterRevision: '1',
@@ -52,6 +52,7 @@ function pagingRegistry(calls) {
         async deleteSession() {},
         async listMessages(id, limit) {
           calls.push(`listMessages:${id}:${limit}`);
+          if (listMessagesImpl) return listMessagesImpl(id, limit);
           return typeof limit === 'number' ? ALL_MESSAGES.slice(-limit) : ALL_MESSAGES;
         },
         async sendMessage() { return { text: '', message: null }; },
@@ -68,7 +69,7 @@ function pagingRegistry(calls) {
   };
 }
 
-async function makeGate({ calls = [] } = {}) {
+async function makeGate({ calls = [], listMessagesImpl } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'gate-paging-'));
   roots.push(root);
   const gateHome = join(root, '.gate-home');
@@ -89,7 +90,7 @@ async function makeGate({ calls = [] } = {}) {
     root,
     port: 0,
     gateHome,
-    environmentRegistry: pagingRegistry(calls),
+    environmentRegistry: pagingRegistry(calls, listMessagesImpl),
     backendServerFactory: () => ({
       ensureRunning: async () => ({ baseUrl: 'http://127.0.0.1:1', attached: true }),
       stop: async () => {},
@@ -179,6 +180,39 @@ test('no limit returns the whole history with no cursor', async () => {
     assert.equal(body.data.length, ALL_MESSAGES.length);
     assert.equal(body.hasMore, false);
     assert.equal(body.nextBefore, null);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a session the backend cannot find is a 404, not a 500', async () => {
+  // A backend throwing "not found" is an answer about the request, not a
+  // crash in the Gate. Letting it reach the outer catch turned it into an
+  // Internal Server Error and printed "Request handler error" over the
+  // operator's log every time the app asked about a session that was gone.
+  const { gate } = await makeGate({
+    listMessagesImpl: () => { throw new Error('session "ses_gone" not found'); },
+  });
+  try {
+    const response = await fetch(messagesUrl(gate, 'limit=10'), { headers: auth(gate) });
+    assert.equal(response.status, 404);
+    const body = await response.json();
+    assert.equal(body.error.code, 'unknown_session');
+    assert.match(body.error.message, /not found/i);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a genuine backend failure is still reported as a failure', async () => {
+  const { gate } = await makeGate({
+    listMessagesImpl: () => { throw new Error('transcript store is on fire'); },
+  });
+  try {
+    const response = await fetch(messagesUrl(gate, 'limit=10'), { headers: auth(gate) });
+    assert.equal(response.status, 502);
+    const body = await response.json();
+    assert.match(body.error.message, /on fire/);
   } finally {
     await gate.close();
   }

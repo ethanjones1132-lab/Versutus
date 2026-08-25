@@ -358,3 +358,46 @@ test('updateBot without an executable or home is an honest 501', async () => {
     (error) => error.code === 'backend_unsupported' && error.status === 501,
   );
 });
+test('a session limit travels to Hermes instead of being silently capped', async () => {
+  const { calls, hermes } = backend();
+  await hermes.listSessions(200);
+  assert.equal(calls[0].url, 'http://h:8642/api/sessions?limit=200');
+
+  const plain = backend();
+  await plain.hermes.listSessions();
+  assert.equal(plain.calls[0].url, 'http://h:8642/api/sessions');
+});
+
+test('a title Hermes already holds resolves to that session, not a failure', async () => {
+  // Hermes keeps session titles unique. Bot Chat is a Bot's one canonical,
+  // permanent conversation, so a refused title means "you already have it" —
+  // and once a Bot has more sessions than one page holds, recovering the id
+  // from the refusal is the only way back to it. Failing instead made tapping
+  // that agent bounce straight back to the roster.
+  const existing = { id: 'api_1787256183_54a46d4a', title: 'Bot Chat', started_at: 1, last_active: 1 };
+  const { calls, hermes } = backend((url, init) => {
+    if (init.method === 'POST') {
+      return {
+        ok: false,
+        status: 400,
+        text: async () => JSON.stringify({ detail: 'Title already in use by session api_1787256183_54a46d4a' }),
+      };
+    }
+    return { ok: true, status: 200, json: async () => ({ session: existing }) };
+  });
+
+  const session = await hermes.createSession({ title: 'Bot Chat' });
+  assert.equal(session.id, 'api_1787256183_54a46d4a');
+  assert.equal(session.title, 'Bot Chat');
+  assert.equal(calls[1].url, 'http://h:8642/api/sessions/api_1787256183_54a46d4a');
+});
+
+test('a refusal that is not a title collision still fails', async () => {
+  const { hermes } = backend((url, init) => {
+    if (init.method === 'POST') {
+      return { ok: false, status: 400, text: async () => JSON.stringify({ detail: 'model unavailable' }) };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  });
+  await assert.rejects(() => hermes.createSession({ title: 'Bot Chat' }), /model unavailable/);
+});

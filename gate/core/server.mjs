@@ -879,9 +879,28 @@ export async function createGate(config = {}) {
       }
 
       async function resolveConversationBackend(backendId, botId) {
+        // Naming a Bot names the environment: a Bot is a Hermes profile, and
+        // Claude Code / Codex / OpenCode have no notion of one. Falling back
+        // to the *first* attached environment - which sorts before Hermes on a
+        // typical Gate - answered every Bot conversation with 501 while the
+        // environment that owned the Bot sat right there. Same capability-first
+        // rule resolveBackendFor and resolveRunBackend already use; an explicit
+        // ?backendId= still wins, so a deliberate pin is still told the truth.
+        if (botId && !backendId) {
+          for (const entry of await backendManager.list()) {
+            const candidate = await backendManager.get(entry.id).catch(() => null);
+            if (candidate && typeof candidate.forBot === 'function') {
+              return resolveForBot(candidate, botId);
+            }
+          }
+        }
         const backend = await resolveBackend(backendId);
         if (!backend) return null;
         if (!botId) return backend;
+        return resolveForBot(backend, botId);
+      }
+
+      async function resolveForBot(backend, botId) {
         if (typeof backend.forBot !== 'function') {
           res.writeHead(501, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
@@ -1362,7 +1381,12 @@ export async function createGate(config = {}) {
         const backend = await resolveConversationBackend(url.searchParams.get('backendId'), readBotId(url));
         if (!backend) return;
         const limit = Number(url.searchParams.get('limit')) || undefined;
-        const sessions = await backend.listSessions();
+        // The limit must travel: slicing here cannot recover rows the backend
+        // never returned. Hermes answers /api/sessions with its own default
+        // page, so a request for 200 quietly meant 50 - and a Bot Chat older
+        // than that window read as absent, which sent the caller off to create
+        // a second one that Hermes then refused by title.
+        const sessions = await backend.listSessions(limit);
         res.writeHead(200);
         res.end(JSON.stringify({ object: 'list', data: limit ? sessions.slice(0, limit) : sessions }));
         return;
@@ -1372,7 +1396,20 @@ export async function createGate(config = {}) {
         const body = (await readJsonBody(req)) ?? {};
         const backend = await resolveConversationBackend(body.backendId, readBotId(url, body));
         if (!backend) return;
-        const created = await backend.createSession({ title: body.title, model: body.model });
+        let created;
+        try {
+          created = await backend.createSession({ title: body.title, model: body.model });
+        } catch (error) {
+          // A backend refusing the request ("Title already in use") is its
+          // answer, not a Gate crash: pass its status and words through so the
+          // caller can act on them instead of seeing Internal Server Error.
+          const status = Number(error?.status) >= 400 && Number(error?.status) < 600 ? Number(error.status) : 502;
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: { message: error?.message ?? 'Could not create a session', code: error?.code ?? 'session_create_failed' },
+          }));
+          return;
+        }
         res.writeHead(200);
         res.end(JSON.stringify(created));
         return;
@@ -1391,7 +1428,22 @@ export async function createGate(config = {}) {
         // slice wearing a different hat. Doing it here still wins the part that
         // matters to the client -- a bounded, stable page instead of
         // re-downloading the entire window with an ever-larger limit.
-        const all = await backend.listMessages(decodeURIComponent(sessionMessagesMatch[1]));
+        // A backend refusing a session id is an answer about the request, not
+        // a crash in the Gate. Unwrapped, it fell to the outer catch as a 500
+        // and printed "Request handler error" over the operator's log - while
+        // the app, seeing only a server error, could not tell "this session is
+        // gone, start a new one" from "the Gate is broken".
+        let all;
+        try {
+          all = await backend.listMessages(decodeURIComponent(sessionMessagesMatch[1]));
+        } catch (error) {
+          const missing = error?.code === 'unknown_session' || /not found/i.test(error?.message ?? '');
+          res.writeHead(missing ? 404 : 502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: { message: error?.message ?? 'Could not read this session', code: missing ? 'unknown_session' : 'session_read_failed' },
+          }));
+          return;
+        }
         const cutoff = before ? all.findIndex((message) => message?.id === before) : -1;
         // An unknown cursor must not silently behave like "no cursor" and
         // re-serve the newest page; that would loop the client forever.
@@ -1629,8 +1681,15 @@ export async function createGate(config = {}) {
 
         // A backend-addressed turn runs inside the native environment, which is
         // what gives it that platform's sessions, tools and approvals.
-        if (body.backendId) {
-          const backend = await resolveConversationBackend(body.backendId, readBotId(url, body));
+        // Naming a Bot is naming an environment, exactly as naming a backend
+        // is. Gating this on `backendId` alone meant that once the app
+        // correctly stopped pinning the thread's chat backend for Bot turns -
+        // a Bot owns its own environment - every Bot message fell through to
+        // the provider proxy below and came back as an upstream error from a
+        // vendor that was never meant to serve it.
+        const botForTurn = readBotId(url, body);
+        if (body.backendId || botForTurn) {
+          const backend = await resolveConversationBackend(body.backendId, botForTurn);
           if (!backend) return;
           try {
             const sessionId = body.sessionId

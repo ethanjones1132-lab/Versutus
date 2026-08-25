@@ -114,11 +114,33 @@ export function createHermesBackend({
     return response.json();
   }
 
+  /**
+   * The session behind a "title already in use" refusal, or null when the
+   * refusal was about something else. Hermes names the holder in the message;
+   * a title scan of the newest page is the fallback for a wording change.
+   */
+  async function sessionForTakenTitle(error, title) {
+    if (!/already in use/i.test(error?.message ?? '')) return null;
+    const named = /session\s+([A-Za-z0-9_.:-]+)/i.exec(error.message)?.[1];
+    if (named) {
+      const found = await call(`/api/sessions/${encodeURIComponent(named)}`).catch(() => null);
+      const session = found?.session ?? found;
+      if (session?.id) return toGatewaySession(session);
+    }
+    const listed = await call('/api/sessions?limit=200').catch(() => null);
+    const match = (listed?.data ?? []).find((session) => session?.title === title);
+    return match ? toGatewaySession(match) : null;
+  }
+
   return {
     kind: 'hermes',
 
-    async listSessions() {
-      const body = await call('/api/sessions');
+    async listSessions(limit) {
+      // Without an explicit limit Hermes serves its own default page, so a
+      // caller asking for more silently got less - and anything past that
+      // window looked like it did not exist.
+      const query = typeof limit === 'number' && limit > 0 ? `?limit=${encodeURIComponent(limit)}` : '';
+      const body = await call(`/api/sessions${query}`);
       return (body.data ?? []).map(toGatewaySession);
     },
 
@@ -126,9 +148,21 @@ export function createHermesBackend({
       const payload = {};
       if (title) payload.title = title;
       if (model?.modelId) payload.model = model.modelId;
-      const body = await call('/api/sessions', { method: 'POST', body: JSON.stringify(payload) });
-      // Create answers `{object, session}` rather than the session directly.
-      return toGatewaySession(body.session ?? body);
+      try {
+        const body = await call('/api/sessions', { method: 'POST', body: JSON.stringify(payload) });
+        // Create answers `{object, session}` rather than the session directly.
+        return toGatewaySession(body.session ?? body);
+      } catch (error) {
+        // Hermes keeps session titles unique. Bot Chat is a Bot's one
+        // canonical, permanent conversation, so a refused title means the
+        // caller already has what it asked for - and once a Bot has more
+        // sessions than a single page holds, the id named in the refusal is
+        // the only way back to it. Without this, tapping such an agent
+        // reported a failure and bounced back to the roster.
+        const existing = title ? await sessionForTakenTitle(error, title) : null;
+        if (existing) return existing;
+        throw error;
+      }
     },
 
     async deleteSession(sessionId) {
