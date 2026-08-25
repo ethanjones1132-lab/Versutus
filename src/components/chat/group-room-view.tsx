@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
 import { BaseSheet, Button, ConfirmSheet, Icon, PressableScale, Text, TextField } from '@/components/ui';
@@ -14,10 +14,10 @@ import {
   GROUP_MEMBER_FLOOR_REASON,
   groupSpeakers,
   MAX_GROUP_MESSAGES,
+  mergeTranscriptRows,
   type BotGroupRoom,
   type GroupReply,
   type GroupTranscriptEntry,
-  transcriptToRoomEntries,
 } from '@/lib/gateway/groups';
 import { extractMentions } from '@/lib/gateway/mentions';
 
@@ -105,6 +105,7 @@ export function GroupRoomView({
   const scrollRef = useRef<ScrollView>(null);
   const [entries, setEntries] = useState<RoomEntry[]>([]);
   const [historyError, setHistoryError] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | undefined>();
@@ -161,8 +162,8 @@ export function GroupRoomView({
 
   // Replay the Gate-stored transcript once per room visit, so a revisit
   // continues the conversation instead of starting blank. Stored lines are
-  // merged by id BEFORE anything typed this session — a send that lands while
-  // history is in flight is never clobbered.
+  // merged by id and send-window BEFORE anything typed this session — a send
+  // that lands while history is in flight is never clobbered or duplicated.
   const historyRequested = useRef(false);
   useEffect(() => {
     if (!loadHistory || historyRequested.current) return;
@@ -171,11 +172,7 @@ export function GroupRoomView({
     loadHistory()
       .then((stored) => {
         if (!alive) return;
-        setEntries((prev) => {
-          const known = new Set(prev.map((entry) => entry.id));
-          const replayed = transcriptToRoomEntries(stored).filter((row) => !known.has(row.id));
-          return [...replayed, ...prev];
-        });
+        setEntries((prev) => mergeTranscriptRows(prev, stored));
       })
       .catch(() => {
         // Fail honest: say earlier replies may be missing instead of showing
@@ -186,6 +183,27 @@ export function GroupRoomView({
       alive = false;
     };
   }, [loadHistory]);
+
+  // Pull-to-refresh re-reads the same transcript in place (the roster pattern
+  // from 3824b97): new stored lines are folded in oldest-first, and a failed
+  // or empty read never wipes what is already on screen — this room's stored
+  // lines are recent truth, but the transcript in front of the operator is
+  // the conversation, not a cached inventory.
+  const handleRefresh = useCallback(() => {
+    if (!loadHistory || refreshing) return;
+    setRefreshing(true);
+    loadHistory()
+      .then((stored) => {
+        setHistoryError(false);
+        setEntries((prev) => mergeTranscriptRows(prev, stored));
+      })
+      .catch(() => {
+        // Fail honest: say the re-read missed lines instead of pretending
+        // everything made it in.
+        setHistoryError(true);
+      })
+      .finally(() => setRefreshing(false));
+  }, [loadHistory, refreshing]);
 
   const handleSend = () => {
     const text = draft.trim();
@@ -294,7 +312,18 @@ export function GroupRoomView({
       <ScrollView
         ref={scrollRef}
         contentContainerStyle={styles.scroll}
-        keyboardShouldPersistTaps="handled">
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          loadHistory ? (
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={tokens.accentWarm}
+              colors={[tokens.accentWarm]}
+              progressBackgroundColor={tokens.backgroundElevated}
+            />
+          ) : undefined
+        }>
         <View
           style={[styles.roomCard, { backgroundColor: tokens.backgroundRaised, borderColor: tokens.glassBorder }]}>
           <View style={styles.roomCardHead}>

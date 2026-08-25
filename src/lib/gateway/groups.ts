@@ -50,6 +50,62 @@ export function transcriptToRoomEntries(entries: GroupTranscriptEntry[]): RoomTr
   return rows;
 }
 
+/** The minimal shape any rendered room line carries — storage rows and the
+ *  view's richer local variants both fit under it. */
+export type TranscriptRowLike = {
+  id: string;
+  role: 'user' | 'bot';
+  text: string;
+  at?: number;
+  botId?: string;
+};
+
+/**
+ * How close two stamps must be for a stored line to read as the Gate's copy
+ * of a line this phone already shows. The Gate records the send moment with
+ * its own clock and id (random hex, never the phone's `u-<ts>`), so a re-read
+ * cannot dedupe by id alone; a byte-identical line stamped within the send
+ * window is the same message, not a new one.
+ */
+export const TRANSCRIPT_READ_WINDOW_MS = 60_000;
+
+function sameStoredLine<T extends TranscriptRowLike>(local: T, stored: RoomTranscriptRow): boolean {
+  if (local.role !== stored.role || local.text !== stored.text) return false;
+  if (local.role === 'bot') {
+    // A bot reply is only the same line when the same bot said the same
+    // thing — a stored line without an author never matches.
+    if (stored.role !== 'bot' || local.botId !== stored.botId) return false;
+  }
+  if (typeof local.at !== 'number' || typeof stored.at !== 'number') return false;
+  return Math.abs(local.at - stored.at) < TRANSCRIPT_READ_WINDOW_MS;
+}
+
+/**
+ * Fold a fresh transcript read into the rows currently shown, oldest-first as
+ * stored. Safe to call for the first replay AND for later pull-to-refresh
+ * reads:
+ *  - a stored line already shown (same id) is never re-added;
+ *  - a stored line that is the Gate's copy of a line this phone sent this
+ *    visit (same role/text, stamped within TRANSCRIPT_READ_WINDOW_MS) is
+ *    skipped so a re-read cannot duplicate the optimistic copy — the local
+ *    row stays because it carries the send-time meta (reply counts, routing
+ *    verdicts, cap note) the storage row lacks;
+ *  - corrupt lines never enter the view (dropped in transcriptToRoomEntries);
+ *  - a failed or empty read never removes anything: the transcript is the
+ *    conversation in front of the operator, not a cached inventory, so no
+ *    refresh wipes it.
+ */
+export function mergeTranscriptRows<T extends TranscriptRowLike>(
+  current: T[],
+  stored: GroupTranscriptEntry[],
+): T[] {
+  const known = new Set(current.map((row) => row.id));
+  const additions = transcriptToRoomEntries(stored).filter(
+    (row) => !known.has(row.id) && !current.some((local) => sameStoredLine(local, row)),
+  );
+  return [...additions, ...current] as T[];
+}
+
 const GROUP_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /**

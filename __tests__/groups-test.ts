@@ -11,12 +11,14 @@ import {
   groupSpeakers,
   MAX_GROUP_MESSAGES,
   MAX_GROUP_ROUNDS,
+  mergeTranscriptRows,
   planGroupRounds,
   rosterInventoryVerified,
+  TRANSCRIPT_READ_WINDOW_MS,
   transcriptToRoomEntries,
   validateGroup,
 } from '@/lib/gateway/groups';
-import type { BotGroupRoom, GroupTranscriptEntry } from '@/lib/gateway/groups';
+import type { BotGroupRoom, GroupTranscriptEntry, TranscriptRowLike } from '@/lib/gateway/groups';
 
 const ROOM: BotGroupRoom = { id: 'room1', name: 'crew', memberIds: ['coder', 'researcher'] };
 
@@ -285,4 +287,117 @@ test('rosterInventoryVerified: an in-flight first read stays unverified', () => 
 
 test('rosterInventoryVerified: rows surviving an earlier success keep verdicts provable after a failed refresh', () => {
   expect(rosterInventoryVerified({ loading: false, error: 'timeout', botCount: 3 })).toBe(true);
+});
+
+const NOW = 1_752_000_000_000;
+
+test('mergeTranscriptRows folds new stored lines in oldest-first, before the live rows', () => {
+  const current = [{ id: 'u-1', role: 'user', text: 'go', at: NOW } as const];
+  const stored: GroupTranscriptEntry[] = [
+    { id: 'g-1', role: 'user', text: 'earlier exchange', at: NOW - 60_000 },
+    { id: 'g-2', role: 'bot', botId: 'coder', text: 'done', at: NOW - 60_000 },
+  ];
+  expect(mergeTranscriptRows(current, stored)).toEqual([
+    { id: 'g-1', role: 'user', text: 'earlier exchange', at: NOW - 60_000 },
+    { id: 'g-2', role: 'bot', botId: 'coder', text: 'done', at: NOW - 60_000 },
+    { id: 'u-1', role: 'user', text: 'go', at: NOW },
+  ]);
+});
+
+test('mergeTranscriptRows never re-adds a stored line the view already shows', () => {
+  const current = [{ id: 'g-1', role: 'user', text: 'seen', at: NOW } as const];
+  // The Gate returns the same line again (plus one genuinely new line).
+  const stored: GroupTranscriptEntry[] = [
+    { id: 'g-1', role: 'user', text: 'seen', at: NOW },
+    { id: 'g-2', role: 'bot', botId: 'writer', text: 'fresh', at: NOW + 5_000 },
+  ];
+  expect(mergeTranscriptRows(current, stored)).toEqual([
+    { id: 'g-2', role: 'bot', botId: 'writer', text: 'fresh', at: NOW + 5_000 },
+    { id: 'g-1', role: 'user', text: 'seen', at: NOW },
+  ]);
+});
+
+test('mergeTranscriptRows skips the Gate copy of a send made this visit — same text, same window — and keeps the richer local row', () => {
+  const local = {
+    id: 'u-1752000001000',
+    role: 'user',
+    text: 'status?',
+    at: NOW,
+    replyCount: 2,
+    speakerCount: 2,
+    routableCount: 2,
+    silentNames: [],
+    unknownNames: [],
+    rosterLoaded: true,
+  } as const;
+  const localReplies: TranscriptRowLike[] = [
+    { id: 'u-1752000001000-r0', role: 'bot', botId: 'coder', text: 'all green', at: NOW + 40 },
+    { id: 'u-1752000001000-r1', role: 'bot', botId: 'writer', text: 'copy checks out', at: NOW + 40 },
+  ];
+  const current = [local, ...localReplies];
+  // The Gate stamps the send with its own clock and a random id — a few ms
+  // on, never the phone's `u-<ts>` — so id-dedupe alone would duplicate it.
+  const stored: GroupTranscriptEntry[] = [
+    { id: 'cafe01', role: 'user', text: 'status?', at: NOW + 4 },
+    { id: 'cafe02', role: 'bot', botId: 'coder', text: 'all green', at: NOW + 4 },
+    { id: 'cafe03', role: 'bot', botId: 'writer', text: 'copy checks out', at: NOW + 4 },
+  ];
+  const merged = mergeTranscriptRows(current, stored);
+  // The whole round reads as one send: nothing from storage is added, and
+  // the local rows (with their outcome meta) survive untouched.
+  expect(merged).toEqual(current);
+  expect(merged[0]).toBe(local);
+});
+
+test('mergeTranscriptRows skips the Gate copy of a bot reply from this visit', () => {
+  const current: TranscriptRowLike[] = [
+    {
+      id: 'u-1-r0',
+      role: 'bot',
+      botId: 'coder',
+      text: 'on it',
+      at: NOW + 1_000,
+    },
+  ];
+  const stored: GroupTranscriptEntry[] = [
+    { id: 'd00d', role: 'bot', botId: 'coder', text: 'on it', at: NOW + 1_002 },
+  ];
+  expect(mergeTranscriptRows(current, stored)).toEqual(current);
+});
+
+test('mergeTranscriptRows treats an identical line stamped outside the send window as a NEW message', () => {
+  const current = [{ id: 'u-1', role: 'user', text: 'again?', at: NOW } as const];
+  const stored: GroupTranscriptEntry[] = [
+    { id: 'g-9', role: 'user', text: 'again?', at: NOW + TRANSCRIPT_READ_WINDOW_MS + 1 },
+  ];
+  expect(mergeTranscriptRows(current, stored)).toEqual([
+    { id: 'g-9', role: 'user', text: 'again?', at: NOW + TRANSCRIPT_READ_WINDOW_MS + 1 },
+    { id: 'u-1', role: 'user', text: 'again?', at: NOW },
+  ]);
+});
+
+test('mergeTranscriptRows treats a same-window line with different text as new', () => {
+  const current = [{ id: 'u-1', role: 'user', text: 'first', at: NOW } as const];
+  const stored: GroupTranscriptEntry[] = [
+    { id: 'g-3', role: 'user', text: 'second', at: NOW + 500 },
+  ];
+  expect(mergeTranscriptRows(current, stored)).toHaveLength(2);
+});
+
+test('mergeTranscriptRows drops corrupt stored lines the same way the fold does', () => {
+  const stored: GroupTranscriptEntry[] = [
+    { id: 'a3', role: 'bot', text: 'no author' },
+    { id: 'a4', role: 'mystery', text: '?' } as unknown as GroupTranscriptEntry,
+    null as unknown as GroupTranscriptEntry,
+  ];
+  // Nothing corrupt and nothing known: the view keeps exactly what it had.
+  expect(mergeTranscriptRows([], stored)).toEqual([]);
+});
+
+test('mergeTranscriptRows: a successful empty read and a failed read both leave the conversation untouched', () => {
+  const current = [{ id: 'u-1', role: 'user', text: 'keep me', at: NOW } as const];
+  // Empty answer (or the adapter absent on older gates) is a no-op — the
+  // transcript in front of the operator is the conversation, not a cached
+  // inventory, so no refresh wipes it.
+  expect(mergeTranscriptRows(current, [])).toEqual(current);
 });
