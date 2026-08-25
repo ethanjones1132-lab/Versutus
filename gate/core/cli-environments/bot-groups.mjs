@@ -56,6 +56,24 @@ export function transcriptEntriesForSend({ text, replies = [], makeId = makeEntr
 export function createBotGroupStore(gateHome) {
   const file = join(gateHome, 'bot-groups.json');
 
+  // Every mutating operation below is a read-modify-write of ONE json file.
+  // Two overlapping operations interleave their read and write halves and the
+  // file ends up as whichever wrote last: an append landing after its room was
+  // disbanded resurrects the disbanded room wholesale, transcript included,
+  // and concurrent appends of the same room silently drop messages. The Gate
+  // is single-process (the instance lock already guarantees one Gate per
+  // home), so mutations are queued to run strictly one at a time. Reads stay
+  // unqueued; they never write back what they read.
+  let mutationTail = Promise.resolve();
+  function serialized(mutation) {
+    const run = mutationTail.then(mutation);
+    mutationTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
   async function read() {
     try {
       const parsed = JSON.parse(await readFile(file, 'utf8'));
@@ -73,7 +91,7 @@ export function createBotGroupStore(gateHome) {
     await writeFile(file, JSON.stringify(data, null, 2), 'utf8');
   }
 
-  return {
+  const store = {
     async list() {
       return (await read()).groups;
     },
@@ -187,5 +205,16 @@ export function createBotGroupStore(gateHome) {
       await write(data);
       return { ok: true };
     },
+  };
+
+  // Reads pass through untouched; every read-modify-write goes through the
+  // queue so its read half can never straddle another operation's write.
+  return {
+    ...store,
+    create: (payload) => serialized(() => store.create(payload)),
+    rename: (id, name) => serialized(() => store.rename(id, name)),
+    leave: (id, memberId) => serialized(() => store.leave(id, memberId)),
+    appendMessages: (id, entries) => serialized(() => store.appendMessages(id, entries)),
+    delete: (id) => serialized(() => store.delete(id)),
   };
 }
