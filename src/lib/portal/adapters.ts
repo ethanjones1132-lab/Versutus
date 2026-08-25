@@ -82,6 +82,7 @@ export interface PortalClient {
   groupHistory?(groupId: string): Promise<GroupTranscriptEntry[]>;
   renameGroup?(groupId: string, name: string): Promise<BotGroupRoom>;
   leaveGroup?(groupId: string, memberId: string): Promise<BotGroupRoom>;
+  deleteGroup?(groupId: string): Promise<{ ok: boolean }>;
   handoffMention?(input: { fromId: string; toId: string; text: string }): Promise<unknown>;
   setBotId?(id: string | undefined): void;
   setBackendId?(id: string | undefined): void;

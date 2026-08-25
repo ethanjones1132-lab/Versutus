@@ -606,6 +606,20 @@ export class ManifestClient implements PortalClient {
     );
   }
 
+  /**
+   * Disbands a room: every member leaves and the stored transcript is
+   * deleted on the Gate, so a disbanded room never resurfaces on the next
+   * list. Gates without the rooms capability refuse like the other group
+   * calls. The roster copy is authoritative after this returns.
+   */
+  async deleteGroup(groupId: string): Promise<{ ok: boolean }> {
+    const path = this.requireEndpoint('botGroups');
+    return this.rootTransport.request(
+      'DELETE',
+      `${path.replace(/\/+$/, '')}/${encodeURIComponent(groupId)}`,
+    );
+  }
+
   async getSessions(limit = 20): Promise<HermesSession[]> {
     const path = this.endpoints.sessions;
     if (!path) {

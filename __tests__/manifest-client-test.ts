@@ -702,6 +702,24 @@ describe('ManifestClient sessions and runs when advertised', () => {
     expect(JSON.parse(fetchMock.mock.calls[4][1].body)).toEqual({ memberId: 'b' });
   });
 
+  test('deleteGroup disbands a room with a DELETE, never scoped to a bot', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ ok: true }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', botGroups: '/v1/bot-groups' });
+
+    await expect(client.deleteGroup('room1')).resolves.toEqual({ ok: true });
+    expect(fetchMock.mock.calls[0][1].method).toBe('DELETE');
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/v1/bot-groups/room1');
+    // Rooms are Gate-level: no bot= / backendId may be appended even
+    // though the client carries bot/backend state.
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('bot=');
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('backendId=');
+  });
+
   test('listGroups degrades to empty on a gate that advertises no rooms', async () => {
     const fetchMock = jest.fn();
     (globalThis as { fetch: unknown }).fetch = fetchMock;

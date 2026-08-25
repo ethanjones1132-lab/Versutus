@@ -698,6 +698,15 @@ export function ChatScreen() {
                   return room;
                 })
               }
+              onDisband={() =>
+                botGroups.deleteGroup(activeGroup.id).then((result) => {
+                  void refreshGroups();
+                  // The room is gone from the Gate; the roster copy is now
+                  // authoritative, so leave the room surface behind.
+                  showSurface({ kind: 'roster' });
+                  return result;
+                })
+              }
             />
           ) : (
             <EmptyState

@@ -88,6 +88,7 @@ export function GroupRoomView({
   onSend,
   onRename,
   onLeave,
+  onDisband,
   loadHistory,
   inventoryLoaded = true,
 }: {
@@ -96,6 +97,7 @@ export function GroupRoomView({
   onSend: (text: string, mentionedIds: string[]) => Promise<{ replies: GroupReply[] }>;
   onRename: (name: string) => Promise<BotGroupRoom>;
   onLeave: (memberId: string) => Promise<BotGroupRoom>;
+  onDisband: () => Promise<unknown>;
   loadHistory?: () => Promise<GroupTranscriptEntry[]>;
   /** False when the phone has never completed a bot-inventory read — no
    *  routing verdicts can be drawn, so plan/outcome lines say so. */
@@ -113,6 +115,8 @@ export function GroupRoomView({
   const [renameDraft, setRenameDraft] = useState('');
   const [renaming, setRenaming] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
+  const [disbandVisible, setDisbandVisible] = useState(false);
+  const [disbanding, setDisbanding] = useState(false);
 
   const displayNameOf = useMemo(() => {
     const byId = new Map(members.map((bot) => [bot.id, bot.displayName]));
@@ -307,6 +311,20 @@ export function GroupRoomView({
       .finally(() => setRenaming(false));
   };
 
+  const confirmDisband = () => {
+    if (disbanding) return;
+    setDisbanding(true);
+    onDisband()
+      .then(() => setDisbandVisible(false))
+      .catch((cause: unknown) => {
+        // Fail honest: the room is still here; say why instead of pretending
+        // it disbanded.
+        setDisbandVisible(false);
+        setError(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => setDisbanding(false));
+  };
+
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
       <ScrollView
@@ -336,18 +354,29 @@ export function GroupRoomView({
                 rosterLoaded: inventoryLoaded,
               })}
             </Text>
-            <PressableScale
-              onPress={() => {
-                setRenameDraft(group.name);
-                setRenameVisible(true);
-              }}
-              hitSlop={6}
-              accessibilityRole="button"
-              accessibilityLabel="Rename room"
-              style={styles.renamePill}>
-              <Icon name={{ ios: 'pencil', android: 'edit', web: 'edit' }} size={12} color="textSecondary" />
-              <Text variant="micro" color="secondary">Rename</Text>
-            </PressableScale>
+            <View style={styles.headActions}>
+              <PressableScale
+                onPress={() => {
+                  setRenameDraft(group.name);
+                  setRenameVisible(true);
+                }}
+                hitSlop={6}
+                accessibilityRole="button"
+                accessibilityLabel="Rename room"
+                style={styles.renamePill}>
+                <Icon name={{ ios: 'pencil', android: 'edit', web: 'edit' }} size={12} color="textSecondary" />
+                <Text variant="micro" color="secondary">Rename</Text>
+              </PressableScale>
+              <PressableScale
+                onPress={() => setDisbandVisible(true)}
+                hitSlop={6}
+                accessibilityRole="button"
+                accessibilityLabel="Disband room"
+                style={styles.renamePill}>
+                <Icon name={{ ios: 'trash', android: 'delete', web: 'delete' }} size={12} color="textSecondary" />
+                <Text variant="micro" color="secondary">Disband</Text>
+              </PressableScale>
+            </View>
           </View>
           {mentioned.length > 0 ? (
             <Text variant="micro" color="accentWarm" style={styles.scopeNote}>
@@ -486,6 +515,18 @@ export function GroupRoomView({
         }}
       />
 
+      <ConfirmSheet
+        visible={disbandVisible}
+        title="Disband room"
+        message={`${group.name} leaves the roster and its transcript is deleted from the Gate. This cannot be undone.`}
+        confirmLabel={disbanding ? 'Disbanding…' : 'Disband'}
+        onCancel={() => {
+          if (disbanding) return;
+          setDisbandVisible(false);
+        }}
+        onConfirm={confirmDisband}
+      />
+
       <BaseSheet
         visible={renameVisible}
         eyebrow="GROUP ROOMS"
@@ -543,6 +584,7 @@ const styles = StyleSheet.create({
     gap: Spacing.one + 2,
   },
   roomCardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two },
+  headActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   renamePill: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   scopeNote: {},
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.one + 2 },

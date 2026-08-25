@@ -170,5 +170,22 @@ export function createBotGroupStore(gateHome) {
       }
       return data.transcripts[id] ?? [];
     },
+    async delete(id) {
+      const data = await read();
+      const group = data.groups.find((entry) => entry.id === id);
+      if (!group) {
+        const error = new Error('group not found');
+        error.code = 'unknown_group';
+        error.status = 404;
+        throw error;
+      }
+      // Disbanding removes the room AND its stored transcript: a disbanded
+      // room must not resurface with its history the next time the phone
+      // lists rooms. The transcript map key is cleaned with the group.
+      data.groups = data.groups.filter((entry) => entry.id !== id);
+      delete data.transcripts[id];
+      await write(data);
+      return { ok: true };
+    },
   };
 }

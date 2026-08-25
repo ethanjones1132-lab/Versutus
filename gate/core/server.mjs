@@ -750,6 +750,7 @@ export async function createGate(config = {}) {
         /^\/v1\/bot-groups\/[^/]+\/messages$/.test(pathname) ||
         /^\/v1\/bot-groups\/[^/]+\/leave$/.test(pathname) ||
         (method === 'PATCH' && /^\/v1\/bot-groups\/[^/]+$/.test(pathname)) ||
+        (method === 'DELETE' && /^\/v1\/bot-groups\/[^/]+$/.test(pathname)) ||
         // Note the divergence from plain /health, which is unauthenticated:
         // detailed diagnostics expose backend internals and need a token.
         (pathname === '/health/detailed' && method === 'GET') ||
@@ -1258,6 +1259,18 @@ export async function createGate(config = {}) {
         } catch (error) {
           res.writeHead(error.status || 400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: { message: error.message, code: error.code ?? 'invalid_group' } }));
+        }
+        return;
+      }
+
+      if (groupEditMatch && method === 'DELETE') {
+        try {
+          const result = await botGroups.delete(decodeURIComponent(groupEditMatch[1]));
+          res.writeHead(200);
+          res.end(JSON.stringify({ ok: true, ...result }));
+        } catch (error) {
+          res.writeHead(error.status || 400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code: error.code ?? 'group_delete_failed' } }));
         }
         return;
       }
