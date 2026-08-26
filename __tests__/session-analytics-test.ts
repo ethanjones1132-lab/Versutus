@@ -1,4 +1,11 @@
-import { relativeMeter, sessionUsage, weekBuckets } from '@/lib/gateway/session-analytics';
+import {
+  relativeMeter,
+  sessionSpendCopy,
+  sessionSpendReadFromUnknown,
+  sessionUsage,
+  totalUsage,
+  weekBuckets,
+} from '@/lib/gateway/session-analytics';
 
 describe('sessionUsage', () => {
   test('sums tokens and prefers actual cost', () => {
@@ -58,5 +65,74 @@ describe('weekBuckets', () => {
     expect(buckets[0].tokens).toBe(20);
     expect(buckets[0].costUsd).toBe(0.1);
     expect(buckets.reduce((sum, bucket) => sum + bucket.tokens, 0)).toBe(35);
+  });
+});
+
+describe('totalUsage', () => {
+  test('sums tokens across sessions and adds only known costs', () => {
+    expect(
+      totalUsage([
+        { input_tokens: 100, output_tokens: 50, actual_cost_usd: 0.5, estimated_cost_usd: 0.99 },
+        { input_tokens: 20, output_tokens: 5, estimated_cost_usd: 0.25 },
+        { input_tokens: 10 },
+      ]),
+    ).toEqual({ sessionCount: 3, tokens: 185, costUsd: 0.75 });
+  });
+
+  test('an empty list is zero tokens and unknown cost, not $0', () => {
+    expect(totalUsage([])).toEqual({ sessionCount: 0, tokens: 0, costUsd: null });
+  });
+
+  test('sessions with no cost field stay cost-unknown', () => {
+    expect(totalUsage([{ input_tokens: 10, output_tokens: 5 }])).toEqual({
+      sessionCount: 1,
+      tokens: 15,
+      costUsd: null,
+    });
+  });
+});
+
+describe('sessionSpendCopy', () => {
+  test('names session count, tokens, and cost', () => {
+    expect(sessionSpendCopy({ sessionCount: 2, tokens: 1500, costUsd: 0.42 })).toBe(
+      'Sessions: 2\nTokens: 1.5k\nCost: $0.42',
+    );
+  });
+
+  test('unknown cost is an em dash, not $0.00', () => {
+    expect(sessionSpendCopy({ sessionCount: 0, tokens: 0, costUsd: null })).toBe(
+      'Sessions: 0\nTokens: 0\nCost: —',
+    );
+  });
+});
+
+describe('sessionSpendReadFromUnknown', () => {
+  test('unwraps a Gate { data } list and a raw array', () => {
+    const session = { input_tokens: 10, output_tokens: 5, actual_cost_usd: 0.4 };
+    expect(sessionSpendReadFromUnknown({ object: 'list', data: [session] })).toEqual({
+      ok: true,
+      sessions: [session],
+    });
+    expect(sessionSpendReadFromUnknown([session])).toEqual({ ok: true, sessions: [session] });
+    expect(sessionSpendReadFromUnknown({ sessions: [session] })).toEqual({
+      ok: true,
+      sessions: [session],
+    });
+  });
+
+  test('an empty list is empty-ok', () => {
+    expect(sessionSpendReadFromUnknown([])).toEqual({ ok: true, sessions: [] });
+    expect(sessionSpendReadFromUnknown({ data: [] })).toEqual({ ok: true, sessions: [] });
+  });
+
+  test('non-object items are dropped, not a failed read', () => {
+    const read = sessionSpendReadFromUnknown([null, 42, { input_tokens: 3 }]);
+    expect(read).toEqual({ ok: true, sessions: [{ input_tokens: 3 }] });
+  });
+
+  test('an unparseable payload is a failed read, not zero spend', () => {
+    expect(sessionSpendReadFromUnknown(null).ok).toBe(false);
+    expect(sessionSpendReadFromUnknown('nope').ok).toBe(false);
+    expect(sessionSpendReadFromUnknown({ error: 'boom' }).ok).toBe(false);
   });
 });

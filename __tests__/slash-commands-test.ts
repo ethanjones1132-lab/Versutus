@@ -102,3 +102,87 @@ describe('/model set override', () => {
     expect(result.text).toMatch(/session will reopen/i);
   });
 });
+
+const SPEND_LIST = {
+  object: 'list',
+  data: [
+    { input_tokens: 100, output_tokens: 50, actual_cost_usd: 0.5 },
+    { input_tokens: 20, output_tokens: 5, estimated_cost_usd: 0.25 },
+  ],
+};
+
+describe('/usage and /cost from session records', () => {
+  test('/usage totals tokens and cost from sessions.list, never usage.status', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue(SPEND_LIST);
+    const result = await executeGatewaySlashCommand('/usage', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('sessions.list', expect.any(Object));
+    expect(gatewayRequest).not.toHaveBeenCalledWith('usage.status', expect.anything());
+    expect(result.title).toBe('/usage');
+    expect(result.text).toContain('Sessions: 2');
+    expect(result.text).toContain('Tokens: 175');
+    expect(result.text).toContain('Cost: $0.75');
+  });
+
+  test('/cost uses the same session totals and never calls usage.cost', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue(SPEND_LIST);
+    const result = await executeGatewaySlashCommand('/cost', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('sessions.list', expect.any(Object));
+    expect(gatewayRequest).not.toHaveBeenCalledWith('usage.cost', expect.anything());
+    expect(result.title).toBe('/cost');
+    expect(result.text).toContain('Cost: $0.75');
+  });
+
+  test('still reports spend when the snapshot says usage.status is not dispatched', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue(SPEND_LIST);
+    const result = await executeGatewaySlashCommand('/usage', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: { usage: { available: false, reason: 'not dispatched by this gateway' } },
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('sessions.list', expect.any(Object));
+    expect(result.text).toContain('Tokens: 175');
+    expect(result.text).not.toContain('not available');
+  });
+
+  test('a refused sessions.list is a failed read, not zero spend', async () => {
+    const gatewayRequest = jest.fn().mockRejectedValue(new Error('sessions.list is not supported'));
+    const result = await executeGatewaySlashCommand('/usage', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(result.text).toBe('Sessions could not be read.');
+    expect(result.text).not.toMatch(/Tokens: 0/);
+  });
+
+  test('an unparseable list is a failed read, not zero spend', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ error: 'boom' });
+    const result = await executeGatewaySlashCommand('/cost', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(result.text).toBe('Sessions could not be read.');
+  });
+
+  test('an empty list is empty-ok, not a failed read', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ data: [] });
+    const result = await executeGatewaySlashCommand('/usage', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(result.text).toContain('Sessions: 0');
+    expect(result.text).toContain('Tokens: 0');
+    expect(result.text).toContain('Cost: —');
+  });
+});
