@@ -66,3 +66,29 @@ export function sessionListTitle(title?: string | null): string {
   const named = title?.trim();
   return named ? named : 'Untitled';
 }
+
+/** The fields a session row can be searched by. */
+export type SessionSearchable = {
+  id: string;
+  title?: string | null;
+  preview?: string | null;
+};
+
+/**
+ * Narrow the session selector by a free-text query over title, preview, and id.
+ *
+ * A blank query is "no filter", not "nothing matches". Untitled sessions
+ * match the word Untitled — that is what the row prints.
+ */
+export function filterSessions<T extends SessionSearchable>(
+  sessions: T[],
+  query: string,
+): T[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return sessions;
+  return sessions.filter((session) =>
+    [sessionListTitle(session.title), session.preview, session.id].some(
+      (value) => typeof value === 'string' && value.toLowerCase().includes(needle),
+    ),
+  );
+}

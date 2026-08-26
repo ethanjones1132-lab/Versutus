@@ -14,7 +14,7 @@ import {
   type ModelSection,
 } from '@/lib/gateway/model-selection';
 import type { GatewayBackend } from '@/lib/portal/manifest';
-import { sessionCreateTitle, sessionListTitle } from '@/lib/gateway/session-list';
+import { filterSessions, sessionCreateTitle, sessionListTitle } from '@/lib/gateway/session-list';
 import {
   threadConfigTitle,
   type ModelPickerMode,
@@ -120,6 +120,8 @@ function SessionsSection({
   const tokens = useTokens();
   const [deleteCandidate, setDeleteCandidate] = useState<SessionItem | null>(null);
   const [nameDraft, setNameDraft] = useState('');
+  const [query, setQuery] = useState('');
+  const visibleSessions = useMemo(() => filterSessions(sessions, query), [sessions, query]);
 
   const confirmDelete = useCallback((item: SessionItem) => {
     setDeleteCandidate(item);
@@ -234,6 +236,17 @@ function SessionsSection({
         </>
       ) : null}
 
+      {sessions.length > 1 ? (
+        <TextField
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Search sessions"
+          returnKeyType="search"
+          accessibilityLabel="Search sessions"
+          style={styles.nameField}
+        />
+      ) : null}
+
       {sessionsError && sessions.length > 0 ? (
         <Text variant="caption" color="secondary" style={styles.blurb}>
           {sessionsError}
@@ -252,9 +265,17 @@ function SessionsSection({
           actionLabel={onNewSession ? 'New session' : undefined}
           onAction={onNewSession ? () => void submitNewSession() : undefined}
         />
+      ) : visibleSessions.length === 0 ? (
+        <EmptyState
+          icon={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
+          title="No matches"
+          description={`Nothing in the session list matches “${query.trim()}”.`}
+          actionLabel="Clear search"
+          onAction={() => setQuery('')}
+        />
       ) : (
         <FlatList
-          data={sessions}
+          data={visibleSessions}
           keyExtractor={(item) => item.id}
           style={styles.list}
           renderItem={renderSessionItem}

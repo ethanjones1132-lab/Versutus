@@ -1,6 +1,7 @@
 import {
   applySessionListRead,
   EMPTY_SESSION_LIST,
+  filterSessions,
   sessionCreateTitle,
   sessionListCopy,
   sessionListTitle,
@@ -114,4 +115,30 @@ test('preview is a snippet, not a title stand-in', () => {
   const preview = 'the last user turn as a snippet';
   expect(sessionListTitle(undefined)).toBe('Untitled');
   expect(sessionListTitle(undefined)).not.toBe(preview);
+});
+
+const CREW_FULL = { id: 'ses_crew', title: 'Crew chat', preview: 'the last user turn' };
+const LAB_FULL = { id: 'ses_lab', title: 'Lab notes', preview: 'a sketch of the experiment' };
+const UNTITLED = { id: 'ses_orphan', title: undefined as string | undefined, preview: 'a stray line' };
+
+test('filterSessions ignores a blank query — the list is unfiltered', () => {
+  const sessions = [CREW_FULL, LAB_FULL];
+  expect(filterSessions(sessions, '')).toBe(sessions);
+  expect(filterSessions(sessions, '   ')).toBe(sessions);
+});
+
+test('filterSessions matches title, preview, and id case-insensitively', () => {
+  const sessions = [CREW_FULL, LAB_FULL, UNTITLED];
+  expect(filterSessions(sessions, 'CREW').map((s) => s.id)).toEqual(['ses_crew']);
+  expect(filterSessions(sessions, 'experiment').map((s) => s.id)).toEqual(['ses_lab']);
+  expect(filterSessions(sessions, 'SES_ORPHAN').map((s) => s.id)).toEqual(['ses_orphan']);
+});
+
+test('filterSessions finds an untitled session by the word Untitled', () => {
+  const sessions = [CREW_FULL, UNTITLED];
+  expect(filterSessions(sessions, 'untitled').map((s) => s.id)).toEqual(['ses_orphan']);
+});
+
+test('filterSessions with no match is empty, not the full list', () => {
+  expect(filterSessions([CREW_FULL, LAB_FULL], 'nomatch')).toEqual([]);
 });
