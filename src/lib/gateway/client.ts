@@ -240,12 +240,21 @@ export class HermesGatewayClient {
     return result.data;
   }
 
-  async createSession(title?: string): Promise<HermesSession> {
+  /**
+   * Opens a session, pinned to `model` when one is given.
+   *
+   * Native Hermes takes `model` as a string on POST /api/sessions. The Gate
+   * remaps `{ modelId }` onto that field; this client talks to Hermes
+   * directly, so the string has to go on the wire. A session opened without
+   * one is stuck on the host default — Hermes refuses PATCH of `model`.
+   */
+  async createSession(title?: string, model?: string): Promise<HermesSession> {
     // The Hermes API server rejects an empty JSON body with 400
     // ("Invalid JSON in request body"). Send an explicit empty-string title
     // instead so the request shape is always valid.
     const result = await this.transport.request<{ session: HermesSession }>('POST', '/api/sessions', {
       title: title ?? '',
+      ...(model ? { model } : {}),
     });
     this.currentSessionId = result.session.id;
     return result.session;
