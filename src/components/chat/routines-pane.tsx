@@ -8,6 +8,7 @@ import {
   DEFAULT_ROUTINE_SCHEDULE,
   describeRoutineError,
   parseRoutineName,
+  routineJobSummary,
   routinesListCopy,
   routinesToggleLabel,
   type RoutineJob,
@@ -117,7 +118,7 @@ export function RoutinesPane({
               <ListRow
                 key={job.id}
                 title={parsed.title || job.id}
-                subtitle={job.paused ? 'paused' : 'active'}
+                subtitle={routineJobSummary(job)}
                 onPress={() => submitRun(job.id)}
                 trailing={
                   <Button
