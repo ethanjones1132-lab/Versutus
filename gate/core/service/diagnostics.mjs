@@ -198,3 +198,55 @@ export async function probeLocalGate(manifestUrl, fetchImpl = globalThis.fetch) 
     return { reachable: false, detail: error.message };
   }
 }
+/**
+ * The bot-groups room store is one JSON file under the Gate home, and it now
+ * REFUSES to read a file that will not parse — a truncated file (force-kill
+ * mid-write) must never read as "no rooms yet", because the next create
+ * would then overwrite the only evidence. Doctor mirrors that rule so an
+ * operator finds the corruption in a health check, not mid-demo.
+ */
+export async function diagnoseBotGroupStore(gateHome) {
+  const file = join(gateHome, 'bot-groups.json');
+  let raw;
+  try {
+    raw = await readFile(file, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      return [{
+        severity: 'info',
+        environment: null,
+        message: 'no bot-groups store yet (rooms appear on first create)',
+      }];
+    }
+    return [{
+      severity: 'error',
+      environment: null,
+      message: `bot-groups.json could not be read: ${error.message} — fix file access before a demo`,
+    }];
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.groups)) {
+      return [{
+        severity: 'error',
+        environment: null,
+        message: 'bot-groups.json does not have the expected { groups, transcripts } shape'
+          + ' — restore a backup, or move the file aside to start a fresh store',
+      }];
+    }
+    const count = parsed.groups.length;
+    return [{
+      severity: 'ok',
+      environment: null,
+      message: `bot-groups store ok (${count} room${count === 1 ? '' : 's'})`,
+    }];
+  } catch (cause) {
+    return [{
+      severity: 'error',
+      environment: null,
+      message: `bot-groups.json does not parse as JSON (${cause.message})`
+        + ' — rooms are not being served and will not be overwritten;'
+        + ' restore a backup, or move the file aside',
+    }];
+  }
+}

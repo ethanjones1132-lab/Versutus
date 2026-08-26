@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { diagnoseEnvironmentRecords, probeLocalGate } from '../core/service/diagnostics.mjs';
+import { diagnoseBotGroupStore, diagnoseEnvironmentRecords, probeLocalGate } from '../core/service/diagnostics.mjs';
 import { doctor } from '../core/service/doctor.mjs';
 import { CredentialVault } from '../core/credentials/vault.mjs';
 import { validEnvironment } from './fixtures/cli-environment.mjs';
@@ -350,4 +350,39 @@ test('local probe reports a running Gate and an unreachable one honestly', async
   }));
   assert.equal(wrong.reachable, false);
   assert.match(wrong.detail, /502/);
+});
+
+test('bot-group store: missing file is info, a healthy store reports its room count', async () => {
+  const gateHome = await mkdtemp(join(tmpdir(), 'gate-doctor-'));
+  assert.equal((await diagnoseBotGroupStore(gateHome))[0].severity, 'info');
+
+  await writeFile(
+    join(gateHome, 'bot-groups.json'),
+    JSON.stringify({ groups: [{ id: 'r1' }], transcripts: {} }),
+    'utf8',
+  );
+  const findings = await diagnoseBotGroupStore(gateHome);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 'ok');
+  assert.match(findings[0].message, /1 room/);
+
+  await rm(gateHome, { recursive: true, force: true });
+});
+
+test('bot-group store: a corrupt or misshapen file is an error a demo can gate on', async () => {
+  const gateHome = await mkdtemp(join(tmpdir(), 'gate-doctor-'));
+  await writeFile(join(gateHome, 'bot-groups.json'), '{"groups": [', 'utf8');
+  const findings = await diagnoseBotGroupStore(gateHome);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].severity, 'error');
+  assert.match(findings[0].message, /does not parse as JSON/);
+
+  // Parses but is not a store: the shape is still wrong and the next create
+  // would overwrite it, so doctor flags it the same way.
+  await writeFile(join(gateHome, 'bot-groups.json'), '{"rooms": []}', 'utf8');
+  const shaped = await diagnoseBotGroupStore(gateHome);
+  assert.equal(shaped[0].severity, 'error');
+  assert.match(shaped[0].message, /expected \{ groups, transcripts \} shape/);
+
+  await rm(gateHome, { recursive: true, force: true });
 });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -235,4 +235,62 @@ test('verifyMembers re-checks the live roster at the send door', async () => {
   // Gate actually wired one.
   const bare = createBotGroupStore(home);
   await bare.verifyMembers(['coder']);
+});
+
+test('a missing store file reads as a fresh, empty store', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'gate-groups-'));
+  const store = createBotGroupStore(home);
+  assert.deepEqual(await store.list(), []);
+  // The first create materialises the file; a fresh start must not refuse.
+  const created = await store.create({ name: 'crew', memberIds: ['a', 'b'] });
+  assert.ok(created.id);
+  assert.equal((await store.list()).length, 1);
+});
+
+test('a store file that will not parse fails loud instead of reading empty', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'gate-groups-'));
+  // Truncated mid-write, as a force-kill can leave it.
+  await writeFile(join(home, 'bot-groups.json'), '{"groups": [', 'utf8');
+  const store = createBotGroupStore(home);
+
+  // Every read path refuses rather than pretending the store is empty — a
+  // truncated file must never read as "no rooms yet".
+  await assert.rejects(store.list(), (error) => {
+    assert.equal(error.code, 'store_corrupt');
+    assert.equal(error.status, 500);
+    assert.match(error.message, /corrupt/);
+    return true;
+  });
+  await assert.rejects(store.create({ name: 'crew', memberIds: ['a', 'b'] }), (error) => {
+    assert.equal(error.code, 'store_corrupt');
+    assert.equal(error.status, 500);
+    return true;
+  });
+  await assert.rejects(
+    store.appendMessages('room-1', transcriptEntriesForSend({ text: 'hi' })),
+    (error) => {
+      assert.equal(error.code, 'store_corrupt');
+      return true;
+    },
+  );
+
+  // The failing write never ran: the corrupt bytes are still on disk,
+  // intact for recovery, instead of being overwritten by a fresh empty store.
+  assert.equal(await readFile(join(home, 'bot-groups.json'), 'utf8'), '{"groups": [');
+});
+
+test('writes are atomic: a completed write leaves no temp debris', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'gate-groups-'));
+  const store = createBotGroupStore(home);
+  const first = await store.create({ name: 'crew', memberIds: ['a', 'b'] });
+  await store.appendMessages(first.id, transcriptEntriesForSend({ text: 'hi' }));
+  await store.create({ name: 'duo', memberIds: ['c', 'd'] });
+
+  const parsed = JSON.parse(await readFile(join(home, 'bot-groups.json'), 'utf8'));
+  assert.equal(parsed.groups.length, 2);
+  assert.deepEqual(parsed.transcripts[first.id].map((entry) => entry.text), ['hi']);
+
+  // A kill can only orphan the .tmp copy; the live store is never a temp
+  // path, so a successful write leaves nothing behind.
+  await assert.rejects(readFile(join(home, 'bot-groups.json.tmp'), 'utf8'));
 });

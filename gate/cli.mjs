@@ -15,7 +15,7 @@ import { CliAdapterRegistry } from './core/cli-environments/adapter-registry.mjs
 import { buildTaskDefinition } from './core/service/windows-task.mjs';
 import { acquireInstanceLock } from './core/service/instance-lock.mjs';
 import { doctor } from './core/service/doctor.mjs';
-import { diagnoseEnvironmentRecords, probeLocalGate } from './core/service/diagnostics.mjs';
+import { diagnoseBotGroupStore, diagnoseEnvironmentRecords, probeLocalGate } from './core/service/diagnostics.mjs';
 import { CredentialVault } from './core/credentials/vault.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -484,21 +484,23 @@ async function handleDoctor(args = []) {
     process.exit(1);
   }
   const listen = `http://127.0.0.1:${portResolution.port}`;
-  const [environmentFindings, serverProbe] = await Promise.all([
+  const [environmentFindings, storeFindings, serverProbe] = await Promise.all([
     diagnoseEnvironmentRecords(join(gateHome, 'config', 'environments'), {
       vault: new CredentialVault({ gateHome }),
     }),
+    diagnoseBotGroupStore(gateHome),
     probeLocalGate(`${listen}/.well-known/gateway.json`),
   ]);
+  const findings = [...environmentFindings, ...storeFindings];
   console.log(doctor({
     user,
     gateHome,
     listen,
     serverProbe,
-    environmentFindings,
+    environmentFindings: findings,
   }));
   // Scriptable verdict: a health check that always exits 0 cannot gate a demo.
-  if (environmentFindings.some((finding) => finding.severity === 'error')) {
+  if (findings.some((finding) => finding.severity === 'error')) {
     process.exitCode = 1;
   }
 }

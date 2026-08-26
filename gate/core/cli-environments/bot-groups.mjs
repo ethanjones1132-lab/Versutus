@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -100,21 +100,47 @@ export function createBotGroupStore(gateHome, { listBotIds } = {}) {
     return run;
   }
 
+  // A missing file is a fresh store, but a file that exists and will not
+  // parse is NOT an empty store: answering every room call with {} made one
+  // corrupt write look like "no rooms yet" — and the next create was the
+  // write that destroyed the only evidence. Loud means the phone sees an
+  // honest 500, doctor can flag the file, and the corrupt bytes stay on
+  // disk until an operator restores a backup or moves the file aside.
   async function read() {
+    let raw;
     try {
-      const parsed = JSON.parse(await readFile(file, 'utf8'));
-      // Rooms written before transcripts existed keep working: the transcript
-      // map materialises on first append.
-      if (!parsed.transcripts) parsed.transcripts = {};
-      return parsed;
-    } catch {
+      raw = await readFile(file, 'utf8');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
       return { groups: [], transcripts: {} };
     }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (cause) {
+      const error = new Error(
+        `bot-groups.json is corrupt and will not parse as JSON (${cause.message}); `
+        + 'rooms and transcripts are not being served and will not be overwritten — '
+        + 'restore a backup, or move the file aside to start a fresh store',
+      );
+      error.code = 'store_corrupt';
+      error.status = 500;
+      throw error;
+    }
+    // Rooms written before transcripts existed keep working: the transcript
+    // map materialises on first append.
+    if (!parsed.transcripts) parsed.transcripts = {};
+    return parsed;
   }
 
+  // Temp-then-rename: a kill between open and close can only orphan the
+  // temp copy. The live store is always either the old bytes or the new
+  // bytes, never a truncated middle.
   async function write(data) {
     await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, JSON.stringify(data, null, 2), 'utf8');
+    const tmp = `${file}.tmp`;
+    await writeFile(tmp, JSON.stringify(data, null, 2), 'utf8');
+    await rename(tmp, file);
   }
 
   const store = {
