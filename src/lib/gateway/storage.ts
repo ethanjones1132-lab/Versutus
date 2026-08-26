@@ -45,6 +45,16 @@ export async function saveGateways(gateways: GatewayProfile[]): Promise<void> {
   await enqueueStoreMutation(() => writeGateways(gateways));
 }
 
+export async function removeGatewayIds(ids: readonly string[]): Promise<GatewayProfile[]> {
+  const removeSet = new Set(ids);
+  if (removeSet.size === 0) return loadGateways();
+  return enqueueStoreMutation(async () => {
+    const gateways = (await loadGateways()).filter((item) => !removeSet.has(item.id));
+    await writeGateways(gateways);
+    return gateways;
+  });
+}
+
 export async function upsertGateway(gateway: GatewayProfile): Promise<GatewayProfile[]> {
   return enqueueStoreMutation(async () => {
     const gateways = await loadGateways();

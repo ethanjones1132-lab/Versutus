@@ -3,6 +3,7 @@
 // `{providerId, modelId}` on that parent. Hermes/agent profiles that are
 // not provider children are left alone.
 
+import { loadGateways, removeGatewayIds } from '@/lib/gateway/storage';
 import type { GatewayManifestProvider } from '@/lib/portal/manifest';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
@@ -33,13 +34,8 @@ export async function syncChildProfiles(
   parent: GatewayProfile,
   providers: GatewayManifestProvider[],
 ): Promise<GatewayProfile[]> {
-  const { loadGateways, saveGateways } = await import('@/lib/gateway/storage');
   const current = await loadGateways();
   const { toRemove } = reconcileChildProfiles(parent, providers, current);
   if (toRemove.length === 0) return current;
-
-  const removeSet = new Set(toRemove);
-  const next = current.filter((profile) => !removeSet.has(profile.id));
-  await saveGateways(next);
-  return next;
+  return removeGatewayIds(toRemove);
 }
