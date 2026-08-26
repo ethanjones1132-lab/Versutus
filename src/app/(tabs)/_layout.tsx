@@ -5,6 +5,7 @@ import { FontFamily, Palette } from '@/constants/tokens';
 export default function TabsLayout() {
   return (
     <NativeTabs
+      sidebarAdaptable
       backgroundColor={Palette.background}
       blurEffect="systemChromeMaterialDark"
       shadowColor={Palette.border}
