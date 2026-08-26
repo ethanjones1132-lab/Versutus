@@ -195,6 +195,20 @@ describe('pinLiveSession — a new session is still current after reconnect', ()
     expect(liveSessionId({ live: 'ses_old', stored: 'ses_old' })).toBe('ses_old');
   });
 
+  test('a list pick that persists the reconnect pin is the session connect copies onto live', () => {
+    // selectSession used to call setSessionId only. connectGateway copies
+    // stored onto live before attachClient disconnects, so a pick then
+    // background/reconnect restored whichever session New session (or the
+    // last persist) wrote — not the one just picked.
+    const client = pinClient('ses_old');
+    const stored = profile('ses_from_new_session');
+    const next = pinLiveSession({ client, sessionId: 'ses_picked', profile: stored });
+    expect(client.sessionId).toBe('ses_picked');
+    expect(next?.sessionId).toBe('ses_picked');
+    expect(stored.sessionId).toBe('ses_from_new_session');
+    expect(liveSessionId({ live: next?.sessionId, stored: next?.sessionId })).toBe('ses_picked');
+  });
+
   test('an already-pinned profile is the same object so the caller skips persist', () => {
     const client = pinClient();
     const previous = profile('ses_new');

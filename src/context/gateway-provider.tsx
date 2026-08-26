@@ -2519,11 +2519,26 @@ const response = await executeGatewaySlashCommand(trimmed, {
 
   const selectSession = useCallback((sessionId: string) => {
     closeSessionSelector();
+    const client = clientRef.current;
+    // Pinning the client is not enough: connect copies stored onto live
+    // before disconnect can rewrite it. Same persist as createNewSession.
+    const pinned = client
+      ? pinLiveSession({
+          client,
+          sessionId,
+          profile: activeGateway ?? undefined,
+        })
+      : undefined;
     sessionIdRef.current = sessionId;
-    clientRef.current?.setSessionId(sessionId);
     setCurrentSessionId(sessionId);
-    if (activeGateway) {
-      void reloadHistoryFor(activeGateway);
+    if (pinned && pinned !== activeGateway) {
+      activeGatewayRef.current = pinned;
+      setActiveGateway(pinned);
+      void upsertGateway(pinned).then(setGateways);
+    }
+    const gateway = pinned ?? activeGateway;
+    if (gateway) {
+      void reloadHistoryFor(gateway);
     }
   }, [closeSessionSelector, activeGateway, reloadHistoryFor]);
 
