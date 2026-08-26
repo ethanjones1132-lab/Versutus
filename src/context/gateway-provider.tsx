@@ -2684,10 +2684,21 @@ const response = await executeGatewaySlashCommand(trimmed, {
         () => client.getSessions(200),
         (title) => client.createSession!(title),
       );
+      // Pinning the client is not enough: connect copies stored onto live
+      // before disconnect can rewrite it. Same persist as selectSession.
+      const pinned = pinLiveSession({
+        client,
+        sessionId: chat.id,
+        profile: activeGateway ?? undefined,
+      });
       sessionIdRef.current = chat.id;
-      client.setSessionId(chat.id);
       setCurrentSessionId(chat.id);
       setSessionList((prev) => (prev.some((session) => session.id === chat.id) ? prev : [chat, ...prev]));
+      if (pinned && pinned !== activeGateway) {
+        activeGatewayRef.current = pinned;
+        setActiveGateway(pinned);
+        void upsertGateway(pinned).then(setGateways);
+      }
       if (activeGateway) void reloadHistoryFor(activeGateway);
     } catch (error) {
       client.setBotId(undefined);
