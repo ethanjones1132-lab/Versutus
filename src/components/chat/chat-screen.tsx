@@ -12,6 +12,7 @@ import { GroupRoomActionSheet } from '@/components/chat/group-room-action-sheet'
 import { GroupRoomView } from '@/components/chat/group-room-view';
 import { NewAgentSheet } from '@/components/chat/new-agent-sheet';
 import { RoutinesPane, type RoutineJob } from '@/components/chat/routines-pane';
+import { SkillsPane } from '@/components/chat/skills-pane';
 import { DayDivider } from '@/components/chat/day-divider';
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
 import { ChatHeader } from '@/components/chat/chat-header';
@@ -35,6 +36,12 @@ import { applyRosterRead } from '@/lib/gateway/roster-read';
 import { botToEditInput, buildBotUpdatePatch, buildRoster, type ChatSurface, type PublicBot, type RosterRow } from '@/lib/gateway/bots';
 import { describeRoomError, rosterInventoryVerified, type BotGroupRoom } from '@/lib/gateway/groups';
 import { routineName } from '@/lib/gateway/routines';
+import {
+  applySkillsRead,
+  EMPTY_SKILLS,
+  skillsReadFromUnknown,
+  type SkillsState,
+} from '@/lib/gateway/skills';
 import { effectiveModel } from '@/lib/gateway/model-selection';
 import { resolveThreadConfigMode, threadConfigOfferedModes, type ThreadConfigMode } from '@/lib/gateway/thread-config';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
@@ -134,6 +141,7 @@ export function ChatScreen() {
     botJobs,
     botGroups,
     selectedBotId,
+    gatewayRequest,
   } = useGateway();
 
   const [draft, setDraft] = useState('');
@@ -162,6 +170,9 @@ export function ChatScreen() {
   // Long-press target on the roster: which room's action sheet is open.
   const [detailGroup, setDetailGroup] = useState<BotGroupRoom | null>(null);
   const [routineJobs, setRoutineJobs] = useState<RoutineJob[]>([]);
+  const [skillsState, setSkillsState] = useState<SkillsState & { botId?: string }>({
+    ...EMPTY_SKILLS,
+  });
   const [groups, setGroups] = useState<BotGroupRoom[]>([]);
   const [newGroupVisible, setNewGroupVisible] = useState(false);
   const [newGroupBusy, setNewGroupBusy] = useState(false);
@@ -356,6 +367,32 @@ export function ChatScreen() {
       cancelled = true;
     };
   }, [botSurfaceId, status, botJobs]);
+
+  useEffect(() => {
+    if (!botSurfaceId || status !== 'connected') return;
+    let cancelled = false;
+    void gatewayRequest('skills.list')
+      .then((payload) => {
+        if (cancelled) return;
+        const read = skillsReadFromUnknown(payload);
+        setSkillsState((prev) => {
+          const previous =
+            prev.botId === botSurfaceId ? prev : { ...EMPTY_SKILLS, botId: botSurfaceId };
+          return { botId: botSurfaceId, ...applySkillsRead(previous, read) };
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSkillsState((prev) => {
+          const previous =
+            prev.botId === botSurfaceId ? prev : { ...EMPTY_SKILLS, botId: botSurfaceId };
+          return { botId: botSurfaceId, ...applySkillsRead(previous, { ok: false }) };
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [botSurfaceId, status, gatewayRequest]);
 
   // Group rooms load alongside the roster. A gateway that does not advertise
   // them answers with an empty list — no error, just no section.
@@ -701,6 +738,14 @@ export function ChatScreen() {
             onRetry={() => void retryAutoConnect()}
           />
         </Animated.View>
+      ) : null}
+
+      {surface.kind === 'bot' ? (
+        <SkillsPane
+          skills={skillsState.botId === surface.botId ? skillsState.skills : []}
+          loaded={skillsState.botId === surface.botId ? skillsState.loaded : false}
+          failed={skillsState.botId === surface.botId ? skillsState.failed : false}
+        />
       ) : null}
 
       {surface.kind === 'bot' ? (
