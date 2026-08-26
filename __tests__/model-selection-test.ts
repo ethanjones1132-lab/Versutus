@@ -1,5 +1,5 @@
 import { effectiveModel, resolveSendModel, withSelectedModel,
-  shouldReleaseSessionForModel,
+  shouldReleaseSessionForModel, applyModelOverride,
 } from '@/lib/gateway/model-selection';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
@@ -146,4 +146,52 @@ test('a first pick on a thread with no model yet keeps the thread', () => {
   // Nothing was overridden before, so the session is already running whatever
   // the gateway defaulted to — resetting here would cost context for nothing.
   expect(shouldReleaseSessionForModel({ next: 'kimi-k3', hasSession: true })).toBe(false);
+});
+
+describe('applyModelOverride', () => {
+  it('a slash override on Bot Chat writes only the Bot pin and releases the open session', () => {
+    const profile = {
+      ...BASE,
+      model: 'gateway-default',
+      backendModels: { 'hermes-local': 'hermes-default' },
+      botModels: { researcher: 'longcat-2.0' },
+    };
+    const next = applyModelOverride({
+      gateway: profile,
+      modelId: 'kimi-k3',
+      selectedBackendId: 'hermes-local',
+      selectedBotId: 'researcher',
+      hasSession: true,
+    });
+    expect(next.gateway.model).toBe('gateway-default');
+    expect(next.gateway.backendModels).toEqual({ 'hermes-local': 'hermes-default' });
+    expect(next.gateway.botModels).toEqual({ researcher: 'kimi-k3' });
+    expect(next.releaseSession).toBe(true);
+  });
+
+  it('a slash override in configurable chat writes the gateway pin, not a Bot pin', () => {
+    const next = applyModelOverride({
+      gateway: BASE,
+      modelId: 'kimi-k3',
+      selectedBackendId: 'hermes-local',
+      hasSession: true,
+    });
+    expect(next.gateway.model).toBe('kimi-k3');
+    expect(next.gateway.backendModels).toEqual({ 'hermes-local': 'kimi-k3' });
+    expect(next.gateway.botModels).toBeUndefined();
+    expect(next.releaseSession).toBe(true);
+  });
+
+  it('does not throw the thread away when the Bot is already on that model', () => {
+    const profile = { ...BASE, botModels: { researcher: 'kimi-k3' } };
+    const next = applyModelOverride({
+      gateway: profile,
+      modelId: 'kimi-k3',
+      selectedBackendId: 'hermes-local',
+      selectedBotId: 'researcher',
+      hasSession: true,
+    });
+    expect(next.releaseSession).toBe(false);
+    expect(next.gateway.botModels).toEqual({ researcher: 'kimi-k3' });
+  });
 });

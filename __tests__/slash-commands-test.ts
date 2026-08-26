@@ -88,3 +88,17 @@ describe('slash command palette', () => {
     expect(suggestions[0]?.value).toBe('/model set foo');
   });
 });
+
+describe('/model set override', () => {
+  test('confirmed override tells the operator the session will reopen', async () => {
+    const setModelOverride = jest.fn();
+    const result = await executeGatewaySlashCommand('/model set kimi-k3 --confirm', {
+      hello: null,
+      gatewayRequest: jest.fn().mockRejectedValue(new Error('no catalog')),
+      runAgentCommand: jest.fn(),
+      setModelOverride,
+    });
+    expect(setModelOverride).toHaveBeenCalledWith('kimi-k3');
+    expect(result.text).toMatch(/session will reopen/i);
+  });
+});

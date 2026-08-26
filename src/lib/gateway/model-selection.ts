@@ -144,3 +144,32 @@ export function shouldReleaseSessionForModel(input: {
   if (!previous || !next) return false;
   return previous.toLowerCase() !== next.toLowerCase();
 }
+
+/**
+ * Apply a model pick the way the picker and `/model set` both must.
+ *
+ * Writes the Bot pin when a Bot is selected (ADR 0014) and says whether
+ * the open session has to be released so the next turn actually runs on
+ * `modelId`. A Hermes session's model is fixed at creation.
+ */
+export function applyModelOverride<T extends ModelBearing>(input: {
+  gateway: T;
+  modelId: string;
+  selectedBackendId: string | undefined;
+  selectedBotId?: string;
+  hasSession: boolean;
+}): { gateway: T; releaseSession: boolean } {
+  return {
+    gateway: withSelectedModel(
+      input.gateway,
+      input.modelId,
+      input.selectedBackendId,
+      input.selectedBotId,
+    ),
+    releaseSession: shouldReleaseSessionForModel({
+      previous: effectiveModel(input.gateway, input.selectedBackendId, input.selectedBotId),
+      next: input.modelId,
+      hasSession: input.hasSession,
+    }),
+  };
+}

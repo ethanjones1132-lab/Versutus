@@ -53,7 +53,7 @@ import {
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
 import { formatRunFailure, modelSubstitutionNote } from '@/lib/gateway/run-failures';
 import { resolveDefaultBackend } from '@/lib/gateway/backend-defaults';
-import { effectiveModel, resolveSendModel, shouldReleaseSessionForModel, withSelectedModel } from '@/lib/gateway/model-selection';
+import { applyModelOverride, effectiveModel, resolveSendModel, shouldReleaseSessionForModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   categorizeProbeError,
   GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
@@ -2036,9 +2036,23 @@ const response = await executeGatewaySlashCommand(trimmed, {
               : async (modelId) => {
                   const gateway = activeGatewayRef.current;
                   if (!gateway) return;
-                  const updated = { ...gateway, model: modelId };
-                  setActiveGateway(updated);
-                  await upsertGateway(updated).then(setGateways);
+                  const applied = applyModelOverride({
+                    gateway,
+                    modelId,
+                    selectedBackendId: selectedBackendIdRef.current,
+                    selectedBotId: selectedBotIdRef.current,
+                    hasSession: Boolean(sessionIdRef.current),
+                  });
+                  setActiveGateway(applied.gateway);
+                  await upsertGateway(applied.gateway).then(setGateways);
+                  // Release the live session so the next send opens one pinned
+                  // to this model. Do not wipe the thread here — the slash
+                  // confirmation still has to land on commandMessageId.
+                  if (applied.releaseSession) {
+                    sessionIdRef.current = undefined;
+                    clientRef.current?.setSessionId(undefined);
+                    setCurrentSessionId(undefined);
+                  }
                 },
         });
         const duration = Date.now() - commandStartTimeRef.current;

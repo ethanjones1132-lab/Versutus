@@ -90,11 +90,10 @@ async function runLeg(label, command, args, { timeoutMs, shell = false, env = un
   if (code === 0 && !timedOut) ok(`${label} exited 0`);
   else {
     bad(`${label} exited ${code === null ? 'spawn-error' : code}${timedOut ? ' (timed out)' : ''}`);
-    // Persist the FULL leg stdio (head+tail truncated only in the console
-    // summary/row). A leg that dies with a Windows fail-fast code carries its
-    // explanation in the tail — losing it made the 0xC0000409 recurrences
-    // undiagnosable. Failures are rare; keeping the file on every red leg is
-    // the diagnosis path for the next one.
+    // Persist the FULL leg stdio; the console row only carries head+tail. A leg
+    // that dies without a useful exit code tends to explain itself in the tail,
+    // which is exactly what the console truncation drops. Red legs are rare, so
+    // writing the file on each one costs little and leaves something to read.
     try {
       const dumpPath = path.join(
         tmpdir(),
