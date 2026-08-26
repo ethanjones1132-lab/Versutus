@@ -561,7 +561,7 @@ async function runModelCommand(args: string[], context: SlashCommandContext): Pr
       }
       await context.setModelOverride(modelId);
       return textResult(
-        `Model override set to ${modelId}.\nNext chat messages on this gateway use this model (per-request; not host config).`,
+        `Model override set to ${modelId}.\nThe current session will reopen so the next turn actually runs on this model.`,
         '/model set',
       );
     }
