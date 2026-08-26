@@ -83,6 +83,7 @@ import {
   saveComposerDraft,
 } from '@/lib/gateway/composer-draft';
 import { effectiveModel } from '@/lib/gateway/model-selection';
+import { sessionListTitle } from '@/lib/gateway/session-list';
 import { resolveThreadConfigMode, threadConfigOfferedModes, type ThreadConfigMode } from '@/lib/gateway/thread-config';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
@@ -312,7 +313,7 @@ export function ChatScreen() {
       }
     : null;
 
-  const sessionLabel = currentSession?.title ?? (currentSessionId ? `${currentSessionId.slice(0, 10)}…` : undefined);
+  const sessionLabel = currentSessionId ? sessionListTitle(currentSession?.title) : undefined;
   // A Bot with no explicit pick answers on the model its Hermes profile
   // carries, so name that rather than falling back to a generic label — and
   // never to configurable chat's model, which is not what this thread runs on.
