@@ -13,6 +13,7 @@ import { GroupRoomView } from '@/components/chat/group-room-view';
 import { NewAgentSheet } from '@/components/chat/new-agent-sheet';
 import { RoutinesPane } from '@/components/chat/routines-pane';
 import { SkillsPane } from '@/components/chat/skills-pane';
+import { ThreadSpendGlance } from '@/components/chat/thread-spend-glance';
 import { DayDivider } from '@/components/chat/day-divider';
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
 import { ChatHeader } from '@/components/chat/chat-header';
@@ -50,6 +51,13 @@ import {
   type RoutineRead,
   type RoutinesState,
 } from '@/lib/gateway/routines';
+import {
+  applySessionSpendRead,
+  EMPTY_SESSION_SPEND,
+  sessionSpendReadFromUnknown,
+  threadSpendCopy,
+  type SessionSpendState,
+} from '@/lib/gateway/session-analytics';
 import {
   applySkillsRead,
   EMPTY_SKILLS,
@@ -189,6 +197,9 @@ export function ChatScreen() {
   });
   const [skillsState, setSkillsState] = useState<SkillsState & { botId?: string }>({
     ...EMPTY_SKILLS,
+  });
+  const [spendState, setSpendState] = useState<SessionSpendState & { surfaceKey?: string }>({
+    ...EMPTY_SESSION_SPEND,
   });
   const [groupsState, setGroupsState] = useState(EMPTY_GROUPS);
   const [newGroupVisible, setNewGroupVisible] = useState(false);
@@ -372,6 +383,12 @@ export function ChatScreen() {
   }, [surface.kind, status, listBots]);
 
   const botSurfaceId = surface.kind === 'bot' ? surface.botId : undefined;
+  const spendSurfaceKey =
+    surface.kind === 'bot'
+      ? `bot:${surface.botId}`
+      : surface.kind === 'configurable'
+        ? `cfg:${selectedBackendId ?? ''}`
+        : undefined;
   const foldRoutineRead = useCallback((botId: string, read: RoutineRead) => {
     setRoutineState((prev) => {
       const previous = prev.botId === botId ? prev : { ...EMPTY_ROUTINES, botId };
@@ -421,6 +438,36 @@ export function ChatScreen() {
       cancelled = true;
     };
   }, [botSurfaceId, status, gatewayRequest]);
+
+  useEffect(() => {
+    if (!spendSurfaceKey || status !== 'connected') return;
+    let cancelled = false;
+    void gatewayRequest('sessions.list', { limit: 50 })
+      .then((payload) => {
+        if (cancelled) return;
+        const read = sessionSpendReadFromUnknown(payload);
+        setSpendState((prev) => {
+          const previous =
+            prev.surfaceKey === spendSurfaceKey
+              ? prev
+              : { ...EMPTY_SESSION_SPEND, surfaceKey: spendSurfaceKey };
+          return { surfaceKey: spendSurfaceKey, ...applySessionSpendRead(previous, read) };
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSpendState((prev) => {
+          const previous =
+            prev.surfaceKey === spendSurfaceKey
+              ? prev
+              : { ...EMPTY_SESSION_SPEND, surfaceKey: spendSurfaceKey };
+          return { surfaceKey: spendSurfaceKey, ...applySessionSpendRead(previous, { ok: false }) };
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [spendSurfaceKey, status, currentSessionId, gatewayRequest]);
 
   // Group rooms load alongside the roster. A gateway that does not advertise
   // them answers with an empty list — no error, just no section.
@@ -767,6 +814,16 @@ export function ChatScreen() {
             onRetry={() => void retryAutoConnect()}
           />
         </Animated.View>
+      ) : null}
+
+      {threadSurface ? (
+        <ThreadSpendGlance
+          copy={
+            spendState.surfaceKey === spendSurfaceKey
+              ? threadSpendCopy(spendState, currentSessionId)
+              : undefined
+          }
+        />
       ) : null}
 
       {surface.kind === 'bot' ? (
