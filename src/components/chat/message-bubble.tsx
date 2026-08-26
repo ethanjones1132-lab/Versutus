@@ -142,7 +142,7 @@ export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPres
               {message.text}
             </Text>
           ) : (
-            <MarkdownText text={body} />
+            <MarkdownText text={body} streaming={!!message.streaming} />
           )}
 
           {isInterrupted && onResume ? (

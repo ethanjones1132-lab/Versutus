@@ -239,3 +239,16 @@ export function parseMarkdown(text: string): MdBlock[] {
   flushParagraph();
   return blocks;
 }
+
+/**
+ * Blocks for the chat bubble.
+ *
+ * A streaming body is one plain paragraph so each token does not re-parse
+ * the whole growing buffer. Markdown runs when the stream completes.
+ */
+export function markdownBlocksForDisplay(text: string, streaming = false): MdBlock[] {
+  if (streaming) {
+    return text.length === 0 ? [] : [{ type: 'paragraph', spans: [{ text }] }];
+  }
+  return parseMarkdown(text);
+}

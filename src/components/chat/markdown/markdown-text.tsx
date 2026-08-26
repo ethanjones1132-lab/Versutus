@@ -6,12 +6,14 @@ import { Divider } from '@/components/ui';
 import { FontFamily, Palette, Spacing } from '@/constants/tokens';
 
 import { CodeBlock } from './code-block';
-import { parseMarkdown, type MdBlock, type MdInline } from './parser';
+import { markdownBlocksForDisplay, type MdBlock, type MdInline } from './parser';
 
 export type MarkdownTextProps = {
   text: string;
   /** Base text color for body content. */
   color?: string;
+  /** Skip markdown parse while tokens are still arriving. */
+  streaming?: boolean;
 };
 
 function openLink(url: string) {
@@ -97,8 +99,12 @@ function BlockView({ block, baseColor }: { block: MdBlock; baseColor: string }) 
 }
 
 /** Themed markdown renderer for agent chat messages. */
-export function MarkdownText({ text, color = Palette.textPrimary }: MarkdownTextProps) {
-  const blocks = useMemo(() => parseMarkdown(text), [text]);
+export function MarkdownText({
+  text,
+  color = Palette.textPrimary,
+  streaming = false,
+}: MarkdownTextProps) {
+  const blocks = useMemo(() => markdownBlocksForDisplay(text, streaming), [text, streaming]);
 
   return (
     <View style={styles.root}>
