@@ -6,7 +6,9 @@ import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-na
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
 import { Badge, Card, Icon, PressableScale, Text, TextField, type IconName } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
+import { composerCopy } from '@/lib/gateway/composer-copy';
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
+import type { ConnectionStatus } from '@/lib/gateway/types';
 import { springSnappy } from '@/lib/motion/presets';
 import { useTokens } from '@/hooks/use-tokens';
 
@@ -25,6 +27,7 @@ type ChatComposerProps = {
   quickActions?: { label: string; draft: string; icon: IconName }[];
   isStreaming: boolean;
   canSend: boolean;
+  status: ConnectionStatus;
 };
 
 export function ChatComposer({
@@ -40,10 +43,12 @@ export function ChatComposer({
   quickActions = [],
   isStreaming,
   canSend,
+  status,
 }: ChatComposerProps) {
   const tokens = useTokens();
   const [focused, setFocused] = useState(false);
   const sendWidth = useSharedValue(56);
+  const copy = composerCopy({ canSend, isStreaming, status });
 
   const sendAnimatedStyle = useAnimatedStyle(() => ({
     minWidth: sendWidth.value,
@@ -239,7 +244,7 @@ export function ChatComposer({
           <TextField
             value={draft}
             onChangeText={onChangeText}
-            placeholder={canSend ? 'Message or /command' : 'Connect a gateway to chat'}
+            placeholder={copy.placeholder}
             multiline
             editable={inputEditable}
             // Chat keeps the platform typing defaults — the kit's form defaults
@@ -264,7 +269,7 @@ export function ChatComposer({
               onPress={() => void handleAction()}
               disabled={isActionDisabled}
               accessibilityRole="button"
-              accessibilityLabel={isStreaming ? 'Stop streaming' : 'Send message'}
+              accessibilityLabel={copy.sendLabel}
               onPressIn={() => {
                 // Reanimated shared value — mutable by design, not React state.
                 // eslint-disable-next-line react-hooks/immutability
