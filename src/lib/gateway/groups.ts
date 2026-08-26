@@ -24,6 +24,55 @@ export type BotGroupRoom = {
   memberIds: string[];
 };
 
+/** What one group-room inventory read produced. */
+export type GroupRead =
+  | { ok: true; rooms: BotGroupRoom[] }
+  | { ok: false };
+
+/**
+ * Visible rooms after folding a read. Two failures are not the same fact:
+ *   - A failed FIRST read claims zero knowledge — no rooms, not a guess.
+ *   - A failed RE-read keeps the last good list and marks it stale.
+ * Only a successful read may clear or replace the list.
+ */
+export type GroupsState = {
+  rooms: BotGroupRoom[];
+  /** True once a successful read has landed. */
+  loaded: boolean;
+  failed: boolean;
+};
+
+export const EMPTY_GROUPS: GroupsState = { rooms: [], loaded: false, failed: false };
+
+export function applyGroupRead(previous: GroupsState, read: GroupRead): GroupsState {
+  if (read.ok) return { rooms: read.rooms, loaded: true, failed: false };
+  if (previous.loaded) return { rooms: previous.rooms, loaded: true, failed: true };
+  return { rooms: [], loaded: false, failed: true };
+}
+
+export function groupsListCopy(state: GroupsState): string | undefined {
+  if (!state.loaded && state.failed) return 'Rooms could not be read.';
+  if (state.failed) return 'Could not re-read rooms — showing the last list.';
+  return undefined;
+}
+
+/**
+ * What the open-room surface should draw for a group id against the
+ * folded inventory. A failed re-read still opens a room that was on the
+ * last good list. A missing id is gone only after a successful read —
+ * an unread inventory must not claim the Gate deleted it.
+ */
+export type OpenGroup =
+  | { kind: 'open'; room: BotGroupRoom }
+  | { kind: 'gone' }
+  | { kind: 'unread' };
+
+export function resolveOpenGroup(groupId: string, state: GroupsState): OpenGroup {
+  const room = state.rooms.find((candidate) => candidate.id === groupId);
+  if (room) return { kind: 'open', room };
+  return state.loaded ? { kind: 'gone' } : { kind: 'unread' };
+}
+
 /** One bot's reply inside a group send (wire shape of deliverGroupMessage). */
 export type GroupReply = { botId: string; text: string };
 

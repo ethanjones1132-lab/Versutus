@@ -1,3 +1,10 @@
+import {
+  applyGroupRead,
+  EMPTY_GROUPS,
+  groupsListCopy,
+  resolveOpenGroup,
+  type BotGroupRoom,
+} from '@/lib/gateway/groups';
 import { applyRosterRead, type PublicBot, type RosterRow } from '@/lib/gateway/roster-read';
 
 const NAVIGATION_ROW: RosterRow = { kind: 'configurable' };
@@ -55,4 +62,73 @@ test('a successful EMPTY read is believed — the host really has no bots now', 
   const previous = [NAVIGATION_ROW, botRow('scout')];
   const rows = applyRosterRead(previous, { ok: true, bots: [] });
   expect(rows).toEqual([{ kind: 'configurable' }]);
+});
+
+const CREW: BotGroupRoom = { id: 'room1', name: 'crew', memberIds: ['coder', 'researcher'] };
+const LAB: BotGroupRoom = { id: 'room2', name: 'lab', memberIds: ['scout', 'writer'] };
+
+test('a good room read becomes the roster copy', () => {
+  const next = applyGroupRead(EMPTY_GROUPS, { ok: true, rooms: [CREW, LAB] });
+  expect(next.rooms).toEqual([CREW, LAB]);
+  expect(next.loaded).toBe(true);
+  expect(next.failed).toBe(false);
+  expect(groupsListCopy(next)).toBeUndefined();
+});
+
+test('a failed FIRST room read claims zero knowledge — no invented rooms', () => {
+  const next = applyGroupRead(EMPTY_GROUPS, { ok: false });
+  expect(next.rooms).toEqual([]);
+  expect(next.loaded).toBe(false);
+  expect(next.failed).toBe(true);
+  expect(groupsListCopy(next)).toBe('Rooms could not be read.');
+});
+
+test('a failed RE-read keeps the last good rooms — a network blip erases nothing', () => {
+  const previous = applyGroupRead(EMPTY_GROUPS, { ok: true, rooms: [CREW, LAB] });
+  const next = applyGroupRead(previous, { ok: false });
+  expect(next.rooms).toBe(previous.rooms);
+  expect(next.rooms).toEqual([CREW, LAB]);
+  expect(next.loaded).toBe(true);
+  expect(next.failed).toBe(true);
+  expect(groupsListCopy(next)).toBe('Could not re-read rooms — showing the last list.');
+});
+
+test('a failed re-read after a never-loaded room list still claims zero knowledge', () => {
+  const previous = applyGroupRead(EMPTY_GROUPS, { ok: false });
+  const next = applyGroupRead(previous, { ok: false });
+  expect(next.rooms).toEqual([]);
+  expect(next.loaded).toBe(false);
+  expect(groupsListCopy(next)).toBe('Rooms could not be read.');
+});
+
+test('a successful room refresh replaces stale rooms — new room in, removed room out', () => {
+  const previous = applyGroupRead(EMPTY_GROUPS, { ok: true, rooms: [CREW] });
+  const next = applyGroupRead(previous, { ok: true, rooms: [LAB] });
+  expect(next.rooms).toEqual([LAB]);
+  expect(next.failed).toBe(false);
+});
+
+test('a successful EMPTY room read is believed — the host really has no rooms now', () => {
+  const previous = applyGroupRead(EMPTY_GROUPS, { ok: true, rooms: [CREW] });
+  const next = applyGroupRead(previous, { ok: true, rooms: [] });
+  expect(next.rooms).toEqual([]);
+  expect(next.loaded).toBe(true);
+  expect(next.failed).toBe(false);
+  expect(groupsListCopy(next)).toBeUndefined();
+});
+
+test('the open room is still that room after a failed re-read', () => {
+  const previous = applyGroupRead(EMPTY_GROUPS, { ok: true, rooms: [CREW] });
+  const stale = applyGroupRead(previous, { ok: false });
+  expect(resolveOpenGroup('room1', stale)).toEqual({ kind: 'open', room: CREW });
+});
+
+test('a missing room after a successful read is gone', () => {
+  const next = applyGroupRead(EMPTY_GROUPS, { ok: true, rooms: [LAB] });
+  expect(resolveOpenGroup('room1', next)).toEqual({ kind: 'gone' });
+});
+
+test('a missing room before any successful read is unread, not gone', () => {
+  const next = applyGroupRead(EMPTY_GROUPS, { ok: false });
+  expect(resolveOpenGroup('room1', next)).toEqual({ kind: 'unread' });
 });

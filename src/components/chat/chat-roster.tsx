@@ -27,6 +27,11 @@ export type ChatRosterProps = {
   error?: string;
   /** Gate-owned group rooms; absent on gateways that do not advertise them. */
   groups?: BotGroupRoom[];
+  /**
+   * Staleness or unread copy for the rooms inventory. Independent of the
+   * agent-inventory `error` — a rooms blip must not look like agents failed.
+   */
+  groupsError?: string;
   onSelectConfigurable: () => void;
   onSelectBot: (bot: PublicBot) => void;
   /**
@@ -62,6 +67,7 @@ export function ChatRoster({
   loading = false,
   error,
   groups = [],
+  groupsError,
   onSelectConfigurable,
   onSelectBot,
   onBotDetail,
@@ -179,6 +185,11 @@ export function ChatRoster({
           />
         );
       })}
+      {groupsError ? (
+        <Text variant="caption" color="secondary" style={styles.error}>
+          {groupsError}
+        </Text>
+      ) : null}
       {visibleGroups.length > 0 ? (
         <Text variant="caption" color="tertiary" style={styles.sectionLabel}>
           GROUP ROOMS
