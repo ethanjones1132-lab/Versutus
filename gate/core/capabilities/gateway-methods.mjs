@@ -41,11 +41,35 @@ function jobIdOf(params) {
  * @param {(backendId?: string) => Promise<object>} deps.getBackend
  *   Resolves the backend or throws. Unlike the routes' `resolveBackend`, this
  *   must not write to a response — the RPC dispatcher owns the reply.
+ * @param {() => Promise<object[]>} [deps.listDevices]
+ *   Devices that hold a token on this Gate. The store's `token` field stays
+ *   in the store — this method never puts it on the wire.
  */
-export function createGatewayMethods({ getBackend }) {
+export function createGatewayMethods({ getBackend, listDevices }) {
   return {
     // The Gate answers for itself; no backend required.
     health: async () => ({ status: 'ok', timestamp: new Date().toISOString() }),
+
+    /**
+     * Devices that hold a token on this Gate. Public fields only:
+     * deviceId, role, scopes, issuedAtMs, revoked. Never `token`.
+     */
+    'device.list': async () => {
+      if (typeof listDevices !== 'function') {
+        throw new Error('This gateway does not keep a device registry');
+      }
+      const entries = await listDevices();
+      const list = Array.isArray(entries) ? entries : [];
+      return {
+        devices: list.map((entry) => ({
+          deviceId: entry?.deviceId,
+          role: entry?.role,
+          scopes: Array.isArray(entry?.scopes) ? entry.scopes : [],
+          issuedAtMs: entry?.issuedAtMs,
+          revoked: Boolean(entry?.revoked),
+        })),
+      };
+    },
 
     status: (params) => via(getBackend, params, 'healthDetailed', (b) => b.healthDetailed()),
     'diagnostics.full': (params) => via(getBackend, params, 'healthDetailed', (b) => b.healthDetailed()),
