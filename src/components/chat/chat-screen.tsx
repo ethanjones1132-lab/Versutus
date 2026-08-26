@@ -5,6 +5,7 @@ import { FlatList, RefreshControl, StyleSheet, View, type NativeScrollEvent, typ
 import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { ApprovalSheet } from '@/components/chat/approval-sheet';
+import { BotChrome } from '@/components/chat/bot-chrome';
 import { BotDetailSheet } from '@/components/chat/bot-detail-sheet';
 import { ChatComposer } from '@/components/chat/chat-composer';
 import { ChatRoster } from '@/components/chat/chat-roster';
@@ -36,6 +37,7 @@ import { formatDayDivider } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
 import { resolvePullRefreshAction } from '@/lib/gateway/messages';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
+import { botChromeCombined } from '@/lib/gateway/bot-chrome';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
 import { botToEditInput, buildBotUpdatePatch, buildRoster, type ChatSurface, type PublicBot, type RosterRow } from '@/lib/gateway/bots';
 import {
@@ -971,55 +973,59 @@ export function ChatScreen() {
         />
       ) : null}
 
-      {surface.kind === 'bot' ? (
-        <SkillsPane
-          skills={skillsState.botId === surface.botId ? skillsState.skills : []}
-          loaded={skillsState.botId === surface.botId ? skillsState.loaded : false}
-          failed={skillsState.botId === surface.botId ? skillsState.failed : false}
-        />
-      ) : null}
-
-      {toolsetsVisibleOn(surface) ? (
+      {botChromeCombined(surface) ? (
+        <BotChrome>
+          <SkillsPane
+            skills={skillsState.botId === surface.botId ? skillsState.skills : []}
+            loaded={skillsState.botId === surface.botId ? skillsState.loaded : false}
+            failed={skillsState.botId === surface.botId ? skillsState.failed : false}
+          />
+          {toolsetsVisibleOn(surface) ? (
+            <ToolsPane
+              toolsets={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.toolsets : []}
+              loaded={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.loaded : false}
+              failed={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.failed : false}
+            />
+          ) : null}
+          <RoutinesPane
+            jobs={routineState.botId === surface.botId ? routineState.jobs : []}
+            loaded={routineState.botId === surface.botId ? routineState.loaded : false}
+            failed={routineState.botId === surface.botId ? routineState.failed : false}
+            onCreate={async (input) => {
+              await botJobs.create({
+                name: routineName(surface.botId, input.title),
+                prompt: input.prompt,
+                schedule: input.schedule,
+              });
+              // Create already landed; a failed re-list must not look like
+              // the Gate refused the job (that would keep the draft of a
+              // routine that exists). Last-good stays; staleness is named.
+              await botJobs
+                .list()
+                .then((jobs) =>
+                  foldRoutineRead(surface.botId, { ok: true, jobs: routineJobsFromList(jobs) }),
+                )
+                .catch(() => foldRoutineRead(surface.botId, { ok: false }));
+            }}
+            onRun={async (jobId) => {
+              await botJobs.run(jobId);
+            }}
+            onTogglePause={async (jobId, paused) => {
+              await botJobs.pause(jobId, paused);
+              await botJobs
+                .list()
+                .then((jobs) =>
+                  foldRoutineRead(surface.botId, { ok: true, jobs: routineJobsFromList(jobs) }),
+                )
+                .catch(() => foldRoutineRead(surface.botId, { ok: false }));
+            }}
+          />
+        </BotChrome>
+      ) : toolsetsVisibleOn(surface) ? (
         <ToolsPane
           toolsets={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.toolsets : []}
           loaded={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.loaded : false}
           failed={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.failed : false}
-        />
-      ) : null}
-
-      {surface.kind === 'bot' ? (
-        <RoutinesPane
-          jobs={routineState.botId === surface.botId ? routineState.jobs : []}
-          loaded={routineState.botId === surface.botId ? routineState.loaded : false}
-          failed={routineState.botId === surface.botId ? routineState.failed : false}
-          onCreate={async (input) => {
-            await botJobs.create({
-              name: routineName(surface.botId, input.title),
-              prompt: input.prompt,
-              schedule: input.schedule,
-            });
-            // Create already landed; a failed re-list must not look like
-            // the Gate refused the job (that would keep the draft of a
-            // routine that exists). Last-good stays; staleness is named.
-            await botJobs
-              .list()
-              .then((jobs) =>
-                foldRoutineRead(surface.botId, { ok: true, jobs: routineJobsFromList(jobs) }),
-              )
-              .catch(() => foldRoutineRead(surface.botId, { ok: false }));
-          }}
-          onRun={async (jobId) => {
-            await botJobs.run(jobId);
-          }}
-          onTogglePause={async (jobId, paused) => {
-            await botJobs.pause(jobId, paused);
-            await botJobs
-              .list()
-              .then((jobs) =>
-                foldRoutineRead(surface.botId, { ok: true, jobs: routineJobsFromList(jobs) }),
-              )
-              .catch(() => foldRoutineRead(surface.botId, { ok: false }));
-          }}
         />
       ) : null}
 
