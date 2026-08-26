@@ -1,4 +1,4 @@
-import { composerCopy } from '@/lib/gateway/composer-copy';
+import { composerCopy, composerDockUtilities } from '@/lib/gateway/composer-copy';
 import type { ConnectionStatus } from '@/lib/gateway/types';
 
 const STATUSES: ConnectionStatus[] = [
@@ -64,5 +64,12 @@ describe('composerCopy', () => {
         expect(copy.sendLabel).toBe('Queue message');
       }
     }
+  });
+});
+
+describe('composerDockUtilities', () => {
+  test('browse-commands stays on the dock; reload and reconnect do not', () => {
+    expect(composerDockUtilities({ canBrowseCommands: true })).toEqual(['browse-commands']);
+    expect(composerDockUtilities({ canBrowseCommands: false })).toEqual([]);
   });
 });

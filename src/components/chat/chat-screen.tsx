@@ -1201,8 +1201,6 @@ export function ChatScreen() {
         onChangeText={setDraft}
         onSend={() => void handleSend()}
         onStop={() => void stopStreaming()}
-        onRefresh={() => void reloadHistory()}
-        onReconnect={() => void retryAutoConnect()}
         slashSuggestions={slashSuggestions}
         onSelectSlashSuggestion={(value) => setDraft(value)}
         onBrowseCommands={() => setPaletteVisible(true)}

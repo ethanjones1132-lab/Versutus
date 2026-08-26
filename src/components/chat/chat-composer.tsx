@@ -6,7 +6,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-na
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
 import { Badge, Card, Icon, PressableScale, Text, TextField, type IconName } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
-import { composerCopy } from '@/lib/gateway/composer-copy';
+import { composerCopy, composerDockUtilities } from '@/lib/gateway/composer-copy';
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
 import type { ConnectionStatus } from '@/lib/gateway/types';
 import { springSnappy } from '@/lib/motion/presets';
@@ -17,8 +17,6 @@ type ChatComposerProps = {
   onChangeText: (text: string) => void;
   onSend: () => void;
   onStop: () => void;
-  onRefresh: () => void;
-  onReconnect: () => void;
   slashSuggestions?: SlashCommandSuggestion[];
   onSelectSlashSuggestion?: (value: string) => void;
   /** Open the browsable command palette. Hidden when not provided. */
@@ -35,8 +33,6 @@ export function ChatComposer({
   onChangeText,
   onSend,
   onStop,
-  onRefresh,
-  onReconnect,
   slashSuggestions = [],
   onSelectSlashSuggestion,
   onBrowseCommands,
@@ -49,6 +45,7 @@ export function ChatComposer({
   const [focused, setFocused] = useState(false);
   const sendWidth = useSharedValue(56);
   const copy = composerCopy({ canSend, isStreaming, status });
+  const dockUtilities = composerDockUtilities({ canBrowseCommands: Boolean(onBrowseCommands) });
 
   const sendAnimatedStyle = useAnimatedStyle(() => ({
     minWidth: sendWidth.value,
@@ -98,29 +95,7 @@ export function ChatComposer({
               : null}
           </View>
           <View style={styles.chipGroup}>
-            <PressableScale
-              onPress={async () => {
-                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                onRefresh();
-              }}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="Reload history"
-              style={styles.utilityButton}>
-              <Icon name={{ ios: 'arrow.clockwise', android: 'refresh', web: 'refresh' }} size={15} color="textTertiary" />
-            </PressableScale>
-            <PressableScale
-              onPress={async () => {
-                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                onReconnect();
-              }}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="Reconnect gateway"
-              style={styles.utilityButton}>
-              <Icon name={{ ios: 'bolt.horizontal', android: 'cable', web: 'cable' }} size={15} color="textTertiary" />
-            </PressableScale>
-            {onBrowseCommands ? (
+            {dockUtilities.includes('browse-commands') && onBrowseCommands ? (
               <PressableScale
                 onPress={async () => {
                   await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

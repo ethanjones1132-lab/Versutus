@@ -37,3 +37,12 @@ function sendLabelCopy(input: { isStreaming: boolean; queues: boolean }): string
   if (input.queues) return 'Queue message';
   return 'Send message';
 }
+
+/** Reload and reconnect already live in overflow (and pull-to-refresh). */
+export type ComposerDockUtility = 'browse-commands';
+
+export function composerDockUtilities(input: {
+  canBrowseCommands: boolean;
+}): ComposerDockUtility[] {
+  return input.canBrowseCommands ? ['browse-commands'] : [];
+}
