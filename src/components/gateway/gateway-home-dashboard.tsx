@@ -126,6 +126,7 @@ export function GatewayHomeDashboard() {
   const channelGroup = capabilitySnapshot.groups.find((group) => group.id === 'channels');
   const runsSupported =
     connected && capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'ready';
+  const primaryActions = homeHeroPrimaryActions();
   const orbColor = statusColor(tokens, status);
   const statusLabel = connected
     ? 'Connected'
@@ -203,21 +204,23 @@ export function GatewayHomeDashboard() {
           />
         ) : null}
 
-        <View style={styles.primaryActions}>
-          {homeHeroPrimaryActions().map((action) => (
-            <Button
-              key={action.id}
-              label={action.label}
-              onPress={async () => {
-                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                router.push(action.href as Href);
-              }}
-              disabled={!connected}
-              variant="secondary"
-              style={styles.primaryAction}
-            />
-          ))}
-        </View>
+        {primaryActions.length > 0 ? (
+          <View style={styles.primaryActions}>
+            {primaryActions.map((action) => (
+              <Button
+                key={action.id}
+                label={action.label}
+                onPress={async () => {
+                  await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  router.push(action.href as Href);
+                }}
+                disabled={!connected}
+                variant="secondary"
+                style={styles.primaryAction}
+              />
+            ))}
+          </View>
+        ) : null}
         {!connected ? (
           <Button
             label="Retry connection"

@@ -48,14 +48,12 @@ describe('describeHomeEmptyState', () => {
 });
 
 describe('homeHeroPrimaryActions', () => {
-  test('the saved-gateway hero keeps Setup; Chat, Activity, and Tools live on the tab bar', () => {
+  test('the saved-gateway hero has no primary actions; Setup lives on the gear', () => {
     const actions = homeHeroPrimaryActions();
-    const ids = actions.map((action) => action.id);
-    expect(ids).toEqual(['setup']);
-    expect(actions[0]?.label).toBe('Setup');
-    expect(actions[0]?.href).toBe('/gateway/setup');
-    expect(ids).not.toContain('chat');
-    expect(ids).not.toContain('activity');
-    expect(ids).not.toContain('tools');
+    expect(actions).toEqual([]);
+    expect(actions.map((action) => action.id)).not.toContain('setup');
+    expect(actions.map((action) => action.id)).not.toContain('chat');
+    expect(actions.map((action) => action.id)).not.toContain('activity');
+    expect(actions.map((action) => action.id)).not.toContain('tools');
   });
 });
