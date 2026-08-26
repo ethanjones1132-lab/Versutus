@@ -109,6 +109,32 @@ export function humanizeGatewayError(error: unknown): HumanizedError {
   };
 }
 
+export type ErrorBannerButton =
+  | { kind: 'setup'; label: string }
+  | { kind: 'reconnect'; label: string }
+  | { kind: 'copy'; label: string }
+  | { kind: 'dismiss' };
+
+/**
+ * Button on the chat error banner, keyed off the verdict
+ * `humanizeGatewayError` already computed.
+ *
+ * Auth rejection says to open setup; a reconnect button would ignore that.
+ * Copy-class errors are host-side. Dismiss has nothing to tap.
+ */
+export function errorBannerButton(action: HumanizedErrorAction): ErrorBannerButton {
+  switch (action) {
+    case 'setup':
+      return { kind: 'setup', label: 'Open gateway setup' };
+    case 'reconnect':
+      return { kind: 'reconnect', label: 'Reconnect gateway' };
+    case 'copy':
+      return { kind: 'copy', label: 'Copy details' };
+    case 'dismiss':
+      return { kind: 'dismiss' };
+  }
+}
+
 /**
  * One-line prose form, for surfaces that take a plain string instead of an
  * `ErrorCard` — empty states, banners, notification bodies.
