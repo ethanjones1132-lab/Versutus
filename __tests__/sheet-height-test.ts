@@ -1,4 +1,4 @@
-import { sheetMaxHeight, SHEET_MARGIN } from '@/lib/motion/sheet-height';
+import { sheetMaxHeight, sheetMaxWidth, SHEET_MARGIN } from '@/lib/motion/sheet-height';
 
 test('a sheet never claims more than the screen minus system chrome', () => {
   // Reported 2026-08-25: the session picker grew past the top of the screen,
@@ -38,4 +38,12 @@ test('nonsense insets cannot inflate the ceiling', () => {
   expect(sheetMaxHeight({ windowHeight: 1000, insetTop: -500 })).toBe(
     sheetMaxHeight({ windowHeight: 1000, insetTop: 0 }),
   );
+});
+
+test('a tablet sheet is a 560-wide column, not window minus 24', () => {
+  expect(sheetMaxWidth({ windowWidth: 1024 })).toBe(560);
+});
+
+test('a phone sheet keeps the 24px inset on each side', () => {
+  expect(sheetMaxWidth({ windowWidth: 390 })).toBe(342);
 });

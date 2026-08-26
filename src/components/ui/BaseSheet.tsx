@@ -15,7 +15,7 @@ import { Text } from './Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Motion, Radius } from '@/constants/tokens';
-import { SHEET_MARGIN, sheetMaxHeight } from '@/lib/motion/sheet-height';
+import { SHEET_MARGIN, sheetMaxHeight, sheetMaxWidth } from '@/lib/motion/sheet-height';
 import { useTokens } from '@/hooks/use-tokens';
 
 interface BaseSheetProps {
@@ -40,7 +40,7 @@ export function BaseSheet({
 }: BaseSheetProps) {
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   // A sheet with no ceiling grows to its children. Anchored to the bottom,
   // that overflow leaves the screen upward and takes the header with it —
   // which is how ~40 sessions made "New session" unreachable. Bounding it here
@@ -51,6 +51,7 @@ export function BaseSheet({
     insetBottom: insets.bottom,
     position,
   });
+  const maxWidth = sheetMaxWidth({ windowWidth });
   const hiddenOffset = position === 'bottom' ? 400 : -400;
   const translateY = useSharedValue(hiddenOffset);
   const [mounted, setMounted] = useState(visible);
@@ -96,10 +97,11 @@ export function BaseSheet({
         <Pressable style={styles.backdrop} onPress={handleBackdrop} accessibilityLabel="Dismiss sheet" />
         <Animated.View
           style={[
-            styles.sheet,
             isBottom ? styles.bottom : styles.top,
             {
               maxHeight,
+              width: maxWidth,
+              alignSelf: 'center',
               // Clear the system bars on the anchored edge; the opposite edge
               // is already handled by maxHeight.
               marginBottom: (isBottom ? SHEET_MARGIN.bottom.inner : 0) + (isBottom ? insets.bottom : 0),
@@ -156,9 +158,6 @@ const styles = StyleSheet.create({
   backdrop: {
     ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0,0,0,0.6)',
-  },
-  sheet: {
-    marginHorizontal: SHEET_MARGIN.bottom.outer,
   },
   // marginBottom / marginTop are applied inline so they can carry the safe-area
   // inset; these remain for anything reading the base style.

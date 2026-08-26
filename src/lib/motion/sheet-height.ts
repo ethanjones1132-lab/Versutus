@@ -54,3 +54,20 @@ export function sheetMaxHeight(input: {
 
   return Math.max(minimum, Math.round(available));
 }
+
+/** ~70-char line at body size. Phone widths keep the 24px inset on each side. */
+const COLUMN_MAX = 560;
+
+/**
+ * The widest a sheet may be without stretching across a tablet.
+ *
+ * Phone widths stay window minus the 24px inset on each side (390 → 342).
+ * Wider windows cap at 560 so a session picker, overflow, and Bot detail
+ * stay a column instead of a 976-wide strip.
+ */
+export function sheetMaxWidth(input: { windowWidth: number }): number {
+  const { windowWidth } = input;
+  const inset = SHEET_MARGIN.bottom.outer * 2;
+  if (!Number.isFinite(windowWidth) || windowWidth <= 0) return COLUMN_MAX;
+  return Math.min(COLUMN_MAX, Math.max(0, Math.round(windowWidth - inset)));
+}
