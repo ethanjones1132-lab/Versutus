@@ -1242,7 +1242,7 @@ export function ChatScreen() {
         currentSessionId={currentSessionId}
         onSelectSession={selectSession}
         onRefreshSessions={() => void openSessionSelector()}
-        onNewSession={() => void createNewSession()}
+        onNewSession={(title) => void createNewSession(title)}
         onDeleteSession={(sessionId) => void deleteSessionById(sessionId)}
         models={modelCatalog.map((model: Record<string, unknown>) => ({
           id: String(model.id || model.model || model.name || ''),

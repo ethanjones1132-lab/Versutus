@@ -47,3 +47,13 @@ export function sessionListCopy(state: SessionListState): string | undefined {
   if (state.failed) return 'Could not re-read sessions — showing the last list.';
   return undefined;
 }
+
+/**
+ * Title forwarded to createNewSession from the name the operator typed.
+ * Empty or whitespace still creates untitled — today's behaviour. There is
+ * no later rename route, so this is the only chance to name the thread.
+ */
+export function sessionCreateTitle(draft: string): string | undefined {
+  const title = draft.trim();
+  return title ? title : undefined;
+}
