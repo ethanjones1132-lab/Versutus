@@ -9,6 +9,7 @@ import { CapabilityHive } from '@/components/gateway/capability-hive';
 import { ChannelStatusRow } from '@/components/gateway/channel-status-row';
 import { CompactGatewayList } from '@/components/gateway/compact-gateway-list';
 import { GatewayCapabilities } from '@/components/gateway/gateway-capabilities';
+import { PairedDevicesPane } from '@/components/gateway/paired-devices-pane';
 import { GlassCollapsible } from '@/components/glass-collapsible';
 import { HomeStatusCard } from '@/components/home-status-card';
 import { PairingPanel } from '@/components/pairing-panel';
@@ -341,6 +342,8 @@ export function GatewayHomeDashboard() {
         onSelect={(gateway) => void connectGateway(gateway)}
         onDelete={confirmDelete}
       />
+
+      <PairedDevicesPane />
 
       <CapabilityHive groups={capabilitySnapshot.groups} status={capabilitySnapshot.status} />
       <GatewayCapabilities snapshot={capabilitySnapshot} />

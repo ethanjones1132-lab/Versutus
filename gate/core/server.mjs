@@ -527,10 +527,17 @@ export async function createGate(config = {}) {
     ...environmentRpc,
   };
 
+  // Device tokens are Gate-owned, not a backend's. The store is created here
+  // so `device.list` is on gatewayMethods before computeState advertises
+  // rpcMethods — a method added after that first build would be dispatchable
+  // but invisible until the next reload.
+  const deviceTokens = new DeviceTokenStore(join(root, '.device-tokens.json'));
+
   // The Hermes-dialect methods the app's command registry actually sends.
   // Resolution throws rather than writing a response: the RPC dispatcher below
   // owns the reply shape, unlike the REST routes' `resolveBackend`.
   const gatewayMethods = createGatewayMethods({
+    listDevices: () => deviceTokens.list(),
     async getBackend(backendId, method) {
       if (backendId) return backendManager.get(backendId);
       const entries = await backendManager.list();
@@ -691,7 +698,6 @@ export async function createGate(config = {}) {
   const token = await tokenStore.ensureToken();
 
   const pairing = new PairingStore(join(root, '.pairing.json'));
-  const deviceTokens = new DeviceTokenStore(join(root, '.device-tokens.json'));
   const replayCache = new Set();
 
   // Create HTTP server
