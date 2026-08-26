@@ -1,5 +1,5 @@
 import { GatewayHttpError } from '@/lib/gateway/errors';
-import { describeGatewayError, humanizeGatewayError, parseStructuredError } from '@/lib/gateway/error-humanizer';
+import { describeGatewayError, errorBannerButton, humanizeGatewayError, parseStructuredError } from '@/lib/gateway/error-humanizer';
 
 describe('humanizeGatewayError', () => {
   it('maps user abort to dismissible cancelled', () => {
@@ -73,6 +73,40 @@ describe('humanizeGatewayError', () => {
     const result = humanizeGatewayError(new GatewayHttpError('upstream exploded', 502));
     expect(result.title).toBe('Gateway error 502');
     expect(result.action).toBe('reconnect');
+  });
+});
+
+describe('errorBannerButton', () => {
+  it('opens gateway setup when the verdict is setup, not reconnect', () => {
+    const verdict = humanizeGatewayError(new GatewayHttpError('invalid api key', 401));
+    expect(errorBannerButton(verdict.action)).toEqual({
+      kind: 'setup',
+      label: 'Open gateway setup',
+    });
+  });
+
+  it('reconnects when the verdict is a reachability miss', () => {
+    const verdict = humanizeGatewayError(new Error('Network request failed'));
+    expect(errorBannerButton(verdict.action)).toEqual({
+      kind: 'reconnect',
+      label: 'Reconnect gateway',
+    });
+  });
+
+  it('copies details when the verdict is host-side, not reconnect', () => {
+    const gate =
+      'bot "echo" still uses the default listen key; /p/echo/ rejects it — give the profile its own API_SERVER_KEY';
+    const verdict = humanizeGatewayError(new GatewayHttpError(gate, 409));
+    expect(errorBannerButton(verdict.action)).toEqual({
+      kind: 'copy',
+      label: 'Copy details',
+    });
+  });
+
+  it('hides the button when the verdict is dismiss', () => {
+    const abort = new Error('The operation was aborted.');
+    abort.name = 'AbortError';
+    expect(errorBannerButton(humanizeGatewayError(abort).action)).toEqual({ kind: 'dismiss' });
   });
 });
 

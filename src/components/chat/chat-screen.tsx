@@ -1,4 +1,5 @@
-import { useRouter } from 'expo-router';
+import * as Clipboard from 'expo-clipboard';
+import { type Href, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
@@ -28,10 +29,11 @@ import { SlashCommandPalette } from '@/components/chat/slash-command-palette';
 import { Button, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text } from '@/components/ui';
 import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
-import { describeGatewayError, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
+import { describeGatewayError, errorBannerButton, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDivider } from '@/lib/format';
+import { haptics } from '@/lib/haptics';
 import { resolvePullRefreshAction } from '@/lib/gateway/messages';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
@@ -116,6 +118,47 @@ function ChatSkeleton() {
       <Skeleton width="48%" height={44} radius={Radius.lg} style={styles.skeletonRight} />
       <Skeleton width="70%" height={88} radius={Radius.lg} style={styles.skeletonLeft} />
     </View>
+  );
+}
+
+function LastErrorBanner({
+  error,
+  onSetup,
+  onReconnect,
+}: {
+  error: unknown;
+  onSetup: () => void;
+  onReconnect: () => void;
+}) {
+  const humanized = humanizeGatewayError(error);
+  const button = errorBannerButton(humanized.action);
+  let onRetry: (() => void) | undefined;
+  switch (button.kind) {
+    case 'setup':
+      onRetry = onSetup;
+      break;
+    case 'reconnect':
+      onRetry = onReconnect;
+      break;
+    case 'copy':
+      onRetry = () => {
+        void Clipboard.setStringAsync(describeGatewayError(error)).then(() => haptics.success());
+      };
+      break;
+    case 'dismiss':
+      onRetry = undefined;
+      break;
+  }
+  return (
+    <Animated.View entering={FadeIn.duration(Motion.duration.fast)} style={styles.bannerWrap}>
+      <ErrorCard
+        cause={humanized.cause}
+        affected={humanized.affected}
+        next={humanized.next}
+        retryLabel={button.kind === 'dismiss' ? undefined : button.label}
+        onRetry={onRetry}
+      />
+    </Animated.View>
   );
 }
 
@@ -903,13 +946,11 @@ export function ChatScreen() {
       />
 
       {lastError ? (
-        <Animated.View entering={FadeIn.duration(Motion.duration.fast)} style={styles.bannerWrap}>
-          <ErrorCard
-            {...humanizeGatewayError(lastError)}
-            retryLabel="Reconnect gateway"
-            onRetry={() => void retryAutoConnect()}
-          />
-        </Animated.View>
+        <LastErrorBanner
+          error={lastError}
+          onSetup={() => router.push('/gateway/setup' as Href)}
+          onReconnect={() => void retryAutoConnect()}
+        />
       ) : null}
 
       {threadSurface ? (
