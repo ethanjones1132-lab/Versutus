@@ -364,9 +364,22 @@ test('prune protects an active tee and buries the marker with its stream', async
   store.end('run_f');
   store.markComplete('run_c');
   store.end('run_c');
-  await new Promise((resolve) => setTimeout(resolve, 10));
 
-  const names = await readdir(dir);
+  // prune() removes the stream and then its marker as two consecutive async
+  // syscalls; a fixed sleep can elapse between the two under load and catch
+  // the stream already gone while the marker is still on disk — a dir read
+  // is only trustworthy once BOTH removals are observable. Bounded poll:
+  // if prune never ran, the deadline expires and the assertions below fail
+  // with the same honest messages.
+  const deadline = Date.now() + 2000;
+  let names;
+  for (;;) {
+    names = await readdir(dir);
+    if (!names.includes('run_d.sse') && !names.includes('run_d.complete')) break;
+    if (Date.now() > deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
   assert.ok(names.includes('run_c.sse'), 'the active tee must never be pruned from under the relay');
   assert.ok(names.includes('run_c.complete'));
   assert.ok(!names.includes('run_d.sse'), 'the oldest seeded run is the one removed instead');
