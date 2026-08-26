@@ -1,8 +1,13 @@
 import {
   applyRoutineCreate,
+  applyRoutineRead,
   describeRoutineError,
+  EMPTY_ROUTINES,
   parseRoutineName,
   routineName,
+  routinesListCopy,
+  routinesToggleLabel,
+  type RoutineJob,
 } from '@/lib/gateway/routines';
 
 test('routineName namespaces a job to a bot', () => {
@@ -50,5 +55,80 @@ test('describeRoutineError keeps unclassifiable refusals raw', () => {
 test('describeRoutineError accepts Error instances and plain strings alike', () => {
   expect(describeRoutineError(new Error('cron already exists'))).toBe('cron already exists');
   expect(describeRoutineError('cron already exists')).toBe('cron already exists');
+});
+
+const INBOX: RoutineJob = { id: 'job_inbox', name: '[bot:echo] inbox', paused: false };
+const NIGHTLY: RoutineJob = { id: 'job_nightly', name: '[bot:echo] nightly', paused: true };
+
+test('a successful first read is believed, even when empty', () => {
+  const next = applyRoutineRead(EMPTY_ROUTINES, { ok: true, jobs: [] });
+  expect(next.jobs).toEqual([]);
+  expect(next.loaded).toBe(true);
+  expect(next.failed).toBe(false);
+  expect(routinesToggleLabel(next, false)).toBe('Routines (0)');
+  expect(routinesListCopy(next)).toBeUndefined();
+});
+
+test('a successful first read with jobs replaces the unread list', () => {
+  const next = applyRoutineRead(EMPTY_ROUTINES, { ok: true, jobs: [INBOX, NIGHTLY] });
+  expect(next.jobs).toEqual([INBOX, NIGHTLY]);
+  expect(next.loaded).toBe(true);
+  expect(next.failed).toBe(false);
+  expect(routinesToggleLabel(next, false)).toBe('Routines (2)');
+  expect(routinesListCopy(next)).toBeUndefined();
+});
+
+test('a failed FIRST read claims zero knowledge — not Routines (0)', () => {
+  const next = applyRoutineRead(EMPTY_ROUTINES, { ok: false });
+  expect(next.jobs).toEqual([]);
+  expect(next.loaded).toBe(false);
+  expect(next.failed).toBe(true);
+  expect(routinesToggleLabel(next, false)).toBe('Routines');
+  expect(routinesToggleLabel(next, false)).not.toContain('0');
+  expect(routinesListCopy(next)).toBe('Routines could not be read.');
+});
+
+test('a failed RE-read keeps the last good list and names the staleness', () => {
+  const loaded = applyRoutineRead(EMPTY_ROUTINES, { ok: true, jobs: [INBOX, NIGHTLY] });
+  const stale = applyRoutineRead(loaded, { ok: false });
+  expect(stale.jobs).toEqual([INBOX, NIGHTLY]);
+  expect(stale.loaded).toBe(true);
+  expect(stale.failed).toBe(true);
+  expect(routinesToggleLabel(stale, false)).toBe('Routines (2)');
+  expect(routinesListCopy(stale)).toBe('Could not re-read routines — showing the last list.');
+});
+
+test('a failed re-read of an empty-ok list stays empty and still names the failure', () => {
+  const previous = applyRoutineRead(EMPTY_ROUTINES, { ok: true, jobs: [] });
+  const next = applyRoutineRead(previous, { ok: false });
+  expect(next.jobs).toEqual([]);
+  expect(next.loaded).toBe(true);
+  expect(next.failed).toBe(true);
+  expect(routinesToggleLabel(next, false)).toBe('Routines (0)');
+  expect(routinesListCopy(next)).toBe('Could not re-read routines — showing the last list.');
+});
+
+test('a successful EMPTY read is believed — the Bot really has none now', () => {
+  const previous = applyRoutineRead(EMPTY_ROUTINES, { ok: true, jobs: [INBOX] });
+  const next = applyRoutineRead(previous, { ok: true, jobs: [] });
+  expect(next).toEqual({ jobs: [], loaded: true, failed: false });
+  expect(routinesToggleLabel(next, false)).toBe('Routines (0)');
+  expect(routinesListCopy(next)).toBeUndefined();
+});
+
+test('a successful refresh replaces the list and clears the failure', () => {
+  const previous = applyRoutineRead(EMPTY_ROUTINES, { ok: true, jobs: [INBOX] });
+  const stale = applyRoutineRead(previous, { ok: false });
+  const next = applyRoutineRead(stale, { ok: true, jobs: [NIGHTLY] });
+  expect(next.jobs).toEqual([NIGHTLY]);
+  expect(next.failed).toBe(false);
+  expect(routinesListCopy(next)).toBeUndefined();
+});
+
+test('the open toggle hides the count the way Skills does', () => {
+  const loaded = applyRoutineRead(EMPTY_ROUTINES, { ok: true, jobs: [INBOX] });
+  expect(routinesToggleLabel(loaded, true)).toBe('Hide routines');
+  expect(routinesToggleLabel(EMPTY_ROUTINES, false)).toBe('Routines');
+  expect(routinesListCopy(EMPTY_ROUTINES)).toBeUndefined();
 });
 

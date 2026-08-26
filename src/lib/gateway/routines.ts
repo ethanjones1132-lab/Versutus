@@ -45,3 +45,43 @@ export function applyRoutineCreate(
   }
   return { draft: submitted, error: describeRoutineError(mutation.cause) };
 }
+
+/** One scheduled job the gateway reports for a Bot. */
+export type RoutineJob = { id: string; name?: string; paused?: boolean };
+
+/** What one routine-list read produced. */
+export type RoutineRead = { ok: true; jobs: RoutineJob[] } | { ok: false };
+
+/**
+ * Visible routines after folding a read. Two failures are not the same
+ * fact:
+ *   - A failed FIRST read claims zero knowledge — not "Routines (0)".
+ *   - A failed RE-read keeps the last good list and marks it stale.
+ * Only a successful read may clear or replace the list.
+ */
+export type RoutinesState = {
+  jobs: RoutineJob[];
+  /** True once a successful read has landed. */
+  loaded: boolean;
+  failed: boolean;
+};
+
+export const EMPTY_ROUTINES: RoutinesState = { jobs: [], loaded: false, failed: false };
+
+export function applyRoutineRead(previous: RoutinesState, read: RoutineRead): RoutinesState {
+  if (read.ok) return { jobs: read.jobs, loaded: true, failed: false };
+  if (previous.loaded) return { jobs: previous.jobs, loaded: true, failed: true };
+  return { jobs: [], loaded: false, failed: true };
+}
+
+export function routinesToggleLabel(state: RoutinesState, open: boolean): string {
+  if (open) return 'Hide routines';
+  if (!state.loaded) return 'Routines';
+  return `Routines (${state.jobs.length})`;
+}
+
+export function routinesListCopy(state: RoutinesState): string | undefined {
+  if (!state.loaded && state.failed) return 'Routines could not be read.';
+  if (state.failed) return 'Could not re-read routines — showing the last list.';
+  return undefined;
+}
