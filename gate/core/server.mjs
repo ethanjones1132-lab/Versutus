@@ -1483,6 +1483,16 @@ export async function createGate(config = {}) {
               transcriptEntriesForSend({ text: body.text, replies: result.replies }),
             );
           } catch (historyError) {
+            // A room disbanded while the round ran (between the send door and
+            // the append) is not a persistence glitch: the room is GONE and
+            // nothing will ever replay. Answering a pristine success would let
+            // the phone keep showing a live-looking conversation the Gate
+            // deleted — the lost transcript is a fact the response must carry.
+            if (historyError?.code === 'unknown_group') {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ ...result, roomDisbanded: true }));
+              return;
+            }
             console.warn(`bot-groups: transcript append failed for ${group.id}:`, historyError?.message ?? historyError);
           }
           res.writeHead(200);

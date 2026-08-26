@@ -586,12 +586,14 @@ export class ManifestClient implements PortalClient {
   /**
    * One send runs the whole planned round-robin server-side and returns every
    * reply with its author, so a silent bot ends the plan early instead of
-   * hanging the phone mid-round.
+   * hanging the phone mid-round. `roomDisbanded` is set only when the room
+   * was deleted between the send door and the transcript write — the replies
+   * happened but nothing was stored, and the room is gone.
    */
   async sendGroupMessage(
     groupId: string,
     input: { text: string; mentionedIds?: string[] },
-  ): Promise<{ replies: GroupReply[] }> {
+  ): Promise<{ replies: GroupReply[]; roomDisbanded?: boolean }> {
     const path = this.requireEndpoint('botGroups');
     return this.rootTransport.request(
       'POST',

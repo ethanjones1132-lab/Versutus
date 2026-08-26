@@ -2,6 +2,7 @@ import {
   addableMembers,
   canAddMember,
   canRemoveMember,
+  describeDisbandedRound,
   describeGroupPlan,
   describeRoomError,
   describeRoomPlan,
@@ -171,6 +172,17 @@ test('describeRoundOutcome names the silence when a round ends early', () => {
   expect(describeRoundOutcome({ replyCount: 10, speakerCount: 10, routableCount: 10, silentNames: [] })).toBe(
     '10 replies this round',
   );
+});
+
+test('describeDisbandedRound names the loss instead of a reply count', () => {
+  // A room the Gate deleted while the round ran has no stored transcript —
+  // a bare "N replied this round" would imply the conversation survives.
+  const note = describeDisbandedRound();
+  expect(note).toContain('disbanded');
+  expect(note).toContain('not stored');
+  // The note never counts replies — no count, no "answered" verdict.
+  expect(note).not.toMatch(/\d/);
+  expect(note).not.toContain('answered');
 });
 
 test('describeRoomPlan counts only roster-confirmed speakers', () => {

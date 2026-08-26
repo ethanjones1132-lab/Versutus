@@ -8,6 +8,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import { botChipModelPin, botChipRoutingTag, type PublicBot } from '@/lib/gateway/bots';
 import {
   canRemoveMember,
+  describeDisbandedRound,
   describeRoomError,
   describeRoundOutcome,
   describeRoomPlan,
@@ -44,6 +45,10 @@ type RoomEntry =
       /** False when the roster inventory had not been read at send time —
        *  the outcome line must never claim a routing verdict it lacks. */
       rosterLoaded?: boolean;
+      /** True when the Gate reported the room was disbanded while this
+       *  round ran: replies happened but nothing was stored. Replaces the
+       *  reply-count outcome line with the honest loss note. */
+      roomDisbanded?: boolean;
     }
   | { id: string; role: 'bot'; botId: string; text: string; at?: number };
 
@@ -60,7 +65,11 @@ function userMetaLine(entry: Extract<RoomEntry, { role: 'user' }>): string {
     const time = formatGroupMessageTime(entry.at);
     if (time) parts.push(time);
   }
-  if (typeof entry.replyCount === 'number') {
+  if (entry.roomDisbanded) {
+    // The Gate deleted the room while the round ran: claims of "N replied
+    // this round" would pretend the conversation is stored when it is gone.
+    parts.push(describeDisbandedRound());
+  } else if (typeof entry.replyCount === 'number') {
     parts.push(
       describeRoundOutcome({
         replyCount: entry.replyCount,
@@ -94,7 +103,7 @@ export function GroupRoomView({
 }: {
   group: BotGroupRoom;
   members: PublicBot[];
-  onSend: (text: string, mentionedIds: string[]) => Promise<{ replies: GroupReply[] }>;
+  onSend: (text: string, mentionedIds: string[]) => Promise<{ replies: GroupReply[]; roomDisbanded?: boolean }>;
   onRename: (name: string) => Promise<BotGroupRoom>;
   onLeave: (memberId: string) => Promise<BotGroupRoom>;
   onDisband: () => Promise<unknown>;
@@ -256,7 +265,7 @@ export function GroupRoomView({
     setError(undefined);
     scrollToBottom();
     onSend(text, mentionedIds)
-      .then(({ replies }) => {
+      .then(({ replies, roomDisbanded }) => {
         const repliedAt = Date.now();
         setEntries((prev) => {
           const next: RoomEntry[] = [];
@@ -267,7 +276,9 @@ export function GroupRoomView({
             }
             // The user bubble keeps its text but now carries the round's
             // visible feedback: how many asked bots answered, or — short of
-            // the full scope — exactly how many of them stayed silent.
+            // the full scope — exactly how many of them stayed silent. A
+            // room the Gate disbanded while the round ran replaces the
+            // reply count with the honest loss note (nothing was stored).
             next.push({
               id: entryId,
               role: 'user',
@@ -279,6 +290,7 @@ export function GroupRoomView({
               silentNames: roundSilentNames,
               unknownNames: roundUnknownNames,
               rosterLoaded: inventoryLoaded,
+              roomDisbanded,
             });
             replies.forEach((reply, index) => {
               next.push({

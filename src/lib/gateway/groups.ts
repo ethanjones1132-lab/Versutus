@@ -334,6 +334,19 @@ export function describeRoundOutcome({
 }
 
 /**
+ * The honest outcome segment for a send whose room was disbanded while the
+ * round ran: the bots spoke, but the Gate deleted the room before the
+ * transcript could be stored, so nothing will ever replay. This REPLACES the
+ * reply-count line — "N replied this round" on a room that no longer exists
+ * would pretend the conversation is stored when the Gate threw it away. The
+ * reply bubbles still render (they happened — the wire said so), with this
+ * note naming the loss.
+ */
+export function describeDisbandedRound(): string {
+  return 'Room disbanded while the bots replied — replies were not stored';
+}
+
+/**
  * Whether the phone holds VERIFIED bot-inventory knowledge: a completed,
  * error-free roster read, or rows that survived from an earlier success.
  * A FAILED read verifies nothing even though it is no longer loading —

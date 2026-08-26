@@ -77,7 +77,7 @@ export interface PortalClient {
   sendGroupMessage?(
     groupId: string,
     input: { text: string; mentionedIds?: string[] },
-  ): Promise<{ replies: GroupReply[] }>;
+  ): Promise<{ replies: GroupReply[]; roomDisbanded?: boolean }>;
   /** Stored room transcript; omitted when the gate has no rooms endpoint. */
   groupHistory?(groupId: string): Promise<GroupTranscriptEntry[]>;
   renameGroup?(groupId: string, name: string): Promise<BotGroupRoom>;

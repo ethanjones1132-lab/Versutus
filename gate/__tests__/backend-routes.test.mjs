@@ -1457,6 +1457,58 @@ test('bot groups: sends are recorded Gate-side and replayed as room history', as
   }
 });
 
+test('bot groups: a room disbanded while the round runs says so instead of a pristine round', async () => {
+  const calls = [];
+  const registry = groupRosterRegistry(calls);
+  const adapter = registry.get('stubcli');
+  const createBackend = adapter.createBackend.bind(adapter);
+  let gateRef = null;
+  let disbandedId = '';
+  adapter.createBackend = (...args) => {
+    const backend = createBackend(...args);
+    backend.deliverGroupMessage = async (input) => {
+      calls.push(`deliverGroupMessage:${input?.name}:${input?.text}`);
+      // The round runs — and meanwhile the operator disbands the room on
+      // another device, before the Gate can store the transcript.
+      const response = await fetch(
+        `http://127.0.0.1:${gateRef.port}/v1/bot-groups/${disbandedId}`,
+        { method: 'DELETE', headers: auth(gateRef) },
+      );
+      calls.push(`disbandDuringSend:${response.status}`);
+      return { replies: [{ botId: 'researcher', text: 'echo status?' }] };
+    };
+    return backend;
+  };
+  const { gate } = await makeGate({ calls, registry });
+  gateRef = gate;
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    const created = await (await fetch(`${base}/v1/bot-groups`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'crew', memberIds: ['researcher', 'coder'] }),
+    })).json();
+    disbandedId = created.id;
+
+    const sent = await (await fetch(`${base}/v1/bot-groups/${created.id}/messages`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ text: 'status?' }),
+    })).json();
+    assert.equal(sent.roomDisbanded, true, 'the response names the lost transcript');
+    assert.deepEqual(sent.replies, [{ botId: 'researcher', text: 'echo status?' }]);
+    assert.ok(calls.includes('disbandDuringSend:200'), 'the mid-send disband really landed');
+
+    // The room is really gone: a replay 404s instead of showing lines that
+    // never landed.
+    const gone = await fetch(`${base}/v1/bot-groups/${created.id}/messages`, { headers: auth(gate) });
+    assert.equal(gone.status, 404);
+    assert.equal((await gone.json()).error.code, 'unknown_group');
+  } finally {
+    await gate.close();
+  }
+});
+
 /**
  * Group rooms are roster-guarded since the unknown-member refusal: writes
  * verify every requested id against what the fronted backend's listBots
