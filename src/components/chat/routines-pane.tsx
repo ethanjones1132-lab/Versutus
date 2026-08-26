@@ -8,17 +8,25 @@ import {
   DEFAULT_ROUTINE_SCHEDULE,
   describeRoutineError,
   parseRoutineName,
+  routinesListCopy,
+  routinesToggleLabel,
+  type RoutineJob,
+  type RoutinesState,
 } from '@/lib/gateway/routines';
 
-export type RoutineJob = { id: string; name?: string; paused?: boolean };
+export type { RoutineJob };
 
 export function RoutinesPane({
   jobs,
+  loaded,
+  failed,
   onCreate,
   onRun,
   onTogglePause,
 }: {
   jobs: RoutineJob[];
+  loaded: boolean;
+  failed: boolean;
   onCreate: (input: { title: string; prompt: string; schedule: string }) => Promise<unknown>;
   onRun: (jobId: string) => Promise<unknown>;
   onTogglePause: (jobId: string, paused: boolean) => Promise<unknown>;
@@ -31,6 +39,8 @@ export function RoutinesPane({
   const [creating, setCreating] = useState(false);
   const [acting, setActing] = useState(false);
   const busy = creating || acting;
+  const state: RoutinesState = { jobs, loaded, failed };
+  const listCopy = routinesListCopy(state);
 
   const submitCreate = () => {
     const submitted = {
@@ -83,12 +93,22 @@ export function RoutinesPane({
 
   return (
     <View style={styles.wrap}>
-      <Button label={open ? 'Hide routines' : `Routines (${jobs.length})`} variant="ghost" size="sm" onPress={() => setOpen((value) => !value)} />
+      <Button
+        label={routinesToggleLabel(state, open)}
+        variant="ghost"
+        size="sm"
+        onPress={() => setOpen((value) => !value)}
+      />
       {open ? (
         <View style={styles.body}>
           {error ? (
             <Text variant="caption" color="accentWarm">
               {error}
+            </Text>
+          ) : null}
+          {listCopy ? (
+            <Text variant="micro" color="secondary">
+              {listCopy}
             </Text>
           ) : null}
           {jobs.map((job) => {

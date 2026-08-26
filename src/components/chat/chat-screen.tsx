@@ -11,7 +11,7 @@ import { CreateGroupSheet } from '@/components/chat/create-group-sheet';
 import { GroupRoomActionSheet } from '@/components/chat/group-room-action-sheet';
 import { GroupRoomView } from '@/components/chat/group-room-view';
 import { NewAgentSheet } from '@/components/chat/new-agent-sheet';
-import { RoutinesPane, type RoutineJob } from '@/components/chat/routines-pane';
+import { RoutinesPane } from '@/components/chat/routines-pane';
 import { SkillsPane } from '@/components/chat/skills-pane';
 import { DayDivider } from '@/components/chat/day-divider';
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
@@ -43,7 +43,13 @@ import {
   rosterInventoryVerified,
   type BotGroupRoom,
 } from '@/lib/gateway/groups';
-import { routineName } from '@/lib/gateway/routines';
+import {
+  applyRoutineRead,
+  EMPTY_ROUTINES,
+  routineName,
+  type RoutineRead,
+  type RoutinesState,
+} from '@/lib/gateway/routines';
 import {
   applySkillsRead,
   EMPTY_SKILLS,
@@ -178,7 +184,9 @@ export function ChatScreen() {
   const [detailBot, setDetailBot] = useState<PublicBot | null>(null);
   // Long-press target on the roster: which room's action sheet is open.
   const [detailGroup, setDetailGroup] = useState<BotGroupRoom | null>(null);
-  const [routineJobs, setRoutineJobs] = useState<RoutineJob[]>([]);
+  const [routineState, setRoutineState] = useState<RoutinesState & { botId?: string }>({
+    ...EMPTY_ROUTINES,
+  });
   const [skillsState, setSkillsState] = useState<SkillsState & { botId?: string }>({
     ...EMPTY_SKILLS,
   });
@@ -364,18 +372,29 @@ export function ChatScreen() {
   }, [surface.kind, status, listBots]);
 
   const botSurfaceId = surface.kind === 'bot' ? surface.botId : undefined;
+  const foldRoutineRead = useCallback((botId: string, read: RoutineRead) => {
+    setRoutineState((prev) => {
+      const previous = prev.botId === botId ? prev : { ...EMPTY_ROUTINES, botId };
+      return { botId, ...applyRoutineRead(previous, read) };
+    });
+  }, []);
   useEffect(() => {
     if (!botSurfaceId || status !== 'connected') return;
     let cancelled = false;
-    void botJobs.list().then((jobs) => {
-      if (!cancelled) setRoutineJobs(jobs);
-    }).catch(() => {
-      if (!cancelled) setRoutineJobs([]);
-    });
+    void botJobs
+      .list()
+      .then((jobs) => {
+        if (cancelled) return;
+        foldRoutineRead(botSurfaceId, { ok: true, jobs });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        foldRoutineRead(botSurfaceId, { ok: false });
+      });
     return () => {
       cancelled = true;
     };
-  }, [botSurfaceId, status, botJobs]);
+  }, [botSurfaceId, status, botJobs, foldRoutineRead]);
 
   useEffect(() => {
     if (!botSurfaceId || status !== 'connected') return;
@@ -760,7 +779,9 @@ export function ChatScreen() {
 
       {surface.kind === 'bot' ? (
         <RoutinesPane
-          jobs={routineJobs}
+          jobs={routineState.botId === surface.botId ? routineState.jobs : []}
+          loaded={routineState.botId === surface.botId ? routineState.loaded : false}
+          failed={routineState.botId === surface.botId ? routineState.failed : false}
           onCreate={async (input) => {
             await botJobs.create({
               name: routineName(surface.botId, input.title),
@@ -769,15 +790,21 @@ export function ChatScreen() {
             });
             // Create already landed; a failed re-list must not look like
             // the Gate refused the job (that would keep the draft of a
-            // routine that exists). Empty-vs-failed list is a later item.
-            await botJobs.list().then(setRoutineJobs).catch(() => undefined);
+            // routine that exists). Last-good stays; staleness is named.
+            await botJobs
+              .list()
+              .then((jobs) => foldRoutineRead(surface.botId, { ok: true, jobs }))
+              .catch(() => foldRoutineRead(surface.botId, { ok: false }));
           }}
           onRun={async (jobId) => {
             await botJobs.run(jobId);
           }}
           onTogglePause={async (jobId, paused) => {
             await botJobs.pause(jobId, paused);
-            await botJobs.list().then(setRoutineJobs).catch(() => undefined);
+            await botJobs
+              .list()
+              .then((jobs) => foldRoutineRead(surface.botId, { ok: true, jobs }))
+              .catch(() => foldRoutineRead(surface.botId, { ok: false }));
           }}
         />
       ) : null}
