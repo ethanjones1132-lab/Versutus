@@ -15,3 +15,8 @@ test('tiny widths still leave a readable column', () => {
 test('non-finite widths fall back to 120', () => {
   expect(bubbleMaxWidth(Number.NaN, false)).toBe(120);
 });
+
+test('a tablet-width thread caps the bubble at a readable column', () => {
+  expect(bubbleMaxWidth(1024, false)).toBe(560);
+  expect(bubbleMaxWidth(1024, true)).toBeLessThanOrEqual(560);
+});
