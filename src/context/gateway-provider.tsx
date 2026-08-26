@@ -36,7 +36,7 @@ import {
   historyToChatMessages,
   prependEarlier,
 } from '@/lib/gateway/messages';
-import { liveSessionId, resolveResumeSession } from '@/lib/gateway/session-resume';
+import { liveSessionId, pinLiveSession, resolveResumeSession } from '@/lib/gateway/session-resume';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import {
   hasBotManagement as probeBotManagement,
@@ -2693,10 +2693,23 @@ const response = await executeGatewaySlashCommand(trimmed, {
         title,
         effectiveModel(activeGateway, selectedBackendId, selectedBotId),
       );
+      // Gate createSession does not assign currentSessionId. Without this
+      // pin, disconnect still writes the previous session onto the profile
+      // and connect copies it back onto live — the new thread is orphaned.
+      const pinned = pinLiveSession({
+        client,
+        sessionId: created.id,
+        profile: activeGateway ?? undefined,
+      });
       sessionIdRef.current = created.id;
       setCurrentSessionId(created.id);
       setMessages([]);
       setSessionList((prev) => [created, ...prev]);
+      if (pinned && pinned !== activeGateway) {
+        activeGatewayRef.current = pinned;
+        setActiveGateway(pinned);
+        void upsertGateway(pinned).then(setGateways);
+      }
     } catch (error) {
       setLastError(error instanceof Error ? error.message : String(error));
     }
