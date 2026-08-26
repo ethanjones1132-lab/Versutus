@@ -1,4 +1,5 @@
 import {
+  overflowNewSessionHop,
   resolveThreadConfigMode,
   threadConfigBackendsAllowed,
   threadConfigOfferedModes,
@@ -49,6 +50,13 @@ test('precedence mirrors the old stacked mount order: models, then sessions, the
 test('titles match the sheets this consolidates', () => {
   expect(threadConfigTitle('sessions')).toBe('Sessions');
   expect(threadConfigTitle('backends')).toBe('Chat backend');
+});
+
+test('overflow New session hops to the named Sessions section', () => {
+  expect(overflowNewSessionHop()).toBe('sessions');
+  expect(threadConfigTitle(overflowNewSessionHop())).toBe('Sessions');
+  expect(overflowNewSessionHop()).not.toBe('models');
+  expect(overflowNewSessionHop()).not.toBe('backends');
 });
 
 test('models title keeps the picker mode wording, including agent targeting', () => {

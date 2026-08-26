@@ -79,6 +79,14 @@ export function threadConfigOfferedModes(options: {
   return modes;
 }
 
+/**
+ * Overflow New session is the named Sessions door, not a second untitled
+ * create. The header chip already opens this section.
+ */
+export function overflowNewSessionHop(): ThreadConfigMode {
+  return 'sessions';
+}
+
 /** The sheet title per section; the models section keeps the picker's modes. */
 export function threadConfigTitle(
   mode: ThreadConfigMode,

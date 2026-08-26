@@ -89,7 +89,12 @@ import {
 } from '@/lib/gateway/composer-draft';
 import { effectiveModel } from '@/lib/gateway/model-selection';
 import { sessionListTitle } from '@/lib/gateway/session-list';
-import { resolveThreadConfigMode, threadConfigOfferedModes, type ThreadConfigMode } from '@/lib/gateway/thread-config';
+import {
+  overflowNewSessionHop,
+  resolveThreadConfigMode,
+  threadConfigOfferedModes,
+  type ThreadConfigMode,
+} from '@/lib/gateway/thread-config';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 
 const PIN_THRESHOLD_PX = 96;
@@ -1254,7 +1259,7 @@ export function ChatScreen() {
             : []
         }
         onReloadHistory={() => void reloadHistory()}
-        onNewSession={() => void createNewSession()}
+        onNewSession={() => handleThreadConfigSwitch(overflowNewSessionHop())}
         onDisconnect={disconnectGateway}
         runsSupported={
           capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'ready'
