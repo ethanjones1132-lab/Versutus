@@ -29,6 +29,36 @@ export const SHEET_MARGIN = {
   top: { outer: 8, inner: 8 },
 } as const;
 
+/** Extra IME lift: keyboard minus the inset already in the anchored-edge margin. */
+function sheetImeExtraLift(
+  position: 'top' | 'bottom',
+  inset: number,
+  keyboardHeight: number,
+): number {
+  if (position === 'top') return 0;
+  const safeInset = Number.isFinite(inset) && inset > 0 ? inset : 0;
+  if (!Number.isFinite(keyboardHeight) || keyboardHeight <= 0) return 0;
+  return Math.max(0, keyboardHeight - safeInset);
+}
+
+/**
+ * Margin on the anchored edge, including IME lift for a bottom sheet.
+ *
+ * Extra lift is keyboard minus the inset already in this margin — the same
+ * subtract-inset shape as `composerKeyboardLift`. A top-anchored sheet ignores
+ * the keyboard.
+ */
+export function sheetAnchoredEdgeMargin(input: {
+  position: 'top' | 'bottom';
+  inset: number;
+  keyboardHeight?: number;
+}): number {
+  const { position, inset, keyboardHeight = 0 } = input;
+  const inner = SHEET_MARGIN[position].inner;
+  const safeInset = Number.isFinite(inset) && inset > 0 ? inset : 0;
+  return inner + safeInset + sheetImeExtraLift(position, safeInset, keyboardHeight);
+}
+
 /**
  * The tallest a sheet may be without any part of it leaving the screen.
  *
@@ -44,13 +74,28 @@ export function sheetMaxHeight(input: {
   position?: 'top' | 'bottom';
   /** Smallest height worth rendering; below this the ceiling is ignored. */
   minimum?: number;
+  /** IME height. Shrinks a bottom sheet by the extra lift; ignored at the top. */
+  keyboardHeight?: number;
 }): number {
-  const { windowHeight, insetTop = 0, insetBottom = 0, position = 'bottom', minimum = 240 } = input;
+  const {
+    windowHeight,
+    insetTop = 0,
+    insetBottom = 0,
+    position = 'bottom',
+    minimum = 240,
+    keyboardHeight = 0,
+  } = input;
   if (!Number.isFinite(windowHeight) || windowHeight <= 0) return minimum;
 
   const margin = SHEET_MARGIN[position];
+  const extraLift = sheetImeExtraLift(position, insetBottom, keyboardHeight);
   const available =
-    windowHeight - Math.max(0, insetTop) - Math.max(0, insetBottom) - margin.outer - margin.inner;
+    windowHeight -
+    Math.max(0, insetTop) -
+    Math.max(0, insetBottom) -
+    margin.outer -
+    margin.inner -
+    extraLift;
 
   return Math.max(minimum, Math.round(available));
 }

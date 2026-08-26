@@ -1,4 +1,9 @@
-import { sheetMaxHeight, sheetMaxWidth, SHEET_MARGIN } from '@/lib/motion/sheet-height';
+import {
+  sheetAnchoredEdgeMargin,
+  sheetMaxHeight,
+  sheetMaxWidth,
+  SHEET_MARGIN,
+} from '@/lib/motion/sheet-height';
 
 test('a sheet never claims more than the screen minus system chrome', () => {
   // Reported 2026-08-25: the session picker grew past the top of the screen,
@@ -46,4 +51,68 @@ test('a tablet sheet is a 560-wide column, not window minus 24', () => {
 
 test('a phone sheet keeps the 24px inset on each side', () => {
   expect(sheetMaxWidth({ windowWidth: 390 })).toBe(342);
+});
+
+test('a closed keyboard keeps the inner-plus-inset margin on the anchored edge', () => {
+  expect(sheetAnchoredEdgeMargin({ position: 'bottom', inset: 48 })).toBe(
+    SHEET_MARGIN.bottom.inner + 48,
+  );
+  expect(sheetAnchoredEdgeMargin({ position: 'top', inset: 96 })).toBe(SHEET_MARGIN.top.inner + 96);
+});
+
+test('a bottom sheet sits inner above the keyboard without stacking the inset twice', () => {
+  // Same subtract-inset shape as composerKeyboardLift: 320 IME with a 48 nav
+  // inset lifts by 272, so the margin is inner + 320, not inner + 48 + 320.
+  expect(sheetAnchoredEdgeMargin({ position: 'bottom', inset: 48, keyboardHeight: 320 })).toBe(
+    SHEET_MARGIN.bottom.inner + 320,
+  );
+});
+
+test('a keyboard shorter than the inset does not add lift', () => {
+  expect(sheetAnchoredEdgeMargin({ position: 'bottom', inset: 48, keyboardHeight: 16 })).toBe(
+    SHEET_MARGIN.bottom.inner + 48,
+  );
+});
+
+test('a top-anchored sheet ignores the IME', () => {
+  expect(sheetAnchoredEdgeMargin({ position: 'top', inset: 96, keyboardHeight: 320 })).toBe(
+    SHEET_MARGIN.top.inner + 96,
+  );
+});
+
+test('nonsense keyboard height does not add lift', () => {
+  expect(sheetAnchoredEdgeMargin({ position: 'bottom', inset: 48, keyboardHeight: Number.NaN })).toBe(
+    SHEET_MARGIN.bottom.inner + 48,
+  );
+  expect(sheetAnchoredEdgeMargin({ position: 'bottom', inset: 48, keyboardHeight: -40 })).toBe(
+    SHEET_MARGIN.bottom.inner + 48,
+  );
+});
+
+test('a tall bottom sheet shrinks by the extra IME lift', () => {
+  const closed = sheetMaxHeight({ windowHeight: 800, insetTop: 40, insetBottom: 48 });
+  const open = sheetMaxHeight({
+    windowHeight: 800,
+    insetTop: 40,
+    insetBottom: 48,
+    keyboardHeight: 320,
+  });
+  expect(closed - open).toBe(320 - 48);
+});
+
+test('a top-anchored sheet ceiling ignores the IME', () => {
+  const closed = sheetMaxHeight({
+    windowHeight: 800,
+    insetTop: 40,
+    insetBottom: 48,
+    position: 'top',
+  });
+  const open = sheetMaxHeight({
+    windowHeight: 800,
+    insetTop: 40,
+    insetBottom: 48,
+    position: 'top',
+    keyboardHeight: 320,
+  });
+  expect(open).toBe(closed);
 });

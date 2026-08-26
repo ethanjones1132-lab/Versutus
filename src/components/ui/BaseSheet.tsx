@@ -1,6 +1,6 @@
 import * as Haptics from 'expo-haptics';
-import { ReactNode, useEffect, useState } from 'react';
-import { Modal, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { ReactNode, useEffect, useState, useSyncExternalStore } from 'react';
+import { Keyboard, Modal, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated, {
   Easing,
   runOnJS,
@@ -15,8 +15,28 @@ import { Text } from './Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Motion, Radius } from '@/constants/tokens';
-import { SHEET_MARGIN, sheetMaxHeight, sheetMaxWidth } from '@/lib/motion/sheet-height';
+import {
+  sheetAnchoredEdgeMargin,
+  sheetMaxHeight,
+  sheetMaxWidth,
+} from '@/lib/motion/sheet-height';
 import { useTokens } from '@/hooks/use-tokens';
+
+function subscribeKeyboardHeight(onChange: () => void) {
+  const show = Keyboard.addListener('keyboardDidShow', onChange);
+  const hide = Keyboard.addListener('keyboardDidHide', onChange);
+  const frame = Keyboard.addListener('keyboardDidChangeFrame', onChange);
+  return () => {
+    show.remove();
+    hide.remove();
+    frame.remove();
+  };
+}
+
+function getKeyboardHeight(): number {
+  const height = Keyboard.metrics()?.height;
+  return typeof height === 'number' && Number.isFinite(height) ? height : 0;
+}
 
 interface BaseSheetProps {
   visible: boolean;
@@ -41,6 +61,11 @@ export function BaseSheet({
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
+  const keyboardHeight = useSyncExternalStore(
+    subscribeKeyboardHeight,
+    getKeyboardHeight,
+    () => 0,
+  );
   // A sheet with no ceiling grows to its children. Anchored to the bottom,
   // that overflow leaves the screen upward and takes the header with it —
   // which is how ~40 sessions made "New session" unreachable. Bounding it here
@@ -50,6 +75,7 @@ export function BaseSheet({
     insetTop: insets.top,
     insetBottom: insets.bottom,
     position,
+    keyboardHeight,
   });
   const maxWidth = sheetMaxWidth({ windowWidth });
   const hiddenOffset = position === 'bottom' ? 400 : -400;
@@ -103,9 +129,18 @@ export function BaseSheet({
               width: maxWidth,
               alignSelf: 'center',
               // Clear the system bars on the anchored edge; the opposite edge
-              // is already handled by maxHeight.
-              marginBottom: (isBottom ? SHEET_MARGIN.bottom.inner : 0) + (isBottom ? insets.bottom : 0),
-              marginTop: (isBottom ? 0 : SHEET_MARGIN.top.inner) + (isBottom ? 0 : insets.top),
+              // is already handled by maxHeight. Bottom sheets also lift by IME
+              // height minus that inset, so a field in the sheet stays on-screen.
+              marginBottom: isBottom
+                ? sheetAnchoredEdgeMargin({
+                    position: 'bottom',
+                    inset: insets.bottom,
+                    keyboardHeight,
+                  })
+                : 0,
+              marginTop: isBottom
+                ? 0
+                : sheetAnchoredEdgeMargin({ position: 'top', inset: insets.top }),
             },
             animatedStyle,
           ]}>
