@@ -1,6 +1,6 @@
 import { httpToWsBase } from '@/lib/gateway/url';
-import { base64ToBytes } from '@/lib/encoding';
 import { streamingFetch } from '@/lib/net/streaming-fetch';
+import { parseTerminalSseEvent, type TerminalSseFrame } from '@/lib/terminal/sse';
 
 export type TerminalSession = {
   sid: string;
@@ -13,19 +13,11 @@ type TerminalHandlers = {
   onExit: (code: number) => void;
 };
 
-function decodeBase64Utf8(base64: string): string {
-  // Previously this returned '' when `atob` was missing, so the pane showed a
-  // connected session producing no output and reported nothing wrong -- the
-  // silent-empty failure the Gate goes out of its way to avoid for chat turns.
-  // Decoding directly removes both the dependency and the silent branch.
-  return new TextDecoder().decode(base64ToBytes(base64));
-}
-
-function parseSseChunk(buffer: string): { events: { event?: string; data: string }[]; rest: string } {
+function parseSseChunk(buffer: string): { events: TerminalSseFrame[]; rest: string } {
   const parts = buffer.split('\n\n');
   const complete = parts.slice(0, -1);
   const rest = parts[parts.length - 1] ?? '';
-  const events: { event?: string; data: string }[] = [];
+  const events: TerminalSseFrame[] = [];
 
   for (const part of complete) {
     if (!part.trim() || part.startsWith(':')) continue;
@@ -42,27 +34,27 @@ function parseSseChunk(buffer: string): { events: { event?: string; data: string
 }
 
 function handleSseEvent(
-  evt: { event?: string; data: string },
+  evt: TerminalSseFrame,
   handlers: TerminalHandlers,
   setSid: (sid: string) => void,
 ) {
-  if (evt.event === 'session') {
-    const payload = JSON.parse(evt.data) as { sid?: string; error?: string };
-    if (payload.error) handlers.onError(payload.error);
-    else if (payload.sid) setSid(payload.sid);
-    return;
+  const action = parseTerminalSseEvent(evt);
+  switch (action.kind) {
+    case 'skip':
+      return;
+    case 'sid':
+      setSid(action.sid);
+      return;
+    case 'error':
+      handlers.onError(action.message);
+      return;
+    case 'exit':
+      handlers.onExit(action.code);
+      return;
+    case 'output':
+      handlers.onOutput(action.chunk);
+      return;
   }
-  if (evt.event === 'error') {
-    const payload = JSON.parse(evt.data) as { error?: string };
-    handlers.onError(payload.error ?? 'Terminal error');
-    return;
-  }
-  if (evt.event === 'exit') {
-    const payload = JSON.parse(evt.data) as { code?: number };
-    handlers.onExit(payload.code ?? 0);
-    return;
-  }
-  handlers.onOutput(decodeBase64Utf8(evt.data));
 }
 
 function authHeaders(token?: string): Record<string, string> {
