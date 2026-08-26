@@ -9,6 +9,7 @@ import {
   normalizeOpenClawMessage,
   normalizeOpenClawModel,
   normalizeOpenClawSession,
+  openClawCreateSessionParams,
   readOpenClawCollection,
   toOpenClawWsUrl,
 } from '@/lib/portal/openclaw-mapping';
@@ -144,8 +145,11 @@ export class OpenClawAdapterClient implements PortalClient {
     throw new Error('Gateway did not return capabilities');
   }
 
-  async createSession(title?: string): Promise<HermesSession> {
-    const result = await this.inner.request<unknown>('sessions.create', title ? { title } : {});
+  async createSession(title?: string, model?: string): Promise<HermesSession> {
+    const result = await this.inner.request<unknown>(
+      'sessions.create',
+      openClawCreateSessionParams({ title, model }),
+    );
     const session = normalizeOpenClawSession(result);
     if (!session) throw new Error('Gateway did not return the created session');
     return session;
