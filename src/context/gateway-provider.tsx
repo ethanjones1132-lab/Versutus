@@ -36,7 +36,7 @@ import {
   historyToChatMessages,
   prependEarlier,
 } from '@/lib/gateway/messages';
-import { resolveResumeSession } from '@/lib/gateway/session-resume';
+import { liveSessionId, resolveResumeSession } from '@/lib/gateway/session-resume';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import {
   hasBotManagement as probeBotManagement,
@@ -663,9 +663,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     historyCursorRef.current = null;
     setHasMoreHistory(false);
     try {
-      // A deliberate session switch updates the ref; do not let the profile's
-      // initial session override it on every history reload.
-      let sessionId = sessionIdRef.current ?? gateway.sessionId;
+      // A deliberate session switch updates the ref; a deliberate release
+      // (CLI environment switch) clears it. Stored is a reconnect pin, not
+      // a live thread — using it as a fallback resurrected the previous
+      // environment's session after selectBackend had just let it go.
+      let sessionId = liveSessionId({
+        live: sessionIdRef.current,
+        stored: gateway.sessionId,
+      });
 
       // Resume this app's own most recent session, or start a fresh one. The
       // session selector still lists every session for deliberate switching.
@@ -1404,6 +1409,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const client = clientRef.current as (PortalClient & { setBackendId?: (id: string | undefined) => void }) | null;
       client?.setBackendId?.(backendId);
       client?.setBotId?.(undefined);
+      client?.setSessionId(undefined);
+      selectedBackendIdRef.current = backendId;
+      selectedBotIdRef.current = undefined;
       setSelectedBackendId(backendId);
       setSelectedBotId(undefined);
       sessionIdRef.current = undefined;
@@ -1413,16 +1421,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // Restore the model last used in this backend, so a send after the
         // switch does not carry the previous backend's model id — and remember
         // the backend itself, so the next launch opens here rather than making
-        // the operator pick it again.
+        // the operator pick it again. Drop the previous session pin: stored
+        // is a reconnect pin, and leaving it would restore the old
+        // environment's thread on the next connect.
         const restored = effectiveModel(activeGateway, backendId);
         const updated = {
           ...activeGateway,
           backendId,
+          sessionId: undefined,
           ...(restored && restored !== activeGateway.model ? { model: restored } : {}),
         };
         setActiveGateway(updated);
         void upsertGateway(updated).then(setGateways);
-        void reloadHistoryFor(activeGateway);
+        void reloadHistoryFor(updated);
       }
     },
     [activeGateway, reloadHistoryFor],

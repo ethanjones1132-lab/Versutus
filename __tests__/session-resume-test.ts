@@ -1,5 +1,5 @@
 import { APP_SESSION_SOURCE, pickAppSession } from '@/lib/gateway/messages';
-import { RESUME_SESSION_PAGE, resolveResumeSession } from '@/lib/gateway/session-resume';
+import { liveSessionId, RESUME_SESSION_PAGE, resolveResumeSession } from '@/lib/gateway/session-resume';
 import type { HermesSession } from '@/lib/gateway/types';
 import type { PortalClient } from '@/lib/portal/adapters';
 
@@ -116,5 +116,31 @@ describe('resolveResumeSession — session pick + graceful degrade', () => {
     // Guards against the helper and the picker drifting apart on the contract.
     const list = [session('a', 'tui'), session('b')];
     expect(pickAppSession(list)?.id).toBe('b');
+  });
+});
+
+describe('liveSessionId — stored is a reconnect pin, not a live thread', () => {
+  test('an open thread reloads itself even when the profile remembers another', () => {
+    expect(liveSessionId({ live: 'ses_open', stored: 'ses_old' })).toBe('ses_open');
+  });
+
+  test('a deliberate release does not restore the previous session from the profile', () => {
+    // selectBackend clears the live slot then reloads. The old `live ?? stored`
+    // fallback immediately resurrected the previous CLI environment's session:
+    // history loaded it (or a 404 looked empty) and the next send still
+    // carried that id.
+    expect(liveSessionId({ live: undefined, stored: 'ses_old' })).toBeUndefined();
+  });
+
+  test('connect copies stored onto live first, so a reconnect still resumes', () => {
+    // connectGateway assigns sessionIdRef from the profile before the first
+    // history load. After that, live is stored — the helper never has to
+    // fall back to the profile itself.
+    expect(liveSessionId({ live: 'ses_remembered', stored: 'ses_remembered' })).toBe('ses_remembered');
+  });
+
+  test('an empty live slot with nothing stored stays empty', () => {
+    expect(liveSessionId({ live: undefined, stored: undefined })).toBeUndefined();
+    expect(liveSessionId({ live: '  ', stored: 'ses_old' })).toBeUndefined();
   });
 });

@@ -18,6 +18,27 @@ export type SessionResumeOutcome = {
 export const RESUME_SESSION_PAGE = 20;
 
 /**
+ * Which session a history load should treat as current.
+ *
+ * Live wins. Stored (`gateway.sessionId`) is a reconnect pin written on
+ * disconnect — it is not a live thread after a deliberate release. The
+ * connect path copies stored onto the live slot before the first load, so a
+ * reconnect still resumes. Using stored as a fallback here is what made a
+ * CLI-environment switch reload and send against the previous session:
+ * `selectBackend` cleared the live slot, then `reloadHistoryFor` restored it
+ * from the profile. A 404 on the new environment looked like a fresh thread
+ * while the next send still carried the old id.
+ */
+export function liveSessionId(input: {
+  live?: string;
+  stored?: string;
+}): string | undefined {
+  const live = input.live?.trim();
+  if (live) return live;
+  return undefined;
+}
+
+/**
  * Whether resuming this session can still honour the operator's model.
  *
  * A Hermes session's model is fixed at creation, so resuming one pinned to a
