@@ -1151,6 +1151,7 @@ export function ChatScreen() {
           { label: 'Help', draft: '/help', icon: { ios: 'questionmark.circle', android: 'help', web: 'help' } },
         ]}
         isStreaming={isStreaming}
+        status={status}
         // Allow send while disconnected so the offline outbox can queue; the
         // provider flushes on reconnect. Block only when no gateway exists.
         canSend={!!activeGateway && !isCommandRunning}
