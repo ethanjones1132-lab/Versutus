@@ -23,6 +23,8 @@ export type RunFailureKind =
   | 'listen_key_missing'
   /** The roster names a Bot the host no longer has. */
   | 'unknown_bot'
+  /** A removal named a member the host's copy of the room doesn't carry. */
+  | 'unknown_member'
   /** The Gate could not read its bot list while verifying group members. */
   | 'roster_unavailable'
   /** The CLI environment could not spawn or was never reachable. */
@@ -53,6 +55,12 @@ export function classifyRunFailure(message: string): RunFailureKind {
   if (/default listen key|default_key_refused/i.test(text)) return 'default_key_refused';
   if (/multiplex/i.test(text)) return 'multiplex_disabled';
   if (/\bunknown bots?\b/i.test(text)) return 'unknown_bot';
+  // gate/core/cli-environments/bot-groups.mjs leave(): a removal naming a
+  // member the host's copy of the room does not carry — 404 with code
+  // unknown_member, body message passed through verbatim. Typically a stale
+  // phone view: another device removed them first. Anchored on both the
+  // sentence and the code shape, like run_events_unavailable above.
+  if (/member not in group|unknown_member\b/i.test(text)) return 'unknown_member';
   // Refused pre-start probe: the supervisor throws `environment <state>` and,
   // since the desktop-parity audit, appends the probe's reason + path. The
   // busy refusal ("environment is busy — …") deliberately does NOT match.
@@ -112,6 +120,10 @@ const TITLES: Record<Exclude<RunFailureKind, 'generic'>, Pick<RunFailureView, 't
   unknown_bot: {
     title: 'Bot not found',
     next: 'Reload the roster — this Bot may have been removed or renamed on the host.',
+  },
+  unknown_member: {
+    title: 'Bot not in this room',
+    next: "Reload the room to see the host's current members — another device may have removed it already.",
   },
   roster_unavailable: {
     title: 'Roster unreadable',

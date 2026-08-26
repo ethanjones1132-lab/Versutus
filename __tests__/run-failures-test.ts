@@ -139,3 +139,19 @@ test('an unreadable roster during membership checks speaks its own verdict', () 
     classifyRunFailure('cannot verify group members: Hermes executable or home is not configured'),
   ).toBe('environment_unreachable');
 });
+
+test('a removal naming a member the host never had speaks its verdict', () => {
+  // gate/core/cli-environments/bot-groups.mjs leave(): 404
+  // {error:{code:'unknown_member', message:'member not in group'}} — the
+  // phone's room copy is stale (another device removed them first, or the
+  // member was never in this room). The clients pass error.message through
+  // verbatim, so anchor on BOTH the sentence and the code shape.
+  const raw = 'member not in group';
+  expect(classifyRunFailure(raw)).toBe('unknown_member');
+  const view = describeRunFailure(raw);
+  expect(view.title).toBe('Bot not in this room');
+  expect(view.next).toMatch(/[Rr]eload the room/);
+  expect(formatRunFailure(raw)).toContain('removed');
+  // The code alone classifies too, whatever prefix wraps it.
+  expect(classifyRunFailure('unknown_member: member not in group')).toBe('unknown_member');
+});

@@ -700,6 +700,16 @@ test('describeRoomError classifies unknown-bot and unreachable-environment refus
   expect(describeRoomError('Hermes home is not configured')).toContain('Environment unreachable');
 });
 
+test('describeRoomError classifies the remove-member 404 as its own verdict', () => {
+  // bot-groups.mjs leave(): the removal named a member the host's room copy
+  // does not carry — a stale phone view. Same verdict every surface, cause
+  // stays verbatim.
+  const shown = describeRoomError(new Error('member not in group'));
+  expect(shown).toContain('Bot not in this room');
+  expect(shown).toContain('member not in group');
+  expect(shown).toContain("Reload the room to see the host's current members");
+});
+
 test('describeRoomError keeps unclassifiable refusals raw (never boilerplate around unknown truth)', () => {
   // Gate group-store validation/refusal texts (bot-groups.mjs): generic by
   // design — the fallback is exactly the pre-parity rendering.
