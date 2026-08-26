@@ -7,6 +7,7 @@ import { MessageBubble } from '@/components/chat/message-bubble';
 import { PreviewScenarioChip } from '@/components/dev/preview-scenario-chip';
 import { SlashCommandPalette } from '@/components/chat/slash-command-palette';
 import { TlsFingerprintChangeSheet } from '@/components/gateway/tls-fingerprint-change-sheet';
+import { ThreadConfigSheet } from '@/components/chat/thread-config-sheet';
 import { GlassCollapsible } from '@/components/glass-collapsible';
 import { HomeStatusCard } from '@/components/home-status-card';
 import { PairingPanel } from '@/components/pairing-panel';
@@ -24,11 +25,25 @@ import {
   type PreviewScenario,
 } from '@/lib/dev/preview-scenarios';
 
+/**
+ * Enough sessions to overflow any phone. The session picker's ceiling only
+ * matters once the list is longer than the screen, so a short mock would
+ * "pass" while the real bug sat untouched.
+ */
+const PREVIEW_SESSIONS = Array.from({ length: 40 }, (_, index) => ({
+  id: `sess_preview_${index}`,
+  title: `Session ${index + 1} — ${['triage', 'handoff', 'research', 'review'][index % 4]}`,
+  preview: 'Last message in this session, long enough to wrap onto a second line.',
+  updatedAt: Date.now() - index * 3_600_000,
+  numMessages: 4 + index,
+}));
+
 export default function DevPreviewScreen() {
   const tokens = useTokens();
   const [scenarioId, setScenarioId] = useState<PreviewScenario>('idle');
   const [paletteVisible, setPaletteVisible] = useState(false);
   const [tlsVisible, setTlsVisible] = useState(false);
+  const [sessionsVisible, setSessionsVisible] = useState(false);
   // Real registry data, no gateway: the palette's whole job is browsing this.
   const previewCommands = useMemo(
     () => getSlashCommandSuggestions('', null, [], {}, [], Number.POSITIVE_INFINITY),
@@ -121,6 +136,14 @@ export default function DevPreviewScreen() {
             variant="secondary"
             onPress={() => setTlsVisible(true)}
           />
+          {/* A long list is the case that broke: 40 sessions once grew the
+              sheet past the top of the screen, taking "New session" and the
+              header with it. Checked here so it cannot regress unnoticed. */}
+          <Button
+            label="Open session picker (40 sessions)"
+            variant="secondary"
+            onPress={() => setSessionsVisible(true)}
+          />
         </View>
 
         <View style={[styles.meta, { borderColor: tokens.glassBorder }]}>
@@ -135,6 +158,17 @@ export default function DevPreviewScreen() {
         commands={previewCommands}
         onClose={() => setPaletteVisible(false)}
         onSelect={() => undefined}
+      />
+
+      <ThreadConfigSheet
+        mode={sessionsVisible ? 'sessions' : null}
+        availableModes={['sessions', 'models']}
+        onModeChange={() => undefined}
+        onClose={() => setSessionsVisible(false)}
+        sessions={PREVIEW_SESSIONS}
+        currentSessionId={PREVIEW_SESSIONS[0]?.id}
+        onSelectSession={() => setSessionsVisible(false)}
+        onNewSession={() => setSessionsVisible(false)}
       />
 
       <TlsFingerprintChangeSheet

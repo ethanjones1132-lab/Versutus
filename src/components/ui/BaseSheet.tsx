@@ -1,6 +1,6 @@
 import * as Haptics from 'expo-haptics';
 import { ReactNode, useEffect, useState } from 'react';
-import { Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated, {
   Easing,
   runOnJS,
@@ -12,7 +12,10 @@ import Animated, {
 import { GlassSurface } from './GlassSurface';
 import { PressableScale } from './PressableScale';
 import { Text } from './Text';
-import { Motion, Radius, Spacing } from '@/constants/tokens';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { Motion, Radius } from '@/constants/tokens';
+import { SHEET_MARGIN, sheetMaxHeight } from '@/lib/motion/sheet-height';
 import { useTokens } from '@/hooks/use-tokens';
 
 interface BaseSheetProps {
@@ -36,6 +39,18 @@ export function BaseSheet({
   position = 'bottom',
 }: BaseSheetProps) {
   const tokens = useTokens();
+  const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  // A sheet with no ceiling grows to its children. Anchored to the bottom,
+  // that overflow leaves the screen upward and takes the header with it —
+  // which is how ~40 sessions made "New session" unreachable. Bounding it here
+  // is also what gives an inner FlatList a height to scroll within.
+  const maxHeight = sheetMaxHeight({
+    windowHeight,
+    insetTop: insets.top,
+    insetBottom: insets.bottom,
+    position,
+  });
   const hiddenOffset = position === 'bottom' ? 400 : -400;
   const translateY = useSharedValue(hiddenOffset);
   const [mounted, setMounted] = useState(visible);
@@ -79,7 +94,19 @@ export function BaseSheet({
     <Modal visible={mounted} transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
       <View style={[styles.overlay, isBottom ? styles.overlayBottom : styles.overlayTop]}>
         <Pressable style={styles.backdrop} onPress={handleBackdrop} accessibilityLabel="Dismiss sheet" />
-        <Animated.View style={[styles.sheet, isBottom ? styles.bottom : styles.top, animatedStyle]}>
+        <Animated.View
+          style={[
+            styles.sheet,
+            isBottom ? styles.bottom : styles.top,
+            {
+              maxHeight,
+              // Clear the system bars on the anchored edge; the opposite edge
+              // is already handled by maxHeight.
+              marginBottom: (isBottom ? SHEET_MARGIN.bottom.inner : 0) + (isBottom ? insets.bottom : 0),
+              marginTop: (isBottom ? 0 : SHEET_MARGIN.top.inner) + (isBottom ? 0 : insets.top),
+            },
+            animatedStyle,
+          ]}>
           <GlassSurface
             variant="hero"
             padding={0}
@@ -131,36 +158,42 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
   },
   sheet: {
-    marginHorizontal: Spacing.four,
+    marginHorizontal: SHEET_MARGIN.bottom.outer,
   },
-  bottom: {
-    marginBottom: Spacing.four,
-  },
-  top: {
-    marginTop: Spacing.two,
-  },
+  // marginBottom / marginTop are applied inline so they can carry the safe-area
+  // inset; these remain for anything reading the base style.
+  bottom: {},
+  top: {},
   sheetSurface: {
     borderRadius: Radius.xl,
     borderWidth: StyleSheet.hairlineWidth * 2,
     overflow: 'hidden',
+    // Never taller than the sheet: the header stays put and the content area
+    // below it is what gives way.
+    flexShrink: 1,
   },
   header: {
+    flexShrink: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: Spacing.two,
-    paddingTop: Spacing.two,
-    paddingBottom: Spacing.one,
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 4,
   },
   eyebrow: {
     textTransform: 'uppercase',
   },
   title: {
-    paddingHorizontal: Spacing.three,
-    paddingBottom: Spacing.two,
+    flexShrink: 0,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
   },
   content: {
-    paddingHorizontal: Spacing.two,
-    paddingBottom: Spacing.two,
+    // Shrinks before the header does, so a long list scrolls inside the sheet
+    // rather than pushing the title off the top of the screen.
+    flexShrink: 1,
+    paddingHorizontal: 8,
+    paddingBottom: 8,
   },
 });
