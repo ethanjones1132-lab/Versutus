@@ -1,6 +1,7 @@
 import {
   applyDiagnosticsRead,
   EMPTY_DIAGNOSTICS,
+  diagnosticsSlashCopy,
   healthCheckRowCopy,
   healthChecksListCopy,
   healthChecksTitle,
@@ -161,6 +162,24 @@ test('the pane belongs on a Gate or Hermes host, not OpenClaw', () => {
   expect(healthChecksVisibleOn({ kind: 'openclaw' })).toBe(false);
   expect(healthChecksVisibleOn({ kind: 'unknown' })).toBe(false);
   expect(healthChecksVisibleOn({})).toBe(false);
+});
+
+test('/status copy names each check, never dumps JSON', () => {
+  const named = diagnosticsSlashCopy({
+    ok: true,
+    status: 'ok',
+    checks: [DB, { name: 'cache', status: 'degraded', detail: 'slow' }],
+  });
+  expect(named).toContain('Status: ok');
+  expect(named).toContain('db: ok');
+  expect(named).toContain('cache: degraded');
+  expect(named).toContain('slow');
+  expect(named).not.toMatch(/[{}\[\]]/);
+
+  expect(diagnosticsSlashCopy({ ok: true, status: 'ok', checks: [] })).toBe(
+    'Status: ok\nNo health checks.',
+  );
+  expect(diagnosticsSlashCopy({ ok: false })).toBe('Health checks could not be read.');
 });
 
 test('a row names the check and tones the status, never dumps JSON', () => {

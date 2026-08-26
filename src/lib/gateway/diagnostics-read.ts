@@ -158,6 +158,22 @@ export function healthChecksListCopy(state: DiagnosticsState): string | undefine
   return undefined;
 }
 
+/** Slash `/status` and `/diagnostics` print this, never a JSON blob. */
+export function diagnosticsSlashCopy(read: DiagnosticsRead): string {
+  if (!read.ok) return 'Health checks could not be read.';
+  const lines: string[] = [];
+  if (read.status) lines.push(`Status: ${read.status}`);
+  if (read.checks.length === 0) {
+    lines.push('No health checks.');
+    return lines.join('\n');
+  }
+  for (const check of read.checks) {
+    const detail = check.detail ? ` — ${check.detail}` : '';
+    lines.push(`${check.name}: ${check.status}${detail}`);
+  }
+  return lines.join('\n');
+}
+
 /**
  * GET /health/detailed is on Hermes and on the Gate (kind `custom`).
  * OpenClaw has only the shallow /health probe — showing "could not be

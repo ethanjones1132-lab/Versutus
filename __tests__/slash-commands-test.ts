@@ -186,3 +186,82 @@ describe('/usage and /cost from session records', () => {
     expect(result.text).toContain('Cost: —');
   });
 });
+
+const GATE_HEALTH = { status: 'ok', checks: { db: 'ok', cache: { status: 'degraded', detail: 'slow' } } };
+
+describe('/status and /diagnostics name health checks', () => {
+  test('/status prints named checks from status, not a JSON blob', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue(GATE_HEALTH);
+    const result = await executeGatewaySlashCommand('/status', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('status', {});
+    expect(gatewayRequest).not.toHaveBeenCalledWith('diagnostics.stability', expect.anything());
+    expect(result.title).toBe('/status');
+    expect(result.text).toContain('Status: ok');
+    expect(result.text).toContain('db: ok');
+    expect(result.text).toContain('cache: degraded');
+    expect(result.text).toContain('slow');
+    expect(result.text).not.toMatch(/[{}\[\]]/);
+    expect(result.raw).toBeUndefined();
+  });
+
+  test('/diagnostics prints the same named checks from diagnostics.full', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue(GATE_HEALTH);
+    const result = await executeGatewaySlashCommand('/diagnostics', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('diagnostics.full', {});
+    expect(gatewayRequest).not.toHaveBeenCalledWith('diagnostics.stability', expect.anything());
+    expect(result.title).toBe('/diagnostics');
+    expect(result.text).toContain('db: ok');
+    expect(result.text).not.toBe('Diagnostics summary');
+    expect(result.raw).toBeUndefined();
+  });
+
+  test('a refused health read is a failed read, never {} under a success title', async () => {
+    const gatewayRequest = jest.fn().mockRejectedValue(new Error('diagnostics.full is not supported'));
+    const status = await executeGatewaySlashCommand('/status', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(status.text).toBe('Health checks could not be read.');
+    expect(status.text).not.toMatch(/online|\{\}/);
+    expect(status.raw).toBeUndefined();
+
+    const diagnostics = await executeGatewaySlashCommand('/diagnostics', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(diagnostics.text).toBe('Health checks could not be read.');
+    expect(diagnostics.text).not.toBe('Diagnostics summary');
+  });
+
+  test('an unparseable payload is a failed read, not Status: online', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ error: 'boom' });
+    const result = await executeGatewaySlashCommand('/status', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(result.text).toBe('Health checks could not be read.');
+    expect(result.text).not.toMatch(/online/);
+  });
+
+  test('an empty checks map is empty-ok, not a failed read', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ status: 'ok', checks: {} });
+    const result = await executeGatewaySlashCommand('/diagnostics', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(result.text).toContain('Status: ok');
+    expect(result.text).toContain('No health checks.');
+  });
+});

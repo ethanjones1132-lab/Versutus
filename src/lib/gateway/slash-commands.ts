@@ -5,6 +5,10 @@ import {
   type GatewayCommand,
 } from '@/lib/gateway/dashboard';
 import {
+  diagnosticsReadFromUnknown,
+  diagnosticsSlashCopy,
+} from '@/lib/gateway/diagnostics-read';
+import {
   sessionSpendCopy,
   sessionSpendReadFromUnknown,
   totalUsage,
@@ -328,9 +332,8 @@ export async function executeGatewaySlashCommand(
     return runRegistryCommand('logs', context, { limit, maxBytes: 16000 });
   }
 
-  if (commandName === '/diagnostics') {
-    const result = await context.gatewayRequest('diagnostics.full', {}).catch(e => ({ error: String(e) }));
-    return textResult('Diagnostics summary', '/diagnostics', compactJson(result));
+  if (commandName === '/status' || commandName === '/diagnostics') {
+    return runHealthChecksCommand(commandName, context);
   }
 
   if (['/agents', '/tools', '/plugins', '/cron', '/env', '/skills', '/artifacts'].includes(commandName)) {
@@ -703,6 +706,19 @@ async function runConfigCommand(args: string[], context: SlashCommandContext): P
   return value === undefined
     ? textResult(`Config path not found: ${path}`, '/config')
     : textResult(`Config ${path}`, `/config ${path}`, compactJson(value));
+}
+
+async function runHealthChecksCommand(
+  commandName: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  const method = commandName === '/status' ? 'status' : 'diagnostics.full';
+  try {
+    const result = await context.gatewayRequest(method, {});
+    return textResult(diagnosticsSlashCopy(diagnosticsReadFromUnknown(result)), commandName);
+  } catch {
+    return textResult(diagnosticsSlashCopy({ ok: false }), commandName);
+  }
 }
 
 async function runSessionSpendCommand(
