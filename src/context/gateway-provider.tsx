@@ -1506,7 +1506,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // backend existed — an unscoped /v1/sessions resolves to whichever
       // environment the Gate picks by capability (claude-local here), so the
       // thread would show one backend's sessions while sends went to another.
-      // Reload now that the scope is settled.
+      // Drop any session that earlier load pinned — it was resolved without
+      // this scope and carries the wrong environment's immutable model pin —
+      // then reload so the thread re-resolves under the adopted backend.
+      sessionIdRef.current = undefined;
       if (gateway) void reloadHistoryFor(gateway);
     }, 0);
     return () => clearTimeout(timer);
