@@ -58,6 +58,8 @@ import {
 import {
   applySessionSpendRead,
   EMPTY_SESSION_SPEND,
+  overflowSpendCopy,
+  overflowSpendSession,
   sessionSpendReadFromUnknown,
   threadSpendCopy,
   threadSpendRefreshKey,
@@ -1236,7 +1238,21 @@ export function ChatScreen() {
         visible={overflowVisible}
         onClose={() => setOverflowVisible(false)}
         session={sessionStats}
-        sessions={sessionList}
+        spendCopy={
+          spendState.surfaceKey === spendSurfaceKey
+            ? overflowSpendCopy(spendState, currentSessionId)
+            : undefined
+        }
+        spendSession={
+          spendState.surfaceKey === spendSurfaceKey
+            ? overflowSpendSession(spendState, currentSessionId)
+            : undefined
+        }
+        sessions={
+          spendState.surfaceKey === spendSurfaceKey && spendState.loaded
+            ? spendState.sessions
+            : []
+        }
         onReloadHistory={() => void reloadHistory()}
         onNewSession={() => void createNewSession()}
         onDisconnect={disconnectGateway}

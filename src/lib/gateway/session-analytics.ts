@@ -119,6 +119,29 @@ export function threadSpendCopy(
 }
 
 /**
+ * Overflow spend is the glance fold. A missing selector list is not a miss:
+ * unread and empty-ok stay silent. A failed read is named. Never tells the
+ * operator to open Sessions.
+ */
+export function overflowSpendCopy(
+  state: SessionSpendState,
+  sessionId: string | undefined,
+): string | undefined {
+  return threadSpendCopy(state, sessionId);
+}
+
+/** This thread's usage row for overflow meters — input and output stay separate. */
+export function overflowSpendSession(
+  state: SessionSpendState,
+  sessionId: string | undefined,
+): SessionUsageInput | undefined {
+  if (!state.loaded) return undefined;
+  const wanted = sessionId?.trim();
+  if (!wanted) return undefined;
+  return state.sessions.find((session) => session.id === wanted);
+}
+
+/**
  * Effect identity for the open-thread spend glance. Surface and session
  * changes already re-read. A live send is a different key than idle, so the
  * glance also re-reads when the turn finishes.

@@ -18,6 +18,10 @@ export type ChatOverflowSheetProps = {
   visible: boolean;
   onClose: () => void;
   session?: ChatSessionStats | null;
+  /** Glance-fold copy. Failed reads only — meters render spendSession. */
+  spendCopy?: string;
+  /** This thread's sessions.list row. Input and output stay separate. */
+  spendSession?: SessionUsageInput | null;
   onReloadHistory: () => void;
   onNewSession: () => void;
   onDisconnect: () => void;
@@ -34,6 +38,8 @@ export function ChatOverflowSheet({
   visible,
   onClose,
   session,
+  spendCopy,
+  spendSession,
   onReloadHistory,
   onNewSession,
   onDisconnect,
@@ -44,26 +50,24 @@ export function ChatOverflowSheet({
 }: ChatOverflowSheetProps) {
   if (!visible) return null;
 
+  const lastActive = session?.lastActive ?? spendSession?.last_active;
+
   return (
     <BaseSheet visible={visible} eyebrow="CHAT" title="Session &amp; connection" onClose={onClose} closeLabel="Dismiss">
-      {session ? (
+      {spendSession ? (
         <SessionAnalytics
-          session={{
-            input_tokens: session.totalTokens,
-            output_tokens: 0,
-            actual_cost_usd: session.costUsd,
-          }}
+          session={spendSession}
           sessions={sessions}
-          messageCount={session.messageCount}
+          messageCount={session?.messageCount}
         />
-      ) : (
+      ) : spendCopy ? (
         <Text variant="caption" color="tertiary" style={styles.noSession}>
-          No session stats yet — open the session selector to load them.
+          {spendCopy}
         </Text>
-      )}
-      {session?.lastActive ? (
+      ) : null}
+      {lastActive ? (
         <Text variant="micro" color="tertiary" style={styles.lastActive}>
-          Last active {formatRelativeTime(session.lastActive)}
+          Last active {formatRelativeTime(lastActive)}
         </Text>
       ) : null}
 

@@ -1,6 +1,8 @@
 import {
   applySessionSpendRead,
   EMPTY_SESSION_SPEND,
+  overflowSpendCopy,
+  overflowSpendSession,
   relativeMeter,
   sessionSpendCopy,
   sessionSpendReadFromUnknown,
@@ -255,6 +257,88 @@ describe('threadSpendCopy', () => {
     });
     const stale = applySessionSpendRead(loaded, { ok: false });
     expect(threadSpendCopy(stale, 'open')).toBe('Could not re-read spend — showing the last total.');
+  });
+});
+
+describe('overflowSpendCopy', () => {
+  test('a failed first read names the miss, never the session selector', () => {
+    const next = applySessionSpendRead(EMPTY_SESSION_SPEND, { ok: false });
+    expect(overflowSpendCopy(next, 's1')).toBe('Spend could not be read.');
+    expect(overflowSpendCopy(next, 's1')).not.toMatch(/selector|Sessions/i);
+  });
+
+  test('unread and empty-ok stay silent — opening Sessions is not the load path', () => {
+    expect(overflowSpendCopy(EMPTY_SESSION_SPEND, 's1')).toBeUndefined();
+    const emptyOk = applySessionSpendRead(EMPTY_SESSION_SPEND, {
+      ok: true,
+      sessions: [{ id: 'other', input_tokens: 10, actual_cost_usd: 1 }],
+    });
+    expect(overflowSpendCopy(emptyOk, 's1')).toBeUndefined();
+  });
+
+  test('this thread is the glance fold, not a selector row', () => {
+    const state = applySessionSpendRead(EMPTY_SESSION_SPEND, {
+      ok: true,
+      sessions: [{ id: 's1', input_tokens: 1400, output_tokens: 100, actual_cost_usd: 0.42 }],
+    });
+    expect(overflowSpendCopy(state, 's1')).toBe(threadSpendCopy(state, 's1'));
+    expect(overflowSpendCopy(state, 's1')).toBe('1.5k · $0.42');
+  });
+
+  test('a failed re-read keeps last-good copy without a selector prompt', () => {
+    const loaded = applySessionSpendRead(EMPTY_SESSION_SPEND, {
+      ok: true,
+      sessions: [{ id: 's1', input_tokens: 100, output_tokens: 50, actual_cost_usd: 0.42 }],
+    });
+    const stale = applySessionSpendRead(loaded, { ok: false });
+    expect(overflowSpendCopy(stale, 's1')).toBe('150 · $0.42');
+    expect(overflowSpendCopy(stale, 's1')).not.toMatch(/selector/i);
+  });
+});
+
+describe('overflowSpendSession', () => {
+  test('keeps this thread input and output separate — not a stuffed total', () => {
+    const state = applySessionSpendRead(EMPTY_SESSION_SPEND, {
+      ok: true,
+      sessions: [{ id: 's1', input_tokens: 100, output_tokens: 50, actual_cost_usd: 0.42 }],
+    });
+    expect(overflowSpendSession(state, 's1')).toEqual({
+      id: 's1',
+      input_tokens: 100,
+      output_tokens: 50,
+      actual_cost_usd: 0.42,
+    });
+  });
+
+  test('a failed first read has no session to meter', () => {
+    const next = applySessionSpendRead(EMPTY_SESSION_SPEND, { ok: false });
+    expect(overflowSpendSession(next, 's1')).toBeUndefined();
+  });
+
+  test('a failed re-read keeps last-good for the sparkline', () => {
+    const loaded = applySessionSpendRead(EMPTY_SESSION_SPEND, {
+      ok: true,
+      sessions: [
+        { id: 's1', input_tokens: 100, output_tokens: 50, last_active: 1_700_000_000 },
+        { id: 'other', input_tokens: 10 },
+      ],
+    });
+    const stale = applySessionSpendRead(loaded, { ok: false });
+    expect(overflowSpendSession(stale, 's1')).toEqual({
+      id: 's1',
+      input_tokens: 100,
+      output_tokens: 50,
+      last_active: 1_700_000_000,
+    });
+  });
+
+  test('a successful list that does not contain this thread is empty-ok', () => {
+    const state = applySessionSpendRead(EMPTY_SESSION_SPEND, {
+      ok: true,
+      sessions: [{ id: 'other', input_tokens: 10 }],
+    });
+    expect(overflowSpendSession(state, 's1')).toBeUndefined();
+    expect(overflowSpendSession(EMPTY_SESSION_SPEND, 's1')).toBeUndefined();
   });
 });
 
