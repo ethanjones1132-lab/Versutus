@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import { runCli } from '../adapters/shared.mjs';
 import { createBotArgs, ensureDistinctListenKey, validateBotId } from '../hermes-bot-create.mjs';
 import { upsertProfileDescription } from '../hermes-bot-edit.mjs';
-import { getHermesBot, listHermesBots, toPublicBot } from '../hermes-profiles.mjs';
+import { getHermesBot, listHermesBots, parseMultiplexEnabled, toPublicBot } from '../hermes-profiles.mjs';
 
 /** Hermes sessions are already gateway-shaped; fill only what may be absent. */
 export function toGatewaySession(session) {
@@ -90,6 +90,8 @@ export function createHermesBackend({
   profilesHome,
   executablePath,
   runCliImpl = runCli,
+  // Injectable so the suite can prove the bound without waiting 25s per case.
+  readTimeoutMs = 30_000,
 } = {}) {
   const root = String(baseUrl).replace(/\/+$/, '');
 
@@ -115,6 +117,65 @@ export function createHermesBackend({
   }
 
   /**
+   * How long a metadata read may take before it is called a failure.
+   *
+   * Deliberately NOT applied to chat: a turn legitimately runs for minutes, and
+   * bounding it would cut off real replies. This ceiling is for the small reads
+   * a screen waits on — the session list, a single session — where hanging is
+   * never the right answer.
+   *
+   * Observed 2026-08-26: with `state.db` at 4.8 GB, `GET /api/sessions?limit=200`
+   * took 9–12 MINUTES and returned zero bytes while `/health` stayed 200. The
+   * Gate had no timeout, so the app waited forever and showed a connected
+   * gateway that could not list a single session.
+   *
+   * The ceiling is measured, not guessed. On that same idle host the app's own
+   * page size costs ~11s (limit=200, 141 KB); the pathological case was two
+   * orders of magnitude worse. 30s clears normal slowness with headroom while
+   * still catching the failure decisively — a bound that tripped on ordinary
+   * load would trade a hang for a lie.
+   */
+  const READ_TIMEOUT_MS = readTimeoutMs;
+
+  /**
+   * A metadata read that fails honestly instead of hanging. Any other error is
+   * passed through untouched — only the timeout is reworded, because an
+   * AbortError alone reads like a bug rather than a slow host.
+   */
+  async function readCall(path, what) {
+    try {
+      return await call(path, { signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+    } catch (error) {
+      const aborted = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+      if (!aborted) throw error;
+      const timeout = new Error(
+        `hermes did not answer "${what}" within ${Math.round(READ_TIMEOUT_MS / 1000)}s — the host is reachable but its state database is not answering queries`,
+      );
+      timeout.code = 'backend_timeout';
+      throw timeout;
+    }
+  }
+
+  /**
+   * Whether the host runs its gateway as a profile multiplexer — true, false,
+   * or null when there is no config to read. Named-prefix routing exists only
+   * when this is on; with it off Hermes ignores `/p/<name>/` and serves the
+   * default profile, so no named Bot is addressable no matter what key it
+   * carries. Read once per backend: the file changes only with a restart.
+   */
+  let multiplexVerdict;
+  async function hostMultiplexEnabled() {
+    if (multiplexVerdict !== undefined) return multiplexVerdict;
+    if (!profilesHome) {
+      multiplexVerdict = null;
+      return multiplexVerdict;
+    }
+    const text = await readFile(join(profilesHome, 'config.yaml'), 'utf8').catch(() => null);
+    multiplexVerdict = text === null ? null : parseMultiplexEnabled(text);
+    return multiplexVerdict;
+  }
+
+  /**
    * The session behind a "title already in use" refusal, or null when the
    * refusal was about something else. Hermes names the holder in the message;
    * a title scan of the newest page is the fallback for a wording change.
@@ -127,7 +188,7 @@ export function createHermesBackend({
       const session = found?.session ?? found;
       if (session?.id) return toGatewaySession(session);
     }
-    const listed = await call('/api/sessions?limit=200').catch(() => null);
+    const listed = await readCall('/api/sessions?limit=200', 'find the session holding that title').catch(() => null);
     const match = (listed?.data ?? []).find((session) => session?.title === title);
     return match ? toGatewaySession(match) : null;
   }
@@ -137,10 +198,10 @@ export function createHermesBackend({
 
     async listSessions(limit) {
       // Without an explicit limit Hermes serves its own default page, so a
-      // caller asking for more silently got less - and anything past that
+      // caller asking for more silently got less — and anything past that
       // window looked like it did not exist.
       const query = typeof limit === 'number' && limit > 0 ? `?limit=${encodeURIComponent(limit)}` : '';
-      const body = await call(`/api/sessions${query}`);
+      const body = await readCall(`/api/sessions${query}`, 'list sessions');
       return (body.data ?? []).map(toGatewaySession);
     },
 
@@ -155,7 +216,7 @@ export function createHermesBackend({
       } catch (error) {
         // Hermes keeps session titles unique. Bot Chat is a Bot's one
         // canonical, permanent conversation, so a refused title means the
-        // caller already has what it asked for - and once a Bot has more
+        // caller already has what it asked for — and once a Bot has more
         // sessions than a single page holds, the id named in the refusal is
         // the only way back to it. Without this, tapping such an agent
         // reported a failure and bounced back to the roster.
@@ -195,6 +256,12 @@ export function createHermesBackend({
           content: typeof content === 'string' && content ? [{ type: 'text', text: content }] : [],
         },
         usage: body.usage,
+        // What actually ran. Hermes substitutes silently — a session with
+        // history falls through `fallback_providers` and answers as a
+        // different model, saying so only here (`model` vs `requested`).
+        // Dropping it left the app showing the model the operator picked and
+        // no way to learn otherwise.
+        runtime: body.runtime ?? body.usage?.runtime,
       };
     },
 
@@ -380,22 +447,43 @@ export function createHermesBackend({
       // Named prefixes reject the default listen key (ADR 0005): flag profiles
       // that merely copied it so the roster can say why they will not route.
       const defaultKey = records.find((record) => record.id === 'default')?.listenKey ?? null;
-      return { object: 'list', data: records.map((record) => toPublicBot(record, defaultKey)) };
+      // ...and when the host has multiplex off, say THAT instead: /p/<name>/
+      // is not an address at all there, so a distinct key alone changes
+      // nothing. Unreadable config stays null and the key verdict stands.
+      const multiplex = await hostMultiplexEnabled();
+      return { object: 'list', data: records.map((record) => toPublicBot(record, defaultKey, multiplex)) };
     },
 
     async deliverGroupMessage({ name, memberIds, mentionedIds, text } = {}) {
-      const { planGroupRounds, groupSessionTitle } = await import('../bot-groups.mjs');
+      const { planGroupRounds, groupSessionTitle, groupTurnPrompt, isSilentReply } =
+        await import('../bot-groups.mjs');
       const steps = planGroupRounds({ memberIds: memberIds ?? [], mentionedIds: mentionedIds ?? [] });
       const replies = [];
+      // A quiet bot is skipped; a wholly quiet ROUND ends the conversation.
+      // Breaking on the first silence cut a three-bot room to one speaker,
+      // because the bot after the quiet one was never asked.
+      const perRound = new Set(steps.filter((s) => s.round === 0).map((s) => s.botId)).size || 1;
+      let round = 0;
+      let silentThisRound = 0;
       for (const step of steps) {
+        if (step.round !== round) {
+          if (silentThisRound >= perRound) break;
+          round = step.round;
+          silentThisRound = 0;
+        }
         const scoped = await this.forBot(step.botId);
         const sessions = await scoped.listSessions();
         const title = groupSessionTitle(name);
         let session = sessions.find((entry) => entry.title === title);
         if (!session) session = await scoped.createSession({ title });
-        const result = await scoped.sendMessage(session.id, { text: text ?? '' });
+        // Each speaker hears the room, not just the original message. Handing
+        // every bot the same prompt in isolation is what turned one message
+        // into nine near-identical replies — there was nothing to build on and
+        // no way for a round to end.
+        const prompt = groupTurnPrompt({ text: text ?? '', replies, botId: step.botId });
+        const result = await scoped.sendMessage(session.id, { text: prompt });
         const reply = typeof result?.text === 'string' ? result.text.trim() : '';
-        if (!reply) break;
+        if (isSilentReply(reply)) { silentThisRound += 1; continue; }
         replies.push({ botId: step.botId, text: reply });
       }
       return { replies };
@@ -442,8 +530,11 @@ export function createHermesBackend({
         // here with the fix instead of letting the chat 401 speak for it.
         const defaultKey = (await getHermesBot(profilesHome, 'default'))?.listenKey ?? null;
         if (record.listenKey === defaultKey) {
+          const multiplexOff = (await hostMultiplexEnabled()) === false;
           const error = new Error(
-            `bot "${botId}" still uses the default listen key; /p/${botId}/ rejects it — give the profile its own API_SERVER_KEY`,
+            multiplexOff
+              ? `bot "${botId}" cannot be addressed: gateway.multiplex_profiles is off, so /p/${botId}/ serves the default profile — enable multiplex on the host, then give the profile its own API_SERVER_KEY`
+              : `bot "${botId}" still uses the default listen key; /p/${botId}/ rejects it — give the profile its own API_SERVER_KEY`,
           );
           error.code = 'bot_not_routable';
           error.status = 409;

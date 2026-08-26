@@ -358,6 +358,7 @@ test('updateBot without an executable or home is an honest 501', async () => {
     (error) => error.code === 'backend_unsupported' && error.status === 501,
   );
 });
+
 test('a session limit travels to Hermes instead of being silently capped', async () => {
   const { calls, hermes } = backend();
   await hermes.listSessions(200);
@@ -400,4 +401,67 @@ test('a refusal that is not a title collision still fails', async () => {
     return { ok: true, status: 200, json: async () => ({}) };
   });
   await assert.rejects(() => hermes.createSession({ title: 'Bot Chat' }), /model unavailable/);
+});
+
+test('a turn reports which model actually ran, not just which was asked for', async () => {
+  // Hermes substitutes silently: ask for longcat-2.0 on a session with history
+  // and `fallback_providers` answers as deepseek-v4-flash instead. It says so
+  // in runtime.model vs runtime.requested — but the Gate used to drop that on
+  // the floor, so the app showed the model the operator picked forever and the
+  // swap was invisible.
+  const { hermes } = backend((url, init) => {
+    if (init.method === 'POST') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          message: { id: 'm1', role: 'assistant', content: 'ok' },
+          usage: {
+            input_tokens: 10,
+            runtime: {
+              provider: 'opencode-go',
+              model: 'deepseek-v4-flash',
+              route_source: 'raw_request',
+              requested: { provider: 'opencode-go', model: 'longcat-2.0' },
+            },
+          },
+        }),
+      };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  });
+
+  const result = await hermes.sendMessage('ses_1', {
+    text: 'hi',
+    model: { providerId: 'opencode-go', modelId: 'longcat-2.0' },
+  });
+
+  assert.equal(result.runtime?.model, 'deepseek-v4-flash');
+  assert.equal(result.runtime?.requested?.model, 'longcat-2.0');
+});
+
+test('a turn that was not substituted reports the model it ran', async () => {
+  const { hermes } = backend((url, init) => {
+    if (init.method === 'POST') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          message: { id: 'm1', role: 'assistant', content: 'ok' },
+          runtime: {
+            provider: 'opencode-go',
+            model: 'longcat-2.0',
+            requested: { provider: 'opencode-go', model: 'longcat-2.0' },
+          },
+        }),
+      };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  });
+
+  const result = await hermes.sendMessage('ses_1', {
+    text: 'hi',
+    model: { providerId: 'opencode-go', modelId: 'longcat-2.0' },
+  });
+  assert.equal(result.runtime?.model, 'longcat-2.0');
 });
