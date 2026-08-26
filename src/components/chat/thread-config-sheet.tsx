@@ -5,16 +5,17 @@ import Animated from 'react-native-reanimated';
 
 import { Badge, BaseSheet, Button, ConfirmSheet, EmptyState, Icon, ListRow, PressableScale, SegmentedControl, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
+import { sessionBotChatBadge } from '@/lib/gateway/bots';
 import { formatCost, formatRelativeTime, formatTokenCount } from '@/lib/format';
-import { entering } from '@/lib/motion/presets';
 import {
   filterModels,
   groupByProvider,
   OTHER_GROUP_KEY,
   type ModelSection,
 } from '@/lib/gateway/model-selection';
-import type { GatewayBackend } from '@/lib/portal/manifest';
 import { filterSessions, sessionCreateTitle, sessionListTitle } from '@/lib/gateway/session-list';
+import { entering } from '@/lib/motion/presets';
+import type { GatewayBackend } from '@/lib/portal/manifest';
 import {
   threadConfigTitle,
   type ModelPickerMode,
@@ -143,6 +144,7 @@ function SessionsSection({
   const renderSessionItem = useCallback(
     ({ item }: { item: SessionItem }) => {
       const isCurrent = item.id === currentSessionId;
+      const botChatBadge = sessionBotChatBadge(item);
       const stats = [
         item.numMessages !== undefined ? `${item.numMessages} msgs` : undefined,
         item.totalTokens !== undefined && item.totalTokens > 0
@@ -174,6 +176,7 @@ function SessionsSection({
               <Text variant="body" numberOfLines={1} style={styles.sessionTitle}>
                 {sessionListTitle(item.title)}
               </Text>
+              {botChatBadge ? <Badge label={botChatBadge} tone="neutral" dot={false} /> : null}
               {isCurrent ? <Badge label="Current" tone="accent" dot={false} /> : null}
               {onDeleteSession && !isCurrent ? (
                 <PressableScale

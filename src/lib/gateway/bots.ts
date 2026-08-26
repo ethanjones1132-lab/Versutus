@@ -210,6 +210,10 @@ export function isBotChat(session: { title?: string | null }): boolean {
   return session.title === BOT_CHAT_TITLE;
 }
 
+export function sessionBotChatBadge(session: { title?: string | null }): string | undefined {
+  return isBotChat(session) ? BOT_CHAT_TITLE : undefined;
+}
+
 export function findBotChat<T extends { title?: string | null }>(sessions: T[]): T | undefined {
   return sessions.find((session) => isBotChat(session));
 }
