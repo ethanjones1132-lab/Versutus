@@ -1,8 +1,57 @@
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { probeVersion } from './shared.mjs';
 import { createHermesBackend } from '../backends/hermes.mjs';
+
+/**
+ * Which Hermes install this environment belongs to.
+ *
+ * Two homes exist on a typical host: the one the operator installed into, and
+ * the bare `~/.hermes` the CLI creates by default. Only one has `profiles/`,
+ * and picking the wrong one does NOT fail loudly — the Gate serves the single
+ * implicit `default` bot and then 401s with "Invalid gateway API key", because
+ * that home's `.env` carries a different key. A 14-bot fleet silently became
+ * one this way (2026-08-25) when the Gate happened to start without
+ * HERMES_HOME in its environment.
+ *
+ * So the ambient variable is preferred but no longer required: the environment
+ * record already names the executable, and a Hermes install puts it at
+ * `<home>/hermes-agent/venv/{bin,Scripts}/hermes*`. That marker is evidence,
+ * not a guess — and when it is absent we fall back to the CLI's own default
+ * rather than inventing a path.
+ */
+export function resolveHermesHome({
+  env = process.env,
+  executablePath,
+  homedir: home = homedir(),
+  hasProfiles = (dir) => existsSync(join(dir, 'profiles')),
+} = {}) {
+  const explicit = typeof env.HERMES_HOME === 'string' ? env.HERMES_HOME.trim() : '';
+
+  const marker = /^(.*)[\\/]hermes-agent[\\/]venv[\\/](?:bin|Scripts)[\\/]hermes(?:\.exe)?$/i
+    .exec(String(executablePath ?? ''));
+  const derived = marker ? marker[1] : '';
+
+  const fallback = join(home, '.hermes');
+
+  // Evidence beats assertion. Preferring the ambient variable outright is what
+  // let a single stale launcher take the fleet down on 2026-08-26: something
+  // started the Gate exporting HERMES_HOME=~/.hermes, that home holds no
+  // profiles/, and a 14-bot roster silently became the one implicit `default`
+  // while every route answered "Invalid gateway API key". The variable is a
+  // claim; a profiles/ directory is proof. Whichever candidate actually holds
+  // one wins, whatever the environment asserts.
+  for (const candidate of [explicit, derived, fallback]) {
+    if (candidate && hasProfiles(candidate)) return candidate;
+  }
+
+  // No candidate has profiles yet — a fresh install, before the first bot
+  // exists. Keep the declared order so a first run still lands where the
+  // operator pointed us rather than somewhere invented.
+  return explicit || derived || fallback;
+}
 
 export const hermesAdapter = {
   adapterId: 'hermes',
@@ -49,7 +98,7 @@ export const hermesAdapter = {
     return createHermesBackend({
       baseUrl,
       apiKey: credentials?.API_SERVER_KEY ?? credentials?.HERMES_API_SERVER_KEY,
-      profilesHome: process.env.HERMES_HOME || join(homedir(), '.hermes'),
+      profilesHome: resolveHermesHome({ executablePath: record?.executable?.path }),
       executablePath: record?.executable?.path,
     });
   },
