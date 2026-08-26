@@ -14,6 +14,7 @@ import {
   type ModelSection,
 } from '@/lib/gateway/model-selection';
 import type { GatewayBackend } from '@/lib/portal/manifest';
+import { sessionCreateTitle } from '@/lib/gateway/session-list';
 import {
   threadConfigTitle,
   type ModelPickerMode,
@@ -82,7 +83,7 @@ export type ThreadConfigSheetProps = {
   currentSessionId?: string;
   onSelectSession?: (sessionId: string) => void;
   onRefreshSessions?: () => void;
-  onNewSession?: () => void;
+  onNewSession?: (title?: string) => void;
   onDeleteSession?: (sessionId: string) => void;
   // Models section
   models?: ModelItem[];
@@ -113,15 +114,22 @@ function SessionsSection({
   currentSessionId?: string;
   onSelect?: (sessionId: string) => void;
   onRefresh?: () => void;
-  onNewSession?: () => void;
+  onNewSession?: (title?: string) => void;
   onDeleteSession?: (sessionId: string) => void;
 }) {
   const tokens = useTokens();
   const [deleteCandidate, setDeleteCandidate] = useState<SessionItem | null>(null);
+  const [nameDraft, setNameDraft] = useState('');
 
   const confirmDelete = useCallback((item: SessionItem) => {
     setDeleteCandidate(item);
   }, []);
+
+  const submitNewSession = useCallback(async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    onNewSession?.(sessionCreateTitle(nameDraft));
+    setNameDraft('');
+  }, [nameDraft, onNewSession]);
 
   const executeDelete = useCallback(() => {
     if (deleteCandidate) {
@@ -204,17 +212,26 @@ function SessionsSection({
   return (
     <>
       {onNewSession ? (
-        <View style={styles.newRow}>
-          <Button
-            label="New session"
-            variant="secondary"
-            size="sm"
-            onPress={async () => {
-              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              onNewSession();
-            }}
+        <>
+          <TextField
+            value={nameDraft}
+            onChangeText={setNameDraft}
+            placeholder="Session name"
+            autoCapitalize="sentences"
+            onSubmitEditing={() => void submitNewSession()}
+            returnKeyType="done"
+            accessibilityLabel="Session name"
+            style={styles.nameField}
           />
-        </View>
+          <View style={styles.newRow}>
+            <Button
+              label="New session"
+              variant="secondary"
+              size="sm"
+              onPress={() => void submitNewSession()}
+            />
+          </View>
+        </>
       ) : null}
 
       {sessionsError && sessions.length > 0 ? (
@@ -233,7 +250,7 @@ function SessionsSection({
               : 'Start a new session or send a message — the gateway creates one for you.'
           }
           actionLabel={onNewSession ? 'New session' : undefined}
-          onAction={onNewSession}
+          onAction={onNewSession ? () => void submitNewSession() : undefined}
         />
       ) : (
         <FlatList
@@ -604,6 +621,11 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.two,
   },
   blurb: { paddingHorizontal: Spacing.two, paddingBottom: Spacing.two },
+  nameField: {
+    marginHorizontal: Spacing.two,
+    marginBottom: Spacing.two,
+    minHeight: 0,
+  },
   newRow: {
     flexDirection: 'row',
     justifyContent: 'flex-end',

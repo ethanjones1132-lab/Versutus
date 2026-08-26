@@ -1,6 +1,7 @@
 import {
   applySessionListRead,
   EMPTY_SESSION_LIST,
+  sessionCreateTitle,
   sessionListCopy,
   type SessionListEntry,
 } from '@/lib/gateway/session-list';
@@ -80,4 +81,17 @@ test('a successful refresh replaces the list and clears the failure', () => {
 
 test('an unread list has no copy — the selector has not spoken yet', () => {
   expect(sessionListCopy(EMPTY_SESSION_LIST)).toBeUndefined();
+});
+
+test('a named new session forwards the title the operator typed', () => {
+  expect(sessionCreateTitle('Crew notes')).toBe('Crew notes');
+});
+
+test('a named new session trims the title', () => {
+  expect(sessionCreateTitle('  Lab notes  ')).toBe('Lab notes');
+});
+
+test('an empty name still creates untitled — today\'s behaviour', () => {
+  expect(sessionCreateTitle('')).toBeUndefined();
+  expect(sessionCreateTitle('   ')).toBeUndefined();
 });
