@@ -22,7 +22,7 @@ import { join } from 'node:path';
 import { runCli } from '../adapters/shared.mjs';
 import { createBotArgs, ensureDistinctListenKey, validateBotId } from '../hermes-bot-create.mjs';
 import { upsertProfileDescription } from '../hermes-bot-edit.mjs';
-import { getHermesBot, listHermesBots, parseMultiplexEnabled, toPublicBot } from '../hermes-profiles.mjs';
+import { getHermesBot, listHermesBots, parseMultiplexEnabled, readHermesSoul, toPublicBot } from '../hermes-profiles.mjs';
 
 /** Hermes sessions are already gateway-shaped; fill only what may be absent. */
 export function toGatewaySession(session) {
@@ -452,6 +452,29 @@ export function createHermesBackend({
       // nothing. Unreadable config stays null and the key verdict stands.
       const multiplex = await hostMultiplexEnabled();
       return { object: 'list', data: records.map((record) => toPublicBot(record, defaultKey, multiplex)) };
+    },
+
+    /**
+     * One Bot, with its soul. Deliberately separate from listBots: the roster
+     * is re-read constantly and a soul can be long, so it is fetched only when
+     * a Bot is actually opened. The listen key never crosses this boundary —
+     * toPublicBot decides what is public, exactly as it does for the roster.
+     */
+    async getBot({ id } = {}) {
+      const refuse = () => {
+        const error = new Error(`unknown bot "${id}"`);
+        error.code = 'unknown_bot';
+        error.status = 404;
+        return error;
+      };
+      if (!profilesHome || !id) throw refuse();
+      const records = await listHermesBots(profilesHome);
+      const record = records.find((entry) => entry.id === id);
+      if (!record) throw refuse();
+      const defaultKey = records.find((entry) => entry.id === 'default')?.listenKey ?? null;
+      const multiplex = await hostMultiplexEnabled();
+      const soul = await readHermesSoul(profilesHome, id);
+      return { ...toPublicBot(record, defaultKey, multiplex), soul };
     },
 
     async deliverGroupMessage({ name, memberIds, mentionedIds, text } = {}) {

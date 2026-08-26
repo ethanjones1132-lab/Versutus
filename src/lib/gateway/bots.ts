@@ -257,3 +257,56 @@ export function hasBotManagement(client?: object | null): boolean {
   if (typeof surface.canManageBots === 'boolean') return surface.canManageBots;
   return typeof surface.createBot === 'function';
 }
+
+/**
+ * One Bot's standing instructions, read on demand when a Bot is opened. Kept
+ * off PublicBot and off the roster payload: the roster is re-read constantly
+ * and a soul can be long.
+ */
+export type BotSoulRead = { ok: true; soul: string | null } | { ok: false };
+
+export type BotSoulState = {
+  soul: string | null;
+  /** True once a read has succeeded — a failed FIRST read has learned nothing. */
+  loaded: boolean;
+  failed: boolean;
+};
+
+export const EMPTY_BOT_SOUL: BotSoulState = { soul: null, loaded: false, failed: false };
+
+/**
+ * Fold one soul read into what the sheet shows. Three states stay distinct:
+ * the Bot has a soul, it genuinely has none, or the read failed. The last must
+ * never render as the middle one — telling an operator a Bot has no standing
+ * instructions when the Gate simply could not answer is the same empty-vs-failed
+ * lie the roster and rooms already refuse (see applyGroupRead).
+ */
+export function applyBotSoulRead(previous: BotSoulState, read: BotSoulRead): BotSoulState {
+  if (read.ok) return { soul: read.soul, loaded: true, failed: false };
+  if (previous.loaded) return { soul: previous.soul, loaded: true, failed: true };
+  return { soul: null, loaded: false, failed: true };
+}
+
+/** The line under the soul, or undefined when the soul itself is the answer. */
+export function botSoulCopy(state: BotSoulState): string | undefined {
+  if (!state.loaded && state.failed) return 'The soul could not be read.';
+  if (state.failed) return 'Could not re-read the soul — showing the last one.';
+  if (state.loaded && state.soul === null) return 'No standing instructions.';
+  return undefined;
+}
+
+/**
+ * Read one `bots.get` payload. The `soul` field is always present on a Gate
+ * that serves this method — absent means the host cannot answer, which is a
+ * FAILED read, not "this Bot has none". Saying the latter would invent a fact
+ * about the Bot out of a fact about the Gate.
+ */
+export function botSoulReadFromUnknown(raw: unknown): BotSoulRead {
+  if (!raw || typeof raw !== 'object') return { ok: false };
+  const record = raw as Record<string, unknown>;
+  if (!('soul' in record)) return { ok: false };
+  const soul = record.soul;
+  if (soul === null) return { ok: true, soul: null };
+  if (typeof soul === 'string') return { ok: true, soul: soul.trim() ? soul : null };
+  return { ok: false };
+}

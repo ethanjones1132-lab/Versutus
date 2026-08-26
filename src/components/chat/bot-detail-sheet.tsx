@@ -5,11 +5,17 @@ import { BaseSheet, Divider, ListRow, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { haptics } from '@/lib/haptics';
 import { describeBotDetail } from '@/lib/gateway/bot-detail';
-import type { PublicBot } from '@/lib/gateway/bots';
+import { botSoulCopy, EMPTY_BOT_SOUL, type BotSoulState, type PublicBot } from '@/lib/gateway/bots';
 
 export type BotDetailSheetProps = {
   /** The Bot to describe; null renders nothing (sheet dismissed). */
   bot: PublicBot | null;
+  /**
+   * This Bot's standing instructions, read on demand by the parent. Absent on
+   * a Gate that cannot serve `bots.get`, which renders as an honest "could not
+   * be read" rather than as "this Bot has none".
+   */
+  soul?: BotSoulState;
   onClose: () => void;
   /**
    * Opens this Bot's chat — the parent owns that navigation (same path a
@@ -32,9 +38,11 @@ export type BotDetailSheetProps = {
  * then act: message the agent, copy the id for host-side commands, or edit
  * what the Gate holds.
  */
-export function BotDetailSheet({ bot, onClose, onMessage, onEdit }: BotDetailSheetProps) {
+export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit }: BotDetailSheetProps) {
   if (!bot) return null;
   const detail = describeBotDetail(bot);
+  const soulState = soul ?? EMPTY_BOT_SOUL;
+  const soulNote = botSoulCopy(soulState);
 
   const handleCopyId = async () => {
     await Clipboard.setStringAsync(detail.id);
@@ -59,6 +67,22 @@ export function BotDetailSheet({ bot, onClose, onMessage, onEdit }: BotDetailShe
       )}
 
       <View style={styles.facts}>
+        <View style={styles.fact}>
+          <Text variant="micro" color="tertiary">
+            SOUL
+          </Text>
+          {soulState.soul ? (
+            <Text variant="body" color="secondary">
+              {soulState.soul.trim()}
+            </Text>
+          ) : null}
+          {soulNote ? (
+            <Text variant="caption" color={soulState.failed ? 'accentWarm' : 'tertiary'}>
+              {soulNote}
+            </Text>
+          ) : null}
+        </View>
+
         <View style={styles.fact}>
           <Text variant="micro" color="tertiary">
             MODEL PIN

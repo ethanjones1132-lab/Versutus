@@ -148,5 +148,10 @@ export function createGatewayMethods({ getBackend, listDevices }) {
     'tools.list': (params) => via(getBackend, params, 'listToolsets', (b) => b.listToolsets()),
 
     'bots.list': (params) => via(getBackend, params, 'listBots', (b) => b.listBots()),
+
+    // One Bot, with its soul. Separate from bots.list on purpose: the roster is
+    // re-read constantly and a soul can be long, so it is fetched only when a
+    // Bot is opened.
+    'bots.get': (params) => via(getBackend, params, 'getBot', (b) => b.getBot({ id: params?.id })),
   };
 }

@@ -13,6 +13,7 @@ import {
   getHermesBot,
   toPublicBot,
   parseMultiplexEnabled,
+  readHermesSoul,
 } from '../core/cli-environments/hermes-profiles.mjs';
 
 test('parseListenKey takes only API_SERVER_KEY', () => {
@@ -187,4 +188,36 @@ test('multiplex off never demotes a Bot that was already routable', async () => 
 
   assert.equal(toPublicBot(researcher, defaultKey, false).routable, true);
   assert.equal(toPublicBot(researcher, defaultKey, false).routingIssue, null);
+});
+
+test('a Bot soul is read from its own SOUL.md', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-home-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=def-key\n');
+  await mkdir(join(home, 'profiles', 'researcher'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'researcher', '.env'), 'API_SERVER_KEY=res-key\n');
+  await writeFile(join(home, 'profiles', 'researcher', 'SOUL.md'), 'You are precise.\nYou cite sources.\n');
+
+  assert.equal(await readHermesSoul(home, 'researcher'), 'You are precise.\nYou cite sources.\n');
+});
+
+test('a Bot with no SOUL.md has no soul, which is not the same as an empty one', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-home-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=def-key\n');
+  await mkdir(join(home, 'profiles', 'silent'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'silent', '.env'), 'API_SERVER_KEY=quiet-key\n');
+
+  assert.equal(await readHermesSoul(home, 'silent'), null);
+});
+
+test('a soul stays off the roster payload', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-home-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=def-key\n');
+  await mkdir(join(home, 'profiles', 'researcher'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'researcher', '.env'), 'API_SERVER_KEY=res-key\n');
+  await writeFile(join(home, 'profiles', 'researcher', 'SOUL.md'), 'You are precise.\n');
+
+  const bots = await listHermesBots(home);
+  const researcher = bots.find((bot) => bot.id === 'researcher');
+  assert.equal(researcher.soul, undefined);
+  assert.equal(JSON.stringify(toPublicBot(researcher)).includes('precise'), false);
 });

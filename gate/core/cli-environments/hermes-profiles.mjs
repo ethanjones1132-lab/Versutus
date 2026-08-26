@@ -213,6 +213,21 @@ export async function listHermesBots(hermesHome, io = {}) {
   return bots;
 }
 
+/**
+ * One Bot's standing instructions. Read on demand for a single Bot, never as
+ * part of listHermesBots: the roster payload is fetched constantly and a soul
+ * can be long, so it does not belong on every row.
+ */
+export async function readHermesSoul(hermesHome, id, io = {}) {
+  const readFile = io.readFile ?? defaultReadFile;
+  const home = id === 'default' ? hermesHome : join(hermesHome, 'profiles', id);
+  // readText folds a missing file into '' — but "no standing instructions" and
+  // "a soul that is blank" are the same fact to the operator, and null lets the
+  // phone tell both apart from "the read failed".
+  const text = await readText(join(home, 'SOUL.md'), readFile);
+  return text.trim() ? text : null;
+}
+
 export async function getHermesBot(hermesHome, id, io = {}) {
   if (!id) return null;
   if (id === 'default') {

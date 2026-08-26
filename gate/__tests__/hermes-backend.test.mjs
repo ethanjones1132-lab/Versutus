@@ -465,3 +465,36 @@ test('a turn that was not substituted reports the model it ran', async () => {
   });
   assert.equal(result.runtime?.model, 'longcat-2.0');
 });
+
+test('getBot returns one Bot with its soul and still never leaks listen keys', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\nOPENAI_API_KEY=sk-nope\n');
+  await mkdir(join(home, 'profiles', 'researcher'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'researcher', '.env'), 'API_SERVER_KEY=res-listen\n');
+  await writeFile(join(home, 'profiles', 'researcher', 'SOUL.md'), 'You are precise.\n');
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'default-listen',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    profilesHome: home,
+  });
+
+  const bot = await hermes.getBot({ id: 'researcher' });
+  assert.equal(bot.id, 'researcher');
+  assert.equal(bot.soul, 'You are precise.\n');
+  assert.equal(JSON.stringify(bot).includes('res-listen'), false);
+  assert.equal(JSON.stringify(bot).includes('sk-nope'), false);
+});
+
+test('getBot on an unknown Bot is refused, not an empty Bot', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'default-listen',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    profilesHome: home,
+  });
+
+  await assert.rejects(() => hermes.getBot({ id: 'nobody' }), (error) => error.code === 'unknown_bot');
+});

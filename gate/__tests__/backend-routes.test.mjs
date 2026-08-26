@@ -594,6 +594,16 @@ function stubFrontedRegistry(calls) {
       calls.push('listBots');
       return { object: 'list', data: [{ id: 'researcher', displayName: 'researcher', routable: true }] };
     },
+    async getBot(input) {
+      calls.push(`getBot:${input?.id}`);
+      if (input?.id === 'nope') {
+        const error = new Error('unknown bot "nope"');
+        error.code = 'unknown_bot';
+        error.status = 404;
+        throw error;
+      }
+      return { id: input.id, displayName: input.id, routable: true, soul: 'You are precise.' };
+    },
     async createBot(input) {
       calls.push(`createBot:${input?.name}`);
       return { id: input.name, displayName: input.name, routable: true };
@@ -1846,6 +1856,44 @@ test('a turn on an existing session does not open another one', async () => {
       }),
     });
     assert.ok(!calls.some((entry) => entry.startsWith('createSession')), JSON.stringify(calls));
+  } finally {
+    await gate.close();
+  }
+});
+
+test('GET /v1/bots/:id fronts one Bot with its soul, and refuses an unknown one', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    const one = await fetch(`${base}/v1/bots/researcher`, { headers: auth(gate) });
+    assert.equal(one.status, 200);
+    const body = await one.json();
+    assert.equal(body.id, 'researcher');
+    assert.equal(body.soul, 'You are precise.');
+    assert.ok(calls.includes('getBot:researcher'));
+
+    const missing = await fetch(`${base}/v1/bots/nope`, { headers: auth(gate) });
+    assert.equal(missing.status, 404);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('the bots.get RPC returns one Bot with its soul', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/capabilities/rpc`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ method: 'bots.get', params: { id: 'researcher' } }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.result.id, 'researcher');
+    assert.equal(body.result.soul, 'You are precise.');
+    assert.ok(calls.includes('getBot:researcher'));
   } finally {
     await gate.close();
   }

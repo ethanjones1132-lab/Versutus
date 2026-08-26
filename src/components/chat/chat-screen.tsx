@@ -39,7 +39,18 @@ import { resolvePullRefreshAction } from '@/lib/gateway/messages';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { botChromeCombined } from '@/lib/gateway/bot-chrome';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
-import { botToEditInput, buildBotUpdatePatch, buildRoster, type ChatSurface, type PublicBot, type RosterRow } from '@/lib/gateway/bots';
+import {
+  applyBotSoulRead,
+  botSoulReadFromUnknown,
+  botToEditInput,
+  buildBotUpdatePatch,
+  buildRoster,
+  EMPTY_BOT_SOUL,
+  type BotSoulState,
+  type ChatSurface,
+  type PublicBot,
+  type RosterRow,
+} from '@/lib/gateway/bots';
 import {
   applyGroupRead,
   describeRoomError,
@@ -264,6 +275,31 @@ export function ChatScreen() {
   const [editingBot, setEditingBot] = useState<PublicBot | null>(null);
   // Long-press target on the roster: which Bot's detail sheet is open.
   const [detailBot, setDetailBot] = useState<PublicBot | null>(null);
+  // The soul is read only when a Bot is actually opened - it is off the roster
+  // payload on purpose (a soul can be long, the roster is re-read constantly).
+  const [soulState, setSoulState] = useState<BotSoulState & { botId: string | null }>({
+    botId: null,
+    ...EMPTY_BOT_SOUL,
+  });
+
+  useEffect(() => {
+    const openId = detailBot?.id ?? null;
+    if (!openId || status !== 'connected') return;
+    let cancelled = false;
+    const fold = (read: Parameters<typeof applyBotSoulRead>[1]) => {
+      if (cancelled) return;
+      setSoulState((prev) => {
+        const previous = prev.botId === openId ? prev : { botId: openId, ...EMPTY_BOT_SOUL };
+        return { botId: openId, ...applyBotSoulRead(previous, read) };
+      });
+    };
+    void gatewayRequest('bots.get', { id: openId })
+      .then((payload) => fold(botSoulReadFromUnknown(payload)))
+      .catch(() => fold({ ok: false }));
+    return () => {
+      cancelled = true;
+    };
+  }, [detailBot, status, gatewayRequest]);
   // Long-press target on the roster: which room's action sheet is open.
   const [detailGroup, setDetailGroup] = useState<BotGroupRoom | null>(null);
   const [routineState, setRoutineState] = useState<RoutinesState & { botId?: string }>({
@@ -850,6 +886,7 @@ export function ChatScreen() {
 
       <BotDetailSheet
         bot={detailBot}
+        soul={detailBot && soulState.botId === detailBot.id ? soulState : undefined}
         onClose={() => setDetailBot(null)}
         onMessage={
           detailBot

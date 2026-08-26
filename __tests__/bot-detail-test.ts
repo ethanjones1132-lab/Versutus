@@ -1,4 +1,5 @@
 import { botRoutingView, describeBotDetail } from '@/lib/gateway/bot-detail';
+import { applyBotSoulRead, botSoulCopy, botSoulReadFromUnknown } from '@/lib/gateway/bots';
 
 // The detail surface is the roster row's "who is this and why can't it
 // route". Every verdict string below is shared with the run-failure
@@ -153,4 +154,63 @@ test('the detail sheet names multiplex as the fix, not the key', () => {
       routingIssue: 'multiplex_disabled',
     }).messagable,
   ).toBe(false);
+});
+
+// A soul is read per-Bot, so the three states the operator can be in must stay
+// distinct: it has one, it genuinely has none, or we could not read it. The
+// third must never render as the second — that is the empty-vs-failed lie.
+describe('a Bot soul read', () => {
+  const fresh = { soul: null, loaded: false, failed: false };
+
+  test('a read that returns a soul shows it', () => {
+    const state = applyBotSoulRead(fresh, { ok: true, soul: 'You are precise.' });
+    expect(state).toEqual({ soul: 'You are precise.', loaded: true, failed: false });
+    expect(botSoulCopy(state)).toBeUndefined();
+  });
+
+  test('a Bot with genuinely no soul says so', () => {
+    const state = applyBotSoulRead(fresh, { ok: true, soul: null });
+    expect(state).toEqual({ soul: null, loaded: true, failed: false });
+    expect(botSoulCopy(state)).toBe('No standing instructions.');
+  });
+
+  test('a failed first read says it could not be read, not that there is none', () => {
+    const state = applyBotSoulRead(fresh, { ok: false });
+    expect(state.loaded).toBe(false);
+    expect(state.failed).toBe(true);
+    expect(botSoulCopy(state)).toBe('The soul could not be read.');
+  });
+
+  test('a failed re-read keeps the soul already on screen', () => {
+    const had = applyBotSoulRead(fresh, { ok: true, soul: 'You are precise.' });
+    const state = applyBotSoulRead(had, { ok: false });
+    expect(state.soul).toBe('You are precise.');
+    expect(botSoulCopy(state)).toBe('Could not re-read the soul — showing the last one.');
+  });
+});
+
+describe('parsing a bots.get payload', () => {
+  test('a Bot carrying a soul reads as that soul', () => {
+    expect(botSoulReadFromUnknown({ id: 'researcher', soul: 'You are precise.' }))
+      .toEqual({ ok: true, soul: 'You are precise.' });
+  });
+
+  test('a Bot reporting soul: null genuinely has none', () => {
+    expect(botSoulReadFromUnknown({ id: 'researcher', soul: null }))
+      .toEqual({ ok: true, soul: null });
+  });
+
+  test('an older Gate that omits soul entirely is a failed read, not an empty one', () => {
+    // The field is always present on a Gate that serves bots.get. Absent means
+    // this host cannot answer — saying "no standing instructions" would invent
+    // a fact about the Bot from a fact about the Gate.
+    expect(botSoulReadFromUnknown({ id: 'researcher', displayName: 'Researcher' }))
+      .toEqual({ ok: false });
+  });
+
+  test('a junk envelope is a failed read', () => {
+    expect(botSoulReadFromUnknown(null)).toEqual({ ok: false });
+    expect(botSoulReadFromUnknown('nope')).toEqual({ ok: false });
+    expect(botSoulReadFromUnknown({ soul: 42 })).toEqual({ ok: false });
+  });
 });

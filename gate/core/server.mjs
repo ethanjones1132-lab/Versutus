@@ -820,6 +820,7 @@ export async function createGate(config = {}) {
         (pathname === '/v1/skills' && method === 'GET') ||
         (pathname === '/v1/bots' && method === 'GET') ||
         (pathname === '/v1/bots' && method === 'POST') ||
+        (method === 'GET' && /^\/v1\/bots\/[^/]+$/.test(pathname)) ||
         (method === 'PATCH' && /^\/v1\/bots\/[^/]+$/.test(pathname)) ||
         (pathname === '/v1/bots/handoff' && method === 'POST') ||
         (pathname === '/v1/bot-groups' && (method === 'GET' || method === 'POST')) ||
@@ -1380,6 +1381,26 @@ export async function createGate(config = {}) {
       }
 
       const botEditMatch = pathname.match(/^\/v1\/bots\/([^/]+)$/);
+      if (botEditMatch && method === 'GET') {
+        // One Bot, fetched only when a Bot is opened. Kept off /v1/bots so the
+        // roster read stays small — a soul can be long and the list is re-read
+        // constantly. The backend decides what is public; the listen key never
+        // reaches this response.
+        const backend = await resolveBackendFor('getBot');
+        if (!backend) return;
+        try {
+          const bot = await backend.getBot({ id: decodeURIComponent(botEditMatch[1]) });
+          res.writeHead(200);
+          res.end(JSON.stringify(bot));
+        } catch (error) {
+          const code = error.code ?? 'bot_read_failed';
+          const status = error.status || (code === 'unknown_bot' ? 404 : 502);
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code } }));
+        }
+        return;
+      }
+
       if (botEditMatch && method === 'PATCH') {
         const body = (await readJsonBody(req)) ?? {};
         const backend = await resolveBackendFor('updateBot');
