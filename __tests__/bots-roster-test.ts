@@ -318,3 +318,22 @@ test('rosterEmptyView keeps stale rows silent even while an error is reported', 
     }),
   ).toEqual({ kind: 'none' });
 });
+
+test('multiplex off is its own verdict on the row and the chip', () => {
+  // Two things are wrong at once when a profile copied the default key on a
+  // host with multiplex off, and only one of them is worth telling the
+  // operator first: /p/<name>/ is not an address at all there, so a distinct
+  // key alone fixes nothing.
+  const bot: PublicBot = {
+    id: 'anvil',
+    displayName: 'anvil',
+    routable: false,
+    routingIssue: 'multiplex_disabled',
+  };
+  expect(botRowSubtitle(bot)).toBe('Multiplex is off');
+  expect(botChipRoutingTag(bot)).toBe('Multiplex is off');
+  // Same precedence as the other issues: a reported verdict beats a stale
+  // `routable: true` from an older Gate.
+  expect(botRowSubtitle({ ...bot, routable: true })).toBe('Multiplex is off');
+  expect(botChipRoutingTag({ ...bot, routable: true })).toBe('Multiplex is off');
+});

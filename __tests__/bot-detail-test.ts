@@ -139,3 +139,18 @@ test('the default profile is messagable even though it is not editable', () => {
   expect(view.messagable).toBe(true);
   expect(view.editable).toBe(false);
 });
+
+test('the detail sheet names multiplex as the fix, not the key', () => {
+  const view = botRoutingView({ routable: false, routingIssue: 'multiplex_disabled' });
+  expect(view.title).toBe('Multiplex is off');
+  expect(view.next).toMatch(/multiplex_profiles/);
+  // A Bot the host cannot address is not messagable, same as the other issues.
+  expect(
+    describeBotDetail({
+      id: 'anvil',
+      displayName: 'anvil',
+      routable: false,
+      routingIssue: 'multiplex_disabled',
+    }).messagable,
+  ).toBe(false);
+});

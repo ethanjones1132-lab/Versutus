@@ -12,6 +12,7 @@ import {
   listHermesBots,
   getHermesBot,
   toPublicBot,
+  parseMultiplexEnabled,
 } from '../core/cli-environments/hermes-profiles.mjs';
 
 test('parseListenKey takes only API_SERVER_KEY', () => {
@@ -133,4 +134,57 @@ test('a profile copying the default listen key lists as refused, default keeps i
   assert.equal(byId.default.routingIssue, null);
   // The comparison happens behind the wire; keys still never travel.
   assert.equal(JSON.stringify(byId).includes('def-key'), false);
+});
+
+test('parseMultiplexEnabled reads what Hermes itself reads', () => {
+  // Hermes: bool(cfg_get(cfg, "gateway", "multiplex_profiles", default=False)),
+  // and hermes_cli/config.py accepts the top-level form alongside it.
+  assert.equal(parseMultiplexEnabled('gateway:\n  multiplex_profiles: true\n'), true);
+  assert.equal(parseMultiplexEnabled('gateway:\n  multiplex_profiles: on\n'), true);
+  assert.equal(parseMultiplexEnabled('multiplex_profiles: true\n'), true);
+  assert.equal(parseMultiplexEnabled('gateway:\n  multiplex_profiles: false\n'), false);
+  // Absent is Hermes' own default: off.
+  assert.equal(parseMultiplexEnabled('gateway:\n  strict: false\n'), false);
+  // Nothing to read is unknown, not off — the caller must not block on a guess.
+  assert.equal(parseMultiplexEnabled(''), null);
+  assert.equal(parseMultiplexEnabled(undefined), null);
+});
+
+test('with multiplex off, a shared key is explained by multiplex, not by the key', async () => {
+  // Both are true, but only one is the blocker the operator must clear first:
+  // with gateway.multiplex_profiles off, /p/<name>/ is not an address at all,
+  // so "give the profile its own API_SERVER_KEY" sends them to a fix that
+  // changes nothing on its own.
+  const home = await mkdtemp(join(tmpdir(), 'hermes-home-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=def-key\n');
+  await mkdir(join(home, 'profiles', 'echo'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'echo', '.env'), 'API_SERVER_KEY=def-key\n');
+
+  const bots = await listHermesBots(home);
+  const defaultKey = bots.find((bot) => bot.id === 'default')?.listenKey ?? null;
+  const echo = bots.find((bot) => bot.id === 'echo');
+
+  assert.equal(toPublicBot(echo, defaultKey, false).routingIssue, 'multiplex_disabled');
+  assert.equal(toPublicBot(echo, defaultKey, false).routable, false);
+  // Multiplex on, or unknown, keeps the key verdict exactly as before.
+  assert.equal(toPublicBot(echo, defaultKey, true).routingIssue, 'default_key_refused');
+  assert.equal(toPublicBot(echo, defaultKey, null).routingIssue, 'default_key_refused');
+  assert.equal(toPublicBot(echo, defaultKey).routingIssue, 'default_key_refused');
+});
+
+test('multiplex off never demotes a Bot that was already routable', async () => {
+  // The verdict this adds is an explanation for an existing refusal, not a new
+  // one: a profile with its own key keeps whatever it had, because proving
+  // multiplex is off from config alone cannot account for the env override.
+  const home = await mkdtemp(join(tmpdir(), 'hermes-home-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=def-key\n');
+  await mkdir(join(home, 'profiles', 'researcher'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'researcher', '.env'), 'API_SERVER_KEY=res-key\n');
+
+  const bots = await listHermesBots(home);
+  const defaultKey = bots.find((bot) => bot.id === 'default')?.listenKey ?? null;
+  const researcher = bots.find((bot) => bot.id === 'researcher');
+
+  assert.equal(toPublicBot(researcher, defaultKey, false).routable, true);
+  assert.equal(toPublicBot(researcher, defaultKey, false).routingIssue, null);
 });

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createBotGroupStore, MAX_GROUP_HISTORY, planGroupRounds, transcriptEntriesForSend, validateGroup } from '../core/cli-environments/bot-groups.mjs';
+import { createBotGroupStore, groupTurnPrompt, isSilentReply, MAX_GROUP_HISTORY, planGroupRounds, transcriptEntriesForSend, validateGroup } from '../core/cli-environments/bot-groups.mjs';
 
 test('validateGroup enforces 2–6 members', () => {
   assert.equal(validateGroup({ name: 'crew', memberIds: ['a'] }).ok, false);
@@ -133,6 +133,34 @@ test('leave falls back to the plain floor when the roster cannot be read', async
   });
 });
 
+test('delete disbands a room and its transcript, refusing unknown ids', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'gate-groups-'));
+  const store = createBotGroupStore(home);
+  const created = await store.create({ name: 'crew', memberIds: ['a', 'b', 'c'] });
+  await store.appendMessages(
+    created.id,
+    transcriptEntriesForSend({ text: 'hi', replies: [{ botId: 'a', text: 'yo' }] }),
+  );
+
+  // Disband removes the room AND the stored transcript together — a
+  // disbanded room must never resurface with its history.
+  assert.deepEqual(await store.delete(created.id), { ok: true });
+  assert.equal(await store.get(created.id), null);
+  const raw = JSON.parse(await readFile(join(home, 'bot-groups.json'), 'utf8'));
+  assert.equal(raw.groups.length, 0);
+  assert.deepEqual(raw.transcripts, {});
+
+  // The room is really gone: the same shape creates fresh without a clash.
+  const again = await store.create({ name: 'crew', memberIds: ['a', 'b', 'c'] });
+  assert.notEqual(again.id, created.id);
+
+  await assert.rejects(store.delete('missing'), (error) => {
+    assert.equal(error.code, 'unknown_group');
+    assert.equal(error.status, 404);
+    return true;
+  });
+});
+
 test('transcriptEntriesForSend records the operator line plus each reply in order', () => {
   let seq = 0;
   const entries = transcriptEntriesForSend({
@@ -207,6 +235,92 @@ test('store transcripts append, replay oldest-first, and cap at MAX_GROUP_HISTOR
   assert.equal(capped.length, MAX_GROUP_HISTORY);
   assert.ok(!capped.some((entry) => entry.id === 't1'), 'oldest lines drop off');
   assert.equal(capped[capped.length - 1].id, `bulk-${MAX_GROUP_HISTORY - 1}`);
+});
+
+// ─── group turns must actually be a conversation ────────────────────
+// Observed live 2026-08-25: one message to a 3-bot room produced NINE replies
+// — each bot answered three times, near-verbatim. Every step was handed the
+// same original prompt with no sight of what anyone else had said, so there
+// was nothing for a later round to build on and nothing to make it stop.
+
+test('the first speaker gets the plain message', () => {
+  const prompt = groupTurnPrompt({ text: 'status please', replies: [], botId: 'needle' });
+  assert.equal(prompt, 'status please');
+});
+
+test('later speakers see what was already said, and are told to add only what is new', () => {
+  const prompt = groupTurnPrompt({
+    text: 'status please',
+    replies: [{ botId: 'needle', text: 'Two leads open.' }],
+    botId: 'herald',
+  });
+  assert.match(prompt, /status please/);
+  assert.match(prompt, /needle: Two leads open\./);
+  // The instruction that lets a round end instead of looping the same answer.
+  assert.match(prompt, /nothing to add/i);
+});
+
+test('a bot never has its own words quoted back at it', () => {
+  const prompt = groupTurnPrompt({
+    text: 'status',
+    replies: [{ botId: 'herald', text: 'mine' }, { botId: 'needle', text: 'theirs' }],
+    botId: 'herald',
+  });
+  assert.match(prompt, /needle: theirs/);
+  assert.doesNotMatch(prompt, /herald: mine/);
+});
+
+test('an empty reply ends the round rather than padding it', () => {
+  // deliverGroupMessage breaks on a blank reply; this is the contract that
+  // makes "say nothing when you have nothing" a real exit.
+  assert.equal(isSilentReply(''), true);
+  assert.equal(isSilentReply('   '), true);
+  assert.equal(isSilentReply('[silent]'), true);
+  assert.equal(isSilentReply('(nothing to add)'), true);
+  assert.equal(isSilentReply('Two leads open.'), false);
+});
+
+test('every step knows which round it belongs to', () => {
+  // Round boundaries are what let one quiet bot be skipped while a whole
+  // silent round ends the conversation.
+  const planned = planGroupRounds({ memberIds: ['a', 'b'], maxRounds: 2 });
+  assert.deepEqual(planned, [
+    { botId: 'a', round: 0 }, { botId: 'b', round: 0 },
+    { botId: 'a', round: 1 }, { botId: 'b', round: 1 },
+  ]);
+});
+
+test('one quiet bot does not silence the room', () => {
+  // Reproduced live 2026-08-25: breaking on the first silent reply cut a
+  // three-bot room down to a single speaker, because bot two had nothing to
+  // add and bot three never got asked.
+  const spoke = [];
+  const steps = planGroupRounds({ memberIds: ['a', 'b', 'c'], maxRounds: 3 });
+  const said = { a: 'hello', b: 'nothing to add', c: 'also hello' };
+  let silentThisRound = 0;
+  let round = 0;
+  for (const step of steps) {
+    if (step.round !== round) {
+      if (silentThisRound >= 3) break;
+      round = step.round;
+      silentThisRound = 0;
+    }
+    if (isSilentReply(said[step.botId])) { silentThisRound += 1; continue; }
+    spoke.push(step.botId);
+  }
+  assert.deepEqual(spoke.slice(0, 2), ['a', 'c'], 'c must still be asked after b stays quiet');
+});
+
+test('one message means one round — each member speaks once', () => {
+  // Three rounds was the original guess and cost 3x for duplicate text.
+  const planned = planGroupRounds({ memberIds: ['a', 'b', 'c'] });
+  assert.deepEqual(planned.map((s) => s.botId), ['a', 'b', 'c']);
+  assert.ok(planned.every((s) => s.round === 0));
+});
+
+test('a caller that wants a real multi-round exchange can still ask', () => {
+  const planned = planGroupRounds({ memberIds: ['a', 'b'], maxRounds: 3 });
+  assert.equal(planned.length, 6);
 });
 
 test('verifyMembers re-checks the live roster at the send door', async () => {

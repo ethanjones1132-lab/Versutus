@@ -43,12 +43,23 @@ export interface PortalClient {
       signal?: AbortSignal;
       /** OpenAI-style tool_calls deltas when the gateway emits them. */
       onToolCall?: (tool: import('@/lib/gateway/types').ChatToolCall) => void;
+      /**
+       * Which model actually served the turn, once the gateway says so.
+       * Backends substitute — reporting only the request would keep repeating
+       * the operator's own choice back at them.
+       */
+      onModelReport?: (report: import('@/lib/gateway/run-failures').ModelReport) => void;
     },
   ): Promise<string>;
   getModels(): Promise<ModelInfo[]>;
   getCapabilities(): Promise<GatewayCapabilities>;
   getSessions(limit?: number): Promise<HermesSession[]>;
-  createSession?(title?: string): Promise<HermesSession>;
+  /**
+   * `model` pins the session at creation. It cannot be applied later — a
+   * Hermes session's model is immutable once opened — so a caller that has a
+   * model must pass it here or the thread runs on the host default for good.
+   */
+  createSession?(title?: string, model?: string): Promise<HermesSession>;
   /** Hermes profile selector on a Gate. Omitted on adapters that are not the Gate. */
   listBots?(): Promise<PublicBot[]>;
   createBot?(input: {
@@ -67,6 +78,14 @@ export interface PortalClient {
     modelId?: string;
     providerId?: string;
   }): Promise<PublicBot>;
+  /**
+   * Cron transparency, Gate adapters only. Omitted on adapters that cannot
+   * join a job to the runs it wrote — the surface then does not render at all,
+   * rather than showing an empty list that looks like "no scheduled work".
+   */
+  listCronJobs?(): Promise<import('@/lib/gateway/cron').CronJob[]>;
+  cronRuns?(jobId: string): Promise<import('@/lib/gateway/cron').CronRun[]>;
+  cronTranscript?(runId: string, limit?: number): Promise<import('@/lib/gateway/cron').CronTurn[]>;
   listJobs?(): Promise<{ id: string; name?: string; paused?: boolean }[]>;
   createJob?(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }>;
   runJob?(jobId: string): Promise<void>;

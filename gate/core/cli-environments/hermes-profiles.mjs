@@ -94,31 +94,74 @@ export function parseModelPin(configText) {
   return pin;
 }
 
+/** Values Hermes' own `is_truthy_value` accepts for a boolean config flag. */
+const TRUTHY = new Set(['true', 'on', 'yes', '1']);
+
+/**
+ * Whether the host has `gateway.multiplex_profiles` on — true, false, or null
+ * when there is nothing to read.
+ *
+ * Named-prefix routing (`/p/<name>/`) only exists when this is on. With it
+ * off, Hermes ignores the prefix entirely and serves the DEFAULT profile —
+ * observed 2026-08-24 on 0.20.4, where `/p/anvil/`, `/p/rook/` and even
+ * `/p/doesnotexist/` all returned the default profile's sessions byte for
+ * byte. Absent means off, which is Hermes' own default
+ * (`bool(cfg_get(cfg, "gateway", "multiplex_profiles", default=False))`);
+ * hermes_cli/config.py also accepts the top-level form. Unreadable stays null
+ * so no caller blocks on a guess.
+ */
+export function parseMultiplexEnabled(configText) {
+  if (typeof configText !== 'string' || !configText.trim()) return null;
+  const lines = configText.split(/\r?\n/);
+  const top = lines.find((line) => /^multiplex_profiles:[ \t]*\S/.test(line));
+  if (top) return TRUTHY.has(top.split(':')[1].trim().toLowerCase());
+  const blockStart = lines.findIndex((line) => /^gateway:[ \t]*$/.test(line));
+  if (blockStart !== -1) {
+    for (let i = blockStart + 1; i < lines.length; i += 1) {
+      const line = lines[i];
+      if (!line.trim()) continue;
+      if (!/^[ \t]+\S/.test(line)) break;
+      const match = /^[ \t]+multiplex_profiles:[ \t]*(\S+)/.exec(line);
+      if (match) return TRUTHY.has(match[1].trim().toLowerCase());
+    }
+  }
+  return false;
+}
+
 /**
  * Why a listed Bot cannot carry chat traffic right now, or null when it can.
  *  - 'listen_key_missing': the profile .env carries no API_SERVER_KEY.
+ *  - 'multiplex_disabled': the host has multiplex off, so `/p/<name>/` is not
+ *    an address at all — the blocker to clear before any key change matters.
  *  - 'default_key_refused': the profile still holds the default profile's
  *    listen key — Hermes multiplex rejects that key on every named prefix
  *    (ADR 0005), so promising routing would fail at chat time.
+ *
+ * `multiplex` only ever *renames* an existing refusal, never creates one: a
+ * profile with its own key keeps its verdict whatever the config says,
+ * because config alone cannot see Hermes' env override.
  */
-export function describeRouting(record, defaultListenKey = null) {
+export function describeRouting(record, defaultListenKey = null, multiplex = null) {
   if (!record.listenKey) return { routable: false, routingIssue: 'listen_key_missing' };
   if (
     record.id !== 'default'
     && typeof defaultListenKey === 'string'
     && record.listenKey === defaultListenKey
   ) {
-    return { routable: false, routingIssue: 'default_key_refused' };
+    return {
+      routable: false,
+      routingIssue: multiplex === false ? 'multiplex_disabled' : 'default_key_refused',
+    };
   }
   return { routable: true, routingIssue: null };
 }
 
-export function toPublicBot(record, defaultListenKey = null) {
+export function toPublicBot(record, defaultListenKey = null, multiplex = null) {
   const model = record.model ?? {};
   const pinned = model.default || model.provider
     ? { default: model.default ?? null, provider: model.provider ?? null }
     : null;
-  const { routable, routingIssue } = describeRouting(record, defaultListenKey);
+  const { routable, routingIssue } = describeRouting(record, defaultListenKey, multiplex);
   return {
     id: record.id,
     displayName: record.displayName,

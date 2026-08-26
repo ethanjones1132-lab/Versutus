@@ -33,6 +33,14 @@ export type GatewayProfile = {
   sessionId?: string;
   /** Target agent on the gateway (OpenClaw chat.send targeting) */
   agentId?: string;
+  /**
+   * Chat backend this gateway last used. Remembered so a reconnect lands where
+   * the operator left off instead of resetting to "nothing selected" — which
+   * previously meant Gate setup showed `backends[0]` (claude-local) as chosen
+   * while the provider held undefined, and every launch needed a manual switch
+   * to the Hermes environment the Bots actually live in.
+   */
+  backendId?: string;
   /** Per-request model override (Hermes-native model selection) */
   model?: string;
   /**

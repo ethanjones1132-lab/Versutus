@@ -6,12 +6,16 @@ export type BotPinnedModel = { default: string | null; provider: string | null }
 /**
  * Why a Bot cannot route. Reported by newer Gates alongside the boolean:
  *   - 'listen_key_missing': the profile .env carries no API_SERVER_KEY.
+ *   - 'multiplex_disabled': the host has `gateway.multiplex_profiles` off, so
+ *     `/p/<name>/` is not an address at all — Hermes ignores the prefix and
+ *     serves the default profile. This outranks the key verdict because a
+ *     distinct key cannot help until multiplex is on.
  *   - 'default_key_refused': the profile still holds the default profile's
  *     listen key, which Hermes multiplex refuses on any named prefix
  *     (ADR 0005) — a distinct fix (set a distinct key), so it gets its own
  *     indicator instead of sharing "no key".
  */
-export type BotRoutingIssue = 'listen_key_missing' | 'default_key_refused';
+export type BotRoutingIssue = 'listen_key_missing' | 'multiplex_disabled' | 'default_key_refused';
 
 export type PublicBot = {
   id: string;
@@ -31,6 +35,7 @@ export type PublicBot = {
  * a detail surface, not every row.
  */
 export function botRowSubtitle(bot: PublicBot): string {
+  if (bot.routingIssue === 'multiplex_disabled') return 'Multiplex is off';
   if (bot.routingIssue === 'default_key_refused') return 'Default listen key refused';
   if (!bot.routable || bot.routingIssue === 'listen_key_missing') return 'No listen key';
   const pin = bot.model?.default ?? null;
@@ -49,12 +54,13 @@ export function botChipModelPin(bot: PublicBot): string {
 
 /**
  * The unroutable tag on a group-room member chip: '' when the member can
- * route, else the same verdict words the roster row uses ('No listen key' /
- * 'Default listen key refused'). Same precedence as botRowSubtitle — a
- * reported routingIssue wins over a stale routable boolean, and older Gates
- * that report neither degrade to the boolean alone.
+ * route, else the same verdict words the roster row uses ('Multiplex is off' /
+ * 'No listen key' / 'Default listen key refused'). Same precedence as
+ * botRowSubtitle — a reported routingIssue wins over a stale routable boolean,
+ * and older Gates that report neither degrade to the boolean alone.
  */
 export function botChipRoutingTag(bot: PublicBot): string {
+  if (bot.routingIssue === 'multiplex_disabled') return 'Multiplex is off';
   if (bot.routingIssue === 'default_key_refused') return 'Default listen key refused';
   if (!bot.routable || bot.routingIssue === 'listen_key_missing') return 'No listen key';
   return '';

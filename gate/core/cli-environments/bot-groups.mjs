@@ -14,14 +14,25 @@ export function validateGroup({ name, memberIds }) {
   return { ok: true, memberIds: unique, name: String(name).trim() };
 }
 
-export function planGroupRounds({ memberIds, mentionedIds = [], maxRounds = 3, maxMessages = 10 }) {
+/**
+ * Who speaks, in what order, for one message to a room.
+ *
+ * ONE round by default. Three was the original guess, and live it produced
+ * nine near-identical replies to a single message on a three-bot room: asked
+ * "state your role", a bot has nothing new to add on round two, and most
+ * models answer the question again rather than staying quiet. Rounds are a
+ * power feature, not what "send a message to a room" should mean — another
+ * turn is another message, or an @mention. Callers that genuinely want a
+ * multi-round exchange still ask for it.
+ */
+export function planGroupRounds({ memberIds, mentionedIds = [], maxRounds = 1, maxMessages = 10 }) {
   const mentioned = mentionedIds.filter((id) => memberIds.includes(id));
   const active = mentioned.length > 0 ? mentioned : memberIds;
   const steps = [];
   for (let round = 0; round < maxRounds && steps.length < maxMessages; round += 1) {
     for (const botId of active) {
       if (steps.length >= maxMessages) break;
-      steps.push({ botId });
+      steps.push({ botId, round });
     }
   }
   return steps;
@@ -348,4 +359,47 @@ export function createBotGroupStore(gateHome, { listBotIds } = {}) {
     delete: (id) => serialized(() => store.delete(id)),
     verifyMembers: (memberIds) => store.verifyMembers(memberIds),
   };
+}
+
+/**
+ * Words a bot uses to say "I have nothing to add".
+ *
+ * `deliverGroupMessage` ends the round on a blank reply, which is what lets a
+ * three-round plan stop after one when the room has said everything. A model
+ * asked to stay quiet rarely returns an empty string though — it returns a
+ * short stock phrase — so those count as silence too. Without this, "say
+ * nothing" was unreachable and every bot spoke in every round.
+ */
+export function isSilentReply(text) {
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed) return true;
+  return /^[([]?\s*(\[silent\]|silent|nothing to add|no comment|pass)\s*[)\]]?\.?$/i.test(trimmed);
+}
+
+/**
+ * What one speaker is actually asked.
+ *
+ * The first speaker gets the operator's message untouched. Everyone after gets
+ * it plus what the room has already said and an instruction to add only
+ * something new — because a bot handed the same prompt in isolation can only
+ * answer it again, which is exactly what produced nine near-identical replies
+ * to a single message on a three-bot room. A speaker never sees its own words
+ * quoted back: that invites self-correction loops rather than conversation.
+ */
+export function groupTurnPrompt({ text, replies = [], botId }) {
+  const message = String(text ?? '');
+  const others = replies.filter((reply) => reply && reply.botId !== botId);
+  if (others.length === 0) return message;
+  const said = others.map((reply) => `${reply.botId}: ${String(reply.text ?? '').trim()}`).join('\n');
+  return [
+    message,
+    '',
+    '--- what the room has said so far ---',
+    said,
+    '---',
+    'Reply with ONE short message only if you have something genuinely new to',
+    'add: build on what was said, answer a question aimed at you, claim or hand',
+    'off work, or report a real result. If you have nothing to add, reply with',
+    'exactly: nothing to add',
+  ].join('\n');
 }

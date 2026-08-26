@@ -62,6 +62,9 @@ export function botRoutingView(bot: Pick<PublicBot, 'routable' | 'routingIssue'>
   title: string;
   next?: string;
 } {
+  // Multiplex first: with it off the named prefix is not an address, so the
+  // key verdict below would send the operator to a fix that changes nothing.
+  if (bot.routingIssue === 'multiplex_disabled') return routingFailureView('multiplex_disabled');
   if (bot.routingIssue === 'default_key_refused') return routingFailureView('default_key_refused');
   if (!bot.routable || bot.routingIssue === 'listen_key_missing') {
     return routingFailureView('listen_key_missing');
