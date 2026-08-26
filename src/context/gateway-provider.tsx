@@ -2043,16 +2043,29 @@ const response = await executeGatewaySlashCommand(trimmed, {
                     selectedBotId: selectedBotIdRef.current,
                     hasSession: Boolean(sessionIdRef.current),
                   });
-                  setActiveGateway(applied.gateway);
-                  await upsertGateway(applied.gateway).then(setGateways);
                   // Release the live session so the next send opens one pinned
                   // to this model. Do not wipe the thread here — the slash
                   // confirmation still has to land on commandMessageId.
+                  // Pinning the client is not enough: connect copies stored
+                  // onto live before disconnect can rewrite it. Same persist
+                  // as createNewSession.
+                  let next = applied.gateway;
                   if (applied.releaseSession) {
                     sessionIdRef.current = undefined;
-                    clientRef.current?.setSessionId(undefined);
                     setCurrentSessionId(undefined);
+                    const client = clientRef.current ?? { setSessionId: () => undefined };
+                    const pinned = pinLiveSession({
+                      client,
+                      sessionId: undefined,
+                      profile: applied.gateway,
+                    });
+                    if (pinned) next = pinned;
                   }
+                  setActiveGateway(next);
+                  if (next !== gateway) {
+                    activeGatewayRef.current = next;
+                  }
+                  await upsertGateway(next).then(setGateways);
                 },
         });
         const duration = Date.now() - commandStartTimeRef.current;
@@ -2507,8 +2520,6 @@ const response = await executeGatewaySlashCommand(trimmed, {
             ...withSelectedModel(activeGateway, modelId, selectedBackendId),
             providerId: providerId ?? activeGateway.providerId,
           };
-      setActiveGateway(updated);
-      void upsertGateway(updated).then(setGateways);
 
       // A Hermes session's model is fixed at creation, so a pick made
       // mid-thread would never reach the wire — every later turn keeps
@@ -2516,17 +2527,31 @@ const response = await executeGatewaySlashCommand(trimmed, {
       // so the next send opens a fresh one pinned to the choice; same trade
       // selectBackend already makes, and the only way the picker means
       // anything after turn one.
+      // Pinning the client is not enough: connect copies stored onto live
+      // before disconnect can rewrite it. Same persist as createNewSession.
       const released = shouldReleaseSessionForModel({
         previous: effectiveModel(activeGateway, selectedBackendId, selectedBotId),
         next: modelId,
         hasSession: Boolean(sessionIdRef.current),
       });
+      let next = updated;
       if (released) {
         sessionIdRef.current = undefined;
-        clientRef.current?.setSessionId(undefined);
         setCurrentSessionId(undefined);
         setMessages([]);
+        const client = clientRef.current ?? { setSessionId: () => undefined };
+        const pinned = pinLiveSession({
+          client,
+          sessionId: undefined,
+          profile: updated,
+        });
+        if (pinned) next = pinned;
       }
+      setActiveGateway(next);
+      if (next !== activeGateway) {
+        activeGatewayRef.current = next;
+      }
+      void upsertGateway(next).then(setGateways);
     },
     [activeGateway, closeModelPicker, sendChatInput, selectedBackendId, selectedBotId],
   );

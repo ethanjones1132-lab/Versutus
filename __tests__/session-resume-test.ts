@@ -243,4 +243,18 @@ describe('pinLiveSession — a new session is still current after reconnect', ()
     expect(client.sessionId).toBeUndefined();
     expect(next?.sessionId).toBeUndefined();
   });
+
+  test('a model change that persists an empty pin reconnects without the old session', () => {
+    // After /model set or a picker pick, the live session is released so the
+    // next send opens one pinned to the new model. connectGateway copies
+    // stored onto live before disconnect, so leaving the old sessionId on
+    // the profile would restore that thread (and its old model) on reconnect.
+    const client = pinClient('ses_old_model');
+    const stored = profile('ses_old_model');
+    const next = pinLiveSession({ client, sessionId: undefined, profile: stored });
+    expect(client.sessionId).toBeUndefined();
+    expect(next?.sessionId).toBeUndefined();
+    expect(stored.sessionId).toBe('ses_old_model');
+    expect(liveSessionId({ live: next?.sessionId, stored: next?.sessionId })).toBeUndefined();
+  });
 });
