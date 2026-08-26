@@ -231,7 +231,7 @@ export function createHermesBackend({
     },
 
     async listMessages(sessionId, limit) {
-      const body = await call(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
+      const body = await readCall(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, 'list messages');
       const mapped = (body.data ?? [])
         .map(toGatewayMessage)
         .filter((message) => message.content.length > 0 || message.tool_calls);
@@ -318,7 +318,7 @@ export function createHermesBackend({
      * what it can observably proxy, not from that self-report.
      */
     async listJobs() {
-      return call('/api/jobs');
+      return readCall('/api/jobs', 'list cron jobs');
     },
 
     async createJob(body) {
