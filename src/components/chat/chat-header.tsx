@@ -1,10 +1,14 @@
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import { PulsingDot, statusColor } from '@/components/connection-badge';
 import { Chip, GlassSurface, Icon, PressableScale, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { ConnectionStatus } from '@/lib/gateway/types';
+import {
+  CHAT_HEADER_CHIP_MAX_WIDTH,
+  chatHeaderChipLayout,
+} from '@/lib/motion/chat-header-layout';
 
 export type ChatHeaderProps = {
   gatewayName: string;
@@ -38,77 +42,119 @@ export function ChatHeader({
   onRosterPress,
 }: ChatHeaderProps) {
   const tokens = useTokens();
+  const { width: windowWidth } = useWindowDimensions();
   const color = statusColor(tokens, status);
   const pulsing = streaming || status === 'connecting' || status === 'reconnecting' || status === 'pairing';
+  const showModel = Boolean(modelLabel && onModelPress);
+  const showSession = Boolean(sessionLabel && onSessionPress);
+  const stacked =
+    chatHeaderChipLayout({
+      windowWidth,
+      model: showModel,
+      session: showSession,
+    }) === 'stacked';
+
+  const orb = (
+    <View style={[styles.orbHalo, { borderColor: tokens.glassBorder }]}>
+      <PulsingDot color={color} active={pulsing} />
+    </View>
+  );
+  const back = onRosterPress ? (
+    <PressableScale
+      onPress={onRosterPress}
+      hitSlop={10}
+      accessibilityRole="button"
+      accessibilityLabel="Back to roster"
+      style={styles.overflow}>
+      <Icon
+        name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
+        size={18}
+        color="textSecondary"
+      />
+    </PressableScale>
+  ) : null;
+  const titles = (
+    <PressableScale
+      onPress={onBackendPress}
+      disabled={!onBackendPress || !backendLabel}
+      accessibilityRole={backendLabel && onBackendPress ? 'button' : undefined}
+      accessibilityLabel={backendLabel ? `Chat backend: ${backendLabel}. Change backend.` : undefined}
+      style={styles.titles}>
+      <Text variant="headline" numberOfLines={1} style={styles.name}>
+        {backendLabel ?? gatewayName}
+      </Text>
+      <Text variant="micro" color="secondary" numberOfLines={1}>
+        {streaming
+          ? 'Streaming response…'
+          : backendLabel
+            ? `via ${gatewayName}${statusDetail ? ` · ${statusDetail}` : ''}`
+            : statusDetail || 'Ready for chat and slash commands'}
+      </Text>
+    </PressableScale>
+  );
+  const modelChip =
+    modelLabel && onModelPress ? (
+      <Chip
+        label={modelLabel}
+        icon={{ ios: 'cpu', android: 'memory', web: 'memory' }}
+        onPress={onModelPress}
+        style={styles.chip}
+      />
+    ) : null;
+  const sessionChip =
+    sessionLabel && onSessionPress ? (
+      <Chip
+        label={sessionLabel}
+        icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
+        onPress={onSessionPress}
+        style={styles.chip}
+      />
+    ) : null;
+  const overflow = onOverflowPress ? (
+    <PressableScale
+      onPress={onOverflowPress}
+      hitSlop={10}
+      accessibilityRole="button"
+      accessibilityLabel="Chat options"
+      style={styles.overflow}>
+      <Icon
+        name={{ ios: 'ellipsis', android: 'more_vert', web: 'more_vert' }}
+        size={18}
+        color="textSecondary"
+      />
+    </PressableScale>
+  ) : null;
 
   return (
     <View style={styles.wrap}>
-      <GlassSurface variant="hero" radius={Radius.xl} padding={Spacing.two} style={styles.card}>
-        <View style={[styles.orbHalo, { borderColor: tokens.glassBorder }]}>
-          <PulsingDot color={color} active={pulsing} />
-        </View>
-        {onRosterPress ? (
-          <PressableScale
-            onPress={onRosterPress}
-            hitSlop={10}
-            accessibilityRole="button"
-            accessibilityLabel="Back to roster"
-            style={styles.overflow}>
-            <Icon
-              name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
-              size={18}
-              color="textSecondary"
-            />
-          </PressableScale>
-        ) : null}
-        <PressableScale
-          onPress={onBackendPress}
-          disabled={!onBackendPress || !backendLabel}
-          accessibilityRole={backendLabel && onBackendPress ? 'button' : undefined}
-          accessibilityLabel={backendLabel ? `Chat backend: ${backendLabel}. Change backend.` : undefined}
-          style={styles.titles}>
-          <Text variant="headline" numberOfLines={1} style={styles.name}>
-            {backendLabel ?? gatewayName}
-          </Text>
-          <Text variant="micro" color="secondary" numberOfLines={1}>
-            {streaming
-              ? 'Streaming response…'
-              : backendLabel
-                ? `via ${gatewayName}${statusDetail ? ` · ${statusDetail}` : ''}`
-                : statusDetail || 'Ready for chat and slash commands'}
-          </Text>
-        </PressableScale>
-
-        {modelLabel && onModelPress ? (
-          <Chip
-            label={modelLabel}
-            icon={{ ios: 'cpu', android: 'memory', web: 'memory' }}
-            onPress={onModelPress}
-            style={styles.chip}
-          />
-        ) : null}
-        {sessionLabel && onSessionPress ? (
-          <Chip
-            label={sessionLabel}
-            icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
-            onPress={onSessionPress}
-            style={styles.chip}
-          />
-        ) : null}
-        {onOverflowPress ? (
-          <PressableScale
-            onPress={onOverflowPress}
-            hitSlop={10}
-            accessibilityRole="button"
-            accessibilityLabel="Chat options"
-            style={styles.overflow}>
-            <Icon
-              name={{ ios: 'ellipsis', android: 'more_vert', web: 'more_vert' }}
-              size={18}
-              color="textSecondary"
-            />
-          </PressableScale>
-        ) : null}
+      <GlassSurface
+        variant="hero"
+        radius={Radius.xl}
+        padding={Spacing.two}
+        style={[styles.card, stacked && styles.cardStacked]}>
+        {stacked ? (
+          <>
+            <View style={styles.row}>
+              {orb}
+              {back}
+              {titles}
+              {overflow}
+            </View>
+            <View style={styles.chipRow}>
+              {modelChip}
+              {sessionChip}
+            </View>
+          </>
+        ) : (
+          <>
+            {orb}
+            {back}
+            {titles}
+            {modelChip}
+            {sessionChip}
+            {overflow}
+          </>
+        )}
       </GlassSurface>
     </View>
   );
@@ -123,6 +169,23 @@ const styles = StyleSheet.create({
   card: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: Spacing.two,
+  },
+  cardStacked: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    minWidth: 0,
+    alignSelf: 'stretch',
+  },
+  chipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
     gap: Spacing.two,
   },
   orbHalo: {
@@ -143,7 +206,7 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   chip: {
-    maxWidth: 120,
+    maxWidth: CHAT_HEADER_CHIP_MAX_WIDTH,
   },
   overflow: {
     width: 32,
