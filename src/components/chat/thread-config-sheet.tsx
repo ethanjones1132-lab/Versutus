@@ -77,6 +77,8 @@ export type ThreadConfigSheetProps = {
   onClose: () => void;
   // Sessions section
   sessions?: SessionItem[];
+  /** Set when the last session-list read failed. Empty is not "No sessions yet". */
+  sessionsError?: string;
   currentSessionId?: string;
   onSelectSession?: (sessionId: string) => void;
   onRefreshSessions?: () => void;
@@ -99,6 +101,7 @@ export type ThreadConfigSheetProps = {
 /** Formerly session-selector-sheet: list, switch, new, delete (confirm-gated). */
 function SessionsSection({
   sessions = [],
+  sessionsError,
   currentSessionId,
   onSelect,
   onRefresh,
@@ -106,6 +109,7 @@ function SessionsSection({
   onDeleteSession,
 }: {
   sessions?: SessionItem[];
+  sessionsError?: string;
   currentSessionId?: string;
   onSelect?: (sessionId: string) => void;
   onRefresh?: () => void;
@@ -213,11 +217,21 @@ function SessionsSection({
         </View>
       ) : null}
 
+      {sessionsError && sessions.length > 0 ? (
+        <Text variant="caption" color="secondary" style={styles.blurb}>
+          {sessionsError}
+        </Text>
+      ) : null}
+
       {sessions.length === 0 ? (
         <EmptyState
           icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
-          title="No sessions yet"
-          description="Start a new session or send a message — the gateway creates one for you."
+          title={sessionsError ?? 'No sessions yet'}
+          description={
+            sessionsError
+              ? undefined
+              : 'Start a new session or send a message — the gateway creates one for you.'
+          }
           actionLabel={onNewSession ? 'New session' : undefined}
           onAction={onNewSession}
         />
@@ -231,7 +245,7 @@ function SessionsSection({
         />
       )}
 
-      {onRefresh && sessions.length > 0 ? (
+      {onRefresh && (sessions.length > 0 || sessionsError) ? (
         <Button
           label="Refresh sessions"
           variant="ghost"
@@ -511,6 +525,7 @@ export function ThreadConfigSheet({
   onModeChange,
   onClose,
   sessions,
+  sessionsError,
   currentSessionId,
   onSelectSession,
   onRefreshSessions,
@@ -554,6 +569,7 @@ export function ThreadConfigSheet({
       {mode === 'sessions' ? (
         <SessionsSection
           sessions={sessions}
+          sessionsError={sessionsError}
           currentSessionId={currentSessionId}
           onSelect={onSelectSession}
           onRefresh={onRefreshSessions}

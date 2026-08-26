@@ -122,6 +122,7 @@ export function ChatScreen() {
     closeSessionSelector,
     selectSession,
     sessionList,
+    sessionListError,
     currentSessionId,
     pendingRunApproval,
     resolveRunApproval,
@@ -1045,6 +1046,7 @@ export function ChatScreen() {
           setBackendPickerVisible(false);
         }}
         sessions={sessions}
+        sessionsError={sessionListError}
         currentSessionId={currentSessionId}
         onSelectSession={selectSession}
         onRefreshSessions={() => void openSessionSelector()}
