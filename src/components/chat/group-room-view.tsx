@@ -21,7 +21,7 @@ import {
   type GroupReply,
   type GroupTranscriptEntry,
 } from '@/lib/gateway/groups';
-import { extractMentions } from '@/lib/gateway/mentions';
+import { extractMentions, insertMention, mentionPicksAtCaret } from '@/lib/gateway/mentions';
 
 /**
  * One exchange in the room: the operator's message (with how many replies it
@@ -152,6 +152,10 @@ export function GroupRoomView({
   // shrink the speaking set; otherwise the whole room takes the round.
   const mentioned = extractMentions(draft, group.memberIds);
   const speakers = groupSpeakers(group.memberIds, mentioned);
+  // Typing at the end of the draft: TextField has no selection hook, so the
+  // caret is the end. The helper still takes a caret so mid-token picks work
+  // once a field can report one.
+  const mentionPicks = mentionPicksAtCaret(draft, draft.length, group.memberIds);
   const removable = canRemoveMember(group);
   // Dead-id eviction mirrors the Gate's leave exemption: a member the
   // verified roster cannot answer to stays removable at the two-member
@@ -503,21 +507,46 @@ export function GroupRoomView({
       ) : null}
 
       <View style={[styles.dock, { borderColor: tokens.border }]}>
-        <TextField
-          value={draft}
-          onChangeText={setDraft}
-          placeholder={`Message ${group.name}…`}
-          editable={!sending}
-          multiline
-          style={styles.dockInput}
-        />
-        <Button
-          label={sending ? 'Round running…' : 'Send'}
-          variant="primary"
-          size="sm"
-          disabled={sending || !draft.trim()}
-          onPress={handleSend}
-        />
+        {mentionPicks.length > 0 ? (
+          <View style={styles.mentionPicks}>
+            <Text variant="micro" color="tertiary">Mention</Text>
+            <View style={styles.chipWrap}>
+              {mentionPicks.map((memberId) => (
+                <PressableScale
+                  key={memberId}
+                  onPress={() => setDraft(insertMention(draft, draft.length, memberId))}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Mention ${displayNameOf(memberId)}`}
+                  style={[
+                    styles.memberChip,
+                    { backgroundColor: tokens.glassHighlight, borderColor: tokens.border },
+                  ]}>
+                  <BotAvatar botId={memberId} size={22} />
+                  <Text variant="caption" color="primary" numberOfLines={1}>
+                    {displayNameOf(memberId)}
+                  </Text>
+                </PressableScale>
+              ))}
+            </View>
+          </View>
+        ) : null}
+        <View style={styles.dockRow}>
+          <TextField
+            value={draft}
+            onChangeText={setDraft}
+            placeholder={`Message ${group.name}…`}
+            editable={!sending}
+            multiline
+            style={styles.dockInput}
+          />
+          <Button
+            label={sending ? 'Round running…' : 'Send'}
+            variant="primary"
+            size="sm"
+            disabled={sending || !draft.trim()}
+            onPress={handleSend}
+          />
+        </View>
       </View>
 
       <ConfirmSheet
@@ -656,12 +685,16 @@ const styles = StyleSheet.create({
   sheetActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: Spacing.two },
   renameField: { minHeight: 0, marginBottom: Spacing.one },
   dock: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
     gap: Spacing.two,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.two,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
+  dockRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: Spacing.two,
+  },
+  mentionPicks: { gap: Spacing.one },
   dockInput: { flex: 1, minHeight: 0 },
 });
