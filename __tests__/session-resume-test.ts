@@ -1,6 +1,6 @@
 import { APP_SESSION_SOURCE, pickAppSession } from '@/lib/gateway/messages';
-import { liveSessionId, RESUME_SESSION_PAGE, resolveResumeSession } from '@/lib/gateway/session-resume';
-import type { HermesSession } from '@/lib/gateway/types';
+import { liveSessionId, pinLiveSession, RESUME_SESSION_PAGE, resolveResumeSession } from '@/lib/gateway/session-resume';
+import type { GatewayProfile, HermesSession } from '@/lib/gateway/types';
 import type { PortalClient } from '@/lib/portal/adapters';
 
 type ResumeClient = Pick<PortalClient, 'getSessions' | 'createSession'>;
@@ -142,5 +142,77 @@ describe('liveSessionId — stored is a reconnect pin, not a live thread', () =>
   test('an empty live slot with nothing stored stays empty', () => {
     expect(liveSessionId({ live: undefined, stored: undefined })).toBeUndefined();
     expect(liveSessionId({ live: '  ', stored: 'ses_old' })).toBeUndefined();
+  });
+});
+
+describe('pinLiveSession — a new session is still current after reconnect', () => {
+  function pinClient(initial?: string) {
+    let current = initial;
+    return {
+      get sessionId() {
+        return current;
+      },
+      setSessionId(id: string | undefined) {
+        current = id;
+      },
+    };
+  }
+
+  const profile = (sessionId?: string): GatewayProfile => ({
+    id: 'g1',
+    name: 'Test gateway',
+    url: 'http://gateway.test:8760',
+    kind: 'custom',
+    createdAt: 0,
+    sessionId,
+  });
+
+  test('pins the client so disconnect writes the new session, not the previous one', () => {
+    // Gate createSession never assigns currentSessionId. Hermes native does.
+    // ManifestClient.disconnect copies currentSessionId onto the profile pin,
+    // so a New session that only updated React state reconnects as the old
+    // thread and orphans the new one in the list.
+    const client = pinClient('ses_old');
+    pinLiveSession({ client, sessionId: 'ses_new', profile: profile('ses_old') });
+    expect(client.sessionId).toBe('ses_new');
+  });
+
+  test('writes the reconnect pin onto a new profile so connect copies the new session onto live', () => {
+    const client = pinClient('ses_old');
+    const previous = profile('ses_old');
+    const next = pinLiveSession({ client, sessionId: 'ses_new', profile: previous });
+    expect(next?.sessionId).toBe('ses_new');
+    expect(previous.sessionId).toBe('ses_old');
+    // connectGateway assigns sessionIdRef from the profile before the first
+    // history load. Without this write, that assignment restores ses_old
+    // even after the client was pinned — disconnect runs too late to help.
+    expect(liveSessionId({ live: next?.sessionId, stored: next?.sessionId })).toBe('ses_new');
+  });
+
+  test('a New session that is not pinned reconnects as the previous thread', () => {
+    // The hole: createNewSession wrote sessionIdRef and React state, never
+    // the client or the profile. connectGateway then copied stored onto live.
+    expect(liveSessionId({ live: 'ses_old', stored: 'ses_old' })).toBe('ses_old');
+  });
+
+  test('an already-pinned profile is the same object so the caller skips persist', () => {
+    const client = pinClient();
+    const previous = profile('ses_new');
+    const next = pinLiveSession({ client, sessionId: 'ses_new', profile: previous });
+    expect(next).toBe(previous);
+    expect(client.sessionId).toBe('ses_new');
+  });
+
+  test('pins the client even when there is no profile to persist', () => {
+    const client = pinClient('ses_old');
+    expect(pinLiveSession({ client, sessionId: 'ses_new' })).toBeUndefined();
+    expect(client.sessionId).toBe('ses_new');
+  });
+
+  test('whitespace is not a live session', () => {
+    const client = pinClient('ses_old');
+    const next = pinLiveSession({ client, sessionId: '  ', profile: profile('ses_old') });
+    expect(client.sessionId).toBeUndefined();
+    expect(next?.sessionId).toBeUndefined();
   });
 });

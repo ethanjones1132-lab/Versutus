@@ -1,5 +1,5 @@
 import { pickAppSession } from '@/lib/gateway/messages';
-import type { HermesSession } from '@/lib/gateway/types';
+import type { GatewayProfile, HermesSession } from '@/lib/gateway/types';
 import type { PortalClient } from '@/lib/portal/adapters';
 
 export type ResumeSessionClient = Pick<PortalClient, 'getSessions' | 'createSession'>;
@@ -36,6 +36,32 @@ export function liveSessionId(input: {
   const live = input.live?.trim();
   if (live) return live;
   return undefined;
+}
+
+/**
+ * Adopt a session as the live thread on the client, and write it as the
+ * reconnect pin on the gateway profile.
+ *
+ * Connect copies stored (`gateway.sessionId`) onto the live slot before the
+ * first history load. Disconnect copies the client's current session back
+ * onto stored. Gate `createSession` does not assign `currentSessionId`
+ * (Hermes native does), so a New session that only updated React state
+ * would reconnect as the previous thread and leave the new one orphaned
+ * in the list.
+ *
+ * Returns the same profile when the pin is already written, so the caller
+ * can skip a persist. Pins the client even when there is no profile.
+ */
+export function pinLiveSession(input: {
+  client: Pick<PortalClient, 'setSessionId'>;
+  sessionId: string | undefined;
+  profile?: GatewayProfile;
+}): GatewayProfile | undefined {
+  const sessionId = input.sessionId?.trim() || undefined;
+  input.client.setSessionId(sessionId);
+  if (!input.profile) return undefined;
+  if (input.profile.sessionId === sessionId) return input.profile;
+  return { ...input.profile, sessionId };
 }
 
 /**
