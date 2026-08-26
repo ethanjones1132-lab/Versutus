@@ -6,6 +6,7 @@ import {
   sessionSpendReadFromUnknown,
   sessionUsage,
   threadSpendCopy,
+  threadSpendRefreshKey,
   threadUsage,
   totalUsage,
   weekBuckets,
@@ -254,5 +255,35 @@ describe('threadSpendCopy', () => {
     });
     const stale = applySessionSpendRead(loaded, { ok: false });
     expect(threadSpendCopy(stale, 'open')).toBe('Could not re-read spend — showing the last total.');
+  });
+});
+
+describe('threadSpendRefreshKey', () => {
+  const open = { surfaceKey: 'bot:research', sessionId: 's1' };
+
+  test('a finished send is a different key than the live send, so the glance re-reads', () => {
+    const live = threadSpendRefreshKey({ ...open, sending: true });
+    const done = threadSpendRefreshKey({ ...open, sending: false });
+    expect(live).toBeTruthy();
+    expect(done).toBeTruthy();
+    expect(live).not.toBe(done);
+  });
+
+  test('the same idle thread keeps one key — navigation did not happen', () => {
+    expect(threadSpendRefreshKey({ ...open, sending: false })).toBe(
+      threadSpendRefreshKey({ ...open, sending: false }),
+    );
+  });
+
+  test('a different session or surface is a new key, the way the first-read already is', () => {
+    const idle = threadSpendRefreshKey({ ...open, sending: false });
+    expect(threadSpendRefreshKey({ ...open, sessionId: 's2', sending: false })).not.toBe(idle);
+    expect(
+      threadSpendRefreshKey({ surfaceKey: 'cfg:hermes', sessionId: 's1', sending: false }),
+    ).not.toBe(idle);
+  });
+
+  test('roster and group rooms have no glance key', () => {
+    expect(threadSpendRefreshKey({ surfaceKey: undefined, sessionId: 's1', sending: false })).toBeUndefined();
   });
 });

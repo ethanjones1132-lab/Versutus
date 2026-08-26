@@ -118,6 +118,21 @@ export function threadSpendCopy(
   return `${formatTokenCount(usage.tokens)} · ${usage.costUsd == null ? '—' : formatCost(usage.costUsd)}`;
 }
 
+/**
+ * Effect identity for the open-thread spend glance. Surface and session
+ * changes already re-read. A live send is a different key than idle, so the
+ * glance also re-reads when the turn finishes.
+ */
+export function threadSpendRefreshKey(input: {
+  surfaceKey: string | undefined;
+  sessionId: string | undefined;
+  sending: boolean;
+}): string | undefined {
+  if (!input.surfaceKey) return undefined;
+  const session = input.sessionId?.trim() ?? '';
+  return `${input.surfaceKey}:${session}:${input.sending ? 'sending' : 'idle'}`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

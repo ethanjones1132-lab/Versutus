@@ -60,6 +60,7 @@ import {
   EMPTY_SESSION_SPEND,
   sessionSpendReadFromUnknown,
   threadSpendCopy,
+  threadSpendRefreshKey,
   type SessionSpendState,
 } from '@/lib/gateway/session-analytics';
 import {
@@ -490,6 +491,11 @@ export function ChatScreen() {
       : surface.kind === 'configurable'
         ? `cfg:${selectedBackendId ?? ''}`
         : undefined;
+  const spendRefreshKey = threadSpendRefreshKey({
+    surfaceKey: spendSurfaceKey,
+    sessionId: currentSessionId,
+    sending: isSending,
+  });
   const toolsSurfaceKey = toolsetsVisibleOn(surface)
     ? surface.kind === 'configurable'
       ? `cfg:${selectedBackendId ?? ''}`
@@ -579,7 +585,7 @@ export function ChatScreen() {
   }, [toolsSurfaceKey, status, surface.kind, selectedBackendId, gatewayRequest]);
 
   useEffect(() => {
-    if (!spendSurfaceKey || status !== 'connected') return;
+    if (!spendRefreshKey || !spendSurfaceKey || status !== 'connected') return;
     let cancelled = false;
     void gatewayRequest('sessions.list', { limit: 50 })
       .then((payload) => {
@@ -606,7 +612,7 @@ export function ChatScreen() {
     return () => {
       cancelled = true;
     };
-  }, [spendSurfaceKey, status, currentSessionId, gatewayRequest]);
+  }, [spendRefreshKey, spendSurfaceKey, status, gatewayRequest]);
 
   // Group rooms load alongside the roster. A gateway that does not advertise
   // them answers with an empty list — no error, just no section.
