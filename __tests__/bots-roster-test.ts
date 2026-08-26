@@ -9,6 +9,7 @@ import {
   findBotChat,
   isBotChat,
   loadBotChat,
+  sessionBotChatBadge,
   rosterEmptyView,
   type ChatSurface,
   type PublicBot,
@@ -37,6 +38,13 @@ test('findBotChat picks the canonical title, not the last session', () => {
   expect(findBotChat(sessions)?.id).toBe('s2');
   expect(isBotChat({ title: BOT_CHAT_TITLE })).toBe(true);
   expect(isBotChat({ title: 'notes' })).toBe(false);
+});
+
+test('the session list badges Bot Chat and leaves extra threads unmarked', () => {
+  expect(sessionBotChatBadge({ title: BOT_CHAT_TITLE })).toBe('Bot Chat');
+  expect(sessionBotChatBadge({ title: 'notes' })).toBeUndefined();
+  expect(sessionBotChatBadge({ title: 'yesterday' })).toBeUndefined();
+  expect(sessionBotChatBadge({})).toBeUndefined();
 });
 
 test('ensureBotChat reuses the canonical session and does not create a second', async () => {
