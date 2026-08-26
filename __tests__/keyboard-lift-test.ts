@@ -17,3 +17,15 @@ test('non-finite values lift nothing', () => {
   expect(composerKeyboardLift(Number.NaN, 24)).toBe(0);
   expect(composerKeyboardLift(320, Number.NaN)).toBe(320);
 });
+
+test('the lift helper is a worklet — it is called from the UI thread', () => {
+  // ComposerKeyboardLift calls this from inside useAnimatedStyle, and only on
+  // Android (`Platform.OS === 'android' ? composerKeyboardLift(...) : 0`).
+  // Without the 'worklet' directive the Babel plugin cannot hoist it, so it is
+  // captured into the worklet's __closure as a plain JS function and invoking
+  // it on the UI thread kills the process — "Versutus keeps stopping" the
+  // instant any chat or Bot opened, iOS unaffected because the ternary
+  // short-circuits there.
+  const marked = composerKeyboardLift as unknown as { __workletHash?: number };
+  expect(typeof marked.__workletHash).toBe('number');
+});

@@ -195,6 +195,107 @@ if (!existsSync(providerPath)) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 6. A worklet may only call functions that are themselves worklets.
+//
+//    `useAnimatedStyle(() => …)` is workletized by the Babel plugin, but a
+//    function it calls from ANOTHER module is not — it is captured into the
+//    worklet's `__closure` as an ordinary JS function, and invoking one of
+//    those on the UI thread takes the whole process down. Nothing else catches
+//    this: tsc is happy, lint is happy, and jest runs the helper on the JS
+//    thread where it works perfectly. It shipped as a native force-close the
+//    instant any chat opened on Android — the one platform whose branch
+//    actually reached the call.
+// ---------------------------------------------------------------------------
+const WORKLET_HOOKS =
+  /useAnimatedStyle|useDerivedValue|useAnimatedScrollHandler|useAnimatedReaction|useFrameCallback|runOnUI/;
+
+async function checkWorkletCalls() {
+  let babel: typeof import('@babel/core');
+  try {
+    babel = await import('@babel/core');
+  } catch {
+    fail('worklets-call-only-worklets', '@babel/core is not resolvable, so worklet bodies cannot be inspected');
+    return;
+  }
+
+  const compile = (file: string) =>
+    babel.transformSync(readFileSync(file, 'utf8'), {
+      filename: resolve(file),
+      presets: [['babel-preset-expo', {}]],
+      // Android is the platform whose branches reach these calls.
+      caller: { name: 'metro', platform: 'android', isDev: false, supportsStaticESM: true },
+      babelrc: false,
+      configFile: false,
+    })?.code ?? '';
+
+  const workletized = new Map<string, boolean>();
+  const isWorkletModule = (file: string) => {
+    const cached = workletized.get(file);
+    if (cached !== undefined) return cached;
+    const value = /__workletHash/.test(compile(file));
+    workletized.set(file, value);
+    return value;
+  };
+
+  const unsafe: string[] = [];
+  let inspected = 0;
+
+  for (const file of filesUnder(join(root, 'src'))) {
+    const source = readFileSync(file, 'utf8');
+    if (!WORKLET_HOOKS.test(source)) continue;
+
+    const imports = new Map<string, string>();
+    const importRe = /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g;
+    for (let im = importRe.exec(source); im; im = importRe.exec(source)) {
+      for (const part of im[1].split(',')) {
+        const local = part.split(' as ').pop()?.trim();
+        if (local) imports.set(local, im[2]);
+      }
+    }
+    if (imports.size === 0) continue;
+
+    let compiled: string;
+    try {
+      compiled = compile(file);
+    } catch {
+      continue; // a file Babel cannot read is tsc's problem, not this check's
+    }
+
+    const initRe = /code:"((?:[^"\\]|\\.)*)"/g;
+    for (let m = initRe.exec(compiled); m; m = initRe.exec(compiled)) {
+      const body = m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+      const closure = /const\{([^}]*)\}=this\.__closure;/.exec(body);
+      if (!closure) continue;
+      for (const raw of closure[1].split(',')) {
+        const name = raw.split(':')[0]?.trim();
+        if (!name || !imports.has(name)) continue;
+        if (!new RegExp(`\\b${name}\\s*\\(`).test(body)) continue;
+
+        inspected += 1;
+        const spec = imports.get(name)!;
+        if (!spec.startsWith('@/')) continue; // third-party helpers ship their own directives
+        const base = join(root, 'src', spec.slice(2));
+        const target = ['.ts', '.tsx', '/index.ts', '/index.tsx']
+          .map((ext) => base + ext)
+          .find((candidate) => existsSync(candidate));
+        if (!target) continue;
+        if (!isWorkletModule(target)) {
+          unsafe.push(`${file.replace(root, '.')} calls ${name}() from '${spec}', which is not a worklet`);
+        }
+      }
+    }
+  }
+
+  if (unsafe.length > 0) {
+    fail('worklets-call-only-worklets', unsafe.join('; '));
+  } else {
+    pass('worklets-call-only-worklets', `${inspected} cross-module worklet call(s), all workletized`);
+  }
+}
+
+await checkWorkletCalls();
+
 console.log('');
 if (failures.length > 0) {
   console.error(`verify-config: ${failures.length} check(s) failed`);
