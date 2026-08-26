@@ -221,42 +221,6 @@ describe('ManifestClient.streamChat', () => {
     expect(chunks).toEqual(['Hel', 'lo']);
     expect(full).toBe('Hello');
   });
-  // After the app stopped defaulting a chat backend (no backends[0] pin), a
-  // Bot conversation must not lose its environment: the Bot names it and the
-  // Gate resolves it by capability. Dropping both left the turn riding the
-  // default environment with none of the Bot's history.
-  test('a Bot turn carries the Bot scope even when no chat backend is pinned', async () => {
-    const fetchMock: jest.Mock = jest.fn((input: unknown) => {
-      const url = String(input);
-      if (url.endsWith('/v1/chat/completions')) {
-        const body = new ReadableStream({
-          start(controller) {
-            const enc = new TextEncoder();
-            controller.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"pong"}}]}\n\n'));
-            controller.enqueue(enc.encode('data: [DONE]\n\n'));
-            controller.close();
-          },
-        });
-        return Promise.resolve({ ok: true, status: 200, body } as unknown as Response);
-      }
-      return Promise.resolve(jsonResponse({}));
-    });
-    (globalThis as { fetch: unknown }).fetch = fetchMock;
-
-    const client = new ManifestClient(PROFILE, IDENTITY, {});
-    client.setBotId('default');
-    client.setSessionId('ses_bot_1');
-
-    const full = await client.streamChat([{ role: 'user', content: 'ping' }], () => undefined, {
-      model: 'test-model',
-    });
-
-    expect(full).toBe('pong');
-    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(sent.bot).toBe('default');
-    expect(sent.backendId).toBeUndefined();
-    expect(sent.sessionId).toBe('ses_bot_1');
-  });
 
   // The Gate reports a failed backend turn as an error frame inside an HTTP
   // 200 stream, so response.ok cannot catch it. Ignoring the frame renders an

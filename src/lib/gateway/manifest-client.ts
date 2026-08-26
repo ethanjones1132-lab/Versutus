@@ -1,5 +1,6 @@
 import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/chat-stream-delta';
 import type { PublicBot } from '@/lib/gateway/bots';
+import type { CronJob, CronRun, CronTurn } from '@/lib/gateway/cron';
 import type { BotGroupRoom, GroupReply, GroupTranscriptEntry } from '@/lib/gateway/groups';
 import { isAuthRejection } from '@/lib/gateway/errors';
 import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
@@ -123,6 +124,7 @@ export class ManifestClient implements PortalClient {
     }
     return path;
   }
+
   /**
    * Up-front capability verdicts read straight off the document this client
    * was built from — no call, no throw. The provider probes them when the
@@ -319,6 +321,8 @@ export class ManifestClient implements PortalClient {
       sessionId?: string;
       signal?: AbortSignal;
       onToolCall?: (tool: import('@/lib/gateway/types').ChatToolCall) => void;
+      /** Which model actually served the turn, once the Gate reports it. */
+      onModelReport?: (report: import('@/lib/gateway/run-failures').ModelReport) => void;
     },
   ): Promise<string> {
     const path = this.requireEndpoint('chat');
@@ -361,8 +365,13 @@ export class ManifestClient implements PortalClient {
     });
 
     if (!response.ok) {
+      // The body is a JSON envelope. Throwing it verbatim is what put
+      // `{"error":{"message":"hermes: 500 …","code":"backend_error"}}` inside an
+      // assistant bubble on 2026-08-26 — wire text presented as if the model had
+      // said it, in the banner as well. Every other call site in this file
+      // already unwraps through the same helper.
       const errorText = await response.text().catch(() => '');
-      throw new Error(errorText || `HTTP ${response.status}`);
+      throw new Error(messageFromHttpErrorBody(errorText, response.status));
     }
 
     let fullText = '';
@@ -388,6 +397,15 @@ export class ManifestClient implements PortalClient {
           }
           if (options?.onToolCall) {
             for (const tool of interpreted.toolCalls) options.onToolCall(tool);
+          }
+          // Which model actually served the turn. Reported once, after the
+          // text, so the caller can say so instead of echoing the pick back.
+          if (interpreted.ranModel && options?.onModelReport) {
+            options.onModelReport({
+              ran: interpreted.ranModel,
+              requested: interpreted.requestedModel ?? options?.model,
+              provider: interpreted.provider,
+            });
           }
         } catch {
           // ignore malformed chunks — matches HermesGatewayClient's streamChat
@@ -557,6 +575,30 @@ export class ManifestClient implements PortalClient {
     );
   }
 
+  /**
+   * Cron transparency. The Gate joins the job record, its latest execution and
+   * the sessions its runs wrote; the phone never learns how the host spells a
+   * cron session id. A gateway with no cron backend answers with the RPC's own
+   * refusal, which the caller surfaces rather than swallowing.
+   */
+  async listCronJobs(): Promise<CronJob[]> {
+    const result = await this.rpcRequest<{ data?: CronJob[] }>('cron.jobs');
+    return result?.data ?? [];
+  }
+
+  async cronRuns(jobId: string): Promise<CronRun[]> {
+    const result = await this.rpcRequest<{ data?: CronRun[] }>('cron.runs', { jobId });
+    return result?.data ?? [];
+  }
+
+  async cronTranscript(runId: string, limit?: number): Promise<CronTurn[]> {
+    const result = await this.rpcRequest<{ data?: CronTurn[] }>('cron.transcript', {
+      runId,
+      ...(limit ? { limit } : {}),
+    });
+    return result?.data ?? [];
+  }
+
   async listBots(): Promise<PublicBot[]> {
     const path = this.endpoints.bots;
     if (!path) return [];
@@ -683,13 +725,25 @@ export class ManifestClient implements PortalClient {
    * Sessions live in the backend, so creation is only offered when one is
    * attached — the app hides the control rather than failing at the tap.
    */
-  async createSession(title?: string): Promise<HermesSession> {
+  /**
+   * Opens a session, pinned to `model` when one is given.
+   *
+   * The model MUST travel with the create call: a Hermes session's model is
+   * fixed at creation and `PATCH /api/sessions/{id}` refuses `model` outright,
+   * so a session opened without one answers on the host's own default for its
+   * whole life. That is what put an unrequested NVIDIA model on the first turn
+   * of every thread and forced the operator to pick a model, watch the session
+   * be released, and send again just to be heard.
+   */
+  async createSession(title?: string, model?: string): Promise<HermesSession> {
     const path = this.requireEndpoint('sessions');
     // Same rule as withScope: the Bot names the environment, so its own
     // chat must not be pinned to whichever backend the thread was using.
     return this.rootTransport.request<HermesSession>('POST', path, {
       ...(this.botId ? { bot: this.botId } : this.backendId ? { backendId: this.backendId } : {}),
       ...(title ? { title } : {}),
+      // `{ modelId }` is the shape the Gate hands to backend.createSession.
+      ...(model ? { model: { modelId: model } } : {}),
     });
   }
 

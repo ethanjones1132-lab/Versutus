@@ -331,8 +331,13 @@ export class HermesGatewayClient {
     });
 
     if (!response.ok) {
+      // The body is a JSON envelope. Throwing it verbatim is what put
+      // `{"error":{"message":"hermes: 500 …","code":"backend_error"}}` inside an
+      // assistant bubble on 2026-08-26 — wire text presented as if the model had
+      // said it. The run-events path below already unwraps; this one must too,
+      // so the banner and the bubble both read the human cause.
       const errorText = await response.text().catch(() => '');
-      throw new Error(errorText || `HTTP ${response.status}`);
+      throw new Error(messageFromHttpErrorBody(errorText, response.status));
     }
 
     let fullText = '';
