@@ -14,6 +14,7 @@ import { NewAgentSheet } from '@/components/chat/new-agent-sheet';
 import { RoutinesPane } from '@/components/chat/routines-pane';
 import { SkillsPane } from '@/components/chat/skills-pane';
 import { ThreadSpendGlance } from '@/components/chat/thread-spend-glance';
+import { ToolsPane } from '@/components/chat/tools-pane';
 import { DayDivider } from '@/components/chat/day-divider';
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
 import { ChatHeader } from '@/components/chat/chat-header';
@@ -64,6 +65,14 @@ import {
   skillsReadFromUnknown,
   type SkillsState,
 } from '@/lib/gateway/skills';
+import {
+  applyToolsetsRead,
+  EMPTY_TOOLSETS,
+  toolsetsListParams,
+  toolsetsReadFromUnknown,
+  toolsetsVisibleOn,
+  type ToolsetsState,
+} from '@/lib/gateway/toolsets';
 import { effectiveModel } from '@/lib/gateway/model-selection';
 import { resolveThreadConfigMode, threadConfigOfferedModes, type ThreadConfigMode } from '@/lib/gateway/thread-config';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
@@ -197,6 +206,9 @@ export function ChatScreen() {
   });
   const [skillsState, setSkillsState] = useState<SkillsState & { botId?: string }>({
     ...EMPTY_SKILLS,
+  });
+  const [toolsetsState, setToolsetsState] = useState<ToolsetsState & { surfaceKey?: string }>({
+    ...EMPTY_TOOLSETS,
   });
   const [spendState, setSpendState] = useState<SessionSpendState & { surfaceKey?: string }>({
     ...EMPTY_SESSION_SPEND,
@@ -389,6 +401,11 @@ export function ChatScreen() {
       : surface.kind === 'configurable'
         ? `cfg:${selectedBackendId ?? ''}`
         : undefined;
+  const toolsSurfaceKey = toolsetsVisibleOn(surface)
+    ? surface.kind === 'configurable'
+      ? `cfg:${selectedBackendId ?? ''}`
+      : `bot:${surface.kind === 'bot' ? surface.botId : ''}`
+    : undefined;
   const foldRoutineRead = useCallback((botId: string, read: RoutineRead) => {
     setRoutineState((prev) => {
       const previous = prev.botId === botId ? prev : { ...EMPTY_ROUTINES, botId };
@@ -438,6 +455,39 @@ export function ChatScreen() {
       cancelled = true;
     };
   }, [botSurfaceId, status, gatewayRequest]);
+
+  useEffect(() => {
+    if (!toolsSurfaceKey || status !== 'connected') return;
+    let cancelled = false;
+    void gatewayRequest('tools.list', toolsetsListParams({
+      surfaceKind: surface.kind,
+      backendId: selectedBackendId,
+    }))
+      .then((payload) => {
+        if (cancelled) return;
+        const read = toolsetsReadFromUnknown(payload);
+        setToolsetsState((prev) => {
+          const previous =
+            prev.surfaceKey === toolsSurfaceKey
+              ? prev
+              : { ...EMPTY_TOOLSETS, surfaceKey: toolsSurfaceKey };
+          return { surfaceKey: toolsSurfaceKey, ...applyToolsetsRead(previous, read) };
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setToolsetsState((prev) => {
+          const previous =
+            prev.surfaceKey === toolsSurfaceKey
+              ? prev
+              : { ...EMPTY_TOOLSETS, surfaceKey: toolsSurfaceKey };
+          return { surfaceKey: toolsSurfaceKey, ...applyToolsetsRead(previous, { ok: false }) };
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [toolsSurfaceKey, status, surface.kind, selectedBackendId, gatewayRequest]);
 
   useEffect(() => {
     if (!spendSurfaceKey || status !== 'connected') return;
@@ -831,6 +881,14 @@ export function ChatScreen() {
           skills={skillsState.botId === surface.botId ? skillsState.skills : []}
           loaded={skillsState.botId === surface.botId ? skillsState.loaded : false}
           failed={skillsState.botId === surface.botId ? skillsState.failed : false}
+        />
+      ) : null}
+
+      {toolsetsVisibleOn(surface) ? (
+        <ToolsPane
+          toolsets={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.toolsets : []}
+          loaded={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.loaded : false}
+          failed={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.failed : false}
         />
       ) : null}
 
