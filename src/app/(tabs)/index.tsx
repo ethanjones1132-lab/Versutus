@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { RefreshControl, ScrollView, StyleSheet } from 'react-native';
+import { Platform, RefreshControl, ScrollView, StyleSheet } from 'react-native';
 
 import { GatewayHomeDashboard } from '@/components/gateway/gateway-home-dashboard';
 import { Screen, ScreenHeader } from '@/components/ui';
@@ -8,6 +8,7 @@ import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
+import { screenEdgesFor } from '@/lib/motion/screen-edges';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -26,7 +27,9 @@ export default function HomeScreen() {
   };
 
   return (
-    <Screen parallaxY={parallaxY}>
+    <Screen
+      edges={screenEdgesFor({ platform: Platform.OS, hasDock: false })}
+      parallaxY={parallaxY}>
       <ScreenHeader
         title="Versutus"
         subtitle={gateways.length > 0 ? 'Command center' : 'Connect your gateway'}

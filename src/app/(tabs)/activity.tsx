@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import { AgentTargets } from '@/components/activity/agent-targets';
 import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
@@ -12,6 +12,7 @@ import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
+import { screenEdgesFor } from '@/lib/motion/screen-edges';
 
 export default function ActivityScreen() {
   const router = useRouter();
@@ -70,7 +71,9 @@ export default function ActivityScreen() {
   };
 
   return (
-    <Screen parallaxY={parallaxY}>
+    <Screen
+      edges={screenEdgesFor({ platform: Platform.OS, hasDock: false })}
+      parallaxY={parallaxY}>
       <ScrollView
         contentContainerStyle={styles.content}
         onScroll={onScroll}
