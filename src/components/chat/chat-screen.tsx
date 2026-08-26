@@ -73,6 +73,14 @@ import {
   toolsetsVisibleOn,
   type ToolsetsState,
 } from '@/lib/gateway/toolsets';
+import {
+  applyComposerDraft,
+  composerDraftKey,
+  composerDraftThread,
+  loadComposerDraft,
+  readComposerDraft,
+  saveComposerDraft,
+} from '@/lib/gateway/composer-draft';
 import { effectiveModel } from '@/lib/gateway/model-selection';
 import { resolveThreadConfigMode, threadConfigOfferedModes, type ThreadConfigMode } from '@/lib/gateway/thread-config';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
@@ -176,7 +184,9 @@ export function ChatScreen() {
     gatewayRequest,
   } = useGateway();
 
-  const [draft, setDraft] = useState('');
+  // Keyed by gateway + surface + session so leaving a thread and coming
+  // back restores that thread's unsent text, never another Bot's.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [dismissedPairingKey, setDismissedPairingKey] = useState<string | null>(null);
   const [overflowVisible, setOverflowVisible] = useState(false);
   const [backendPickerVisible, setBackendPickerVisible] = useState(false);
@@ -217,6 +227,40 @@ export function ChatScreen() {
   const [newGroupVisible, setNewGroupVisible] = useState(false);
   const [newGroupBusy, setNewGroupBusy] = useState(false);
   const [newGroupError, setNewGroupError] = useState<string | undefined>();
+  const draftThread = useMemo(
+    () =>
+      composerDraftThread({
+        gatewayId: activeGateway?.id,
+        surface,
+        sessionId: currentSessionId,
+      }),
+    [activeGateway?.id, surface, currentSessionId],
+  );
+  const draft = draftThread ? readComposerDraft(drafts, draftThread) : '';
+  const setDraft = useCallback(
+    (text: string) => {
+      if (!draftThread) return;
+      setDrafts((prev) => applyComposerDraft(prev, draftThread, text));
+      void saveComposerDraft(draftThread, text);
+    },
+    [draftThread],
+  );
+  useEffect(() => {
+    if (!draftThread) return;
+    const thread = draftThread;
+    const key = composerDraftKey(thread);
+    let cancelled = false;
+    void loadComposerDraft(thread).then((text) => {
+      if (cancelled) return;
+      setDrafts((prev) => {
+        if (prev[key] !== undefined) return prev;
+        return applyComposerDraft(prev, thread, text);
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [draftThread]);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const pinnedRef = useRef(true);
@@ -336,7 +380,7 @@ export function ChatScreen() {
     pinnedRef.current = true;
     await sendChatInput(text);
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
-  }, [draft, sendChatInput]);
+  }, [draft, sendChatInput, setDraft]);
 
   const handleResumeMessage = useCallback(
     (message: ChatMessage) => {
