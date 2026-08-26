@@ -68,6 +68,7 @@
     "smoke:providers": "node ./scripts/smoke-provider-runtime.mjs",
     "smoke:environments": "node ./scripts/smoke-cli-environments.mjs",
     "smoke:wedge": "node ./scripts/smoke-wedge-loop.mjs",
+    "smoke:replay": "node ./scripts/replay-probe.mjs",
     "smoke:signoff": "node ./scripts/smoke-signoff.mjs",
     "export:web": "expo export --platform web",
     "serve:web": "node ./scripts/serve-web-demo.mjs",
