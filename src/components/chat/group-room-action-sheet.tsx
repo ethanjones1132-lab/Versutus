@@ -10,6 +10,7 @@ import {
   addableMembers,
   canAddMember,
   canRemoveMember,
+  describeRoomError,
   removableMembers,
   roomMemberNames,
   type BotGroupRoom,
@@ -109,7 +110,7 @@ export function GroupRoomActionSheet({
       .catch((cause: unknown) => {
         // Fail honest: the room keeps its old name; say why instead of
         // pretending the rename landed.
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(describeRoomError(cause));
       })
       .finally(() => setRenamingBusy(false));
   };
@@ -139,7 +140,7 @@ export function GroupRoomActionSheet({
       .catch((cause: unknown) => {
         // Fail honest: the membership is unchanged; keep the selection so a
         // transient failure can be retried without picking everyone again.
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(describeRoomError(cause));
       })
       .finally(() => setAddingBusy(false));
   };
@@ -163,7 +164,7 @@ export function GroupRoomActionSheet({
       .catch((cause: unknown) => {
         // Fail honest: the membership is unchanged; keep the selection so a
         // transient failure can be retried without picking again.
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(describeRoomError(cause));
       })
       .finally(() => setRemovingBusy(false));
   };
@@ -177,7 +178,7 @@ export function GroupRoomActionSheet({
         // Fail honest: the room is still here; leave the confirm so the
         // operator reads why instead of thinking it disbanded.
         setDisbandVisible(false);
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setError(describeRoomError(cause));
       })
       .finally(() => setDisbanding(false));
   };

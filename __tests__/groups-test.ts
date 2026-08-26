@@ -683,3 +683,25 @@ test('describeRoomError accepts Error instances and plain strings alike', () => 
   expect(describeRoomError(new Error('name required'))).toBe('name required');
   expect(describeRoomError('name required')).toBe('name required');
 });
+
+test('describeRoomError classifies the membership-write refusals (create/add/PATCH)', () => {
+  // gate/core/cli-environments/bot-groups.mjs verifyMembers (a7cdae0): every
+  // member id must exist on the fronted roster before a room is created,
+  // joined, or patched. Singular matches the send-path wording; the PLURAL
+  // form only fires on these writes. GroupRoomActionSheet renders whatever
+  // this returns — it must be the verdict, never raw wire text.
+  expect(describeRoomError(new Error('unknown bot: ghost'))).toContain('Bot not found');
+  const plural = describeRoomError(new Error('unknown bots: ghost, phantom'));
+  expect(plural).toContain('Bot not found');
+  expect(plural).toContain('Reload the roster');
+  // 502 roster_unavailable: the roster read itself failed mid-verification.
+  expect(describeRoomError(new Error('cannot verify group members: spawn failed'))).toContain(
+    'Roster unreadable',
+  );
+  // A cause the classifier knows keeps the SPECIFIC verdict through the prefix.
+  expect(
+    describeRoomError(new Error('cannot verify group members: Hermes executable or home is not configured')),
+  ).toContain(
+    'Environment unreachable',
+  );
+});

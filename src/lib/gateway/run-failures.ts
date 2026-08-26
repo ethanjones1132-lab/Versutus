@@ -23,6 +23,8 @@ export type RunFailureKind =
   | 'listen_key_missing'
   /** The roster names a Bot the host no longer has. */
   | 'unknown_bot'
+  /** The Gate could not read its bot list while verifying group members. */
+  | 'roster_unavailable'
   /** The CLI environment could not spawn or was never reachable. */
   | 'environment_unreachable'
   /** The run outlived its environment's lifecycle.maxRunSeconds budget. */
@@ -50,7 +52,7 @@ export function classifyRunFailure(message: string): RunFailureKind {
   if (/run_events_unavailable\b/i.test(text)) return 'run_events_unavailable';
   if (/default listen key|default_key_refused/i.test(text)) return 'default_key_refused';
   if (/multiplex/i.test(text)) return 'multiplex_disabled';
-  if (/\bunknown bot\b/i.test(text)) return 'unknown_bot';
+  if (/\bunknown bots?\b/i.test(text)) return 'unknown_bot';
   // Refused pre-start probe: the supervisor throws `environment <state>` and,
   // since the desktop-parity audit, appends the probe's reason + path. The
   // busy refusal ("environment is busy — …") deliberately does NOT match.
@@ -74,6 +76,11 @@ export function classifyRunFailure(message: string): RunFailureKind {
   )) {
     return 'environment_unreachable';
   }
+  // gate/core/cli-environments/bot-groups.mjs membership writes: the fronted
+  // listBots read failed (`roster_unavailable`, 502) so members could not be
+  // verified. Checked LATE on purpose — the embedded cause often names a
+  // state above (an unconfigured CLI environment), and that verdict wins.
+  if (/cannot verify group members/i.test(text)) return 'roster_unavailable';
   if (/\bexpired\b/i.test(text)) return 'expired';
   return 'generic';
 }
@@ -105,6 +112,10 @@ const TITLES: Record<Exclude<RunFailureKind, 'generic'>, Pick<RunFailureView, 't
   unknown_bot: {
     title: 'Bot not found',
     next: 'Reload the roster — this Bot may have been removed or renamed on the host.',
+  },
+  roster_unavailable: {
+    title: 'Roster unreadable',
+    next: 'The Gate could not read its bot list to verify these members — check the CLI environment on the Gate machine, then retry.',
   },
   environment_unreachable: {
     title: 'Environment unreachable',

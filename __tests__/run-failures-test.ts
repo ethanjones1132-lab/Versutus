@@ -114,3 +114,28 @@ test('routingFailureView hands the roster the same verdicts a failed send gets',
     next: "Give this profile its own API_SERVER_KEY — named Bots reject the default profile's key.",
   });
 });
+
+test('a room create naming several dead bots reaches the same verdict as one', () => {
+  // gate/core/cli-environments/bot-groups.mjs verifyMembers throws
+  // `unknown bot${s}: ${ids}` — the PLURAL form must classify like the
+  // singular send-path refusal (`\bunknown bot\b` cannot match "bots").
+  const raw = 'unknown bots: ghost, phantom';
+  expect(classifyRunFailure(raw)).toBe('unknown_bot');
+  expect(describeRunFailure(raw).title).toBe('Bot not found');
+  expect(formatRunFailure(raw)).toContain('Reload the roster');
+});
+
+test('an unreadable roster during membership checks speaks its own verdict', () => {
+  // gate/core/cli-environments/bot-groups.mjs: the fronted listBots read
+  // failed (error.code roster_unavailable, 502) — create/addMembers refuse.
+  const raw = 'cannot verify group members: spawn failed';
+  expect(classifyRunFailure(raw)).toBe('roster_unavailable');
+  const view = describeRunFailure(raw);
+  expect(view.title).toBe('Roster unreadable');
+  expect(view.next).toMatch(/CLI environment/);
+  // The prefix must never swallow a cause the classifier knows: an embedded
+  // unconfigured-environment message keeps its SPECIFIC verdict.
+  expect(
+    classifyRunFailure('cannot verify group members: Hermes executable or home is not configured'),
+  ).toBe('environment_unreachable');
+});
