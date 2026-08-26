@@ -12,13 +12,14 @@ import { bubbleMaxWidth } from '@/lib/motion/bubble-width';
 import { entering } from '@/lib/motion/presets';
 import { formatClockTime } from '@/lib/format';
 import { useTokens } from '@/hooks/use-tokens';
+import { interruptedSendAgainLabel } from '@/lib/gateway/interrupted-copy';
 import type { ChatMessage, CommandTranscriptEntry } from '@/lib/gateway/types';
 
 type MessageBubbleProps = {
   message: ChatMessage;
   onRetry?: (entry: Partial<CommandTranscriptEntry> & { input: string }) => void;
   onCancel?: (id: string) => void;
-  /** Resume an assistant bubble left interrupted by a mid-stream disconnect. */
+  /** Resend the previous user turn after a mid-stream disconnect. */
   onResume?: (message: ChatMessage) => void;
   /** Long-press opens the message action sheet. */
   onLongPress?: (message: ChatMessage) => void;
@@ -152,7 +153,7 @@ export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPres
               }}
               style={styles.actionButton}>
               <Text variant="caption" color="accent">
-                Resume
+                {interruptedSendAgainLabel()}
               </Text>
             </PressableScale>
           ) : null}
