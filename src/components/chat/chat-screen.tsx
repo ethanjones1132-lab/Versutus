@@ -48,6 +48,7 @@ import {
 import {
   applyRoutineRead,
   EMPTY_ROUTINES,
+  routineJobsFromList,
   routineName,
   type RoutineRead,
   type RoutinesState,
@@ -463,7 +464,7 @@ export function ChatScreen() {
       .list()
       .then((jobs) => {
         if (cancelled) return;
-        foldRoutineRead(botSurfaceId, { ok: true, jobs });
+        foldRoutineRead(botSurfaceId, { ok: true, jobs: routineJobsFromList(jobs) });
       })
       .catch(() => {
         if (cancelled) return;
@@ -952,7 +953,9 @@ export function ChatScreen() {
             // routine that exists). Last-good stays; staleness is named.
             await botJobs
               .list()
-              .then((jobs) => foldRoutineRead(surface.botId, { ok: true, jobs }))
+              .then((jobs) =>
+                foldRoutineRead(surface.botId, { ok: true, jobs: routineJobsFromList(jobs) }),
+              )
               .catch(() => foldRoutineRead(surface.botId, { ok: false }));
           }}
           onRun={async (jobId) => {
@@ -962,7 +965,9 @@ export function ChatScreen() {
             await botJobs.pause(jobId, paused);
             await botJobs
               .list()
-              .then((jobs) => foldRoutineRead(surface.botId, { ok: true, jobs }))
+              .then((jobs) =>
+                foldRoutineRead(surface.botId, { ok: true, jobs: routineJobsFromList(jobs) }),
+              )
               .catch(() => foldRoutineRead(surface.botId, { ok: false }));
           }}
         />

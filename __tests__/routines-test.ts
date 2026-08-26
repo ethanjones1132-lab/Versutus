@@ -4,6 +4,9 @@ import {
   describeRoutineError,
   EMPTY_ROUTINES,
   parseRoutineName,
+  routineJobFromUnknown,
+  routineJobsFromList,
+  routineJobSummary,
   routineName,
   routinesListCopy,
   routinesToggleLabel,
@@ -130,5 +133,108 @@ test('the open toggle hides the count the way Skills does', () => {
   expect(routinesToggleLabel(loaded, true)).toBe('Hide routines');
   expect(routinesToggleLabel(EMPTY_ROUTINES, false)).toBe('Routines');
   expect(routinesListCopy(EMPTY_ROUTINES)).toBeUndefined();
+});
+
+const HERMES_INBOX = {
+  id: 'job_inbox',
+  name: '[bot:echo] inbox',
+  schedule: '0 9 * * *',
+  schedule_display: 'daily at 09:00',
+  enabled: true,
+  next_run_at: '2026-08-25T09:06:00Z',
+  last_status: 'ok',
+};
+
+test('a Hermes job keeps schedule, next run, and last status', () => {
+  expect(routineJobFromUnknown(HERMES_INBOX)).toEqual({
+    id: 'job_inbox',
+    name: '[bot:echo] inbox',
+    paused: false,
+    schedule: '0 9 * * *',
+    nextRunAt: '2026-08-25T09:06:00Z',
+    lastStatus: 'ok',
+  });
+});
+
+test('a camelCase job (already curated) parses the same fields', () => {
+  expect(
+    routineJobFromUnknown({
+      id: 'job_inbox',
+      name: '[bot:echo] inbox',
+      paused: false,
+      schedule: '0 9 * * *',
+      nextRunAt: '2026-08-25T09:06:00Z',
+      lastStatus: 'ok',
+    }),
+  ).toEqual({
+    id: 'job_inbox',
+    name: '[bot:echo] inbox',
+    paused: false,
+    schedule: '0 9 * * *',
+    nextRunAt: '2026-08-25T09:06:00Z',
+    lastStatus: 'ok',
+  });
+});
+
+test('enabled: false is a paused routine, the way Activity reads it', () => {
+  expect(routineJobFromUnknown({ id: 'job_inbox', enabled: false })?.paused).toBe(true);
+  expect(routineJobFromUnknown({ id: 'job_inbox', paused: true })?.paused).toBe(true);
+  expect(routineJobFromUnknown({ id: 'job_inbox', paused_at: '2026-08-25T08:00:00Z' })?.paused).toBe(
+    true,
+  );
+});
+
+test('a job without an id is not a routine', () => {
+  expect(routineJobFromUnknown({ name: 'inbox' })).toBeNull();
+  expect(routineJobFromUnknown(null)).toBeNull();
+  expect(routineJobFromUnknown('job_inbox')).toBeNull();
+});
+
+test('routineJobsFromList keeps parseable jobs and drops junk', () => {
+  expect(routineJobsFromList([HERMES_INBOX, { name: 'no-id' }, null])).toEqual([
+    {
+      id: 'job_inbox',
+      name: '[bot:echo] inbox',
+      paused: false,
+      schedule: '0 9 * * *',
+      nextRunAt: '2026-08-25T09:06:00Z',
+      lastStatus: 'ok',
+    },
+  ]);
+  expect(routineJobsFromList({ data: [HERMES_INBOX] })).toEqual([]);
+});
+
+test('the routine subtitle is the Activity one-liner, not paused/active', () => {
+  const now = Date.parse('2026-08-25T09:00:00Z');
+  const inbox = routineJobFromUnknown(HERMES_INBOX);
+  expect(inbox).not.toBeNull();
+  if (!inbox) return;
+  expect(routineJobSummary(inbox, now)).toBe('ok · next in 6m');
+});
+
+test('a paused routine says Paused even when a next run is known', () => {
+  const now = Date.parse('2026-08-25T09:00:00Z');
+  const paused = routineJobFromUnknown({ ...HERMES_INBOX, enabled: false });
+  expect(paused).not.toBeNull();
+  if (!paused) return;
+  expect(routineJobSummary(paused, now)).toBe('Paused');
+});
+
+test('a running routine says so above the countdown', () => {
+  const now = Date.parse('2026-08-25T09:00:00Z');
+  const running = routineJobFromUnknown({
+    ...HERMES_INBOX,
+    latest_execution: { status: 'running' },
+  });
+  expect(running).not.toBeNull();
+  if (!running) return;
+  expect(routineJobSummary(running, now)).toBe('running now');
+});
+
+test('a job the host has never run is Not run yet, not active', () => {
+  const job = routineJobFromUnknown({ id: 'job_new', name: '[bot:echo] new' });
+  expect(job).not.toBeNull();
+  if (!job) return;
+  expect(routineJobSummary(job)).toBe('Not run yet');
 });
 
