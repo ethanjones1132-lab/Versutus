@@ -5,6 +5,7 @@ import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import { AgentTargets } from '@/components/activity/agent-targets';
 import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
+import { CronSection } from '@/components/activity/cron-section';
 import { RunCard } from '@/components/activity/run-card';
 import { Badge, Button, Card, EmptyState, Screen, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
@@ -148,6 +149,11 @@ export default function ActivityScreen() {
             ))}
           </View>
         ) : null}
+
+        {/* Scheduled work sits with live runs: Activity is the one place that
+            answers "what is this gateway doing". Renders nothing on a gateway
+            that cannot report cron. */}
+        <CronSection />
 
         <AgentTargets
           gateways={gateways}
