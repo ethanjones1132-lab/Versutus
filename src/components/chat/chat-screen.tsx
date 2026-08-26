@@ -760,26 +760,23 @@ export function ChatScreen() {
       {surface.kind === 'bot' ? (
         <RoutinesPane
           jobs={routineJobs}
-          onCreate={(input) => {
-            void botJobs
-              .create({
-                name: routineName(surface.botId, input.title),
-                prompt: input.prompt,
-                schedule: input.schedule,
-              })
-              .then(() => botJobs.list())
-              .then(setRoutineJobs)
-              .catch(() => undefined);
+          onCreate={async (input) => {
+            await botJobs.create({
+              name: routineName(surface.botId, input.title),
+              prompt: input.prompt,
+              schedule: input.schedule,
+            });
+            // Create already landed; a failed re-list must not look like
+            // the Gate refused the job (that would keep the draft of a
+            // routine that exists). Empty-vs-failed list is a later item.
+            await botJobs.list().then(setRoutineJobs).catch(() => undefined);
           }}
-          onRun={(jobId) => {
-            void botJobs.run(jobId).catch(() => undefined);
+          onRun={async (jobId) => {
+            await botJobs.run(jobId);
           }}
-          onTogglePause={(jobId, paused) => {
-            void botJobs
-              .pause(jobId, paused)
-              .then(() => botJobs.list())
-              .then(setRoutineJobs)
-              .catch(() => undefined);
+          onTogglePause={async (jobId, paused) => {
+            await botJobs.pause(jobId, paused);
+            await botJobs.list().then(setRoutineJobs).catch(() => undefined);
           }}
         />
       ) : null}

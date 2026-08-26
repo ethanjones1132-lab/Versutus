@@ -88,7 +88,24 @@ async function runLeg(label, command, args, { timeoutMs, shell = false, env = un
   if (timedOut) output += `\n[leg killed after ${Math.round(timeoutMs / 1000)}s timeout]`;
   const result = { label, code: code === null ? -1 : code, timedOut, output };
   if (code === 0 && !timedOut) ok(`${label} exited 0`);
-  else bad(`${label} exited ${code === null ? 'spawn-error' : code}${timedOut ? ' (timed out)' : ''}`);
+  else {
+    bad(`${label} exited ${code === null ? 'spawn-error' : code}${timedOut ? ' (timed out)' : ''}`);
+    // Persist the FULL leg stdio (head+tail truncated only in the console
+    // summary/row). A leg that dies with a Windows fail-fast code carries its
+    // explanation in the tail — losing it made the 0xC0000409 recurrences
+    // undiagnosable. Failures are rare; keeping the file on every red leg is
+    // the diagnosis path for the next one.
+    try {
+      const dumpPath = path.join(
+        tmpdir(),
+        `signoff-leg-${label.replace(/[^a-z0-9]+/gi, '-')}-${Date.now()}.log`,
+      );
+      await writeFile(dumpPath, `${output}\n`);
+      console.log(`  dump  ${label} full stdio -> ${dumpPath}`);
+    } catch (dumpError) {
+      console.log(`  dump  ${label} stdio persist failed: ${dumpError.message}`);
+    }
+  }
   return result;
 }
 
