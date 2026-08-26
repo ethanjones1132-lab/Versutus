@@ -4,8 +4,13 @@ import {
   summarizeCommandResult,
   type GatewayCommand,
 } from '@/lib/gateway/dashboard';
-import type { GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
+import {
+  sessionSpendCopy,
+  sessionSpendReadFromUnknown,
+  totalUsage,
+} from '@/lib/gateway/session-analytics';
 import type { RunOutcome } from '@/lib/gateway/runs';
+import type { GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
 import type { GatewayCapabilityCommand } from '@/lib/portal/manifest';
 
 const UNSUPPORTED_NOTE = 'Not offered by this gateway';
@@ -263,6 +268,10 @@ export async function executeGatewaySlashCommand(
   const commandName = tokens[0]?.toLowerCase();
   const args = tokens.slice(1);
   const argText = trimmed.slice(commandName?.length ?? 0).trim();
+
+  if (commandName === '/usage' || commandName === '/cost') {
+    return runSessionSpendCommand(commandName, context);
+  }
 
   const blocked = blockUnsupportedCommand(commandName, args, context.methods);
   if (blocked) return blocked;
@@ -694,6 +703,20 @@ async function runConfigCommand(args: string[], context: SlashCommandContext): P
   return value === undefined
     ? textResult(`Config path not found: ${path}`, '/config')
     : textResult(`Config ${path}`, `/config ${path}`, compactJson(value));
+}
+
+async function runSessionSpendCommand(
+  commandName: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  try {
+    const result = await context.gatewayRequest('sessions.list', { limit: 50 });
+    const read = sessionSpendReadFromUnknown(result);
+    if (!read.ok) return textResult('Sessions could not be read.', commandName);
+    return textResult(sessionSpendCopy(totalUsage(read.sessions)), commandName);
+  } catch {
+    return textResult('Sessions could not be read.', commandName);
+  }
 }
 
 async function runSessionCommand(args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
