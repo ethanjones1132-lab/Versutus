@@ -34,7 +34,15 @@ import { resolvePullRefreshAction } from '@/lib/gateway/messages';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
 import { botToEditInput, buildBotUpdatePatch, buildRoster, type ChatSurface, type PublicBot, type RosterRow } from '@/lib/gateway/bots';
-import { describeRoomError, rosterInventoryVerified, type BotGroupRoom } from '@/lib/gateway/groups';
+import {
+  applyGroupRead,
+  describeRoomError,
+  EMPTY_GROUPS,
+  groupsListCopy,
+  resolveOpenGroup,
+  rosterInventoryVerified,
+  type BotGroupRoom,
+} from '@/lib/gateway/groups';
 import { routineName } from '@/lib/gateway/routines';
 import {
   applySkillsRead,
@@ -173,7 +181,7 @@ export function ChatScreen() {
   const [skillsState, setSkillsState] = useState<SkillsState & { botId?: string }>({
     ...EMPTY_SKILLS,
   });
-  const [groups, setGroups] = useState<BotGroupRoom[]>([]);
+  const [groupsState, setGroupsState] = useState(EMPTY_GROUPS);
   const [newGroupVisible, setNewGroupVisible] = useState(false);
   const [newGroupBusy, setNewGroupBusy] = useState(false);
   const [newGroupError, setNewGroupError] = useState<string | undefined>();
@@ -401,11 +409,11 @@ export function ChatScreen() {
     return botGroups
       .list()
       .then((rooms) => {
-        setGroups(rooms);
+        setGroupsState((previous) => applyGroupRead(previous, { ok: true, rooms }));
         return rooms;
       })
       .catch(() => {
-        setGroups([]);
+        setGroupsState((previous) => applyGroupRead(previous, { ok: false }));
         return [] as BotGroupRoom[];
       });
   }, [botGroups]);
@@ -419,9 +427,9 @@ export function ChatScreen() {
 
   // Pull-to-refresh on the roster: re-read BOTH inventories — agents and
   // rooms — without leaving the surface. A failed RE-read never wipes rows
-  // the operator was just looking at (applyRosterRead keeps the last good
-  // inventory; the error line explains the staleness). Only a SUCCESSFUL
-  // read may clear or replace the list.
+  // the operator was just looking at (applyRosterRead / applyGroupRead keep
+  // the last good inventory; the error line explains the staleness). Only a
+  // SUCCESSFUL read may clear or replace the list.
   const refreshRoster = useCallback(async () => {
     const [read] = await Promise.all([
       listBots()
@@ -455,9 +463,10 @@ export function ChatScreen() {
     error: rosterError,
     botCount: rosterBots.length,
   });
-  const activeGroup = surface.kind === 'group'
-    ? groups.find((group) => group.id === surface.groupId)
+  const openGroup = surface.kind === 'group'
+    ? resolveOpenGroup(surface.groupId, groupsState)
     : undefined;
+  const activeGroup = openGroup?.kind === 'open' ? openGroup.room : undefined;
   // Thread surfaces ride the provider message pipeline; a group room and the
   // roster do not (the room owns its transcript locally).
   const threadSurface = surface.kind === 'configurable' || surface.kind === 'bot';
@@ -780,7 +789,8 @@ export function ChatScreen() {
           rows={rosterRows}
           loading={rosterLoading && status === 'connected'}
           error={rosterError}
-          groups={groups}
+          groups={groupsState.rooms}
+          groupsError={groupsListCopy(groupsState)}
           onSelectConfigurable={() => {
             clearBot();
             showSurface({ kind: 'configurable' });
@@ -857,8 +867,12 @@ export function ChatScreen() {
           ) : (
             <EmptyState
               icon={{ ios: 'person.3', android: 'groups', web: 'groups' }}
-              title="This room is gone"
-              description="The Gate no longer lists this group room."
+              title={openGroup?.kind === 'unread' ? 'Rooms could not be read' : 'This room is gone'}
+              description={
+                openGroup?.kind === 'unread'
+                  ? "The Gate's group rooms could not be listed. The room may still be there."
+                  : 'The Gate no longer lists this group room.'
+              }
               actionLabel="Back to the roster"
               onAction={() => showSurface({ kind: 'roster' })}
             />
