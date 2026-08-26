@@ -209,6 +209,20 @@ describe('pinLiveSession — a new session is still current after reconnect', ()
     expect(liveSessionId({ live: next?.sessionId, stored: next?.sessionId })).toBe('ses_picked');
   });
 
+  test('a Bot Chat that persists the reconnect pin is the session connect copies onto live', () => {
+    // openBot used to call setSessionId only. connectGateway copies stored
+    // onto live before attachClient disconnects, so tapping a Bot then
+    // background/reconnect restored whichever session New session or a list
+    // pick last persisted — not that Bot Chat.
+    const client = pinClient('ses_old');
+    const stored = profile('ses_from_new_session');
+    const next = pinLiveSession({ client, sessionId: 'ses_bot_chat', profile: stored });
+    expect(client.sessionId).toBe('ses_bot_chat');
+    expect(next?.sessionId).toBe('ses_bot_chat');
+    expect(stored.sessionId).toBe('ses_from_new_session');
+    expect(liveSessionId({ live: next?.sessionId, stored: next?.sessionId })).toBe('ses_bot_chat');
+  });
+
   test('an already-pinned profile is the same object so the caller skips persist', () => {
     const client = pinClient();
     const previous = profile('ses_new');
