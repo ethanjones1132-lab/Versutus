@@ -701,15 +701,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         sessionId = outcome.sessionId;
       }
 
-      sessionIdRef.current = sessionId;
-      setCurrentSessionId(sessionId);
+      // Only the newest reload may claim the live thread. Cold start races
+      // the connect health-check reload against the adopt-backend reload;
+      // the older one can finish last after resolving against a scope a
+      // newer reload already replaced. Pinning it would point the next
+      // send at a session the UI is not showing — an unscoped list
+      // resolves to whichever environment the Gate picks, claude-local
+      // here, and that session's model pin is immutable.
+      if (requestId === historyRequestRef.current) {
+        sessionIdRef.current = sessionId;
+        setCurrentSessionId(sessionId);
+      }
 
       const sessionKey = gateway.sessionKey ?? sessionId ?? 'default';
       const [gatewayHistory, localTrans] = await Promise.all([
         sessionId
-           ? client.getSessionMessages(sessionId, historyLimitRef.current).catch(() => [])
-           : Promise.resolve([]),
-         loadTranscripts(gateway.id, sessionKey),
+          ? client.getSessionMessages(sessionId, historyLimitRef.current).catch(() => [])
+          : Promise.resolve([]),
+        loadTranscripts(gateway.id, sessionKey),
       ]);
       if (requestId !== historyRequestRef.current) return;
       setHasMoreHistory(hasEarlierHistory(gatewayHistory.length, historyLimitRef.current));
