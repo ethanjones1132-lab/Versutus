@@ -7,6 +7,7 @@ export default function TabsLayout() {
     <NativeTabs
       sidebarAdaptable
       labelVisibilityMode="labeled"
+      backBehavior="history"
       backgroundColor={Palette.background}
       blurEffect="systemChromeMaterialDark"
       shadowColor={Palette.border}
