@@ -10,6 +10,7 @@ import {
   addableMembers,
   canAddMember,
   canRemoveMember,
+  describeAddableExhaustion,
   describeRoomError,
   removableMembers,
   roomMemberNames,
@@ -45,6 +46,9 @@ export type GroupRoomActionSheetProps = {
    * roster.
    */
   onRemoveMember?: (memberId: string) => Promise<BotGroupRoom>;
+  /** False when the phone has never completed a bot-inventory read — an
+   *  empty candidate list then means "nothing counted", not "all added". */
+  inventoryLoaded?: boolean;
 };
 
 /**
@@ -60,6 +64,7 @@ export type GroupRoomActionSheetProps = {
 export function GroupRoomActionSheet({
   room,
   members = [],
+  inventoryLoaded = true,
   onClose,
   onOpen,
   onRename,
@@ -258,7 +263,7 @@ export function GroupRoomActionSheet({
               </View>
             ) : (
               <Text variant="caption" color="secondary">
-                Every routable bot on this roster is already in this room.
+                {describeAddableExhaustion({ inventoryLoaded })}
               </Text>
             )}
             {error ? (
@@ -354,7 +359,7 @@ export function GroupRoomActionSheet({
                 subtitle={
                   candidates.length > 0
                     ? 'Routable bots not already in this room'
-                    : 'No routable bots left to add'
+                    : describeAddableExhaustion({ inventoryLoaded })
                 }
                 icon={{ ios: 'person.badge.plus', android: 'person-add', web: 'person-add' }}
                 chevron={false}

@@ -354,6 +354,32 @@ export function rosterInventoryVerified({
   return (!loading && !error) || botCount > 0;
 }
 
+/**
+ * What an empty add-member picker says. A VERIFIED inventory may claim
+ * exhaustion — every routable bot really is already in the room. An
+ * UNVERIFIED one (a failed or never-completed roster read wiped it to zero
+ * rows) knows nothing about who is addable: 'already in this room' would be
+ * the same fake-verdict class the room view's routing lines were cured of
+ * (B19/B10), so it names the unread roster instead.
+ */
+export function describeAddableExhaustion({ inventoryLoaded }: { inventoryLoaded: boolean }): string {
+  return inventoryLoaded
+    ? 'Every routable bot on this roster is already in this room.'
+    : 'Roster not loaded — addable members are unknown.';
+}
+
+/**
+ * The create-room sheet's below-minimum verdict. A verified read that really
+ * found fewer than two routable bots states a fact about the gateway; an
+ * unverified one never counted anybody, so it names the unread roster rather
+ * than demanding bots it cannot see.
+ */
+export function describeGroupCreationFloor({ inventoryLoaded }: { inventoryLoaded: boolean }): string {
+  return inventoryLoaded
+    ? 'At least two routable bots are needed before a room can be created.'
+    : 'Roster not loaded — routable members are unknown.';
+}
+
 /** Roster subtitle for a group row. */
 export function groupMemberLine(group: Pick<BotGroupRoom, 'memberIds'>): string {
   const count = group.memberIds.length;

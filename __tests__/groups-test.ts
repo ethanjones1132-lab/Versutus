@@ -11,6 +11,8 @@ import {
   GROUP_MEMBER_FLOOR_REASON,
   GROUP_ROUNDS_ON_SEND,
   GROUP_SESSION_TITLE,
+  describeAddableExhaustion,
+  describeGroupCreationFloor,
   groupMemberLine,
   groupSpeakers,
   MAX_GROUP_MESSAGES,
@@ -363,6 +365,55 @@ test('rosterInventoryVerified: an in-flight first read stays unverified', () => 
 
 test('rosterInventoryVerified: rows surviving an earlier success keep verdicts provable after a failed refresh', () => {
   expect(rosterInventoryVerified({ loading: false, error: 'timeout', botCount: 3 })).toBe(true);
+});
+
+test('describeAddableExhaustion: a verified inventory may claim exhaustion', () => {
+  expect(describeAddableExhaustion({ inventoryLoaded: true })).toBe(
+    'Every routable bot on this roster is already in this room.',
+  );
+});
+
+test('describeAddableExhaustion: an unverified roster is named, never claimed exhausted', () => {
+  // B10: the add picker claimed 'already in this room' from a roster a failed
+  // read wiped to zero rows. The unverified verdict must read unread, and the
+  // pin on 'already in this room' keeps a typo from resurrecting the lie.
+  const unread = describeAddableExhaustion({ inventoryLoaded: false });
+  expect(unread).not.toContain('already in this room');
+  expect(unread).toContain('Roster not loaded');
+  expect(unread).toContain('unknown');
+});
+
+test('describeGroupCreationFloor: a verified short roster states the real minimum', () => {
+  expect(describeGroupCreationFloor({ inventoryLoaded: true })).toBe(
+    'At least two routable bots are needed before a room can be created.',
+  );
+});
+
+test('describeGroupCreationFloor: an unverified roster never demands bots nobody counted', () => {
+  const unread = describeGroupCreationFloor({ inventoryLoaded: false });
+  expect(unread).not.toContain('two routable bots are needed');
+  expect(unread).toContain('Roster not loaded');
+});
+
+test('B10 end to end: a failed first read leaves BOTH member pickers saying the roster is unread', () => {
+  // The exact first-run failure shape: read failed, spinner stopped, zero
+  // rows. rosterInventoryVerified is false, so neither picker may speak
+  // exhaustion — they must say nobody has counted.
+  const verified = rosterInventoryVerified({ loading: false, error: 'HTTP 500', botCount: 0 });
+  expect(verified).toBe(false);
+  expect(describeAddableExhaustion({ inventoryLoaded: verified })).toBe(
+    'Roster not loaded — addable members are unknown.',
+  );
+  expect(describeGroupCreationFloor({ inventoryLoaded: verified })).toBe(
+    'Roster not loaded — routable members are unknown.',
+  );
+  // A completed clean read of an empty gateway IS a verified fact — the
+  // pickers keep their genuine-exhaustion answers there.
+  const verifiedEmpty = rosterInventoryVerified({ loading: false, error: undefined, botCount: 0 });
+  expect(verifiedEmpty).toBe(true);
+  expect(describeAddableExhaustion({ inventoryLoaded: verifiedEmpty })).toContain(
+    'already in this room',
+  );
 });
 
 const NOW = 1_752_000_000_000;

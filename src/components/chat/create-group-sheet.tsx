@@ -7,6 +7,7 @@ import type { PublicBot } from '@/lib/gateway/bots';
 import {
   MAX_GROUP_MEMBERS,
   MIN_GROUP_MEMBERS,
+  describeGroupCreationFloor,
   validateGroup,
 } from '@/lib/gateway/groups';
 
@@ -20,6 +21,7 @@ export function CreateGroupSheet({
   busy = false,
   error,
   bots,
+  inventoryLoaded = true,
   onClose,
   onCreate,
 }: {
@@ -27,6 +29,9 @@ export function CreateGroupSheet({
   busy?: boolean;
   error?: string;
   bots: PublicBot[];
+  /** False when the phone has never completed a bot-inventory read — an
+   *  empty chip row then means "nobody counted", not "no bots exist". */
+  inventoryLoaded?: boolean;
   onClose: () => void;
   onCreate: (input: { name: string; memberIds: string[] }) => void;
 }) {
@@ -82,7 +87,7 @@ export function CreateGroupSheet({
         </View>
       ) : (
         <Text variant="caption" color="secondary" style={styles.hint}>
-          At least two routable bots are needed before a room can be created.
+          {describeGroupCreationFloor({ inventoryLoaded })}
         </Text>
       )}
 

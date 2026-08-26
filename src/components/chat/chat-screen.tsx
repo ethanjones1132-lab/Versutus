@@ -391,6 +391,19 @@ export function ChatScreen() {
       rosterRows.flatMap((row) => (row.kind === 'bot' ? [row.bot] : [])),
     [rosterRows],
   );
+
+  // Verified-inventory honesty, ONE source for every surface that draws
+  // routing/addable verdicts from the roster: the room view's plan/outcome
+  // lines AND both member pickers. A completed, error-free read verifies
+  // (even at zero bots — an empty gateway is a fact); a FAILED read
+  // verifies nothing, so pickers say the roster is unread instead of
+  // claiming exhaustion from zero knowledge (rook 2026-08-24T20:51;
+  // B10 2026-08-26).
+  const inventoryLoaded = rosterInventoryVerified({
+    loading: rosterLoading,
+    error: rosterError,
+    botCount: rosterBots.length,
+  });
   const activeGroup = surface.kind === 'group'
     ? groups.find((group) => group.id === surface.groupId)
     : undefined;
@@ -538,6 +551,7 @@ export function ChatScreen() {
         busy={newGroupBusy}
         error={newGroupError}
         bots={rosterBots}
+        inventoryLoaded={inventoryLoaded}
         onClose={() => setNewGroupVisible(false)}
         onCreate={({ name, memberIds }) => {
           setNewGroupBusy(true);
@@ -593,6 +607,7 @@ export function ChatScreen() {
       <GroupRoomActionSheet
         room={detailGroup}
         members={rosterBots}
+        inventoryLoaded={inventoryLoaded}
         onClose={() => setDetailGroup(null)}
         onOpen={
           detailGroup
@@ -752,11 +767,7 @@ export function ChatScreen() {
                           // read verifies nothing even though its spinner stopped — the room
                           // names the unread roster instead of asserting routing verdicts
                           // from zero knowledge (rook 2026-08-24T20:51).
-                          inventoryLoaded={rosterInventoryVerified({
-                            loading: rosterLoading,
-                            error: rosterError,
-                            botCount: rosterBots.length,
-                          })}
+                          inventoryLoaded={inventoryLoaded}
                           onSend={(text, mentionedIds) => botGroups.send(activeGroup.id, { text, mentionedIds })}
               loadHistory={() => botGroups.history(activeGroup.id)}
               onRename={(name) =>
