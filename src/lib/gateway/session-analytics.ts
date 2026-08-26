@@ -1,6 +1,7 @@
 import { formatCost, formatTokenCount } from '@/lib/format';
 
 export type SessionUsageInput = {
+  id?: string;
   input_tokens?: number;
   output_tokens?: number;
   actual_cost_usd?: number | null;
@@ -19,6 +20,26 @@ export type SessionSpend = {
 export type SessionSpendRead =
   | { ok: true; sessions: SessionUsageInput[] }
   | { ok: false };
+
+/**
+ * Visible spend after folding a sessions.list read. Two failures are not
+ * the same fact:
+ *   - A failed FIRST read claims zero knowledge — not zero spend.
+ *   - A failed RE-read keeps the last good list and marks it stale.
+ * Only a successful read may clear or replace the list.
+ */
+export type SessionSpendState = {
+  sessions: SessionUsageInput[];
+  /** True once a successful read has landed. */
+  loaded: boolean;
+  failed: boolean;
+};
+
+export const EMPTY_SESSION_SPEND: SessionSpendState = {
+  sessions: [],
+  loaded: false,
+  failed: false,
+};
 
 export type WeekBucket = { startMs: number; tokens: number; costUsd: number };
 
@@ -64,6 +85,39 @@ export function sessionSpendCopy(spend: SessionSpend): string {
   ].join('\n');
 }
 
+export function applySessionSpendRead(
+  previous: SessionSpendState,
+  read: SessionSpendRead,
+): SessionSpendState {
+  if (read.ok) return { sessions: read.sessions, loaded: true, failed: false };
+  if (previous.loaded) return { sessions: previous.sessions, loaded: true, failed: true };
+  return { sessions: [], loaded: false, failed: true };
+}
+
+/** This open thread's tokens and cost — not the total of every session. */
+export function threadUsage(
+  sessions: SessionUsageInput[],
+  sessionId: string | undefined,
+): SessionUsage | undefined {
+  const wanted = sessionId?.trim();
+  if (!wanted) return undefined;
+  const match = sessions.find((session) => session.id === wanted);
+  return match ? sessionUsage(match) : undefined;
+}
+
+export function threadSpendCopy(
+  state: SessionSpendState,
+  sessionId: string | undefined,
+): string | undefined {
+  if (!state.loaded && state.failed) return 'Spend could not be read.';
+  if (!state.loaded) return undefined;
+  const usage = threadUsage(state.sessions, sessionId);
+  if (!usage) {
+    return state.failed ? 'Could not re-read spend — showing the last total.' : undefined;
+  }
+  return `${formatTokenCount(usage.tokens)} · ${usage.costUsd == null ? '—' : formatCost(usage.costUsd)}`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -82,6 +136,17 @@ function numberField(record: Record<string, unknown>, key: string): number | und
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function sessionIdentity(record: Record<string, unknown>): string | undefined {
+  return stringField(record, 'id') ?? stringField(record, 'sessionId') ?? stringField(record, 'name');
+}
+
 function costField(record: Record<string, unknown>, key: string): number | null | undefined {
   const value = record[key];
   if (value === null) return null;
@@ -92,11 +157,13 @@ function costField(record: Record<string, unknown>, key: string): number | null 
 function asUsageInput(raw: unknown): SessionUsageInput | null {
   if (!isRecord(raw)) return null;
   const input: SessionUsageInput = {};
+  const id = sessionIdentity(raw);
   const inputTokens = numberField(raw, 'input_tokens');
   const outputTokens = numberField(raw, 'output_tokens');
   const actual = costField(raw, 'actual_cost_usd');
   const estimated = costField(raw, 'estimated_cost_usd');
   const lastActive = numberField(raw, 'last_active');
+  if (id !== undefined) input.id = id;
   if (inputTokens !== undefined) input.input_tokens = inputTokens;
   if (outputTokens !== undefined) input.output_tokens = outputTokens;
   if (actual !== undefined) input.actual_cost_usd = actual;

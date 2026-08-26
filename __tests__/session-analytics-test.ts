@@ -1,8 +1,12 @@
 import {
+  applySessionSpendRead,
+  EMPTY_SESSION_SPEND,
   relativeMeter,
   sessionSpendCopy,
   sessionSpendReadFromUnknown,
   sessionUsage,
+  threadSpendCopy,
+  threadUsage,
   totalUsage,
   weekBuckets,
 } from '@/lib/gateway/session-analytics';
@@ -134,5 +138,121 @@ describe('sessionSpendReadFromUnknown', () => {
     expect(sessionSpendReadFromUnknown(null).ok).toBe(false);
     expect(sessionSpendReadFromUnknown('nope').ok).toBe(false);
     expect(sessionSpendReadFromUnknown({ error: 'boom' }).ok).toBe(false);
+  });
+
+  test('keeps id from id, sessionId, or name so this thread can be found', () => {
+    expect(sessionSpendReadFromUnknown([{ id: 's1', input_tokens: 4 }])).toEqual({
+      ok: true,
+      sessions: [{ id: 's1', input_tokens: 4 }],
+    });
+    expect(sessionSpendReadFromUnknown([{ sessionId: 's2', output_tokens: 1 }])).toEqual({
+      ok: true,
+      sessions: [{ id: 's2', output_tokens: 1 }],
+    });
+    expect(sessionSpendReadFromUnknown([{ name: 's3', actual_cost_usd: 0.1 }])).toEqual({
+      ok: true,
+      sessions: [{ id: 's3', actual_cost_usd: 0.1 }],
+    });
+  });
+
+  test('prefers id over sessionId over name', () => {
+    expect(
+      sessionSpendReadFromUnknown([{ id: 'keep', sessionId: 'other', name: 'also', input_tokens: 1 }]),
+    ).toEqual({
+      ok: true,
+      sessions: [{ id: 'keep', input_tokens: 1 }],
+    });
+  });
+});
+
+describe('applySessionSpendRead', () => {
+  test('a failed FIRST read claims zero knowledge — not zero spend', () => {
+    const next = applySessionSpendRead(EMPTY_SESSION_SPEND, { ok: false });
+    expect(next.sessions).toEqual([]);
+    expect(next.loaded).toBe(false);
+    expect(next.failed).toBe(true);
+    expect(threadSpendCopy(next, 's1')).toBe('Spend could not be read.');
+    expect(threadSpendCopy(next, 's1')).not.toMatch(/0|\$/);
+  });
+
+  test('a failed RE-read keeps last-good spend for this thread', () => {
+    const loaded = applySessionSpendRead(EMPTY_SESSION_SPEND, {
+      ok: true,
+      sessions: [{ id: 's1', input_tokens: 100, output_tokens: 50, actual_cost_usd: 0.42 }],
+    });
+    const stale = applySessionSpendRead(loaded, { ok: false });
+    expect(stale.sessions).toEqual([
+      { id: 's1', input_tokens: 100, output_tokens: 50, actual_cost_usd: 0.42 },
+    ]);
+    expect(stale.loaded).toBe(true);
+    expect(stale.failed).toBe(true);
+    expect(threadSpendCopy(stale, 's1')).toBe('150 · $0.42');
+  });
+
+  test('a successful refresh replaces the list', () => {
+    const previous = applySessionSpendRead(EMPTY_SESSION_SPEND, {
+      ok: true,
+      sessions: [{ id: 's1', input_tokens: 10 }],
+    });
+    const next = applySessionSpendRead(previous, {
+      ok: true,
+      sessions: [{ id: 's1', input_tokens: 20, actual_cost_usd: 0.42 }],
+    });
+    expect(next.failed).toBe(false);
+    expect(threadSpendCopy(next, 's1')).toBe('20 · $0.42');
+  });
+});
+
+describe('threadUsage', () => {
+  const sessions = [
+    { id: 'other', input_tokens: 999, actual_cost_usd: 9 },
+    { id: 'open', input_tokens: 100, output_tokens: 50, actual_cost_usd: 0.42 },
+  ];
+
+  test('returns this thread, not the total of every session', () => {
+    expect(threadUsage(sessions, 'open')).toEqual({ tokens: 150, costUsd: 0.42 });
+    expect(totalUsage(sessions)).toEqual({ sessionCount: 2, tokens: 1149, costUsd: 9.42 });
+  });
+
+  test('a missing or blank session id is not a match', () => {
+    expect(threadUsage(sessions, undefined)).toBeUndefined();
+    expect(threadUsage(sessions, '  ')).toBeUndefined();
+    expect(threadUsage(sessions, 'gone')).toBeUndefined();
+  });
+});
+
+describe('threadSpendCopy', () => {
+  test('names this thread tokens and cost without opening the selector', () => {
+    const state = applySessionSpendRead(EMPTY_SESSION_SPEND, {
+      ok: true,
+      sessions: [{ id: 's1', input_tokens: 1400, output_tokens: 100, actual_cost_usd: 0.42 }],
+    });
+    expect(threadSpendCopy(state, 's1')).toBe('1.5k · $0.42');
+  });
+
+  test('unknown cost is an em dash, not $0.00', () => {
+    const state = applySessionSpendRead(EMPTY_SESSION_SPEND, {
+      ok: true,
+      sessions: [{ id: 's1', input_tokens: 10 }],
+    });
+    expect(threadSpendCopy(state, 's1')).toBe('10 · —');
+  });
+
+  test('a successful list that does not contain this thread is empty-ok, not a miss', () => {
+    const state = applySessionSpendRead(EMPTY_SESSION_SPEND, {
+      ok: true,
+      sessions: [{ id: 'other', input_tokens: 10, actual_cost_usd: 1 }],
+    });
+    expect(threadSpendCopy(state, 'new-session')).toBeUndefined();
+    expect(threadSpendCopy(EMPTY_SESSION_SPEND, 's1')).toBeUndefined();
+  });
+
+  test('a failed re-read without this thread in last-good names the miss', () => {
+    const loaded = applySessionSpendRead(EMPTY_SESSION_SPEND, {
+      ok: true,
+      sessions: [{ id: 'other', input_tokens: 10 }],
+    });
+    const stale = applySessionSpendRead(loaded, { ok: false });
+    expect(threadSpendCopy(stale, 'open')).toBe('Could not re-read spend — showing the last total.');
   });
 });
