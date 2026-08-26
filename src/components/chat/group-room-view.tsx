@@ -15,6 +15,7 @@ import {
   GROUP_MEMBER_FLOOR_REASON,
   groupSpeakers,
   mergeTranscriptRows,
+  rosterDeadMembers,
   type BotGroupRoom,
   type GroupReply,
   type GroupTranscriptEntry,
@@ -143,6 +144,15 @@ export function GroupRoomView({
   const mentioned = extractMentions(draft, group.memberIds);
   const speakers = groupSpeakers(group.memberIds, mentioned);
   const removable = canRemoveMember(group);
+  // Dead-id eviction mirrors the Gate's leave exemption: a member the
+  // verified roster cannot answer to stays removable at the two-member
+  // floor; an unread roster claims nothing and pins everyone.
+  const deadMemberIds = rosterDeadMembers(group, {
+    rosterIds: new Set(members.map((bot) => bot.id)),
+    loaded: inventoryLoaded,
+  });
+  const memberIsRemovable = (memberId: string) =>
+    removable || deadMemberIds.includes(memberId);
 
   // The plan line tells the truth about silence: a member that cannot route
   // is not a speaker, and a member the phone has never seen on the loaded
@@ -393,15 +403,18 @@ export function GroupRoomView({
               const routingTag = routingTagOf(memberId);
               const modelPin = routingTag ? '' : pinnedModelOf(memberId);
               const missingFromRoster = routingTag === undefined;
+              const evictable = memberIsRemovable(memberId);
               return (
                 <PressableScale
                   key={memberId}
-                  onPress={removable ? () => setPendingRemoval(memberId) : undefined}
-                  disabled={!removable}
+                  onPress={evictable ? () => setPendingRemoval(memberId) : undefined}
+                  disabled={!evictable}
                   accessibilityRole="button"
                   accessibilityLabel={
-                    removable
-                      ? `Remove ${displayNameOf(memberId)} from the room`
+                    evictable
+                      ? deadMemberIds.includes(memberId)
+                        ? `Remove ${displayNameOf(memberId)} — not on this gateway's roster`
+                        : `Remove ${displayNameOf(memberId)} from the room`
                       : `${displayNameOf(memberId)}. ${GROUP_MEMBER_FLOOR_REASON}.`
                   }
                   style={[

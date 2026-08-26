@@ -223,8 +223,28 @@ export function createBotGroupStore(gateHome, { listBotIds } = {}) {
         error.status = 404;
         throw error;
       }
-      if (group.memberIds.length <= 2) {
-        const error = new Error('a room needs at least 2 members');
+      // The two-member floor keeps a room a conversation. But a member no bot
+      // on the roster answers to is not a participant, and counting one toward
+      // the floor is what stranded legacy two-member rooms carrying a dead id:
+      // add refused unknown_member for the whole room, leave refused
+      // too_few_members here, and disbanding (transcript deleted) was the only
+      // exit. When the resolver confirms the leaver is dead, the floor does not
+      // apply — evicting a ghost removes zero addressable participants. With no
+      // resolver, or a resolver that fails, the plain length rule stands:
+      // leaving must never become harder than before (create/add fail loud on
+      // an unreadable roster because they grow a room; leave is how an operator
+      // escapes one).
+      let evicting = false;
+      if (typeof listBotIds === 'function') {
+        try {
+          const known = new Set(await listBotIds());
+          evicting = !known.has(memberId);
+        } catch {
+          evicting = false;
+        }
+      }
+      if (!evicting && group.memberIds.length <= 2) {
+        const error = new Error('a room needs at least 2 members; disband instead');
         error.code = 'too_few_members';
         error.status = 400;
         throw error;

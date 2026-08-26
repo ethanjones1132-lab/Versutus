@@ -448,20 +448,52 @@ export type RemovableMemberOption = {
   label: string;
   /** True when the inventory had no name — the chip shows the raw id. */
   unknown: boolean;
+  /**
+   * Set only on floor-exempt options: the member is offered DESPITE the
+   * two-member floor because the verified roster has no such bot (dead-id
+   * eviction). Absent on ordinary above-floor options.
+   */
+  dead?: true;
 };
+
+/**
+ * Which of a room's members the verified loaded roster cannot answer to:
+ * ids absent from the roster id set of a COMPLETED read. An unverified read
+ * (still loading, failed, or never run) claims nothing — [] — because "not
+ * on a roster nobody read" is zero knowledge, not evidence (rook
+ * 2026-08-24T20:51; B10 2026-08-26).
+ */
+export function rosterDeadMembers(
+  group: Pick<BotGroupRoom, 'memberIds'>,
+  inventory: { rosterIds?: ReadonlySet<string>; loaded?: boolean },
+): string[] {
+  if (!inventory.loaded || !(inventory.rosterIds instanceof Set)) return [];
+  const rosterIds = inventory.rosterIds;
+  return group.memberIds.filter((id) => !rosterIds.has(id));
+}
 
 /**
  * Who the remove picker offers: every current member, in room order, labeled
  * through the loaded bot inventory (raw id when never seen — never an
- * invented name, the same rule as the sheet's member line). Empty at the
- * two-member floor: every remaining member is structural, so there is
- * nothing honest to offer.
+ * invented name, the same rule as the sheet's member line). At the
+ * two-member floor every LIVE member is structural and nothing was offered —
+ * which stranded rooms carrying a dead id, since only disband could clear a
+ * member the roster no longer answers to. Now a verified read that cannot
+ * find a member makes it evictable exactly as the Gate's leave floor exempts
+ * it; an unverified read still offers nothing.
  */
 export function removableMembers(
   group: Pick<BotGroupRoom, 'memberIds'>,
   namesById: ReadonlyMap<string, string>,
+  inventory?: { rosterIds?: ReadonlySet<string>; loaded?: boolean },
 ): RemovableMemberOption[] {
-  if (!canRemoveMember(group)) return [];
+  if (!canRemoveMember(group)) {
+    return rosterDeadMembers(group, inventory ?? {}).map((id) => {
+      const name = namesById.get(id);
+      const known = typeof name === 'string' && name.length > 0;
+      return { id, label: known ? (name as string) : id, unknown: !known, dead: true as const };
+    });
+  }
   return group.memberIds.map((id) => {
     const name = namesById.get(id);
     const known = typeof name === 'string' && name.length > 0;

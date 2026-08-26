@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -71,6 +71,64 @@ test('leave removes a member but keeps rooms viable at two', async () => {
   });
   await assert.rejects(store.leave('missing', 'b'), (error) => {
     assert.equal(error.code, 'unknown_group');
+    return true;
+  });
+});
+
+test('leave evicts a roster-dead member even at the two-member floor', async () => {
+  // A pre-door-check room carrying a dead id: the door refuses such a create
+  // today, which is exactly why legacy rows were stranded — add refused
+  // unknown_member for the whole room, leave refused too_few_members at the
+  // floor, and disband (transcript deleted) was the only exit.
+  const home = await mkdtemp(join(tmpdir(), 'gate-groups-'));
+  await writeFile(
+    join(home, 'bot-groups.json'),
+    JSON.stringify({
+      groups: [{ id: 'legacy', name: 'legacy crew', memberIds: ['coder', 'ghost'] }],
+      transcripts: { legacy: [{ botId: 'coder', text: 'earlier reply', at: 1 }] },
+    }),
+    'utf8',
+  );
+  const store = createBotGroupStore(home, { listBotIds: async () => ['coder', 'researcher'] });
+
+  const left = await store.leave('legacy', 'ghost');
+  assert.deepEqual(left.memberIds, ['coder']);
+  // Eviction keeps the transcript — that is the entire point over disband.
+  assert.equal((await store.history('legacy')).length, 1);
+});
+
+test('leave still refuses a live member at the floor and names disband', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'gate-groups-'));
+  const store = createBotGroupStore(home, { listBotIds: async () => ['coder', 'researcher'] });
+  const created = await store.create({ name: 'crew', memberIds: ['coder', 'researcher'] });
+
+  await assert.rejects(store.leave(created.id, 'researcher'), (error) => {
+    assert.equal(error.code, 'too_few_members');
+    assert.match(error.message, /disband/i);
+    return true;
+  });
+});
+
+test('leave falls back to the plain floor when the roster cannot be read', async () => {
+  // No resolver answer means nobody can be proven dead, so nobody is exempt:
+  // leaving never becomes harder than before, and never easier on a guess.
+  const home = await mkdtemp(join(tmpdir(), 'gate-groups-'));
+  await writeFile(
+    join(home, 'bot-groups.json'),
+    JSON.stringify({
+      groups: [{ id: 'legacy', name: 'legacy crew', memberIds: ['coder', 'ghost'] }],
+      transcripts: {},
+    }),
+    'utf8',
+  );
+  const store = createBotGroupStore(home, {
+    listBotIds: async () => {
+      throw new Error('roster down');
+    },
+  });
+
+  await assert.rejects(store.leave('legacy', 'ghost'), (error) => {
+    assert.equal(error.code, 'too_few_members');
     return true;
   });
 });

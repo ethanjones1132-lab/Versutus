@@ -93,9 +93,13 @@ export function GroupRoomActionSheet({
     onClose();
   };
   const namesById = new Map(members.map((bot) => [bot.id, bot.displayName]));
+  const rosterIds = new Set(members.map((bot) => bot.id));
   const memberFacts = roomMemberNames(room, namesById);
   const candidates = addableMembers(room, members);
-  const removeOptions = removableMembers(room, namesById);
+  // The verified roster decides who is evictable at the floor: a member no
+  // loaded bot answers to can be removed even in a two-member room (the
+  // Gate exempts it from its leave floor); an unread roster offers nothing.
+  const removeOptions = removableMembers(room, namesById, { rosterIds, loaded: inventoryLoaded });
 
   const openRename = () => {
     setError(undefined);
@@ -366,10 +370,14 @@ export function GroupRoomActionSheet({
                 onPress={openAdd}
               />
             ) : null}
-            {onRemoveMember && canRemoveMember(room) ? (
+            {onRemoveMember && (canRemoveMember(room) || removeOptions.length > 0) ? (
               <ListRow
                 title="Remove member"
-                subtitle="Current members leave without deleting history"
+                subtitle={
+                  canRemoveMember(room)
+                    ? 'Current members leave without deleting history'
+                    : "Not on this gateway's roster — evict it without deleting history"
+                }
                 icon={{ ios: 'person.badge.minus', android: 'person_remove', web: 'person-remove' }}
                 chevron={false}
                 onPress={openRemove}

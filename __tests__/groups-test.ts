@@ -20,6 +20,7 @@ import {
   planGroupRounds,
   removableMembers,
   roomMemberNames,
+  rosterDeadMembers,
   rosterInventoryVerified,
   TRANSCRIPT_DEDUPE_WINDOW_MS,
   transcriptToRoomEntries,
@@ -663,6 +664,40 @@ test('removableMembers offers nothing at the two-member floor', () => {
   // false at 2, so the picker shows the floor reason instead of chips.
   expect(removableMembers(ROOM, new Map())).toEqual([]);
   expect(removableMembers(ROOM, new Map([['coder', 'Coder']]))).toEqual([]);
+});
+
+test('rosterDeadMembers names only members a verified read cannot answer to', () => {
+  const pair: BotGroupRoom = { id: 'r', name: 'n', memberIds: ['coder', 'ghost'] };
+  expect(rosterDeadMembers(pair, { rosterIds: new Set(['coder']), loaded: true })).toEqual(['ghost']);
+  // A completed read with zero bots is still a fact — everyone is dead then.
+  expect(rosterDeadMembers(pair, { rosterIds: new Set<string>(), loaded: true })).toEqual([
+    'coder',
+    'ghost',
+  ]);
+  // An unread roster verifies nothing: loading, failed, or never run.
+  expect(rosterDeadMembers(pair, { rosterIds: new Set(['coder']), loaded: false })).toEqual([]);
+  expect(rosterDeadMembers(pair, {})).toEqual([]);
+});
+
+test('removableMembers at the floor offers only verified-roster-dead members', () => {
+  // Dead-id eviction mirrors the Gate's leave exemption exactly: the ghost
+  // is offered despite the floor, flagged dead; the live member stays pinned.
+  const pair: BotGroupRoom = { id: 'r', name: 'n', memberIds: ['coder', 'ghost'] };
+  expect(
+    removableMembers(pair, new Map([['coder', 'Coder']]), {
+      rosterIds: new Set(['coder']),
+      loaded: true,
+    }),
+  ).toEqual([{ id: 'ghost', label: 'ghost', unknown: true, dead: true }]);
+});
+
+test('removableMembers above the floor ignores the inventory entirely', () => {
+  // Above the floor every member is offered regardless of the roster — the
+  // Gate accepts those leaves either way, verified or not.
+  const three: BotGroupRoom = { id: 'r', name: 'n', memberIds: ['coder', 'ghost', 'researcher'] };
+  expect(
+    removableMembers(three, new Map(), { rosterIds: new Set(['coder']), loaded: true }),
+  ).toHaveLength(3);
 });
 
 // ── describeRoomError: desktop-parity verdicts on room refusals ─────────
