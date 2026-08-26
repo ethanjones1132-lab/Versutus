@@ -51,3 +51,30 @@ test('argument-only fragment with no name yet emits nothing', () => {
   );
   expect(result.toolCalls).toEqual([]);
 });
+
+test('a model frame reports what actually answered', () => {
+  // The Gate emits this once a turn resolves. Hermes substitutes silently —
+  // ask for longcat-2.0 and `fallback_providers` can answer as something else
+  // entirely — so the frame carries both names and the UI can stop repeating
+  // the operator's own pick back at them.
+  const acc = createChatStreamAcc();
+  const out = interpretChatStreamChunk(
+    { model: 'deepseek-v4-flash', requested_model: 'longcat-2.0', provider: 'opencode-go', choices: [] },
+    acc,
+  );
+  expect(out.ranModel).toBe('deepseek-v4-flash');
+  expect(out.requestedModel).toBe('longcat-2.0');
+  expect(out.provider).toBe('opencode-go');
+  // It is not content, and it is not an error.
+  expect(out.text).toBeUndefined();
+  expect(out.streamError).toBeUndefined();
+  expect(out.toolCalls).toEqual([]);
+});
+
+test('an ordinary delta carries no model claim', () => {
+  const acc = createChatStreamAcc();
+  const out = interpretChatStreamChunk({ choices: [{ delta: { content: 'hi' } }] }, acc);
+  expect(out.text).toBe('hi');
+  expect(out.ranModel).toBeUndefined();
+  expect(out.requestedModel).toBeUndefined();
+});

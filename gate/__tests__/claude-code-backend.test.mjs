@@ -135,6 +135,34 @@ test('history comes from the transcript', async () => {
   assert.deepEqual(messages.map((m) => m.role), ['user', 'assistant']);
 });
 
+test('a freshly created session is empty, not missing', async () => {
+  // createSession only reserves the id Claude Code will bind on the first
+  // turn, so no transcript exists yet. The app opens the chat immediately
+  // after creating it: reading that session must answer "no messages", never
+  // throw — a throw reached the route as a 500 and every new chat opened onto
+  // an error instead of an empty thread.
+  const { home, cwd } = await makeHome([]);
+  const backend = createClaudeCodeBackend({ claudeHome: home, cwd, executablePath: 'claude.exe' });
+
+  const created = await backend.createSession({ title: 'Bot Chat' });
+  assert.deepEqual(await backend.listMessages(created.id), []);
+
+  // And it must be visible, or the caller cannot tell it apart from an id the
+  // gate never issued — which is how the app minted a fresh session on every
+  // single reconnect.
+  const sessions = await backend.listSessions();
+  assert.ok(sessions.some((session) => session.id === created.id));
+});
+
+test('a session id the gate never issued is still reported missing', async () => {
+  const { home, cwd } = await makeHome([]);
+  const backend = createClaudeCodeBackend({ claudeHome: home, cwd, executablePath: 'claude.exe' });
+  await assert.rejects(
+    () => backend.listMessages('11111111-2222-3333-4444-555555555555'),
+    /not found/i,
+  );
+});
+
 test('a session id that could escape the transcript directory is refused', async () => {
   const { home, cwd } = await makeHome([]);
   const backend = createClaudeCodeBackend({ claudeHome: home, cwd, executablePath: 'claude.exe' });

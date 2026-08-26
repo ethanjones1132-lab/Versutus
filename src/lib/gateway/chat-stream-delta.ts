@@ -13,6 +13,18 @@ export type ChatStreamInterpretation = {
   text?: string;
   toolCalls: ChatToolCall[];
   streamError?: string;
+  /**
+   * The model that actually served the turn, as the Gate reports it once the
+   * turn resolves. Backends substitute — Hermes falls through
+   * `fallback_providers` and answers as a different model entirely — so this
+   * is the only honest name for what replied. Absent on gateways that do not
+   * report it, which must read as "unknown", never as confirmation.
+   */
+  ranModel?: string;
+  /** The model that was asked for, echoed back so a swap is self-evident. */
+  requestedModel?: string;
+  /** The provider that served it, when reported. */
+  provider?: string;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -38,6 +50,13 @@ export function interpretChatStreamChunk(
           : `The gateway reported a failed turn (${code}).`,
     };
   }
+
+  // A model report rides its own frame (no delta, empty choices) so it can
+  // arrive after the text without being mistaken for content.
+  const ranModel = typeof root.model === 'string' && root.model ? root.model : undefined;
+  const requestedModel =
+    typeof root.requested_model === 'string' && root.requested_model ? root.requested_model : undefined;
+  const provider = typeof root.provider === 'string' && root.provider ? root.provider : undefined;
 
   const choice = Array.isArray(root.choices) ? asRecord(root.choices[0]) : null;
   const delta = asRecord(choice?.delta) ?? asRecord(root.delta);
@@ -86,5 +105,5 @@ export function interpretChatStreamChunk(
     }
   }
 
-  return { text, toolCalls };
+  return { text, toolCalls, ranModel, requestedModel, provider };
 }

@@ -102,6 +102,22 @@ export function createClaudeCodeBackend({
 } = {}) {
   const dir = transcriptDirFor(claudeHome, cwd);
 
+  /**
+   * Ids handed out by createSession that no turn has bound yet.
+   *
+   * Claude Code writes a transcript only when a turn runs, so a just-created
+   * session has no file. Without this the id was indistinguishable from one
+   * the Gate never issued: listSessions omitted it and listMessages threw
+   * "not found", which the route reported as a 500. The app opens a chat the
+   * instant it creates one, so *every* new conversation opened onto that
+   * error — and because the session never appeared in the list either, the
+   * app could not recognise its own and minted another on each reconnect.
+   *
+   * Reservations are process-local on purpose: they hold no history, so
+   * losing them across a Gate restart costs nothing.
+   */
+  const reserved = new Map();
+
   async function transcripts() {
     try {
       const names = await readdir(dir);
@@ -166,6 +182,13 @@ export function createClaudeCodeBackend({
           has_model_config: false,
         });
       }
+      // Reserved-but-unbound ids belong in the list too: a session the caller
+      // just created must be findable, or it cannot tell its own thread from
+      // one the Gate never issued.
+      const onDisk = new Set(sessions.map((session) => session.id));
+      for (const [id, record] of reserved) {
+        if (!onDisk.has(id)) sessions.push(record);
+      }
       return sessions.sort((a, b) => b.last_active - a.last_active);
     },
 
@@ -175,7 +198,7 @@ export function createClaudeCodeBackend({
      */
     async createSession({ title } = {}) {
       const id = randomUUID();
-      return {
+      const record = {
         id,
         source: 'claude-code',
         user_id: null,
@@ -200,14 +223,20 @@ export function createClaudeCodeBackend({
         has_system_prompt: false,
         has_model_config: false,
       };
+      reserved.set(id, record);
+      return record;
     },
 
     async deleteSession(sessionId) {
       if (!/^[0-9a-f-]{36}$/i.test(sessionId)) throw new Error('invalid session id');
+      reserved.delete(sessionId);
       await rm(join(dir, `${sessionId}.jsonl`), { force: true });
     },
 
     async listMessages(sessionId, limit) {
+      // A reserved id with no transcript is an empty conversation, not a
+      // missing one — answering [] is what lets a brand-new chat open.
+      if (reserved.has(sessionId) && !(await transcripts()).includes(`${sessionId}.jsonl`)) return [];
       const entries = await readTranscript(sessionId);
       const mapped = entries
         .filter((entry) => entry.message && (entry.type === 'user' || entry.type === 'assistant'))
