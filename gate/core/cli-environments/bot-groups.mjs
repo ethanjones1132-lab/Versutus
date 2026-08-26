@@ -57,11 +57,11 @@ export function createBotGroupStore(gateHome, { listBotIds } = {}) {
   const file = join(gateHome, 'bot-groups.json');
 
   // Membership writes trust the caller's ids only as far as the roster
-  // confirms them. When the Gate wires a roster resolver, every id a create
-  // or an add names must be a bot this Gate can actually address — a typo'd
-  // id dies here, at the door, instead of surviving until the room's first
-  // message fails wholesale with "unknown bot". Without a resolver nothing
-  // changes: verification is claimed only when it actually ran.
+  // confirms them. When the Gate wires a roster resolver, every id a create,
+  // an add, or a send names must be a bot this Gate can actually address,
+  // and each dies here, at the door, instead of surviving until the room's
+  // first message fails wholesale with "unknown bot". Without a resolver
+  // nothing changes: verification is claimed only when it actually ran.
   async function assertKnownMembers(requestedIds) {
     if (typeof listBotIds !== 'function') return;
     let known;
@@ -297,10 +297,21 @@ export function createBotGroupStore(gateHome, { listBotIds } = {}) {
       await write(data);
       return { ok: true };
     },
+    // The send door: create() verified the roster when the room was born,
+    // but a room can sit unvisited while the host's roster changes (a
+    // profile renamed or removed, a backend reordered). Same refusals as
+    // the create/add door check — unknown_member naming the dead id, or
+    // roster_unavailable when the roster itself cannot be read — so a
+    // stale-room send is classified exactly like any membership refusal.
+    verifyMembers(memberIds) {
+      return assertKnownMembers(memberIds);
+    },
   };
 
   // Reads pass through untouched; every read-modify-write goes through the
   // queue so its read half can never straddle another operation's write.
+  // verifyMembers is a read too: it writes nothing back, so it stays
+  // unqueued.
   return {
     ...store,
     create: (payload) => serialized(() => store.create(payload)),
@@ -309,5 +320,6 @@ export function createBotGroupStore(gateHome, { listBotIds } = {}) {
     leave: (id, memberId) => serialized(() => store.leave(id, memberId)),
     appendMessages: (id, entries) => serialized(() => store.appendMessages(id, entries)),
     delete: (id) => serialized(() => store.delete(id)),
+    verifyMembers: (memberIds) => store.verifyMembers(memberIds),
   };
 }

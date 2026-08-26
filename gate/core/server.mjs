@@ -1461,6 +1461,13 @@ export async function createGate(config = {}) {
         const backend = await resolveBackendFor('deliverGroupMessage');
         if (!backend) return;
         try {
+          // The create-time door check is create-time truth; a room can sit
+          // unvisited while the host's roster changes (a profile renamed or
+          // removed, a backend reordered). Re-check the LIVE roster at the
+          // send door so the first message refuses with the membership
+          // verdict — naming the dead member — before any bot has spoken a
+          // partial round.
+          await botGroups.verifyMembers(group.memberIds);
           const result = await backend.deliverGroupMessage({
             name: group.name,
             memberIds: group.memberIds,

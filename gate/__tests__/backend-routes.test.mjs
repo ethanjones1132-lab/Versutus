@@ -1462,9 +1462,11 @@ test('bot groups: sends are recorded Gate-side and replayed as room history', as
  * verify every requested id against what the fronted backend's listBots
  * reports. This variant widens the shared stub roster so room fixtures can
  * name coder / writer / silent without changing what the other suites pin
- * about listBots payloads.
+ * about listBots payloads. An optional `roster` array becomes the source of
+ * truth for listBots, so a test can simulate the host's roster changing
+ * mid-flight (an environment reorder) and watch the door checks react.
  */
-function groupRosterRegistry(calls) {
+function groupRosterRegistry(calls, roster) {
   const registry = stubFrontedRegistry(calls);
   const adapter = registry.get('stubcli');
   const createBackend = adapter.createBackend.bind(adapter);
@@ -1475,7 +1477,7 @@ function groupRosterRegistry(calls) {
       const result = await listBots();
       return {
         ...result,
-        data: [...result.data, { id: 'coder' }, { id: 'writer' }, { id: 'silent' }],
+        data: [...result.data, ...(roster ?? [{ id: 'coder' }, { id: 'writer' }, { id: 'silent' }])],
       };
     };
     return backend;
@@ -1502,6 +1504,53 @@ test('bot groups: a member no bot answers to dies at the door, not on first send
     // this room again as a mid-demo 404 on its first message.
     const rooms = await (await fetch(`${base}/v1/bot-groups`, { headers: auth(gate) })).json();
     assert.deepEqual(rooms.data, []);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('bot groups: the send door re-checks the live roster before any bot speaks', async () => {
+  const calls = [];
+  const roster = [{ id: 'coder' }, { id: 'writer' }];
+  const { gate } = await makeGate({ calls, registry: groupRosterRegistry(calls, roster) });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    const created = await (await fetch(`${base}/v1/bot-groups`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ name: 'crew', memberIds: ['researcher', 'coder'] }),
+    })).json();
+
+    // The host's roster changes between the create door check and the first
+    // message: coder is no longer a bot this Gate can address. The send must
+    // refuse at ITS door with the membership verdict — not die halfway
+    // through the round after some bots already spoke.
+    roster.splice(0, 1);
+    const refused = await fetch(`${base}/v1/bot-groups/${created.id}/messages`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ text: 'status?' }),
+    });
+    assert.equal(refused.status, 400);
+    const body = await refused.json();
+    assert.equal(body.error.code, 'unknown_member');
+    assert.match(body.error.message, /coder/);
+
+    // No bot spoke and no partial transcript was recorded: the refusal
+    // landed at the door, before the round could start.
+    assert.ok(!calls.some((call) => call.startsWith('deliverGroupMessage')));
+    const history = (await (await fetch(`${base}/v1/bot-groups/${created.id}/messages`, { headers: auth(gate) })).json()).data;
+    assert.deepEqual(history, []);
+
+    // The member the refusal names is evictable: leave exempts roster-dead
+    // members from the two-member floor, so this room recovers in place
+    // instead of meeting its ghost on every send.
+    const left = await (await fetch(`${base}/v1/bot-groups/${created.id}/leave`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ memberId: 'coder' }),
+    })).json();
+    assert.deepEqual(left.memberIds, ['researcher']);
   } finally {
     await gate.close();
   }

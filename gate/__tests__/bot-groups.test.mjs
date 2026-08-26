@@ -208,3 +208,31 @@ test('store transcripts append, replay oldest-first, and cap at MAX_GROUP_HISTOR
   assert.ok(!capped.some((entry) => entry.id === 't1'), 'oldest lines drop off');
   assert.equal(capped[capped.length - 1].id, `bulk-${MAX_GROUP_HISTORY - 1}`);
 });
+
+test('verifyMembers re-checks the live roster at the send door', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'gate-groups-'));
+  let roster = ['coder', 'researcher'];
+  const store = createBotGroupStore(home, { listBotIds: async () => roster });
+  const created = await store.create({ name: 'crew', memberIds: ['coder', 'researcher'] });
+
+  // Environment reorder between create and first send: the roster no longer
+  // answers to one of the room's members (a profile renamed or removed on
+  // the host). The create-time door check already ran and cannot see this —
+  // only the live re-check at the send door can, and it refuses with the
+  // membership verdict, naming the dead member.
+  roster = roster.filter((id) => id !== 'researcher');
+  await assert.rejects(store.verifyMembers(created.memberIds), (error) => {
+    assert.equal(error.code, 'unknown_member');
+    assert.equal(error.status, 400);
+    assert.match(error.message, /researcher/);
+    return true;
+  });
+
+  // Members the live roster still answers to pass.
+  await store.verifyMembers(['coder']);
+
+  // Without a resolver nothing is claimed: verification only runs when the
+  // Gate actually wired one.
+  const bare = createBotGroupStore(home);
+  await bare.verifyMembers(['coder']);
+});
