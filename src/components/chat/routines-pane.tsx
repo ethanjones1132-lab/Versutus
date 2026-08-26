@@ -3,7 +3,12 @@ import { StyleSheet, View } from 'react-native';
 
 import { Button, ListRow, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
-import { parseRoutineName } from '@/lib/gateway/routines';
+import {
+  applyRoutineCreate,
+  DEFAULT_ROUTINE_SCHEDULE,
+  describeRoutineError,
+  parseRoutineName,
+} from '@/lib/gateway/routines';
 
 export type RoutineJob = { id: string; name?: string; paused?: boolean };
 
@@ -14,20 +19,78 @@ export function RoutinesPane({
   onTogglePause,
 }: {
   jobs: RoutineJob[];
-  onCreate: (input: { title: string; prompt: string; schedule: string }) => void;
-  onRun: (jobId: string) => void;
-  onTogglePause: (jobId: string, paused: boolean) => void;
+  onCreate: (input: { title: string; prompt: string; schedule: string }) => Promise<unknown>;
+  onRun: (jobId: string) => Promise<unknown>;
+  onTogglePause: (jobId: string, paused: boolean) => Promise<unknown>;
 }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [prompt, setPrompt] = useState('');
-  const [schedule, setSchedule] = useState('0 9 * * *');
+  const [schedule, setSchedule] = useState(DEFAULT_ROUTINE_SCHEDULE);
+  const [error, setError] = useState<string | undefined>();
+  const [creating, setCreating] = useState(false);
+  const [acting, setActing] = useState(false);
+  const busy = creating || acting;
+
+  const submitCreate = () => {
+    const submitted = {
+      title: title.trim(),
+      prompt: prompt.trim(),
+      schedule: schedule.trim() || DEFAULT_ROUTINE_SCHEDULE,
+    };
+    if (!submitted.title || !submitted.prompt || busy) return;
+    setCreating(true);
+    setError(undefined);
+    void Promise.resolve(onCreate(submitted))
+      .then(() => {
+        const next = applyRoutineCreate(submitted, { ok: true });
+        setTitle(next.draft.title);
+        setPrompt(next.draft.prompt);
+        setSchedule(next.draft.schedule);
+      })
+      .catch((cause: unknown) => {
+        // Fail honest: keep the draft; say why instead of pretending Add landed.
+        const next = applyRoutineCreate(submitted, { ok: false, cause });
+        setTitle(next.draft.title);
+        setPrompt(next.draft.prompt);
+        setSchedule(next.draft.schedule);
+        setError(next.error);
+      })
+      .finally(() => setCreating(false));
+  };
+
+  const submitRun = (jobId: string) => {
+    if (busy) return;
+    setActing(true);
+    setError(undefined);
+    void Promise.resolve(onRun(jobId))
+      .catch((cause: unknown) => {
+        setError(describeRoutineError(cause));
+      })
+      .finally(() => setActing(false));
+  };
+
+  const submitPause = (jobId: string, paused: boolean) => {
+    if (busy) return;
+    setActing(true);
+    setError(undefined);
+    void Promise.resolve(onTogglePause(jobId, paused))
+      .catch((cause: unknown) => {
+        setError(describeRoutineError(cause));
+      })
+      .finally(() => setActing(false));
+  };
 
   return (
     <View style={styles.wrap}>
       <Button label={open ? 'Hide routines' : `Routines (${jobs.length})`} variant="ghost" size="sm" onPress={() => setOpen((value) => !value)} />
       {open ? (
         <View style={styles.body}>
+          {error ? (
+            <Text variant="caption" color="accentWarm">
+              {error}
+            </Text>
+          ) : null}
           {jobs.map((job) => {
             const parsed = parseRoutineName(job.name ?? job.id);
             return (
@@ -35,13 +98,14 @@ export function RoutinesPane({
                 key={job.id}
                 title={parsed.title || job.id}
                 subtitle={job.paused ? 'paused' : 'active'}
-                onPress={() => onRun(job.id)}
+                onPress={() => submitRun(job.id)}
                 trailing={
                   <Button
                     label={job.paused ? 'Resume' : 'Pause'}
                     variant="ghost"
                     size="sm"
-                    onPress={() => onTogglePause(job.id, !job.paused)}
+                    disabled={busy}
+                    onPress={() => submitPause(job.id, !job.paused)}
                   />
                 }
               />
@@ -51,16 +115,12 @@ export function RoutinesPane({
             New routine
           </Text>
           <TextField value={title} onChangeText={setTitle} placeholder="inbox" />
-          <TextField value={schedule} onChangeText={setSchedule} placeholder="0 9 * * *" />
+          <TextField value={schedule} onChangeText={setSchedule} placeholder={DEFAULT_ROUTINE_SCHEDULE} />
           <TextField value={prompt} onChangeText={setPrompt} placeholder="Summarize overnight mail" multiline />
           <Button
-            label="Add"
-            disabled={!title.trim() || !prompt.trim()}
-            onPress={() => {
-              onCreate({ title: title.trim(), prompt: prompt.trim(), schedule: schedule.trim() || '0 9 * * *' });
-              setTitle('');
-              setPrompt('');
-            }}
+            label={creating ? 'Adding…' : 'Add'}
+            disabled={busy || !title.trim() || !prompt.trim()}
+            onPress={submitCreate}
           />
         </View>
       ) : null}
