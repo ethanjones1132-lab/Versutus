@@ -1,4 +1,6 @@
-import { effectiveModel, resolveSendModel, withSelectedModel } from '@/lib/gateway/model-selection';
+import { effectiveModel, resolveSendModel, withSelectedModel,
+  shouldReleaseSessionForModel,
+} from '@/lib/gateway/model-selection';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
 const BASE: GatewayProfile = {
@@ -57,6 +59,31 @@ describe('withSelectedModel', () => {
 });
 
 describe('bot-scoped model', () => {
+  it('a Bot with no explicit pick carries no model, so its own profile answers', () => {
+    // anvil is grok-4.6 and ledger is a deepseek on nvidia, configured in
+    // Hermes. Sending the configurable-chat model for an unpicked Bot would
+    // pin the new session to it and quietly swap the Bot's identity — the
+    // failure mode that put an unrequested NVIDIA model on a fresh thread.
+    const profile = {
+      ...BASE,
+      model: 'gateway-default',
+      backendModels: { 'hermes-local': 'hermes-default' },
+      botModels: {},
+    };
+    expect(effectiveModel(profile, 'hermes-local', 'anvil')).toBeUndefined();
+    expect(resolveSendModel(profile, 'hermes-local', 'anvil')).toEqual({});
+  });
+
+  it('an explicit pick for one Bot does not leak to another', () => {
+    const profile = {
+      ...BASE,
+      model: 'gateway-default',
+      botModels: { anvil: 'xai/grok-4.6' },
+    };
+    expect(effectiveModel(profile, 'hermes-local', 'anvil')).toBe('xai/grok-4.6');
+    expect(effectiveModel(profile, 'hermes-local', 'ledger')).toBeUndefined();
+  });
+
   it('prefers botModels when a bot is selected', () => {
     const profile = {
       ...BASE,
@@ -95,4 +122,28 @@ describe('bot-scoped model', () => {
     expect(resolveSendModel(profile, 'hermes-local', 'researcher')).toEqual({ model: 'x-ai/grok-4' });
     expect(resolveSendModel(profile, 'hermes-local', undefined)).toEqual({ model: 'other' });
   });
+});
+
+test('changing model releases the thread, because a session cannot change its own', () => {
+  // Hermes fixes a session's model at creation — PATCH /api/sessions/{id}
+  // refuses `model` outright — so a pick made mid-thread could never take
+  // effect on that thread. Releasing the session is what makes the picker
+  // mean something; the next send opens a fresh one pinned to the choice.
+  expect(shouldReleaseSessionForModel({ previous: 'longcat-2.0', next: 'kimi-k3', hasSession: true })).toBe(true);
+});
+
+test('re-picking the model already in use never throws the thread away', () => {
+  expect(shouldReleaseSessionForModel({ previous: 'kimi-k3', next: 'kimi-k3', hasSession: true })).toBe(false);
+  // Whitespace and case are not a change worth resetting a conversation for.
+  expect(shouldReleaseSessionForModel({ previous: ' kimi-k3 ', next: 'Kimi-K3', hasSession: true })).toBe(false);
+});
+
+test('with no session open there is nothing to release', () => {
+  expect(shouldReleaseSessionForModel({ previous: 'longcat-2.0', next: 'kimi-k3', hasSession: false })).toBe(false);
+});
+
+test('a first pick on a thread with no model yet keeps the thread', () => {
+  // Nothing was overridden before, so the session is already running whatever
+  // the gateway defaulted to — resetting here would cost context for nothing.
+  expect(shouldReleaseSessionForModel({ next: 'kimi-k3', hasSession: true })).toBe(false);
 });

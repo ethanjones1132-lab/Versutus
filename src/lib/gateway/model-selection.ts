@@ -30,10 +30,14 @@ export function effectiveModel(
   selectedBotId?: string,
 ): string | undefined {
   if (!gateway) return undefined;
-  if (selectedBotId) {
-    const botRemembered = gateway.botModels?.[selectedBotId];
-    if (botRemembered) return botRemembered;
-  }
+  // A Bot answers as itself. Its model belongs to its Hermes profile — anvil
+  // is grok-4.6, ledger is a deepseek on nvidia — so the ONLY thing that may
+  // override it is an explicit per-Bot pick. Falling through to the
+  // configurable-chat model here would hand every Bot whatever the last
+  // untargeted thread happened to use; harmless while Hermes ignored the
+  // per-turn model on an open session, and a silent identity swap the moment
+  // sessions began being pinned at creation.
+  if (selectedBotId) return gateway.botModels?.[selectedBotId];
   if (selectedBackendId) {
     const remembered = gateway.backendModels?.[selectedBackendId];
     if (remembered) return remembered;
@@ -111,4 +115,32 @@ export function groupByProvider<T extends ModelSearchable>(models: T[]): ModelSe
     }
   }
   return [...groups.values()].sort((a, b) => a.title.localeCompare(b.title));
+}
+
+/**
+ * Whether picking a model must release the current thread's session.
+ *
+ * A Hermes session's model is fixed when the session is created —
+ * `PATCH /api/sessions/{id}` refuses `model` outright — so a pick made
+ * mid-thread can never take effect on that thread: every later turn answers on
+ * whatever the session was opened with, while the picker goes on showing the
+ * choice. Releasing the session is what makes the picker mean something; the
+ * next send opens a fresh one pinned to it. This is the same trade the backend
+ * switcher already makes, for the same reason.
+ *
+ * False whenever there is nothing to gain: no session open, the same model
+ * re-picked, or a first pick on a thread that never had an override (there the
+ * session is already running the gateway's default, and resetting would cost
+ * the operator their context for nothing).
+ */
+export function shouldReleaseSessionForModel(input: {
+  previous?: string;
+  next: string;
+  hasSession: boolean;
+}): boolean {
+  if (!input.hasSession) return false;
+  const previous = input.previous?.trim();
+  const next = input.next?.trim();
+  if (!previous || !next) return false;
+  return previous.toLowerCase() !== next.toLowerCase();
 }

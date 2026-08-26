@@ -273,12 +273,18 @@ test('a Bot turn reaches that Bot\'s environment even with no backendId named', 
     const response = await fetch(`${base(gate)}/v1/chat/completions`, {
       method: 'POST',
       headers: auth(gate),
-      body: JSON.stringify({ bot: 'default', messages: [{ role: 'user', content: 'ping' }] }),
+      body: JSON.stringify({
+        bot: 'default',
+        sessionId: 'bot_1',
+        model: 'opencode-go/ox-alpha-free',
+        messages: [{ role: 'user', content: 'ping' }],
+      }),
     });
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.choices[0].message.content, 'ok');
-    assert.ok(calls.some((entry) => entry.startsWith('sendMessage:default')), `never reached the Bot: ${calls.join(', ')}`);
+    assert.ok(calls.includes('sendMessage:default'), `never reached the Bot: ${calls.join(', ')}`);
+    assert.equal(body.model, 'ox-alpha-free', 'the chosen model still travels');
   } finally {
     await gate.close();
   }

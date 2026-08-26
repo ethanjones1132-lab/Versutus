@@ -213,6 +213,12 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
       res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: result.text } }] })}\n\n`);
     }
 
+    // Same truth the non-streaming path reports: which model actually ran.
+    const report = modelReport(result?.runtime, model);
+    if (!clientDisconnected && report.model) {
+      res.write(`data: ${JSON.stringify({ ...report, choices: [] })}\n\n`);
+    }
+
     if (!clientDisconnected && !hasContent) {
       // The backend reported the turn as done, but nothing came back that
       // the user could see — a clean [DONE] here would render as a silent
@@ -236,10 +242,46 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
 }
 
 /** Backend models are `providerId/modelId`, since a CLI reaches many vendors. */
+/**
+ * Title for a session this turn has to open.
+ *
+ * Must be unique. Hermes keeps session titles unique and the backend recovers
+ * a refused title by returning the EXISTING session — correct for Bot Chat,
+ * which is a Bot's one permanent conversation, and quietly wrong here: the
+ * fixed title this used to pass ("Versutus") meant every fresh thread on the
+ * Gate was handed back the same session, opened days earlier and pinned for
+ * life to whatever model it was born with. Pinning the model at creation
+ * cannot help if creation keeps resolving to a session that already exists.
+ */
+function newThreadTitle() {
+  return `Versutus ${new Date().toISOString().replace('T', ' ').slice(0, 19)}`;
+}
+
 function parseQualifiedModel(model) {
   const separator = String(model).indexOf('/');
   if (separator === -1) return { modelId: String(model) };
   return { providerId: String(model).slice(0, separator), modelId: String(model).slice(separator + 1) };
+}
+
+/**
+ * The model that actually answered, alongside the one the caller asked for.
+ *
+ * Backends are allowed to substitute — Hermes does it silently through
+ * `fallback_providers`, so a session with history can answer as an entirely
+ * different model — and they report it in a runtime block. Reporting only the
+ * request would keep repeating the operator's own choice back at them, which
+ * is exactly how a swap stayed invisible from the phone. Absent runtime means
+ * the backend cannot tell us: say what was asked and nothing more, rather than
+ * inventing a confirmation.
+ */
+function modelReport(runtime, requested) {
+  const ran = runtime?.model ?? requested?.modelId;
+  const asked = runtime?.requested?.model ?? requested?.modelId;
+  const report = {};
+  if (ran) report.model = ran;
+  if (asked) report.requested_model = asked;
+  if (runtime?.provider) report.provider = runtime.provider;
+  return report;
 }
 
 async function proxyChat(root, provider, requestBody, res) {
@@ -909,8 +951,8 @@ export async function createGate(config = {}) {
       async function resolveConversationBackend(backendId, botId) {
         // Naming a Bot names the environment: a Bot is a Hermes profile, and
         // Claude Code / Codex / OpenCode have no notion of one. Falling back
-        // to the *first* attached environment - which sorts before Hermes on a
-        // typical Gate - answered every Bot conversation with 501 while the
+        // to the *first* attached environment — which sorts before Hermes on a
+        // typical Gate — answered every Bot conversation with 501 while the
         // environment that owned the Bot sat right there. Same capability-first
         // rule resolveBackendFor and resolveRunBackend already use; an explicit
         // ?backendId= still wins, so a deliberate pin is still told the truth.
@@ -1530,7 +1572,7 @@ export async function createGate(config = {}) {
         const limit = Number(url.searchParams.get('limit')) || undefined;
         // The limit must travel: slicing here cannot recover rows the backend
         // never returned. Hermes answers /api/sessions with its own default
-        // page, so a request for 200 quietly meant 50 - and a Bot Chat older
+        // page, so a request for 200 quietly meant 50 — and a Bot Chat older
         // than that window read as absent, which sent the caller off to create
         // a second one that Hermes then refused by title.
         const sessions = await backend.listSessions(limit);
@@ -1577,7 +1619,7 @@ export async function createGate(config = {}) {
         // re-downloading the entire window with an ever-larger limit.
         // A backend refusing a session id is an answer about the request, not
         // a crash in the Gate. Unwrapped, it fell to the outer catch as a 500
-        // and printed "Request handler error" over the operator's log - while
+        // and printed "Request handler error" over the operator's log — while
         // the app, seeing only a server error, could not tell "this session is
         // gone, start a new one" from "the Gate is broken".
         let all;
@@ -1830,8 +1872,8 @@ export async function createGate(config = {}) {
         // what gives it that platform's sessions, tools and approvals.
         // Naming a Bot is naming an environment, exactly as naming a backend
         // is. Gating this on `backendId` alone meant that once the app
-        // correctly stopped pinning the thread's chat backend for Bot turns -
-        // a Bot owns its own environment - every Bot message fell through to
+        // correctly stopped pinning the thread's chat backend for Bot turns —
+        // a Bot owns its own environment — every Bot message fell through to
         // the provider proxy below and came back as an upstream error from a
         // vendor that was never meant to serve it.
         const botForTurn = readBotId(url, body);
@@ -1839,10 +1881,17 @@ export async function createGate(config = {}) {
           const backend = await resolveConversationBackend(body.backendId, botForTurn);
           if (!backend) return;
           try {
-            const sessionId = body.sessionId
-              ?? (await backend.createSession({ title: 'Versutus' })).id;
             const text = lastUserText(body.messages);
             const model = body.model ? parseQualifiedModel(body.model) : undefined;
+            // The model is parsed BEFORE the session exists so a session this
+            // turn has to open is born pinned to it. A Hermes session's model
+            // is fixed at creation, so a session opened bare answers on the
+            // host default for the rest of its life and the per-turn `model`
+            // below cannot override it — which is how a thread asked for one
+            // model and was answered by another, and why the operator had to
+            // pick a model, lose the session, and send again to be heard.
+            const sessionId = body.sessionId
+              ?? (await backend.createSession({ title: newThreadTitle(), model })).id;
 
             if (body.stream === true) {
               await streamBackendTurn(backend, sessionId, { text, model }, res);
@@ -1866,6 +1915,7 @@ export async function createGate(config = {}) {
               id: `gate-${Date.now()}`,
               object: 'chat.completion',
               session_id: sessionId,
+              ...modelReport(result?.runtime, model),
               choices: [{ index: 0, message: { role: 'assistant', content: result.text }, finish_reason: 'stop' }],
             }));
           } catch (error) {

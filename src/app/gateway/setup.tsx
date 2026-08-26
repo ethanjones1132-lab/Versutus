@@ -27,7 +27,12 @@ const SECTIONS = [
 export default function GatewaySetupScreen() {
   const [section, setSection] = useState<Section>('providers');
   const { backends, selectedBackendId, selectBackend } = useGateway();
-  const activeBackendId = selectedBackendId ?? backends[0]?.id;
+  // Show what is actually selected. This used to fall back to `backends[0]`,
+  // which drew the Claude Code chip as chosen while the provider held
+  // undefined — so the screen disagreed with the thing doing the routing, and
+  // the operator had to tap a chip that already looked active. The provider
+  // adopts a default on connect now, so there is a real value to show.
+  const activeBackendId = selectedBackendId;
 
   return (
     <Screen>

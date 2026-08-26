@@ -1,4 +1,11 @@
-import { classifyRunFailure, describeRunFailure, formatRunFailure, routingFailureView } from '@/lib/gateway/run-failures';
+import {
+  classifyRunFailure,
+  describeModelSubstitution,
+  modelSubstitutionNote,
+  describeRunFailure,
+  formatRunFailure,
+  routingFailureView,
+} from '@/lib/gateway/run-failures';
 
 // Every raw string below is one the Gate actually emits — pinned verbatim so
 // a Gate wording change shows up here as a test failure instead of silently
@@ -113,6 +120,59 @@ test('routingFailureView hands the roster the same verdicts a failed send gets',
     title: 'Bot listen key refused',
     next: "Give this profile its own API_SERVER_KEY — named Bots reject the default profile's key.",
   });
+});
+
+test('the Gate\'s multiplex-off refusal classifies as multiplex, not as the key', () => {
+  // Anchored to the exact string gate/core/cli-environments/backends/hermes.mjs
+  // forBot() emits when gateway.multiplex_profiles is off. It mentions
+  // API_SERVER_KEY as the *second* step, so the key patterns must not claim it.
+  const raw =
+    'bot "anvil" cannot be addressed: gateway.multiplex_profiles is off, so /p/anvil/ serves the default profile — enable multiplex on the host, then give the profile its own API_SERVER_KEY';
+  expect(classifyRunFailure(raw)).toBe('multiplex_disabled');
+  expect(describeRunFailure(raw).next).toMatch(/multiplex_profiles/);
+});
+
+test('a substituted model is described honestly, naming both models', () => {
+  const view = describeModelSubstitution({
+    requested: 'longcat-2.0',
+    ran: 'deepseek-v4-flash',
+    provider: 'opencode-go',
+  });
+  expect(view).not.toBeNull();
+  expect(view!.title).toBe('A different model answered');
+  expect(view!.cause).toContain('longcat-2.0');
+  expect(view!.cause).toContain('deepseek-v4-flash');
+  expect(view!.next).toMatch(/fallback_providers/);
+});
+
+test('a turn that ran what was asked is not a substitution', () => {
+  expect(describeModelSubstitution({ requested: 'longcat-2.0', ran: 'longcat-2.0' })).toBeNull();
+  // Case and surrounding whitespace are not a swap.
+  expect(describeModelSubstitution({ requested: ' longcat-2.0 ', ran: 'LongCat-2.0' })).toBeNull();
+});
+
+test('an unreported model is unknown, never a claim either way', () => {
+  // A gateway that does not report what ran must not be made to look like it
+  // confirmed the pick, nor like it swapped one.
+  expect(describeModelSubstitution({ requested: 'longcat-2.0' })).toBeNull();
+  expect(describeModelSubstitution({ ran: 'deepseek-v4-flash' })).toBeNull();
+  expect(describeModelSubstitution({})).toBeNull();
+});
+
+test('the substitution note reads as one honest line for the transcript', () => {
+  const note = modelSubstitutionNote({
+    requested: 'longcat-2.0',
+    ran: 'deepseek-v4-flash',
+    provider: 'opencode-go',
+  });
+  expect(note).toBe(
+    'A different model answered — You chose longcat-2.0; opencode-go/deepseek-v4-flash replied. ' +
+      "Check the gateway's fallback_providers — a thread also keeps the model it was " +
+      'opened with, which is why changing model starts a fresh session.',
+  );
+  // Nothing to report is silence, not a reassuring line in the thread.
+  expect(modelSubstitutionNote({ requested: 'longcat-2.0', ran: 'longcat-2.0' })).toBeNull();
+  expect(modelSubstitutionNote({ ran: 'deepseek-v4-flash' })).toBeNull();
 });
 
 test('a room create naming several dead bots reaches the same verdict as one', () => {

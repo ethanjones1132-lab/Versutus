@@ -217,9 +217,23 @@ export function ChatScreen() {
     : null;
 
   const sessionLabel = currentSession?.title ?? (currentSessionId ? `${currentSessionId.slice(0, 10)}…` : undefined);
-  const modelLabel = effectiveModel(activeGateway, selectedBackendId, selectedBotId) ?? 'Default model';
+  // A Bot with no explicit pick answers on the model its Hermes profile
+  // carries, so name that rather than falling back to a generic label — and
+  // never to configurable chat's model, which is not what this thread runs on.
+  const botOwnModel = selectedBotId
+    ? rosterRows.find(
+        (row): row is Extract<RosterRow, { kind: 'bot' }> =>
+          row.kind === 'bot' && row.bot.id === selectedBotId,
+      )?.bot.model?.default ?? undefined
+    : undefined;
+  const modelLabel =
+    effectiveModel(activeGateway, selectedBackendId, selectedBotId) ?? botOwnModel ?? 'Default model';
   const identity = settings.pcName ?? activeGateway?.name;
-  const activeBackend = backends.find((backend) => backend.id === selectedBackendId) ?? backends[0];
+  // Only the backend actually routing this thread. The `?? backends[0]`
+  // fallback that used to be here labelled the chip "Claude Code" whenever the
+  // selection had not resolved — the same lie the Gate setup screen told, and
+  // the reason the UI could not be trusted about what a send would hit.
+  const activeBackend = backends.find((backend) => backend.id === selectedBackendId);
   const backendLabel = activeBackend?.label;
 
   // One consolidated thread-config sheet (roadmap 2.2): sessions, models and

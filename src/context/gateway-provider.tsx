@@ -51,8 +51,9 @@ import {
   type GroupTranscriptEntry,
 } from '@/lib/gateway/groups';
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
-import { formatRunFailure } from '@/lib/gateway/run-failures';
-import { effectiveModel, resolveSendModel, withSelectedModel } from '@/lib/gateway/model-selection';
+import { formatRunFailure, modelSubstitutionNote } from '@/lib/gateway/run-failures';
+import { resolveDefaultBackend } from '@/lib/gateway/backend-defaults';
+import { effectiveModel, resolveSendModel, shouldReleaseSessionForModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   categorizeProbeError,
   GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
@@ -208,6 +209,18 @@ type GatewayContextValue = {
     create: (input: { name: string; prompt: string; schedule: string }) => Promise<void>;
     run: (jobId: string) => Promise<void>;
     pause: (jobId: string, paused: boolean) => Promise<void>;
+  };
+  /**
+   * Cron transparency, read-only. `available` is false on a gateway whose
+   * client cannot join jobs to their runs — the Activity section then does not
+   * render at all, rather than showing an empty list that reads as "no
+   * scheduled work" on a host that has plenty.
+   */
+  cron: {
+    available: boolean;
+    list: () => Promise<import('@/lib/gateway/cron').CronJob[]>;
+    runs: (jobId: string) => Promise<import('@/lib/gateway/cron').CronRun[]>;
+    transcript: (runId: string, limit?: number) => Promise<import('@/lib/gateway/cron').CronTurn[]>;
   };
   botGroups: {
     list: () => Promise<BotGroupRoom[]>;
@@ -507,6 +520,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [selectedBackendId, setSelectedBackendId] = useState<string | undefined>(undefined);
   const [selectedBotId, setSelectedBotId] = useState<string | undefined>(undefined);
+  // Mirrored so long-lived callbacks (reloadHistoryFor and friends) can read
+  // the current scope without taking it as a dependency — the same reason
+  // activeGatewayRef exists. Rebuilding those callbacks on every backend or
+  // Bot switch would re-run the effects that depend on their identity.
+  const selectedBackendIdRef = useRef<string | undefined>(undefined);
+  const selectedBotIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    selectedBackendIdRef.current = selectedBackendId;
+  }, [selectedBackendId]);
+  useEffect(() => {
+    selectedBotIdRef.current = selectedBotId;
+  }, [selectedBotId]);
   // Client-derived honesty verdicts, decided when a client is installed and
   // cleared when it goes away: does this client speak bots / group rooms at
   // all? The pure decisions live in lib/gateway so the UI hides creation
@@ -649,7 +674,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // reload — an operator connecting to such a gate still gets the
       // dashboard and every environment run.
       if (!sessionId) {
-        const outcome = await resolveResumeSession(client);
+        // Same reason as createNewSession: if this connect has to open a
+        // session, it must be born with the operator's model already on it.
+        const outcome = await resolveResumeSession(
+          client,
+          effectiveModel(gateway, selectedBackendIdRef.current, selectedBotIdRef.current),
+        );
         if (requestId === historyRequestRef.current) setSessionList(outcome.sessions);
         sessionId = outcome.sessionId;
       }
@@ -1381,18 +1411,75 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setMessages([]);
       if (activeGateway) {
         // Restore the model last used in this backend, so a send after the
-        // switch does not carry the previous backend's model id.
+        // switch does not carry the previous backend's model id — and remember
+        // the backend itself, so the next launch opens here rather than making
+        // the operator pick it again.
         const restored = effectiveModel(activeGateway, backendId);
-        if (restored && restored !== activeGateway.model) {
-          const updated = { ...activeGateway, model: restored };
-          setActiveGateway(updated);
-          void upsertGateway(updated).then(setGateways);
-        }
+        const updated = {
+          ...activeGateway,
+          backendId,
+          ...(restored && restored !== activeGateway.model ? { model: restored } : {}),
+        };
+        setActiveGateway(updated);
+        void upsertGateway(updated).then(setGateways);
         void reloadHistoryFor(activeGateway);
       }
     },
     [activeGateway, reloadHistoryFor],
   );
+
+  /**
+   * Land a fresh connection on a usable backend without making the operator
+   * go and find one.
+   *
+   * Every launch used to begin the same way: open Gate setup, tap the Hermes
+   * chip, press Start on the CLI card, then go back to chat. None of it was a
+   * decision — `selectedBackendId` simply began as undefined, and the setup
+   * screen's `?? backends[0]` made claude-local LOOK selected while the
+   * provider had nothing. This adopts the remembered backend (or the most
+   * capable one) as soon as the manifest lands.
+   *
+   * Deliberately lighter than selectBackend: there is no thread to tear down
+   * on first adoption, and clearing messages here would fight the history
+   * reload the connect path is already running.
+   */
+  useEffect(() => {
+    if (selectedBackendId || backends.length === 0) return undefined;
+    const resolved = resolveDefaultBackend(backends, activeGatewayRef.current?.backendId);
+    if (!resolved) return undefined;
+
+    // Deferred a tick like every other loader here: writing state straight
+    // from an effect body trips react-hooks/set-state-in-effect.
+    const timer = setTimeout(() => {
+      const client = clientRef.current as (PortalClient & { setBackendId?: (id?: string) => void }) | null;
+      client?.setBackendId?.(resolved);
+      setSelectedBackendId(resolved);
+
+      const gateway = activeGatewayRef.current;
+      if (gateway && gateway.backendId !== resolved) {
+        const updated = { ...gateway, backendId: resolved };
+        setActiveGateway(updated);
+        void upsertGateway(updated).then(setGateways);
+      }
+
+      // Probe the environment so its card reads "ready" rather than "stopped".
+      // This is what the operator was pressing Start for: the Gate boots every
+      // environment as stopped until something probes it, and lifecycle.start
+      // IS that probe (supervisor.start === check). Chat never needed it —
+      // sessions create fine against a stopped environment — so this is
+      // best-effort and its failure must not block the connection.
+      void gatewayRequest('environments.lifecycle.start', { id: resolved }).catch(() => undefined);
+
+      // The connect path already loaded history, but it did so before this
+      // backend existed — an unscoped /v1/sessions resolves to whichever
+      // environment the Gate picks by capability (claude-local here), so the
+      // thread would show one backend's sessions while sends went to another.
+      // Reload now that the scope is settled.
+      if (gateway) void reloadHistoryFor(gateway);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [backends, gatewayRequest, reloadHistoryFor, selectedBackendId]);
+
 
   const runAgentCommand = useCallback(
     async (command: string, options?: { onDelta?: (delta: string) => void }) => {
@@ -1630,6 +1717,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             signal: abortController.signal,
             onToolCall: (toolCall) => {
               setMessages((prev) => appendToolCallDelta(prev, runId, toolCall));
+            },
+            // A gateway may answer with a model the operator did not choose —
+            // Hermes falls through `fallback_providers` and says so only in
+            // its runtime block. Saying nothing left the thread looking like
+            // the pick had been honoured, so a swap is now on the record.
+            onModelReport: (report) => {
+              const note = modelSubstitutionNote(report);
+              if (note) setMessages((prev) => appendSystemNote(prev, note));
             },
           },
         );
@@ -2389,6 +2484,24 @@ const response = await executeGatewaySlashCommand(trimmed, {
           };
       setActiveGateway(updated);
       void upsertGateway(updated).then(setGateways);
+
+      // A Hermes session's model is fixed at creation, so a pick made
+      // mid-thread would never reach the wire — every later turn keeps
+      // answering on whatever the session was opened with. Release the session
+      // so the next send opens a fresh one pinned to the choice; same trade
+      // selectBackend already makes, and the only way the picker means
+      // anything after turn one.
+      const released = shouldReleaseSessionForModel({
+        previous: effectiveModel(activeGateway, selectedBackendId, selectedBotId),
+        next: modelId,
+        hasSession: Boolean(sessionIdRef.current),
+      });
+      if (released) {
+        sessionIdRef.current = undefined;
+        clientRef.current?.setSessionId(undefined);
+        setCurrentSessionId(undefined);
+        setMessages([]);
+      }
     },
     [activeGateway, closeModelPicker, sendChatInput, selectedBackendId, selectedBotId],
   );
@@ -2429,6 +2542,27 @@ const response = await executeGatewaySlashCommand(trimmed, {
       const client = clientRef.current;
       if (!client?.setJobPaused) throw new Error('This gateway does not pause jobs.');
       await client.setJobPaused(jobId, paused);
+    },
+  }), []);
+
+  const cron = useMemo(() => ({
+    get available() {
+      return typeof clientRef.current?.listCronJobs === 'function';
+    },
+    list: async () => {
+      const client = clientRef.current;
+      if (!client?.listCronJobs) return [];
+      return client.listCronJobs();
+    },
+    runs: async (jobId: string) => {
+      const client = clientRef.current;
+      if (!client?.cronRuns) return [];
+      return client.cronRuns(jobId);
+    },
+    transcript: async (runId: string, limit?: number) => {
+      const client = clientRef.current;
+      if (!client?.cronTranscript) return [];
+      return client.cronTranscript(runId, limit);
     },
   }), []);
 
@@ -2541,7 +2675,13 @@ const response = await executeGatewaySlashCommand(trimmed, {
     const client = clientRef.current;
     if (!client?.createSession) return;
     try {
-      const created = await client.createSession(title);
+      // Pin the operator's model as the session is opened. A Hermes session's
+      // model cannot be changed afterwards, so a session created bare is
+      // permanently stuck on the host default no matter what the picker shows.
+      const created = await client.createSession(
+        title,
+        effectiveModel(activeGateway, selectedBackendId, selectedBotId),
+      );
       sessionIdRef.current = created.id;
       setCurrentSessionId(created.id);
       setMessages([]);
@@ -2550,7 +2690,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       setLastError(error instanceof Error ? error.message : String(error));
     }
     closeSessionSelector();
-  }, [closeSessionSelector]);
+  }, [activeGateway, closeSessionSelector, selectedBackendId, selectedBotId]);
 
   const deleteSessionById = useCallback(
     async (sessionId: string) => {
@@ -2623,6 +2763,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       clearBot,
       botJobs,
       botGroups,
+      cron,
       runAgentCommand,
       dynamicCommands,
       setupFromPcAddress,
@@ -2675,7 +2816,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       messages, isSending, isCommandRunning, lastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
+      cron, gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
       setAutoConnect, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

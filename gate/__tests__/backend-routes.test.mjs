@@ -87,7 +87,11 @@ function stubTurnRegistry({ calls = [], sendMessage, streamEvents } = {}) {
     createBackend() {
       return {
         async listSessions() { return [SESSION]; },
-        async createSession(input) { return { ...SESSION, title: input?.title ?? null }; },
+        async createSession(input) {
+          // Records the model so a test can prove the session was born pinned.
+          calls.push(`createSession:model=${input?.model?.modelId ?? 'none'}`);
+          return { ...SESSION, title: input?.title ?? null };
+        },
         async deleteSession() {},
         async listMessages() { return []; },
         async sendMessage(id, input) { calls.push('sendMessage'); return sendMessage(id, input); },
@@ -1508,6 +1512,104 @@ test('bot groups: a room disbanded while the round runs says so instead of a pri
     await gate.close();
   }
 });
+// ─── model substitution must be visible ─────────────────────────────
+// Reproduced live 2026-08-24: ask Hermes for longcat-2.0 on a session that
+// already has history and `fallback_providers` answers as deepseek-v4-flash.
+// Hermes reports the swap (runtime.model vs runtime.requested); the Gate threw
+// it away, so the app kept showing the model the operator picked and the
+// substitution was undetectable from the phone.
+
+test('a turn reports the model that actually answered', async () => {
+  const registry = stubTurnRegistry({
+    sendMessage: async () => ({
+      text: 'ok',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+      runtime: {
+        provider: 'opencode-go',
+        model: 'deepseek-v4-flash',
+        requested: { provider: 'opencode-go', model: 'longcat-2.0' },
+      },
+    }),
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        model: 'opencode-go/longcat-2.0',
+        messages: [{ role: 'user', content: 'ping' }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.model, 'deepseek-v4-flash', 'the answer names what ran, not what was asked');
+    assert.equal(body.requested_model, 'longcat-2.0');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a streamed turn announces a substituted model on the wire', async () => {
+  const registry = stubTurnRegistry({
+    sendMessage: async () => ({
+      text: 'ok',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+      runtime: {
+        provider: 'opencode-go',
+        model: 'deepseek-v4-flash',
+        requested: { provider: 'opencode-go', model: 'longcat-2.0' },
+      },
+    }),
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        model: 'opencode-go/longcat-2.0',
+        messages: [{ role: 'user', content: 'ping' }],
+        stream: true,
+      }),
+    });
+    const text = await response.text();
+    const frames = text.split('\n\n').filter((line) => line.startsWith('data: ')).map((line) => line.slice(6));
+    const announced = frames.map((f) => { try { return JSON.parse(f); } catch { return null; } })
+      .find((f) => f && f.model);
+    assert.ok(announced, `no frame carried the model: ${text.slice(0, 300)}`);
+    assert.equal(announced.model, 'deepseek-v4-flash');
+    assert.equal(announced.requested_model, 'longcat-2.0');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a turn that ran what was asked reports no substitution', async () => {
+  const registry = stubTurnRegistry({
+    sendMessage: async () => ({
+      text: 'ok',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+      runtime: { provider: 'opencode-go', model: 'longcat-2.0', requested: { model: 'longcat-2.0' } },
+    }),
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        model: 'opencode-go/longcat-2.0',
+        messages: [{ role: 'user', content: 'ping' }],
+      }),
+    });
+    const body = await response.json();
+    assert.equal(body.model, 'longcat-2.0');
+    assert.equal(body.requested_model, 'longcat-2.0');
+  } finally {
+    await gate.close();
+  }
+});
 
 /**
  * Group rooms are roster-guarded since the unknown-member refusal: writes
@@ -1667,6 +1769,83 @@ test('bot groups: a patch that names members AND a blank name lands nowhere', as
     const after = await (await fetch(`${base}/v1/bot-groups`, { headers: auth(gate) })).json();
     assert.deepEqual(after.data[0].memberIds, ['researcher', 'coder']);
     assert.equal(after.data[0].name, 'crew', 'the good half of a poisoned patch must not land');
+  } finally {
+    await gate.close();
+  }
+});
+
+// ─── the model must be pinned when the turn opens the session ────────
+// Reported 2026-08-25: every fresh thread answered on an unrequested NVIDIA
+// model, and the operator had to pick a model, watch the session be released,
+// and send again before being heard. The cause was ordering — the chat route
+// created the session BEFORE parsing body.model, so the session was born with
+// no model. A Hermes session's model is immutable, so the per-turn model that
+// followed could never correct it.
+
+test('a turn that has to open a session pins the requested model to it', async () => {
+  const calls = [];
+  const registry = stubTurnRegistry({
+    calls,
+    sendMessage: async () => ({ text: 'ok', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }),
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local',
+        // No sessionId: this is the first turn of a thread, the case that broke.
+        messages: [{ role: 'user', content: 'ping' }],
+        model: 'moonshot/kimi-k2.5',
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.ok(
+      calls.includes('createSession:model=kimi-k2.5'),
+      `session was not pinned to the requested model: ${JSON.stringify(calls)}`,
+    );
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a turn with no model still opens a session, leaving the backend default', async () => {
+  // A Bot carries its own model in its Hermes profile. Sending nothing is how
+  // the app says "answer as yourself", so this must not invent a model.
+  const calls = [];
+  const registry = stubTurnRegistry({
+    calls,
+    sendMessage: async () => ({ text: 'ok', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }),
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({ backendId: 'stub-local', messages: [{ role: 'user', content: 'ping' }] }),
+    });
+    assert.equal(response.status, 200);
+    assert.ok(calls.includes('createSession:model=none'), JSON.stringify(calls));
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a turn on an existing session does not open another one', async () => {
+  const calls = [];
+  const registry = stubTurnRegistry({
+    calls,
+    sendMessage: async () => ({ text: 'ok', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } }),
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'ping' }], model: 'moonshot/kimi-k2.5',
+      }),
+    });
+    assert.ok(!calls.some((entry) => entry.startsWith('createSession')), JSON.stringify(calls));
   } finally {
     await gate.close();
   }

@@ -1,3 +1,10 @@
+import {
+  parseCronSessionId,
+  runsForJob,
+  toCronJobView,
+  toCronTurn,
+} from '../cron-view.mjs';
+
 /**
  * Hermes-dialect RPC methods, answered by the Gate itself.
  *
@@ -46,8 +53,61 @@ export function createGatewayMethods({ getBackend }) {
     'skills.list': (params) => via(getBackend, params, 'listSkills', (b) => b.listSkills()),
     'skills.status': (params) => via(getBackend, params, 'listSkills', (b) => b.listSkills()),
 
+    // Hermes-dialect passthroughs the slash-command registry speaks. Left raw
+    // on purpose: `/cron` renders whatever the host returns.
     'cron.list': (params) => via(getBackend, params, 'listJobs', (b) => b.listJobs()),
     'cron.status': (params) => via(getBackend, params, 'listJobs', (b) => b.listJobs()),
+
+    // ── Cron transparency ────────────────────────────────────────────
+    // The curated surfaces. `cron.list` above answers the dialect; these
+    // answer the operator's questions — what is this job, did it work, what
+    // is it doing right now — by joining the job record, its latest
+    // execution, and the sessions its runs wrote. The
+    // `cron_<jobId>_<ts>` naming that links them is a HOST convention and
+    // stays here, so the phone never learns how Hermes spells a session id.
+    'cron.jobs': async (params) =>
+      via(getBackend, params, 'listJobs', async (backend) => {
+        const raw = await backend.listJobs();
+        const jobs = (raw?.data ?? raw?.jobs ?? (Array.isArray(raw) ? raw : []))
+          .map(toCronJobView)
+          .filter(Boolean);
+        return { object: 'list', data: jobs };
+      }),
+
+    'cron.runs': async (params) => {
+      const jobId = jobIdOf(params);
+      // Resolve on the CRON capability, not on listSessions. Every backend can
+      // list sessions — Claude Code sorts first and answers with its own
+      // transcripts, which contain no cron runs at all. The environment that
+      // owns the jobs is the only one whose sessions can hold their runs.
+      return via(getBackend, params, 'listJobs', async (backend) => {
+        if (typeof backend.listSessions !== 'function') {
+          throw new Error(`This gateway's cron backend cannot list sessions, so run history is unavailable`);
+        }
+        // Ask wide: runs are interleaved with every other session on the
+        // host, so a small page would silently hide older runs.
+        const sessions = await backend.listSessions(Number(params?.limit) || 200);
+        return { object: 'list', data: runsForJob(jobId, sessions ?? []) };
+      });
+    },
+
+    /** Read-only transcript of one run. `runId` is the run's session id. */
+    'cron.transcript': async (params) => {
+      const runId = params?.runId ?? params?.run_id ?? params?.sessionId;
+      if (!runId) throw new Error('runId is required');
+      if (!parseCronSessionId(runId)) {
+        throw new Error(`"${runId}" is not a cron run id`);
+      }
+      // Same reasoning as cron.runs: the transcript lives on the environment
+      // that ran the job, not on whichever one lists messages first.
+      return via(getBackend, params, 'listJobs', async (backend) => {
+        if (typeof backend.listMessages !== 'function') {
+          throw new Error(`This gateway's cron backend cannot read transcripts`);
+        }
+        const messages = await backend.listMessages(String(runId), Number(params?.limit) || undefined);
+        return { object: 'list', data: (messages ?? []).map(toCronTurn).filter(Boolean) };
+      });
+    },
     'jobs.run': (params) => via(getBackend, params, 'runJob', (b) => b.runJob(jobIdOf(params))),
     'jobs.pause': (params) => via(getBackend, params, 'setJobPaused', (b) => b.setJobPaused(jobIdOf(params), true)),
     'jobs.resume': (params) => via(getBackend, params, 'setJobPaused', (b) => b.setJobPaused(jobIdOf(params), false)),

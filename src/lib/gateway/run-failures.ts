@@ -155,7 +155,7 @@ const TITLES: Record<Exclude<RunFailureKind, 'generic'>, Pick<RunFailureView, 't
  * re-declared by callers — so the strings stay pinned in one place.
  */
 export function routingFailureView(
-  kind: Extract<RunFailureKind, 'listen_key_missing' | 'default_key_refused'>,
+  kind: Extract<RunFailureKind, 'listen_key_missing' | 'multiplex_disabled' | 'default_key_refused'>,
 ): Pick<RunFailureView, 'title' | 'next'> {
   return TITLES[kind];
 }
@@ -183,6 +183,60 @@ export function describeRunFailure(message: string): RunFailureView {
 export function formatRunFailure(message: string): string | null {
   const view = describeRunFailure(message);
   if (!view.next) return null;
+  const separator = /[.!?]$/.test(view.cause.trim()) ? ' ' : '. ';
+  return `${view.title} — ${view.cause}${separator}${view.next}`;
+}
+
+/** What the Gate reports about a turn's model, once it resolves. */
+export type ModelReport = {
+  /** The model that was asked for. */
+  requested?: string;
+  /** The model that actually served the turn. */
+  ran?: string;
+  /** The provider that served it, when reported. */
+  provider?: string;
+};
+
+/**
+ * The honest account of a turn that was answered by a model the operator did
+ * not choose, or null when nothing can be claimed.
+ *
+ * Backends substitute. Hermes falls through `fallback_providers` whenever the
+ * requested model refuses — and, observed 2026-08-24, keeps doing it for the
+ * rest of the process once one unsupported-model 401 marks the primary
+ * provider's credential pool exhausted. It reports the swap; the app used to
+ * show the operator's own pick regardless, so a LongCat conversation answered
+ * by something else looked exactly like a LongCat conversation.
+ *
+ * Null in all three honest cases: the names match, or either name is missing.
+ * A gateway that cannot say what ran leaves the question open — it must never
+ * be dressed up as confirmation.
+ */
+export function describeModelSubstitution(report: ModelReport): RunFailureView | null {
+  const requested = report.requested?.trim();
+  const ran = report.ran?.trim();
+  if (!requested || !ran) return null;
+  if (requested.toLowerCase() === ran.toLowerCase()) return null;
+  const servedBy = report.provider?.trim() ? `${report.provider.trim()}/${ran}` : ran;
+  return {
+    kind: 'generic',
+    title: 'A different model answered',
+    cause: `You chose ${requested}; ${servedBy} replied.`,
+    next: 'Check the gateway\'s fallback_providers — a thread also keeps the model it was opened with, which is why changing model starts a fresh session.',
+  };
+}
+
+/**
+ * One line for the transcript when a turn was answered by a model the
+ * operator did not choose, or null when there is nothing to report.
+ *
+ * Joined the way `formatRunFailure` joins — no doubled punctuation — because
+ * it lands in the same system-note channel. Null means silence: a gateway
+ * that cannot say what ran gets no reassuring line either.
+ */
+export function modelSubstitutionNote(report: ModelReport): string | null {
+  const view = describeModelSubstitution(report);
+  if (!view?.next) return null;
   const separator = /[.!?]$/.test(view.cause.trim()) ? ' ' : '. ';
   return `${view.title} — ${view.cause}${separator}${view.next}`;
 }
