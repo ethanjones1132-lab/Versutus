@@ -750,13 +750,7 @@ export function ChatScreen() {
         status={status}
         statusDetail={status === 'connected' ? undefined : statusDetail || probeMessage}
         streaming={isStreaming}
-        sessionLabel={
-          surface.kind === 'group'
-            ? activeGroup?.name
-            : threadSurface
-              ? sessionLabel
-              : undefined
-        }
+        sessionLabel={threadSurface ? sessionLabel : undefined}
         modelLabel={threadSurface ? modelLabel : undefined}
         onSessionPress={threadSurface ? () => void openSessionSelector() : undefined}
         onModelPress={threadSurface ? () => openModelPicker('default') : undefined}
@@ -769,6 +763,7 @@ export function ChatScreen() {
               ? backendLabel
               : undefined
         }
+        groupName={surface.kind === 'group' ? activeGroup?.name : undefined}
         onBackendPress={surface.kind === 'configurable' && backends.length > 0 ? () => setBackendPickerVisible(true) : undefined}
         onRosterPress={surface.kind === 'roster' ? undefined : () => {
           clearBot();

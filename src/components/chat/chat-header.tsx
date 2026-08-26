@@ -8,6 +8,8 @@ import type { ConnectionStatus } from '@/lib/gateway/types';
 import {
   CHAT_HEADER_CHIP_MAX_WIDTH,
   chatHeaderChipLayout,
+  chatHeaderSessionChip,
+  chatHeaderTitle,
 } from '@/lib/motion/chat-header-layout';
 
 export type ChatHeaderProps = {
@@ -22,6 +24,8 @@ export type ChatHeaderProps = {
   onOverflowPress?: () => void;
   /** Present only when the gateway advertises chat backends. */
   backendLabel?: string;
+  /** Group room name. Titles the header; rooms have no session chip. */
+  groupName?: string;
   onBackendPress?: () => void;
   onRosterPress?: () => void;
 };
@@ -38,6 +42,7 @@ export function ChatHeader({
   onModelPress,
   onOverflowPress,
   backendLabel,
+  groupName,
   onBackendPress,
   onRosterPress,
 }: ChatHeaderProps) {
@@ -45,8 +50,13 @@ export function ChatHeader({
   const { width: windowWidth } = useWindowDimensions();
   const color = statusColor(tokens, status);
   const pulsing = streaming || status === 'connecting' || status === 'reconnecting' || status === 'pairing';
+  const title = chatHeaderTitle({ gatewayName, backendLabel, groupName });
   const showModel = Boolean(modelLabel && onModelPress);
-  const showSession = Boolean(sessionLabel && onSessionPress);
+  const showSession = chatHeaderSessionChip(
+    groupName?.trim()
+      ? { surface: 'group' }
+      : { surface: 'thread', sessionLabel, sessionPress: Boolean(onSessionPress) },
+  );
   const stacked =
     chatHeaderChipLayout({
       windowWidth,
@@ -81,12 +91,12 @@ export function ChatHeader({
       accessibilityLabel={backendLabel ? `Chat backend: ${backendLabel}. Change backend.` : undefined}
       style={styles.titles}>
       <Text variant="headline" numberOfLines={1} style={styles.name}>
-        {backendLabel ?? gatewayName}
+        {title}
       </Text>
       <Text variant="micro" color="secondary" numberOfLines={1}>
         {streaming
           ? 'Streaming response…'
-          : backendLabel
+          : backendLabel || groupName?.trim()
             ? `via ${gatewayName}${statusDetail ? ` · ${statusDetail}` : ''}`
             : statusDetail || 'Ready for chat and slash commands'}
       </Text>
@@ -102,7 +112,7 @@ export function ChatHeader({
       />
     ) : null;
   const sessionChip =
-    sessionLabel && onSessionPress ? (
+    showSession && sessionLabel && onSessionPress ? (
       <Chip
         label={sessionLabel}
         icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}

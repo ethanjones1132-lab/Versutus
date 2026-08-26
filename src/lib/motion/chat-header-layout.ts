@@ -38,3 +38,24 @@ export function chatHeaderChipLayout(input: {
   const needed = THREAD_CHROME + chips * CHAT_HEADER_CHIP_MAX_WIDTH + gaps + MIN_TITLE;
   return needed > input.windowWidth ? 'stacked' : 'row';
 }
+
+/** Headline: a group is the room name; a thread is the backend, else the gateway. */
+export function chatHeaderTitle(input: {
+  gatewayName: string;
+  backendLabel?: string;
+  groupName?: string;
+}): string {
+  const groupName = input.groupName?.trim();
+  if (groupName) return groupName;
+  return input.backendLabel ?? input.gatewayName;
+}
+
+/** Session chip only on a thread that can open Sessions. Rooms never show one. */
+export function chatHeaderSessionChip(
+  input:
+    | { surface: 'group' }
+    | { surface: 'thread'; sessionLabel?: string; sessionPress: boolean },
+): boolean {
+  if (input.surface === 'group') return false;
+  return Boolean(input.sessionLabel && input.sessionPress);
+}
