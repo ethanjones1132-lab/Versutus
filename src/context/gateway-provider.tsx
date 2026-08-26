@@ -37,6 +37,12 @@ import {
   prependEarlier,
 } from '@/lib/gateway/messages';
 import { liveSessionId, pinLiveSession, resolveResumeSession } from '@/lib/gateway/session-resume';
+import {
+  applySessionListRead,
+  emptySessionList,
+  sessionListCopy,
+  type SessionListState,
+} from '@/lib/gateway/session-list';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import {
   hasBotManagement as probeBotManagement,
@@ -290,6 +296,8 @@ type GatewayContextValue = {
   closeSessionSelector: () => void;
   selectSession: (sessionId: string) => void;
   sessionList: any[];
+  /** Set when the last session-list read failed. Empty is not the same fact. */
+  sessionListError?: string;
   currentSessionId?: string;
   /** True while session history is being (re)loaded — drives chat skeletons. */
   historyLoading: boolean;
@@ -584,7 +592,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     agentId?: string;
   }>({ visible: false, mode: 'default' });
   const [modelCatalog, setModelCatalog] = useState<any[]>([]);
-  const [sessionList, setSessionList] = useState<HermesSession[]>([]);
+  const [sessionListState, setSessionListState] = useState<SessionListState<HermesSession>>(
+    emptySessionList<HermesSession>(),
+  );
   const [sessionSelector, setSessionSelector] = useState<{ visible: boolean }>({ visible: false });
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -685,7 +695,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           client,
           effectiveModel(gateway, selectedBackendIdRef.current, selectedBotIdRef.current),
         );
-        if (requestId === historyRequestRef.current) setSessionList(outcome.sessions);
+        if (requestId === historyRequestRef.current) {
+          setSessionListState((previous) => ({ ...previous, sessions: outcome.sessions }));
+        }
         sessionId = outcome.sessionId;
       }
 
@@ -2173,10 +2185,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
       const client = clientRef.current;
       if (client) {
         const sessions = await client.getSessions(20);
-        setSessionList(sessions);
+        setSessionListState((previous) => applySessionListRead(previous, { ok: true, sessions }));
       }
     } catch {
-      // Keep selector usable
+      setSessionListState((previous) => applySessionListRead(previous, { ok: false }));
     }
     setSessionSelector({ visible: true });
   }, []);
@@ -2732,7 +2744,11 @@ const response = await executeGatewaySlashCommand(trimmed, {
       });
       sessionIdRef.current = chat.id;
       setCurrentSessionId(chat.id);
-      setSessionList((prev) => (prev.some((session) => session.id === chat.id) ? prev : [chat, ...prev]));
+      setSessionListState((previous) =>
+        previous.sessions.some((session) => session.id === chat.id)
+          ? previous
+          : { ...previous, sessions: [chat, ...previous.sessions] },
+      );
       if (pinned && pinned !== activeGateway) {
         activeGatewayRef.current = pinned;
         setActiveGateway(pinned);
@@ -2769,7 +2785,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
       sessionIdRef.current = created.id;
       setCurrentSessionId(created.id);
       setMessages([]);
-      setSessionList((prev) => [created, ...prev]);
+      setSessionListState((previous) => ({
+        ...previous,
+        sessions: [created, ...previous.sessions],
+      }));
       if (pinned && pinned !== activeGateway) {
         activeGatewayRef.current = pinned;
         setActiveGateway(pinned);
@@ -2787,7 +2806,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
       if (!client?.deleteSession) return;
       try {
         await client.deleteSession(sessionId);
-        setSessionList((prev) => prev.filter((session) => session.id !== sessionId));
+        setSessionListState((previous) => ({
+          ...previous,
+          sessions: previous.sessions.filter((session) => session.id !== sessionId),
+        }));
         if (sessionIdRef.current === sessionId) {
           sessionIdRef.current = undefined;
           setCurrentSessionId(undefined);
@@ -2890,7 +2912,8 @@ const response = await executeGatewaySlashCommand(trimmed, {
       openSessionSelector,
       closeSessionSelector,
       selectSession,
-      sessionList,
+      sessionList: sessionListState.sessions,
+      sessionListError: sessionListCopy(sessionListState),
       currentSessionId,
       historyLoading,
       createNewSession,
@@ -2913,7 +2936,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       rejectTlsFingerprintChange,
       runTask, activityRuns, stopActivityRun, modelPicker, openModelPicker, closeModelPicker,
       selectModel, modelCatalog, sessionSelector,
-      openSessionSelector, closeSessionSelector, selectSession, sessionList, currentSessionId,
+      openSessionSelector, closeSessionSelector, selectSession, sessionListState, currentSessionId,
       historyLoading, createNewSession, deleteSessionById, deleteLocalMessage,
       tlsFingerprintChange,
       dynamicCommands,

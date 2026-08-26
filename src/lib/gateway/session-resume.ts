@@ -8,8 +8,10 @@ export type SessionResumeOutcome = {
   /** The session the thread resumes, or undefined for stateless chat. */
   sessionId: string | undefined;
   /**
-   * Whatever the gateway could list. The session selector shows even a
-   * failed/sessionless read as an empty list — never a stale one.
+   * Whatever the gateway could list. A failed list degrades to [] so
+   * connect still proceeds; the session selector folds ok vs failed
+   * separately (`applySessionListRead`) and must not use this array as
+   * empty-ok.
    */
   sessions: HermesSession[];
 };
