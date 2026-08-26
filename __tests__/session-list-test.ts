@@ -3,6 +3,7 @@ import {
   EMPTY_SESSION_LIST,
   sessionCreateTitle,
   sessionListCopy,
+  sessionListTitle,
   type SessionListEntry,
 } from '@/lib/gateway/session-list';
 
@@ -94,4 +95,23 @@ test('a named new session trims the title', () => {
 test('an empty name still creates untitled — today\'s behaviour', () => {
   expect(sessionCreateTitle('')).toBeUndefined();
   expect(sessionCreateTitle('   ')).toBeUndefined();
+});
+
+test('an untitled session reads as Untitled, not a truncated id', () => {
+  expect(sessionListTitle(undefined)).toBe('Untitled');
+  expect(sessionListTitle(null)).toBe('Untitled');
+  expect(sessionListTitle('')).toBe('Untitled');
+  expect(sessionListTitle('   ')).toBe('Untitled');
+  expect(sessionListTitle(undefined)).not.toMatch(/^ses_/);
+});
+
+test('a named session keeps the title the operator gave it', () => {
+  expect(sessionListTitle('Crew chat')).toBe('Crew chat');
+  expect(sessionListTitle('  Lab notes  ')).toBe('Lab notes');
+});
+
+test('preview is a snippet, not a title stand-in', () => {
+  const preview = 'the last user turn as a snippet';
+  expect(sessionListTitle(undefined)).toBe('Untitled');
+  expect(sessionListTitle(undefined)).not.toBe(preview);
 });

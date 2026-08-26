@@ -57,3 +57,12 @@ export function sessionCreateTitle(draft: string): string | undefined {
   const title = draft.trim();
   return title ? title : undefined;
 }
+
+/**
+ * What the selector and header print for a session. Missing or blank title
+ * is Untitled, never a truncated id. Preview is a snippet, not a title.
+ */
+export function sessionListTitle(title?: string | null): string {
+  const named = title?.trim();
+  return named ? named : 'Untitled';
+}

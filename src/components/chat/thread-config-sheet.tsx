@@ -14,7 +14,7 @@ import {
   type ModelSection,
 } from '@/lib/gateway/model-selection';
 import type { GatewayBackend } from '@/lib/portal/manifest';
-import { sessionCreateTitle } from '@/lib/gateway/session-list';
+import { sessionCreateTitle, sessionListTitle } from '@/lib/gateway/session-list';
 import {
   threadConfigTitle,
   type ModelPickerMode,
@@ -163,14 +163,14 @@ function SessionsSection({
               },
             ]}
             accessibilityRole="button"
-            accessibilityLabel={`Switch to session ${item.title ?? item.id}`}
+            accessibilityLabel={`Switch to session ${sessionListTitle(item.title)}`}
             onPress={async () => {
               await Haptics.selectionAsync();
               onSelect?.(item.id);
             }}>
             <View style={styles.sessionHeader}>
               <Text variant="body" numberOfLines={1} style={styles.sessionTitle}>
-                {item.title ?? item.id}
+                {sessionListTitle(item.title)}
               </Text>
               {isCurrent ? <Badge label="Current" tone="accent" dot={false} /> : null}
               {onDeleteSession && !isCurrent ? (
@@ -178,7 +178,7 @@ function SessionsSection({
                   onPress={() => confirmDelete(item)}
                   hitSlop={8}
                   accessibilityRole="button"
-                  accessibilityLabel={`Delete session ${item.title ?? item.id}`}
+                  accessibilityLabel={`Delete session ${sessionListTitle(item.title)}`}
                   style={styles.deleteButton}>
                   <Icon name={{ ios: 'trash', android: 'delete', web: 'delete' }} size={14} color="textTertiary" />
                 </PressableScale>
@@ -278,7 +278,7 @@ function SessionsSection({
       <ConfirmSheet
         visible={deleteCandidate !== null}
         title="Delete session?"
-        message={`"${deleteCandidate?.title ?? deleteCandidate?.id ?? ''}" is removed from the gateway.`}
+        message={`"${sessionListTitle(deleteCandidate?.title)}" is removed from the gateway.`}
         confirmLabel="Delete session"
         danger
         onCancel={() => setDeleteCandidate(null)}
