@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
+import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
 import { BaseSheet, Button, ConfirmSheet, Icon, PressableScale, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
@@ -506,6 +507,7 @@ export function GroupRoomView({
         <Text variant="caption" color="accentWarm" style={styles.error}>{error}</Text>
       ) : null}
 
+      <ComposerKeyboardLift>
       <View style={[styles.dock, { borderColor: tokens.border }]}>
         {mentionPicks.length > 0 ? (
           <View style={styles.mentionPicks}>
@@ -548,6 +550,7 @@ export function GroupRoomView({
           />
         </View>
       </View>
+      </ComposerKeyboardLift>
 
       <ConfirmSheet
         visible={pendingRemoval !== null}
