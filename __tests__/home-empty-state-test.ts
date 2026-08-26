@@ -1,4 +1,5 @@
 import { describeHomeEmptyState } from '@/lib/home/home-empty-state';
+import { homeHeroPrimaryActions } from '@/lib/home/home-hero-actions';
 
 type DescribeInput = Parameters<typeof describeHomeEmptyState>[0];
 
@@ -43,5 +44,18 @@ describe('describeHomeEmptyState', () => {
   test('discovery candidates drive the nearby note', () => {
     expect(describeHomeEmptyState({ ...base, discoveredCount: 2 }).showDiscovered).toBe(true);
     expect(describeHomeEmptyState(base).showDiscovered).toBe(false);
+  });
+});
+
+describe('homeHeroPrimaryActions', () => {
+  test('the saved-gateway hero keeps Setup; Chat, Activity, and Tools live on the tab bar', () => {
+    const actions = homeHeroPrimaryActions();
+    const ids = actions.map((action) => action.id);
+    expect(ids).toEqual(['setup']);
+    expect(actions[0]?.label).toBe('Setup');
+    expect(actions[0]?.href).toBe('/gateway/setup');
+    expect(ids).not.toContain('chat');
+    expect(ids).not.toContain('activity');
+    expect(ids).not.toContain('tools');
   });
 });

@@ -24,6 +24,7 @@ import { describeAutoRetry } from '@/lib/connection/retry-ladder';
 import { describeGatewayError, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import type { GatewayProfile } from '@/lib/gateway/types';
 import { describeHomeEmptyState } from '@/lib/home/home-empty-state';
+import { homeHeroPrimaryActions } from '@/lib/home/home-hero-actions';
 
 export function GatewayHomeDashboard() {
   const router = useRouter();
@@ -203,46 +204,19 @@ export function GatewayHomeDashboard() {
         ) : null}
 
         <View style={styles.primaryActions}>
-          <Button
-            label="Chat"
-            onPress={async () => {
-              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.push('/chat');
-            }}
-            disabled={!connected}
-            style={styles.primaryAction}
-          />
-          <Button
-            label="Activity"
-            onPress={async () => {
-              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.push('/activity');
-            }}
-            variant="secondary"
-            style={styles.primaryAction}
-          />
-          <Button
-            label="Tools"
-            onPress={async () => {
-              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.push('/terminal');
-            }}
-            disabled={!activeGateway}
-            variant="secondary"
-            style={styles.primaryAction}
-          />
-          {/* One entry point: providers, CLI environments and the capability
-              registry all live under Setup. */}
-          <Button
-            label="Setup"
-            onPress={async () => {
-              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.push('/gateway/setup' as Href);
-            }}
-            disabled={!connected}
-            variant="secondary"
-            style={styles.primaryAction}
-          />
+          {homeHeroPrimaryActions().map((action) => (
+            <Button
+              key={action.id}
+              label={action.label}
+              onPress={async () => {
+                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push(action.href as Href);
+              }}
+              disabled={!connected}
+              variant="secondary"
+              style={styles.primaryAction}
+            />
+          ))}
         </View>
         {!connected ? (
           <Button
@@ -412,9 +386,6 @@ const styles = StyleSheet.create({
   },
   primaryActions: {
     flexDirection: 'row',
-    // No wrapping: three equal actions share one row and compress instead.
-    // Wrapping put a full-width button on a second line that overlapped the
-    // retry control beneath it at large system font sizes.
     alignItems: 'stretch',
     gap: Spacing.two,
   },
