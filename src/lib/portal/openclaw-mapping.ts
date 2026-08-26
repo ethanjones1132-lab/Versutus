@@ -12,6 +12,22 @@ export function toOpenClawWsUrl(url: string): string {
   return `${httpToWsBase(trimmed)}/openclaw`;
 }
 
+/**
+ * Params for OpenClaw `sessions.create`.
+ *
+ * The dialect takes optional `model` as a string and persists it on the new
+ * row. The Gate posts `{ model: { modelId } }`; that shape is not this RPC.
+ */
+export function openClawCreateSessionParams(input: {
+  title?: string;
+  model?: string;
+}): Record<string, unknown> {
+  return {
+    ...(input.title ? { title: input.title } : {}),
+    ...(input.model ? { model: input.model } : {}),
+  };
+}
+
 export function normalizeOpenClawModel(value: unknown): ModelInfo | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Record<string, unknown>;
