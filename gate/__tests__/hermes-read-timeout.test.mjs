@@ -7,7 +7,7 @@ import { createHermesBackend } from '../core/cli-environments/backends/hermes.mj
 // `GET /api/sessions?limit=200` took 9-12 MINUTES and returned zero bytes while
 // `/health` still answered 200 instantly. The Gate passed no signal to fetch, so
 // the phone waited forever on a gateway that looked connected and could not list
-// one session. A metadata read now fails at 25s with a cause worth reading.
+// one session. A metadata read now fails at 30s with a cause worth reading.
 
 /** A fetch that never settles, like the 4.8 GB host. */
 function hangingFetch() {
@@ -44,8 +44,90 @@ test('a hung session listing is bounded rather than waiting forever', async () =
       return true;
     },
   );
-  // Proves it aborted rather than hung; the ceiling is 25s.
+  // Proves it aborted rather than hung; the ceiling is 30s.
   assert.ok(Date.now() - started < 5_000);
+});
+
+test('a hung cron job listing is bounded by the same read ceiling', async () => {
+  const backend = createHermesBackend({
+    baseUrl: 'http://127.0.0.1:8642',
+    apiKey: 'test-key',
+    fetchImpl: hangingFetch(),
+    readTimeoutMs: 40,
+  });
+
+  const started = Date.now();
+  await assert.rejects(
+    () => backend.listJobs(),
+    (error) => {
+      assert.equal(error.code, 'backend_timeout');
+      // The Activity tab blocks on cron.jobs; the verdict names the surface.
+      assert.match(error.message, /list cron jobs/);
+      assert.match(error.message, /state database/);
+      return true;
+    },
+  );
+  assert.ok(Date.now() - started < 5_000);
+});
+
+test('a hung transcript listing is bounded by the same read ceiling', async () => {
+  const backend = createHermesBackend({
+    baseUrl: 'http://127.0.0.1:8642',
+    apiKey: 'test-key',
+    fetchImpl: hangingFetch(),
+    readTimeoutMs: 40,
+  });
+
+  const started = Date.now();
+  await assert.rejects(
+    () => backend.listMessages('sess_1'),
+    (error) => {
+      assert.equal(error.code, 'backend_timeout');
+      // The Activity tab blocks on cron.transcript; the verdict names it.
+      assert.match(error.message, /list messages/);
+      assert.match(error.message, /state database/);
+      return true;
+    },
+  );
+  assert.ok(Date.now() - started < 5_000);
+});
+
+test('a healthy cron listing still returns its jobs', async () => {
+  // Guard against the timeout wrapper breaking the normal path.
+  const backend = createHermesBackend({
+    baseUrl: 'http://127.0.0.1:8642',
+    apiKey: 'test-key',
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [{ id: 'job_1', paused: false }] }),
+      text: async () => '',
+    }),
+  });
+  const body = await backend.listJobs();
+  assert.equal(body.data.length, 1);
+  assert.equal(body.data[0].id, 'job_1');
+});
+
+test('a healthy transcript read still maps and filters', async () => {
+  const backend = createHermesBackend({
+    baseUrl: 'http://127.0.0.1:8642',
+    apiKey: 'test-key',
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: [
+          { id: 'm1', role: 'assistant', content: 'answer', timestamp: 1 },
+          { id: 'm2', role: 'assistant', content: '', timestamp: 2 },
+        ],
+      }),
+      text: async () => '',
+    }),
+  });
+  const messages = await backend.listMessages('sess_1', 5);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].id, 'm1');
 });
 
 test('the timeout names the read that failed, not a bare abort', async () => {
