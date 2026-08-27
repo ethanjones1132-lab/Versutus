@@ -18,10 +18,7 @@ import { isConnectionError, isUserAbort } from '@/lib/gateway/errors';
 import {
   addStreamingPlaceholder,
   addUserMessage,
-  appendReasoningDelta,
-  appendStreamDelta,
   appendSystemNote,
-  appendToolCallDelta,
   convertStreamError,
   finalizeStreamingMessage,
   interruptedRunIds,
@@ -29,6 +26,7 @@ import {
   preserveInterruptedAfterReload,
   settleInterruptedFromRuns,
 } from '@/lib/gateway/message-reducer';
+import { createStreamBatcher } from '@/lib/gateway/stream-batching';
 import {
   appendBounded,
   boundWindow,
@@ -1732,6 +1730,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
 
+      // Coalesce per-chunk `setMessages` to at most one per frame.
+      // Before: each SSE `data:` line triggered its own state write and FlatList pass.
+      // After: deltas are buffered and flushed once per RAF (≈60fps), so 100
+      // rapid chunks coalesce to ~1-2 renders with identical final text.
+      const batcher = createStreamBatcher({ runId, setMessages });
+
       try {
         // Build bounded conversation context: last 20 real turns, no command payloads.
         const conversationMessages = [
@@ -1745,7 +1749,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         await client.streamChat(
           conversationMessages,
           (delta) => {
-            setMessages((prev) => appendStreamDelta(prev, runId, delta));
+            batcher.queueDelta(delta);
           },
           {
             sessionId: sessionIdRef.current,
@@ -1753,10 +1757,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             providerId: selectedBotId ? undefined : gateway.providerId,
             signal: abortController.signal,
             onToolCall: (toolCall) => {
-              setMessages((prev) => appendToolCallDelta(prev, runId, toolCall));
+              batcher.queueTool(toolCall);
             },
             onReasoning: (reasoning: string) => {
-              setMessages((prev) => appendReasoningDelta(prev, runId, reasoning));
+              batcher.queueReasoning(reasoning);
             },
             // A gateway may answer with a model the operator did not choose —
             // Hermes falls through `fallback_providers` and says so only in
@@ -1773,6 +1777,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           },
         );
 
+        batcher.flush();
         // Mark as complete
         setMessages((prev) => finalizeStreamingMessage(prev, runId));
         setLastError(null);
@@ -1808,8 +1813,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         const message = error instanceof Error ? error.message : String(error);
         const aborted = isUserAbort(error, abortController.signal);
         if (aborted) {
+          batcher.cancel();
           setMessages((prev) => convertStreamError(prev, runId, message, true));
         } else if (isConnectionError(error)) {
+          batcher.flush();
           setMessages((prev) => markInterrupted(prev, runId, message));
           setLastError(message);
         } else {
@@ -1817,6 +1824,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           // (multiplex off, refused key, dead environment, spent budget), the
           // bubble shows verdict + fix instead of a raw exception dump. The
           // banner still gets the raw message for anyone who wants details.
+          batcher.cancel();
           const shown = formatRunFailure(message) ?? message;
           setMessages((prev) => convertStreamError(prev, runId, shown, false));
           setLastError(message);
