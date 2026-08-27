@@ -57,7 +57,7 @@ import {
   type GroupTranscriptEntry,
 } from '@/lib/gateway/groups';
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
-import { formatRunFailure, modelSubstitutionNote } from '@/lib/gateway/run-failures';
+import { formatRunFailure, modelSubstitutionNote, shouldShowModelSubstitution } from '@/lib/gateway/run-failures';
 import { resolveDefaultBackend } from '@/lib/gateway/backend-defaults';
 import { applyModelOverride, effectiveModel, resolveSendModel, shouldReleaseSessionForModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
@@ -635,6 +635,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const historyLoadedForRef = useRef<string | null>(null);
   const historyRequestRef = useRef(0);
   const activeRunIdRef = useRef<string | null>(null);
+  const lastSubstitutionRef = useRef<import('@/lib/gateway/run-failures').ModelReport | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
   const bootstrapStartedRef = useRef(false);
   const autoConnectInFlightRef = useRef(false);
@@ -1758,8 +1759,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             // its runtime block. Saying nothing left the thread looking like
             // the pick had been honoured, so a swap is now on the record.
             onModelReport: (report) => {
+              if (!shouldShowModelSubstitution(report, lastSubstitutionRef.current)) return;
               const note = modelSubstitutionNote(report);
-              if (note) setMessages((prev) => appendSystemNote(prev, note));
+              if (note) {
+                lastSubstitutionRef.current = report;
+                setMessages((prev) => appendSystemNote(prev, note));
+              }
             },
           },
         );

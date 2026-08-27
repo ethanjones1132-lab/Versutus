@@ -240,3 +240,31 @@ export function modelSubstitutionNote(report: ModelReport): string | null {
   const separator = /[.!?]$/.test(view.cause.trim()) ? ' ' : '. ';
   return `${view.title} — ${view.cause}${separator}${view.next}`;
 }
+
+/**
+ * Suppress the identical substitution note on consecutive turns.
+ *
+ * A gateway with `fallback_providers` can substitute the same
+ * requested→ran pair on every turn in a row; each one is correctly
+ * detected by `describeModelSubstitution`, but repeating the same line
+ * verbatim fills the transcript with noise. This is the dedup gate:
+ * the first occurrence shows, an identical immediate repeat is silent,
+ * and a changed pair shows again.
+ *
+ * Pure — the caller owns the memory of what it last reported.
+ * Comparison is case-insensitive and trims surrounding whitespace,
+ * matching `describeModelSubstitution`, so `" LongCat "` and
+ * `"longcat"` are the same pair.
+ */
+export function shouldShowModelSubstitution(
+  report: ModelReport,
+  previous: ModelReport | null | undefined,
+): boolean {
+  // Nothing to report is not a repeat — it is silence controlled by
+  // describeModelSubstitution, so dedup has nothing to suppress.
+  if (!describeModelSubstitution(report)) return false;
+  if (!previous) return true;
+  if (!describeModelSubstitution(previous)) return true;
+  const norm = (value: string | undefined) => (value ?? '').trim().toLowerCase();
+  return !(norm(report.requested) === norm(previous.requested) && norm(report.ran) === norm(previous.ran));
+}
