@@ -316,6 +316,7 @@ export class HermesGatewayClient {
       sessionId?: string;
       signal?: AbortSignal;
       onToolCall?: (tool: import('@/lib/gateway/types').ChatToolCall) => void;
+      onReasoning?: (text: string) => void;
     },
   ): Promise<string> {
     const body: Record<string, unknown> = {
@@ -365,6 +366,9 @@ export class HermesGatewayClient {
         if (interpreted.text) {
           fullText += interpreted.text;
           onDelta(interpreted.text);
+        }
+        if (interpreted.reasoning) {
+          options?.onReasoning?.(interpreted.reasoning);
         }
         if (options?.onToolCall) {
           for (const tool of interpreted.toolCalls) options.onToolCall(tool);
