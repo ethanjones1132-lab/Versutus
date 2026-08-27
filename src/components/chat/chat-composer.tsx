@@ -1,7 +1,8 @@
 import * as Haptics from 'expo-haptics';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
 import { Badge, Card, Icon, PressableScale, Text, TextField, type IconName } from '@/components/ui';
@@ -9,6 +10,7 @@ import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { composerCopy, composerDockUtilities } from '@/lib/gateway/composer-copy';
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
 import type { ConnectionStatus } from '@/lib/gateway/types';
+import { chatComposerKeyboardOffset } from '@/lib/motion/chat-composer-layout';
 import { springSnappy } from '@/lib/motion/presets';
 import { useTokens } from '@/hooks/use-tokens';
 
@@ -67,9 +69,18 @@ export function ChatComposer({
   // Input stays editable whenever the user can queue or send (including offline).
   const inputEditable = canSend && !isStreaming;
 
-  return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={72}>
-      <ComposerKeyboardLift>
+  const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
+  const kavOffset = chatComposerKeyboardOffset({
+    platform: Platform.OS,
+    windowWidth,
+    topInset: insets.top,
+  });
+
+  // Android owns IME lift via ComposerKeyboardLift (useAnimatedKeyboard) —
+  // KAV with undefined behavior still participates in layout and is not needed.
+  const composerInner = (
+    <ComposerKeyboardLift>
       <View style={styles.dock}>
         <View style={styles.utilityRow}>
           <View style={styles.chipGroup}>
@@ -270,7 +281,14 @@ export function ChatComposer({
           </Animated.View>
         </Card>
       </View>
-      </ComposerKeyboardLift>
+    </ComposerKeyboardLift>
+  );
+
+  if (Platform.OS !== 'ios') return composerInner;
+
+  return (
+    <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={kavOffset}>
+      {composerInner}
     </KeyboardAvoidingView>
   );
 }
