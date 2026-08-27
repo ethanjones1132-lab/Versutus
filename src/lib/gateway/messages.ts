@@ -26,6 +26,32 @@ export function extractMessageText(content: unknown): string {
     .join('');
 }
 
+export function extractReasoning(content: unknown): string {
+  if (typeof content === 'string') return '';
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((block) => {
+      if (!block || typeof block !== 'object') return '';
+      const typed = block as {
+        type?: string;
+        text?: string;
+        thinking?: string;
+        reasoning?: string;
+        reasoning_content?: string;
+        content?: string;
+      };
+      const t = typed.type;
+      if (t !== 'thinking' && t !== 'reasoning' && t !== 'reasoning_content') return '';
+      if (typeof typed.thinking === 'string' && typed.thinking) return typed.thinking;
+      if (typeof typed.reasoning === 'string' && typed.reasoning) return typed.reasoning;
+      if (typeof typed.reasoning_content === 'string' && typed.reasoning_content) return typed.reasoning_content;
+      if (typeof typed.text === 'string' && typed.text) return typed.text;
+      if (typeof typed.content === 'string' && typed.content) return typed.content;
+      return '';
+    })
+    .join('');
+}
+
 /**
  * Pull tool invocations from common history shapes:
  * - OpenAI `tool_calls` on the message
@@ -113,9 +139,10 @@ export function historyToChatMessages(messages: unknown[]): ChatMessage[] {
     const role = message.role;
     if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
     const text = extractMessageText(message.content).trim();
+    const reasoning = extractReasoning(message.content).trim();
     const toolCalls = extractToolCalls(message);
-    // Keep assistant tool-only turns (text empty, tools present).
-    if (!text && toolCalls.length === 0) continue;
+    // Keep assistant tool-only turns (text empty, tools present) and reasoning-only turns.
+    if (!text && !reasoning && toolCalls.length === 0) continue;
     const explicitId =
       typeof message.__openclaw?.id === 'string' && message.__openclaw.id
         ? message.__openclaw.id
@@ -129,6 +156,7 @@ export function historyToChatMessages(messages: unknown[]): ChatMessage[] {
       text: text || (toolCalls.length > 0 ? '' : text),
       timestamp: message.timestamp,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      reasoning: reasoning ? reasoning : undefined,
     });
   }
   return result;
