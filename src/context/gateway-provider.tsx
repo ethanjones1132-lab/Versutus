@@ -18,6 +18,7 @@ import { isConnectionError, isUserAbort } from '@/lib/gateway/errors';
 import {
   addStreamingPlaceholder,
   addUserMessage,
+  appendReasoningDelta,
   appendStreamDelta,
   appendSystemNote,
   appendToolCallDelta,
@@ -1753,6 +1754,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             signal: abortController.signal,
             onToolCall: (toolCall) => {
               setMessages((prev) => appendToolCallDelta(prev, runId, toolCall));
+            },
+            onReasoning: (reasoning: string) => {
+              setMessages((prev) => appendReasoningDelta(prev, runId, reasoning));
             },
             // A gateway may answer with a model the operator did not choose —
             // Hermes falls through `fallback_providers` and says so only in

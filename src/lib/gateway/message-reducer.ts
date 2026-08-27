@@ -49,6 +49,20 @@ export function appendStreamDelta(
   return copy;
 }
 
+/** Append a streamed reasoning/thinking delta to the placeholder. */
+export function appendReasoningDelta(
+  messages: readonly ChatMessage[],
+  runId: string,
+  delta: string,
+): ChatMessage[] {
+  const idx = findStreamingIndex(messages, runId);
+  if (idx < 0) return [...messages];
+  const copy = [...messages];
+  const prev = copy[idx].reasoning ?? '';
+  copy[idx] = { ...copy[idx], reasoning: prev + delta, streaming: true };
+  return copy;
+}
+
 /** Merge a tool call into the streaming placeholder. */
 export function appendToolCallDelta(
   messages: readonly ChatMessage[],

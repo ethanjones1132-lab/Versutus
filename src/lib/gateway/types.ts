@@ -195,6 +195,8 @@ export type ChatMessage = {
   interrupted?: boolean;
   /** Tool calls attached to this message, when the stream exposes them. */
   toolCalls?: ChatToolCall[];
+  /** Reasoning/thinking streamed alongside content, when the model exposes it. */
+  reasoning?: string;
   command?: {
     input?: string;
     title?: string;

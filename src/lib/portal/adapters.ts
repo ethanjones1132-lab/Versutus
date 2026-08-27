@@ -43,6 +43,8 @@ export interface PortalClient {
       signal?: AbortSignal;
       /** OpenAI-style tool_calls deltas when the gateway emits them. */
       onToolCall?: (tool: import('@/lib/gateway/types').ChatToolCall) => void;
+      /** Reasoning/thinking deltas streamed alongside content, when the model exposes them. */
+      onReasoning?: (text: string) => void;
       /**
        * Which model actually served the turn, once the gateway says so.
        * Backends substitute — reporting only the request would keep repeating

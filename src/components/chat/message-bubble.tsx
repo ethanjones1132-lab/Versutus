@@ -47,6 +47,13 @@ export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPres
   const hasMonogram = !isUser && !!identity;
   const columnMaxWidth = bubbleMaxWidth(windowWidth, hasMonogram);
   const [rawOpen, setRawOpen] = useState(false);
+  const hasReasoning = typeof message.reasoning === 'string' && message.reasoning.length > 0;
+  const [reasoningUserOverride, setReasoningUserOverride] = useState<boolean | null>(null);
+  const isReasoningExpanded = hasReasoning
+    ? reasoningUserOverride !== null
+      ? reasoningUserOverride
+      : !!message.streaming
+    : false;
   const commandStatus = message.command?.status;
 
   const duration = message.command?.durationMs
@@ -128,6 +135,37 @@ export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPres
           {message.toolCalls?.map((toolCall, index) => (
             <ToolCallCard key={`${toolCall.name}-${index}`} toolCall={toolCall} />
           ))}
+
+          {!isUser && hasReasoning ? (
+            <View style={styles.reasoningSection}>
+              <PressableScale
+                onPress={async () => {
+                  await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  setReasoningUserOverride((prev) => (prev !== null ? !prev : !message.streaming));
+                }}
+                style={styles.reasoningToggle}>
+                <Text variant="caption" color="accent">
+                  {isReasoningExpanded ? 'Hide thinking' : 'Thinking'}
+                </Text>
+              </PressableScale>
+              {isReasoningExpanded ? (
+                <View
+                  style={[
+                    styles.reasoningCard,
+                    {
+                      backgroundColor: tokens.backgroundInset,
+                      borderColor: tokens.glassBorder,
+                    },
+                  ]}>
+                  <ScrollView style={styles.reasoningScroll} nestedScrollEnabled>
+                    <Text variant="caption" color="secondary">
+                      {message.reasoning}
+                    </Text>
+                  </ScrollView>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
 
           {isInterrupted ? (
             <Badge label="Interrupted" tone="warning" dot={false} />
@@ -315,6 +353,23 @@ const styles = StyleSheet.create({
   },
   rawScroll: {
     maxHeight: 240,
+  },
+  reasoningSection: {
+    gap: Spacing.two,
+  },
+  reasoningToggle: {
+    alignSelf: 'flex-start',
+    minHeight: 28,
+    justifyContent: 'center',
+  },
+  reasoningCard: {
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: Spacing.two,
+    maxHeight: 220,
+  },
+  reasoningScroll: {
+    maxHeight: 200,
   },
   commandActions: {
     flexDirection: 'row',
