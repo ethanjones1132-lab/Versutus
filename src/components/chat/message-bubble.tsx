@@ -170,6 +170,11 @@ export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPres
           {isInterrupted ? (
             <Badge label="Interrupted" tone="warning" dot={false} />
           ) : null}
+          {isInterrupted && message.interruptedReason ? (
+            <Text variant="caption" color="tertiary" style={styles.interruptedReason}>
+              {message.interruptedReason}
+            </Text>
+          ) : null}
 
           {isCommand ? (
             <Text color="primary" variant="caption">
@@ -386,6 +391,11 @@ const styles = StyleSheet.create({
     fontSize: 10,
     lineHeight: 13,
     fontFamily: FontFamily.mono,
+    paddingHorizontal: Spacing.one,
+  },
+  interruptedReason: {
+    fontSize: 12,
+    lineHeight: 16,
     paddingHorizontal: Spacing.one,
   },
 });

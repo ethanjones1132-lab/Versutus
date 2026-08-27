@@ -955,7 +955,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             // turns so a mid-stream disconnect does not leave a ghost message.
             const activeRunId = activeRunIdRef.current;
             if (activeRunId) {
-              setMessages((prev) => markInterrupted(prev, activeRunId));
+              setMessages((prev) => markInterrupted(prev, activeRunId, 'Connection lost'));
             }
             const previousMessages = messagesRef.current;
             void (async () => {
@@ -1810,7 +1810,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (aborted) {
           setMessages((prev) => convertStreamError(prev, runId, message, true));
         } else if (isConnectionError(error)) {
-          setMessages((prev) => markInterrupted(prev, runId));
+          setMessages((prev) => markInterrupted(prev, runId, message));
           setLastError(message);
         } else {
           // Desktop-parity failure state: when the Gate names the host state

@@ -193,6 +193,8 @@ export type ChatMessage = {
   queued?: boolean;
   /** Set when the connection drops mid-stream; the bubble may be reconciled later. */
   interrupted?: boolean;
+  /** Human-readable cause for an interruption, surfaced in the transcript bubble. */
+  interruptedReason?: string;
   /** Tool calls attached to this message, when the stream exposes them. */
   toolCalls?: ChatToolCall[];
   /** Reasoning/thinking streamed alongside content, when the model exposes it. */

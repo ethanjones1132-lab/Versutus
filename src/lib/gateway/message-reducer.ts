@@ -135,11 +135,11 @@ export function convertStreamError(
  * Mark an in-flight stream as interrupted rather than completed.
  * Used when the connection drops mid-stream.
  */
-export function markInterrupted(messages: readonly ChatMessage[], runId: string): ChatMessage[] {
+export function markInterrupted(messages: readonly ChatMessage[], runId: string, reason?: string): ChatMessage[] {
   const idx = findStreamingIndex(messages, runId);
   if (idx < 0) return [...messages];
   const copy = [...messages];
-  copy[idx] = { ...copy[idx], streaming: false, interrupted: true };
+  copy[idx] = { ...copy[idx], streaming: false, interrupted: true, interruptedReason: reason?.trim() || undefined };
   return copy;
 }
 
@@ -277,6 +277,7 @@ export function settleInterruptedFromRuns(
     return {
       ...message,
       interrupted: false,
+      interruptedReason: undefined,
       streaming: false,
       text: text || message.text,
       ...(resolution.failed ? { command: { ...message.command, status: 'error' as const } } : {}),
