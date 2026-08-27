@@ -55,6 +55,23 @@ describe('composerCopy', () => {
     ).toBe('Stop streaming');
   });
 
+  test('streaming with a queued message surfaces the queued count in the placeholder', () => {
+    const idle = composerCopy({ canSend: true, isStreaming: true, status: 'connected' });
+    const oneQueued = composerCopy({ canSend: true, isStreaming: true, status: 'connected', queuedCount: 1 });
+    const twoQueued = composerCopy({ canSend: true, isStreaming: true, status: 'connected', queuedCount: 2 });
+
+    expect(idle.placeholder).toBe('Message or /command');
+    expect(oneQueued.placeholder).toBe('1 queued — will send next');
+    expect(twoQueued.placeholder).toBe('2 queued — will send in order');
+    expect(oneQueued.placeholder).not.toBe(idle.placeholder);
+  });
+
+  test('queuedCount is ignored when not streaming', () => {
+    expect(
+      composerCopy({ canSend: true, isStreaming: false, status: 'connected', queuedCount: 1 }).placeholder,
+    ).toBe('Message or /command');
+  });
+
   test('every status is classified — connected is live, the rest queue when send is open', () => {
     for (const status of STATUSES) {
       const copy = composerCopy({ canSend: true, isStreaming: false, status });

@@ -370,6 +370,7 @@ export function ChatScreen() {
 
   const pairingKey = `${deviceId ?? ''}:${pairingDetails?.requestId ?? ''}`;
   const isStreaming = isSending || messages.some((message) => message.streaming);
+  const queuedCount = messages.filter((message) => message.queued).length;
   const showPairingSheet = status === 'pairing' && !!deviceId && dismissedPairingKey !== pairingKey;
   const slashSuggestions = draft.trimStart().startsWith('/')
     ? getSlashCommandSuggestions(draft, activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands)
@@ -1248,6 +1249,7 @@ export function ChatScreen() {
         ]}
         isStreaming={isStreaming}
         status={status}
+        queuedCount={queuedCount}
         // Allow send while disconnected so the offline outbox can queue; the
         // provider flushes on reconnect. Block only when no gateway exists.
         canSend={!!activeGateway && !isCommandRunning}

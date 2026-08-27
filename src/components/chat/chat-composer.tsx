@@ -26,6 +26,7 @@ type ChatComposerProps = {
   isStreaming: boolean;
   canSend: boolean;
   status: ConnectionStatus;
+  queuedCount?: number;
 };
 
 export function ChatComposer({
@@ -40,11 +41,12 @@ export function ChatComposer({
   isStreaming,
   canSend,
   status,
+  queuedCount,
 }: ChatComposerProps) {
   const tokens = useTokens();
   const [focused, setFocused] = useState(false);
   const sendWidth = useSharedValue(56);
-  const copy = composerCopy({ canSend, isStreaming, status });
+  const copy = composerCopy({ canSend, isStreaming, status, queuedCount });
   const dockUtilities = composerDockUtilities({ canBrowseCommands: Boolean(onBrowseCommands) });
 
   const sendAnimatedStyle = useAnimatedStyle(() => ({

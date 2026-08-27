@@ -4,6 +4,7 @@ export type ComposerCopyInput = {
   canSend: boolean;
   isStreaming: boolean;
   status: ConnectionStatus;
+  queuedCount?: number;
 };
 
 export type ComposerCopy = {
@@ -21,12 +22,15 @@ export type ComposerCopy = {
 export function composerCopy(input: ComposerCopyInput): ComposerCopy {
   const queues = input.canSend && input.status !== 'connected';
   return {
-    placeholder: placeholderCopy({ canSend: input.canSend, queues }),
+    placeholder: placeholderCopy({ canSend: input.canSend, queues, isStreaming: input.isStreaming, queuedCount: input.queuedCount }),
     sendLabel: sendLabelCopy({ isStreaming: input.isStreaming, queues }),
   };
 }
 
-function placeholderCopy(input: { canSend: boolean; queues: boolean }): string {
+function placeholderCopy(input: { canSend: boolean; queues: boolean; isStreaming: boolean; queuedCount?: number }): string {
+  if (input.isStreaming && input.queuedCount && input.queuedCount > 0) {
+    return input.queuedCount === 1 ? '1 queued — will send next' : `${input.queuedCount} queued — will send in order`;
+  }
   if (input.queues) return 'Message will queue';
   if (!input.canSend) return 'Connect a gateway to chat';
   return 'Message or /command';
