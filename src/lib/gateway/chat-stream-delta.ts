@@ -11,6 +11,7 @@ export function createChatStreamAcc(): ChatStreamAcc {
 
 export type ChatStreamInterpretation = {
   text?: string;
+  reasoning?: string;
   toolCalls: ChatToolCall[];
   streamError?: string;
   /**
@@ -29,6 +30,19 @@ export type ChatStreamInterpretation = {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+}
+
+function pickReasoning(delta: Record<string, unknown> | null): string | undefined {
+  if (!delta) return undefined;
+  // The Gate relays chunks verbatim (gate/core/server.mjs relayOpenAiStream
+  // writes res.write(data) without rewriting), so whatever field the provider
+  // used arrives here — observed as `reasoning`, `reasoning_content`, and
+  // `thinking` across backends and models. First non-empty wins.
+  for (const key of ['reasoning', 'reasoning_content', 'thinking'] as const) {
+    const value = delta[key];
+    if (typeof value === 'string' && value) return value;
+  }
+  return undefined;
 }
 
 export function interpretChatStreamChunk(
@@ -62,6 +76,7 @@ export function interpretChatStreamChunk(
   const delta = asRecord(choice?.delta) ?? asRecord(root.delta);
   const toolCalls: ChatToolCall[] = [];
   const text = typeof delta?.content === 'string' && delta.content ? delta.content : undefined;
+  const reasoning = pickReasoning(delta);
 
   const rawTools = delta?.tool_calls ?? delta?.toolCalls;
   if (Array.isArray(rawTools)) {
@@ -105,5 +120,5 @@ export function interpretChatStreamChunk(
     }
   }
 
-  return { text, toolCalls, ranModel, requestedModel, provider };
+  return { text, reasoning, toolCalls, ranModel, requestedModel, provider };
 }
