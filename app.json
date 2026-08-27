@@ -18,7 +18,12 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "softwareKeyboardLayoutMode": "resize",
+      "navigationBar": {
+        "backgroundColor": "#08080A",
+        "barStyle": "light-content"
+      }
     },
     "web": {
       "output": "static",
