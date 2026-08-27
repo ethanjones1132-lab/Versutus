@@ -6,8 +6,8 @@ import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { ConnectionStatus } from '@/lib/gateway/types';
 import {
-  CHAT_HEADER_CHIP_MAX_WIDTH,
   chatHeaderChipLayout,
+  chatHeaderChipMaxWidth,
   chatHeaderSessionChip,
   chatHeaderTitle,
 } from '@/lib/motion/chat-header-layout';
@@ -47,7 +47,7 @@ export function ChatHeader({
   onRosterPress,
 }: ChatHeaderProps) {
   const tokens = useTokens();
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, fontScale } = useWindowDimensions();
   const color = statusColor(tokens, status);
   const pulsing = streaming || status === 'connecting' || status === 'reconnecting' || status === 'pairing';
   const title = chatHeaderTitle({ gatewayName, backendLabel, groupName });
@@ -60,9 +60,11 @@ export function ChatHeader({
   const stacked =
     chatHeaderChipLayout({
       windowWidth,
+      fontScale,
       model: showModel,
       session: showSession,
     }) === 'stacked';
+  const chipMaxWidth = chatHeaderChipMaxWidth(fontScale);
 
   const orb = (
     <View style={[styles.orbHalo, { borderColor: tokens.glassBorder }]}>
@@ -108,7 +110,7 @@ export function ChatHeader({
         label={modelLabel}
         icon={{ ios: 'cpu', android: 'memory', web: 'memory' }}
         onPress={onModelPress}
-        style={styles.chip}
+        style={[styles.chip, { maxWidth: chipMaxWidth }]}
       />
     ) : null;
   const sessionChip =
@@ -117,7 +119,7 @@ export function ChatHeader({
         label={sessionLabel}
         icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
         onPress={onSessionPress}
-        style={styles.chip}
+        style={[styles.chip, { maxWidth: chipMaxWidth }]}
       />
     ) : null;
   const overflow = onOverflowPress ? (
@@ -216,7 +218,8 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   chip: {
-    maxWidth: CHAT_HEADER_CHIP_MAX_WIDTH,
+    // maxWidth is set dynamically via chatHeaderChipMaxWidth(fontScale) so large
+    // system fonts do not force a 120px pill to clip off-screen.
   },
   overflow: {
     width: 32,

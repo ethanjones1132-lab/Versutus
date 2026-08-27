@@ -27,16 +27,35 @@ export function chatHeaderChipLayout(input: {
   windowWidth: number;
   model: boolean;
   session: boolean;
+  /** System font scale from useWindowDimensions(). Capped at 1.4 to match Text caption cap. */
+  fontScale?: number;
 }): ChatHeaderChipLayout {
   const chips = (input.model ? 1 : 0) + (input.session ? 1 : 0);
   if (chips === 0) return 'row';
   if (!Number.isFinite(input.windowWidth) || input.windowWidth <= 0) return 'stacked';
 
-  // orb, back, titles, overflow, plus each chip
+  const rawScale = input.fontScale;
+  const scale =
+    Number.isFinite(rawScale as number) && (rawScale as number) > 0
+      ? Math.min(rawScale as number, 1.4)
+      : 1;
+
+  // orb, back, titles, overflow, plus each chip — chip and title widths grow with fontScale
   const items = 4 + chips;
   const gaps = (items - 1) * GAP;
-  const needed = THREAD_CHROME + chips * CHAT_HEADER_CHIP_MAX_WIDTH + gaps + MIN_TITLE;
+  const needed =
+    THREAD_CHROME + chips * CHAT_HEADER_CHIP_MAX_WIDTH * scale + gaps + MIN_TITLE * scale;
   return needed > input.windowWidth ? 'stacked' : 'row';
+}
+
+/** Effective chip maxWidth that keeps the label inside the pill at a given fontScale. */
+export function chatHeaderChipMaxWidth(fontScale?: number): number {
+  const scale =
+    Number.isFinite(fontScale as number) && (fontScale as number) > 0
+      ? Math.min(fontScale as number, 1.4)
+      : 1;
+  // Shrink the cap so larger text still fits within the same visual budget.
+  return Math.round(CHAT_HEADER_CHIP_MAX_WIDTH / scale);
 }
 
 /** Headline: a group is the room name; a thread is the backend, else the gateway. */

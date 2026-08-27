@@ -73,6 +73,32 @@ test('a group room never shows a session chip', () => {
   expect(chatHeaderSessionChip({ surface: 'group' })).toBe(false);
 });
 
+test('a 360-wide phone at large fontScale stacks two chips while 390 at normal scale respects single-chip row', () => {
+  // Backlog P2: 360dp + 1.4x font, two chips must stack; single chip still fits on 390 at 1.0.
+  expect(chatHeaderChipLayout({ windowWidth: 360, model: true, session: true, fontScale: 1.4 })).toBe(
+    'stacked',
+  );
+  expect(chatHeaderChipLayout({ windowWidth: 390, model: true, session: false, fontScale: 1.0 })).toBe(
+    'row',
+  );
+});
+
+test('large fontScale forces stacked earlier than normal scale', () => {
+  // 600dp fits both chips at 1.0 but not at 1.4 because chip+title scale.
+  expect(chatHeaderChipLayout({ windowWidth: 600, model: true, session: true, fontScale: 1.0 })).toBe(
+    'row',
+  );
+  expect(chatHeaderChipLayout({ windowWidth: 600, model: true, session: true, fontScale: 1.4 })).toBe(
+    'stacked',
+  );
+});
+
+test('fontScale beyond the Text cap is clamped', () => {
+  expect(chatHeaderChipLayout({ windowWidth: 600, model: true, session: true, fontScale: 2.5 })).toBe(
+    chatHeaderChipLayout({ windowWidth: 600, model: true, session: true, fontScale: 1.4 }),
+  );
+});
+
 test('a thread shows a session chip only when it can open Sessions', () => {
   expect(
     chatHeaderSessionChip({
