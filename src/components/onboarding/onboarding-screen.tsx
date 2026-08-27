@@ -19,6 +19,7 @@ import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import { phaseToTimelineStep } from '@/lib/connection/phase';
 import { entering } from '@/lib/motion/presets';
+import { onboardingKeyboardBehavior } from '@/lib/onboarding/keyboard-behavior';
 import { deriveWizardCta } from '@/lib/onboarding/wizard-cta';
 import { validatePcAddress } from '@/lib/onboarding/validate-pc-address';
 
@@ -65,7 +66,7 @@ export function OnboardingScreen() {
 
   return (
     <Screen>
-      <KeyboardAvoidingView style={styles.keyboard} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <KeyboardAvoidingView style={styles.keyboard} behavior={onboardingKeyboardBehavior(Platform.OS)}>
         {/* Scrollable, not a centered fixed block: the error card and probe
             status grow this content past the viewport, and a centered overflow
             pushes the connect button and the error's own retry off both edges
