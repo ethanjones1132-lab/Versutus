@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button, ListRow, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import {
+  TOOLSETS_PANE_MAX_HEIGHT,
   toolsetsListCopy,
   toolsetsToggleLabel,
   type Toolset,
@@ -32,7 +33,12 @@ export function ToolsPane({
         onPress={() => setOpen((value) => !value)}
       />
       {open ? (
-        <View style={styles.body}>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.body}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator
+        >
           {copy ? (
             <Text variant="micro" color="secondary">
               {copy}
@@ -45,7 +51,7 @@ export function ToolsPane({
               subtitle={toolset.description || undefined}
             />
           ))}
-        </View>
+        </ScrollView>
       ) : null}
     </View>
   );
@@ -53,5 +59,6 @@ export function ToolsPane({
 
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.one },
+  scroll: { maxHeight: TOOLSETS_PANE_MAX_HEIGHT },
   body: { gap: Spacing.one, paddingTop: Spacing.one },
 });

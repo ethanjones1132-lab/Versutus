@@ -92,6 +92,9 @@ export function toolsetsListCopy(state: ToolsetsState): string | undefined {
   return undefined;
 }
 
+/** Max height for the expanded tools list so a long catalog scrolls in place. */
+export const TOOLSETS_PANE_MAX_HEIGHT = 280;
+
 /**
  * Tools belong to the CLI environment, not to a Bot. Skills stay Bot-only;
  * copying that gate would hide this catalog from configurable chat.
