@@ -317,6 +317,7 @@ export class HermesGatewayClient {
       signal?: AbortSignal;
       onToolCall?: (tool: import('@/lib/gateway/types').ChatToolCall) => void;
       onReasoning?: (text: string) => void;
+      onModelReport?: (report: import('@/lib/gateway/run-failures').ModelReport) => void;
     },
   ): Promise<string> {
     const body: Record<string, unknown> = {
@@ -356,6 +357,7 @@ export class HermesGatewayClient {
     // because the handler's own catch would swallow a throw.
     let streamError: string | null = null;
     const acc = createChatStreamAcc();
+    let lastModelReport: import('@/lib/gateway/run-failures').ModelReport | null = null;
     await this.transport.streamSSE(response, (data) => {
       try {
         const interpreted = interpretChatStreamChunk(JSON.parse(data), acc);
@@ -372,6 +374,22 @@ export class HermesGatewayClient {
         }
         if (options?.onToolCall) {
           for (const tool of interpreted.toolCalls) options.onToolCall(tool);
+        }
+        if (options?.onModelReport && (interpreted.ranModel || interpreted.requestedModel || interpreted.provider)) {
+          const report: import('@/lib/gateway/run-failures').ModelReport = {
+            requested: interpreted.requestedModel,
+            ran: interpreted.ranModel,
+            provider: interpreted.provider,
+          };
+          const isDuplicate =
+            lastModelReport !== null &&
+            lastModelReport.requested === report.requested &&
+            lastModelReport.ran === report.ran &&
+            lastModelReport.provider === report.provider;
+          if (!isDuplicate) {
+            lastModelReport = report;
+            options.onModelReport(report);
+          }
         }
       } catch {
         // ignore malformed chunks
