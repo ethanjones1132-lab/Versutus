@@ -87,6 +87,10 @@ export function finalizeStreamingMessage(messages: readonly ChatMessage[], runId
   const idx = findStreamingIndex(messages, runId);
   if (idx < 0) return [...messages];
   const copy = [...messages];
+  // A turn that ends with finish_reason tool_calls may have no trailing content
+  // delta — the stream simply closes. Without this promotion the ToolCallCard
+  // would remain at 'Running' forever; the only other update path is an
+  // explicit status-bearing appendToolCallDelta which most backends never send.
   const tools = copy[idx].toolCalls?.map((tool) =>
     tool.status === 'running' ? { ...tool, status: 'complete' as const } : tool,
   );
@@ -111,10 +115,18 @@ export function convertStreamError(
   const idx = findStreamingIndex(messages, runId);
   if (idx < 0) return [...messages];
   const copy = [...messages];
+  // The turn failed — any tool still marked Running would otherwise remain
+  // there forever behind the error text, since finalizeStreamingMessage is not
+  // called on this error path. Promote running tools to error so the card
+  // reflects the terminal state.
+  const tools = copy[idx].toolCalls?.map((tool) =>
+    tool.status === 'running' ? { ...tool, status: 'error' as const } : tool,
+  );
   copy[idx] = {
     ...copy[idx],
     text: `Error: ${errorMessage}`,
     streaming: false,
+    toolCalls: tools,
   };
   return copy;
 }
