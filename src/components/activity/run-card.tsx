@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Badge, Card, Icon, PressableScale, Text } from '@/components/ui';
@@ -32,14 +32,21 @@ export type RunCardProps = {
   onStop?: (runId: string) => void;
 };
 
+/** Ticking elapsed label for a live run; the only per-second re-render in the card. */
+function LiveElapsed({ startedAt }: { startedAt: number }) {
+  const now = useNow(1000, true);
+  return (
+    <Text variant="micro" color="tertiary">
+      {formatDuration(now - startedAt)}
+    </Text>
+  );
+}
+
 /** Live run monitor card: status, elapsed, latest event, expandable event log. */
-export function RunCard({ run, onStop }: RunCardProps) {
+export const RunCard = memo(function RunCard({ run, onStop }: RunCardProps) {
   const tokens = useTokens();
   const [expanded, setExpanded] = useState(false);
   const live = run.status === 'running' || run.status === 'waiting-approval';
-  const now = useNow(1000, live);
-
-  const elapsed = formatDuration((run.finishedAt ?? now) - run.startedAt);
   const latestEvent = run.events.length > 0 ? run.events[run.events.length - 1] : null;
 
   return (
@@ -61,9 +68,13 @@ export function RunCard({ run, onStop }: RunCardProps) {
       ]}>
       <View style={styles.header}>
         <Badge label={STATUS_LABEL[run.status]} tone={STATUS_TONE[run.status]} />
-        <Text variant="micro" color="tertiary">
-          {live ? elapsed : `${elapsed} · ${formatRelativeTime(run.finishedAt ?? run.startedAt)}`}
-        </Text>
+        {live ? (
+          <LiveElapsed startedAt={run.startedAt} />
+        ) : (
+          <Text variant="micro" color="tertiary">
+            {formatDuration((run.finishedAt ?? run.startedAt) - run.startedAt)} · {formatRelativeTime(run.finishedAt ?? run.startedAt)}
+          </Text>
+        )}
       </View>
 
       <Text variant="body" numberOfLines={expanded ? undefined : 2}>
@@ -134,7 +145,7 @@ export function RunCard({ run, onStop }: RunCardProps) {
       </View>
     </Card>
   );
-}
+});
 
 const styles = StyleSheet.create({
   card: {
