@@ -6,6 +6,7 @@ import { TransportSecurityCard } from '@/components/gateway/transport-security-c
 import { Button, Card, ErrorCard, Screen, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { gatewayAddKeyboardBehavior } from '@/lib/gateway/add-keyboard-behavior';
 import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { normalizeGatewayUrl } from '@/lib/gateway/url';
 import { requestGatewayAccess, type AccessRequestResult } from '@/lib/portal/access';
@@ -122,7 +123,7 @@ export default function AddGatewayScreen() {
     <Screen>
       <KeyboardAvoidingView
         style={styles.keyboard}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        behavior={gatewayAddKeyboardBehavior(Platform.OS)}>
         {/* Six fields plus a transport card outgrow the viewport once the
             keyboard is up, and a bottom-anchored fixed block puts Save out of
             reach with nothing to scroll. */}
