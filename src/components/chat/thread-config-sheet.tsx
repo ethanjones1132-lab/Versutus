@@ -282,6 +282,8 @@ function SessionsSection({
           keyExtractor={(item) => item.id}
           style={styles.list}
           renderItem={renderSessionItem}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
           removeClippedSubviews
         />
       )}
@@ -480,6 +482,8 @@ function ModelsSection({
           renderItem={renderModelItem}
           renderSectionHeader={renderSectionHeader}
           stickySectionHeadersEnabled={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
           removeClippedSubviews
         />
       )}
@@ -554,7 +558,7 @@ function BackendsSection({
           description="Attach a CLI environment on the Gate — OpenCode, Codex or Claude Code — to converse through it."
         />
       ) : (
-        <FlatList data={backends} keyExtractor={(item) => item.id} renderItem={renderItem} removeClippedSubviews />
+        <FlatList data={backends} keyExtractor={(item) => item.id} renderItem={renderItem} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" removeClippedSubviews />
       )}
     </>
   );
