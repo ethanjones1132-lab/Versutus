@@ -103,3 +103,54 @@ export function describeCommandResult(text: string): CommandResultModel {
   if (parsed === null) return { kind: 'text', text };
   return { kind: 'json', value: parsed, signal: jsonExitSignal(parsed) };
 }
+
+export type JsonTreeRow =
+  | { kind: 'container'; id: string; path: string; depth: number; chevron: string; isRoot: boolean; open: boolean; nodeKind: 'object' | 'array'; preview: string }
+  | { kind: 'primitive'; id: string; path: string; depth: number; value: string; primitive: JsonPrimitiveKind }
+  | { kind: 'key'; id: string; path: string; depth: number; key: string }
+  | { kind: 'brace'; id: string; path: string; depth: number; brace: '{' | '}' | '[' | ']' };
+
+/**
+ * Flatten the visible tree into depth-keyed rows so the renderer can window
+ * it. A collapsed container contributes only its own row — its descendants
+ * are pruned until that path is expanded again. Row ids are unique per
+ * path/kind so expanding and collapsing reuse stable list keys.
+ */
+export function flattenJsonTreeRows(root: JsonTreeNode, expanded: ReadonlySet<string>): JsonTreeRow[] {
+  const rows: JsonTreeRow[] = [];
+
+  const visit = (node: JsonTreeNode, path: string, depth: number): void => {
+    if (node.kind === 'primitive') {
+      rows.push({ kind: 'primitive', id: `p:${path}`, path, depth, value: node.value, primitive: node.primitive });
+      return;
+    }
+    const open = expanded.has(path);
+    rows.push({
+      kind: 'container',
+      id: `c:${path}`,
+      path,
+      depth,
+      chevron: node.kind === 'object' ? (open ? '▾' : '▸') : open ? '−' : '+',
+      isRoot: path === 'root',
+      open,
+      nodeKind: node.kind,
+      preview: node.preview,
+    });
+    if (!open) return;
+    if (node.kind === 'object') {
+      rows.push({ kind: 'brace', id: `{:${path}`, path, depth, brace: '{' });
+      for (const entry of node.entries) {
+        rows.push({ kind: 'key', id: `k:${path}.${entry.key}`, path: `${path}.${entry.key}`, depth, key: entry.key });
+        visit(entry.node, `${path}.${entry.key}`, depth + 1);
+      }
+      rows.push({ kind: 'brace', id: `}:${path}`, path, depth, brace: '}' });
+      return;
+    }
+    rows.push({ kind: 'brace', id: `[:${path}`, path, depth, brace: '[' });
+    node.children.forEach((child, index) => visit(child, `${path}[${index}]`, depth + 1));
+    rows.push({ kind: 'brace', id: `]:${path}`, path, depth, brace: ']' });
+  };
+
+  visit(root, 'root', 0);
+  return rows;
+}

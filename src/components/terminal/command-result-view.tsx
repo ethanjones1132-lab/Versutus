@@ -40,6 +40,7 @@ export function CommandResultView({ log }: { log: string }) {
 const styles = StyleSheet.create({
   json: {
     gap: Spacing.two,
+    flexShrink: 1,
   },
   exitBadge: {
     alignSelf: 'flex-start',

@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { FlatList, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
@@ -343,7 +343,7 @@ export function TerminalScreen() {
           })()}
         </>
       ) : (
-        <ScrollView
+        <FlatList
           style={styles.commandContent}
           contentContainerStyle={[
             styles.commandScroll,
@@ -351,32 +351,37 @@ export function TerminalScreen() {
           ]}
           onScroll={onScroll}
           scrollEventThrottle={16}
-          keyboardShouldPersistTaps="handled">
-          <GatewayCommandPanel
-            title={mode === 'rpc' ? 'Gateway RPC' : 'Agent commands'}
-            commands={commandList}
-            runningCommandId={runningCommandId}
-            lastSummary={commandOutput || undefined}
-            onRun={(command) => void runGatewayCommand(command)}
-            onOpenOutput={() => setLogSheetVisible(true)}
-          />
-          {commandLog ? (
+          keyboardShouldPersistTaps="handled"
+          data={commandLog ? [commandLog] : []}
+          keyExtractor={() => 'result'}
+          ListHeaderComponent={
+            <GatewayCommandPanel
+              title={mode === 'rpc' ? 'Gateway RPC' : 'Agent commands'}
+              commands={commandList}
+              runningCommandId={runningCommandId}
+              lastSummary={commandOutput || undefined}
+              onRun={(command) => void runGatewayCommand(command)}
+              onOpenOutput={() => setLogSheetVisible(true)}
+            />
+          }
+          renderItem={({ item }) => (
             <Card padding={Spacing.two} style={[styles.resultCard, { borderColor: tokens.glassBorder }]}>
-              {commandOutput && commandOutput !== commandLog ? (
+              {commandOutput && commandOutput !== item ? (
                 <Text variant="caption" color="secondary" style={styles.resultSummary}>
                   {commandOutput}
                 </Text>
               ) : null}
-              <CommandResultView log={commandLog} />
+              <CommandResultView log={item} />
             </Card>
-          ) : (
+          )}
+          ListEmptyComponent={
             <Text color="tertiary" variant="caption">
               {status === 'connected'
                 ? 'Run a command to inspect or control the live gateway.'
                 : 'Connect to the gateway to run commands.'}
             </Text>
-          )}
-        </ScrollView>
+          }
+        />
       )}
 
       <CommandLogSheet visible={logSheetVisible} log={commandLog} onClose={() => setLogSheetVisible(false)} />

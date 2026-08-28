@@ -1,10 +1,13 @@
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
+import { useMemo } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
+
+import { describeCommandResult } from '@/lib/terminal/json-tree';
 
 import { CommandResultView } from './command-result-view';
 
@@ -31,6 +34,8 @@ export function CommandLogSheet({
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     await Clipboard.setStringAsync(log);
   };
+
+  const model = useMemo(() => describeCommandResult(log), [log]);
 
   if (!log) return null;
 
@@ -69,9 +74,13 @@ export function CommandLogSheet({
             </View>
           </View>
 
-          <ScrollView contentContainerStyle={styles.logScroll}>
+          {model.kind === 'text' ? (
+            <ScrollView contentContainerStyle={styles.logScroll}>
+              <CommandResultView log={log} />
+            </ScrollView>
+          ) : (
             <CommandResultView log={log} />
-          </ScrollView>
+          )}
         </View>
       </View>
     </Modal>

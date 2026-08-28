@@ -1,12 +1,18 @@
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/ui';
 import { FontFamily, Spacing, type SemanticPalette } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
-import { jsonTreeNode, type JsonPrimitiveKind, type JsonTreeNode } from '@/lib/terminal/json-tree';
+import {
+  flattenJsonTreeRows,
+  jsonTreeNode,
+  type JsonPrimitiveKind,
+  type JsonTreeRow,
+  type JsonTreeNode,
+} from '@/lib/terminal/json-tree';
 
 type Props = {
   value: unknown;
@@ -27,6 +33,7 @@ export function JsonView({ value, maxDepth = 2 }: Props) {
     [root, maxDepth],
   );
   const [expanded, setExpanded] = useState<Set<string>>(() => initial);
+  const rows = useMemo(() => flattenJsonTreeRows(root, expanded), [root, expanded]);
 
   const toggle = (path: string) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -45,15 +52,19 @@ export function JsonView({ value, maxDepth = 2 }: Props) {
 
   return (
     <View style={styles.root}>
-      <NodeRow
-        node={root}
-        path="root"
-        depth={0}
-        expanded={expanded}
-        onToggle={toggle}
-        onCopy={copy}
-        tokens={tokens}
-        root
+      <FlatList
+        data={rows}
+        keyExtractor={(row) => row.id}
+        renderItem={({ item }) => (
+          <JsonTreeRowView row={item} onToggle={toggle} onCopy={copy} tokens={tokens} />
+        )}
+        removeClippedSubviews
+        initialNumToRender={12}
+        maxToRenderPerBatch={16}
+        windowSize={9}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        nestedScrollEnabled
       />
     </View>
   );
@@ -71,122 +82,86 @@ function collectRootPaths(node: JsonTreeNode, maxDepth: number, path = 'root', d
   return paths;
 }
 
-function NodeRow({
-  node,
-  path,
-  depth,
-  expanded,
+function JsonTreeRowView({
+  row,
   onToggle,
   onCopy,
   tokens,
-  root = false,
 }: {
-  node: JsonTreeNode;
-  path: string;
-  depth: number;
-  expanded: Set<string>;
+  row: JsonTreeRow;
   onToggle: (path: string) => void;
   onCopy: (text: string) => void;
   tokens: SemanticPalette;
-  root?: boolean;
 }) {
-  const indent = { paddingLeft: root ? 0 : Spacing.one + depth * Spacing.three };
-
-  if (node.kind === 'primitive') {
+  if (row.kind === 'primitive') {
     return (
       <Pressable
-        onLongPress={() => onCopy(node.value)}
-        onPress={() => onCopy(node.value)}
+        onLongPress={() => onCopy(row.value)}
+        onPress={() => onCopy(row.value)}
         delayLongPress={260}
-        accessibilityLabel={`Copy ${node.value}`}
-        style={[styles.row, indent]}>
-        <Text variant="mono" style={[styles.text, { color: primitiveColor(node.primitive, tokens) }]}>
-          {node.value}
+        accessibilityLabel={`Copy ${row.value}`}
+        style={[styles.row, { paddingLeft: rowIndent(row) }]}>
+        <Text variant="mono" style={[styles.text, { color: primitiveColor(row.primitive, tokens) }]}>
+          {row.value}
         </Text>
       </Pressable>
     );
   }
 
-  const isOpen = expanded.has(path);
-  const chevron = node.kind === 'object' ? (isOpen ? '▾' : '▸') : isOpen ? '−' : '+';
-
-  return (
-    <View style={indent}>
-      <Pressable onPress={() => onToggle(path)} accessibilityRole="button" style={styles.row}>
+  if (row.kind === 'container') {
+    return (
+      <Pressable
+        onPress={() => onToggle(row.path)}
+        accessibilityRole="button"
+        style={[styles.row, { paddingLeft: rowIndent(row) }]}>
         <Text variant="mono" style={[styles.text, { color: tokens.textTertiary }]}>
-          {chevron}
+          {row.chevron}
         </Text>
         <Text variant="mono" style={[styles.text, { color: tokens.textSecondary }]}>
-          {root ? '' : node.kind === 'object' ? '{…}' : '[…]'}
+          {row.isRoot ? '' : row.nodeKind === 'object' ? '{…}' : '[…]'}
         </Text>
         <Text variant="mono" style={[styles.text, { color: tokens.textTertiary }]}>
-          {node.preview}
+          {row.preview}
         </Text>
       </Pressable>
-      {isOpen ? (
-        <View>
-          {node.kind === 'object' ? (
-            <>
-              <View style={[styles.braceRow, { paddingLeft: Spacing.three }]}>
-                <Text variant="mono" style={[styles.text, { color: tokens.textTertiary }]}>
-                  {'{'}
-                </Text>
-              </View>
-              {node.entries.map((entry) => (
-                <View key={entry.key}>
-                  <View style={[styles.row, { paddingLeft: Spacing.four }]}>
-                    <Text variant="mono" style={[styles.text, { color: tokens.accentWarm }]}>
-                      {entry.key}:
-                    </Text>
-                  </View>
-                  <NodeRow
-                    node={entry.node}
-                    path={`${path}.${entry.key}`}
-                    depth={depth + 1}
-                    expanded={expanded}
-                    onToggle={onToggle}
-                    onCopy={onCopy}
-                    tokens={tokens}
-                  />
-                </View>
-              ))}
-              <View style={[styles.braceRow, { paddingLeft: Spacing.three }]}>
-                <Text variant="mono" style={[styles.text, { color: tokens.textTertiary }]}>
-                  {'}'}
-                </Text>
-              </View>
-            </>
-          ) : (
-            <>
-              <View style={[styles.braceRow, { paddingLeft: Spacing.three }]}>
-                <Text variant="mono" style={[styles.text, { color: tokens.textTertiary }]}>
-                  {'['}
-                </Text>
-              </View>
-              {node.children.map((child, index) => (
-                <View key={index}>
-                  <NodeRow
-                    node={child}
-                    path={`${path}[${index}]`}
-                    depth={depth + 1}
-                    expanded={expanded}
-                    onToggle={onToggle}
-                    onCopy={onCopy}
-                    tokens={tokens}
-                  />
-                </View>
-              ))}
-              <View style={[styles.braceRow, { paddingLeft: Spacing.three }]}>
-                <Text variant="mono" style={[styles.text, { color: tokens.textTertiary }]}>
-                  {']'}
-                </Text>
-              </View>
-            </>
-          )}
-        </View>
-      ) : null}
+    );
+  }
+
+  if (row.kind === 'key') {
+    return (
+      <View style={[styles.row, { paddingLeft: rowIndent(row) }]}>
+        <Text variant="mono" style={[styles.text, { color: tokens.accentWarm }]}>
+          {row.key}:
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={[styles.braceRow, { paddingLeft: rowIndent(row) }]}>
+      <Text variant="mono" style={[styles.text, { color: tokens.textTertiary }]}>
+        {row.brace}
+      </Text>
     </View>
   );
+}
+
+/**
+ * Each row owns the nesting depth it renders at; the indentation mirrors the
+ * recursive renderer it replaces — a node adds `Spacing.one` plus one
+ * `Spacing.three` per level, braces sit one `Spacing.three` inside their
+ * container and keys one `Spacing.four`.
+ */
+function rowIndent(row: JsonTreeRow): number {
+  const base = nodeIndent(row.depth);
+  if (row.kind === 'key') return base + Spacing.four;
+  if (row.kind === 'brace') return base + Spacing.three;
+  return base;
+}
+
+function nodeIndent(depth: number): number {
+  if (depth <= 0) return 0;
+  return Spacing.one * depth + (Spacing.three * depth * (depth + 1)) / 2;
 }
 
 function primitiveColor(kind: JsonPrimitiveKind, tokens: SemanticPalette): string {
@@ -205,6 +180,7 @@ function primitiveColor(kind: JsonPrimitiveKind, tokens: SemanticPalette): strin
 const styles = StyleSheet.create({
   root: {
     width: '100%',
+    flexShrink: 1,
   },
   row: {
     flexDirection: 'row',
