@@ -112,6 +112,7 @@ import {
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { chatTranscriptContentPaddingBottom } from '@/lib/motion/chat-transcript-insets';
+import { chatJumpBottom } from '@/lib/motion/chat-jump-inset';
 
 const PIN_THRESHOLD_PX = 96;
 const JUMP_PILL_THRESHOLD_PX = 260;
@@ -1220,7 +1221,9 @@ export function ChatScreen() {
         />
 
         {jumpVisible ? (
-          <Animated.View entering={FadeIn.duration(Motion.duration.fast)} style={styles.jumpWrap}>
+          <Animated.View
+            entering={FadeIn.duration(Motion.duration.fast)}
+            style={[styles.jumpWrap, { bottom: chatJumpBottom({ platform: Platform.OS, insetBottom: insets.bottom }) }]}>
             <PressableScale
               onPress={scrollToLatest}
               accessibilityRole="button"
