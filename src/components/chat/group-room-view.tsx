@@ -600,38 +600,43 @@ export function GroupRoomView({
         }}
         closeLabel="Cancel"
         position="bottom">
-        <Text variant="title">Rename room</Text>
-        <Text variant="caption" color="secondary" style={styles.hint}>
-          The room keeps its members and history — only the name changes.
-        </Text>
-        <TextField
-          value={renameDraft}
-          onChangeText={setRenameDraft}
-          placeholder="New room name"
-          autoCapitalize="none"
-          onSubmitEditing={submitRename}
-          style={styles.renameField}
-        />
-        {error ? (
-          <Text variant="caption" color="accentWarm" style={styles.sheetError}>{error}</Text>
-        ) : null}
-        <View style={styles.sheetActions}>
-          <Button
-            label="Cancel"
-            variant="ghost"
-            onPress={() => {
-              setRenameVisible(false);
-              setRenameDraft('');
-            }}
-            disabled={renaming}
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.sheetScroll}>
+          <Text variant="title">Rename room</Text>
+          <Text variant="caption" color="secondary" style={styles.hint}>
+            The room keeps its members and history — only the name changes.
+          </Text>
+          <TextField
+            value={renameDraft}
+            onChangeText={setRenameDraft}
+            placeholder="New room name"
+            autoCapitalize="none"
+            onSubmitEditing={submitRename}
+            style={styles.renameField}
           />
-          <Button
-            label={renaming ? 'Renaming…' : 'Rename'}
-            variant="primary"
-            disabled={renaming || !renameDraft.trim()}
-            onPress={submitRename}
-          />
-        </View>
+          {error ? (
+            <Text variant="caption" color="accentWarm" style={styles.sheetError}>{error}</Text>
+          ) : null}
+          <View style={styles.sheetActions}>
+            <Button
+              label="Cancel"
+              variant="ghost"
+              onPress={() => {
+                setRenameVisible(false);
+                setRenameDraft('');
+              }}
+              disabled={renaming}
+            />
+            <Button
+              label={renaming ? 'Renaming…' : 'Rename'}
+              variant="primary"
+              disabled={renaming || !renameDraft.trim()}
+              onPress={submitRename}
+            />
+          </View>
+        </ScrollView>
       </BaseSheet>
     </KeyboardAvoidingView>
   );
@@ -692,6 +697,7 @@ const styles = StyleSheet.create({
   hint: { marginBottom: Spacing.two },
   sheetError: { marginBottom: Spacing.two },
   sheetActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: Spacing.two },
+  sheetScroll: { paddingHorizontal: Spacing.two, paddingBottom: Spacing.two, gap: Spacing.one },
   renameField: { minHeight: 0, marginBottom: Spacing.one },
   dock: {
     gap: Spacing.two,
