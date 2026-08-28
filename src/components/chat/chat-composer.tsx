@@ -1,6 +1,6 @@
 import * as Haptics from 'expo-haptics';
-import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { useState, useSyncExternalStore } from 'react';
+import { Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -11,6 +11,10 @@ import { composerCopy, composerDockUtilities } from '@/lib/gateway/composer-copy
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
 import type { ConnectionStatus } from '@/lib/gateway/types';
 import { chatComposerKeyboardOffset } from '@/lib/motion/chat-composer-layout';
+import {
+  chatComposerPaletteMaxHeight,
+  chatComposerPaletteScrollMaxHeight,
+} from '@/lib/motion/chat-composer-palette';
 import { springSnappy } from '@/lib/motion/presets';
 import { useTokens } from '@/hooks/use-tokens';
 
@@ -70,11 +74,24 @@ export function ChatComposer({
   const inputEditable = canSend && !isStreaming;
 
   const insets = useSafeAreaInsets();
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const kavOffset = chatComposerKeyboardOffset({
     platform: Platform.OS,
     windowWidth,
     topInset: insets.top,
+  });
+  const keyboardHeight = useSyncExternalStore(subscribeKeyboardHeight, getKeyboardHeight, () => 0);
+  const paletteMaxHeight = chatComposerPaletteMaxHeight({
+    windowHeight,
+    insetTop: insets.top,
+    insetBottom: insets.bottom,
+    keyboardHeight,
+  });
+  const paletteScrollMaxHeight = chatComposerPaletteScrollMaxHeight({
+    windowHeight,
+    insetTop: insets.top,
+    insetBottom: insets.bottom,
+    keyboardHeight,
   });
 
   // Android owns IME lift via ComposerKeyboardLift (useAnimatedKeyboard) —
@@ -132,13 +149,13 @@ export function ChatComposer({
           <View
             style={[
               styles.palette,
-              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.glassBorder },
+              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.glassBorder, maxHeight: paletteMaxHeight },
             ]}>
             <Text variant="micro" color="tertiary" style={styles.paletteTitle}>
               Commands
             </Text>
             <ScrollView
-              style={styles.paletteScroll}
+              style={[styles.paletteScroll, { maxHeight: paletteScrollMaxHeight }]}
               contentContainerStyle={styles.paletteContent}
               nestedScrollEnabled
               keyboardShouldPersistTaps="handled"
@@ -291,6 +308,22 @@ export function ChatComposer({
       {composerInner}
     </KeyboardAvoidingView>
   );
+}
+
+function subscribeKeyboardHeight(onChange: () => void) {
+  const show = Keyboard.addListener('keyboardDidShow', onChange);
+  const hide = Keyboard.addListener('keyboardDidHide', onChange);
+  const frame = Keyboard.addListener('keyboardDidChangeFrame', onChange);
+  return () => {
+    show.remove();
+    hide.remove();
+    frame.remove();
+  };
+}
+
+function getKeyboardHeight(): number {
+  const height = Keyboard.metrics()?.height;
+  return typeof height === 'number' && Number.isFinite(height) ? height : 0;
 }
 
 const styles = StyleSheet.create({
