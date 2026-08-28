@@ -8,8 +8,12 @@ import { describeCommandResult } from '@/lib/terminal/json-tree';
 
 import { JsonView } from './json-view';
 
+// Long text results (list/help dumps) render as a bounded teaser in the
+// inline RPC card; the sheet renders the full output.
+const RPC_RESULT_PREVIEW_LINES = 8;
+
 /** Shared structured/plain render for a command log (inline card + sheet). */
-export function CommandResultView({ log }: { log: string }) {
+export function CommandResultView({ log, preview = false }: { log: string; preview?: boolean }) {
   const tokens = useTokens();
   const model = useMemo(() => describeCommandResult(log), [log]);
 
@@ -17,7 +21,10 @@ export function CommandResultView({ log }: { log: string }) {
 
   if (model.kind === 'text') {
     return (
-      <Text variant="mono" style={styles.logText}>
+      <Text
+        variant="mono"
+        style={styles.logText}
+        numberOfLines={preview ? RPC_RESULT_PREVIEW_LINES : undefined}>
         {model.text}
       </Text>
     );

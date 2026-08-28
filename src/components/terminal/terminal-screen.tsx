@@ -371,7 +371,7 @@ export function TerminalScreen() {
                   {commandOutput}
                 </Text>
               ) : null}
-              <CommandResultView log={item} />
+              <CommandResultView log={item} preview />
             </Card>
           )}
           ListEmptyComponent={
