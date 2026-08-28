@@ -173,6 +173,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.one,
-    minHeight: 30,
+    minHeight: 44,
   },
 });
