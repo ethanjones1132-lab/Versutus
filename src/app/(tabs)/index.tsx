@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Platform, RefreshControl, ScrollView, StyleSheet } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GatewayHomeDashboard } from '@/components/gateway/gateway-home-dashboard';
 import { Screen, ScreenHeader } from '@/components/ui';
@@ -9,6 +10,7 @@ import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
+import { tabContentPaddingBottom } from '@/lib/motion/tab-insets';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -16,6 +18,7 @@ export default function HomeScreen() {
   const { gateways, refreshCapabilities, refreshGateways, reloadHistory } = useGateway();
   const [refreshing, setRefreshing] = useState(false);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
+  const insets = useSafeAreaInsets();
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -36,7 +39,7 @@ export default function HomeScreen() {
         onTrailingPress={() => router.push('/gateway/settings')}
       />
       <ScrollView
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, { paddingBottom: tabContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom }) }]}
         onScroll={onScroll}
         scrollEventThrottle={16}
         refreshControl={

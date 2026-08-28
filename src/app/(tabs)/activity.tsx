@@ -2,6 +2,7 @@ import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AgentTargets } from '@/components/activity/agent-targets';
 import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
@@ -13,6 +14,7 @@ import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
+import { tabContentPaddingBottom } from '@/lib/motion/tab-insets';
 
 export default function ActivityScreen() {
   const router = useRouter();
@@ -36,6 +38,7 @@ export default function ActivityScreen() {
   const [starting, setStarting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
+  const insets = useSafeAreaInsets();
 
   const activeRuns = activityRuns.filter((run) => run.status === 'running' || run.status === 'waiting-approval');
   const finishedRuns = activityRuns.filter((run) => !activeRuns.includes(run));
@@ -75,7 +78,7 @@ export default function ActivityScreen() {
       edges={screenEdgesFor({ platform: Platform.OS, hasDock: false })}
       parallaxY={parallaxY}>
       <ScrollView
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, { paddingBottom: tabContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom }) }]}
         onScroll={onScroll}
         scrollEventThrottle={16}
         refreshControl={

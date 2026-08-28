@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
 import { EmptyState, ListRow, Skeleton, Text, TextField } from '@/components/ui';
@@ -20,6 +21,7 @@ import {
   type BotGroupRoom,
 } from '@/lib/gateway/groups';
 import { rosterBotTap } from '@/lib/gateway/roster-tap';
+import { TAB_ROSTER_BASE_PADDING, tabContentPaddingBottom } from '@/lib/motion/tab-insets';
 
 export type ChatRosterProps = {
   rows: RosterRow[];
@@ -82,6 +84,7 @@ export function ChatRoster({
   const [query, setQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const tokens = useTokens();
+  const insets = useSafeAreaInsets();
 
   // The spinner holds for a beat even on fast reads so the gesture always
   // feels acknowledged — same floor as the thread surface's refresh.
@@ -129,7 +132,7 @@ export function ChatRoster({
 
   return (
     <ScrollView
-      contentContainerStyle={styles.pad}
+      contentContainerStyle={[styles.pad, { paddingBottom: tabContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom, base: TAB_ROSTER_BASE_PADDING }) }]}
       keyboardShouldPersistTaps="handled"
       refreshControl={
         handleRefresh ? (
