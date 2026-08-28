@@ -2,11 +2,12 @@ import { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
-import { Button, Card, Icon, Text } from '@/components/ui';
+import { Button, Card, Icon, PressableScale, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { haptics } from '@/lib/haptics';
 import { approvalExitDuration, nextApprovalExit, type ApprovalExit } from '@/lib/motion/approval-exit';
+import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 
 export function ApprovalDecisionCard({
   runId,
@@ -19,6 +20,8 @@ export function ApprovalDecisionCard({
 }) {
   const tokens = useTokens();
   const [exit, setExit] = useState<ApprovalExit>('idle');
+  // Default collapsed keeps the card compact; the full prompt is one tap away.
+  const [promptExpanded, setPromptExpanded] = useState(false);
   const locked = useRef(false);
   const scale = useSharedValue(1);
   const opacity = useSharedValue(1);
@@ -66,9 +69,19 @@ export function ApprovalDecisionCard({
             Approval requested
           </Text>
         </View>
-        <Text variant="body" numberOfLines={3}>
-          {prompt}
-        </Text>
+        <PressableScale
+          onPress={() => {
+            void haptics.light();
+            setPromptExpanded((prev) => !prev);
+          }}
+          hitSlop={CHIP_HIT_SLOP}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: promptExpanded }}
+          accessibilityLabel={promptExpanded ? 'Collapse run prompt' : 'Expand run prompt'}>
+          <Text variant="body" numberOfLines={promptExpanded ? undefined : 3}>
+            {prompt}
+          </Text>
+        </PressableScale>
         <Text variant="mono" color="tertiary" numberOfLines={1}>
           run {runId}
         </Text>
