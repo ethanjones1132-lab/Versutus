@@ -9,6 +9,7 @@ import { ToolCallCard } from '@/components/chat/tool-call-card';
 import { Badge, Card, PressableScale, Text } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { bubbleMaxWidth } from '@/lib/motion/bubble-width';
+import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { entering } from '@/lib/motion/presets';
 import { formatClockTime } from '@/lib/format';
 import { useTokens } from '@/hooks/use-tokens';
@@ -143,6 +144,7 @@ export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPres
                   await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   setReasoningUserOverride((prev) => (prev !== null ? !prev : !message.streaming));
                 }}
+                hitSlop={CHIP_HIT_SLOP}
                 style={styles.reasoningToggle}>
                 <Text variant="caption" color="accent">
                   {isReasoningExpanded ? 'Hide thinking' : 'Thinking'}
@@ -194,6 +196,7 @@ export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPres
                 await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 onResume(message);
               }}
+              hitSlop={CHIP_HIT_SLOP}
               style={styles.actionButton}>
               <Text variant="caption" color="accent">
                 {interruptedSendAgainLabel()}
@@ -203,7 +206,10 @@ export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPres
 
           {message.command?.raw ? (
             <View style={styles.rawSection}>
-              <PressableScale onPress={() => setRawOpen((open) => !open)} style={styles.rawButton}>
+              <PressableScale
+                onPress={() => setRawOpen((open) => !open)}
+                hitSlop={CHIP_HIT_SLOP}
+                style={styles.rawButton}>
                 <Text variant="caption" color="accent">
                   {rawOpen ? 'Hide raw' : 'Raw'}
                 </Text>
@@ -243,6 +249,7 @@ export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPres
                       title: message.command?.title,
                     });
                   }}
+                  hitSlop={CHIP_HIT_SLOP}
                   style={styles.actionButton}>
                   <Text variant="caption" color="accent">
                     Retry
@@ -255,6 +262,7 @@ export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPres
                     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                     onCancel(message.id);
                   }}
+                  hitSlop={CHIP_HIT_SLOP}
                   style={styles.actionButton}>
                   <Text variant="caption" color="accent">
                     Cancel
