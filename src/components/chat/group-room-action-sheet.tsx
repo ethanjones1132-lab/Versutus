@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { BaseSheet, Button, Chip, ConfirmSheet, Divider, ListRow, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
@@ -201,7 +201,10 @@ export function GroupRoomActionSheet({
         onClose={close}
         closeLabel="Dismiss">
         {removing ? (
-          <View style={styles.facts}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.facts}>
             <Text variant="caption" color="secondary" style={styles.hint}>
               Removed members stop speaking in future sends — history stays as it was.
             </Text>
@@ -245,9 +248,12 @@ export function GroupRoomActionSheet({
                 onPress={submitRemove}
               />
             </View>
-          </View>
+          </ScrollView>
         ) : adding ? (
-          <View style={styles.facts}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.facts}>
             <Text variant="caption" color="secondary" style={styles.hint}>
               New members join future sends — history stays as it was.
             </Text>
@@ -289,9 +295,12 @@ export function GroupRoomActionSheet({
                 onPress={submitAdd}
               />
             </View>
-          </View>
+          </ScrollView>
         ) : renaming ? (
-          <View style={styles.facts}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.facts}>
             <Text variant="caption" color="secondary" style={styles.hint}>
               The room keeps its members and history — only the name changes.
             </Text>
@@ -322,9 +331,12 @@ export function GroupRoomActionSheet({
                 onPress={submitRename}
               />
             </View>
-          </View>
+          </ScrollView>
         ) : (
-          <View style={styles.facts}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.facts}>
             <View style={styles.fact}>
               <Text variant="micro" color="tertiary">
                 MEMBERS
@@ -400,7 +412,7 @@ export function GroupRoomActionSheet({
                 {error}
               </Text>
             ) : null}
-          </View>
+          </ScrollView>
         )}
       </BaseSheet>
 
