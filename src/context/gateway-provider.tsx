@@ -155,9 +155,6 @@ type GatewayContextValue = {
   statusDetail: string;
   connectionPhase: ConnectionPhase;
   probeMessage: string;
-  messages: ChatMessage[];
-  isSending: boolean;
-  isCommandRunning: boolean;
   lastError: string | null;
   deviceId: string | null;
   pairingDetails: PairingDetails | null;
@@ -317,6 +314,18 @@ type GatewayContextValue = {
 /** Turns fetched per `reloadHistoryFor` call and per `loadEarlierMessages` page. */
 const HISTORY_PAGE_SIZE = 80;
 
+/**
+ * Transcript and send state, split out of the shared gateway value so a
+ * streamed frame re-renders only the chat surface that reads them instead
+ * of the whole mounted tab tree.
+ */
+type ChatSurfaceContextValue = {
+  messages: ChatMessage[];
+  isSending: boolean;
+  isCommandRunning: boolean;
+};
+
+const ChatSurfaceContext = createContext<ChatSurfaceContextValue | null>(null);
 const GatewayContext = createContext<GatewayContextValue | null>(null);
 
 let sharedDiscoveryScanner: GatewayDiscoveryScanner | null = null;
@@ -1739,7 +1748,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       try {
         // Build bounded conversation context: last 20 real turns, no command payloads.
         const conversationMessages = [
-          ...messages
+          // Latest-committed via the ref mirror at the state declaration,
+          // so this callback's identity stays stable across streamed frames.
+          ...messagesRef.current
             .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.command && !m.queued && m.text.trim())
             .slice(-20)
             .map((m) => ({ role: m.role, content: m.text })),
@@ -1835,7 +1846,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         abortControllerRef.current = null;
       }
     },
-    [activeGateway, isSending, messages, selectedBackendId, selectedBotId],
+    [activeGateway, isSending, selectedBackendId, selectedBotId],
   );
 
   const resolveRunApproval = useCallback((approved: boolean, feedback?: string) => {
@@ -2871,9 +2882,6 @@ const response = await executeGatewaySlashCommand(trimmed, {
       statusDetail,
       connectionPhase,
       probeMessage,
-      messages,
-      isSending,
-      isCommandRunning,
       lastError,
       deviceId,
       pairingDetails,
@@ -2954,7 +2962,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
     }),
     [
       gateways, activeGateway, activeHello, status, statusDetail, connectionPhase, probeMessage,
-      messages, isSending, isCommandRunning, lastError, deviceId, pairingDetails,
+      lastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
       cron, gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
@@ -2973,7 +2981,28 @@ const response = await executeGatewaySlashCommand(trimmed, {
     ],
   );
 
-  return <GatewayContext.Provider value={value}>{children}</GatewayContext.Provider>;
+  // The three streaming-scoped states live in a nested context, so a
+  // coalesced streamed frame (iter-015) rebuilds only this value and
+  // re-renders the chat surface alone — the other mounted tabs keep the
+  // outer value's identity.
+  const chatSurfaceValue = useMemo<ChatSurfaceContextValue>(
+    () => ({ messages, isSending, isCommandRunning }),
+    [messages, isSending, isCommandRunning],
+  );
+
+  return (
+    <GatewayContext.Provider value={value}>
+      <ChatSurfaceContext.Provider value={chatSurfaceValue}>
+        {children}
+      </ChatSurfaceContext.Provider>
+    </GatewayContext.Provider>
+  );
+}
+
+export function useChatSurface() {
+  const context = useContext(ChatSurfaceContext);
+  if (!context) throw new Error('useChatSurface must be used within GatewayProvider');
+  return context;
 }
 
 export function useGateway() {

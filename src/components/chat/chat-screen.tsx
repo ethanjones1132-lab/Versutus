@@ -30,7 +30,7 @@ import { ThreadConfigSheet, type SessionItem } from '@/components/chat/thread-co
 import { SlashCommandPalette } from '@/components/chat/slash-command-palette';
 import { Button, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text } from '@/components/ui';
 import { Motion, Radius, Spacing } from '@/constants/tokens';
-import { useGateway } from '@/context/gateway-provider';
+import { useChatSurface, useGateway } from '@/context/gateway-provider';
 import { describeGatewayError, errorBannerButton, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
@@ -201,9 +201,6 @@ export function ChatScreen() {
     statusDetail,
     connectionPhase,
     probeMessage,
-    messages,
-    isSending,
-    isCommandRunning,
     lastError,
     deviceId,
     pairingDetails,
@@ -257,6 +254,10 @@ export function ChatScreen() {
     selectedBotId,
     gatewayRequest,
   } = useGateway();
+
+  // The transcript and its send state come from the chat-surface context so
+  // a streamed frame re-renders this screen alone, not every mounted tab.
+  const { messages, isSending, isCommandRunning } = useChatSurface();
 
   // Keyed by gateway + surface + session so leaving a thread and coming
   // back restores that thread's unsent text, never another Bot's.
