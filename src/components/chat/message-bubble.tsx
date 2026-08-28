@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 
@@ -40,7 +40,7 @@ const COMMAND_STATUS_TONE = {
   error: 'danger',
 } as const;
 
-export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPress, identity }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, onRetry, onCancel, onResume, onLongPress, identity }: MessageBubbleProps) {
   const tokens = useTokens();
   const { width: windowWidth } = useWindowDimensions();
   const isUser = message.role === 'user';
@@ -283,7 +283,7 @@ export function MessageBubble({ message, onRetry, onCancel, onResume, onLongPres
         </View>
     </Animated.View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   row: {

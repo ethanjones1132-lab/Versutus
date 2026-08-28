@@ -123,6 +123,10 @@ const AT_TOP_PX = 8;
 
 type SessionRecord = HermesSession & { sessionId?: string; name?: string };
 
+// One transcript row: the message plus the day-divider decision, computed once
+// per message-array change so renderItem stays referentially stable mid-turn.
+type TranscriptItem = { message: ChatMessage; label: string | undefined; showDivider: boolean };
+
 function toSessionItem(session: SessionRecord): SessionItem {
   return {
     id: session.id || session.sessionId || session.name || '',
@@ -358,10 +362,16 @@ export function ChatScreen() {
   }, [draftThread]);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
-  const listRef = useRef<FlatList<ChatMessage>>(null);
+  const listRef = useRef<FlatList<TranscriptItem>>(null);
   const pinnedRef = useRef(true);
   const atTopRef = useRef(true);
   const jumpVisibleRef = useRef(false);
+  // Latest-commit mirror of `messages` so callbacks that need the list stay
+  // referentially stable while a turn streams (see handleResumeMessage).
+  const messagesRef = useRef<ChatMessage[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // Every surface change funnels through here so the screen-local backends
   // section cannot outlive the configurable thread it belongs to (rook
@@ -481,13 +491,14 @@ export function ChatScreen() {
 
   const handleResumeMessage = useCallback(
     (message: ChatMessage) => {
-      const idx = messages.findIndex((m) => m.id === message.id);
-      const previousUser = messages.slice(0, idx).reverse().find((m) => m.role === 'user');
+      const current = messagesRef.current;
+      const idx = current.findIndex((m) => m.id === message.id);
+      const previousUser = current.slice(0, idx).reverse().find((m) => m.role === 'user');
       if (previousUser?.text.trim()) {
         void sendChatInput(previousUser.text.trim());
       }
     },
-    [messages, sendChatInput],
+    [sendChatInput],
   );
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -753,16 +764,27 @@ export function ChatScreen() {
     setRefreshing(false);
   }, [hasMoreHistory, loadEarlierMessages, loadingEarlierHistory, reloadHistory]);
 
+  // Day dividers are decided here, once per message-array change, instead of
+  // inside renderItem — renderMessage then depends on the stable callback set
+  // only and keeps one identity for the whole streamed turn.
+  const transcriptItems = useMemo<TranscriptItem[]>(
+    () =>
+      messages.map((message, index) => {
+        const label = message.timestamp ? formatDayDivider(message.timestamp) : undefined;
+        const previous = messages[index - 1];
+        const previousLabel = previous?.timestamp ? formatDayDivider(previous.timestamp) : undefined;
+        return { message, label, showDivider: !!label && label !== previousLabel };
+      }),
+    [messages],
+  );
+
   const renderMessage = useCallback(
-    ({ item, index }: { item: ChatMessage; index: number }) => {
-      const previous = messages[index - 1];
-      const label = item.timestamp ? formatDayDivider(item.timestamp) : undefined;
-      const previousLabel = previous?.timestamp ? formatDayDivider(previous.timestamp) : undefined;
+    ({ item }: { item: TranscriptItem }) => {
       return (
         <>
-          {label && label !== previousLabel ? <DayDivider label={label} /> : null}
+          {item.showDivider && item.label ? <DayDivider label={item.label} /> : null}
           <MessageBubble
-            message={item}
+            message={item.message}
             identity={identity}
             onRetry={retryCommand}
             onCancel={cancelCommand}
@@ -772,7 +794,7 @@ export function ChatScreen() {
         </>
       );
     },
-    [cancelCommand, handleResumeMessage, identity, messages, retryCommand],
+    [cancelCommand, handleResumeMessage, identity, retryCommand],
   );
 
   if (!activeGateway) {
@@ -1170,8 +1192,8 @@ export function ChatScreen() {
       <View style={styles.listWrap}>
         <FlatList
           ref={listRef}
-          data={messages}
-          keyExtractor={(item) => item.id}
+          data={transcriptItems}
+          keyExtractor={(item) => item.message.id}
           style={styles.list}
           contentContainerStyle={[
             styles.messages,
@@ -1179,6 +1201,10 @@ export function ChatScreen() {
           ]}
           onScroll={handleScroll}
           scrollEventThrottle={16}
+          removeClippedSubviews
+          initialNumToRender={12}
+          maxToRenderPerBatch={16}
+          windowSize={9}
           onContentSizeChange={handleContentSizeChange}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
