@@ -555,7 +555,7 @@ export function GroupRoomView({
           <Button
             label={sending ? 'Round running…' : 'Send'}
             variant="primary"
-            size="sm"
+            size="md"
             disabled={sending || !draft.trim()}
             onPress={handleSend}
           />
