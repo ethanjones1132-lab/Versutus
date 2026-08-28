@@ -1180,6 +1180,8 @@ export function ChatScreen() {
           onScroll={handleScroll}
           scrollEventThrottle={16}
           onContentSizeChange={handleContentSizeChange}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
           renderItem={renderMessage}
           ListHeaderComponent={
             hasMoreHistory && messages.length > 0 ? (
