@@ -1189,7 +1189,7 @@ export function ChatScreen() {
                 <Button
                   label={loadingEarlierHistory ? 'Loading…' : 'Load earlier messages'}
                   variant="ghost"
-                  size="sm"
+                  size="md"
                   disabled={loadingEarlierHistory}
                   onPress={() => void loadEarlierMessages()}
                 />
