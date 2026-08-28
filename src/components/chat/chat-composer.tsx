@@ -416,7 +416,7 @@ const styles = StyleSheet.create({
   },
   sendButton: {
     borderRadius: Radius.md,
-    minHeight: 40,
+    minHeight: 48,
     paddingHorizontal: Spacing.three,
     alignItems: 'center',
     justifyContent: 'center',
