@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { FlatList, KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
@@ -126,7 +126,7 @@ export function GroupRoomView({
   const insets = useSafeAreaInsets();
   const { fontScale } = useWindowDimensions();
   const memberPinMaxWidth = groupMemberChipPinMaxWidth(fontScale);
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<FlatList<RoomEntry>>(null);
   const pinnedRef = useRef(true);
   const [entries, setEntries] = useState<RoomEntry[]>([]);
   const [historyError, setHistoryError] = useState(false);
@@ -375,8 +375,11 @@ export function GroupRoomView({
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
-      <ScrollView
+      <FlatList
         ref={scrollRef}
+        data={entries}
+        keyExtractor={(entry) => entry.id}
+        style={styles.flex}
         contentContainerStyle={[
           styles.scroll,
           { paddingBottom: chatTranscriptContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom }) },
@@ -384,6 +387,10 @@ export function GroupRoomView({
         keyboardShouldPersistTaps="handled"
         onScroll={handleScroll}
         scrollEventThrottle={16}
+        removeClippedSubviews
+        initialNumToRender={12}
+        maxToRenderPerBatch={16}
+        windowSize={9}
         refreshControl={
           loadHistory ? (
             <RefreshControl
@@ -394,140 +401,142 @@ export function GroupRoomView({
               progressBackgroundColor={tokens.backgroundElevated}
             />
           ) : undefined
-        }>
-        <View
-          style={[styles.roomCard, { backgroundColor: tokens.backgroundRaised, borderColor: tokens.glassBorder }]}>
-          <View style={styles.roomCardHead}>
-            <Text variant="caption" color="secondary" numberOfLines={1}>
-              {describeRoomPlan({
-                speakerCount: speakers.length,
-                routableCount: routableSpeakerCount,
-                silentNames: silentSpeakerNames,
-                unknownNames: unknownSpeakerNames,
-                rosterLoaded: inventoryLoaded,
-              })}
-            </Text>
-            <View style={styles.headActions}>
-              <PressableScale
-                onPress={() => {
-                  setRenameDraft(group.name);
-                  setRenameVisible(true);
-                }}
-                hitSlop={CHIP_HIT_SLOP}
-                accessibilityRole="button"
-                accessibilityLabel="Rename room"
-                style={styles.renamePill}>
-                <Icon name={{ ios: 'pencil', android: 'edit', web: 'edit' }} size={12} color="textSecondary" />
-                <Text variant="micro" color="secondary">Rename</Text>
-              </PressableScale>
-              <PressableScale
-                onPress={() => setDisbandVisible(true)}
-                hitSlop={CHIP_HIT_SLOP}
-                accessibilityRole="button"
-                accessibilityLabel="Disband room"
-                style={styles.renamePill}>
-                <Icon name={{ ios: 'trash', android: 'delete', web: 'delete' }} size={12} color="textSecondary" />
-                <Text variant="micro" color="secondary">Disband</Text>
-              </PressableScale>
-            </View>
-          </View>
-          {mentioned.length > 0 ? (
-            <Text variant="micro" color="accentWarm" style={styles.scopeNote}>
-              @mentions scope the round to {mentioned.length === 1 ? 'one bot' : `${mentioned.length} bots`}.
-            </Text>
-          ) : null}
-          <View style={styles.chipWrap}>
-            {group.memberIds.map((memberId) => {
-              // Routing state outranks the pin: an unroutable chip shows WHY
-              // it will stay silent instead of what a silent bot is pinned to,
-              // and a member this phone has never seen on the roster says so
-              // instead of masquerading as a verified speaker.
-              const routingTag = routingTagOf(memberId);
-              const modelPin = routingTag ? '' : pinnedModelOf(memberId);
-              const missingFromRoster = routingTag === undefined;
-              const evictable = memberIsRemovable(memberId);
-              return (
+        }
+        ListHeaderComponent={
+          <View style={styles.listHeader}>
+          <View
+            style={[styles.roomCard, { backgroundColor: tokens.backgroundRaised, borderColor: tokens.glassBorder }]}>
+            <View style={styles.roomCardHead}>
+              <Text variant="caption" color="secondary" numberOfLines={1}>
+                {describeRoomPlan({
+                  speakerCount: speakers.length,
+                  routableCount: routableSpeakerCount,
+                  silentNames: silentSpeakerNames,
+                  unknownNames: unknownSpeakerNames,
+                  rosterLoaded: inventoryLoaded,
+                })}
+              </Text>
+              <View style={styles.headActions}>
                 <PressableScale
-                  key={memberId}
-                  onPress={evictable ? () => setPendingRemoval(memberId) : undefined}
-                  disabled={!evictable}
-                  hitSlop={evictable ? CHIP_HIT_SLOP : undefined}
+                  onPress={() => {
+                    setRenameDraft(group.name);
+                    setRenameVisible(true);
+                  }}
+                  hitSlop={CHIP_HIT_SLOP}
                   accessibilityRole="button"
-                  accessibilityLabel={
-                    evictable
-                      ? deadMemberIds.includes(memberId)
-                        ? `Remove ${displayNameOf(memberId)} — not on this gateway's roster`
-                        : `Remove ${displayNameOf(memberId)} from the room`
-                      : `${displayNameOf(memberId)}. ${GROUP_MEMBER_FLOOR_REASON}.`
-                  }
-                  style={[
-                    styles.memberChip,
-                    { backgroundColor: tokens.glassHighlight, borderColor: tokens.border },
-                  ]}>
-                  <BotAvatar botId={memberId} size={22} />
-                  <Text variant="caption" color="primary" numberOfLines={1}>
-                    {displayNameOf(memberId)}
-                  </Text>
-                  {routingTag ? (
-                    <Text variant="micro" color="accentWarm" numberOfLines={1} style={[styles.memberChipPin, { maxWidth: memberPinMaxWidth }]}>
-                      {routingTag}
-                    </Text>
-                  ) : missingFromRoster ? (
-                    <Text variant="micro" color="accentWarm" numberOfLines={1} style={[styles.memberChipPin, { maxWidth: memberPinMaxWidth }]}>
-                      Not on gateway
-                    </Text>
-                  ) : modelPin ? (
-                    <Text variant="micro" color="tertiary" numberOfLines={1} style={[styles.memberChipPin, { maxWidth: memberPinMaxWidth }]}>
-                      {modelPin}
-                    </Text>
-                  ) : null}
-                  {removable ? (
-                    <Icon name={{ ios: 'xmark', android: 'close', web: 'close' }} size={10} color="textTertiary" />
-                  ) : null}
+                  accessibilityLabel="Rename room"
+                  style={styles.renamePill}>
+                  <Icon name={{ ios: 'pencil', android: 'edit', web: 'edit' }} size={12} color="textSecondary" />
+                  <Text variant="micro" color="secondary">Rename</Text>
                 </PressableScale>
-              );
-            })}
+                <PressableScale
+                  onPress={() => setDisbandVisible(true)}
+                  hitSlop={CHIP_HIT_SLOP}
+                  accessibilityRole="button"
+                  accessibilityLabel="Disband room"
+                  style={styles.renamePill}>
+                  <Icon name={{ ios: 'trash', android: 'delete', web: 'delete' }} size={12} color="textSecondary" />
+                  <Text variant="micro" color="secondary">Disband</Text>
+                </PressableScale>
+              </View>
+            </View>
+            {mentioned.length > 0 ? (
+              <Text variant="micro" color="accentWarm" style={styles.scopeNote}>
+                @mentions scope the round to {mentioned.length === 1 ? 'one bot' : `${mentioned.length} bots`}.
+              </Text>
+            ) : null}
+            <View style={styles.chipWrap}>
+              {group.memberIds.map((memberId) => {
+                // Routing state outranks the pin: an unroutable chip shows WHY
+                // it will stay silent instead of what a silent bot is pinned to,
+                // and a member this phone has never seen on the roster says so
+                // instead of masquerading as a verified speaker.
+                const routingTag = routingTagOf(memberId);
+                const modelPin = routingTag ? '' : pinnedModelOf(memberId);
+                const missingFromRoster = routingTag === undefined;
+                const evictable = memberIsRemovable(memberId);
+                return (
+                  <PressableScale
+                    key={memberId}
+                    onPress={evictable ? () => setPendingRemoval(memberId) : undefined}
+                    disabled={!evictable}
+                    hitSlop={evictable ? CHIP_HIT_SLOP : undefined}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      evictable
+                        ? deadMemberIds.includes(memberId)
+                          ? `Remove ${displayNameOf(memberId)} — not on this gateway's roster`
+                          : `Remove ${displayNameOf(memberId)} from the room`
+                        : `${displayNameOf(memberId)}. ${GROUP_MEMBER_FLOOR_REASON}.`
+                    }
+                    style={[
+                      styles.memberChip,
+                      { backgroundColor: tokens.glassHighlight, borderColor: tokens.border },
+                    ]}>
+                    <BotAvatar botId={memberId} size={22} />
+                    <Text variant="caption" color="primary" numberOfLines={1}>
+                      {displayNameOf(memberId)}
+                    </Text>
+                    {routingTag ? (
+                      <Text variant="micro" color="accentWarm" numberOfLines={1} style={[styles.memberChipPin, { maxWidth: memberPinMaxWidth }]}>
+                        {routingTag}
+                      </Text>
+                    ) : missingFromRoster ? (
+                      <Text variant="micro" color="accentWarm" numberOfLines={1} style={[styles.memberChipPin, { maxWidth: memberPinMaxWidth }]}>
+                        Not on gateway
+                      </Text>
+                    ) : modelPin ? (
+                      <Text variant="micro" color="tertiary" numberOfLines={1} style={[styles.memberChipPin, { maxWidth: memberPinMaxWidth }]}>
+                        {modelPin}
+                      </Text>
+                    ) : null}
+                    {removable ? (
+                      <Icon name={{ ios: 'xmark', android: 'close', web: 'close' }} size={10} color="textTertiary" />
+                    ) : null}
+                  </PressableScale>
+                );
+              })}
+            </View>
+            {!removable ? (
+              <Text variant="micro" color="tertiary">{GROUP_MEMBER_FLOOR_REASON} — members are pinned.</Text>
+            ) : null}
           </View>
-          {!removable ? (
-            <Text variant="micro" color="tertiary">{GROUP_MEMBER_FLOOR_REASON} — members are pinned.</Text>
+          {historyError ? (
+            <Text variant="micro" color="tertiary" style={styles.emptyHint}>
+              Could not load earlier replies from the Gate — this visit may be missing older lines.
+            </Text>
           ) : null}
-        </View>
-
-        {historyError ? (
-          <Text variant="micro" color="tertiary" style={styles.emptyHint}>
-            Could not load earlier replies from the Gate — this visit may be missing older lines.
-          </Text>
-        ) : null}
-
-        {entries.length === 0 ? (
-          <Text variant="caption" color="tertiary" style={styles.emptyHint}>
-            Say something to the room. Every reply lands here, attributed to its bot.
-          </Text>
-        ) : null}
-
-        {entries.map((entry) =>
-          entry.role === 'user' ? (
-            <View key={entry.id} style={styles.userRow}>
+          {entries.length === 0 ? (
+            <Text variant="caption" color="tertiary" style={styles.emptyHint}>
+              Say something to the room. Every reply lands here, attributed to its bot.
+            </Text>
+          ) : null}
+          </View>
+        }
+        renderItem={({ item }) =>
+          item.role === 'user' ? (
+            <View style={styles.userRow}>
               <View style={[styles.userBubble, { backgroundColor: tokens.accentMuted }]}>
-                <Text variant="body" color="primary">{entry.text}</Text>
-                {typeof entry.at === 'number' || typeof entry.replyCount === 'number' ? (
+                <Text variant="body" color="primary">{item.text}</Text>
+                {typeof item.at === 'number' || typeof item.replyCount === 'number' ? (
                   <Text variant="micro" color="secondary" style={styles.metaLine}>
-                    {userMetaLine(entry)}
+                    {userMetaLine(item)}
                   </Text>
                 ) : null}
               </View>
             </View>
           ) : (
-            <View key={entry.id} style={styles.botRow}>
-              <BotAvatar botId={entry.botId} size={26} />
+            <View style={styles.botRow}>
+              <BotAvatar botId={item.botId} size={26} />
               <View style={[styles.botBubble, { backgroundColor: tokens.backgroundElevated }]}>
-                <Text variant="micro" color="tertiary">{botByline(displayNameOf(entry.botId), entry.at)}</Text>
-                <Text variant="body" color="primary">{entry.text}</Text>
+                <Text variant="micro" color="tertiary">{botByline(displayNameOf(item.botId), item.at)}</Text>
+                <Text variant="body" color="primary">{item.text}</Text>
               </View>
             </View>
-          ),
-        )}
-      </ScrollView>
+          )
+        }
+      />
+
 
       {error ? (
         <Text variant="caption" color="accentWarm" style={styles.error}>{error}</Text>
@@ -690,6 +699,7 @@ const styles = StyleSheet.create({
   // even at the six-member cap — the wrap stays two-plus chips per line.
   memberChipPin: { maxWidth: 120 },
   emptyHint: { textAlign: 'center', paddingVertical: Spacing.four },
+  listHeader: { gap: Spacing.two },
   userRow: { flexDirection: 'row', justifyContent: 'flex-end' },
   userBubble: {
     maxWidth: '82%',

@@ -39,9 +39,14 @@ describe('group room scroll pin', () => {
     expect(handler).toMatch(/pinnedRef\.current = distanceFromBottom < PIN_THRESHOLD_PX/);
   });
 
-  test('the room ScrollView wires the guarded scroll handler', () => {
+  test('the room FlatList wires the guarded scroll handler', () => {
     const src = readGroupRoomViewSource();
-    const scrollView = src.match(/<ScrollView\s+ref=\{scrollRef\}[\s\S]*?>/)?.[0];
+    // The iter-079 pin guard moved onto the windowed transcript list
+    // (iter-080); the selector follows the component, the assertions
+    // stay the same.
+    // Match through the scroll props (a lazy [\s\S]*?> would stop at the
+    // first `>` — the `=>` arrow inside keyExtractor).
+    const scrollView = src.match(/<FlatList\s+ref={scrollRef}[\s\S]*?scrollEventThrottle=\{16\}/)?.[0];
     expect(scrollView).toBeDefined();
     expect(scrollView).toMatch(/onScroll=\{handleScroll\}/);
     expect(scrollView).toMatch(/scrollEventThrottle=\{16\}/);
