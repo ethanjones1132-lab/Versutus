@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
@@ -23,6 +24,7 @@ import {
   type GroupTranscriptEntry,
 } from '@/lib/gateway/groups';
 import { extractMentions, insertMention, mentionPicksAtCaret } from '@/lib/gateway/mentions';
+import { chatTranscriptContentPaddingBottom } from '@/lib/motion/chat-transcript-insets';
 
 /**
  * One exchange in the room: the operator's message (with how many replies it
@@ -114,6 +116,7 @@ export function GroupRoomView({
   inventoryLoaded?: boolean;
 }) {
   const tokens = useTokens();
+  const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollView>(null);
   const [entries, setEntries] = useState<RoomEntry[]>([]);
   const [historyError, setHistoryError] = useState(false);
@@ -357,7 +360,10 @@ export function GroupRoomView({
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
       <ScrollView
         ref={scrollRef}
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[
+          styles.scroll,
+          { paddingBottom: chatTranscriptContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom }) },
+        ]}
         keyboardShouldPersistTaps="handled"
         refreshControl={
           loadHistory ? (
