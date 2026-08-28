@@ -134,6 +134,7 @@ export function ChatRoster({
     <ScrollView
       contentContainerStyle={[styles.pad, { paddingBottom: tabContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom, base: TAB_ROSTER_BASE_PADDING }) }]}
       keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="interactive"
       refreshControl={
         handleRefresh ? (
           <RefreshControl
