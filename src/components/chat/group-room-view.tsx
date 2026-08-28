@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
@@ -27,6 +27,11 @@ import { extractMentions, insertMention, mentionPicksAtCaret } from '@/lib/gatew
 import { chatTranscriptContentPaddingBottom } from '@/lib/motion/chat-transcript-insets';
 import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { groupMemberChipPinMaxWidth } from '@/lib/motion/group-member-chip-layout';
+
+// Follow the tail while the operator stays near it; scrolling up pins the
+// room so a round's replies stop yanking the view back to the bottom
+// (mirrors the transcript guard at chat-screen.tsx:117).
+const PIN_THRESHOLD_PX = 96;
 
 /**
  * One exchange in the room: the operator's message (with how many replies it
@@ -122,6 +127,7 @@ export function GroupRoomView({
   const { fontScale } = useWindowDimensions();
   const memberPinMaxWidth = groupMemberChipPinMaxWidth(fontScale);
   const scrollRef = useRef<ScrollView>(null);
+  const pinnedRef = useRef(true);
   const [entries, setEntries] = useState<RoomEntry[]>([]);
   const [historyError, setHistoryError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -191,8 +197,15 @@ export function GroupRoomView({
   }
 
   const scrollToBottom = () => {
+    if (!pinnedRef.current) return;
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
   };
+
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
+    pinnedRef.current = distanceFromBottom < PIN_THRESHOLD_PX;
+  }, []);
 
   // Replay the Gate-stored transcript once per room visit, so a revisit
   // continues the conversation instead of starting blank. Stored lines are
@@ -369,6 +382,8 @@ export function GroupRoomView({
           { paddingBottom: chatTranscriptContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom }) },
         ]}
         keyboardShouldPersistTaps="handled"
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
         refreshControl={
           loadHistory ? (
             <RefreshControl
