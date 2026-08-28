@@ -3,6 +3,7 @@ import { FlatList, KeyboardAvoidingView, Platform, RefreshControl, ScrollView, S
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
+import { MarkdownText } from '@/components/chat/markdown/markdown-text';
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
 import { BaseSheet, Button, ConfirmSheet, Icon, PressableScale, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
@@ -530,7 +531,7 @@ export function GroupRoomView({
               <BotAvatar botId={item.botId} size={26} />
               <View style={[styles.botBubble, { backgroundColor: tokens.backgroundElevated }]}>
                 <Text variant="micro" color="tertiary">{botByline(displayNameOf(item.botId), item.at)}</Text>
-                <Text variant="body" color="primary">{item.text}</Text>
+                <MarkdownText text={item.text} />
               </View>
             </View>
           )
