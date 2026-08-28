@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet } from 'react-native';
 
 import { BaseSheet, Button, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
@@ -64,7 +64,10 @@ export function NewAgentSheet({
         onClose();
       }}
       closeLabel="Dismiss">
-      <View style={styles.pad}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.pad}>
         <Text variant="caption" color="tertiary" style={styles.blurb}>
           {editing
             ? 'Applies only the fields you fill in — a blank field leaves what the Gate holds untouched.'
@@ -122,7 +125,7 @@ export function NewAgentSheet({
             })
           }
         />
-      </View>
+      </ScrollView>
     </BaseSheet>
   );
 }

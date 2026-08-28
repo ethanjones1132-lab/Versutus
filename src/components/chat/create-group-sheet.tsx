@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { BaseSheet, Button, Chip, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
@@ -58,59 +58,65 @@ export function CreateGroupSheet({
       onClose={onClose}
       closeLabel="Cancel"
       position="bottom">
-      <Text variant="title">New group room</Text>
-      <Text variant="caption" color="secondary" style={styles.hint}>
-        One message runs a round-robin: every member replies in turn, up to 3 rounds.
-      </Text>
-
-      <TextField
-        value={name}
-        onChangeText={setName}
-        placeholder="Room name"
-        autoCapitalize="none"
-        style={styles.field}
-      />
-
-      <Text variant="caption" color="tertiary" style={styles.sectionLabel}>
-        Members · {memberIds.length}/{MAX_GROUP_MEMBERS} selected (min {MIN_GROUP_MEMBERS})
-      </Text>
-      {routable.length >= MIN_GROUP_MEMBERS ? (
-        <View style={styles.chipWrap}>
-          {routable.map((bot) => (
-            <Chip
-              key={bot.id}
-              label={bot.displayName}
-              selected={memberIds.includes(bot.id)}
-              onPress={() => toggle(bot.id)}
-            />
-          ))}
-        </View>
-      ) : (
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.pad}>
+        <Text variant="title">New group room</Text>
         <Text variant="caption" color="secondary" style={styles.hint}>
-          {describeGroupCreationFloor({ inventoryLoaded })}
+          One message runs a round-robin: every member replies in turn, up to 3 rounds.
         </Text>
-      )}
 
-      {error ? (
-        <Text variant="caption" color="accentWarm" style={styles.error}>
-          {error}
-        </Text>
-      ) : null}
-
-      <View style={styles.actions}>
-        <Button label="Cancel" variant="ghost" onPress={onClose} disabled={busy} />
-        <Button
-          label={busy ? 'Creating…' : 'Create room'}
-          variant="primary"
-          disabled={busy || !validation.ok}
-          onPress={() => onCreate({ name: name.trim(), memberIds })}
+        <TextField
+          value={name}
+          onChangeText={setName}
+          placeholder="Room name"
+          autoCapitalize="none"
+          style={styles.field}
         />
-      </View>
+
+        <Text variant="caption" color="tertiary" style={styles.sectionLabel}>
+          Members · {memberIds.length}/{MAX_GROUP_MEMBERS} selected (min {MIN_GROUP_MEMBERS})
+        </Text>
+        {routable.length >= MIN_GROUP_MEMBERS ? (
+          <View style={styles.chipWrap}>
+            {routable.map((bot) => (
+              <Chip
+                key={bot.id}
+                label={bot.displayName}
+                selected={memberIds.includes(bot.id)}
+                onPress={() => toggle(bot.id)}
+              />
+            ))}
+          </View>
+        ) : (
+          <Text variant="caption" color="secondary" style={styles.hint}>
+            {describeGroupCreationFloor({ inventoryLoaded })}
+          </Text>
+        )}
+
+        {error ? (
+          <Text variant="caption" color="accentWarm" style={styles.error}>
+            {error}
+          </Text>
+        ) : null}
+
+        <View style={styles.actions}>
+          <Button label="Cancel" variant="ghost" onPress={onClose} disabled={busy} />
+          <Button
+            label={busy ? 'Creating…' : 'Create room'}
+            variant="primary"
+            disabled={busy || !validation.ok}
+            onPress={() => onCreate({ name: name.trim(), memberIds })}
+          />
+        </View>
+      </ScrollView>
     </BaseSheet>
   );
 }
 
 const styles = StyleSheet.create({
+  pad: { paddingHorizontal: Spacing.two, paddingBottom: Spacing.two, gap: Spacing.one },
   hint: { marginTop: Spacing.one, marginBottom: Spacing.two },
   field: { minHeight: 0 },
   sectionLabel: { marginBottom: Spacing.one },
