@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button, ListRow, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import {
+  SKILLS_PANE_MAX_HEIGHT,
   skillsListCopy,
   skillsToggleLabel,
   type Skill,
@@ -32,7 +33,13 @@ export function SkillsPane({
         onPress={() => setOpen((value) => !value)}
       />
       {open ? (
-        <View style={styles.body}>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.body}
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
           {copy ? (
             <Text variant="micro" color="secondary">
               {copy}
@@ -45,7 +52,7 @@ export function SkillsPane({
               subtitle={skill.description || undefined}
             />
           ))}
-        </View>
+        </ScrollView>
       ) : null}
     </View>
   );
@@ -53,5 +60,6 @@ export function SkillsPane({
 
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.one },
+  scroll: { maxHeight: SKILLS_PANE_MAX_HEIGHT },
   body: { gap: Spacing.one, paddingTop: Spacing.one },
 });

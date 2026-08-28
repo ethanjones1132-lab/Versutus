@@ -82,3 +82,6 @@ export function skillsListCopy(state: SkillsState): string | undefined {
   if (state.loaded && state.skills.length === 0) return 'No skills.';
   return undefined;
 }
+
+/** Max height for the expanded skills list so a long catalog scrolls in place. */
+export const SKILLS_PANE_MAX_HEIGHT = 280;

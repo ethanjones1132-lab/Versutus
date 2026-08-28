@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button, ListRow, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import {
+  ROUTINES_PANE_MAX_HEIGHT,
   applyRoutineCreate,
   DEFAULT_ROUTINE_SCHEDULE,
   describeRoutineError,
@@ -101,7 +102,13 @@ export function RoutinesPane({
         onPress={() => setOpen((value) => !value)}
       />
       {open ? (
-        <View style={styles.body}>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.body}
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
           {error ? (
             <Text variant="caption" color="accentWarm">
               {error}
@@ -143,7 +150,7 @@ export function RoutinesPane({
             disabled={busy || !title.trim() || !prompt.trim()}
             onPress={submitCreate}
           />
-        </View>
+        </ScrollView>
       ) : null}
     </View>
   );
@@ -151,5 +158,6 @@ export function RoutinesPane({
 
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.one },
+  scroll: { maxHeight: ROUTINES_PANE_MAX_HEIGHT },
   body: { gap: Spacing.one, paddingTop: Spacing.one },
 });

@@ -179,3 +179,6 @@ export function routinesListCopy(state: RoutinesState): string | undefined {
   if (state.failed) return 'Could not re-read routines — showing the last list.';
   return undefined;
 }
+
+/** Max height for the expanded routines list so jobs and the create form scroll in place. */
+export const ROUTINES_PANE_MAX_HEIGHT = 280;
