@@ -72,7 +72,7 @@ export function RunCard({ run, onStop }: RunCardProps) {
 
       {live && latestEvent ? (
         <View style={[styles.ticker, { backgroundColor: tokens.backgroundInset, borderColor: tokens.borderSubtle }]}>
-          <Text variant="mono" color="secondary" numberOfLines={1}>
+          <Text variant="mono" color="secondary" numberOfLines={2}>
             {latestEvent.preview || latestEvent.type}
           </Text>
         </View>
