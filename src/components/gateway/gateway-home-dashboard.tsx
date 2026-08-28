@@ -430,7 +430,7 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   headerButton: {
-    minHeight: 38,
+    minHeight: 44,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.two,
   },
