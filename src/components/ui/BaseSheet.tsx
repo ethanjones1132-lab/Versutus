@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Motion, Radius } from '@/constants/tokens';
 import {
   sheetAnchoredEdgeMargin,
+  sheetContentPaddingBottom,
   sheetMaxHeight,
   sheetMaxWidth,
 } from '@/lib/motion/sheet-height';
@@ -172,7 +173,19 @@ export function BaseSheet({
               </Text>
             ) : null}
 
-            <View style={styles.content}>{children}</View>
+            <View
+              style={[
+                styles.content,
+                {
+                  paddingBottom: sheetContentPaddingBottom({
+                    position,
+                    inset: insets.bottom,
+                    keyboardHeight,
+                  }),
+                },
+              ]}>
+              {children}
+            </View>
           </GlassSurface>
         </Animated.View>
       </View>

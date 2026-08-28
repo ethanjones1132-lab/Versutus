@@ -100,6 +100,20 @@ export function sheetMaxHeight(input: {
   return Math.max(minimum, Math.round(available));
 }
 
+/** Extra bottom padding inside the sheet so a 42px gesture bar cannot clip the Close hitSlop. */
+export function sheetContentPaddingBottom(input: {
+  position: 'top' | 'bottom';
+  inset: number;
+  keyboardHeight?: number;
+  base?: number;
+}): number {
+  const { position, inset, keyboardHeight = 0, base = 8 } = input;
+  if (position !== 'bottom') return base;
+  const safeInset = Number.isFinite(inset) && inset > 0 ? inset : 0;
+  if (Number.isFinite(keyboardHeight) && keyboardHeight > 0) return base;
+  return base + safeInset;
+}
+
 /** ~70-char line at body size. Phone widths keep the 24px inset on each side. */
 const COLUMN_MAX = 560;
 
