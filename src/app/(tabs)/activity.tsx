@@ -1,8 +1,11 @@
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
+import { activityKeyboardBehavior } from '@/lib/activity/keyboard-behavior';
 
 import { AgentTargets } from '@/components/activity/agent-targets';
 import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
@@ -79,6 +82,7 @@ export default function ActivityScreen() {
       parallaxY={parallaxY}>
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: tabContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom }) }]}
+        keyboardShouldPersistTaps="handled"
         onScroll={onScroll}
         scrollEventThrottle={16}
         refreshControl={
@@ -106,8 +110,10 @@ export default function ActivityScreen() {
           />
         ) : null}
 
-        {runsSupported ? (
-          <Card padding={Spacing.three} style={styles.startCard}>
+        {runsSupported
+          ? (() => {
+              const startCard = (
+                <Card padding={Spacing.three} style={styles.startCard}>
             <Text variant="caption" color="accentWarm" style={styles.approvalEyebrow}>
               Start a run
             </Text>
@@ -131,8 +137,19 @@ export default function ActivityScreen() {
               onPress={() => void startRun()}
               disabled={!runPrompt.trim() || starting || status !== 'connected'}
             />
-          </Card>
-        ) : null}
+                </Card>
+              );
+              const lifted = <ComposerKeyboardLift>{startCard}</ComposerKeyboardLift>;
+              if (activityKeyboardBehavior(Platform.OS) === 'padding') {
+                return (
+                  <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={insets.top}>
+                    {lifted}
+                  </KeyboardAvoidingView>
+                );
+              }
+              return lifted;
+            })()
+          : null}
 
         {activeRuns.length > 0 ? (
           <View style={styles.section}>
