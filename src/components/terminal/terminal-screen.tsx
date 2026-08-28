@@ -37,6 +37,7 @@ import { appendTerminalChunk, type TerminalLine } from '@/lib/terminal/output';
 import { openTerminalSession, sendTerminalInput, type TerminalSession } from '@/lib/terminal/client';
 import { describeShellUnavailable, resolveShellSupport } from '@/lib/terminal/shell-support';
 import { terminalKeyboardBehavior } from '@/lib/terminal/keyboard-behavior';
+import { terminalRpcContentPaddingBottom } from '@/lib/terminal/rpc-insets';
 
 const HISTORY_LIMIT = 40;
 
@@ -343,9 +344,13 @@ export function TerminalScreen() {
       ) : (
         <ScrollView
           style={styles.commandContent}
-          contentContainerStyle={styles.commandScroll}
+          contentContainerStyle={[
+            styles.commandScroll,
+            { paddingBottom: terminalRpcContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom }) },
+          ]}
           onScroll={onScroll}
-          scrollEventThrottle={16}>
+          scrollEventThrottle={16}
+          keyboardShouldPersistTaps="handled">
           <GatewayCommandPanel
             title={mode === 'rpc' ? 'Gateway RPC' : 'Agent commands'}
             commands={commandList}
