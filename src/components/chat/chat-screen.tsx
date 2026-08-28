@@ -2,6 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { type Href, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Platform, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { ApprovalSheet } from '@/components/chat/approval-sheet';
@@ -110,6 +111,7 @@ import {
 } from '@/lib/gateway/thread-config';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
+import { chatTranscriptContentPaddingBottom } from '@/lib/motion/chat-transcript-insets';
 
 const PIN_THRESHOLD_PX = 96;
 const JUMP_PILL_THRESHOLD_PX = 260;
@@ -354,6 +356,7 @@ export function ChatScreen() {
     };
   }, [draftThread]);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
+  const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const pinnedRef = useRef(true);
   const atTopRef = useRef(true);
@@ -1169,7 +1172,10 @@ export function ChatScreen() {
           data={messages}
           keyExtractor={(item) => item.id}
           style={styles.list}
-          contentContainerStyle={styles.messages}
+          contentContainerStyle={[
+            styles.messages,
+            { paddingBottom: chatTranscriptContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom }) },
+          ]}
           onScroll={handleScroll}
           scrollEventThrottle={16}
           onContentSizeChange={handleContentSizeChange}
