@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
 import { MarkdownText } from '@/components/chat/markdown/markdown-text';
+import { StreamingIndicator } from '@/components/chat/streaming-indicator';
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
 import { BaseSheet, Button, ConfirmSheet, Icon, PressableScale, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
@@ -513,6 +514,16 @@ export function GroupRoomView({
             </Text>
           ) : null}
           </View>
+        }
+        ListFooterComponent={
+          sending ? (
+            <View style={styles.botRow}>
+              <View style={[styles.botBubble, { backgroundColor: tokens.backgroundElevated }]}>
+                <Text variant="caption" color="secondary">Bots are answering…</Text>
+                <StreamingIndicator />
+              </View>
+            </View>
+          ) : null
         }
         renderItem={({ item }) =>
           item.role === 'user' ? (
