@@ -1,6 +1,7 @@
 import * as Haptics from 'expo-haptics';
-import { useCallback, useMemo, useState } from 'react';
-import { FlatList, SectionList, StyleSheet, View } from 'react-native';
+import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
+import { FlatList, Keyboard, SectionList, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated from 'react-native-reanimated';
 
 import { Badge, BaseSheet, Button, ConfirmSheet, EmptyState, Icon, ListRow, PressableScale, SegmentedControl, Text, TextField } from '@/components/ui';
@@ -22,6 +23,23 @@ import {
   type ThreadConfigMode,
 } from '@/lib/gateway/thread-config';
 import { useTokens } from '@/hooks/use-tokens';
+import { threadConfigListMaxHeight } from '@/lib/motion/thread-config-list-height';
+
+function subscribeKeyboardHeight(onChange: () => void) {
+  const show = Keyboard.addListener('keyboardDidShow', onChange);
+  const hide = Keyboard.addListener('keyboardDidHide', onChange);
+  const frame = Keyboard.addListener('keyboardDidChangeFrame', onChange);
+  return () => {
+    show.remove();
+    hide.remove();
+    frame.remove();
+  };
+}
+
+function getKeyboardHeight(): number {
+  const height = Keyboard.metrics()?.height;
+  return typeof height === 'number' && Number.isFinite(height) ? height : 0;
+}
 
 /**
  * The one thread-config surface (polish roadmap 2.2): sessions, models, and
@@ -119,6 +137,15 @@ function SessionsSection({
   onDeleteSession?: (sessionId: string) => void;
 }) {
   const tokens = useTokens();
+  const { height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const keyboardHeight = useSyncExternalStore(subscribeKeyboardHeight, getKeyboardHeight, () => 0);
+  const listMaxHeight = threadConfigListMaxHeight({
+    windowHeight,
+    insetTop: insets.top,
+    insetBottom: insets.bottom,
+    keyboardHeight,
+  });
   const [deleteCandidate, setDeleteCandidate] = useState<SessionItem | null>(null);
   const [nameDraft, setNameDraft] = useState('');
   const [query, setQuery] = useState('');
@@ -280,7 +307,7 @@ function SessionsSection({
         <FlatList
           data={visibleSessions}
           keyExtractor={(item) => item.id}
-          style={styles.list}
+          style={[styles.list, { maxHeight: listMaxHeight }]}
           renderItem={renderSessionItem}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
@@ -327,6 +354,15 @@ function ModelsSection({
   onRefresh?: () => void;
 }) {
   const tokens = useTokens();
+  const { height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const keyboardHeight = useSyncExternalStore(subscribeKeyboardHeight, getKeyboardHeight, () => 0);
+  const listMaxHeight = threadConfigListMaxHeight({
+    windowHeight,
+    insetTop: insets.top,
+    insetBottom: insets.bottom,
+    keyboardHeight,
+  });
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [query, setQuery] = useState('');
 
@@ -478,7 +514,7 @@ function ModelsSection({
             data: isExpanded(section.key) ? section.data : [],
           }))}
           keyExtractor={(item) => `${item.providerId ?? item.provider ?? OTHER_GROUP_KEY}:${item.id}`}
-          style={styles.list}
+          style={[styles.list, { maxHeight: listMaxHeight }]}
           renderItem={renderModelItem}
           renderSectionHeader={renderSectionHeader}
           stickySectionHeadersEnabled={false}
@@ -515,6 +551,15 @@ function BackendsSection({
   onSelect?: (backendId: string) => void;
 }) {
   const tokens = useTokens();
+  const { height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const keyboardHeight = useSyncExternalStore(subscribeKeyboardHeight, getKeyboardHeight, () => 0);
+  const listMaxHeight = threadConfigListMaxHeight({
+    windowHeight,
+    insetTop: insets.top,
+    insetBottom: insets.bottom,
+    keyboardHeight,
+  });
 
   const renderItem = useCallback(
     ({ item }: { item: GatewayBackend }) => {
@@ -558,7 +603,7 @@ function BackendsSection({
           description="Attach a CLI environment on the Gate — OpenCode, Codex or Claude Code — to converse through it."
         />
       ) : (
-        <FlatList data={backends} keyExtractor={(item) => item.id} renderItem={renderItem} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" removeClippedSubviews />
+        <FlatList data={backends} keyExtractor={(item) => item.id} style={[styles.list, { maxHeight: listMaxHeight }]} renderItem={renderItem} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" removeClippedSubviews />
       )}
     </>
   );
