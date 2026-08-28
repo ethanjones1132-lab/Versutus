@@ -36,10 +36,10 @@ describe('Activity ComposerKeyboardLift on Android', () => {
     expect(composerKeyboardLift(300, 0)).toBe(300);
   });
 
-  test('closed keyboard or inset-covering IME yields no lift', () => {
-    expect(composerKeyboardLift(0, 42)).toBe(0);
+  test('closed keyboard keeps bottom inset (dock above nav bar)', () => {
+    expect(composerKeyboardLift(0, 42)).toBe(42);
     expect(composerKeyboardLift(16, 42)).toBe(0);
-    expect(composerKeyboardLift(NaN, 42)).toBe(0);
+    expect(composerKeyboardLift(NaN, 42)).toBe(42);
   });
 });
 

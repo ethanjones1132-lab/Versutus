@@ -1,8 +1,8 @@
 import { composerKeyboardLift } from '@/lib/motion/keyboard-lift';
 
-test('closed keyboard does not lift', () => {
-  expect(composerKeyboardLift(0, 24)).toBe(0);
-  expect(composerKeyboardLift(-10, 24)).toBe(0);
+test('closed keyboard keeps bottom inset clearance (dock above nav bar)', () => {
+  expect(composerKeyboardLift(0, 24)).toBe(24);
+  expect(composerKeyboardLift(-10, 24)).toBe(24);
 });
 
 test('open keyboard subtracts the bottom inset already applied by Screen', () => {
@@ -13,8 +13,8 @@ test('keyboard shorter than the inset does not go negative', () => {
   expect(composerKeyboardLift(16, 24)).toBe(0);
 });
 
-test('non-finite values lift nothing', () => {
-  expect(composerKeyboardLift(Number.NaN, 24)).toBe(0);
+test('non-finite values keep inset when keyboard unknown', () => {
+  expect(composerKeyboardLift(Number.NaN, 24)).toBe(24);
   expect(composerKeyboardLift(320, Number.NaN)).toBe(320);
 });
 

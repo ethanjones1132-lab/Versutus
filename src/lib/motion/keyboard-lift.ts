@@ -13,7 +13,7 @@
  */
 export function composerKeyboardLift(keyboardHeight: number, bottomInset: number): number {
   'worklet';
-  if (!Number.isFinite(keyboardHeight) || keyboardHeight <= 0) return 0;
   const inset = Number.isFinite(bottomInset) && bottomInset > 0 ? bottomInset : 0;
+  if (!Number.isFinite(keyboardHeight) || keyboardHeight <= 0) return inset;
   return Math.max(0, keyboardHeight - inset);
 }
