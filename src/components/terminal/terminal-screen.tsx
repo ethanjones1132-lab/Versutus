@@ -1,13 +1,8 @@
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
@@ -41,6 +36,7 @@ import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { appendTerminalChunk, type TerminalLine } from '@/lib/terminal/output';
 import { openTerminalSession, sendTerminalInput, type TerminalSession } from '@/lib/terminal/client';
 import { describeShellUnavailable, resolveShellSupport } from '@/lib/terminal/shell-support';
+import { terminalKeyboardBehavior } from '@/lib/terminal/keyboard-behavior';
 
 const HISTORY_LIMIT = 40;
 
@@ -79,6 +75,7 @@ export function TerminalScreen() {
   const [commandLog, setCommandLog] = useState('');
   const [logSheetVisible, setLogSheetVisible] = useState(false);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
+  const insets = useSafeAreaInsets();
   const sessionRef = useRef<TerminalSession | null>(null);
 
   const appendOutput = useCallback((chunk: string) => {
@@ -295,41 +292,48 @@ export function TerminalScreen() {
             <TerminalOutput lines={terminalLines} onScroll={onScroll} />
           </View>
 
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-            <ComposerKeyboardLift>
-            {inputHistory.length > 0 ? (
-              <View style={styles.historyRow}>
-                {inputHistory.slice(0, 3).map((command) => (
-                  <Chip
-                    key={command}
-                    label={command}
-                    onPress={() => setInput(command)}
-                    style={styles.historyChip}
+          {(() => {
+            const terminalComposerInner = (
+              <ComposerKeyboardLift>
+                {inputHistory.length > 0 ? (
+                  <View style={styles.historyRow}>
+                    {inputHistory.slice(0, 3).map((command) => (
+                      <Chip
+                        key={command}
+                        label={command}
+                        onPress={() => setInput(command)}
+                        style={styles.historyChip}
+                      />
+                    ))}
+                  </View>
+                ) : null}
+                <Card
+                  padding={Spacing.two}
+                  style={[styles.inputCard, { borderColor: tokens.accentWarmMuted }]}
+                >
+                  <TextField
+                    value={input}
+                    onChangeText={setInput}
+                    onKeyPress={handleInputKeyPress}
+                    placeholder="Shell input (Enter sends)"
+                    onSubmitEditing={() => void sendToTerminal()}
+                    returnKeyType="send"
+                    accessibilityLabel="Terminal input"
+                    style={styles.input}
                   />
-                ))}
-              </View>
-            ) : null}
-            <Card
-              padding={Spacing.two}
-              style={[styles.inputCard, { borderColor: tokens.accentWarmMuted }]}
-            >
-              <TextField
-                value={input}
-                onChangeText={setInput}
-                onKeyPress={handleInputKeyPress}
-                placeholder="Shell input (Enter sends)"
-                onSubmitEditing={() => void sendToTerminal()}
-                returnKeyType="send"
-                // Shell commands are not prose: the kit's form defaults
-                // (autoCapitalize none / autoCorrect off) are right here,
-                // where the raw field used to inherit platform prose keys.
-                accessibilityLabel="Terminal input"
-                style={styles.input}
-              />
-              <Button label="Send" size="sm" onPress={() => void sendToTerminal()} />
-            </Card>
-            </ComposerKeyboardLift>
-          </KeyboardAvoidingView>
+                  <Button label="Send" size="sm" onPress={() => void sendToTerminal()} />
+                </Card>
+              </ComposerKeyboardLift>
+            );
+            if (terminalKeyboardBehavior(Platform.OS) === 'padding') {
+              return (
+                <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={insets.top}>
+                  {terminalComposerInner}
+                </KeyboardAvoidingView>
+              );
+            }
+            return terminalComposerInner;
+          })()}
         </>
       ) : (
         <ScrollView
