@@ -1,5 +1,5 @@
 import * as Clipboard from 'expo-clipboard';
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { BaseSheet, Divider, ListRow, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
@@ -56,18 +56,22 @@ export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit }: BotDet
       title={detail.name}
       onClose={onClose}
       closeLabel="Dismiss">
-      {detail.description ? (
-        <Text variant="body" color="secondary" style={styles.description}>
-          {detail.description}
-        </Text>
-      ) : (
-        <Text variant="caption" color="tertiary" style={styles.description}>
-          No description yet.
-        </Text>
-      )}
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scroll}>
+        {detail.description ? (
+          <Text variant="body" color="secondary" style={styles.description}>
+            {detail.description}
+          </Text>
+        ) : (
+          <Text variant="caption" color="tertiary" style={styles.description}>
+            No description yet.
+          </Text>
+        )}
 
-      <View style={styles.facts}>
-        <View style={styles.fact}>
+        <View style={styles.facts}>
+          <View style={styles.fact}>
           <Text variant="micro" color="tertiary">
             SOUL
           </Text>
@@ -144,11 +148,16 @@ export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit }: BotDet
           />
         ) : null}
       </View>
+      </ScrollView>
     </BaseSheet>
   );
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    gap: Spacing.two,
+    paddingBottom: Spacing.two,
+  },
   description: {
     paddingHorizontal: Spacing.one,
     paddingBottom: Spacing.two,
