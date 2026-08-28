@@ -1,12 +1,14 @@
 import * as Haptics from 'expo-haptics';
-import { useMemo, useState } from 'react';
-import { SectionList, StyleSheet, View } from 'react-native';
+import { useMemo, useState, useSyncExternalStore } from 'react';
+import { Keyboard, SectionList, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BaseSheet, EmptyState, Icon, PressableScale, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
 import { filterPaletteSuggestions, groupSuggestionsByFamily } from '@/lib/gateway/slash-palette';
+import { paletteListMaxHeight } from '@/lib/motion/slash-palette-height';
 
 export type SlashCommandPaletteProps = {
   visible: boolean;
@@ -17,6 +19,22 @@ export type SlashCommandPaletteProps = {
   onClose: () => void;
   onSelect: (value: string) => void;
 };
+
+function subscribeKeyboardHeight(onChange: () => void) {
+  const show = Keyboard.addListener('keyboardDidShow', onChange);
+  const hide = Keyboard.addListener('keyboardDidHide', onChange);
+  const frame = Keyboard.addListener('keyboardDidChangeFrame', onChange);
+  return () => {
+    show.remove();
+    hide.remove();
+    frame.remove();
+  };
+}
+
+function getKeyboardHeight(): number {
+  const height = Keyboard.metrics()?.height;
+  return typeof height === 'number' && Number.isFinite(height) ? height : 0;
+}
 
 /**
  * Browsable view of the whole slash-command surface.
@@ -33,6 +51,19 @@ export function SlashCommandPalette({
   onSelect,
 }: SlashCommandPaletteProps) {
   const tokens = useTokens();
+  const { height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const keyboardHeight = useSyncExternalStore(
+    subscribeKeyboardHeight,
+    getKeyboardHeight,
+    () => 0,
+  );
+  const listMaxHeight = paletteListMaxHeight({
+    windowHeight,
+    insetTop: insets.top,
+    insetBottom: insets.bottom,
+    keyboardHeight,
+  });
   const [query, setQuery] = useState(initialQuery);
 
   // Re-seed on each open so the palette reflects whatever the composer holds
@@ -86,7 +117,7 @@ export function SlashCommandPalette({
         <SectionList
           sections={sections}
           keyExtractor={(item) => item.value}
-          style={styles.list}
+          style={[styles.list, { maxHeight: listMaxHeight }]}
           stickySectionHeadersEnabled={false}
           keyboardShouldPersistTaps="handled"
           removeClippedSubviews
