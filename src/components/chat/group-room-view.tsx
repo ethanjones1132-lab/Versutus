@@ -714,5 +714,5 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   mentionPicks: { gap: Spacing.one },
-  dockInput: { flex: 1, minHeight: 0 },
+  dockInput: { flex: 1, minHeight: 48 },
 });
