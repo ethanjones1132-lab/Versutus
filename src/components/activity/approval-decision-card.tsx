@@ -92,6 +92,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.xl,
     borderWidth: StyleSheet.hairlineWidth * 2,
     gap: Spacing.two,
+    marginBottom: Spacing.two,
   },
   header: {
     flexDirection: 'row',
