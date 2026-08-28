@@ -6,6 +6,11 @@ import { useTokens } from '@/hooks/use-tokens';
 import { parseAnsiText, ansiPlainText, type AnsiColor } from '@/lib/terminal/ansi';
 import { isPromptLine, type TerminalLine } from '@/lib/terminal/output';
 
+// Follow the tail while the operator stays near it; scrolling up pins the pane
+// so streamed output stops yanking the view back to the bottom (mirrors the
+// transcript guard at chat-screen.tsx:117).
+const PIN_THRESHOLD_PX = 96;
+
 export type TerminalOutputProps = {
   lines: TerminalLine[];
   placeholder?: string;
@@ -45,6 +50,7 @@ export function TerminalOutput({
 }: TerminalOutputProps) {
   const tokens = useTokens();
   const listRef = useRef<FlatList<TerminalLine>>(null);
+  const pinnedRef = useRef(true);
   const palette = useMemo(() => ansiPalette(tokens), [tokens]);
 
   const renderLine = useCallback(
@@ -62,6 +68,22 @@ export function TerminalOutput({
     [palette, tokens],
   );
 
+  const handleScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      onScroll?.(event);
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
+      pinnedRef.current = distanceFromBottom < PIN_THRESHOLD_PX;
+    },
+    [onScroll],
+  );
+
+  const handleContentSizeChange = useCallback(() => {
+    if (pinnedRef.current) {
+      listRef.current?.scrollToEnd({ animated: false });
+    }
+  }, []);
+
   if (lines.length === 0) {
     return (
       <View style={styles.empty}>
@@ -77,8 +99,8 @@ export function TerminalOutput({
       keyExtractor={(item) => String(item.id)}
       renderItem={renderLine}
       contentContainerStyle={styles.content}
-      onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
-      onScroll={onScroll}
+      onContentSizeChange={handleContentSizeChange}
+      onScroll={handleScroll}
       scrollEventThrottle={16}
       showsVerticalScrollIndicator
       removeClippedSubviews
