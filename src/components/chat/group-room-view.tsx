@@ -25,6 +25,7 @@ import {
 } from '@/lib/gateway/groups';
 import { extractMentions, insertMention, mentionPicksAtCaret } from '@/lib/gateway/mentions';
 import { chatTranscriptContentPaddingBottom } from '@/lib/motion/chat-transcript-insets';
+import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { groupMemberChipPinMaxWidth } from '@/lib/motion/group-member-chip-layout';
 
 /**
@@ -435,6 +436,7 @@ export function GroupRoomView({
                   key={memberId}
                   onPress={evictable ? () => setPendingRemoval(memberId) : undefined}
                   disabled={!evictable}
+                  hitSlop={evictable ? CHIP_HIT_SLOP : undefined}
                   accessibilityRole="button"
                   accessibilityLabel={
                     evictable
