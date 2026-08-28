@@ -191,115 +191,121 @@ export function EnvironmentRunLauncher({
         </Text>
       ) : null}
 
-      <View style={styles.row}>
-        {operations.map((item) => (
-          <Chip
-            key={item}
-            label={item}
-            selected={item === operation}
-            onPress={() => setOperation(item)}
-            disabled={running}
-          />
-        ))}
-      </View>
-
-      {operation === 'prompt' ? (
-        <TextField
-          value={prompt}
-          onChangeText={setPrompt}
-          placeholder="What should it do?"
-          multiline
-          style={styles.prompt}
-        />
-      ) : null}
-
-      {/* Desktop-parity failure state: when the Gate names the host state,
-          show verdict + fix and keep the raw text as the cause. */}
-      {error ? (
-        <Text variant="caption">{formatRunFailure(error) ?? error}</Text>
-      ) : null}
-
-      <View style={styles.statusRow}>
-        {badge ? <Badge label={badge.label} tone={badge.tone} /> : null}
-        {view.failureDetail ? (
-          <Text variant="caption">{formatRunFailure(view.failureDetail) ?? view.failureDetail}</Text>
-        ) : null}
-      </View>
-
-      {detached ? (
-        <Text variant="caption" color="secondary">
-          The connection ended before the run finished. Reopen it from Recent runs — the full output replays.
-        </Text>
-      ) : null}
-
-      {approval ? (
-        <View style={styles.approval}>
-          <Text variant="caption">{approval.summary}</Text>
-          <View style={styles.row}>
-            <Button label="Approve" onPress={() => void decide('approve')} />
-            <Button label="Deny" variant="secondary" onPress={() => void decide('deny')} />
-          </View>
-        </View>
-      ) : null}
-
-      <ScrollView style={styles.log}>
-        <View style={[styles.bubble, view.replyText ? null : styles.bubblePending]}>
-          {view.replyText ? (
-            <Text variant="mono" selectable>
-              {view.replyText}
-            </Text>
-          ) : (
-            <Text variant="caption">{running && events.length === 0 ? 'Starting…' : 'No output yet.'}</Text>
-          )}
-        </View>
-        {view.stderrText ? (
-          <View style={styles.diagnostics}>
-            <Text variant="micro">stderr</Text>
-            <Text variant="mono" color="tertiary" selectable>
-              {view.stderrText}
-            </Text>
-          </View>
-        ) : null}
-        {view.notes.map((note, index) => (
-          <Text key={`${index}-${note}`} variant="caption" color="tertiary">
-            {note}
-          </Text>
-        ))}
-      </ScrollView>
-
-      {runs.length > 0 ? (
-        <View style={styles.history}>
-          <Text variant="micro">Recent runs</Text>
-          {runs.slice(0, 5).map((run) => (
-            <ListRow
-              key={run.runId}
-              title={`${run.operation} · ${run.runId}`}
-              subtitle={clockTime(run.startedAt)}
-              onPress={running ? undefined : () => void attach(run.runId)}
-              trailing={<Badge label={summaryBadge(run).label} tone={summaryBadge(run).tone} />}
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scroll}>
+        <View style={styles.row}>
+          {operations.map((item) => (
+            <Chip
+              key={item}
+              label={item}
+              selected={item === operation}
+              onPress={() => setOperation(item)}
+              disabled={running}
             />
           ))}
         </View>
-      ) : null}
 
-      <View style={styles.row}>
-        {running ? (
-          <Button label="Cancel run" variant="destructive" onPress={() => void cancel()} />
-        ) : (
-          <Button
-            label="Start run"
-            onPress={() => void start()}
-            disabled={!environment || (operation === 'prompt' && !prompt.trim())}
+        {operation === 'prompt' ? (
+          <TextField
+            value={prompt}
+            onChangeText={setPrompt}
+            placeholder="What should it do?"
+            multiline
+            style={styles.prompt}
           />
-        )}
-        <Button label="Close" variant="secondary" onPress={onClose} />
-      </View>
+        ) : null}
+
+        {/* Desktop-parity failure state: when the Gate names the host state,
+            show verdict + fix and keep the raw text as the cause. */}
+        {error ? (
+          <Text variant="caption">{formatRunFailure(error) ?? error}</Text>
+        ) : null}
+
+        <View style={styles.statusRow}>
+          {badge ? <Badge label={badge.label} tone={badge.tone} /> : null}
+          {view.failureDetail ? (
+            <Text variant="caption">{formatRunFailure(view.failureDetail) ?? view.failureDetail}</Text>
+          ) : null}
+        </View>
+
+        {detached ? (
+          <Text variant="caption" color="secondary">
+            The connection ended before the run finished. Reopen it from Recent runs — the full output replays.
+          </Text>
+        ) : null}
+
+        {approval ? (
+          <View style={styles.approval}>
+            <Text variant="caption">{approval.summary}</Text>
+            <View style={styles.row}>
+              <Button label="Approve" onPress={() => void decide('approve')} />
+              <Button label="Deny" variant="secondary" onPress={() => void decide('deny')} />
+            </View>
+          </View>
+        ) : null}
+
+        <ScrollView style={styles.log} nestedScrollEnabled>
+          <View style={[styles.bubble, view.replyText ? null : styles.bubblePending]}>
+            {view.replyText ? (
+              <Text variant="mono" selectable>
+                {view.replyText}
+              </Text>
+            ) : (
+              <Text variant="caption">{running && events.length === 0 ? 'Starting…' : 'No output yet.'}</Text>
+            )}
+          </View>
+          {view.stderrText ? (
+            <View style={styles.diagnostics}>
+              <Text variant="micro">stderr</Text>
+              <Text variant="mono" color="tertiary" selectable>
+                {view.stderrText}
+              </Text>
+            </View>
+          ) : null}
+          {view.notes.map((note, index) => (
+            <Text key={`${index}-${note}`} variant="caption" color="tertiary">
+              {note}
+            </Text>
+          ))}
+        </ScrollView>
+
+        {runs.length > 0 ? (
+          <View style={styles.history}>
+            <Text variant="micro">Recent runs</Text>
+            {runs.slice(0, 5).map((run) => (
+              <ListRow
+                key={run.runId}
+                title={`${run.operation} · ${run.runId}`}
+                subtitle={clockTime(run.startedAt)}
+                onPress={running ? undefined : () => void attach(run.runId)}
+                trailing={<Badge label={summaryBadge(run).label} tone={summaryBadge(run).tone} />}
+              />
+            ))}
+          </View>
+        ) : null}
+
+        <View style={styles.row}>
+          {running ? (
+            <Button label="Cancel run" variant="destructive" onPress={() => void cancel()} />
+          ) : (
+            <Button
+              label="Start run"
+              onPress={() => void start()}
+              disabled={!environment || (operation === 'prompt' && !prompt.trim())}
+            />
+          )}
+          <Button label="Close" variant="secondary" onPress={onClose} />
+        </View>
+      </ScrollView>
     </BaseSheet>
   );
 }
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two, marginTop: Spacing.two },
+  scroll: { paddingBottom: Spacing.two },
   prompt: { minHeight: 72, marginTop: Spacing.two },
   approval: { gap: Spacing.one, marginTop: Spacing.two },
   statusRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: Spacing.two, marginTop: Spacing.two },
