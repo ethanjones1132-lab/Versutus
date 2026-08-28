@@ -33,6 +33,7 @@ import {
   type GatewayCommand,
 } from '@/lib/gateway/dashboard';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
+import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { appendTerminalChunk, type TerminalLine } from '@/lib/terminal/output';
 import { openTerminalSession, sendTerminalInput, type TerminalSession } from '@/lib/terminal/client';
 import { describeShellUnavailable, resolveShellSupport } from '@/lib/terminal/shell-support';
@@ -226,7 +227,7 @@ export function TerminalScreen() {
   const modeLabel = mode === 'shell' ? 'Shell' : mode === 'rpc' ? 'Gateway RPC' : 'Agent';
 
   return (
-    <Screen parallaxY={parallaxY}>
+    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: false })} parallaxY={parallaxY}>
       <View style={styles.header}>
         <View style={styles.headerText}>
           <Text variant="caption" color="accentWarm" style={styles.headerKicker}>
