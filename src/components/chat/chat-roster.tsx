@@ -261,7 +261,7 @@ export function ChatRoster({
 
 const styles = StyleSheet.create({
   pad: { paddingHorizontal: Spacing.three, paddingTop: Spacing.two, paddingBottom: Spacing.five },
-  search: { marginBottom: Spacing.two, minHeight: 0, paddingVertical: 10 },
+  search: { marginBottom: Spacing.two, minHeight: 48 },
   row: { marginBottom: Spacing.one },
   gap: { marginTop: Spacing.two },
   error: { marginBottom: Spacing.two },
