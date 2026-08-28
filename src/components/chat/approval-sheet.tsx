@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { BaseSheet, Button, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
@@ -31,60 +31,69 @@ export function ApprovalSheet({
       onClose={() => onDeny(feedback.trim() || undefined)}
       closeLabel="Deny"
       position="bottom">
-      <Text variant="title">Approve this agent action?</Text>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scroll}>
+        <Text variant="title">Approve this agent action?</Text>
 
-      {gatewayName ? (
-        <Text variant="caption" color="tertiary" style={styles.meta}>
-          {gatewayName} · run {runId.slice(0, 12)}…
+        {gatewayName ? (
+          <Text variant="caption" color="tertiary" style={styles.meta}>
+            {gatewayName} · run {runId.slice(0, 12)}…
+          </Text>
+        ) : null}
+
+        <Text color="secondary" style={styles.summary}>
+          {prompt || 'The agent is requesting permission to proceed.'}
         </Text>
-      ) : null}
 
-      <Text color="secondary" style={styles.summary}>
-        {prompt || 'The agent is requesting permission to proceed.'}
-      </Text>
+        <View style={styles.feedback}>
+          <Text variant="caption" color="tertiary">
+            Feedback (optional)
+          </Text>
+          <TextField
+            value={feedback}
+            onChangeText={setFeedback}
+            placeholder="Why this action is safe, or what to change…"
+            multiline
+            // Feedback is prose — keep the platform typing defaults; the kit's
+            // form defaults (none / no autocorrect) are for URLs and tokens.
+            autoCapitalize="sentences"
+            autoCorrect={true}
+            accessibilityLabel="Approval feedback"
+            style={styles.input}
+          />
+        </View>
 
-      <View style={styles.feedback}>
-        <Text variant="caption" color="tertiary">
-          Feedback (optional)
-        </Text>
-        <TextField
-          value={feedback}
-          onChangeText={setFeedback}
-          placeholder="Why this action is safe, or what to change…"
-          multiline
-          // Feedback is prose — keep the platform typing defaults; the kit's
-          // form defaults (none / no autocorrect) are for URLs and tokens.
-          autoCapitalize="sentences"
-          autoCorrect={true}
-          accessibilityLabel="Approval feedback"
-          style={styles.input}
-        />
-      </View>
-
-      <View style={styles.footer}>
-        <Button
-          label="Deny"
-          variant="secondary"
-          onPress={async () => {
-            await haptics.warning();
-            onDeny(feedback.trim() || undefined);
-          }}
-          style={styles.footerButton}
-        />
-        <Button
-          label="Approve"
-          onPress={async () => {
-            await haptics.success();
-            onApprove(feedback.trim() || undefined);
-          }}
-          style={styles.footerPrimary}
-        />
-      </View>
+        <View style={styles.footer}>
+          <Button
+            label="Deny"
+            variant="secondary"
+            onPress={async () => {
+              await haptics.warning();
+              onDeny(feedback.trim() || undefined);
+            }}
+            style={styles.footerButton}
+          />
+          <Button
+            label="Approve"
+            onPress={async () => {
+              await haptics.success();
+              onApprove(feedback.trim() || undefined);
+            }}
+            style={styles.footerPrimary}
+          />
+        </View>
+      </ScrollView>
     </BaseSheet>
   );
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    gap: Spacing.one,
+    paddingBottom: Spacing.two,
+  },
   meta: {
     marginTop: Spacing.one,
   },
