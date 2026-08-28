@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
@@ -25,6 +25,7 @@ import {
 } from '@/lib/gateway/groups';
 import { extractMentions, insertMention, mentionPicksAtCaret } from '@/lib/gateway/mentions';
 import { chatTranscriptContentPaddingBottom } from '@/lib/motion/chat-transcript-insets';
+import { groupMemberChipPinMaxWidth } from '@/lib/motion/group-member-chip-layout';
 
 /**
  * One exchange in the room: the operator's message (with how many replies it
@@ -117,6 +118,8 @@ export function GroupRoomView({
 }) {
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
+  const { fontScale } = useWindowDimensions();
+  const memberPinMaxWidth = groupMemberChipPinMaxWidth(fontScale);
   const scrollRef = useRef<ScrollView>(null);
   const [entries, setEntries] = useState<RoomEntry[]>([]);
   const [historyError, setHistoryError] = useState(false);
@@ -449,15 +452,15 @@ export function GroupRoomView({
                     {displayNameOf(memberId)}
                   </Text>
                   {routingTag ? (
-                    <Text variant="micro" color="accentWarm" numberOfLines={1} style={styles.memberChipPin}>
+                    <Text variant="micro" color="accentWarm" numberOfLines={1} style={[styles.memberChipPin, { maxWidth: memberPinMaxWidth }]}>
                       {routingTag}
                     </Text>
                   ) : missingFromRoster ? (
-                    <Text variant="micro" color="accentWarm" numberOfLines={1} style={styles.memberChipPin}>
+                    <Text variant="micro" color="accentWarm" numberOfLines={1} style={[styles.memberChipPin, { maxWidth: memberPinMaxWidth }]}>
                       Not on gateway
                     </Text>
                   ) : modelPin ? (
-                    <Text variant="micro" color="tertiary" numberOfLines={1} style={styles.memberChipPin}>
+                    <Text variant="micro" color="tertiary" numberOfLines={1} style={[styles.memberChipPin, { maxWidth: memberPinMaxWidth }]}>
                       {modelPin}
                     </Text>
                   ) : null}
