@@ -398,7 +398,7 @@ export function GroupRoomView({
                   setRenameDraft(group.name);
                   setRenameVisible(true);
                 }}
-                hitSlop={6}
+                hitSlop={CHIP_HIT_SLOP}
                 accessibilityRole="button"
                 accessibilityLabel="Rename room"
                 style={styles.renamePill}>
@@ -407,7 +407,7 @@ export function GroupRoomView({
               </PressableScale>
               <PressableScale
                 onPress={() => setDisbandVisible(true)}
-                hitSlop={6}
+                hitSlop={CHIP_HIT_SLOP}
                 accessibilityRole="button"
                 accessibilityLabel="Disband room"
                 style={styles.renamePill}>
@@ -658,7 +658,7 @@ const styles = StyleSheet.create({
   },
   roomCardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two },
   headActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
-  renamePill: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  renamePill: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: Spacing.two },
   scopeNote: {},
   chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.one + 2 },
   memberChip: {
