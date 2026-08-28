@@ -29,7 +29,7 @@ export function ToolsPane({
       <Button
         label={toolsetsToggleLabel(state, open)}
         variant="ghost"
-        size="sm"
+        size="md"
         onPress={() => setOpen((value) => !value)}
       />
       {open ? (

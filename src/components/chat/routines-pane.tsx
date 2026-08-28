@@ -98,7 +98,7 @@ export function RoutinesPane({
       <Button
         label={routinesToggleLabel(state, open)}
         variant="ghost"
-        size="sm"
+        size="md"
         onPress={() => setOpen((value) => !value)}
       />
       {open ? (

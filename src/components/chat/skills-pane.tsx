@@ -29,7 +29,7 @@ export function SkillsPane({
       <Button
         label={skillsToggleLabel(state, open)}
         variant="ghost"
-        size="sm"
+        size="md"
         onPress={() => setOpen((value) => !value)}
       />
       {open ? (
