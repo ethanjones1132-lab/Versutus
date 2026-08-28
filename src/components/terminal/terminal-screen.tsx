@@ -296,7 +296,12 @@ export function TerminalScreen() {
             const terminalComposerInner = (
               <ComposerKeyboardLift>
                 {inputHistory.length > 0 ? (
-                  <View style={styles.historyRow}>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    keyboardShouldPersistTaps="handled"
+                    style={styles.historyScroll}
+                    contentContainerStyle={styles.historyRow}>
                     {inputHistory.slice(0, 3).map((command) => (
                       <Chip
                         key={command}
@@ -305,7 +310,7 @@ export function TerminalScreen() {
                         style={styles.historyChip}
                       />
                     ))}
-                  </View>
+                  </ScrollView>
                 ) : null}
                 <Card
                   padding={Spacing.two}
@@ -426,6 +431,9 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     paddingHorizontal: Spacing.four,
     paddingVertical: Spacing.one,
+  },
+  historyScroll: {
+    flexGrow: 0,
   },
   historyChip: {
     maxWidth: 160,
