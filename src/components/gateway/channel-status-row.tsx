@@ -55,7 +55,7 @@ export function ChannelStatusRow({
 
 const styles = StyleSheet.create({
   row: {
-    minHeight: 40,
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
