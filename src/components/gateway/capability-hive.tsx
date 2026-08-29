@@ -10,9 +10,10 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { Text } from '@/components/ui';
+import { PressableScale, Text } from '@/components/ui';
 import { Palette, Spacing, type SemanticPalette } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
+import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import type { GatewayCapabilityGroup, GatewayCapabilitySnapshot } from '@/lib/gateway/types';
 
 /**
@@ -30,6 +31,10 @@ export function CapabilityHive({
 }) {
   const tokens = useTokens();
   const [selected, setSelected] = useState<string | null>(null);
+  // Default collapsed keeps the summary slim; the full name is one tap away.
+  // The summary is a plain View (not a row Pressable), so the toggle does not
+  // need to stop a navigation event from bubbling.
+  const [labelExpanded, setLabelExpanded] = useState(false);
   // Undeclared groups are not capabilities this gateway is missing — nothing
   // defines them — so they belong in neither half of the ratio.
   const counted = groups.filter((group) => group.status !== 'undeclared');
@@ -59,9 +64,17 @@ export function CapabilityHive({
         <Text variant="micro" color="accentWarm">
           {ready}/{counted.length} ready
         </Text>
-        <Text variant="micro" color="tertiary" numberOfLines={1} style={styles.detail}>
-          {selectedGroup ? selectedGroup.label : status}
-        </Text>
+        <PressableScale
+          onPress={() => setLabelExpanded((prev) => !prev)}
+          hitSlop={CHIP_HIT_SLOP}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: labelExpanded }}
+          accessibilityLabel={labelExpanded ? 'Collapse capability name' : 'Expand capability name'}
+          style={styles.detailToggle}>
+          <Text variant="micro" color="tertiary" numberOfLines={labelExpanded ? undefined : 1} style={styles.detail}>
+            {selectedGroup ? selectedGroup.label : status}
+          </Text>
+        </PressableScale>
       </View>
     </View>
   );
@@ -172,6 +185,11 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     gap: Spacing.half,
     flexShrink: 1,
+  },
+  detailToggle: {
+    minWidth: 0,
+    flexShrink: 1,
+    alignItems: 'flex-end',
   },
   detail: {
     maxWidth: 120,
