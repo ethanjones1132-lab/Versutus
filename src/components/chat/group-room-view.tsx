@@ -142,6 +142,10 @@ export function GroupRoomView({
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
   const [disbandVisible, setDisbandVisible] = useState(false);
   const [disbanding, setDisbanding] = useState(false);
+  // The room plan names silent/unknown members plus the round count and
+  // routinely exceeds one caption line at 360dp; default-collapsed keeps the
+  // card compact, a tap (same idiom as the approval-prompt expand) reveals it.
+  const [planExpanded, setPlanExpanded] = useState(false);
 
   const displayNameOf = useMemo(() => {
     const byId = new Map(members.map((bot) => [bot.id, bot.displayName]));
@@ -409,15 +413,21 @@ export function GroupRoomView({
           <View
             style={[styles.roomCard, { backgroundColor: tokens.backgroundRaised, borderColor: tokens.glassBorder }]}>
             <View style={styles.roomCardHead}>
-              <Text variant="caption" color="secondary" numberOfLines={1}>
-                {describeRoomPlan({
-                  speakerCount: speakers.length,
-                  routableCount: routableSpeakerCount,
-                  silentNames: silentSpeakerNames,
-                  unknownNames: unknownSpeakerNames,
-                  rosterLoaded: inventoryLoaded,
-                })}
-              </Text>
+              <PressableScale
+                onPress={() => setPlanExpanded((prev) => !prev)}
+                accessibilityRole="button"
+                accessibilityLabel={planExpanded ? 'Collapse room plan' : 'Show full room plan'}
+                style={styles.roomPlanTarget}>
+                <Text variant="caption" color="secondary" numberOfLines={planExpanded ? undefined : 1}>
+                  {describeRoomPlan({
+                    speakerCount: speakers.length,
+                    routableCount: routableSpeakerCount,
+                    silentNames: silentSpeakerNames,
+                    unknownNames: unknownSpeakerNames,
+                    rosterLoaded: inventoryLoaded,
+                  })}
+                </Text>
+              </PressableScale>
               <View style={styles.headActions}>
                 <PressableScale
                   onPress={() => {
@@ -693,6 +703,9 @@ const styles = StyleSheet.create({
     gap: Spacing.one + 2,
   },
   roomCardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two },
+  // The plan is a press target: fill the head's lead side so the whole line,
+  // not just the glyphs, toggles expansion.
+  roomPlanTarget: { flex: 1, minHeight: 36, justifyContent: 'center' },
   headActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   renamePill: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: Spacing.two },
   scopeNote: {},
