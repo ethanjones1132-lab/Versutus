@@ -1,9 +1,11 @@
 import { StyleSheet, View } from 'react-native';
+import { useState } from 'react';
 
 import { ConnectionBadge } from '@/components/connection-badge';
-import { Button, Card, Text } from '@/components/ui';
+import { Button, Card, PressableScale, Text } from '@/components/ui';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
+import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import type { GatewayReachability, GatewayReachabilityState } from '@/lib/gateway/dashboard';
 import type { ConnectionStatus, GatewayProfile } from '@/lib/gateway/types';
 
@@ -78,6 +80,9 @@ function GatewayRow({
     gateway.discoverySource === 'tailscale' || gateway.url.startsWith('wss://')
       ? 'Tailscale/TLS'
       : gateway.discoverySource ?? 'manual';
+  // Default collapsed keeps the row slim; the full URL is one tap away when a
+  // connection fails and the operator must read the address to debug it.
+  const [urlExpanded, setUrlExpanded] = useState(false);
 
   return (
     <Card
@@ -101,9 +106,16 @@ function GatewayRow({
               </Text>
             ) : null}
           </View>
-          <Text variant="mono" numberOfLines={1} style={styles.onGlassSecondary}>
-            {gateway.url}
-          </Text>
+          <PressableScale
+            onPress={() => setUrlExpanded((prev) => !prev)}
+            hitSlop={CHIP_HIT_SLOP}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: urlExpanded }}
+            accessibilityLabel={urlExpanded ? 'Collapse gateway URL' : 'Expand gateway URL'}>
+            <Text variant="mono" numberOfLines={urlExpanded ? undefined : 1} style={styles.onGlassSecondary}>
+              {gateway.url}
+            </Text>
+          </PressableScale>
           <Text variant="caption" numberOfLines={1} style={styles.onGlassTertiary}>
             {secureLabel} - {gateway.sessionKey}
           </Text>
