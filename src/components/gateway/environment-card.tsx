@@ -7,6 +7,7 @@ import { EnvironmentActionsSheet } from '@/components/gateway/environment-action
 import { Badge, Button, Card, Icon, PressableScale, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { environmentPrimaryAction, environmentRunBudgetLine } from '@/lib/gateway/entity-actions';
+import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import type { EnvironmentSnapshot } from '@/lib/gateway/environment-types';
 
 export type EnvironmentCardProps = {
@@ -21,6 +22,8 @@ export type EnvironmentCardProps = {
 
 export function EnvironmentCard({ environment, onCheck, onStart, onStop, onRun, onEdit, onRemove }: EnvironmentCardProps) {
   const [actionsVisible, setActionsVisible] = useState(false);
+  const [policyExpanded, setPolicyExpanded] = useState(false);
+  const [providersExpanded, setProvidersExpanded] = useState(false);
   const primary = environmentPrimaryAction(environment);
   const handlers: Record<string, () => void> = { start: onStart, stop: onStop, check: onCheck };
   const healthy = environment.state === 'ready';
@@ -39,14 +42,28 @@ export function EnvironmentCard({ environment, onCheck, onStart, onStop, onRun, 
         <Badge label={environment.state} tone={healthy ? 'success' : 'neutral'} />
       </View>
 
-      <Text variant="caption" color="tertiary" numberOfLines={2}>
-        {environment.workspacePolicy.defaultSandbox} · {environment.workspacePolicy.defaultRoot}
-      </Text>
-      <Text variant="caption" color="tertiary">
-        {environment.providerRefs.length > 0
-          ? `Bound providers: ${environment.providerRefs.join(', ')}`
-          : 'Uses its own credentials — no Gate provider bound.'}
-      </Text>
+      <PressableScale
+        onPress={() => setPolicyExpanded((prev) => !prev)}
+        hitSlop={CHIP_HIT_SLOP}
+        accessibilityRole="button"
+        accessibilityLabel={`Workspace policy for ${environment.label}`}
+        style={{ flex: 1, minHeight: 36 }}>
+        <Text variant="caption" color="tertiary" numberOfLines={policyExpanded ? undefined : 2}>
+          {environment.workspacePolicy.defaultSandbox} · {environment.workspacePolicy.defaultRoot}
+        </Text>
+      </PressableScale>
+      <PressableScale
+        onPress={() => setProvidersExpanded((prev) => !prev)}
+        hitSlop={CHIP_HIT_SLOP}
+        accessibilityRole="button"
+        accessibilityLabel={`Bound providers for ${environment.label}`}
+        style={{ flex: 1, minHeight: 36 }}>
+        <Text variant="caption" color="tertiary" numberOfLines={providersExpanded ? undefined : 1}>
+          {environment.providerRefs.length > 0
+            ? `Bound providers: ${environment.providerRefs.join(', ')}`
+            : 'Uses its own credentials — no Gate provider bound.'}
+        </Text>
+      </PressableScale>
       <Text variant="caption" color="tertiary">{environmentRunBudgetLine(environment)}</Text>
 
       <View style={styles.actions}>
