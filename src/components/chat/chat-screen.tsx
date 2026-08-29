@@ -407,7 +407,11 @@ export function ChatScreen() {
     [activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands],
   );
 
-  const sessions = (sessionList as SessionRecord[]).map(toSessionItem);
+  // The open config sheet's session list re-renders its visible rows whenever
+  // this array's identity changes, so it must be stable across the streamed
+  // frames that touch everything else on this screen. `sessionList` only
+  // changes identity when the gateway actually sends new sessions.
+  const sessions = useMemo(() => (sessionList as SessionRecord[]).map(toSessionItem), [sessionList]);
   const currentSession = sessions.find((session) => session.id === currentSessionId);
   const sessionStats: ChatSessionStats | null = currentSession
     ? {
@@ -418,6 +422,26 @@ export function ChatScreen() {
         lastActive: currentSession.updatedAt,
       }
     : null;
+
+  // The model SectionList in the config sheet re-renders its visible rows on
+  // every new array identity. The gateway only changes the catalog when models
+  // are added, removed, or re-priced, so memoize on `modelCatalog` and let the
+  // streamed frames that churn the rest of this screen reuse the same rows.
+  const modelRows = useMemo(
+    () =>
+      modelCatalog.map((model: Record<string, unknown>) => ({
+        id: String(model.id || model.model || model.name || ''),
+        provider: model.provider as string | undefined,
+        providerId: (model.providerId ?? model.provider) as string | undefined,
+        catalogState: (model.catalogSource ?? model.catalogState) as string | undefined,
+        available: model.available !== false,
+        context: (model.context ?? model.contextLength) as number | undefined,
+        price: (model.cost ?? model.price) as number | undefined,
+        auth: (model.authStatus ?? model.auth) as string | undefined,
+        usage: model.usage as string | undefined,
+      })),
+    [modelCatalog],
+  );
 
   const sessionLabel = currentSessionId ? sessionListTitle(currentSession?.title) : undefined;
   // A Bot with no explicit pick answers on the model its Hermes profile
@@ -1390,17 +1414,7 @@ export function ChatScreen() {
         onRefreshSessions={() => void openSessionSelector()}
         onNewSession={(title) => void createNewSession(title)}
         onDeleteSession={(sessionId) => void deleteSessionById(sessionId)}
-        models={modelCatalog.map((model: Record<string, unknown>) => ({
-          id: String(model.id || model.model || model.name || ''),
-          provider: model.provider as string | undefined,
-          providerId: (model.providerId ?? model.provider) as string | undefined,
-          catalogState: (model.catalogSource ?? model.catalogState) as string | undefined,
-          available: model.available !== false,
-          context: (model.context ?? model.contextLength) as number | undefined,
-          price: (model.cost ?? model.price) as number | undefined,
-          auth: (model.authStatus ?? model.auth) as string | undefined,
-          usage: model.usage as string | undefined,
-        }))}
+        models={modelRows}
         currentModel={activeGateway.model}
         modelMode={modelPicker.mode}
         modelAgentId={modelPicker.agentId}
