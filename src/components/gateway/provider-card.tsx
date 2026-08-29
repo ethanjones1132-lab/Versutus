@@ -6,6 +6,7 @@ import * as Haptics from 'expo-haptics';
 import { ProviderActionsSheet } from '@/components/gateway/provider-actions-sheet';
 import { Badge, Button, Card, Icon, PressableScale, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
+import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { providerPrimaryAction } from '@/lib/gateway/entity-actions';
 import type { ProviderSnapshot } from '@/lib/gateway/provider-types';
 import { providerUiState } from '@/lib/gateway/provider-state';
@@ -25,6 +26,8 @@ export type ProviderCardProps = {
 export function ProviderCard(props: ProviderCardProps) {
   const { snapshot } = props;
   const [actionsVisible, setActionsVisible] = useState(false);
+  // Default collapsed keeps the card compact; the full readiness reason is one tap away.
+  const [readyExpanded, setReadyExpanded] = useState(false);
   const label = providerUiState(snapshot);
   const primary = providerPrimaryAction(snapshot);
   const ready = label === 'Ready';
@@ -56,9 +59,16 @@ export function ProviderCard(props: ProviderCardProps) {
       </View>
 
       {snapshot.readiness.message ? (
-        <Text variant="caption" color="tertiary" numberOfLines={3}>
-          {snapshot.readiness.message}
-        </Text>
+        <PressableScale
+          onPress={() => setReadyExpanded((prev) => !prev)}
+          hitSlop={CHIP_HIT_SLOP}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: readyExpanded }}
+          accessibilityLabel={readyExpanded ? 'Collapse provider readiness detail' : 'Expand provider readiness detail'}>
+          <Text variant="caption" color="tertiary" numberOfLines={readyExpanded ? undefined : 3}>
+            {snapshot.readiness.message}
+          </Text>
+        </PressableScale>
       ) : null}
 
       <View style={styles.actions}>
