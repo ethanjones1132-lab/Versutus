@@ -1,5 +1,5 @@
 import { type Href, Link, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import * as Haptics from 'expo-haptics';
@@ -53,6 +53,32 @@ export function GatewayHomeDashboard() {
   const reachability = useGatewayReachability({ gateways, activeGateway, status });
   const discovery = useGatewayDiscovery(true);
   const [deleteCandidate, setDeleteCandidate] = useState<GatewayProfile | null>(null);
+
+  // Derived dashboard values — memoized so a streamed frame that only changed
+  // messages does not re-run the gateway list, run filter, capability count,
+  // channel glance or runs-supported flag (iter-099). These live above the
+  // empty-state early return so the hooks run in the same order every render.
+  const connected = status === 'connected' && !!activeGateway;
+  const activeRuns = useMemo(
+    () => activityRuns.filter((run) => run.status === 'running' || run.status === 'waiting-approval'),
+    [activityRuns],
+  );
+  const capabilityCount = useMemo(
+    () =>
+      capabilitySnapshot.groups.filter((group) =>
+        ['available', 'ready', 'fresh'].includes(group.status),
+      ).length,
+    [capabilitySnapshot.groups],
+  );
+  const channelGroup = useMemo(
+    () => capabilitySnapshot.groups.find((group) => group.id === 'channels'),
+    [capabilitySnapshot.groups],
+  );
+  const runsSupported = useMemo(
+    () =>
+      connected && capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'ready',
+    [connected, capabilitySnapshot.groups],
+  );
 
   // One surface rule: with nothing saved yet this component is STILL the home
   // screen — the hero slot becomes the connect empty state (HomeStatusCard)
@@ -115,17 +141,7 @@ export function GatewayHomeDashboard() {
     );
   }
 
-  const connected = status === 'connected' && !!activeGateway;
   const activeLabel = activeGateway?.name ?? 'No active gateway';
-  const activeRuns = activityRuns.filter((run) => run.status === 'running' || run.status === 'waiting-approval');
-  const capabilityCount = capabilitySnapshot.groups.filter((group) =>
-    ['available', 'ready', 'fresh'].includes(group.status),
-  ).length;
-  // Persistent channel glance (Tier 2.6): the row itself decides whether the
-  // snapshot says anything about channels at all.
-  const channelGroup = capabilitySnapshot.groups.find((group) => group.id === 'channels');
-  const runsSupported =
-    connected && capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'ready';
   const primaryActions = homeHeroPrimaryActions();
   const orbColor = statusColor(tokens, status);
   const statusLabel = connected
