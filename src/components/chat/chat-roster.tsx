@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { memo, useState } from 'react';
+import { FlatList, Platform, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
@@ -64,7 +64,7 @@ export type ChatRosterProps = {
   onRefresh?: () => Promise<void> | void;
 };
 
-export function ChatRoster({
+function ChatRosterImpl({
   rows,
   loading = false,
   error,
@@ -130,11 +130,87 @@ export function ChatRoster({
     (row): row is Extract<RosterRow, { kind: 'bot' }> => row.kind === 'bot' && row.bot.routable,
   );
 
+  // FlatList data: the configurable row, every visible bot row, then every
+  // visible group room. Only these rows virtualize — search, errors, the
+  // creation rows, capability notes and empty states stay fixed in the
+  // header/footer so a 200-bot roster mounts only the rows on screen instead
+  // of the whole ScrollView at once per streamed frame (iter-090).
+  const items: RosterItem[] = [
+    ...visibleRows.map(
+      (row): RosterItem => ({ key: rowKindKey(row), kind: 'row', row }),
+    ),
+    ...visibleGroups.map(
+      (group, index): RosterItem => ({
+        key: group.id,
+        kind: 'group',
+        group,
+        showSectionLabel: index === 0,
+      }),
+    ),
+  ];
+
+  const renderItem = ({ item }: { item: RosterItem }) => {
+    if (item.kind === 'group') {
+      return (
+        <View>
+          {item.showSectionLabel ? (
+            <Text variant="caption" color="tertiary" style={styles.sectionLabel}>
+              GROUP ROOMS
+            </Text>
+          ) : null}
+          <ListRow
+            key={item.group.id}
+            title={item.group.name}
+            subtitle={groupMemberLine(item.group)}
+            leading={<BotAvatar botId={item.group.id} />}
+            onPress={onSelectGroup ? () => onSelectGroup(item.group) : undefined}
+            onLongPress={onGroupDetail ? () => onGroupDetail(item.group) : undefined}
+            style={styles.row}
+          />
+        </View>
+      );
+    }
+    const row = item.row;
+    if (row.kind === 'configurable') {
+      return (
+        <ListRow
+          key="configurable"
+          title="Chat"
+          subtitle="Model, sessions, and backend"
+          icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
+          onPress={onSelectConfigurable}
+          style={styles.row}
+        />
+      );
+    }
+    return (
+      <ListRow
+        key={row.bot.id}
+        title={row.bot.displayName}
+        subtitle={botRowSubtitle(row.bot)}
+        leading={<BotAvatar botId={row.bot.id} />}
+        onPress={rosterBotTap(row.bot, {
+          onChat: () => onSelectBot(row.bot),
+          onDetail: onBotDetail ? () => onBotDetail(row.bot) : undefined,
+        })}
+        onLongPress={onBotDetail ? () => onBotDetail(row.bot) : undefined}
+        style={styles.row}
+      />
+    );
+  };
+
   return (
-    <ScrollView
+    <FlatList<RosterItem>
+      data={items}
+      keyExtractor={(item) => item.key}
+      renderItem={renderItem}
       contentContainerStyle={[styles.pad, { paddingBottom: tabContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom, base: TAB_ROSTER_BASE_PADDING }) }]}
       keyboardShouldPersistTaps="handled"
       keyboardDismissMode="interactive"
+      removeClippedSubviews
+      initialNumToRender={12}
+      maxToRenderPerBatch={16}
+      windowSize={9}
       refreshControl={
         handleRefresh ? (
           <RefreshControl
@@ -146,119 +222,95 @@ export function ChatRoster({
           />
         ) : undefined
       }
-    >
-      {rows.length > 1 ? (
-        <TextField
-          value={query}
-          onChangeText={setQuery}
-          placeholder="Search agents"
-          returnKeyType="search"
-          style={styles.search}
-        />
-      ) : null}
-      {error ? (
-        <Text variant="caption" color="secondary" style={styles.error}>
-          {error}
-        </Text>
-      ) : null}
-      {visibleRows.map((row) => {
-        if (row.kind === 'configurable') {
-          return (
+      ListHeaderComponent={
+        <View>
+          {rows.length > 1 ? (
+            <TextField
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search agents"
+              returnKeyType="search"
+              style={styles.search}
+            />
+          ) : null}
+          {error ? (
+            <Text variant="caption" color="secondary" style={styles.error}>
+              {error}
+            </Text>
+          ) : null}
+          {groupsError ? (
+            <Text variant="caption" color="secondary" style={styles.error}>
+              {groupsError}
+            </Text>
+          ) : null}
+        </View>
+      }
+      ListFooterComponent={
+        <View>
+          {onNewAgent ? (
             <ListRow
-              key="configurable"
-              title="Chat"
-              subtitle="Model, sessions, and backend"
-              icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
-              onPress={onSelectConfigurable}
+              title="New Agent"
+              subtitle="Name, soul, keys, and model pin"
+              icon={{ ios: 'plus.circle', android: 'add_circle', web: 'add_circle' }}
+              onPress={onNewAgent}
               style={styles.row}
             />
-          );
-        }
-        return (
-          <ListRow
-            key={row.bot.id}
-            title={row.bot.displayName}
-            subtitle={botRowSubtitle(row.bot)}
-            leading={<BotAvatar botId={row.bot.id} />}
-            onPress={rosterBotTap(row.bot, {
-              onChat: () => onSelectBot(row.bot),
-              onDetail: onBotDetail ? () => onBotDetail(row.bot) : undefined,
-            })}
-            onLongPress={onBotDetail ? () => onBotDetail(row.bot) : undefined}
-            style={styles.row}
-          />
-        );
-      })}
-      {groupsError ? (
-        <Text variant="caption" color="secondary" style={styles.error}>
-          {groupsError}
-        </Text>
-      ) : null}
-      {visibleGroups.length > 0 ? (
-        <Text variant="caption" color="tertiary" style={styles.sectionLabel}>
-          GROUP ROOMS
-        </Text>
-      ) : null}
-      {visibleGroups.map((group) => (
-        <ListRow
-          key={group.id}
-          title={group.name}
-          subtitle={groupMemberLine(group)}
-          leading={<BotAvatar botId={group.id} />}
-          onPress={onSelectGroup ? () => onSelectGroup(group) : undefined}
-          onLongPress={onGroupDetail ? () => onGroupDetail(group) : undefined}
-          style={styles.row}
-        />
-      ))}
-      {onNewAgent ? (
-        <ListRow
-          title="New Agent"
-          subtitle="Name, soul, keys, and model pin"
-          icon={{ ios: 'plus.circle', android: 'add_circle', web: 'add_circle' }}
-          onPress={onNewAgent}
-          style={styles.row}
-        />
-      ) : null}
-      {onNewGroup && routableBots.length >= MIN_GROUP_MEMBERS ? (
-        <ListRow
-          title="New Group Room"
-          subtitle="2–6 bots reply in rounds to one message"
-          icon={{ ios: 'person.3', android: 'groups', web: 'groups' }}
-          onPress={onNewGroup}
-          style={styles.row}
-        />
-      ) : null}
-      {capabilityNotes.map((note) => (
-        <Text key={note} variant="caption" color="secondary" style={styles.capability}>
-          {note}
-        </Text>
-      ))}
-      {emptyView.kind === 'zero-bots' ? (
-        <EmptyState
-          icon={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}
-          title="No bots on this gateway"
-          description="Named Hermes profiles appear here once the Gate can inventory them."
-        />
-      ) : null}
-      {emptyView.kind === 'load-failed' ? (
-        <EmptyState
-          icon={{ ios: 'exclamationmark.triangle', android: 'warning', web: 'warning' }}
-          title="Couldn't load agents"
-          description="The roster could not read this gateway's agent inventory — the reason is named above."
-        />
-      ) : null}
-      {emptyView.kind === 'no-match' ? (
-        <EmptyState
-          icon={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
-          title={`No agents match "${emptyView.query}"`}
-          description="Names, ids, and descriptions are searched."
-          actionLabel="Clear search"
-          onAction={() => setQuery('')}
-        />
-      ) : null}
-    </ScrollView>
+          ) : null}
+          {onNewGroup && routableBots.length >= MIN_GROUP_MEMBERS ? (
+            <ListRow
+              title="New Group Room"
+              subtitle="2–6 bots reply in rounds to one message"
+              icon={{ ios: 'person.3', android: 'groups', web: 'groups' }}
+              onPress={onNewGroup}
+              style={styles.row}
+            />
+          ) : null}
+          {capabilityNotes.map((note) => (
+            <Text key={note} variant="caption" color="secondary" style={styles.capability}>
+              {note}
+            </Text>
+          ))}
+          {emptyView.kind === 'zero-bots' ? (
+            <EmptyState
+              icon={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}
+              title="No bots on this gateway"
+              description="Named Hermes profiles appear here once the Gate can inventory them."
+            />
+          ) : null}
+          {emptyView.kind === 'load-failed' ? (
+            <EmptyState
+              icon={{ ios: 'exclamationmark.triangle', android: 'warning', web: 'warning' }}
+              title="Couldn't load agents"
+              description="The roster could not read this gateway's agent inventory — the reason is named above."
+            />
+          ) : null}
+          {emptyView.kind === 'no-match' ? (
+            <EmptyState
+              icon={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
+              title={`No agents match "${emptyView.query}"`}
+              description="Names, ids, and descriptions are searched."
+              actionLabel="Clear search"
+              onAction={() => setQuery('')}
+            />
+          ) : null}
+        </View>
+      }
+    />
   );
 }
+
+/** One stable key per roster row for the windowed list. */
+function rowKindKey(row: RosterRow): string {
+  return row.kind === 'configurable' ? 'configurable' : row.bot.id;
+}
+
+/** A single windowed row: a bot/configurable agent row or a group room. */
+type RosterItem =
+  | { key: string; kind: 'row'; row: RosterRow }
+  | { key: string; kind: 'group'; group: BotGroupRoom; showSectionLabel: boolean };
+
+export const ChatRoster = memo(ChatRosterImpl);
+ChatRoster.displayName = 'ChatRoster';
 
 const styles = StyleSheet.create({
   pad: { paddingHorizontal: Spacing.three, paddingTop: Spacing.two, paddingBottom: Spacing.five },
