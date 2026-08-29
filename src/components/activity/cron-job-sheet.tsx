@@ -108,9 +108,13 @@ export function CronJobSheet({ job, onClose, onOpenRun }: CronJobSheetProps) {
           onPress={() => setShowRaw((open) => !open)}
         />
         {showRaw ? (
-          <Text variant="micro" style={styles.mono} selectable>
-            {JSON.stringify(job.raw ?? job, null, 2)}
-          </Text>
+          <View style={styles.rawCard}>
+            <ScrollView style={styles.rawScroll} nestedScrollEnabled>
+              <Text variant="micro" style={styles.mono} selectable>
+                {JSON.stringify(job.raw ?? job, null, 2)}
+              </Text>
+            </ScrollView>
+          </View>
         ) : null}
 
         <Button
@@ -155,4 +159,13 @@ const styles = StyleSheet.create({
   field: { gap: 2 },
   row: { marginBottom: Spacing.one },
   mono: { fontFamily: 'monospace' },
+  rawCard: {
+    borderWidth: 1,
+    borderColor: 'rgba(229, 198, 126, 0.18)',
+    borderRadius: 8,
+    padding: Spacing.two,
+  },
+  rawScroll: {
+    maxHeight: 200,
+  },
 });
