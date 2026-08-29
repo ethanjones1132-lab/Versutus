@@ -384,6 +384,29 @@ export function ChatScreen() {
     setSurface(next);
   }, []);
 
+  // Stable header callbacks. The chat header is memoized (chat-header.tsx) so it
+  // skips a re-render when only the transcript changes; inline arrow wrappers here
+  // would hand it a fresh function identity every frame and defeat that memo. These
+  // wrappers keep a single reference for the whole surface so the header is skipped
+  // during a streaming turn. Each is built from a stable dependency (a callback or a
+  // useState setter), so its identity never changes across renders.
+  const handleHeaderSessionPress = useCallback(() => {
+    void openSessionSelector();
+  }, [openSessionSelector]);
+  const handleHeaderModelPress = useCallback(() => {
+    void openModelPicker('default');
+  }, [openModelPicker]);
+  const handleHeaderOverflowPress = useCallback(() => {
+    setOverflowVisible(true);
+  }, []);
+  const handleHeaderBackendPress = useCallback(() => {
+    setBackendPickerVisible(true);
+  }, []);
+  const handleHeaderRosterPress = useCallback(() => {
+    clearBot();
+    showSurface({ kind: 'roster' });
+  }, [clearBot, showSurface]);
+
   const pairingKey = `${deviceId ?? ''}:${pairingDetails?.requestId ?? ''}`;
   const isStreaming = isSending || messages.some((message) => message.streaming);
   const queuedCount = messages.filter((message) => message.queued).length;
@@ -850,9 +873,9 @@ export function ChatScreen() {
         streaming={isStreaming}
         sessionLabel={threadSurface ? sessionLabel : undefined}
         modelLabel={threadSurface ? modelLabel : undefined}
-        onSessionPress={threadSurface ? () => void openSessionSelector() : undefined}
-        onModelPress={threadSurface ? () => openModelPicker('default') : undefined}
-        onOverflowPress={threadSurface ? () => setOverflowVisible(true) : undefined}
+        onSessionPress={threadSurface ? handleHeaderSessionPress : undefined}
+        onModelPress={threadSurface ? handleHeaderModelPress : undefined}
+        onOverflowPress={threadSurface ? handleHeaderOverflowPress : undefined}
         backendLabel={
           surface.kind === 'bot'
             ? rosterRows.find((row): row is Extract<RosterRow, { kind: 'bot' }> => row.kind === 'bot' && row.bot.id === surface.botId)?.bot.displayName
@@ -862,11 +885,8 @@ export function ChatScreen() {
               : undefined
         }
         groupName={surface.kind === 'group' ? activeGroup?.name : undefined}
-        onBackendPress={surface.kind === 'configurable' && backends.length > 0 ? () => setBackendPickerVisible(true) : undefined}
-        onRosterPress={surface.kind === 'roster' ? undefined : () => {
-          clearBot();
-          showSurface({ kind: 'roster' });
-        }}
+        onBackendPress={surface.kind === 'configurable' && backends.length > 0 ? handleHeaderBackendPress : undefined}
+        onRosterPress={surface.kind === 'roster' ? undefined : handleHeaderRosterPress}
       />
 
       <NewAgentSheet

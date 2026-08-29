@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { StyleSheet, useWindowDimensions, View } from 'react-native';
 
 import { PulsingDot, statusColor } from '@/components/connection-badge';
@@ -31,7 +32,7 @@ export type ChatHeaderProps = {
 };
 
 /** Slim contextual chat header: orb, gateway, quick model/session chips, overflow. */
-export function ChatHeader({
+function ChatHeaderImpl({
   gatewayName,
   status,
   statusDetail,
@@ -171,6 +172,9 @@ export function ChatHeader({
     </View>
   );
 }
+
+export const ChatHeader = memo(ChatHeaderImpl);
+ChatHeader.displayName = 'ChatHeader';
 
 const styles = StyleSheet.create({
   wrap: {
