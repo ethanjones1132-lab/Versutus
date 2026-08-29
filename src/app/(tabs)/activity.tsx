@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useMemo, useState } from 'react';
+import { FlatList, KeyboardAvoidingView, Platform, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
@@ -18,6 +18,12 @@ import { useTokens } from '@/hooks/use-tokens';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { tabContentPaddingBottom } from '@/lib/motion/tab-insets';
+import type { ActivityRun } from '@/lib/gateway/runs';
+
+type ActivityItem =
+  | { kind: 'label'; id: string; text: string }
+  | { kind: 'active'; id: string; run: ActivityRun }
+  | { kind: 'finished'; id: string; run: ActivityRun };
 
 export default function ActivityScreen() {
   const router = useRouter();
@@ -81,15 +87,159 @@ export default function ActivityScreen() {
     setRefreshing(false);
   };
 
+  // One windowed list carries both run sections so a gateway with a long run
+  // history lays out only the few cards on screen, not hundreds at once.
+  const listData = useMemo<ActivityItem[]>(() => {
+    const items: ActivityItem[] = [];
+    if (activeRuns.length > 0) {
+      items.push({ kind: 'label', id: 'in-flight', text: 'In flight' });
+      for (const run of activeRuns) items.push({ kind: 'active', id: run.id, run });
+    }
+    if (finishedRuns.length > 0) {
+      items.push({ kind: 'label', id: 'recent', text: 'Recent runs' });
+      for (const run of finishedRuns) items.push({ kind: 'finished', id: run.id, run });
+    }
+    return items;
+  }, [activeRuns, finishedRuns]);
+
+  const renderItem = useCallback(
+    ({ item }: { item: ActivityItem }) => {
+      switch (item.kind) {
+        case 'label':
+          return (
+            <Text variant="caption" color="secondary" style={styles.sectionTitle}>
+              {item.text}
+            </Text>
+          );
+        case 'active':
+          return <RunCard run={item.run} onStop={stopActivityRun} />;
+        case 'finished':
+          return <RunCard run={item.run} />;
+      }
+    },
+    [stopActivityRun],
+  );
+
+  const listHeader = (
+    <View style={styles.header}>
+      <View style={styles.titleRow}>
+        <Text variant="title">Activity</Text>
+        <Badge
+          label={status === 'connected' ? 'Live' : 'Offline'}
+          tone={status === 'connected' ? 'success' : 'neutral'}
+        />
+      </View>
+
+      {pendingRunApproval ? (
+        <ApprovalDecisionCard
+          runId={pendingRunApproval.runId}
+          prompt={pendingRunApproval.prompt}
+          onResolve={(approved) => resolveRunApproval(approved)}
+        />
+      ) : null}
+
+      {runsSupported
+        ? (() => {
+            const startCard = (
+              <Card padding={Spacing.three} style={styles.startCard}>
+                <Text variant="caption" color="accentWarm" style={styles.approvalEyebrow}>
+                  Start a run
+                </Text>
+                <Text variant="body" color="secondary">
+                  Agentic task with live events and approval gates. Tracks here while it runs.
+                </Text>
+                <TextField
+                  value={runPrompt}
+                  onChangeText={setRunPrompt}
+                  placeholder="Describe the task…"
+                  multiline
+                  // A run prompt is prose — keep the platform typing defaults; the
+                  // kit's form defaults (none / no autocorrect) are for URLs and tokens.
+                  autoCapitalize="sentences"
+                  autoCorrect={true}
+                  editable={!starting && status === 'connected'}
+                  accessibilityLabel="Run prompt"
+                />
+                <Button
+                  label={starting ? 'Starting…' : 'Run task'}
+                  onPress={() => void startRun()}
+                  disabled={!runPrompt.trim() || starting || status !== 'connected'}
+                />
+              </Card>
+            );
+            const lifted = <ComposerKeyboardLift>{startCard}</ComposerKeyboardLift>;
+            if (activityKeyboardBehavior(Platform.OS) === 'padding') {
+              return (
+                <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={insets.top}>
+                  {lifted}
+                </KeyboardAvoidingView>
+              );
+            }
+            return lifted;
+          })()
+        : null}
+    </View>
+  );
+
+  const listFooter = (
+    <View style={styles.footer}>
+      {/* Scheduled work sits with live runs: Activity is the one place that
+          answers "what is this gateway doing". Renders nothing on a gateway
+          that cannot report cron. */}
+      <CronSection cronReloadSignal={cronReloadSignal} />
+
+      <AgentTargets
+        gateways={gateways}
+        activeGatewayId={activeGateway?.id}
+        status={status}
+        onSelect={(gateway) => {
+          void connectGateway(gateway).then(() => router.push('/chat'));
+        }}
+      />
+
+      {activityRuns.length === 0 && !pendingRunApproval ? (
+        <EmptyState
+          icon={{ ios: 'bolt', android: 'bolt', web: 'bolt' }}
+          title={
+            !activeGateway
+              ? 'Nothing to watch yet'
+              : runsUnsupported
+                ? 'Runs not offered'
+                : status !== 'connected'
+                  ? 'Connect to start runs'
+                  : 'No runs yet'
+          }
+          description={
+            !activeGateway
+              ? 'Connect to a gateway that supports agentic runs, then start one here or with /run in chat.'
+              : runsUnsupported
+                ? `${activeGateway.name} is chat-only (or has no run API). Chat still works; agentic runs need Hermes /v1/runs.`
+                : status !== 'connected'
+                  ? 'Reconnect, then start a run from this screen or Chat → overflow → Run task.'
+                  : 'Start a run above, use Chat overflow → Run task, or type /run <prompt> in chat.'
+          }
+        />
+      ) : null}
+    </View>
+  );
+
   return (
-    <Screen
-      edges={screenEdgesFor({ platform: Platform.OS, hasDock: false })}
-      parallaxY={parallaxY}>
-      <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: tabContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom }) }]}
-        keyboardShouldPersistTaps="handled"
+    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: false })} parallaxY={parallaxY}>
+      <FlatList
+        data={listData}
+        keyExtractor={(item) => item.id}
+        style={styles.list}
+        contentContainerStyle={[
+          styles.listContent,
+          { paddingBottom: tabContentPaddingBottom({ platform: Platform.OS, insetBottom: insets.bottom }) },
+        ]}
         onScroll={onScroll}
         scrollEventThrottle={16}
+        removeClippedSubviews
+        initialNumToRender={12}
+        maxToRenderPerBatch={16}
+        windowSize={9}
+        keyboardShouldPersistTaps="handled"
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -98,133 +248,30 @@ export default function ActivityScreen() {
             colors={[tokens.accentWarm]}
             progressBackgroundColor={tokens.backgroundElevated}
           />
-        }>
-        <View style={styles.titleRow}>
-          <Text variant="title">Activity</Text>
-          <Badge
-            label={status === 'connected' ? 'Live' : 'Offline'}
-            tone={status === 'connected' ? 'success' : 'neutral'}
-          />
-        </View>
-
-        {pendingRunApproval ? (
-          <ApprovalDecisionCard
-            runId={pendingRunApproval.runId}
-            prompt={pendingRunApproval.prompt}
-            onResolve={(approved) => resolveRunApproval(approved)}
-          />
-        ) : null}
-
-        {runsSupported
-          ? (() => {
-              const startCard = (
-                <Card padding={Spacing.three} style={styles.startCard}>
-            <Text variant="caption" color="accentWarm" style={styles.approvalEyebrow}>
-              Start a run
-            </Text>
-            <Text variant="body" color="secondary">
-              Agentic task with live events and approval gates. Tracks here while it runs.
-            </Text>
-            <TextField
-              value={runPrompt}
-              onChangeText={setRunPrompt}
-              placeholder="Describe the task…"
-              multiline
-              // A run prompt is prose — keep the platform typing defaults; the
-              // kit's form defaults (none / no autocorrect) are for URLs and tokens.
-              autoCapitalize="sentences"
-              autoCorrect={true}
-              editable={!starting && status === 'connected'}
-              accessibilityLabel="Run prompt"
-            />
-            <Button
-              label={starting ? 'Starting…' : 'Run task'}
-              onPress={() => void startRun()}
-              disabled={!runPrompt.trim() || starting || status !== 'connected'}
-            />
-                </Card>
-              );
-              const lifted = <ComposerKeyboardLift>{startCard}</ComposerKeyboardLift>;
-              if (activityKeyboardBehavior(Platform.OS) === 'padding') {
-                return (
-                  <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={insets.top}>
-                    {lifted}
-                  </KeyboardAvoidingView>
-                );
-              }
-              return lifted;
-            })()
-          : null}
-
-        {activeRuns.length > 0 ? (
-          <View style={styles.section}>
-            <Text variant="caption" color="secondary" style={styles.sectionTitle}>
-              In flight
-            </Text>
-            {activeRuns.map((run) => (
-              <RunCard key={run.id} run={run} onStop={stopActivityRun} />
-            ))}
-          </View>
-        ) : null}
-
-        {finishedRuns.length > 0 ? (
-          <View style={styles.section}>
-            <Text variant="caption" color="secondary" style={styles.sectionTitle}>
-              Recent runs
-            </Text>
-            {finishedRuns.map((run) => (
-              <RunCard key={run.id} run={run} />
-            ))}
-          </View>
-        ) : null}
-
-        {/* Scheduled work sits with live runs: Activity is the one place that
-            answers "what is this gateway doing". Renders nothing on a gateway
-            that cannot report cron. */}
-        <CronSection cronReloadSignal={cronReloadSignal} />
-
-        <AgentTargets
-          gateways={gateways}
-          activeGatewayId={activeGateway?.id}
-          status={status}
-          onSelect={(gateway) => {
-            void connectGateway(gateway).then(() => router.push('/chat'));
-          }}
-        />
-
-        {activityRuns.length === 0 && !pendingRunApproval ? (
-          <EmptyState
-            icon={{ ios: 'bolt', android: 'bolt', web: 'bolt' }}
-            title={
-              !activeGateway
-                ? 'Nothing to watch yet'
-                : runsUnsupported
-                  ? 'Runs not offered'
-                  : status !== 'connected'
-                    ? 'Connect to start runs'
-                    : 'No runs yet'
-            }
-            description={
-              !activeGateway
-                ? 'Connect to a gateway that supports agentic runs, then start one here or with /run in chat.'
-                : runsUnsupported
-                  ? `${activeGateway.name} is chat-only (or has no run API). Chat still works; agentic runs need Hermes /v1/runs.`
-                  : status !== 'connected'
-                    ? 'Reconnect, then start a run from this screen or Chat → overflow → Run task.'
-                    : 'Start a run above, use Chat overflow → Run task, or type /run <prompt> in chat.'
-            }
-          />
-        ) : null}
-      </ScrollView>
+        }
+        ListHeaderComponent={listHeader}
+        ListFooterComponent={listFooter}
+        renderItem={renderItem}
+      />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  content: {
+  list: {
+    flex: 1,
+  },
+  listContent: {
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.two,
     paddingBottom: Spacing.four,
+    gap: Spacing.three,
+    flexGrow: 1,
+  },
+  header: {
+    gap: Spacing.three,
+  },
+  footer: {
     gap: Spacing.three,
   },
   titleRow: {
@@ -238,9 +285,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   startCard: {
-    gap: Spacing.two,
-  },
-  section: {
     gap: Spacing.two,
   },
   sectionTitle: {

@@ -1,20 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Card, Text } from '@/components/ui';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
+import { useNow } from '@/hooks/use-now';
 import type { GatewayCapabilitySnapshot, GatewayCapabilityGroup } from '@/lib/gateway/types';
 
 export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilitySnapshot }) {
   const { groups, checkedAt, status: snapStatus } = snapshot;
   const [showAll, setShowAll] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(timer);
-  }, []);
 
   // Undeclared groups exist in no gateway this app knows; they are not
   // capabilities the connected one lacks, so they stay out of the ratio.
@@ -29,7 +24,6 @@ export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilityS
   );
   const visible = showAll ? groups : readyGroups.length > 0 ? readyGroups : groups.slice(0, 6);
   const hiddenCount = Math.max(0, groups.length - visible.length);
-  const staleMinutes = Math.max(0, Math.floor((now - checkedAt) / 60000));
 
   return (
     <Card padding={Spacing.three} style={styles.card}>
@@ -39,9 +33,7 @@ export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilityS
           <Text variant="caption" style={styles.onGlassSecondary}>
             {readyGroups.length}/{counted.length} ready
           </Text>
-          <Text variant="caption" color="tertiary" style={{ fontSize: 10 }}>
-            {snapStatus} • {staleMinutes}m ago
-          </Text>
+          <CapabilityFreshness checkedAt={checkedAt} status={snapStatus} />
         </View>
       </View>
       <View style={styles.grid}>
@@ -64,6 +56,23 @@ export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilityS
         </Pressable>
       ) : null}
     </Card>
+  );
+}
+
+/**
+ * The "Xm ago" freshness stamp. Owns its own per-minute tick so the rest of
+ * the card — every CapabilityPill, the header, the show-all toggle — stays
+ * still between checks. A frozen stamp would itself be misleading, but
+ * re-rendering the whole pill grid once a minute just to advance the clock
+ * repainted every capability for a single number.
+ */
+function CapabilityFreshness({ checkedAt, status }: { checkedAt: number; status: string }) {
+  const now = useNow(60_000, true);
+  const staleMinutes = Math.max(0, Math.floor((now - checkedAt) / 60000));
+  return (
+    <Text variant="caption" color="tertiary" style={{ fontSize: 10 }}>
+      {status} • {staleMinutes}m ago
+    </Text>
   );
 }
 
