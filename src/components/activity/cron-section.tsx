@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 
 import { CronJobSheet } from '@/components/activity/cron-job-sheet';
@@ -32,7 +33,7 @@ const TONE_COLOR: Record<ReturnType<typeof describeCronHealth>['tone'], TextColo
  * empty list on a host with twelve crons would read as "no scheduled work",
  * which is a worse lie than saying nothing.
  */
-export function CronSection() {
+export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: number }) {
   const { cron, status } = useGateway();
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +61,16 @@ export function CronSection() {
   useEffect(() => {
     const timer = setTimeout(() => { void load(); }, 0);
     return () => clearTimeout(timer);
-  }, [load]);
+  }, [load, cronReloadSignal]);
+
+  // Re-read jobs when the operator returns to the tab: a Routine that
+  // starts or finishes while Activity is backgrounded keeps its old verdict
+  // (running badge / Not running) until the next connection cycle otherwise.
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
 
   if (status !== 'connected' || !available) return null;
 

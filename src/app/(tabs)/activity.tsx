@@ -40,6 +40,10 @@ export default function ActivityScreen() {
   const [runPrompt, setRunPrompt] = useState('');
   const [starting, setStarting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // A pull-to-refresh re-reads capabilities + gateways but not cron jobs
+  // (CronSection loads once per connection); bumping this signal reaches
+  // the section's re-list without remounting the tab.
+  const [cronReloadSignal, setCronReloadSignal] = useState(0);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
 
@@ -70,6 +74,7 @@ export default function ActivityScreen() {
     setRefreshing(true);
     const started = Date.now();
     await Promise.all([refreshCapabilities(), refreshGateways()]).catch(() => undefined);
+    setCronReloadSignal((n) => n + 1);
     // Hold the spinner briefly so recovery isn't a disorienting flash.
     const elapsed = Date.now() - started;
     if (elapsed < 400) await new Promise((resolve) => setTimeout(resolve, 400 - elapsed));
@@ -176,7 +181,7 @@ export default function ActivityScreen() {
         {/* Scheduled work sits with live runs: Activity is the one place that
             answers "what is this gateway doing". Renders nothing on a gateway
             that cannot report cron. */}
-        <CronSection />
+        <CronSection cronReloadSignal={cronReloadSignal} />
 
         <AgentTargets
           gateways={gateways}
