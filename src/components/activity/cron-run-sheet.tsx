@@ -5,6 +5,7 @@ import { BaseSheet, Divider, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { freshnessLabel, type CronTurn } from '@/lib/gateway/cron';
+import { useNow } from '@/hooks/use-now';
 
 /** How often the open view asks the host for new turns. */
 const POLL_MS = 3000;
@@ -30,7 +31,6 @@ export function CronRunSheet({ runId, onClose }: CronRunSheetProps) {
   const [turns, setTurns] = useState<CronTurn[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [polledAt, setPolledAt] = useState<number | null>(null);
-  const [, forceTick] = useState(0);
   const cancelled = useRef(false);
 
   const poll = useCallback(async () => {
@@ -61,14 +61,12 @@ export function CronRunSheet({ runId, onClose }: CronRunSheetProps) {
     // starting it synchronously would write state during the effect body.
     const first = setTimeout(() => { void poll(); }, 0);
     const timer = setInterval(() => { void poll(); }, POLL_MS);
-    // Re-render once a second so the "updated Ns ago" stamp keeps counting
-    // even between polls — a frozen stamp would itself be misleading.
-    const tick = setInterval(() => forceTick((n) => n + 1), 1000);
+    // The freshness stamp (FreshnessLabel below) owns its own per-second tick,
+    // so the turn list and the rest of the sheet stay still between polls.
     return () => {
       cancelled.current = true;
       clearTimeout(first);
       clearInterval(timer);
-      clearInterval(tick);
     };
   }, [poll, runId]);
 
@@ -103,11 +101,24 @@ export function CronRunSheet({ runId, onClose }: CronRunSheetProps) {
         ))}
 
         <Divider />
-        <Text variant="micro" color="tertiary">
-          {freshnessLabel(polledAt)} · read-only
-        </Text>
+        <FreshnessLabel polledAt={polledAt} />
       </ScrollView>
     </BaseSheet>
+  );
+}
+
+/**
+ * The "updated Ns ago" stamp. Owns its own per-second tick so the rest of the
+ * sheet — the turn list, the error line — stays still between polls. A frozen
+ * stamp would itself be misleading, but re-rendering the whole transcript once
+ * a second just to advance the clock remounted every row for no content change.
+ */
+function FreshnessLabel({ polledAt }: { polledAt: number | null }) {
+  const now = useNow(1000, true);
+  return (
+    <Text variant="micro" color="tertiary">
+      {freshnessLabel(polledAt, now)} · read-only
+    </Text>
   );
 }
 
