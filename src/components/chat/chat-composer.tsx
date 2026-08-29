@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { useState, useSyncExternalStore } from 'react';
+import { memo, useState, useSyncExternalStore } from 'react';
 import { Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -35,7 +35,7 @@ type ChatComposerProps = {
   queuedCount?: number;
 };
 
-export function ChatComposer({
+export const ChatComposer = memo(function ChatComposer({
   draft,
   onChangeText,
   onSend,
@@ -308,7 +308,7 @@ export function ChatComposer({
       {composerInner}
     </KeyboardAvoidingView>
   );
-}
+});
 
 function subscribeKeyboardHeight(onChange: () => void) {
   const show = Keyboard.addListener('keyboardDidShow', onChange);

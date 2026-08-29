@@ -28,7 +28,7 @@ import { MessageBubble } from '@/components/chat/message-bubble';
 import { PairingSheet } from '@/components/chat/pairing-sheet';
 import { ThreadConfigSheet, type SessionItem } from '@/components/chat/thread-config-sheet';
 import { SlashCommandPalette } from '@/components/chat/slash-command-palette';
-import { Button, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text } from '@/components/ui';
+import { Button, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text, type IconName } from '@/components/ui';
 import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
 import { describeGatewayError, errorBannerButton, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
@@ -266,6 +266,7 @@ export function ChatScreen() {
   const [overflowVisible, setOverflowVisible] = useState(false);
   const [backendPickerVisible, setBackendPickerVisible] = useState(false);
   const [paletteVisible, setPaletteVisible] = useState(false);
+  const openPalette = useCallback(() => setPaletteVisible(true), [setPaletteVisible]);
   const [actionMessage, setActionMessage] = useState<ChatMessage | null>(null);
   const [jumpVisible, setJumpVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -414,6 +415,16 @@ export function ChatScreen() {
   const slashSuggestions = draft.trimStart().startsWith('/')
     ? getSlashCommandSuggestions(draft, activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands)
     : [];
+  // Stable across streamed frames (icons + drafts never change) so the memoized
+  // ChatComposer short-circuits when only `messages` changed.
+  const quickActions: { label: string; draft: string; icon: IconName }[] = useMemo(
+    () => [
+      { label: 'Run', draft: '/run ', icon: { ios: 'bolt.fill', android: 'bolt', web: 'bolt' } },
+      { label: 'Status', draft: '/status', icon: { ios: 'waveform.path.ecg', android: 'pulse', web: 'pulse' } },
+      { label: 'Help', draft: '/help', icon: { ios: 'questionmark.circle', android: 'help', web: 'help' } },
+    ],
+    [],
+  );
 
   // The palette browses the whole surface, so it asks for an uncapped list --
   // the composer strip's 12-row cap is what makes discovery impossible.
@@ -1320,16 +1331,12 @@ export function ChatScreen() {
       <ChatComposer
         draft={draft}
         onChangeText={setDraft}
-        onSend={() => void handleSend()}
-        onStop={() => void stopStreaming()}
+        onSend={handleSend}
+        onStop={stopStreaming}
         slashSuggestions={slashSuggestions}
-        onSelectSlashSuggestion={(value) => setDraft(value)}
-        onBrowseCommands={() => setPaletteVisible(true)}
-        quickActions={[
-          { label: 'Run', draft: '/run ', icon: { ios: 'bolt.fill', android: 'bolt', web: 'bolt' } },
-          { label: 'Status', draft: '/status', icon: { ios: 'waveform.path.ecg', android: 'pulse', web: 'pulse' } },
-          { label: 'Help', draft: '/help', icon: { ios: 'questionmark.circle', android: 'help', web: 'help' } },
-        ]}
+        onSelectSlashSuggestion={setDraft}
+        onBrowseCommands={openPalette}
+        quickActions={quickActions}
         isStreaming={isStreaming}
         status={status}
         queuedCount={queuedCount}
