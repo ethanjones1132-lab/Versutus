@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
@@ -8,9 +8,10 @@ import { describeCommandResult } from '@/lib/terminal/json-tree';
 
 import { JsonView } from './json-view';
 
-// Long text results (list/help dumps) render as a bounded teaser in the
-// inline RPC card; the sheet renders the full output.
-const RPC_RESULT_PREVIEW_LINES = 8;
+// Inline (preview) text results (list/help dumps) render inside a capped,
+// scrollable teaser so a long dump stays reachable on the phone; the sheet
+// renders the full, unbounded output.
+const RPC_RESULT_PREVIEW_MAX_HEIGHT = 240;
 
 /** Shared structured/plain render for a command log (inline card + sheet). */
 export function CommandResultView({ log, preview = false }: { log: string; preview?: boolean }) {
@@ -20,11 +21,17 @@ export function CommandResultView({ log, preview = false }: { log: string; previ
   if (model.kind === 'empty') return null;
 
   if (model.kind === 'text') {
-    return (
-      <Text
-        variant="mono"
-        style={styles.logText}
-        numberOfLines={preview ? RPC_RESULT_PREVIEW_LINES : undefined}>
+    // The inline card bounds the dump in a capped, scrollable teaser so the
+    // tail is reachable, not clipped at eight lines; the sheet path (preview
+    // false) keeps the full, unscoped text.
+    return preview ? (
+      <ScrollView style={styles.previewScroll} nestedScrollEnabled>
+        <Text variant="mono" style={styles.logText}>
+          {model.text}
+        </Text>
+      </ScrollView>
+    ) : (
+      <Text variant="mono" style={styles.logText}>
         {model.text}
       </Text>
     );
@@ -62,5 +69,8 @@ const styles = StyleSheet.create({
   logText: {
     fontFamily: FontFamily.mono,
     lineHeight: 18,
+  },
+  previewScroll: {
+    maxHeight: RPC_RESULT_PREVIEW_MAX_HEIGHT,
   },
 });

@@ -14,14 +14,18 @@ function readSource(relative: string): string {
 }
 
 describe('RPC inline text result preview', () => {
-  test('the shared text branch clamps to a named preview line count', () => {
+  test('the shared text branch bounds the preview in a capped, scrollable teaser', () => {
     const source = readSource('components/terminal/command-result-view.tsx');
-    // The inline card and the sheet share CommandResultView; the clamp is a
-    // prop that defaults off, so only the inline usage bounds long text.
-    expect(source).toMatch(/const RPC_RESULT_PREVIEW_LINES = 8;/);
-    expect(source).toMatch(
-      /numberOfLines=\{preview \? RPC_RESULT_PREVIEW_LINES : undefined\}/,
-    );
+    // The inline card and the sheet share CommandResultView; the inline (preview)
+    // path caps a long dump in a bounded ScrollView so the tail is scrollable
+    // instead of clipped at a line count, while the sheet path renders the full,
+    // unscoped text.
+    expect(source).toMatch(/const RPC_RESULT_PREVIEW_MAX_HEIGHT = \d+;/);
+    expect(source).toMatch(/previewScroll: \{[\s\S]*?maxHeight: RPC_RESULT_PREVIEW_MAX_HEIGHT/);
+    expect(source).toMatch(/<ScrollView style=\{styles\.previewScroll\} nestedScrollEnabled>/);
+    // The bare 8-line clamp is gone -- the rest of the dump is reachable on the
+    // phone, not silently truncated.
+    expect(source).not.toMatch(/RPC_RESULT_PREVIEW_LINES/);
     expect(source).toMatch(/preview = false \}: \{ log: string; preview\?: boolean \}\)/);
   });
 
