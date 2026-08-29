@@ -36,21 +36,52 @@ export function formatClockTime(timestamp: number): string {
   return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
-/** Day-group label for message dividers: "Today", "Yesterday", weekday, else short date. */
-export function formatDayDivider(timestamp: number): string {
+/**
+ * Day-group label for message dividers: "Today", "Yesterday", weekday, else short date.
+ * `now` defaults to the current time and is only overridden in tests for determinism.
+ */
+export function formatDayDivider(timestamp: number, now: number = Date.now()): string {
   const ms = timestamp > 1_000_000_000_000 ? timestamp : timestamp * 1000;
   const day = new Date(ms);
-  const now = new Date();
   const startOf = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  const diffDays = Math.round((startOf(now) - startOf(day)) / 86_400_000);
+  const diffDays = Math.round((startOf(new Date(now)) - startOf(day)) / 86_400_000);
   if (diffDays <= 0) return 'Today';
   if (diffDays === 1) return 'Yesterday';
   if (diffDays < 7) return day.toLocaleDateString(undefined, { weekday: 'long' });
   return day.toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
-    year: day.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+    year: day.getFullYear() !== new Date(now).getFullYear() ? 'numeric' : undefined,
   });
+}
+
+/**
+ * Day-group labels depend only on the message's calendar day and the *current*
+ * calendar day (Today / Yesterday / weekday / date). The transcript rebuilds its
+ * item array on every coalesced streamed frame, so without caching a 200-message
+ * thread re-runs `toLocaleDateString` ~400 times per frame. Labels within the same
+ * day are computed once and reused; the cache is dropped when the current calendar
+ * day rolls over (the only event that can change a label).
+ */
+let dayDividerCache: { currentDayStart: number; entries: Map<number, string> } | null = null;
+
+function startOfDayKey(ms: number): number {
+  const date = new Date(ms);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+export function formatDayDividerCached(timestamp: number, now: number = Date.now()): string {
+  const ms = timestamp > 1_000_000_000_000 ? timestamp : timestamp * 1000;
+  const dayStart = startOfDayKey(ms);
+  const currentDayStart = startOfDayKey(now);
+  if (!dayDividerCache || dayDividerCache.currentDayStart !== currentDayStart) {
+    dayDividerCache = { currentDayStart, entries: new Map() };
+  }
+  const cached = dayDividerCache.entries.get(dayStart);
+  if (cached !== undefined) return cached;
+  const label = formatDayDivider(timestamp, now);
+  dayDividerCache.entries.set(dayStart, label);
+  return label;
 }
 
 /** Connected-ceremony HUD: "Connected · Studio · v0.5.2" */

@@ -34,7 +34,7 @@ import { useChatSurface, useGateway } from '@/context/gateway-provider';
 import { describeGatewayError, errorBannerButton, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
-import { formatDayDivider } from '@/lib/format';
+import { formatDayDividerCached } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
 import { resolvePullRefreshAction } from '@/lib/gateway/messages';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
@@ -771,9 +771,9 @@ export function ChatScreen() {
   const transcriptItems = useMemo<TranscriptItem[]>(
     () =>
       messages.map((message, index) => {
-        const label = message.timestamp ? formatDayDivider(message.timestamp) : undefined;
+        const label = message.timestamp ? formatDayDividerCached(message.timestamp) : undefined;
         const previous = messages[index - 1];
-        const previousLabel = previous?.timestamp ? formatDayDivider(previous.timestamp) : undefined;
+        const previousLabel = previous?.timestamp ? formatDayDividerCached(previous.timestamp) : undefined;
         return { message, label, showDivider: !!label && label !== previousLabel };
       }),
     [messages],
