@@ -14,8 +14,9 @@ import { PairedDevicesPane } from '@/components/gateway/paired-devices-pane';
 import { GlassCollapsible } from '@/components/glass-collapsible';
 import { HomeStatusCard } from '@/components/home-status-card';
 import { PairingPanel } from '@/components/pairing-panel';
-import { Badge, Button, Card, ConfirmSheet, ErrorCard, Icon, StatTile, Text } from '@/components/ui';
+import { Badge, Button, Card, ConfirmSheet, ErrorCard, Icon, PressableScale, StatTile, Text } from '@/components/ui';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
+import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayDiscovery } from '@/hooks/use-gateway-discovery';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
@@ -53,6 +54,10 @@ export function GatewayHomeDashboard() {
   const reachability = useGatewayReachability({ gateways, activeGateway, status });
   const discovery = useGatewayDiscovery(true);
   const [deleteCandidate, setDeleteCandidate] = useState<GatewayProfile | null>(null);
+  // Default collapsed keeps the disconnected card slim; a tap on either hero
+  // line reveals the full reason it gave up / the backoff schedule.
+  const [statusExpanded, setStatusExpanded] = useState(false);
+  const [retryExpanded, setRetryExpanded] = useState(false);
 
   // Derived dashboard values — memoized so a streamed frame that only changed
   // messages does not re-run the gateway list, run filter, capability count,
@@ -201,15 +206,33 @@ export function GatewayHomeDashboard() {
         {/* Full width: connection failures name a host and a reason, and the
             cramped status column truncated them to uselessness. */}
         {!connected && statusDetail ? (
-          <Text variant="caption" numberOfLines={3} style={styles.onGlassTertiary}>
-            {statusDetail}
-          </Text>
+          <PressableScale
+            onPress={() => setStatusExpanded((prev) => !prev)}
+            hitSlop={CHIP_HIT_SLOP}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: statusExpanded }}
+            accessibilityLabel={
+              statusExpanded ? 'Collapse connection failure detail' : 'Expand connection failure detail'
+            }>
+            <Text variant="caption" numberOfLines={statusExpanded ? undefined : 3} style={styles.onGlassTertiary}>
+              {statusDetail}
+            </Text>
+          </PressableScale>
         ) : null}
 
         {!connected && autoRetry ? (
-          <Text variant="caption" numberOfLines={2} style={styles.onGlassTertiary}>
-            {describeAutoRetry(autoRetry)}
-          </Text>
+          <PressableScale
+            onPress={() => setRetryExpanded((prev) => !prev)}
+            hitSlop={CHIP_HIT_SLOP}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: retryExpanded }}
+            accessibilityLabel={
+              retryExpanded ? 'Collapse auto-retry schedule' : 'Expand auto-retry schedule'
+            }>
+            <Text variant="caption" numberOfLines={retryExpanded ? undefined : 2} style={styles.onGlassTertiary}>
+              {describeAutoRetry(autoRetry)}
+            </Text>
+          </PressableScale>
         ) : null}
 
         {lastError ? (
