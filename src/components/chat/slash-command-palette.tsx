@@ -7,6 +7,7 @@ import { BaseSheet, EmptyState, Icon, PressableScale, Text, TextField } from '@/
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
+import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { filterPaletteSuggestions, groupSuggestionsByFamily } from '@/lib/gateway/slash-palette';
 import { paletteListMaxHeight } from '@/lib/motion/slash-palette-height';
 
@@ -65,6 +66,9 @@ export function SlashCommandPalette({
     keyboardHeight,
   });
   const [query, setQuery] = useState(initialQuery);
+  // Default collapsed keeps the list dense; a command's full description is one
+  // tap away. Keyed by command value so each row remembers its own expansion.
+  const [expandedDescs, setExpandedDescs] = useState<Record<string, boolean>>({});
 
   // Re-seed on each open so the palette reflects whatever the composer holds
   // now, without clobbering what the user types once it is already open.
@@ -128,6 +132,7 @@ export function SlashCommandPalette({
           )}
           renderItem={({ item }) => {
             const danger = item.danger === 'write' || item.danger === 'destructive';
+            const descExpanded = expandedDescs[item.value] ?? false;
             return (
               <PressableScale
                 style={[
@@ -165,9 +170,22 @@ export function SlashCommandPalette({
                     />
                   ) : null}
                 </View>
-                <Text variant="caption" color="secondary" numberOfLines={2}>
-                  {item.description}
-                </Text>
+                <PressableScale
+                  onPress={(event) => {
+                    // The row itself is a press target that selects the command;
+                    // swallow the tap so expanding the description does not also
+                    // fire onSelect and close the palette.
+                    event.stopPropagation();
+                    setExpandedDescs((prev) => ({ ...prev, [item.value]: !prev[item.value] }));
+                  }}
+                  hitSlop={CHIP_HIT_SLOP}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: descExpanded }}
+                  accessibilityLabel={descExpanded ? 'Collapse command description' : 'Expand command description'}>
+                  <Text variant="caption" color="secondary" numberOfLines={descExpanded ? undefined : 2}>
+                    {item.description}
+                  </Text>
+                </PressableScale>
                 {item.unavailable ? (
                   <Text variant="micro" color="tertiary">
                     Not available on this gateway
