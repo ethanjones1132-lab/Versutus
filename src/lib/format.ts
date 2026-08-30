@@ -97,6 +97,7 @@ export function formatConnectedToastLabel(input: {
 
 /** Elapsed duration: "0:07", "3:42", "1:02:11" */
 export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '0:00';
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const seconds = totalSeconds % 60;
   const minutes = Math.floor(totalSeconds / 60) % 60;
