@@ -20,6 +20,9 @@ export function jsonTreeNode(value: unknown): JsonTreeNode {
     return { kind: 'primitive', value: JSON.stringify(value), primitive: 'string' };
   }
   if (typeof value === 'number' || typeof value === 'bigint') {
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      return { kind: 'primitive', value: 'null', primitive: 'null' };
+    }
     return { kind: 'primitive', value: String(value), primitive: 'number' };
   }
   if (typeof value === 'boolean') {
