@@ -55,11 +55,11 @@ function startOfLocalDay(ms: number): number {
 }
 
 export function sessionUsage(session: SessionUsageInput): SessionUsage {
-  const input = typeof session.input_tokens === 'number' ? session.input_tokens : 0;
-  const output = typeof session.output_tokens === 'number' ? session.output_tokens : 0;
+  const input = typeof session.input_tokens === 'number' && Number.isFinite(session.input_tokens) ? session.input_tokens : 0;
+  const output = typeof session.output_tokens === 'number' && Number.isFinite(session.output_tokens) ? session.output_tokens : 0;
   const tokens = Math.max(0, input + output);
   const cost = session.actual_cost_usd ?? session.estimated_cost_usd;
-  return { tokens, costUsd: typeof cost === 'number' ? cost : null };
+  return { tokens, costUsd: typeof cost === 'number' && Number.isFinite(cost) ? cost : null };
 }
 
 export function totalUsage(sessions: SessionUsageInput[]): SessionSpend {
