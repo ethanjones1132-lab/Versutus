@@ -540,6 +540,22 @@ async function runModelCommand(args: string[], context: SlashCommandContext): Pr
     return textResult(formatAgentModels(snapshot, agentId), agentId ? `/model agent ${agentId}` : '/model agents', compactJson(readPath(readConfigObject(snapshot), 'agents')));
   }
 
+  // Bare /model <name> — switch directly through setModelOverride
+  // (no --confirm needed; picking a model is not destructive).
+  // Fall through to config.patch if no per-request override is available.
+  if (subcommand && subcommand !== 'set' && subcommand !== 'auth' && subcommand !== 'routing' && subcommand !== 'policy' && subcommand !== 'agent' && subcommand !== 'agents') {
+    const modelId = subcommand;
+    const validation = await validateModelId(modelId, context);
+    if (context.setModelOverride) {
+      await context.setModelOverride(modelId);
+      return textResult(
+        `Model override set to ${modelId}\nThe current session will reopen so the next turn actually runs on this model.`,
+        '/model',
+      );
+    }
+    // Fall through to config.patch path if no setModelOverride
+  }
+
   if (subcommand === 'set') {
     const modelId = args.slice(1).find((arg) => !arg.startsWith('--'));
     if (!modelId) return textResult('Usage: /model set provider/model-id --confirm', '/model set');
