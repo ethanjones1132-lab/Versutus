@@ -33,10 +33,9 @@ export function SessionAnalytics({
   const weekCostPeak = Math.max(...buckets.map((bucket) => bucket.costUsd), 0);
   const tokenMeter = relativeMeter(usage.tokens, weekTokenPeak);
   const costMeter = relativeMeter(usage.costUsd ?? 0, weekCostPeak);
-  const sparkPoints = sparklinePoints(
-    buckets.map((bucket) => bucket.tokens),
-    SPARK_W,
-    SPARK_H,
+  const sparkPoints = useMemo(
+    () => sparklinePoints(buckets.map((bucket) => bucket.tokens), SPARK_W, SPARK_H),
+    [buckets],
   );
 
   return (
