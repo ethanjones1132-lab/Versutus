@@ -32,10 +32,14 @@ export function appendTerminalChunk(
   const next = lines.length > 0 ? [...lines] : [{ id: 0, text: '' }];
   const parts = clean.split('\n');
   const last = next[next.length - 1];
-  last.text += parts.shift() ?? '';
+  let text = last.text + (parts.shift() ?? '');
+  if (text.length > 8192) text = text.slice(0, 8192);
+  last.text = text;
 
   for (const part of parts) {
-    next.push({ id: (next[next.length - 1]?.id ?? 0) + 1, text: part });
+    let p = part;
+    if (p.length > 8192) p = p.slice(0, 8192);
+    next.push({ id: (next[next.length - 1]?.id ?? 0) + 1, text: p });
   }
 
   return next.length > maxLines ? next.slice(-maxLines) : next;
