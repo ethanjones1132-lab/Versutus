@@ -348,6 +348,22 @@ export async function executeGatewaySlashCommand(
     return runModelsList(argText, context);
   }
 
+  if (commandName === '/context') {
+    return textResult(
+      await context.gatewayRequest('context.get', {}),
+      '/context',
+      compactJson(await context.gatewayRequest('context.get', {})),
+    );
+  }
+
+  if (commandName === '/version') {
+    return textResult(
+      await context.gatewayRequest('version.get', {}),
+      '/version',
+      compactJson(await context.gatewayRequest('version.get', {})),
+    );
+  }
+
   const command = findCommandBySlash(commandName);
   if (!command) {
     // Reached only after every built-in dispatch above has declined, so a
