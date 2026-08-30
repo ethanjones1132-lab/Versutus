@@ -136,7 +136,7 @@ function describeProbeTarget(url: string): string {
     const host = parsed.hostname;
     const port = parsed.port || '8642';
     if (host.endsWith('.ts.net')) return `Trying ${host} over Tailscale…`;
-    if (host.startsWith('100.')) return `Trying ${host} on your tailnet…`;
+    if (host.startsWith('100.') && host.startsWith('100.64.') && parseInt(host.split('.')[2], 10) >= 64 && parseInt(host.split('.')[2], 10) <= 127) return `Trying ${host} on your tailnet…`;
     if (host === '127.0.0.1' || host === 'localhost') return `Trying local gateway at ${port}…`;
     return `Trying ${host}:${port}…`;
   } catch {
