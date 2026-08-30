@@ -111,7 +111,7 @@ export function runNeedsApproval(signal: string): boolean {
 }
 
 export function isTerminalRunStatus(status: string): boolean {
-  return /(complete|succeeded|success|done|finished|failed|error|cancelled|canceled|aborted)/i.test(status);
+  return /(?:^|[^a-z])(complete|completed|succeeded|success|done|finished|failed|error|cancelled|canceled|aborted)(?:$|[^a-z])/i.test(status);
 }
 
 function isTerminalSuccessStatus(status: string): boolean {
