@@ -10,7 +10,6 @@ export function friendlyPcName(input: string): string {
   const normalized = normalizePcAddress(input);
   if (!normalized) return 'My PC';
   const short = normalized.split('.')[0];
-  if (short.match(/^\d+\.\d+\.\d+\.\d+$/)) return short;
   return short.charAt(0).toUpperCase() + short.slice(1);
 }
 
