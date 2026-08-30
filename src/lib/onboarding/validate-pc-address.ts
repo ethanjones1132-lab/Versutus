@@ -15,6 +15,11 @@ export function validatePcAddress(value: string): { valid: boolean; message: str
     tailnetIpPattern.test(withoutPort) ||
     lanIpPattern.test(withoutPort)
   ) {
+    const octets = withoutPort.split('.').map(Number);
+    const allValid = octets.every(n => Number.isInteger(n) && n >= 0 && n <= 255);
+    if (!allValid) {
+      return { valid: false, message: 'Use a Tailscale hostname, tailnet IP (100.x.x.x), or LAN IP — optional :port (Gate is 8760).' };
+    }
     return { valid: true, message: 'Looks good — ready to connect.' };
   }
 
