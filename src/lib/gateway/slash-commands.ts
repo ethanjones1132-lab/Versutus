@@ -670,8 +670,46 @@ async function runModelCommand(args: string[], context: SlashCommandContext): Pr
     return textResult(`Agent ${agentId} model updated to ${modelId}\n${formatConfigWriteResult(result)}`, '/model set-agent', compactJson(result));
   }
 
-  return textResult('Usage: /model, /model auth, /model routing, /model agent <id>, /model set <model-id> --confirm, /model set-agent <agent-id> <model-id> --confirm, or /model fallbacks <ids> --confirm', '/model');
-}
+  // Bare `/model <name>` — any first token that is not a recognised
+    // subcommand is a model id the operator wants to switch to. Picking
+    // a model is not destructive; the ceremony around `set --confirm`
+    // existed for no gain and is why this composer path is unused in
+    // favour of the sheet. Hermes still gets `set --confirm` working
+    // unchanged above, so nothing that scripts it breaks.
+    const bareModelId = args.find((arg) => !arg.startsWith('--'));
+    if (bareModelId) {
+      return applyModelIdDirect(bareModelId, context);
+    }
+
+    return textResult('Usage: /model, /model auth, /model routing, /model agent <id>, /model set <model-id> --confirm, /model set-agent <agent-id> <model-id> --confirm, or /model fallbacks <ids> --confirm', '/model');
+  }
+
+  /**
+   * Apply a model id the operator typed without the `set --confirm` ceremony.
+   * Hermes / Gate (which exposes `setModelOverride`) goes through the same
+   * per-request profile override the picker uses; OpenClaw (no override) goes
+   * straight through `config.patch` with the standard primary-model patch.
+   */
+  async function applyModelIdDirect(modelId: string, context: SlashCommandContext): Promise<SlashCommandResult> {
+    if (context.setModelOverride) {
+      await context.setModelOverride(modelId);
+      return textResult(
+        `Model override set to ${modelId}.\nThe current session will reopen so the next turn actually runs on this model.`,
+        '/model',
+      );
+    }
+
+    const snapshot = await readConfigSnapshot(context);
+    const baseHash = readBaseHash(snapshot);
+    if (!baseHash) return textResult('Could not read the config base hash. Run /model and retry.', '/model');
+
+    const patch = { agents: { defaults: { model: { primary: modelId } } } };
+    const result = await context.gatewayRequest('config.patch', {
+      raw: JSON.stringify(patch, null, 2),
+      baseHash,
+    });
+    return textResult(`Default model updated to ${modelId}\n${formatConfigWriteResult(result)}`, '/model', compactJson(result));
+  }
 
 async function runConfigCommand(args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
   const subcommand = args[0]?.toLowerCase();
