@@ -61,6 +61,6 @@ describe('roster render cost', () => {
     expect(src).not.toMatch(/visibleRows\.map\(\(row\) => \{/);
     expect(src).not.toMatch(/visibleGroups\.map\(\(group\) => \(/);
     // Only the windowed renderItem returns a ListRow for a row/group.
-    expect(src).toMatch(/const renderItem = \(\{ item \}: \{ item: RosterItem \}\) =>/);
+    expect(src).toMatch(/const renderItem = useCallback\(\s*\(\{ item \}: \{ item: RosterItem \}\) =>/);
   });
 });

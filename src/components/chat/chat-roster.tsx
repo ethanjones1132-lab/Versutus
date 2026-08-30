@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useState, useCallback } from 'react';
 import { FlatList, Platform, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -99,6 +99,59 @@ function ChatRosterImpl({
       }
     : undefined;
 
+  const renderItem = useCallback(
+    ({ item }: { item: RosterItem }) => {
+      if (item.kind === 'group') {
+        return (
+          <View>
+            {item.showSectionLabel ? (
+              <Text variant="caption" color="tertiary" style={styles.sectionLabel}>
+                GROUP ROOMS
+              </Text>
+            ) : null}
+            <ListRow
+              key={item.group.id}
+              title={item.group.name}
+              subtitle={groupMemberLine(item.group)}
+              leading={<BotAvatar botId={item.group.id} />}
+              onPress={onSelectGroup ? () => onSelectGroup(item.group) : undefined}
+              onLongPress={onGroupDetail ? () => onGroupDetail(item.group) : undefined}
+              style={styles.row}
+            />
+          </View>
+        );
+      }
+      const row = item.row;
+      if (row.kind === 'configurable') {
+        return (
+          <ListRow
+            key="configurable"
+            title="Chat"
+            subtitle="Model, sessions, and backend"
+            icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
+            onPress={onSelectConfigurable}
+            style={styles.row}
+          />
+        );
+      }
+      return (
+        <ListRow
+          key={row.bot.id}
+          title={row.bot.displayName}
+          subtitle={botRowSubtitle(row.bot)}
+          leading={<BotAvatar botId={row.bot.id} />}
+          onPress={rosterBotTap(row.bot, {
+            onChat: () => onSelectBot(row.bot),
+            onDetail: onBotDetail ? () => onBotDetail(row.bot) : undefined,
+          })}
+          onLongPress={onBotDetail ? () => onBotDetail(row.bot) : undefined}
+          style={styles.row}
+        />
+      );
+    },
+    [onSelectGroup, onGroupDetail, onSelectConfigurable, onSelectBot, onBotDetail, rosterBotTap],
+  );
+
   if (loading && rows.length <= 1) {
     return (
       <View style={styles.pad}>
@@ -148,56 +201,6 @@ function ChatRosterImpl({
       }),
     ),
   ];
-
-  const renderItem = ({ item }: { item: RosterItem }) => {
-    if (item.kind === 'group') {
-      return (
-        <View>
-          {item.showSectionLabel ? (
-            <Text variant="caption" color="tertiary" style={styles.sectionLabel}>
-              GROUP ROOMS
-            </Text>
-          ) : null}
-          <ListRow
-            key={item.group.id}
-            title={item.group.name}
-            subtitle={groupMemberLine(item.group)}
-            leading={<BotAvatar botId={item.group.id} />}
-            onPress={onSelectGroup ? () => onSelectGroup(item.group) : undefined}
-            onLongPress={onGroupDetail ? () => onGroupDetail(item.group) : undefined}
-            style={styles.row}
-          />
-        </View>
-      );
-    }
-    const row = item.row;
-    if (row.kind === 'configurable') {
-      return (
-        <ListRow
-          key="configurable"
-          title="Chat"
-          subtitle="Model, sessions, and backend"
-          icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
-          onPress={onSelectConfigurable}
-          style={styles.row}
-        />
-      );
-    }
-    return (
-      <ListRow
-        key={row.bot.id}
-        title={row.bot.displayName}
-        subtitle={botRowSubtitle(row.bot)}
-        leading={<BotAvatar botId={row.bot.id} />}
-        onPress={rosterBotTap(row.bot, {
-          onChat: () => onSelectBot(row.bot),
-          onDetail: onBotDetail ? () => onBotDetail(row.bot) : undefined,
-        })}
-        onLongPress={onBotDetail ? () => onBotDetail(row.bot) : undefined}
-        style={styles.row}
-      />
-    );
-  };
 
   return (
     <FlatList<RosterItem>
