@@ -18,6 +18,7 @@ export function formatCost(usd: number): string {
 
 /** Relative timestamp: "just now", "4m ago", "2h ago", "3d ago", else short date. */
 export function formatRelativeTime(timestamp: number): string {
+  if (!Number.isFinite(timestamp)) return 'just now';
   const ms = timestamp > 1_000_000_000_000 ? timestamp : timestamp * 1000;
   const delta = Date.now() - ms;
   if (delta < 45_000) return 'just now';
