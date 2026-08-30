@@ -22,11 +22,13 @@ export function autoRetryDelayMs(
   consecutiveFailures: number,
   floorMs: number = AUTO_RETRY_BASE_DELAY_MS,
 ): number {
+  const effectiveFloorMs = Number.isFinite(floorMs) ? floorMs : AUTO_RETRY_BASE_DELAY_MS;
+  const effectiveConsecutiveFailures = Number.isFinite(consecutiveFailures) ? consecutiveFailures : 0;
   const rung = Math.min(
     AUTO_RETRY_MAX_DELAY_MS,
-    AUTO_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, Math.floor(consecutiveFailures)),
+    AUTO_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, Math.floor(effectiveConsecutiveFailures)),
   );
-  return Math.min(AUTO_RETRY_MAX_DELAY_MS, Math.max(rung, floorMs));
+  return Math.min(AUTO_RETRY_MAX_DELAY_MS, Math.max(rung, effectiveFloorMs));
 }
 
 /** What the UI needs to know about ONE pending automatic retry. */
