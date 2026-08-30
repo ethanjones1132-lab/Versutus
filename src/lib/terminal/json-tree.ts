@@ -72,7 +72,7 @@ export function jsonExitSignal(value: unknown): JsonExitSignal {
 
   const exitCode = record.exitCode ?? record.exit_code ?? record.code;
   const numericExit = typeof exitCode === 'number' ? exitCode : typeof exitCode === 'string' ? Number(exitCode) : undefined;
-  if (numericExit !== undefined && !Number.isNaN(numericExit) && numericExit !== 0) {
+  if (numericExit !== undefined && Number.isFinite(numericExit) && numericExit !== 0) {
     return { failed: true, label: `exit ${numericExit}` };
   }
 
