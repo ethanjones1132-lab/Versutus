@@ -1527,6 +1527,8 @@ function formatRegisteredCommandResult(command: GatewayCommand, result: unknown)
       return formatGatewayStatus(result);
     case 'sessions':
       return formatSessions(result);
+    case 'bots':
+      return formatBots(result);
     case 'channels':
       return formatChannels(result);
     case 'usage':
@@ -1697,6 +1699,15 @@ function formatAgents(result: unknown): string {
   if (!agents?.length) return 'Agents: none reported';
   const lines = agents.slice(0, 10).map((item) => describeNamedRecord(item, ['name', 'id', 'agentId', 'label'], ['status', 'state', 'model', 'provider']));
   return [`Agents: ${agents.length}`, ...lines].join('\n');
+}
+
+function formatBots(result: unknown): string {
+  const bots = readCollection(result, ['data', 'bots', 'items']);
+  if (!bots?.length) return 'Bots: none reported';
+  const lines = bots.slice(0, 10).map((item) =>
+    describeNamedRecord(item, ['displayName', 'name', 'id', 'title'], ['routable', 'routingIssue', 'status', 'state']),
+  );
+  return [`Bots: ${bots.length}`, ...lines].join('\n');
 }
 
 function formatArtifacts(result: unknown): string {
