@@ -485,7 +485,7 @@ export async function executeGatewaySlashCommand(
       const level = sub;
       const limit = clampNumber(Number(args[1]) || 20, 5, 100, 20);
       const result = await context.gatewayRequest('logs.tail', { level, limit }).catch(e => ({ error: String(e) }));
-      return textResult(`${level} logs`, `/logs ${level}`, compactJson(result));
+      return directReadResult('logs.tail', `${level} logs`, `/logs ${level}`, result);
     }
     const limit = clampNumber(Number(args[0]), 10, 120, 40);
     return runRegistryCommand('logs', context, { limit, maxBytes: 16000 });
@@ -1035,19 +1035,19 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
   if (sub === 'get') {
     if (!id) return textResult('Usage: /session get <session-id>', '/session get');
     const result = await context.gatewayRequest('session.get', { sessionId: id }).catch(e => ({ error: String(e) }));
-    return sessionReadResult('session.get', `Session ${id}`, `/session get ${id}`, result);
+    return directReadResult('session.get', `Session ${id}`, `/session get ${id}`, result);
   }
 
   if (sub === 'messages') {
     if (!id) return textResult('Usage: /session messages <session-id>', '/session messages');
     const result = await context.gatewayRequest('session.messages', { sessionId: id, limit: 50 }).catch(e => ({ error: String(e) }));
-    return sessionReadResult('session.messages', `Messages for session ${id}`, `/session messages ${id}`, result);
+    return directReadResult('session.messages', `Messages for session ${id}`, `/session messages ${id}`, result);
   }
 
   if (sub === 'usage') {
     const params = id ? { sessionId: id } : {};
     const result = await context.gatewayRequest('session.usage', params).catch(e => ({ error: String(e) }));
-    return sessionReadResult('session.usage', 'Session usage', '/session usage', result);
+    return directReadResult('session.usage', 'Session usage', '/session usage', result);
   }
 
   // Dangerous actions - will be intercepted by confirmation in provider if danger=write
@@ -1106,18 +1106,27 @@ function sessionActionResult(action: 'abort' | 'compact', result: unknown): Slas
 }
 
 /**
- * A session read whose RPC rejected must carry the failure — with the
- * actionable METHOD_GUIDANCE next step when the method has one and the
- * error does not already name it — because printing the success title
- * over a thrown call is how the operator ends up believing a session
- * record was read. A resolved read keeps today's title and Raw.
+ * A direct read/report whose RPC rejected must carry the failure — with
+ * the actionable METHOD_GUIDANCE next step when the method has one and
+ * the error does not already name it — because printing the success
+ * title over a thrown call is how the operator ends up believing the
+ * read happened. failurePhrase overrides the derived `${title} could
+ * not be read` for actions whose title is already a past-tense sentence
+ * ("Device token repair attempted"). A resolved read keeps today's
+ * title and Raw.
  */
-function sessionReadResult(method: string, title: string, command: string, result: unknown): SlashCommandResult {
+function directReadResult(
+  method: string,
+  title: string,
+  command: string,
+  result: unknown,
+  failurePhrase?: string,
+): SlashCommandResult {
   const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
   if (error) {
     const guidance = METHOD_GUIDANCE[method];
     const detail = guidance && !error.includes(guidance) ? `${error} ${guidance}` : error;
-    return textResult(`${title} could not be read: ${detail}`, command, compactJson(result));
+    return textResult(`${failurePhrase ?? `${title} could not be read`}: ${detail}`, command, compactJson(result));
   }
   return textResult(title, command, compactJson(result));
 }
@@ -1202,7 +1211,7 @@ async function runApprovalsDevicesCommand(commandName: string, args: string[], c
     const sub = (args[0] || '').toLowerCase();
     if (sub === 'repair') {
       const result = await context.gatewayRequest('device.repair', {}).catch(e => ({ error: String(e) }));
-      return textResult('Device token repair attempted', '/device repair', compactJson(result));
+      return directReadResult('device.repair', 'Device token repair attempted', '/device repair', result, 'Device token repair failed');
     }
     if (sub === 'revoke') {
       // Forward into the registry entry (dashboard.ts device-revoke, danger
@@ -1212,7 +1221,7 @@ async function runApprovalsDevicesCommand(commandName: string, args: string[], c
       return runRegistryCommand('device-revoke', context);
     }
     const result = await context.gatewayRequest('device.info', {}).catch(e => ({ error: String(e) }));
-    return textResult('Device info', '/device', compactJson(result));
+    return directReadResult('device.info', 'Device info', '/device', result);
   }
 
   return textResult('Unknown approvals/devices command', commandName);
@@ -1347,14 +1356,14 @@ async function runVoiceCommand(commandName: string, args: string[], context: Sla
     const sub = (args[0] || '').toLowerCase();
     if (sub === 'catalog' || sub === 'config' || sub === 'mode') {
       const result = await context.gatewayRequest(`talk.${sub}`, {}).catch(e => ({ error: String(e) }));
-      return textResult(`Talk ${sub}`, `/talk ${sub}`, compactJson(result));
+      return directReadResult(`talk.${sub}`, `Talk ${sub}`, `/talk ${sub}`, result);
     }
     return textResult('Usage: /talk catalog | config | mode', '/talk');
   }
 
   if (commandName === '/voicewake') {
     const result = await context.gatewayRequest('voicewake.status', {}).catch(e => ({ error: String(e) }));
-    return textResult('VoiceWake status', '/voicewake', compactJson(result));
+    return directReadResult('voicewake.status', 'VoiceWake status', '/voicewake', result);
   }
 
   return textResult('Voice/Talk commands are read-first only at this stage.', commandName);
