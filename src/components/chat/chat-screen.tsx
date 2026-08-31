@@ -413,7 +413,15 @@ export function ChatScreen() {
   const queuedCount = messages.filter((message) => message.queued).length;
   const showPairingSheet = status === 'pairing' && !!deviceId && dismissedPairingKey !== pairingKey;
   const slashSuggestions = draft.trimStart().startsWith('/')
-    ? getSlashCommandSuggestions(draft, activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands)
+    ? getSlashCommandSuggestions(
+        draft,
+        activeHello,
+        recentCommands,
+        capabilitySnapshot.methods,
+        dynamicCommands,
+        12,
+        skillsState.skills,
+      )
     : [];
   // Stable across streamed frames (icons + drafts never change) so the memoized
   // ChatComposer short-circuits when only `messages` changed.
@@ -437,8 +445,9 @@ export function ChatScreen() {
         capabilitySnapshot.methods,
         dynamicCommands,
         Number.POSITIVE_INFINITY,
+        skillsState.skills,
       ),
-    [activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands],
+    [activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands, skillsState.skills],
   );
 
   // The open config sheet's session list re-renders its visible rows whenever

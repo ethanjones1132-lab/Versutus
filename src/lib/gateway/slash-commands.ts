@@ -14,6 +14,7 @@ import {
   totalUsage,
 } from '@/lib/gateway/session-analytics';
 import type { RunOutcome } from '@/lib/gateway/runs';
+import type { Skill } from '@/lib/gateway/skills';
 import type { ChatMessage, GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
 import type { GatewayCapabilityCommand } from '@/lib/portal/manifest';
 
@@ -201,6 +202,7 @@ export function getSlashCommandSuggestions(
    * commands is the exact problem it exists to solve.
    */
   limit: number = 12,
+  skills: Skill[] = [],
 ): SlashCommandSuggestion[] {
   const needle = input.trimStart().toLowerCase();
 
@@ -258,7 +260,24 @@ export function getSlashCommandSuggestions(
       unavailable: false,
     }));
 
-  let suggestions = [...recentSuggestions, ...localWithMeta, ...registrySuggestions, ...dynamicSuggestions];
+  const skillSuggestions: SlashCommandSuggestion[] = skills
+    .map((skill) => ({
+      value: `/${skill.name}`,
+      label: `/${skill.name}`,
+      description: skill.description || 'Skill',
+      danger: 'local' as const,
+      family: 'Skill',
+      unavailable: false,
+    }))
+    .filter((item) => !builtInSlashes.has(item.value));
+
+  let suggestions = [
+    ...recentSuggestions,
+    ...localWithMeta,
+    ...registrySuggestions,
+    ...dynamicSuggestions,
+    ...skillSuggestions,
+  ];
 
   if (needle) {
     // Simple fuzzy-ish filter: startsWith or includes
