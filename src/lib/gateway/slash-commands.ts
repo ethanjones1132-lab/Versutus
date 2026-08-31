@@ -17,8 +17,12 @@ import type { RunOutcome } from '@/lib/gateway/runs';
 import { matchSkillSlash, type Skill } from '@/lib/gateway/skills';
 import type { ChatMessage, GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
 import type { GatewayCapabilityCommand } from '@/lib/portal/manifest';
+import { METHOD_GUIDANCE } from '@/lib/gateway/rpc-routes';
 
 const UNSUPPORTED_NOTE = 'Not offered by this gateway';
+
+/** The snapshot's generic reason for a method this gateway does not dispatch (dashboard.ts:1131). */
+const GENERIC_NOT_DISPATCHED = 'not dispatched by this gateway';
 
 export type SlashCommandSuggestion = {
   value: string;
@@ -508,10 +512,27 @@ function blockUnsupportedCommand(
   const entry = methods[id];
   if (!entry || entry.available !== false) return null;
   const reason = entry.reason ?? UNSUPPORTED_NOTE;
+  const guidance = blockedMethodGuidance(id, reason);
   return textResult(
-    `${commandName} is not available on this gateway (${reason}). Use /help to see what is.`,
+    guidance
+      ? `${commandName} is not available on this gateway. ${guidance} Use /help to see what is.`
+      : `${commandName} is not available on this gateway (${reason}). Use /help to see what is.`,
     commandName,
   );
+}
+
+/**
+ * A blocked command whose snapshot entry carries the generic "not dispatched
+ * by this gateway" reason (dashboard.ts:1131) gets the actionable next step
+ * METHOD_GUIDANCE already holds for its method (rpc-routes.ts:49-96) — the
+ * generic string is a dead end and the guidance was written for exactly these
+ * route-less methods. Undefined when no guidance applies, keeping the old reply.
+ */
+function blockedMethodGuidance(id: string, reason: string | undefined): string | undefined {
+  if (reason !== GENERIC_NOT_DISPATCHED) return undefined;
+  const command = GATEWAY_COMMANDS.find((c) => c.id === id);
+  const method = command?.method;
+  return method ? METHOD_GUIDANCE[method] : undefined;
 }
 
 async function runTaskCommand(argText: string, context: SlashCommandContext): Promise<SlashCommandResult> {
@@ -920,13 +941,13 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
   if (sub === 'abort') {
     const params = id ? { sessionId: id } : {};
     const result = await context.gatewayRequest('session.abort', params).catch(e => ({ error: String(e) }));
-    return textResult('Session abort requested', '/session abort', compactJson(result));
+    return sessionActionResult('abort', result);
   }
 
   if (sub === 'compact') {
     const params = id ? { sessionId: id } : {};
     const result = await context.gatewayRequest('session.compact', params).catch(e => ({ error: String(e) }));
-    return textResult('Session compact requested', '/session compact', compactJson(result));
+    return sessionActionResult('compact', result);
   }
 
   if (sub === 'restore') {
@@ -939,6 +960,25 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
     'Usage: /session current | list | get <id> | messages <id> | usage [id] | abort [id] | compact [id] | restore <id>',
     '/session'
   );
+}
+
+/**
+ * A session action whose RPC rejected must carry the failure — with the
+ * actionable METHOD_GUIDANCE next step when the error does not already name
+ * it — because printing the success copy over a thrown call is how the
+ * operator ends up believing a compaction happened. A resolved RPC keeps the
+ * success copy, so a gateway that does dispatch `session.compact` or
+ * `session.abort` behaves exactly as before.
+ */
+function sessionActionResult(action: 'abort' | 'compact', result: unknown): SlashCommandResult {
+  const title = `/session ${action}`;
+  const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
+  if (error) {
+    const guidance = METHOD_GUIDANCE[`session.${action}`];
+    const detail = guidance && !error.includes(guidance) ? `${error} ${guidance}` : error;
+    return textResult(`Session ${action} could not be run: ${detail}`, title);
+  }
+  return textResult(`Session ${action} requested`, title, compactJson(result));
 }
 
 async function runChannelCommand(args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
