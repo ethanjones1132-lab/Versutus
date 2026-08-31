@@ -1132,7 +1132,14 @@ async function runApprovalsDevicesCommand(commandName: string, args: string[], c
   if (commandName === '/approval') {
     const action = (args[0] || '').toLowerCase();
     const id = args[1];
-    if (!id) return textResult(`Usage: /approval ${action} <id>`, `/approval ${action}`);
+    // A blank or unknown action must answer with the usage naming both
+    // actions — never interpolate the blank (that rendered a double space
+    // and taught nobody approve/deny) and never fall through to the method
+    // ternary, which would silently DENY an approval the operator meant
+    // something else by.
+    if ((action !== 'approve' && action !== 'deny') || !id) {
+      return textResult('Usage: /approval approve <id> | deny <id>', '/approval');
+    }
     const method = action === 'approve' ? 'approval.approve' : 'approval.deny';
     const result = await context.gatewayRequest(method, { id }).catch(e => ({ error: String(e) }));
     return textResult(`Approval ${action} for ${id}`, `/approval ${action} ${id}`, compactJson(result));
