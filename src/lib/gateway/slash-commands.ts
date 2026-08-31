@@ -15,6 +15,7 @@ import {
 } from '@/lib/gateway/session-analytics';
 import type { RunOutcome } from '@/lib/gateway/runs';
 import { matchSkillSlash, skillsReadFromUnknown, type Skill } from '@/lib/gateway/skills';
+import { toolsetsReadFromUnknown } from '@/lib/gateway/toolsets';
 import type { ChatMessage, GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
 import type { GatewayCapabilityCommand } from '@/lib/portal/manifest';
 import { METHOD_GUIDANCE } from '@/lib/gateway/rpc-routes';
@@ -1149,7 +1150,54 @@ async function runAdvancedFamilyCommand(commandName: string, args: string[], con
 
   const params = sub ? { id: sub } : {};
   const result = await context.gatewayRequest(method, params).catch(e => ({ error: String(e) }));
+  return familyCommandResult(commandName, title, method, sub, result);
+}
+
+/**
+ * Family reads must answer in the bubble text, not only in Raw: a list
+ * payload (bare form) renders its formatted rows, and a caught RPC failure
+ * carries the error with the METHOD_GUIDANCE next step when one exists —
+ * the same honesty rule as sessionActionResult. A resolved single-record
+ * read (sub form) keeps the legacy title-as-text shape.
+ */
+function familyCommandResult(
+  commandName: string,
+  title: string,
+  method: string,
+  sub: string,
+  result: unknown,
+): SlashCommandResult {
+  const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
+  if (error) {
+    const guidance = METHOD_GUIDANCE[method];
+    const detail = guidance && !error.includes(guidance) ? `${error} ${guidance}` : error;
+    return textResult(`${title} could not be read: ${detail}`, commandName, compactJson(result));
+  }
+  if (!sub) {
+    return textResult(formatFamilyList(commandName, title, result), commandName, compactJson(result));
+  }
   return textResult(title, commandName, compactJson(result));
+}
+
+function formatFamilyList(commandName: string, title: string, result: unknown): string {
+  switch (commandName) {
+    case '/tools':
+      return formatTools(result);
+    case '/skills':
+      return formatSkills(result);
+    case '/cron':
+      return formatCron(result);
+    case '/plugins':
+      return formatPlugins(result);
+    case '/env':
+      return formatEnvironments(result);
+    case '/agents':
+      return formatAgents(result);
+    case '/artifacts':
+      return formatArtifacts(result);
+    default:
+      return title;
+  }
 }
 
 async function runVoiceCommand(commandName: string, args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
@@ -1449,6 +1497,31 @@ function formatPlugins(result: unknown): string {
   if (!plugins?.length) return 'Plugins: none reported';
   const lines = plugins.slice(0, 10).map((item) => describeNamedRecord(item, ['name', 'id', 'pluginId', 'title'], ['enabled', 'status', 'state', 'version']));
   return [`Plugins: ${plugins.length}`, ...lines].join('\n');
+}
+
+function formatTools(result: unknown): string {
+  const read = toolsetsReadFromUnknown(result);
+  if (!read.ok) return summarizeRecord('Tools', result);
+  if (read.toolsets.length === 0) return 'Tools: none reported';
+  const lines = read.toolsets.slice(0, 10).map((toolset) => {
+    const description = toolset.description ? `: ${truncateLine(toolset.description, 90)}` : '';
+    return `- ${toolset.name}${description}`;
+  });
+  return [`Toolsets: ${read.toolsets.length}`, ...lines].join('\n');
+}
+
+function formatAgents(result: unknown): string {
+  const agents = readCollection(result, ['agents', 'items', 'data']);
+  if (!agents?.length) return 'Agents: none reported';
+  const lines = agents.slice(0, 10).map((item) => describeNamedRecord(item, ['name', 'id', 'agentId', 'label'], ['status', 'state', 'model', 'provider']));
+  return [`Agents: ${agents.length}`, ...lines].join('\n');
+}
+
+function formatArtifacts(result: unknown): string {
+  const artifacts = readCollection(result, ['artifacts', 'items', 'data', 'files']);
+  if (!artifacts?.length) return 'Artifacts: none reported';
+  const lines = artifacts.slice(0, 10).map((item) => describeNamedRecord(item, ['name', 'id', 'path', 'fileName'], ['size', 'bytes', 'kind', 'updatedAt']));
+  return [`Artifacts: ${artifacts.length}`, ...lines].join('\n');
 }
 
 function formatApprovals(result: unknown): string {
