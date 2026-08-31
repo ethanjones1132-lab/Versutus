@@ -1186,7 +1186,17 @@ async function runApprovalsDevicesCommand(commandName: string, args: string[], c
     const sub = (args[0] || '').toLowerCase();
     if (sub === 'pending') {
       const result = await context.gatewayRequest('approvals.pending', {}).catch(e => ({ error: String(e) }));
-      return textResult('Pending approvals', '/approvals pending', compactJson(result));
+      // A rejected read must carry the failure (with the METHOD_GUIDANCE next
+      // step when the error does not already name it) — printing the bare
+      // title over a thrown call is how the operator believes a pending list
+      // was read. A resolved read renders the list into the text.
+      const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
+      if (error) {
+        const guidance = METHOD_GUIDANCE['approvals.pending'];
+        const detail = guidance && !error.includes(guidance) ? `${error} ${guidance}` : error;
+        return textResult(`Pending approvals could not be read: ${detail}`, '/approvals pending', compactJson(result));
+      }
+      return textResult(formatApprovalsPending(result), '/approvals pending', compactJson(result));
     }
     return runRegistryCommand('approvals', context);
   }
@@ -1708,6 +1718,15 @@ function formatApprovals(result: unknown): string {
   if (path) lines.push(`Path: ${path}`);
   if (hash) lines.push(`Hash: ${hash.slice(0, 12)}`);
   return lines.length > 1 ? lines.join('\n') : summarizeRecord('Approvals', result);
+}
+
+function formatApprovalsPending(result: unknown): string {
+  const pending = readCollection(result, ['pending', 'requests', 'items']);
+  if (!pending?.length) return 'Pending approvals: none reported';
+  const lines = pending.slice(0, 10).map((item) =>
+    describeNamedRecord(item, ['approvalId', 'id', 'name', 'title'], ['type', 'decision', 'status', 'state']),
+  );
+  return [`Pending approvals: ${pending.length}`, ...lines].join('\n');
 }
 
 function formatMemory(result: unknown): string {
