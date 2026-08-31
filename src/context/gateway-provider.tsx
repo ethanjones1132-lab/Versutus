@@ -58,7 +58,7 @@ import {
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
 import { formatRunFailure, modelSubstitutionNote, shouldShowModelSubstitution } from '@/lib/gateway/run-failures';
 import { resolveDefaultBackend } from '@/lib/gateway/backend-defaults';
-import { applyModelOverride, effectiveModel, resolveSendModel, shouldReleaseSessionForModel, withSelectedModel } from '@/lib/gateway/model-selection';
+import { applyModelOverride, effectiveModel, modelSwitchAnnouncement, resolveSendModel, shouldReleaseSessionForModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   categorizeProbeError,
   GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
@@ -2584,8 +2584,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
       // anything after turn one.
       // Pinning the client is not enough: connect copies stored onto live
       // before disconnect can rewrite it. Same persist as createNewSession.
+      const previousModel = effectiveModel(activeGateway, selectedBackendId, selectedBotId);
       const released = shouldReleaseSessionForModel({
-        previous: effectiveModel(activeGateway, selectedBackendId, selectedBotId),
+        previous: previousModel,
         next: modelId,
         hasSession: Boolean(sessionIdRef.current),
       });
@@ -2593,7 +2594,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
       if (released) {
         sessionIdRef.current = undefined;
         setCurrentSessionId(undefined);
-        setMessages([]);
+        setMessages(
+          appendSystemNote([], modelSwitchAnnouncement({ previous: previousModel ?? modelId, next: modelId })),
+        );
         const client = clientRef.current ?? { setSessionId: () => undefined };
         const pinned = pinLiveSession({
           client,

@@ -145,6 +145,11 @@ export function shouldReleaseSessionForModel(input: {
   return previous.toLowerCase() !== next.toLowerCase();
 }
 
+/** System line for a transcript emptied because the session had to be released. */
+export function modelSwitchAnnouncement(input: { previous: string; next: string }): string {
+  return `New session opened. Was ${input.previous}, now ${input.next}.`;
+}
+
 /**
  * Apply a model pick the way the picker and `/model set` both must.
  *
