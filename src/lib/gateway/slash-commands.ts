@@ -183,6 +183,14 @@ const LOCAL_SUGGESTIONS: SlashCommandSuggestion[] = [
     family: 'Chat',
     unavailable: false,
   },
+  {
+    value: '/compress',
+    label: '/compress',
+    description: 'Show conversation size (compaction is local only)',
+    danger: 'local',
+    family: 'Chat',
+    unavailable: false,
+  },
 ];
 
 export function isSlashCommandInput(text: string): boolean {
@@ -363,6 +371,10 @@ export async function executeGatewaySlashCommand(
 
   if (commandName === '/context') {
     return textResult(formatContextSummary(context.messages ?? []), '/context');
+  }
+
+  if (commandName === '/compress') {
+    return textResult(formatCompressSummary(context.messages ?? []), '/compress');
   }
 
   if (commandName === '/reset') {
@@ -1457,6 +1469,21 @@ function formatContextSummary(messages: readonly ChatMessage[]): string {
     `User: ${user}`,
     `Assistant: ${assistant}`,
     `System: ${system}`,
+  ].join('\n');
+}
+
+/**
+ * Compaction is not offered over the Hermes API server — `session.compact`
+ * is guidance-only (rpc-routes.ts:88). Report the conversation size using the
+ * same summary shape as `/context`, then name the supported next steps so the
+ * operator is never stranded by a command that advertises compaction.
+ */
+function formatCompressSummary(messages: readonly ChatMessage[]): string {
+  return [
+    formatContextSummary(messages),
+    '',
+    'Compaction is not offered over the API.',
+    'Start a new session with /reset, or pick a different session from the session selector.',
   ].join('\n');
 }
 
