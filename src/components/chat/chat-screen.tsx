@@ -553,9 +553,9 @@ export function ChatScreen() {
     if (!text.trim()) return;
     setDraft('');
     pinnedRef.current = true;
-    await sendChatInput(text);
+    await sendChatInput(text, { skills: skillsState.skills });
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
-  }, [draft, sendChatInput, setDraft]);
+  }, [draft, sendChatInput, setDraft, skillsState.skills]);
 
   const handleResumeMessage = useCallback(
     (message: ChatMessage) => {
@@ -563,10 +563,10 @@ export function ChatScreen() {
       const idx = current.findIndex((m) => m.id === message.id);
       const previousUser = current.slice(0, idx).reverse().find((m) => m.role === 'user');
       if (previousUser?.text.trim()) {
-        void sendChatInput(previousUser.text.trim());
+        void sendChatInput(previousUser.text.trim(), { skills: skillsState.skills });
       }
     },
-    [sendChatInput],
+    [sendChatInput, skillsState.skills],
   );
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {

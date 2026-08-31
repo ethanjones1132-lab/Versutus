@@ -14,7 +14,7 @@ import {
   totalUsage,
 } from '@/lib/gateway/session-analytics';
 import type { RunOutcome } from '@/lib/gateway/runs';
-import type { Skill } from '@/lib/gateway/skills';
+import { matchSkillSlash, type Skill } from '@/lib/gateway/skills';
 import type { ChatMessage, GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
 import type { GatewayCapabilityCommand } from '@/lib/portal/manifest';
 
@@ -183,6 +183,32 @@ const LOCAL_SUGGESTIONS: SlashCommandSuggestion[] = [
 
 export function isSlashCommandInput(text: string): boolean {
   return text.trimStart().startsWith('/');
+}
+
+function firstSlashName(slash: string): string {
+  return slash.trim().split(/\s+/)[0]?.replace(/^\//, '').toLowerCase() ?? '';
+}
+
+const RESERVED_SLASH_NAMES = new Set<string>(
+  [
+    ...LOCAL_SUGGESTIONS.map((item) => firstSlashName(item.value)),
+    ...GATEWAY_COMMANDS.map((command) => (command.slash ? firstSlashName(command.slash) : '')),
+  ].filter(Boolean),
+);
+
+export function isReservedSlashName(name: string): boolean {
+  return RESERVED_SLASH_NAMES.has(name.trim().toLowerCase());
+}
+
+/**
+ * Hermes skill commands are `/name instruction`. Versutus currently swallows
+ * every slash as a client command, so a known skill slash has to skip the
+ * executor and go out as a user turn.
+ */
+export function shouldPassthroughSkillSlash(input: string, skills: Skill[]): boolean {
+  const match = matchSkillSlash(input, skills);
+  if (!match) return false;
+  return !isReservedSlashName(match.skill.name);
 }
 
 export function getSlashCommandSuggestions(

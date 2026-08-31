@@ -67,7 +67,8 @@ import {
   probeGatewayUrl,
   probeHighPriorityCandidates,
 } from '@/lib/gateway/probe';
-import { isSlashCommandInput } from '@/lib/gateway/slash-commands';
+import { isSlashCommandInput, shouldPassthroughSkillSlash } from '@/lib/gateway/slash-commands';
+import type { Skill } from '@/lib/gateway/skills';
 import { findConfirmableSlash } from '@/lib/gateway/command-match';
 import { GATEWAY_COMMANDS, buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
 import { manifestUrlForGateway } from '@/lib/gateway/gateway-origin';
@@ -244,7 +245,7 @@ type GatewayContextValue = {
   disconnectGateway: () => void;
   sendChatInput: (
     text: string,
-    options?: { fromQueue?: boolean; messageId?: string },
+    options?: { fromQueue?: boolean; messageId?: string; skills?: Skill[] },
   ) => Promise<void>;
   stopStreaming: () => Promise<void>;
   reloadHistory: () => Promise<void>;
@@ -1990,7 +1991,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const sendChatInput = useCallback(
     async (
       text: string,
-      options?: { fromQueue?: boolean; messageId?: string },
+      options?: { fromQueue?: boolean; messageId?: string; skills?: Skill[] },
     ) => {
       const trimmed = text.trim();
       if (!trimmed) return;
@@ -2005,7 +2006,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      if (!isSlashCommandInput(trimmed)) {
+      if (!isSlashCommandInput(trimmed) || shouldPassthroughSkillSlash(trimmed, options?.skills ?? [])) {
         await sendMessage(trimmed, options?.messageId);
         return;
       }

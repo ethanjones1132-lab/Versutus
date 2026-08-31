@@ -85,3 +85,23 @@ export function skillsListCopy(state: SkillsState): string | undefined {
 
 /** Max height for the expanded skills list so a long catalog scrolls in place. */
 export const SKILLS_PANE_MAX_HEIGHT = 280;
+
+/**
+ * Hermes treats a skill as `/name` plus the rest of the line as instruction.
+ * Returns null when the input is not a slash, or the first token is not a
+ * fetched skill name.
+ */
+export function matchSkillSlash(
+  input: string,
+  skills: Skill[],
+): { skill: Skill; instruction: string } | null {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith('/')) return null;
+  const rest = trimmed.slice(1);
+  const space = rest.search(/\s/);
+  const name = (space < 0 ? rest : rest.slice(0, space)).toLowerCase();
+  if (!name) return null;
+  const skill = skills.find((item) => item.name.toLowerCase() === name);
+  if (!skill) return null;
+  return { skill, instruction: space < 0 ? '' : rest.slice(space).trim() };
+}
