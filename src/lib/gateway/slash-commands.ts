@@ -1034,20 +1034,20 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
 
   if (sub === 'get') {
     if (!id) return textResult('Usage: /session get <session-id>', '/session get');
-    const result = await context.gatewayRequest('session.get', { sessionId: id }).catch(() => ({}));
-    return textResult(`Session ${id}`, `/session get ${id}`, compactJson(result));
+    const result = await context.gatewayRequest('session.get', { sessionId: id }).catch(e => ({ error: String(e) }));
+    return sessionReadResult('session.get', `Session ${id}`, `/session get ${id}`, result);
   }
 
   if (sub === 'messages') {
     if (!id) return textResult('Usage: /session messages <session-id>', '/session messages');
-    const result = await context.gatewayRequest('session.messages', { sessionId: id, limit: 50 }).catch(() => ({}));
-    return textResult(`Messages for session ${id}`, `/session messages ${id}`, compactJson(result));
+    const result = await context.gatewayRequest('session.messages', { sessionId: id, limit: 50 }).catch(e => ({ error: String(e) }));
+    return sessionReadResult('session.messages', `Messages for session ${id}`, `/session messages ${id}`, result);
   }
 
   if (sub === 'usage') {
     const params = id ? { sessionId: id } : {};
-    const result = await context.gatewayRequest('session.usage', params).catch(() => ({}));
-    return textResult('Session usage', '/session usage', compactJson(result));
+    const result = await context.gatewayRequest('session.usage', params).catch(e => ({ error: String(e) }));
+    return sessionReadResult('session.usage', 'Session usage', '/session usage', result);
   }
 
   // Dangerous actions - will be intercepted by confirmation in provider if danger=write
@@ -1103,6 +1103,23 @@ function sessionActionResult(action: 'abort' | 'compact', result: unknown): Slas
     return textResult(`Session ${action} could not be run: ${detail}`, title);
   }
   return textResult(`Session ${action} requested`, title, compactJson(result));
+}
+
+/**
+ * A session read whose RPC rejected must carry the failure — with the
+ * actionable METHOD_GUIDANCE next step when the method has one and the
+ * error does not already name it — because printing the success title
+ * over a thrown call is how the operator ends up believing a session
+ * record was read. A resolved read keeps today's title and Raw.
+ */
+function sessionReadResult(method: string, title: string, command: string, result: unknown): SlashCommandResult {
+  const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
+  if (error) {
+    const guidance = METHOD_GUIDANCE[method];
+    const detail = guidance && !error.includes(guidance) ? `${error} ${guidance}` : error;
+    return textResult(`${title} could not be read: ${detail}`, command, compactJson(result));
+  }
+  return textResult(title, command, compactJson(result));
 }
 
 async function runChannelCommand(args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
