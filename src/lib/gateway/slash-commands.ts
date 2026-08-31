@@ -80,6 +80,13 @@ type SlashCommandContext = {
   messages?: readonly ChatMessage[];
   /** Clears the thread and opens a fresh session. Used by `/reset`. */
   resetConversation?: () => void | Promise<void>;
+  /**
+   * Switches the open thread to the given session after `/session restore`
+   * read it successfully — the same switch the session selector performs.
+   * Absent on hosts that cannot switch; the reply then names what it did
+   * not do and points at the session selector.
+   */
+  restoreSession?: (sessionId: string) => void | Promise<void>;
 };
 
 type ConfigSnapshot = {
@@ -987,7 +994,18 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
   if (sub === 'restore') {
     if (!id) return textResult('Usage: /session restore <session-id>', '/session restore');
     const result = await context.gatewayRequest('session.restore', { sessionId: id }).catch(e => ({ error: String(e) }));
-    return textResult(`Restore session ${id}`, `/session restore ${id}`, compactJson(result));
+    if (isRecord(result) && typeof result.error === 'string') {
+      return textResult(`Session ${id} could not be restored: ${result.error}`, `/session restore ${id}`);
+    }
+    if (context.restoreSession) {
+      await context.restoreSession(id);
+      return textResult(`Session ${id} restored; the open thread now shows it`, `/session restore ${id}`, compactJson(result));
+    }
+    return textResult(
+      `Session ${id} record read; the open thread is not switched — use the session selector`,
+      `/session restore ${id}`,
+      compactJson(result),
+    );
   }
 
   return textResult(

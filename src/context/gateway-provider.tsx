@@ -525,6 +525,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const messagesRef = useRef<ChatMessage[]>([]);
   const createNewSessionRef = useRef<(title?: string) => Promise<void>>(async () => undefined);
+  const selectSessionRef = useRef<(sessionId: string) => void>(() => undefined);
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
@@ -2068,6 +2069,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
           dynamicCommands,
           messages: messagesRef.current,
           resetConversation: () => createNewSessionRef.current(),
+          restoreSession: (sessionId) => selectSessionRef.current(sessionId),
           runTask: (prompt, onEvent) =>
             runTask(prompt, onEvent, () => {
               streamedText = `${streamedText}\n⏳ Waiting for your approval…`.trim();
@@ -2639,6 +2641,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
       void reloadHistoryFor(gateway);
     }
   }, [closeSessionSelector, activeGateway, reloadHistoryFor]);
+
+  useEffect(() => {
+    selectSessionRef.current = selectSession;
+  }, [selectSession]);
 
   const listBots = useCallback(async (): Promise<PublicBot[]> => {
     const client = clientRef.current;
