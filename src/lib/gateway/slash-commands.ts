@@ -878,6 +878,27 @@ async function runConfigCommand(args: string[], context: SlashCommandContext): P
     return textResult('Last good config', '/config last-good', compactJson(result));
   }
 
+  // `/config patch {"key":"value"}` is a registered write command
+  // (dashboard.ts config-patch, danger write) but runConfigCommand used to
+  // swallow it into the path-read fallback below — "Config path not found:
+  // patch" — so the write could never happen from chat (and the failure
+  // text lied about what the operator asked). Forward it to the registry
+  // entry like `/agent status` does: the JSON body rides the RPC params,
+  // findConfirmableSlash's danger-write confirmation (already matched on
+  // the `/config patch` prefix in the composer) gates it, and a gateway
+  // without config REST reports its real RPC error instead of a fake read.
+  if (subcommand === 'patch') {
+    const json = args.slice(1).join(' ').trim();
+    if (!json) return textResult('Usage: /config patch {"key":"value"}', '/config patch');
+    let patchParams: Record<string, unknown>;
+    try {
+      patchParams = parseJsonParams(json);
+    } catch {
+      return textResult('Config patch expects a JSON object: /config patch {"key":"value"}', '/config patch');
+    }
+    return runRegistryCommand('config-patch', context, patchParams);
+  }
+
   const snapshot = await readConfigSnapshot(context);
   const config = readConfigObject(snapshot);
   const path = args.join(' ').trim();
