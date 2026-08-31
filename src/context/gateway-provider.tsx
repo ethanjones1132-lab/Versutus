@@ -68,6 +68,7 @@ import {
   probeHighPriorityCandidates,
 } from '@/lib/gateway/probe';
 import { isSlashCommandInput, shouldPassthroughSkillSlash } from '@/lib/gateway/slash-commands';
+import { decideBusySlash } from '@/lib/gateway/busy-slash';
 import type { Skill } from '@/lib/gateway/skills';
 import { findConfirmableSlash } from '@/lib/gateway/command-match';
 import { GATEWAY_COMMANDS, buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
@@ -531,10 +532,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [messages]);
   const [isSending, setIsSending] = useState(false);
   const [isCommandRunning, setIsCommandRunning] = useState(false);
-  // Write-only: the label is tracked so a future running-command indicator can
-  // read it, but nothing renders it today. Kept as state (not a ref) because
-  // the setter is already threaded through the command paths.
-  const [, setRunningCommandLabel] = useState<string | null>(null);
+  // Tracks the running command's label so a second slash command can be told
+  // which command it must wait for. Kept as state (not a ref) because the
+  // setter is already threaded through the command paths.
+  const [runningCommandLabel, setRunningCommandLabel] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [selectedBackendId, setSelectedBackendId] = useState<string | undefined>(undefined);
@@ -2012,7 +2013,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      if (isCommandRunning) return;
+      const busySlash = decideBusySlash(trimmed, isCommandRunning, runningCommandLabel);
+      if (busySlash.kind === 'busy') {
+        // The guard still returns here: the note is feedback, never a second
+        // concurrent command.
+        appendLocalMessage('assistant', busySlash.note);
+        return;
+      }
 
       if (options?.messageId) {
         setMessages((prev) =>
@@ -2168,6 +2175,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       dynamicCommands,
       gatewayRequest,
       isCommandRunning,
+      runningCommandLabel,
       runAgentCommand,
       runTask,
       sendMessage,
