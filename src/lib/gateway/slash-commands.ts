@@ -1010,7 +1010,17 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
   if (!sub || sub === 'current' || sub === 'status') {
     try {
       const result = await context.gatewayRequest('sessions.current', {});
-      return textResult('Current session', '/session current', compactJson(result));
+      const current = isRecord(result) ? result : undefined;
+      const id = readFirstString(current, ['sessionId', 'id']);
+      if (!id) {
+        return textResult('No current session or command not supported.', '/session current', compactJson(result));
+      }
+      const title = readFirstString(current, ['title', 'name']);
+      return textResult(
+        title ? `Current session: ${id} — ${title}` : `Current session: ${id}`,
+        '/session current',
+        compactJson(result),
+      );
     } catch {
       return textResult('No current session or command not supported.', '/session current');
     }
