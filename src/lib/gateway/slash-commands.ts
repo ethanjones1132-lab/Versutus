@@ -1023,7 +1023,41 @@ async function runApprovalsDevicesCommand(commandName: string, args: string[], c
   return textResult('Unknown approvals/devices command', commandName);
 }
 
+/**
+ * Longest registered subcommand slash whose input is the family command plus
+ * its args — `/skills status` beats the bare `/skills` entry. The family
+ * switch guesses a method from the first argument (`/skills <x>` → `skill.get`),
+ * and the guessed method is usually the guidance-only one; the registry
+ * command's own method (`skills.status`) is the one with a real route.
+ * Bare family names are excluded so `/env` keeps its switch semantics
+ * distinct from the registry's `environments.status` entry.
+ */
+function registeredFamilySubcommand(commandName: string, args: string[]): GatewayCommand | undefined {
+  const fullInput = [commandName, ...args].join(' ').toLowerCase().trim();
+  if (!fullInput) return undefined;
+  let best: GatewayCommand | undefined;
+  let bestLength = 0;
+  for (const command of GATEWAY_COMMANDS) {
+    const slashes = [command.slash, ...(command.aliases ?? [])]
+      .filter(Boolean)
+      .map((item) => (item as string).toLowerCase().trim());
+    for (const slash of slashes) {
+      if (slash.length <= commandName.length) continue;
+      if (fullInput === slash || fullInput.startsWith(`${slash} `)) {
+        if (slash.length > bestLength) {
+          best = command;
+          bestLength = slash.length;
+        }
+      }
+    }
+  }
+  return best;
+}
+
 async function runAdvancedFamilyCommand(commandName: string, args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
+  const registered = registeredFamilySubcommand(commandName, args);
+  if (registered) return runCommand(registered, context);
+
   const sub = (args[0] || '').toLowerCase();
   let method = '';
   let title = commandName;
