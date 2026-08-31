@@ -1090,6 +1090,13 @@ async function runApprovalsDevicesCommand(commandName: string, args: string[], c
       const result = await context.gatewayRequest('device.repair', {}).catch(e => ({ error: String(e) }));
       return textResult('Device token repair attempted', '/device repair', compactJson(result));
     }
+    if (sub === 'revoke') {
+      // Forward into the registry entry (dashboard.ts device-revoke, danger
+      // destructive) so the confirmation sheet matched by findConfirmableSlash,
+      // the snapshot block with guidance, and honest RPC failures all apply
+      // instead of the device.info read every other sub falls into.
+      return runRegistryCommand('device-revoke', context);
+    }
     const result = await context.gatewayRequest('device.info', {}).catch(e => ({ error: String(e) }));
     return textResult('Device info', '/device', compactJson(result));
   }
