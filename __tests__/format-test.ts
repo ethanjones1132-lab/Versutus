@@ -1,4 +1,10 @@
-import { formatConnectedToastLabel, formatCost, formatDuration, formatTokenCount } from '@/lib/format';
+import {
+  formatClockTime,
+  formatConnectedToastLabel,
+  formatCost,
+  formatDuration,
+  formatTokenCount,
+} from '@/lib/format';
 
 describe('display formatters', () => {
   test('formats tokens and cost compactly', () => {
@@ -12,6 +18,20 @@ describe('display formatters', () => {
     expect(formatDuration(7_000)).toBe('0:07');
     expect(formatDuration(63_000)).toBe('1:03');
     expect(formatDuration(3_723_000)).toBe('1:02:03');
+  });
+});
+
+describe('formatClockTime', () => {
+  test('a non-finite timestamp returns empty rather than Invalid Date', () => {
+    expect(formatClockTime(Number.POSITIVE_INFINITY)).toBe('');
+    expect(formatClockTime(Number.NEGATIVE_INFINITY)).toBe('');
+    expect(formatClockTime(Number.NaN)).toBe('');
+  });
+
+  test('a finite millisecond timestamp still returns a clock string', () => {
+    const label = formatClockTime(1_700_000_000_000);
+    expect(label).not.toBe('');
+    expect(label).not.toMatch(/invalid/i);
   });
 });
 

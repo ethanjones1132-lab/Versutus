@@ -33,6 +33,7 @@ export function formatRelativeTime(timestamp: number): string {
 
 /** Compact clock time for message details: "14:03" */
 export function formatClockTime(timestamp: number): string {
+  if (!Number.isFinite(timestamp)) return '';
   const ms = timestamp > 1_000_000_000_000 ? timestamp : timestamp * 1000;
   return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
