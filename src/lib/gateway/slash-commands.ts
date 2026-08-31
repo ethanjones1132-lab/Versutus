@@ -914,18 +914,18 @@ async function runConfigCommand(args: string[], context: SlashCommandContext): P
   }
 
   if (subcommand === 'diff') {
-    const result = await context.gatewayRequest('config.diff', {}).catch(() => ({}));
-    return textResult('Config diff', '/config diff', compactJson(result));
+    const result = await context.gatewayRequest('config.diff', {}).catch(e => ({ error: String(e) }));
+    return configReadResult('config.diff', 'Config diff', '/config diff', result);
   }
 
   if (subcommand === 'rollback') {
-    const result = await context.gatewayRequest('config.rollback', {}).catch(() => ({}));
-    return textResult('Config rolled back', '/config rollback', compactJson(result));
+    const result = await context.gatewayRequest('config.rollback', {}).catch(e => ({ error: String(e) }));
+    return configReadResult('config.rollback', 'Config rolled back', '/config rollback', result);
   }
 
   if (subcommand === 'last-good' || subcommand === 'lastgood') {
-    const result = await context.gatewayRequest('config.last-good', {}).catch(() => ({}));
-    return textResult('Last good config', '/config last-good', compactJson(result));
+    const result = await context.gatewayRequest('config.last-good', {}).catch(e => ({ error: String(e) }));
+    return configReadResult('config.last-good', 'Last good config', '/config last-good', result);
   }
 
   // `/config patch {"key":"value"}` is a registered write command
@@ -957,6 +957,23 @@ async function runConfigCommand(args: string[], context: SlashCommandContext): P
   return value === undefined
     ? textResult(`Config path not found: ${path}`, '/config')
     : textResult(`Config ${path}`, `/config ${path}`, compactJson(value));
+}
+
+/**
+ * A config read whose RPC rejected must carry the failure — with the
+ * actionable METHOD_GUIDANCE next step when the method has one and the
+ * error does not already name it — because printing the success title
+ * over a thrown call is how the operator ends up believing a diff or
+ * rollback happened. A resolved read keeps today's title and Raw.
+ */
+function configReadResult(method: string, title: string, command: string, result: unknown): SlashCommandResult {
+  const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
+  if (error) {
+    const guidance = METHOD_GUIDANCE[method];
+    const detail = guidance && !error.includes(guidance) ? `${error} ${guidance}` : error;
+    return textResult(`${title} could not be read: ${detail}`, command, compactJson(result));
+  }
+  return textResult(title, command, compactJson(result));
 }
 
 async function runHealthChecksCommand(
