@@ -2077,6 +2077,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
           messages: messagesRef.current,
           resetConversation: () => createNewSessionRef.current(),
           restoreSession: (sessionId) => selectSessionRef.current(sessionId),
+          createNewSession: (title) => createNewSessionRef.current(title),
           runTask: (prompt, onEvent) =>
             runTask(prompt, onEvent, () => {
               streamedText = `${streamedText}\n⏳ Waiting for your approval…`.trim();

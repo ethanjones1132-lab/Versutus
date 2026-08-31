@@ -87,6 +87,13 @@ type SlashCommandContext = {
    * not do and points at the session selector.
    */
   restoreSession?: (sessionId: string) => void | Promise<void>;
+  /**
+   * Opens a fresh session on the host — the same creation the session
+   * selector performs, exposed so `/session new` can ask for one from the
+   * composer. Absent on hosts that cannot create; the reply then names
+   * what it did not do and points at the session selector.
+   */
+  createNewSession?: (title?: string) => void | Promise<void>;
 };
 
 type ConfigSnapshot = {
@@ -996,6 +1003,18 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
     return runRegistryCommand('sessions', context, { limit: 10 });
   }
 
+  if (sub === 'new') {
+    const title = args[1]?.trim() || undefined;
+    if (context.createNewSession) {
+      await context.createNewSession(title);
+      return textResult(
+        title ? `New session "${title}" opened — the thread starts fresh` : 'New session opened — the thread starts fresh',
+        '/session new',
+      );
+    }
+    return textResult('A new session cannot be opened from here — use the session selector', '/session new');
+  }
+
   if (sub === 'get') {
     if (!id) return textResult('Usage: /session get <session-id>', '/session get');
     const result = await context.gatewayRequest('session.get', { sessionId: id }).catch(() => ({}));
@@ -1045,7 +1064,7 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
   }
 
   return textResult(
-    'Usage: /session current | list | get <id> | messages <id> | usage [id] | abort [id] | compact [id] | restore <id>',
+    'Usage: /session current | new [title] | list | get <id> | messages <id> | usage [id] | abort [id] | compact [id] | restore <id>',
     '/session'
   );
 }
