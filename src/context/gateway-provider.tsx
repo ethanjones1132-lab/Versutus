@@ -523,6 +523,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [probeMessage, setProbeMessage] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const messagesRef = useRef<ChatMessage[]>([]);
+  const createNewSessionRef = useRef<(title?: string) => Promise<void>>(async () => undefined);
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
@@ -2065,6 +2066,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
           methods: capabilitySnapshot.methods,
           dynamicCommands,
           messages: messagesRef.current,
+          resetConversation: () => createNewSessionRef.current(),
           runTask: (prompt, onEvent) =>
             runTask(prompt, onEvent, () => {
               streamedText = `${streamedText}\n⏳ Waiting for your approval…`.trim();
@@ -2840,6 +2842,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
     }
     closeSessionSelector();
   }, [activeGateway, closeSessionSelector, selectedBackendId, selectedBotId]);
+  useEffect(() => {
+    createNewSessionRef.current = createNewSession;
+  }, [createNewSession]);
 
   const deleteSessionById = useCallback(
     async (sessionId: string) => {

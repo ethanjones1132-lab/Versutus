@@ -72,6 +72,8 @@ type SlashCommandContext = {
    * Gate path that does not exist.
    */
   messages?: readonly ChatMessage[];
+  /** Clears the thread and opens a fresh session. Used by `/reset`. */
+  resetConversation?: () => void | Promise<void>;
 };
 
 type ConfigSnapshot = {
@@ -164,6 +166,14 @@ const LOCAL_SUGGESTIONS: SlashCommandSuggestion[] = [
     value: '/version',
     label: '/version',
     description: 'Show gateway version',
+    danger: 'local',
+    family: 'Chat',
+    unavailable: false,
+  },
+  {
+    value: '/reset',
+    label: '/reset',
+    description: 'Clear the conversation and open a new session',
     danger: 'local',
     family: 'Chat',
     unavailable: false,
@@ -304,6 +314,14 @@ export async function executeGatewaySlashCommand(
 
   if (commandName === '/context') {
     return textResult(formatContextSummary(context.messages ?? []), '/context');
+  }
+
+  if (commandName === '/reset') {
+    if (!context.resetConversation) {
+      return textResult('Cannot reset — no session is available to clear.', '/reset');
+    }
+    await context.resetConversation();
+    return textResult('Conversation cleared. A new session is open.', '/reset');
   }
 
   const blocked = blockUnsupportedCommand(commandName, args, context.methods);
@@ -1066,6 +1084,7 @@ function formatHelp(hello: GatewayHelloOk | null, filter?: string): string {
     '/rpc <method> [json] — raw escape hatch (advanced)',
     '/context — conversation size',
     '/version — gateway version from the hello handshake',
+    '/reset — clear the conversation and open a new session',
     '',
   ];
 
