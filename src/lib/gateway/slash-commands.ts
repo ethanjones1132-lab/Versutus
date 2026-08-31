@@ -1385,11 +1385,22 @@ function formatHelp(
     list = list.filter((command) => methods[command.id]?.available !== false);
   }
 
-  const lines = list.map((command) => {
+  // The registry carries a group per command (dashboard.ts:28-45); Discord
+  // renders help as structured sections, so emit `### <group>` before each
+  // group's rows — groups in registry order, first seen — and MarkdownText
+  // draws the heading (parser.ts:187, markdown-text.tsx:60). The rows below
+  // stay the same strings the flat wall printed.
+  const groupedLines: string[] = [];
+  const seenGroups = new Set<GatewayCommand['group']>();
+  for (const command of list) {
+    if (!seenGroups.has(command.group)) {
+      seenGroups.add(command.group);
+      groupedLines.push(`### ${command.group}`);
+    }
     const danger = command.danger !== 'safe' ? ` [${command.danger}]` : '';
     const scope = command.requiredScope ? ` (${command.requiredScope})` : '';
-    return `${command.slash}${danger}${scope} — ${command.description ?? command.label}`;
-  });
+    groupedLines.push(`${command.slash}${danger}${scope} — ${command.description ?? command.label}`);
+  }
 
   const base = [
     'Available commands',
@@ -1440,11 +1451,11 @@ function formatHelp(
       : [];
   const skillSection = skillRows.length > 0 ? ['', 'Skills', ...skillRows] : [];
 
-  if (lines.length === 0 && localRows.length === 0 && skillRows.length === 0) {
+  if (groupedLines.length === 0 && localRows.length === 0 && skillRows.length === 0) {
     return [...base, '', 'No matching commands for current scope.'].join('\n');
   }
 
-  return [...base, ...localRows, ...skillSection, '', ...lines].join('\n');
+  return [...base, ...localRows, ...skillSection, '', ...groupedLines].join('\n');
 }
 
 function formatCommandResponse(command: GatewayCommand, result: unknown): SlashCommandResult {
