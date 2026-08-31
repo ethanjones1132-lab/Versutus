@@ -1216,14 +1216,39 @@ function formatHelp(hello: GatewayHelloOk | null, filter?: string): string {
     '/context — conversation size',
     '/version — gateway version from the hello handshake',
     '/reset — clear the conversation and open a new session',
-    '',
   ];
 
-  if (lines.length === 0) {
-    return [...base, 'No matching commands for current scope.'].join('\n');
+  // Local-only commands (the /model family, /compress) have no registry
+  // slash, so the base rows above are their only advertisement. Append the
+  // Chat/Models suggestions no base row or listed registry command already
+  // covers, deduped by slash, so a new user reading help can see them.
+  // Admin and family-filtered views keep today's rows exactly.
+  const shownSlashes = new Set<string>(
+    [
+      ...base
+        .map((line) => line.trim().split(/\s+/)[0])
+        .filter((token) => token.startsWith('/'))
+        .map((token) => token.toLowerCase()),
+      ...list
+        .flatMap((command) => [command.slash, ...(command.aliases ?? [])])
+        .filter((slash): slash is string => Boolean(slash))
+        .map((slash) => slash.trim().toLowerCase()),
+    ],
+  );
+  const localRows =
+    !isAdmin && !familyFilter
+      ? LOCAL_SUGGESTIONS.filter(
+          (suggestion) =>
+            (suggestion.family === 'Chat' || suggestion.family === 'Models') &&
+            !shownSlashes.has(suggestion.label.toLowerCase()),
+        ).map((suggestion) => `${suggestion.label} — ${suggestion.description}`)
+      : [];
+
+  if (lines.length === 0 && localRows.length === 0) {
+    return [...base, '', 'No matching commands for current scope.'].join('\n');
   }
 
-  return [...base, ...lines].join('\n');
+  return [...base, ...localRows, '', ...lines].join('\n');
 }
 
 function formatCommandResponse(command: GatewayCommand, result: unknown): SlashCommandResult {
