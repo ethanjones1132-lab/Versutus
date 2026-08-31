@@ -74,6 +74,16 @@ describe('humanizeGatewayError', () => {
     expect(result.title).toBe('Gateway error 502');
     expect(result.action).toBe('reconnect');
   });
+
+  it('maps an empty turn to a model-did-not-answer verdict, not a connection fault', () => {
+    const result = humanizeGatewayError(
+      new Error('The backend completed the turn with no assistant content.'),
+    );
+    expect(result.title).toBe('The model did not answer');
+    expect(result.affected).toBe('this turn');
+    expect(result.action).toBe('copy');
+    expect(result.next).toMatch(/signed-in provider/);
+  });
 });
 
 describe('errorBannerButton', () => {

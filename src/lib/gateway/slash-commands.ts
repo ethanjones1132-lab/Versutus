@@ -1686,8 +1686,7 @@ function parseModelListOptions(value: string): ModelListOptions {
 }
 
 function formatModelsList(result: unknown, options: ModelListOptions): string {
-  const record = isRecord(result) ? result : {};
-  const models = readArray(record, 'models') ?? readArray(record, 'items') ?? [];
+  const models = readModelItems(result);
   const filters = options.filters.map((item) => item.toLowerCase());
   const visible = models
     .filter((item) => {

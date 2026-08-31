@@ -1,5 +1,6 @@
 import { effectiveModel, resolveSendModel, withSelectedModel,
   shouldReleaseSessionForModel, applyModelOverride,
+  sameModelId, flattenHermesModelOptions, modelPickerName,
 } from '@/lib/gateway/model-selection';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
@@ -193,5 +194,68 @@ describe('applyModelOverride', () => {
     });
     expect(next.releaseSession).toBe(false);
     expect(next.gateway.botModels).toEqual({ researcher: 'kimi-k3' });
+  });
+});
+
+describe('sameModelId', () => {
+  it('treats a provider prefix as the same model, including a nested vendor id', () => {
+    expect(sameModelId('nous/poolside/laguna-xs-2.1:free', 'poolside/laguna-xs-2.1:free')).toBe(true);
+    expect(sameModelId('opencode-zen/laguna-s-2.1-free', 'laguna-s-2.1-free')).toBe(true);
+    expect(sameModelId('laguna-s-2.1-free', 'opencode-zen/laguna-s-2.1-free')).toBe(true);
+  });
+
+  it('does not collapse two different models that share a suffix fragment', () => {
+    expect(sameModelId('dots-studio/dots-3-note-preview:free', 'opencode-zen/laguna-s-2.1-free')).toBe(false);
+    expect(sameModelId('poolside/laguna-xs-2.1:free', 'poolside/laguna-s-2.1:free')).toBe(false);
+  });
+});
+
+describe('modelPickerName', () => {
+  it('shows only the model token under a provider section, not the full slug', () => {
+    expect(
+      modelPickerName({
+        id: 'nous/poolside/laguna-xs-2.1:free',
+        modelId: 'poolside/laguna-xs-2.1:free',
+        providerId: 'nous',
+      }),
+    ).toBe('laguna-xs-2.1:free');
+    expect(
+      modelPickerName({ id: 'opencode-zen/laguna-s-2.1-free', providerId: 'opencode-zen' }),
+    ).toBe('laguna-s-2.1-free');
+    expect(modelPickerName({ id: 'gpt-5.5', providerId: 'openai' })).toBe('gpt-5.5');
+  });
+});
+
+describe('flattenHermesModelOptions', () => {
+  it('builds picker rows from /api/model/options and marks unsigned-in providers unavailable', () => {
+    const rows = flattenHermesModelOptions({
+      providers: [
+        { slug: 'nous', name: 'Nous Portal', authenticated: true, models: ['poolside/laguna-xs-2.1:free'] },
+        { slug: 'qwen-oauth', name: 'Qwen', authenticated: false, models: ['qwen3'] },
+      ],
+    });
+    expect(rows).toEqual([
+      {
+        id: 'nous/poolside/laguna-xs-2.1:free',
+        providerId: 'nous',
+        modelId: 'poolside/laguna-xs-2.1:free',
+        provider: 'Nous Portal',
+        available: true,
+        label: 'Nous Portal · poolside/laguna-xs-2.1:free',
+      },
+      {
+        id: 'qwen-oauth/qwen3',
+        providerId: 'qwen-oauth',
+        modelId: 'qwen3',
+        provider: 'Qwen',
+        available: false,
+        label: 'Qwen · qwen3',
+      },
+    ]);
+  });
+
+  it('is empty on a missing or empty catalog rather than throwing', () => {
+    expect(flattenHermesModelOptions(undefined)).toEqual([]);
+    expect(flattenHermesModelOptions({})).toEqual([]);
   });
 });

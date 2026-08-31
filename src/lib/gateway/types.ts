@@ -106,6 +106,14 @@ export type ModelInfo = {
   object: string;
   created?: number;
   owned_by?: string;
+  /** Display name of the owning provider, when the catalog reports one. */
+  provider?: string;
+  /** Stable provider slug used for grouping and wire `provider`. */
+  providerId?: string;
+  /** Inner model id, without the outer `providerId/` qualification. */
+  modelId?: string;
+  /** False when the owning provider is not signed in. */
+  available?: boolean;
 };
 
 export type ModelsResponse = {

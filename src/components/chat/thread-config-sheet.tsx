@@ -11,6 +11,8 @@ import { formatCost, formatRelativeTime, formatTokenCount } from '@/lib/format';
 import {
   filterModels,
   groupByProvider,
+  modelPickerName,
+  sameModelId,
   OTHER_GROUP_KEY,
   type ModelSection,
 } from '@/lib/gateway/model-selection';
@@ -66,6 +68,7 @@ type ModelItem = {
   id: string;
   provider?: string;
   providerId?: string;
+  modelId?: string;
   available?: boolean;
   context?: number;
   price?: number;
@@ -370,7 +373,10 @@ function ModelsSection({
   const visibleModels = useMemo(() => filterModels(models, query), [models, query]);
   const sections = useMemo(() => groupByProvider(visibleModels), [visibleModels]);
   const currentGroupKey = useMemo(
-    () => sections.find((section) => section.data.some((item) => item.id === currentDefault))?.key,
+    () =>
+      sections.find((section) =>
+        section.data.some((item) => item.id === currentDefault || sameModelId(item.id, currentDefault)),
+      )?.key,
     [sections, currentDefault],
   );
   // Default: the group holding the current model is open (or the first group); everything else collapsed.
@@ -392,7 +398,8 @@ function ModelsSection({
 
   const renderModelItem = useCallback(
     ({ item }: { item: ModelItem }) => {
-      const isCurrent = item.id === currentDefault;
+      const isCurrent = sameModelId(item.id, currentDefault) || item.id === currentDefault;
+      const name = modelPickerName(item);
       const meta = [
         item.catalogState,
         formatContext(item.context),
@@ -415,14 +422,14 @@ function ModelsSection({
             ]}
             disabled={item.available === false}
             accessibilityRole="button"
-            accessibilityLabel={`Apply model ${item.id}`}
+            accessibilityLabel={`Apply model ${name}`}
             onPress={async () => {
               await Haptics.selectionAsync();
               onSelect?.(item.id, item.providerId ?? item.provider);
             }}>
             <View style={styles.modelHeader}>
-              <Text variant="body" numberOfLines={1} style={styles.modelId}>
-                {item.id}
+              <Text variant="body" numberOfLines={2} style={styles.modelId}>
+                {name}
               </Text>
               {isCurrent ? (
                 <Badge label="Current" tone="accent" dot={false} />

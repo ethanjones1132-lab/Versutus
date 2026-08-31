@@ -498,3 +498,23 @@ test('getBot on an unknown Bot is refused, not an empty Bot', async () => {
 
   await assert.rejects(() => hermes.getBot({ id: 'nobody' }), (error) => error.code === 'unknown_bot');
 });
+
+test('listModels reads /api/model/options and does not mark unsigned-in providers available', async () => {
+  const { calls, hermes } = backend(() => ({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      providers: [
+        { slug: 'nous', name: 'Nous Portal', authenticated: true, models: ['poolside/laguna-xs-2.1:free'] },
+        { slug: 'qwen-oauth', name: 'Qwen', authenticated: false, models: ['qwen3'] },
+      ],
+    }),
+  }));
+  const models = await hermes.listModels();
+  assert.equal(calls[0].url, 'http://h:8642/api/model/options');
+  const laguna = models.find((m) => m.modelId === 'poolside/laguna-xs-2.1:free');
+  assert.equal(laguna.id, 'nous/poolside/laguna-xs-2.1:free');
+  assert.equal(laguna.available, true);
+  const qwen = models.find((m) => m.modelId === 'qwen3');
+  assert.equal(qwen.available, false);
+});

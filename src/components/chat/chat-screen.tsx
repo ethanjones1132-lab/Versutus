@@ -476,6 +476,7 @@ export function ChatScreen() {
         id: String(model.id || model.model || model.name || ''),
         provider: model.provider as string | undefined,
         providerId: (model.providerId ?? model.provider) as string | undefined,
+        modelId: (model.modelId as string | undefined) ?? undefined,
         catalogState: (model.catalogSource ?? model.catalogState) as string | undefined,
         available: model.available !== false,
         context: (model.context ?? model.contextLength) as number | undefined,

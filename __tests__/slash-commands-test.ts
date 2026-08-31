@@ -57,6 +57,23 @@ describe('slash commands', () => {
     });
     expect(gatewayRequest).toHaveBeenCalledWith('channels.status', {});
   });
+
+  test('/models reads an OpenAI-shaped {data} catalog instead of claiming nothing matched', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({
+      object: 'list',
+      data: [
+        { id: 'nous/poolside/laguna-xs-2.1:free', provider: 'Nous Portal' },
+        { id: 'opencode-zen/laguna-s-2.1-free', provider: 'OpenCode Zen' },
+      ],
+    });
+    const result = await executeGatewaySlashCommand('/models', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(result.text).toContain('laguna-xs-2.1:free');
+    expect(result.text).not.toBe('No models matched.');
+  });
 });
 
 describe('slash command palette', () => {

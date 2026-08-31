@@ -14,6 +14,8 @@
 // 'generic' and every caller falls back to today's raw-text behavior — a
 // misfire can only cost us the nicer wording, never the truth.
 
+import { sameModelId } from '@/lib/gateway/model-selection';
+
 export type RunFailureKind =
   /** Multiplex off (ADR 0008): named-prefix chat fails until the host enables it. */
   | 'multiplex_disabled'
@@ -35,6 +37,8 @@ export type RunFailureKind =
   | 'expired'
   /** A finished run's event stream cannot be replayed — the Gate has no archive for it. */
   | 'run_events_unavailable'
+  /** The backend closed the turn without any assistant text (Gate `empty_turn`). */
+  | 'empty_turn'
   | 'generic';
 
 /**
@@ -90,6 +94,12 @@ export function classifyRunFailure(message: string): RunFailureKind {
   // state above (an unconfigured CLI environment), and that verdict wins.
   if (/cannot verify group members/i.test(text)) return 'roster_unavailable';
   if (/\bexpired\b/i.test(text)) return 'expired';
+  // gate/core/server.mjs: a turn finished with neither text nor a tool. Hermes
+  // does this when the pinned provider cannot authenticate (observed 2026-08-30:
+  // Nous Portal, no access token) and still answers HTTP 200. The Gate wraps
+  // the empty stream as this exact sentence so the phone does not show a
+  // silent bubble.
+  if (/no assistant content|empty_turn\b/i.test(text)) return 'empty_turn';
   return 'generic';
 }
 
@@ -144,6 +154,10 @@ const TITLES: Record<Exclude<RunFailureKind, 'generic'>, Pick<RunFailureView, 't
   run_events_unavailable: {
     title: 'Replay unavailable',
     next: 'The Gate has no archived stream for this run, so its output cannot be replayed. Its status and result still show in Recent runs — run it again from there to see output.',
+  },
+  empty_turn: {
+    title: 'The model did not answer',
+    next: 'The session is pinned to a model whose provider could not run (often a missing login — run hermes model on the host). Pick a model from a signed-in provider; a new session opens so the next turn actually runs on it.',
   },
 };
 
@@ -216,8 +230,9 @@ export function describeModelSubstitution(report: ModelReport): RunFailureView |
   const requested = report.requested?.trim();
   const ran = report.ran?.trim();
   if (!requested || !ran) return null;
-  if (requested.toLowerCase() === ran.toLowerCase()) return null;
+  if (sameModelId(requested, ran)) return null;
   const servedBy = report.provider?.trim() ? `${report.provider.trim()}/${ran}` : ran;
+  if (sameModelId(requested, servedBy)) return null;
   return {
     kind: 'generic',
     title: 'A different model answered',

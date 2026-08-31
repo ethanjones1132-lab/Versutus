@@ -149,6 +149,13 @@ test('a turn that ran what was asked is not a substitution', () => {
   expect(describeModelSubstitution({ requested: 'longcat-2.0', ran: 'longcat-2.0' })).toBeNull();
   // Case and surrounding whitespace are not a swap.
   expect(describeModelSubstitution({ requested: ' longcat-2.0 ', ran: 'LongCat-2.0' })).toBeNull();
+  // The picker qualifies `nous/poolside/…`; the turn reports `poolside/…`.
+  expect(
+    describeModelSubstitution({
+      requested: 'nous/poolside/laguna-xs-2.1:free',
+      ran: 'poolside/laguna-xs-2.1:free',
+    }),
+  ).toBeNull();
 });
 
 test('an unreported model is unknown, never a claim either way', () => {
@@ -214,4 +221,13 @@ test('a removal naming a member the host never had speaks its verdict', () => {
   expect(formatRunFailure(raw)).toContain('removed');
   // The code alone classifies too, whatever prefix wraps it.
   expect(classifyRunFailure('unknown_member: member not in group')).toBe('unknown_member');
+});
+
+test('an empty turn is a model-did-not-answer verdict, not a generic connection fault', () => {
+  const raw = 'The backend completed the turn with no assistant content.';
+  expect(classifyRunFailure(raw)).toBe('empty_turn');
+  expect(classifyRunFailure('empty_turn')).toBe('empty_turn');
+  const view = describeRunFailure(raw);
+  expect(view.title).toBe('The model did not answer');
+  expect(view.next).toMatch(/signed-in provider/);
 });

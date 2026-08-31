@@ -70,7 +70,9 @@ export function humanizeGatewayError(error: unknown): HumanizedError {
       cause: failureView.cause,
       affected: failureView.kind === 'environment_unreachable' || failureView.kind === 'time_limit' || failureView.kind === 'expired'
         ? 'remote task'
-        : 'bot routing',
+        : failureView.kind === 'empty_turn'
+          ? 'this turn'
+          : 'bot routing',
       next: failureView.next,
       action: 'copy',
     };

@@ -6,6 +6,7 @@ import {
   ConnectionMonitor,
   hasRecentContact,
 } from '@/lib/gateway/connection-monitor';
+import { flattenHermesModelOptions, type HermesModelOptions } from '@/lib/gateway/model-selection';
 import { METHOD_GUIDANCE, METHOD_TO_ROUTE, resolveRoute } from '@/lib/gateway/rpc-routes';
 
 import { streamingFetch } from '@/lib/net/streaming-fetch';
@@ -231,8 +232,28 @@ export class HermesGatewayClient {
   }
 
   async getModels(): Promise<ModelInfo[]> {
+    // `/v1/models` is a single hermes-agent entry. The picker catalog is
+    // GET /api/model/options (providers + their models). Older Hermes 404s
+    // that path — fall through rather than emptying the picker.
+    try {
+      const options = await this.transport.request<HermesModelOptions>('GET', '/api/model/options');
+      const flattened = flattenHermesModelOptions(options);
+      if (flattened.length > 0) {
+        return flattened.map((model) => ({
+          id: model.id,
+          object: 'model',
+          owned_by: model.providerId,
+          provider: model.provider,
+          providerId: model.providerId,
+          modelId: model.modelId,
+          available: model.available,
+        }));
+      }
+    } catch {
+      // fall through
+    }
     const result = await this.transport.request<{ data: ModelInfo[] }>('GET', '/v1/models');
-    return result.data;
+    return result.data ?? [];
   }
 
   async getSessions(limit = 20): Promise<HermesSession[]> {

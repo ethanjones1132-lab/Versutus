@@ -41,6 +41,12 @@ describe('canServeModel', () => {
     // creator used. A raw compare would throw away a perfectly good session.
     expect(canServeModel(session({ model: 'laguna-s-2.1-free' }), 'opencode-zen/laguna-s-2.1-free')).toBe(true);
     expect(canServeModel(session({ model: 'opencode-zen/laguna-s-2.1-free' }), 'laguna-s-2.1-free')).toBe(true);
+    expect(
+      canServeModel(
+        session({ model: 'poolside/laguna-xs-2.1:free' }),
+        'nous/poolside/laguna-xs-2.1:free',
+      ),
+    ).toBe(true);
   });
 
   test('wanting no particular model keeps whatever session exists', () => {

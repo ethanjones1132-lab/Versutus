@@ -281,13 +281,15 @@ export function createHermesBackend({
       for (const provider of providers) {
         const providerId = provider.slug ?? provider.id ?? provider.name;
         if (!providerId) continue;
+        const available = provider.authenticated !== false;
         for (const modelId of provider.models ?? []) {
           models.push({
             id: `${providerId}/${modelId}`,
             providerId,
             modelId,
+            provider: provider.name ?? providerId,
             label: `${provider.name ?? providerId} · ${modelId}`,
-            available: true,
+            available,
           });
         }
       }

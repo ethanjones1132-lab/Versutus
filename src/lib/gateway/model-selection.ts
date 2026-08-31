@@ -23,6 +23,120 @@ export function filterModels<T extends ModelSearchable>(models: T[], query: stri
   );
 }
 
+/**
+ * Whether two model ids name the same model under different qualification.
+ *
+ * The picker stores `providerId/modelId` (and Hermes `/api/model/options`
+ * already puts a vendor prefix on the model id, so Nous Portal's Laguna
+ * becomes `nous/poolside/laguna-xs-2.1:free`). The session and the turn
+ * report often drop the outer provider. A raw string compare then claims a
+ * swap that never happened.
+ *
+ * True when the trimmed ids match case-insensitively, or one is the other
+ * with extra `provider/` prefixes. Missing either side is not a match —
+ * callers that want "unknown" treat empty as a separate case.
+ */
+export function sameModelId(a?: string | null, b?: string | null): boolean {
+  const left = a?.trim().toLowerCase();
+  const right = b?.trim().toLowerCase();
+  if (!left || !right) return false;
+  if (left === right) return true;
+  return left.endsWith(`/${right}`) || right.endsWith(`/${left}`);
+}
+
+/**
+ * Label for a picker row that already sits under a provider section.
+ *
+ * The send id is `providerId/modelId` and Hermes model ids often carry a
+ * second vendor prefix (`nous/poolside/laguna-xs-2.1:free`). Rendering that
+ * full slug on one line truncates before the part the operator needs to
+ * tell models apart. Drop the section's provider and any remaining path,
+ * leaving the model token — `laguna-xs-2.1:free`.
+ */
+export function modelPickerName(input: {
+  id: string;
+  modelId?: string;
+  providerId?: string;
+}): string {
+  const raw = (input.modelId ?? input.id).trim();
+  if (!raw) return input.id;
+  let rest = raw;
+  const provider = input.providerId?.trim();
+  if (provider) {
+    const prefix = `${provider}/`;
+    if (rest.toLowerCase().startsWith(prefix.toLowerCase())) {
+      rest = rest.slice(prefix.length);
+    }
+  }
+  const slash = rest.lastIndexOf('/');
+  if (slash !== -1) rest = rest.slice(slash + 1);
+  return rest || input.id;
+}
+
+/** One provider entry from Hermes GET /api/model/options. */
+export type HermesProviderCatalog = {
+  slug?: string;
+  id?: string;
+  name?: string;
+  models?: string[];
+  authenticated?: boolean;
+};
+
+/** Body of Hermes GET /api/model/options. */
+export type HermesModelOptions = {
+  providers?: HermesProviderCatalog[] | Record<string, HermesProviderCatalog>;
+};
+
+/** One picker row flattened from Hermes /api/model/options. */
+export type FlattenedCatalogModel = {
+  id: string;
+  providerId: string;
+  modelId: string;
+  provider?: string;
+  available: boolean;
+  label: string;
+};
+
+/**
+ * Flatten Hermes `/api/model/options` into picker rows.
+ *
+ * `/v1/models` is a single `hermes-agent` entry — true to the OpenAI
+ * contract, useless for picking. The real catalog is per-provider model
+ * lists. Ids stay `providerId/modelId` so Gate `parseQualifiedModel` can
+ * split the first slash into `{provider, model}` for the upstream call.
+ *
+ * `available` follows `authenticated`: an unsigned-in provider's rows
+ * stay visible but not selectable, instead of pinning a session that
+ * then completes with no assistant content.
+ */
+export function flattenHermesModelOptions(
+  body: HermesModelOptions | null | undefined,
+): FlattenedCatalogModel[] {
+  if (!body?.providers) return [];
+  const providers = Array.isArray(body.providers)
+    ? body.providers
+    : Object.values(body.providers);
+  const models: FlattenedCatalogModel[] = [];
+  for (const provider of providers) {
+    const providerId = provider.slug ?? provider.id ?? provider.name;
+    if (!providerId) continue;
+    const available = provider.authenticated !== false;
+    const display = provider.name ?? providerId;
+    for (const modelId of provider.models ?? []) {
+      if (!modelId) continue;
+      models.push({
+        id: `${providerId}/${modelId}`,
+        providerId,
+        modelId,
+        provider: display,
+        available,
+        label: `${display} · ${modelId}`,
+      });
+    }
+  }
+  return models;
+}
+
 /** The model a send should use: Bot pick, else backend memory, else profile. */
 export function effectiveModel(
   gateway: ModelBearing | null | undefined,

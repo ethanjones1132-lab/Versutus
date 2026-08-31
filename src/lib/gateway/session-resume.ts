@@ -1,4 +1,5 @@
 import { pickAppSession } from '@/lib/gateway/messages';
+import { sameModelId } from '@/lib/gateway/model-selection';
 import type { GatewayProfile, HermesSession } from '@/lib/gateway/types';
 import type { PortalClient } from '@/lib/portal/adapters';
 
@@ -84,16 +85,12 @@ export function canServeModel(session: Pick<HermesSession, 'model'>, wanted?: st
   if (!wanted) return true;
   const pinned = session.model?.trim();
   if (!pinned) return true;
-  // Compare on the bare model id: the app carries `providerId/modelId` while a
-  // session records whichever form its creator used, so a raw string compare
-  // reports a mismatch between two names for the same model.
-  return bareModelId(pinned) === bareModelId(wanted);
-}
-
-/** `provider/model` -> `model`; anything else unchanged. Lowercased to compare. */
-function bareModelId(model: string): string {
-  const separator = model.indexOf('/');
-  return (separator === -1 ? model : model.slice(separator + 1)).trim().toLowerCase();
+  // Compare on qualification-insensitive identity: the app carries
+  // `providerId/modelId` (sometimes two prefixes, when the inner id is
+  // already `vendor/name`) while a session records whichever form its
+  // creator used. A raw string compare reports a mismatch between two
+  // names for the same model.
+  return sameModelId(pinned, wanted);
 }
 
 /**
