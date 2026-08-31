@@ -444,7 +444,7 @@ export async function executeGatewaySlashCommand(
     if (sub === 'all') return textResult(formatHelp(context.hello, 'all'), '/help all');
     if (sub === 'admin' || sub === 'write' || sub === 'destructive') return textResult(formatHelp(context.hello, 'admin'), '/help admin');
     if (sub) return textResult(formatHelp(context.hello, sub), `/help ${sub}`);
-    return textResult(formatHelp(context.hello, undefined, await fetchHelpSkills(context)), '/help');
+    return textResult(formatHelp(context.hello, undefined, await fetchHelpSkills(context), context.methods), '/help');
   }
 
   if (commandName === '/rpc') {
@@ -513,7 +513,7 @@ export async function executeGatewaySlashCommand(
     // gateway-advertised slash can never take precedence over a first-party one.
     const dynamic = context.dynamicCommands?.find((entry) => entry.slash === commandName);
     if (dynamic) return runDynamicCommand(dynamic, argText, context);
-    return textResult(`Unknown command: ${commandName}\n\n${formatHelp(context.hello, undefined, await fetchHelpSkills(context))}`, commandName);
+    return textResult(`Unknown command: ${commandName}\n\n${formatHelp(context.hello, undefined, await fetchHelpSkills(context), context.methods)}`, commandName);
   }
 
   return runCommand(command, context);
@@ -1362,6 +1362,7 @@ function formatHelp(
   hello: GatewayHelloOk | null,
   filter?: string,
   skills: Skill[] = [],
+  methods: Record<string, GatewayMethodAvailability> = {},
 ): string {
   const isAdmin = filter === 'admin' || filter === 'write' || filter === 'destructive';
   const familyFilter = filter && !['all', 'admin', 'write', 'destructive'].includes(filter) ? filter : undefined;
@@ -1373,6 +1374,15 @@ function formatHelp(
   }
   if (isAdmin) {
     list = list.filter((c) => c.danger === 'write' || c.danger === 'destructive');
+  }
+
+  // The unfiltered view hides rows the capability snapshot marks unavailable —
+  // the same predicate the slash palette applies — so help never advertises a
+  // command the gateway will answer with "not available on this gateway".
+  // /help all, /help admin and /help <family> keep today's rows exactly.
+  const hasLiveMethods = Object.keys(methods).length > 0;
+  if (filter === undefined && hasLiveMethods) {
+    list = list.filter((command) => methods[command.id]?.available !== false);
   }
 
   const lines = list.map((command) => {
