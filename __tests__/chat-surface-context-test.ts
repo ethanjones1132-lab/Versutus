@@ -58,10 +58,13 @@ describe('chat surface context split', () => {
     // sendMessage feeds sendChatInput, which is in the outer memo deps — if
     // its identity churned with `messages`, the split would be pointless.
     const src = readProviderSource();
-    const send = src.match(/const sendMessage = useCallback\([\s\S]*?\n    \],\n  \);/)?.[0];
+    const send = src.match(
+      /const sendMessage = useCallback\([\s\S]*?\[activeGateway, isSending, selectedBackendId, selectedBotId\],\n  \);/,
+    )?.[0];
     expect(send).toBeDefined();
     expect(send).toMatch(/messagesRef\.current/);
     expect(send).not.toMatch(/\bmessages\b/);
+    expect(send).not.toContain('const sendChatInput');
   });
 
   test('useChatSurface is exported and chat-screen reads the three states off it', () => {

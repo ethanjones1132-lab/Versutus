@@ -14,7 +14,7 @@ import {
   totalUsage,
 } from '@/lib/gateway/session-analytics';
 import type { RunOutcome } from '@/lib/gateway/runs';
-import type { GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
+import type { ChatMessage, GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
 import type { GatewayCapabilityCommand } from '@/lib/portal/manifest';
 
 const UNSUPPORTED_NOTE = 'Not offered by this gateway';
@@ -67,6 +67,11 @@ type SlashCommandContext = {
    * so a gateway can never shadow a first-party command.
    */
   dynamicCommands?: GatewayCapabilityCommand[];
+  /**
+   * Live transcript, used by `/context` so the command never has to hit a
+   * Gate path that does not exist.
+   */
+  messages?: readonly ChatMessage[];
 };
 
 type ConfigSnapshot = {
@@ -145,6 +150,22 @@ const LOCAL_SUGGESTIONS: SlashCommandSuggestion[] = [
     description: 'Run a raw gateway RPC',
     danger: 'local',
     family: 'Other',
+    unavailable: false,
+  },
+  {
+    value: '/context',
+    label: '/context',
+    description: 'Show conversation size',
+    danger: 'local',
+    family: 'Chat',
+    unavailable: false,
+  },
+  {
+    value: '/version',
+    label: '/version',
+    description: 'Show gateway version',
+    danger: 'local',
+    family: 'Chat',
     unavailable: false,
   },
 ];
@@ -275,6 +296,14 @@ export async function executeGatewaySlashCommand(
 
   if (commandName === '/usage' || commandName === '/cost') {
     return runSessionSpendCommand(commandName, context);
+  }
+
+  if (commandName === '/version') {
+    return textResult(formatVersionSummary(context.hello), '/version');
+  }
+
+  if (commandName === '/context') {
+    return textResult(formatContextSummary(context.messages ?? []), '/context');
   }
 
   const blocked = blockUnsupportedCommand(commandName, args, context.methods);
@@ -1035,6 +1064,8 @@ function formatHelp(hello: GatewayHelloOk | null, filter?: string): string {
     '/help admin — write/destructive only',
     '/help <family> — e.g. sessions, models, config',
     '/rpc <method> [json] — raw escape hatch (advanced)',
+    '/context — conversation size',
+    '/version — gateway version from the hello handshake',
     '',
   ];
 
@@ -1265,6 +1296,30 @@ function formatStatusCollection(title: string, result: unknown, collectionKeys: 
 
 function textResult(text: string, title?: string, raw?: string): SlashCommandResult {
   return { text, title, raw };
+}
+
+function formatVersionSummary(hello: GatewayHelloOk | null): string {
+  const version = hello?.server?.version?.trim();
+  if (!version) return 'Gateway version was not reported in the hello handshake.';
+  return `Gateway version: ${version}`;
+}
+
+function formatContextSummary(messages: readonly ChatMessage[]): string {
+  let user = 0;
+  let assistant = 0;
+  let system = 0;
+  for (const message of messages) {
+    if (message.role === 'user') user += 1;
+    else if (message.role === 'assistant') assistant += 1;
+    else if (message.role === 'system') system += 1;
+  }
+  return [
+    'Conversation',
+    `Messages: ${messages.length}`,
+    `User: ${user}`,
+    `Assistant: ${assistant}`,
+    `System: ${system}`,
+  ].join('\n');
 }
 
 function formatModelConfig(snapshot: ConfigSnapshot): string {

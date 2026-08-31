@@ -38,9 +38,6 @@ export const METHOD_TO_ROUTE: Record<string, Route> = {
   'tools.list': { method: 'GET', path: '/v1/toolsets' },
   // Capabilities
   'capabilities': { method: 'GET', path: '/v1/capabilities' },
-  // Diagnostics
-  'context.get': { method: 'GET', path: '/v1/context' },
-  'version.get': { method: 'GET', path: '/v1/version' },
 };
 
 /**

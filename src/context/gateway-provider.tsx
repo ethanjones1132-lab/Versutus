@@ -2064,6 +2064,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
           runAgentCommand,
           methods: capabilitySnapshot.methods,
           dynamicCommands,
+          messages: messagesRef.current,
           runTask: (prompt, onEvent) =>
             runTask(prompt, onEvent, () => {
               streamedText = `${streamedText}\n⏳ Waiting for your approval…`.trim();
