@@ -231,6 +231,35 @@ export function shouldPassthroughSkillSlash(input: string, skills: Skill[]): boo
   return !isReservedSlashName(match.skill.name);
 }
 
+/**
+ * The registry command a recent slash value names, or undefined when none
+ * does. Exact slash/alias match wins; otherwise the longest registered slash
+ * that is a prefix of the value — so a recent `/device revoke` resolves to
+ * the destructive device-revoke entry and never to the shorter `/device` info
+ * read that precedes it (commandIdForInput's shortest-token-first quirk).
+ * An unresolvable recent keeps its generic row.
+ */
+function resolveRecentRegistryCommand(value: string): GatewayCommand | undefined {
+  const lower = value.trim().toLowerCase();
+  let best: GatewayCommand | undefined;
+  let bestLength = -1;
+  for (const command of GATEWAY_COMMANDS) {
+    const slashes: string[] = [command.slash, ...(command.aliases ?? [])].filter(
+      (item): item is string => Boolean(item),
+    );
+    for (const slash of slashes) {
+      const candidate = slash.toLowerCase();
+      if (lower === candidate || lower.startsWith(`${candidate} `)) {
+        if (candidate.length > bestLength) {
+          best = command;
+          bestLength = candidate.length;
+        }
+      }
+    }
+  }
+  return best;
+}
+
 export function getSlashCommandSuggestions(
   input: string,
   hello: GatewayHelloOk | null,
@@ -252,17 +281,24 @@ export function getSlashCommandSuggestions(
 ): SlashCommandSuggestion[] {
   const needle = input.trimStart().toLowerCase();
 
-  // Recent commands first — fastest path to what you actually run.
+  // Recent commands first — fastest path to what you actually run. A recent
+  // that names a registered command carries that entry's danger and the live
+  // snapshot's unavailable flag over the generic 'local' row, so a destructive
+  // or no-longer-offered recent is not branded as a safe working one; an
+  // unresolvable recent keeps the generic row verbatim.
   const recentSuggestions: SlashCommandSuggestion[] = recents
     .filter((item) => item.startsWith('/'))
-    .map((value) => ({
-      value,
-      label: value,
-      description: 'Recent command',
-      danger: 'local',
-      family: 'Recent',
-      unavailable: false,
-    }));
+    .map((value) => {
+      const resolved = resolveRecentRegistryCommand(value);
+      return {
+        value,
+        label: value,
+        description: 'Recent command',
+        danger: resolved?.danger ?? 'local',
+        family: 'Recent',
+        unavailable: resolved ? methods[resolved.id]?.available === false : false,
+      };
+    });
 
   // Show all commands, mark unavailable
   const registrySuggestions = GATEWAY_COMMANDS.map((command) => {
