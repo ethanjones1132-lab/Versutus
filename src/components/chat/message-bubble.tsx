@@ -179,9 +179,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
           ) : null}
 
           {isCommand ? (
-            <Text color="primary" variant="caption">
-              {body}
-            </Text>
+            <MarkdownText text={body} compact streaming={!!message.streaming} />
           ) : isUser ? (
             <Text color="primary" variant="body">
               {message.text}

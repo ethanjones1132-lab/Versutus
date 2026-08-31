@@ -14,6 +14,8 @@ export type MarkdownTextProps = {
   color?: string;
   /** Skip markdown parse while tokens are still arriving. */
   streaming?: boolean;
+  /** Render body and list text at caption scale instead of body scale. */
+  compact?: boolean;
 };
 
 function openLink(url: string) {
@@ -53,7 +55,7 @@ const HEADING_SIZES: Record<1 | 2 | 3 | 4, { fontSize: number; lineHeight: numbe
   4: { fontSize: 16, lineHeight: 22 },
 };
 
-function BlockView({ block, baseColor }: { block: MdBlock; baseColor: string }) {
+function BlockView({ block, baseColor, compact }: { block: MdBlock; baseColor: string; compact: boolean }) {
   switch (block.type) {
     case 'heading':
       return (
@@ -66,7 +68,7 @@ function BlockView({ block, baseColor }: { block: MdBlock; baseColor: string }) 
     case 'quote':
       return (
         <View style={[styles.quote, { borderLeftColor: Palette.accentWarmMuted }]}>
-          <RNText style={[styles.body, { color: Palette.textSecondary, fontStyle: 'italic' }]}>
+          <RNText style={[compact ? styles.bodyCompact : styles.body, { color: Palette.textSecondary, fontStyle: 'italic' }]}>
             <InlineSpans spans={block.spans} baseColor={Palette.textSecondary} />
           </RNText>
         </View>
@@ -76,10 +78,10 @@ function BlockView({ block, baseColor }: { block: MdBlock; baseColor: string }) 
         <View style={styles.list}>
           {block.items.map((item, index) => (
             <View key={index} style={styles.listItem}>
-              <RNText style={[styles.listMarker, { color: Palette.accentWarm }]}>
+              <RNText style={[compact ? styles.listMarkerCompact : styles.listMarker, { color: Palette.accentWarm }]}>
                 {block.ordered ? `${index + 1}.` : '•'}
               </RNText>
-              <RNText style={[styles.body, styles.listText, { color: baseColor }]}>
+              <RNText style={[compact ? styles.bodyCompact : styles.body, styles.listText, { color: baseColor }]}>
                 <InlineSpans spans={item} baseColor={baseColor} />
               </RNText>
             </View>
@@ -91,7 +93,7 @@ function BlockView({ block, baseColor }: { block: MdBlock; baseColor: string }) 
     case 'paragraph':
     default:
       return (
-        <RNText style={[styles.body, { color: baseColor }]}>
+        <RNText style={[compact ? styles.bodyCompact : styles.body, { color: baseColor }]}>
           <InlineSpans spans={block.spans} baseColor={baseColor} />
         </RNText>
       );
@@ -103,13 +105,14 @@ export function MarkdownText({
   text,
   color = Palette.textPrimary,
   streaming = false,
+  compact = false,
 }: MarkdownTextProps) {
   const blocks = useMemo(() => markdownBlocksForDisplay(text, streaming), [text, streaming]);
 
   return (
     <View style={styles.root}>
       {blocks.map((block, index) => (
-        <BlockView key={index} block={block} baseColor={color} />
+        <BlockView key={index} block={block} baseColor={color} compact={compact} />
       ))}
     </View>
   );
@@ -123,6 +126,11 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.sans,
     fontSize: 16,
     lineHeight: 24,
+  },
+  bodyCompact: {
+    fontFamily: FontFamily.sans,
+    fontSize: 13,
+    lineHeight: 18,
   },
   heading: {
     fontFamily: FontFamily.sansSemiBold,
@@ -165,6 +173,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 24,
     minWidth: 16,
+  },
+  listMarkerCompact: {
+    fontFamily: FontFamily.sansSemiBold,
+    fontSize: 12,
+    lineHeight: 18,
+    minWidth: 14,
   },
   listText: {
     flex: 1,
