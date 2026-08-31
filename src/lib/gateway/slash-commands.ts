@@ -14,7 +14,7 @@ import {
   totalUsage,
 } from '@/lib/gateway/session-analytics';
 import type { RunOutcome } from '@/lib/gateway/runs';
-import { matchSkillSlash, type Skill } from '@/lib/gateway/skills';
+import { matchSkillSlash, skillsReadFromUnknown, type Skill } from '@/lib/gateway/skills';
 import type { ChatMessage, GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
 import type { GatewayCapabilityCommand } from '@/lib/portal/manifest';
 import { METHOD_GUIDANCE } from '@/lib/gateway/rpc-routes';
@@ -393,7 +393,7 @@ export async function executeGatewaySlashCommand(
     if (sub === 'all') return textResult(formatHelp(context.hello, 'all'), '/help all');
     if (sub === 'admin' || sub === 'write' || sub === 'destructive') return textResult(formatHelp(context.hello, 'admin'), '/help admin');
     if (sub) return textResult(formatHelp(context.hello, sub), `/help ${sub}`);
-    return textResult(formatHelp(context.hello), '/help');
+    return textResult(formatHelp(context.hello, undefined, await fetchHelpSkills(context)), '/help');
   }
 
   if (commandName === '/rpc') {
@@ -462,7 +462,7 @@ export async function executeGatewaySlashCommand(
     // gateway-advertised slash can never take precedence over a first-party one.
     const dynamic = context.dynamicCommands?.find((entry) => entry.slash === commandName);
     if (dynamic) return runDynamicCommand(dynamic, argText, context);
-    return textResult(`Unknown command: ${commandName}\n\n${formatHelp(context.hello)}`, commandName);
+    return textResult(`Unknown command: ${commandName}\n\n${formatHelp(context.hello, undefined, await fetchHelpSkills(context))}`, commandName);
   }
 
   return runCommand(command, context);
@@ -1187,7 +1187,26 @@ function readConfigObject(snapshot: ConfigSnapshot): unknown {
   return snapshot.config ?? snapshot.gatewaySource ?? snapshot.parsed;
 }
 
-function formatHelp(hello: GatewayHelloOk | null, filter?: string): string {
+/**
+ * Best-effort read of the gateway's skills list for `/help`. A failed or
+ * empty read degrades to an empty array so `formatHelp` keeps today's output
+ * — the `/help` command must never depend on skills being reachable.
+ */
+async function fetchHelpSkills(context: SlashCommandContext): Promise<Skill[]> {
+  try {
+    const raw = await context.gatewayRequest('skills.list', {});
+    const read = skillsReadFromUnknown(raw);
+    return read.ok ? read.skills : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatHelp(
+  hello: GatewayHelloOk | null,
+  filter?: string,
+  skills: Skill[] = [],
+): string {
   const isAdmin = filter === 'admin' || filter === 'write' || filter === 'destructive';
   const familyFilter = filter && !['all', 'admin', 'write', 'destructive'].includes(filter) ? filter : undefined;
 
@@ -1244,11 +1263,22 @@ function formatHelp(hello: GatewayHelloOk | null, filter?: string): string {
         ).map((suggestion) => `${suggestion.label} — ${suggestion.description}`)
       : [];
 
-  if (lines.length === 0 && localRows.length === 0) {
+  // Hermes turns every skill into a slash command (agent/skill_commands.py:148),
+  // and Versutus already executes and suggests them — but help had no Skills
+  // section, so a user who never types `/` cannot learn the skills exist.
+  // Append `/name — description` rows to the unfiltered view only; `/help all`,
+  // `/help admin` and `/help <family>` keep today's rows exactly.
+  const skillRows =
+    filter === undefined && skills.length > 0
+      ? skills.map((skill) => `/${skill.name.replace(/^\/+/, '')} — ${skill.description || 'Skill'}`)
+      : [];
+  const skillSection = skillRows.length > 0 ? ['', 'Skills', ...skillRows] : [];
+
+  if (lines.length === 0 && localRows.length === 0 && skillRows.length === 0) {
     return [...base, '', 'No matching commands for current scope.'].join('\n');
   }
 
-  return [...base, ...localRows, '', ...lines].join('\n');
+  return [...base, ...localRows, ...skillSection, '', ...lines].join('\n');
 }
 
 function formatCommandResponse(command: GatewayCommand, result: unknown): SlashCommandResult {

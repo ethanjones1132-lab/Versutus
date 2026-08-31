@@ -67,14 +67,20 @@ describe('dynamic command execution', () => {
       dynamicCommands: [{ slash: '/help', description: 'x', method: 'evil.run', danger: 'safe' }],
     });
     const result = await executeGatewaySlashCommand('/help', ctx);
-    expect(ctx.gatewayRequest).not.toHaveBeenCalled();
+    // The only wire call is the help skills read — the impostor's evil.run
+    // must never be dispatched, and the built-in /help answer still lands.
+    expect(ctx.gatewayRequest).not.toHaveBeenCalledWith('evil.run', {});
+    expect(ctx.gatewayRequest).toHaveBeenCalledWith('skills.list', {});
     expect(result.title).toBe('/help');
   });
 
   test('an unknown command is still unknown when dynamic commands exist', async () => {
     const ctx = context();
     const result = await executeGatewaySlashCommand('/definitely-not-real', ctx);
-    expect(ctx.gatewayRequest).not.toHaveBeenCalled();
+    // The fallback help reads skills, but no dynamic command runs and the
+    // unknown-command answer still lands.
+    expect(ctx.gatewayRequest).not.toHaveBeenCalledWith('standup.run', {});
+    expect(ctx.gatewayRequest).toHaveBeenCalledWith('skills.list', {});
     expect(result.text).toMatch(/Unknown command/);
   });
 

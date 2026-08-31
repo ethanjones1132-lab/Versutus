@@ -9,7 +9,9 @@ describe('slash commands', () => {
       runAgentCommand: jest.fn(),
     });
     expect(result.text).toContain('Available commands');
-    expect(gatewayRequest).not.toHaveBeenCalled();
+    // Help answers locally; the only wire it makes is the best-effort
+    // skills.list read for the Skills section, which must never block it.
+    expect(gatewayRequest).toHaveBeenCalledWith('skills.list', {});
   });
 
   test('passes JSON parameters through /rpc', async () => {
