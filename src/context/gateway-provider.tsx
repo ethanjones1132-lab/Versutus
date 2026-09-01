@@ -2078,6 +2078,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
           resetConversation: () => createNewSessionRef.current(),
           restoreSession: (sessionId) => selectSessionRef.current(sessionId),
           createNewSession: (title) => createNewSessionRef.current(title),
+          // Already fetched by the chat screen and handed to sendChatInput; /help
+          // renders it. Passing it beats re-fetching, which put a network
+          // round-trip in front of every mistyped command.
+          skills: options?.skills ?? [],
           runTask: (prompt, onEvent) =>
             runTask(prompt, onEvent, () => {
               streamedText = `${streamedText}\n⏳ Waiting for your approval…`.trim();

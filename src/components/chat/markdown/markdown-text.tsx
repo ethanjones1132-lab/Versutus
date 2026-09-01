@@ -16,6 +16,14 @@ export type MarkdownTextProps = {
   streaming?: boolean;
   /** Render body and list text at caption scale instead of body scale. */
   compact?: boolean;
+  /**
+   * Cap on the OS font-size setting, as `Text` applies per variant
+   * (ui/Text.tsx:62). Defaults to 1.4 under `compact` -- the same cap the
+   * `caption` variant carries, because past ~1.4x small text stops fitting its
+   * container and wraps mid-word. Body-scale markdown stays UNCAPPED by
+   * default so large-text users get the size they asked for.
+   */
+  maxFontSizeMultiplier?: number;
 };
 
 function openLink(url: string) {
@@ -32,12 +40,13 @@ function spanStyle(span: MdInline) {
   ];
 }
 
-function InlineSpans({ spans, baseColor }: { spans: MdInline[]; baseColor: string }) {
+function InlineSpans({ spans, baseColor, maxFontSizeMultiplier }: { spans: MdInline[]; baseColor: string; maxFontSizeMultiplier?: number }) {
   return (
     <>
       {spans.map((span, index) => (
         <RNText
           key={index}
+          maxFontSizeMultiplier={maxFontSizeMultiplier}
           style={[spanStyle(span), span.link || span.code ? null : { color: baseColor }]}
           onPress={span.link ? () => openLink(span.link!) : undefined}
           accessibilityRole={span.link ? 'link' : undefined}>
@@ -55,12 +64,12 @@ const HEADING_SIZES: Record<1 | 2 | 3 | 4, { fontSize: number; lineHeight: numbe
   4: { fontSize: 16, lineHeight: 22 },
 };
 
-function BlockView({ block, baseColor, compact }: { block: MdBlock; baseColor: string; compact: boolean }) {
+function BlockView({ block, baseColor, compact, maxFontSizeMultiplier }: { block: MdBlock; baseColor: string; compact: boolean; maxFontSizeMultiplier?: number }) {
   switch (block.type) {
     case 'heading':
       return (
-        <RNText style={[styles.heading, HEADING_SIZES[block.level], { color: Palette.textPrimary }]}>
-          <InlineSpans spans={block.spans} baseColor={Palette.textPrimary} />
+        <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[styles.heading, HEADING_SIZES[block.level], { color: Palette.textPrimary }]}>
+          <InlineSpans spans={block.spans} baseColor={Palette.textPrimary} maxFontSizeMultiplier={maxFontSizeMultiplier} />
         </RNText>
       );
     case 'code':
@@ -68,8 +77,8 @@ function BlockView({ block, baseColor, compact }: { block: MdBlock; baseColor: s
     case 'quote':
       return (
         <View style={[styles.quote, { borderLeftColor: Palette.accentWarmMuted }]}>
-          <RNText style={[compact ? styles.bodyCompact : styles.body, { color: Palette.textSecondary, fontStyle: 'italic' }]}>
-            <InlineSpans spans={block.spans} baseColor={Palette.textSecondary} />
+          <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[compact ? styles.bodyCompact : styles.body, { color: Palette.textSecondary, fontStyle: 'italic' }]}>
+            <InlineSpans spans={block.spans} baseColor={Palette.textSecondary} maxFontSizeMultiplier={maxFontSizeMultiplier} />
           </RNText>
         </View>
       );
@@ -78,11 +87,11 @@ function BlockView({ block, baseColor, compact }: { block: MdBlock; baseColor: s
         <View style={styles.list}>
           {block.items.map((item, index) => (
             <View key={index} style={styles.listItem}>
-              <RNText style={[compact ? styles.listMarkerCompact : styles.listMarker, { color: Palette.accentWarm }]}>
+              <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[compact ? styles.listMarkerCompact : styles.listMarker, { color: Palette.accentWarm }]}>
                 {block.ordered ? `${index + 1}.` : '•'}
               </RNText>
-              <RNText style={[compact ? styles.bodyCompact : styles.body, styles.listText, { color: baseColor }]}>
-                <InlineSpans spans={item} baseColor={baseColor} />
+              <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[compact ? styles.bodyCompact : styles.body, styles.listText, { color: baseColor }]}>
+                <InlineSpans spans={item} baseColor={baseColor} maxFontSizeMultiplier={maxFontSizeMultiplier} />
               </RNText>
             </View>
           ))}
@@ -93,8 +102,8 @@ function BlockView({ block, baseColor, compact }: { block: MdBlock; baseColor: s
     case 'paragraph':
     default:
       return (
-        <RNText style={[compact ? styles.bodyCompact : styles.body, { color: baseColor }]}>
-          <InlineSpans spans={block.spans} baseColor={baseColor} />
+        <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[compact ? styles.bodyCompact : styles.body, { color: baseColor }]}>
+          <InlineSpans spans={block.spans} baseColor={baseColor} maxFontSizeMultiplier={maxFontSizeMultiplier} />
         </RNText>
       );
   }
@@ -106,13 +115,19 @@ export function MarkdownText({
   color = Palette.textPrimary,
   streaming = false,
   compact = false,
+  maxFontSizeMultiplier,
 }: MarkdownTextProps) {
   const blocks = useMemo(() => markdownBlocksForDisplay(text, streaming), [text, streaming]);
+  // Compact rows replaced a `<Text variant="caption">`, which carried a 1.4 cap
+  // (ui/Text.tsx:40). Without this the command bubble is uncapped and overflows
+  // at large system font sizes. `undefined` at body scale is deliberate: RNText
+  // keeps its default, exactly as before this prop existed.
+  const fontCap = maxFontSizeMultiplier ?? (compact ? 1.4 : undefined);
 
   return (
     <View style={styles.root}>
       {blocks.map((block, index) => (
-        <BlockView key={index} block={block} baseColor={color} compact={compact} />
+        <BlockView key={index} block={block} baseColor={color} compact={compact} maxFontSizeMultiplier={fontCap} />
       ))}
     </View>
   );

@@ -14,7 +14,7 @@ import {
   totalUsage,
 } from '@/lib/gateway/session-analytics';
 import type { RunOutcome } from '@/lib/gateway/runs';
-import { matchSkillSlash, skillsReadFromUnknown, type Skill } from '@/lib/gateway/skills';
+import { matchSkillSlash, type Skill } from '@/lib/gateway/skills';
 import { toolsetsReadFromUnknown } from '@/lib/gateway/toolsets';
 import type { ChatMessage, GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
 import type { GatewayCapabilityCommand } from '@/lib/portal/manifest';
@@ -94,6 +94,14 @@ type SlashCommandContext = {
    * what it did not do and points at the session selector.
    */
   createNewSession?: (title?: string) => void | Promise<void>;
+  /**
+   * Skills the app has already fetched. `/help` renders these as slash-command
+   * rows. Passed in rather than fetched: the list is already in app state, and
+   * awaiting an RPC here put a network round-trip in front of every mistyped
+   * command before it could be told it was a typo. Absent or empty simply
+   * omits the Skills section.
+   */
+  skills?: Skill[];
 };
 
 type ConfigSnapshot = {
@@ -201,7 +209,7 @@ const LOCAL_SUGGESTIONS: SlashCommandSuggestion[] = [
   {
     value: '/compress',
     label: '/compress',
-    description: 'Show conversation size (compaction is local only)',
+    description: 'Show conversation size (no compaction over the API)',
     danger: 'local',
     family: 'Chat',
     unavailable: false,
@@ -441,10 +449,10 @@ export async function executeGatewaySlashCommand(
 
   if (!commandName || commandName === '/help') {
     const sub = args[0]?.toLowerCase();
-    if (sub === 'all') return textResult(formatHelp(context.hello, 'all'), '/help all');
-    if (sub === 'admin' || sub === 'write' || sub === 'destructive') return textResult(formatHelp(context.hello, 'admin'), '/help admin');
-    if (sub) return textResult(formatHelp(context.hello, sub), `/help ${sub}`);
-    return textResult(formatHelp(context.hello, undefined, await fetchHelpSkills(context), context.methods), '/help');
+    if (sub === 'all') return textResult(formatHelp(context.hello, 'all', context.skills ?? [], context.methods), '/help all');
+    if (sub === 'admin' || sub === 'write' || sub === 'destructive') return textResult(formatHelp(context.hello, 'admin', context.skills ?? [], context.methods), '/help admin');
+    if (sub) return textResult(formatHelp(context.hello, sub, context.skills ?? [], context.methods), `/help ${sub}`);
+    return textResult(formatHelp(context.hello, undefined, context.skills ?? [], context.methods), '/help');
   }
 
   if (commandName === '/rpc') {
@@ -513,7 +521,7 @@ export async function executeGatewaySlashCommand(
     // gateway-advertised slash can never take precedence over a first-party one.
     const dynamic = context.dynamicCommands?.find((entry) => entry.slash === commandName);
     if (dynamic) return runDynamicCommand(dynamic, argText, context);
-    return textResult(`Unknown command: ${commandName}\n\n${formatHelp(context.hello, undefined, await fetchHelpSkills(context), context.methods)}`, commandName);
+    return textResult(`Unknown command: ${commandName}\n\n${formatHelp(context.hello, undefined, context.skills ?? [], context.methods)}`, commandName);
   }
 
   return runCommand(command, context);
@@ -915,17 +923,20 @@ async function runConfigCommand(args: string[], context: SlashCommandContext): P
 
   if (subcommand === 'diff') {
     const result = await context.gatewayRequest('config.diff', {}).catch(e => ({ error: String(e) }));
-    return configReadResult('config.diff', 'Config diff', '/config diff', result);
+    return directReadResult('config.diff', 'Config diff', '/config diff', result);
   }
 
   if (subcommand === 'rollback') {
     const result = await context.gatewayRequest('config.rollback', {}).catch(e => ({ error: String(e) }));
-    return configReadResult('config.rollback', 'Config rolled back', '/config rollback', result);
+    // 'Config rolled back' is already a past-tense sentence, so the derived
+    // `${title} could not be read` reads as nonsense at the exact moment the
+    // operator needs to know the rollback did NOT happen.
+    return directReadResult('config.rollback', 'Config rolled back', '/config rollback', result, 'Config rollback failed');
   }
 
   if (subcommand === 'last-good' || subcommand === 'lastgood') {
     const result = await context.gatewayRequest('config.last-good', {}).catch(e => ({ error: String(e) }));
-    return configReadResult('config.last-good', 'Last good config', '/config last-good', result);
+    return directReadResult('config.last-good', 'Last good config', '/config last-good', result);
   }
 
   // `/config patch {"key":"value"}` is a registered write command
@@ -957,23 +968,6 @@ async function runConfigCommand(args: string[], context: SlashCommandContext): P
   return value === undefined
     ? textResult(`Config path not found: ${path}`, '/config')
     : textResult(`Config ${path}`, `/config ${path}`, compactJson(value));
-}
-
-/**
- * A config read whose RPC rejected must carry the failure — with the
- * actionable METHOD_GUIDANCE next step when the method has one and the
- * error does not already name it — because printing the success title
- * over a thrown call is how the operator ends up believing a diff or
- * rollback happened. A resolved read keeps today's title and Raw.
- */
-function configReadResult(method: string, title: string, command: string, result: unknown): SlashCommandResult {
-  const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
-  if (error) {
-    const guidance = METHOD_GUIDANCE[method];
-    const detail = guidance && !error.includes(guidance) ? `${error} ${guidance}` : error;
-    return textResult(`${title} could not be read: ${detail}`, command, compactJson(result));
-  }
-  return textResult(title, command, compactJson(result));
 }
 
 async function runHealthChecksCommand(
@@ -1008,22 +1002,28 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
   const id = args[1];
 
   if (!sub || sub === 'current' || sub === 'status') {
-    try {
-      const result = await context.gatewayRequest('sessions.current', {});
-      const current = isRecord(result) ? result : undefined;
-      const id = readFirstString(current, ['sessionId', 'id']);
-      if (!id) {
-        return textResult('No current session or command not supported.', '/session current', compactJson(result));
-      }
-      const title = readFirstString(current, ['title', 'name']);
-      return textResult(
-        title ? `Current session: ${id} — ${title}` : `Current session: ${id}`,
-        '/session current',
-        compactJson(result),
-      );
-    } catch {
-      return textResult('No current session or command not supported.', '/session current');
+    // A bare `catch` here used to swallow the error whole: a rejected read
+    // rendered "No current session" -- which may be false, there may well BE
+    // one -- with no Raw to diagnose it. Name the failure the way every other
+    // session read does, and keep the no-session copy for the case it actually
+    // describes: a resolved payload that carries no id.
+    const result = await context
+      .gatewayRequest('sessions.current', {})
+      .catch((e) => ({ error: String(e) }));
+    if (isRecord(result) && typeof result.error === 'string') {
+      return directReadResult('sessions.current', 'Current session', '/session current', result);
     }
+    const current = isRecord(result) ? result : undefined;
+    const id = readFirstString(current, ['sessionId', 'id']);
+    if (!id) {
+      return textResult('No current session or command not supported.', '/session current', compactJson(result));
+    }
+    const title = readFirstString(current, ['title', 'name']);
+    return textResult(
+      title ? `Current session: ${id} — ${title}` : `Current session: ${id}`,
+      '/session current',
+      compactJson(result),
+    );
   }
 
   if (sub === 'list') {
@@ -1406,21 +1406,6 @@ function readConfigObject(snapshot: ConfigSnapshot): unknown {
   return snapshot.config ?? snapshot.gatewaySource ?? snapshot.parsed;
 }
 
-/**
- * Best-effort read of the gateway's skills list for `/help`. A failed or
- * empty read degrades to an empty array so `formatHelp` keeps today's output
- * — the `/help` command must never depend on skills being reachable.
- */
-async function fetchHelpSkills(context: SlashCommandContext): Promise<Skill[]> {
-  try {
-    const raw = await context.gatewayRequest('skills.list', {});
-    const read = skillsReadFromUnknown(raw);
-    return read.ok ? read.skills : [];
-  } catch {
-    return [];
-  }
-}
-
 function formatHelp(
   hello: GatewayHelloOk | null,
   filter?: string,
@@ -1509,7 +1494,7 @@ function formatHelp(
   // Append `/name — description` rows to the unfiltered view only; `/help all`,
   // `/help admin` and `/help <family>` keep today's rows exactly.
   const skillRows =
-    filter === undefined && skills.length > 0
+    !isAdmin && !familyFilter && skills.length > 0
       ? skills.map((skill) => `/${skill.name.replace(/^\/+/, '')} — ${skill.description || 'Skill'}`)
       : [];
   const skillSection = skillRows.length > 0 ? ['', 'Skills', ...skillRows] : [];

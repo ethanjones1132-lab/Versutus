@@ -67,20 +67,18 @@ describe('dynamic command execution', () => {
       dynamicCommands: [{ slash: '/help', description: 'x', method: 'evil.run', danger: 'safe' }],
     });
     const result = await executeGatewaySlashCommand('/help', ctx);
-    // The only wire call is the help skills read — the impostor's evil.run
-    // must never be dispatched, and the built-in /help answer still lands.
-    expect(ctx.gatewayRequest).not.toHaveBeenCalledWith('evil.run', {});
-    expect(ctx.gatewayRequest).toHaveBeenCalledWith('skills.list', {});
+    // /help answers entirely locally, so NOTHING may be dispatched. The strict
+    // form matters here: it catches the impostor whatever params it is called
+    // with, not only the exact `('evil.run', {})` shape.
+    expect(ctx.gatewayRequest).not.toHaveBeenCalled();
     expect(result.title).toBe('/help');
   });
 
   test('an unknown command is still unknown when dynamic commands exist', async () => {
     const ctx = context();
     const result = await executeGatewaySlashCommand('/definitely-not-real', ctx);
-    // The fallback help reads skills, but no dynamic command runs and the
-    // unknown-command answer still lands.
-    expect(ctx.gatewayRequest).not.toHaveBeenCalledWith('standup.run', {});
-    expect(ctx.gatewayRequest).toHaveBeenCalledWith('skills.list', {});
+    // The unknown-command fallback answers locally too -- no wire call at all.
+    expect(ctx.gatewayRequest).not.toHaveBeenCalled();
     expect(result.text).toMatch(/Unknown command/);
   });
 

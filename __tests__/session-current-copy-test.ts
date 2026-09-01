@@ -64,16 +64,32 @@ describe('/session current honesty', () => {
     expect(result.raw).toContain('"ok": true');
   });
 
-  test('a rejecting sessions.current read keeps the fallback copy byte-identical', async () => {
+  test('a rejecting sessions.current read names the failure instead of claiming there is no session', async () => {
     const gatewayRequest = jest.fn().mockRejectedValue(new Error('sessions.current is not supported by this gateway.'));
     const result = await executeGatewaySlashCommand('/session current', {
       hello: null,
       gatewayRequest,
       runAgentCommand: jest.fn(),
     });
-    expect(result.text).toBe('No current session or command not supported.');
     expect(result.title).toBe('/session current');
-    expect(result.raw).toBeUndefined();
-    expect(result.text).not.toContain('sessions.current is not supported');
+    expect(result.text).toContain('Current session could not be read');
+    // The operator must see WHY, and must not be told there is no session when
+    // the read simply failed -- there may well be one.
+    expect(result.text).toContain('sessions.current is not supported');
+    expect(result.text).not.toContain('No current session or command not supported.');
+    expect(result.raw).toBeDefined();
+  });
+
+  test('a resolved payload with no id still reports no current session', async () => {
+    // The copy above is correct for the case it actually describes: the read
+    // worked and the host reports nothing open.
+    const gatewayRequest = jest.fn().mockResolvedValue({});
+    const result = await executeGatewaySlashCommand('/session current', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(result.text).toBe('No current session or command not supported.');
+    expect(result.raw).toBe('{}');
   });
 });

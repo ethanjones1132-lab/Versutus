@@ -31,7 +31,8 @@ describe('/config diff, /config rollback and /config last-good honesty', () => {
       runAgentCommand: jest.fn(),
     });
     expect(gatewayRequest).toHaveBeenCalledWith('config.rollback', {});
-    expect(result.text).toContain('Config rolled back could not be read');
+    expect(result.text).toContain('Config rollback failed');
+    expect(result.text).not.toContain('Config rolled back could not be read');
     expect(result.text).toContain('config.rollback is not supported');
     expect(result.text).not.toBe('Config rolled back');
   });
