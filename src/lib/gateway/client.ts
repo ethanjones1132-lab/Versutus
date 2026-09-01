@@ -257,8 +257,20 @@ export class HermesGatewayClient {
   }
 
   async getSessions(limit = 20): Promise<HermesSession[]> {
+    // `/api/sessions` is a Hermes-NATIVE path. A Gate exposes `/v1/sessions` and
+    // answers 404 to the `/api/*` form, so every session read through a Gate
+    // failed and the sheet reported "Sessions could not be read" -- the delay
+    // being the 404 and its retry, not a slow read (/v1/sessions answers in
+    // ~80ms). Try the Gate path first, keep the Hermes one for a direct
+    // connection. Same shape either way: { object, data }.
+    try {
+      const gate = await this.transport.request<SessionsResponse>('GET', `/v1/sessions?limit=${limit}`);
+      if (Array.isArray(gate?.data)) return gate.data;
+    } catch {
+      // not a Gate, or it does not serve sessions -- fall through
+    }
     const result = await this.transport.request<SessionsResponse>('GET', `/api/sessions?limit=${limit}`);
-    return result.data;
+    return result.data ?? [];
   }
 
   /**
@@ -287,6 +299,9 @@ export class HermesGatewayClient {
   }
 
   async deleteSession(sessionId: string): Promise<void> {
+    // A Gate serves /v1/sessions for GET and POST only -- there is no remote
+    // delete. Try the Hermes-native path and let its failure surface, rather
+    // than reporting a deletion that never happened.
     await this.transport.request<void>('DELETE', `/api/sessions/${sessionId}`);
   }
 

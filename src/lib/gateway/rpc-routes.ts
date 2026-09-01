@@ -14,6 +14,12 @@ export const METHOD_TO_ROUTE: Record<string, Route> = {
   'diagnostics.full': { method: 'GET', path: '/health/detailed' },
   // Models
   'models.list': { method: 'GET', path: '/v1/models' },
+  // The Gate gained GET /v1/environments (server.mjs:1698) but this method was
+  // left in METHOD_GUIDANCE saying no remote REST existed, so environments.list
+  // resolved to no route, the caller's catch returned [], and every environment
+  // card rendered its default -- Hermes as NOT_INSTALLED while the Gate reported
+  // it ready with an executable on disk. Envelope is { environments: [...] }.
+  'environments.list': { method: 'GET', path: '/v1/environments' },
   // Sessions (Sessions API)
   'sessions.list': { method: 'GET', path: '/api/sessions' },
   'sessions.current': { method: 'GET', path: '/api/sessions' },
@@ -74,7 +80,6 @@ export const METHOD_GUIDANCE: Record<string, string> = {
   'doctor.memory': 'Memory lives on the gateway host; the API server only scopes it via the X-Hermes-Session-Key header.',
   'doctor.memory.status': 'Memory lives on the gateway host; the API server only scopes it via the X-Hermes-Session-Key header.',
   'env.get': 'Environment and secrets management is host-side (config.yaml) — no remote REST exists.',
-  'environments.list': 'Environment and secrets management is host-side — no remote REST exists.',
   'environments.status': 'Environment and secrets management is host-side — no remote REST exists.',
   'logs.tail': 'Gateway logs are host-side (hermes logs) — the API server does not expose log streaming.',
   'models.primary': 'Model routing is host config. Per-request model override is supported — use the Chat model picker.',

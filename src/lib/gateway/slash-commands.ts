@@ -1739,8 +1739,50 @@ function formatMemory(result: unknown): string {
   return formatStatusCollection('Memory', result, ['items', 'checks', 'stores'], ['status', 'state', 'ok', 'healthy']);
 }
 
+/**
+ * The Gate answers `/v1/skills` with `{ object: 'list', data: [...] }` and 92
+ * entries carrying `name`, `description` and `category`. The old reader looked
+ * under skills/items/available/installed only -- `data` was missing -- so it
+ * found no collection and fell through to `summarizeRecord`, which printed the
+ * envelope as `object: list` followed by the raw array. That is the unreadable
+ * dump. `formatBots` already had `data` in its key list; this did not.
+ *
+ * 92 rows will not fit a phone bubble, so group by category and show the first
+ * few of each, then say plainly how many were not shown and how to see one.
+ */
 function formatSkills(result: unknown): string {
-  return formatStatusCollection('Skills', result, ['skills', 'items', 'available', 'installed'], ['status', 'state', 'enabled', 'available']);
+  const skills = readCollection(result, ['data', 'skills', 'items', 'available', 'installed']);
+  if (!skills) return formatStatusCollection('Skills', result, ['data', 'skills', 'items'], ['status', 'state', 'enabled']);
+  if (skills.length === 0) return 'Skills: none reported';
+
+  const byCategory = new Map<string, { name: string; description: string }[]>();
+  for (const entry of skills) {
+    const record = isRecord(entry) ? entry : {};
+    const name = readFirstString(record, ['name', 'id', 'slug', 'title']) ?? '';
+    if (!name) continue;
+    const category = readFirstString(record, ['category', 'group', 'kind']) ?? 'Other';
+    const description = readFirstString(record, ['description', 'summary', 'detail']) ?? '';
+    if (!byCategory.has(category)) byCategory.set(category, []);
+    byCategory.get(category)!.push({ name, description });
+  }
+  if (byCategory.size === 0) return `Skills: ${skills.length}`;
+
+  const PER_CATEGORY = 4;
+  const lines = [`Skills: ${skills.length} in ${byCategory.size} categor${byCategory.size === 1 ? 'y' : 'ies'}`];
+  let hidden = 0;
+  for (const [category, entries] of [...byCategory.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    lines.push('', `### ${category} (${entries.length})`);
+    for (const entry of entries.slice(0, PER_CATEGORY)) {
+      const slug = entry.name.replace(/^\/+/, '');
+      lines.push(entry.description ? `- /${slug} - ${truncateLine(entry.description, 72)}` : `- /${slug}`);
+    }
+    if (entries.length > PER_CATEGORY) {
+      hidden += entries.length - PER_CATEGORY;
+      lines.push(`- ...${entries.length - PER_CATEGORY} more in ${category}`);
+    }
+  }
+  if (hidden > 0) lines.push('', `${hidden} not shown. Type /<skill-name> to run one, or /skills <name> for its detail.`);
+  return lines.join('\n');
 }
 
 function formatEnvironments(result: unknown): string {

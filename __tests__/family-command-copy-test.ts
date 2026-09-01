@@ -34,9 +34,13 @@ describe('family list commands put the answer in the bubble text, not only in Ra
       runAgentCommand: jest.fn(),
     });
     expect(gatewayRequest).toHaveBeenCalledWith('skills.list', {});
-    expect(result.text).toContain('Items: 2');
-    expect(result.text).toContain('- codemod');
-    expect(result.text).toContain('- swe');
+    // The renderer now names each skill as the slash you would type and groups
+    // by category, so a 92-entry Gate catalogue is readable on a phone. These
+    // fixtures carry no category, so both land under 'Other'.
+    expect(result.text).toContain('Skills: 2');
+    expect(result.text).toContain('/codemod');
+    expect(result.text).toContain('apply a codemod');
+    expect(result.text).toContain('/swe');
   });
 
   test('/cron reports the runner state and job count as the bubble text', async () => {
