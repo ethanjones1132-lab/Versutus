@@ -916,6 +916,10 @@ export function ChatScreen() {
         busy={newAgentBusy}
         error={newAgentError}
         initial={editingBot ? botToEditInput(editingBot) : undefined}
+        // The same normalized catalogue the chat model picker uses. Passing it
+        // turns the bot's model pin from a hand-typed `provider/model-id` into a
+        // pick, so a typo can no longer pin a model that does not exist.
+        models={modelRows}
         onClose={() => {
           setNewAgentVisible(false);
           setEditingBot(null);
