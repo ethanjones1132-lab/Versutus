@@ -27,6 +27,7 @@ import {
   settleInterruptedFromRuns,
 } from '@/lib/gateway/message-reducer';
 import { createStreamBatcher } from '@/lib/gateway/stream-batching';
+import { readHistory } from '@/lib/gateway/history-read';
 import {
   appendBounded,
   boundWindow,
@@ -727,13 +728,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
 
       const sessionKey = gateway.sessionKey ?? sessionId ?? 'default';
-      const [gatewayHistory, localTrans] = await Promise.all([
+      const [historyRead, localTrans] = await Promise.all([
         sessionId
-          ? client.getSessionMessages(sessionId, historyLimitRef.current).catch(() => [])
-          : Promise.resolve([]),
+          ? readHistory(() => client.getSessionMessages(sessionId, historyLimitRef.current), [])
+          : Promise.resolve({ ok: true as const, value: [] }),
         loadTranscripts(gateway.id, sessionKey),
       ]);
       if (requestId !== historyRequestRef.current) return;
+      if (!historyRead.ok) {
+        setLastError(`Session history could not be read: ${historyRead.error}`);
+        return;
+      }
+      const gatewayHistory = historyRead.value;
       setHasMoreHistory(hasEarlierHistory(gatewayHistory.length, historyLimitRef.current));
       // Seed the paging cursor from the oldest turn this page returned. A
       // gateway with no message ids leaves it null, which sends
@@ -803,10 +809,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // ceiling the gateway enforces on `limit`.
       const cursor = historyCursorRef.current;
       if (client.getSessionMessagePage && cursor) {
-        const page = await client
-          .getSessionMessagePage(sessionId, HISTORY_PAGE_SIZE, cursor)
-          .catch(() => null);
+        const pageRead = await readHistory(
+          () => client.getSessionMessagePage!(sessionId, HISTORY_PAGE_SIZE, cursor),
+          { messages: [] },
+        );
         if (requestId !== historyRequestRef.current) return;
+        if (!pageRead.ok) {
+          setLastError(`Session history could not be read: ${pageRead.error}`);
+          return;
+        }
+        const page = pageRead.value;
 
         // A gateway that reports paging settles it; one that does not falls
         // through to the short-page heuristic below.
@@ -821,8 +833,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // Fallback for gateways with no cursor support: re-fetch a bigger window
       // and prepend only what it newly reveals.
       const nextLimit = historyLimitRef.current + HISTORY_PAGE_SIZE;
-      const older = await client.getSessionMessages(sessionId, nextLimit).catch(() => []);
+      const olderRead = await readHistory(() => client.getSessionMessages(sessionId, nextLimit), []);
       if (requestId !== historyRequestRef.current) return;
+      if (!olderRead.ok) {
+        setLastError(`Session history could not be read: ${olderRead.error}`);
+        return;
+      }
+      const older = olderRead.value;
       historyLimitRef.current = nextLimit;
       setHasMoreHistory(hasEarlierHistory(older.length, nextLimit));
       const olderChat = historyToChatMessages(older);
