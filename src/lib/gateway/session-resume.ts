@@ -3,17 +3,12 @@ import { sameModelId } from '@/lib/gateway/model-selection';
 import type { GatewayProfile, HermesSession } from '@/lib/gateway/types';
 import type { PortalClient } from '@/lib/portal/adapters';
 
-export type ResumeSessionClient = Pick<PortalClient, 'getSessions' | 'createSession'>;
+export type ResumeSessionClient = Pick<PortalClient, 'getSessions' | 'createSession' | 'canManageSessions'>;
 
 export type SessionResumeOutcome = {
   /** The session the thread resumes, or undefined for stateless chat. */
   sessionId: string | undefined;
-  /**
-   * Whatever the gateway could list. A failed list degrades to [] so
-   * connect still proceeds; the session selector folds ok vs failed
-   * separately (`applySessionListRead`) and must not use this array as
-   * empty-ok.
-   */
+  /** The sessions from a successful list, or [] when the list could not be read. */
   sessions: HermesSession[];
 };
 
@@ -120,9 +115,16 @@ export async function resolveResumeSession(
    */
   model?: string,
 ): Promise<SessionResumeOutcome> {
-  const sessions = await client
-    .getSessions(RESUME_SESSION_PAGE)
-    .catch(() => [] as HermesSession[]);
+  if (client.canManageSessions === false) return { sessionId: undefined, sessions: [] };
+
+  let sessions: HermesSession[];
+  try {
+    sessions = await client.getSessions(RESUME_SESSION_PAGE);
+  } catch {
+    // A failed list is not proof that the gateway has no app session. Do not
+    // create a duplicate thread while the session catalogue is unavailable.
+    return { sessionId: undefined, sessions: [] };
+  }
   const own = pickAppSession(sessions);
   if (own && canServeModel(own, model)) return { sessionId: own.id, sessions };
 

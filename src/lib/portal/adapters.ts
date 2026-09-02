@@ -55,6 +55,8 @@ export interface PortalClient {
   ): Promise<string>;
   getModels(): Promise<ModelInfo[]>;
   getCapabilities(): Promise<GatewayCapabilities>;
+  /** Whether the manifest explicitly offers session management. */
+  readonly canManageSessions?: boolean;
   getSessions(limit?: number): Promise<HermesSession[]>;
   /**
    * `model` pins the session at creation. It cannot be applied later — a

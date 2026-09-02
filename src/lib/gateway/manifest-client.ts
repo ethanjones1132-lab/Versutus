@@ -139,6 +139,10 @@ export class ManifestClient implements PortalClient {
     return Boolean(this.endpoints.botGroups);
   }
 
+  get canManageSessions(): boolean {
+    return Boolean(this.endpoints.sessions);
+  }
+
   /**
    * Concurrent callers join the attempt already in flight rather than stack
    * a duplicate one: resumeReconnect() and the monitor's reconnect hook can

@@ -3,7 +3,7 @@ import { liveSessionId, pinLiveSession, RESUME_SESSION_PAGE, resolveResumeSessio
 import type { GatewayProfile, HermesSession } from '@/lib/gateway/types';
 import type { PortalClient } from '@/lib/portal/adapters';
 
-type ResumeClient = Pick<PortalClient, 'getSessions' | 'createSession'>;
+type ResumeClient = Pick<PortalClient, 'getSessions' | 'createSession' | 'canManageSessions'>;
 
 function session(id: string, source = APP_SESSION_SOURCE): HermesSession {
   return {
@@ -78,6 +78,19 @@ describe('resolveResumeSession — session pick + graceful degrade', () => {
     expect(outcome.sessions).toEqual([]);
   });
 
+  test('does not list or create when the client advertises no session capability', async () => {
+    const getSessions = jest.fn(async () => [session('unexpected')]);
+    const createSession = jest.fn(async () => session('unexpected-create'));
+    const client: ResumeClient = { canManageSessions: false, getSessions, createSession };
+
+    const outcome = await resolveResumeSession(client);
+
+    expect(outcome.sessionId).toBeUndefined();
+    expect(outcome.sessions).toEqual([]);
+    expect(getSessions).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
   test('does not even demand a list when the client has no session surface at all', async () => {
     const getSessions = jest.fn(async () => []);
     const client: Pick<PortalClient, 'getSessions'> = { getSessions };
@@ -88,7 +101,7 @@ describe('resolveResumeSession — session pick + graceful degrade', () => {
     expect(getSessions).toHaveBeenCalledTimes(1);
   });
 
-  test('still creates a session when a flaky list read fails but create works', async () => {
+  test('does not create a session when a flaky list read fails', async () => {
     const getSessions = jest.fn(async () => {
       throw new Error('temporary list failure');
     });
@@ -97,8 +110,9 @@ describe('resolveResumeSession — session pick + graceful degrade', () => {
 
     const outcome = await resolveResumeSession(client);
 
-    expect(outcome.sessionId).toBe('recovered');
-    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(outcome.sessionId).toBeUndefined();
+    expect(outcome.sessions).toEqual([]);
+    expect(createSession).not.toHaveBeenCalled();
   });
 
   test('a gateway with no createSession stays stateless', async () => {
