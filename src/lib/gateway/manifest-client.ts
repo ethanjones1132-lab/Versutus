@@ -883,7 +883,7 @@ export class ManifestClient implements PortalClient {
     const path = template
       ? interpolatePath(template, { id: runId, runId, run_id: runId })
       : `${this.requireRunsEndpoint().replace(/\/+$/, '')}/${runId}`;
-    return this.rootTransport.request<RunStatus>('GET', path);
+    return this.rootTransport.request<RunStatus>('GET', this.withExplicitBackend(path));
   }
 
   async streamRunEvents(
@@ -896,7 +896,7 @@ export class ManifestClient implements PortalClient {
       ? interpolatePath(template, { id: runId, runId, run_id: runId })
       : `${this.requireRunsEndpoint().replace(/\/+$/, '')}/${runId}/events`;
 
-    const response = await streamingFetch(`${this.rootTransport.baseUrl}${path}`, {
+    const response = await streamingFetch(`${this.rootTransport.baseUrl}${this.withExplicitBackend(path)}`, {
       headers: this.rootTransport.headers,
       signal,
     });
@@ -929,7 +929,7 @@ export class ManifestClient implements PortalClient {
     const path = template
       ? interpolatePath(template, { id: runId, runId, run_id: runId })
       : `${this.requireRunsEndpoint().replace(/\/+$/, '')}/${runId}/approval`;
-    await this.rootTransport.request<unknown>('POST', path, {
+    await this.rootTransport.request<unknown>('POST', this.withExplicitBackend(path), {
       approved,
       ...(feedback ? { feedback } : {}),
     });
@@ -956,7 +956,7 @@ export class ManifestClient implements PortalClient {
     const path = template
       ? interpolatePath(template, { id: runId, runId })
       : `${runs!.replace(/\/+$/, '')}/${runId}/stop`;
-    await this.rootTransport.request<unknown>('POST', path, {});
+    await this.rootTransport.request<unknown>('POST', this.withExplicitBackend(path), {});
   }
 
   private setStatus(status: ConnectionStatus, detail = '') {

@@ -70,6 +70,40 @@ function stubRegistry(calls) {
   };
 }
 
+/** Two run-capable adapters make route ownership observable. */
+function runScopeRegistry(calls) {
+  const base = stubRegistry(calls).get('stubcli');
+  const make = (adapterId) => ({
+    ...base,
+    adapterId,
+    capabilities: [...base.capabilities, 'runs'],
+    createBackend() {
+      const backend = base.createBackend();
+      return {
+        ...backend,
+        async startRun() { calls.push(`${adapterId}:startRun`); return { run_id: `${adapterId}-run`, status: 'started' }; },
+        async getRunStatus() { calls.push(`${adapterId}:getRunStatus`); return { status: 'completed' }; },
+        async stopRun() { calls.push(`${adapterId}:stopRun`); },
+        async replyApproval() { calls.push(`${adapterId}:replyApproval`); },
+        async runEvents() {
+          calls.push(`${adapterId}:runEvents`);
+          return sseUpstream(['data: {"type":"run.completed"}\n\n']);
+        },
+      };
+    },
+  });
+  const first = make('first-runs');
+  const second = make('second-runs');
+  return {
+    get(id) {
+      if (id === first.adapterId) return first;
+      if (id === second.adapterId) return second;
+      throw new Error(`unknown CLI adapter "${id}"`);
+    },
+    list() { return [first, second]; },
+  };
+}
+
 /**
  * An adapter whose turn behaviour (sendMessage/streamEvents) is fully test-
  * controlled — used to drive the Gate's own empty-turn detection rather than
@@ -1288,6 +1322,66 @@ test('a fronted route picks the backend that can serve it, not the first attache
     const response = await fetch(`http://127.0.0.1:${gate.port}/v1/skills`, { headers: auth(gate) });
     assert.equal(response.status, 200, 'the capable backend should have answered');
     assert.equal((await response.json()).data[0].id, 'from-capable');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('run lifecycle routes stay on an explicit backend while unpinned creation auto-resolves', async () => {
+  const calls = [];
+  const { gate } = await makeGate({
+    calls,
+    registry: runScopeRegistry(calls),
+    environments: [
+      { id: 'a-first', adapterId: 'first-runs' },
+      { id: 'b-second', adapterId: 'second-runs' },
+    ],
+  });
+  const baseUrl = `http://127.0.0.1:${gate.port}`;
+  try {
+    const unpinned = await fetch(`${baseUrl}/v1/runs`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ input: 'auto resolve' }),
+    });
+    assert.equal((await unpinned.json()).run_id, 'first-runs-run');
+
+    const scoped = '?backendId=b-second';
+    const started = await fetch(`${baseUrl}/v1/runs${scoped}`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ input: 'stay here' }),
+    });
+    assert.equal((await started.json()).run_id, 'second-runs-run');
+
+    const status = await fetch(`${baseUrl}/v1/runs/second-runs-run${scoped}`, { headers: auth(gate) });
+    assert.equal((await status.json()).status, 'completed');
+
+    const events = await fetch(`${baseUrl}/v1/runs/second-runs-run/events${scoped}`, { headers: auth(gate) });
+    assert.equal(await events.text(), 'data: {"type":"run.completed"}\n\n');
+
+    const approval = await fetch(`${baseUrl}/v1/runs/second-runs-run/approval${scoped}`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ approved: true }),
+    });
+    assert.equal(approval.status, 200);
+
+    const stopped = await fetch(`${baseUrl}/v1/runs/second-runs-run/stop${scoped}`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({}),
+    });
+    assert.equal(stopped.status, 200);
+
+    assert.deepEqual(calls, [
+      'first-runs:startRun',
+      'second-runs:startRun',
+      'second-runs:getRunStatus',
+      'second-runs:runEvents',
+      'second-runs:replyApproval',
+      'second-runs:stopRun',
+    ]);
   } finally {
     await gate.close();
   }

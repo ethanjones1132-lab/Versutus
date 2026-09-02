@@ -46,6 +46,27 @@ describe('ManifestClient startRun backend scoping', () => {
     return new ManifestClient(PROFILE, MULTI_BACKEND_IDENTITY, {});
   }
 
+  function jsonResponse(body: unknown) {
+    return {
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(body),
+    };
+  }
+
+  function sseResponse() {
+    return {
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"type":"run.completed"}\n\n'));
+          controller.close();
+        },
+      }),
+    };
+  }
+
   test('a run with no explicit backend leaves the route unpinned for the Gate to resolve', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
@@ -102,5 +123,26 @@ describe('ManifestClient startRun backend scoping', () => {
     const url = String(fetchMock.mock.calls[0][0]);
     expect(url).not.toContain('backendId=');
     expect(url).not.toContain('bot=');
+  });
+
+  test('every follow-up action keeps the explicitly selected backend', async () => {
+    const fetchMock = jest.fn((input: unknown) => {
+      const url = String(input);
+      return Promise.resolve(url.includes('/events') ? sseResponse() : jsonResponse({ status: 'completed' }));
+    });
+    const client = clientWith(fetchMock);
+    client.setBackendId('hermes-local');
+
+    await client.getRunStatus('run-4');
+    await client.streamRunEvents('run-4', () => undefined);
+    await client.resolveApproval('run-4', true, 'looks good');
+    await client.stopRun('run-4');
+
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      'http://gate.test:8760/v1/runs/run-4?backendId=hermes-local',
+      'http://gate.test:8760/v1/runs/run-4/events?backendId=hermes-local',
+      'http://gate.test:8760/v1/runs/run-4/approval?backendId=hermes-local',
+      'http://gate.test:8760/v1/runs/run-4/stop?backendId=hermes-local',
+    ]);
   });
 });
