@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { createHermesBackend } from '../core/cli-environments/backends/hermes.mjs';
+import { removeModelPins } from '../core/cli-environments/hermes-config-edit.mjs';
 
 /**
  * The Gate's routes are covered with stub backends, which means the actual
@@ -291,6 +292,27 @@ test('updateBot rewrites only what the request carries, on the CLI writer\'s own
   ]);
 });
 
+test('removeModelPins removes only the model defaults and provider, preserving the rest of the config', () => {
+  const source = 'model:\r\n  default: anthropic/claude\r\n  provider: kilo\r\n  temperature: 0.2\r\nproviders:\r\n  kilo:\r\n    api_key: sk-keep\r\n';
+  assert.equal(
+    removeModelPins(source),
+    'model:\r\n  temperature: 0.2\r\nproviders:\r\n  kilo:\r\n    api_key: sk-keep\r\n',
+  );
+});
+
+test('removeModelPins removes an empty model block without touching adjacent config', () => {
+  const source = 'name: coder\nmodel:\n  default: one\n  provider: two\nproviders:\n  one:\n    api_key: keep\n';
+  assert.equal(
+    removeModelPins(source),
+    'name: coder\nproviders:\n  one:\n    api_key: keep\n',
+  );
+});
+
+test('removeModelPins is a no-op when no model pin exists', () => {
+  const source = 'model:\n  temperature: 0.2\nproviders:\n  one:\n    api_key: keep\n';
+  assert.equal(removeModelPins(source), source);
+});
+
 test('updateBot with no editable field changes nothing at all', async () => {
   const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
   await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');
@@ -319,6 +341,37 @@ test('updateBot with no editable field changes nothing at all', async () => {
   await assert.rejects(
     () => readFile(join(home, 'profiles', 'coder', 'SOUL.md'), 'utf8'),
     /ENOENT/,
+  );
+});
+
+test('updateBot clears explicit null model fields and preserves provider credentials', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');
+  await mkdir(join(home, 'profiles', 'coder'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'coder', '.env'), 'API_SERVER_KEY=own-key\n');
+  await writeFile(
+    join(home, 'profiles', 'coder', 'config.yaml'),
+    'model:\n  default: old-model\n  provider: old-provider\nproviders:\n  old-provider:\n    api_key: sk-keep\n',
+  );
+  const argvLog = [];
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'k',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    profilesHome: home,
+    executablePath: 'hermes',
+    runCliImpl: async (_exe, args) => {
+      argvLog.push(args);
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  await hermes.updateBot({ id: 'coder', modelId: null, providerId: null });
+
+  assert.deepEqual(argvLog, []);
+  assert.equal(
+    await readFile(join(home, 'profiles', 'coder', 'config.yaml'), 'utf8'),
+    'providers:\n  old-provider:\n    api_key: sk-keep\n',
   );
 });
 

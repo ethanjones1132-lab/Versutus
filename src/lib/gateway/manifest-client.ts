@@ -509,8 +509,8 @@ export class ManifestClient implements PortalClient {
     soul?: string;
     inheritKeys?: boolean;
     description?: string;
-    modelId?: string;
-    providerId?: string;
+    modelId?: string | null;
+    providerId?: string | null;
   }): Promise<PublicBot> {
     const path = this.requireEndpoint('bots');
     return this.rootTransport.request('POST', path, input);
@@ -519,15 +519,14 @@ export class ManifestClient implements PortalClient {
   /**
    * Edit an existing Bot through the manifest-declared bots endpoint. Only
    * the fields present in `input` travel — the Gate leaves absent fields
-   * untouched — so a partial edit from the phone can never wipe what the
-   * form did not show.
+   * untouched, while null explicitly clears a model pin.
    */
   async updateBot(input: {
     id: string;
     soul?: string;
     description?: string;
-    modelId?: string;
-    providerId?: string;
+    modelId?: string | null;
+    providerId?: string | null;
   }): Promise<PublicBot> {
     const path = this.requireEndpoint('bots');
     const body: Record<string, unknown> = {};

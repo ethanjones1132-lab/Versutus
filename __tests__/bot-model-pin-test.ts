@@ -90,11 +90,13 @@ describe('the pick resolves to the fields the Gate PATCH expects', () => {
     expect(buildBotUpdatePatch(draft)).toMatchObject({ modelId: 'grok-4.6', providerId: 'xai-oauth' });
   });
 
-  test('KNOWN GAP: an empty pin is dropped, so a pin cannot be cleared', () => {
-    // buildBotUpdatePatch drops empty strings and backends/hermes.mjs applies
-    // the pin only `if (typeof modelId === 'string' && modelId.trim())`, so
-    // clearing needs a host-side unset before the form can offer it. Pinned
-    // here so the day it changes, this test says so rather than going quiet.
-    expect(buildBotUpdatePatch({ modelId: '', providerId: '' })).toEqual({});
+  test('an explicit null clears both pins while omitted fields remain no-ops', () => {
+    expect(buildBotUpdatePatch({ modelId: null, providerId: null })).toEqual({ modelId: null, providerId: null });
+    expect(buildBotUpdatePatch({})).toEqual({});
+  });
+
+  test('editing emits null when both model fields are blank', () => {
+    expect(SHEET).toContain('editing ? modelId.trim() || null : modelId.trim() || undefined');
+    expect(SHEET).toContain('editing ? providerId.trim() || null : providerId.trim() || undefined');
   });
 });

@@ -54,4 +54,11 @@ describe('bot edit form helpers', () => {
   test('an all-blank form produces an empty patch instead of a wipe', () => {
     expect(buildBotUpdatePatch({})).toEqual({});
   });
+
+  test('explicit null model fields are preserved as clear instructions', () => {
+    expect(buildBotUpdatePatch({ modelId: null, providerId: null })).toEqual({
+      modelId: null,
+      providerId: null,
+    });
+  });
 });

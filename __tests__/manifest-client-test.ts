@@ -669,6 +669,14 @@ describe('ManifestClient sessions and runs when advertised', () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ description: 'Reads code' });
   });
 
+  test('updateBot sends null model fields as explicit clear instructions', async () => {
+    const fetchMock = jest.fn().mockResolvedValue(jsonResponse({ id: 'coder', displayName: 'coder', routable: true }));
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', bots: '/v1/bots' });
+    await client.updateBot({ id: 'coder', modelId: null, providerId: null });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ modelId: null, providerId: null });
+  });
+
   test('updateBot refuses to guess the path when the manifest omits bots', async () => {
     const client = clientWithEndpoints({ health: '/health' });
     await expect(client.updateBot({ id: 'coder' })).rejects.toThrow(/bots/);

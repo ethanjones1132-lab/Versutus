@@ -74,13 +74,13 @@ export interface PortalClient {
     modelId?: string;
     providerId?: string;
   }): Promise<PublicBot>;
-  /** Edit an existing Bot's soul, description or model pin. Gate adapters only. */
+  /** Edit an existing Bot's soul, description or model pin; null clears a pin. Gate adapters only. */
   updateBot?(input: {
     id: string;
     soul?: string;
     description?: string;
-    modelId?: string;
-    providerId?: string;
+    modelId?: string | null;
+    providerId?: string | null;
   }): Promise<PublicBot>;
   /**
    * Cron transparency, Gate adapters only. Omitted on adapters that cannot

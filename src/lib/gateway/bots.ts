@@ -70,8 +70,8 @@ export function botChipRoutingTag(bot: PublicBot): string {
 export type BotEditDraft = {
   soul?: string;
   description?: string;
-  modelId?: string;
-  providerId?: string;
+  modelId?: string | null;
+  providerId?: string | null;
 };
 
 /**
@@ -95,15 +95,15 @@ export function botToEditInput(bot: PublicBot): {
 
 /**
  * Fields the edit form owns, expressed as an update patch. The Gate applies
- * only what the request carries and leaves absent fields untouched, so a
- * blank field means "leave unchanged" — fixing a typo'd description must
- * never wipe a model pin the form did not show.
+ * only what the request carries and leaves absent fields untouched; null is
+ * reserved for the explicit instruction to clear a model pin.
  */
 export function buildBotUpdatePatch(input: BotEditDraft): BotEditDraft {
   const patch: BotEditDraft = {};
   for (const key of ['soul', 'description', 'modelId', 'providerId'] as const) {
     const value = input[key];
-    if (typeof value === 'string' && value.trim()) patch[key] = value.trim();
+    if (value === null) Object.assign(patch, { [key]: null });
+    else if (typeof value === 'string' && value.trim()) patch[key] = value.trim();
   }
   return patch;
 }

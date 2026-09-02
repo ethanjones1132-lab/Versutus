@@ -10,8 +10,8 @@ export type NewAgentDraft = {
   soul?: string;
   inheritKeys: boolean;
   description?: string;
-  modelId?: string;
-  providerId?: string;
+  modelId?: string | null;
+  providerId?: string | null;
 };
 
 /**
@@ -221,8 +221,8 @@ export function NewAgentSheet({
               soul: soul.trim() || undefined,
               inheritKeys,
               description: description.trim() || undefined,
-              modelId: modelId.trim() || undefined,
-              providerId: providerId.trim() || undefined,
+              modelId: editing ? modelId.trim() || null : modelId.trim() || undefined,
+              providerId: editing ? providerId.trim() || null : providerId.trim() || undefined,
             })
           }
         />

@@ -928,10 +928,10 @@ export function ChatScreen() {
           setNewAgentBusy(true);
           setNewAgentError(undefined);
           const target = editingBot;
-          // Edit sends only what the form owns; the Gate leaves absent fields untouched.
+          // Edit sends only what the form owns; null explicitly clears a model pin.
           const request = target
             ? updateBot({ id: target.id, ...buildBotUpdatePatch(form) })
-            : createBot(form);
+            : createBot({ ...form, modelId: form.modelId ?? undefined, providerId: form.providerId ?? undefined });
           void request
             .then(async (bot) => {
               setNewAgentVisible(false);
@@ -1521,4 +1521,3 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
   },
 });
-

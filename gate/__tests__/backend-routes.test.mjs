@@ -644,6 +644,7 @@ function stubFrontedRegistry(calls) {
     },
     async updateBot(input) {
       calls.push(`updateBot:${input?.id}`);
+      calls.push(`updateBot-body:${JSON.stringify({ modelId: input?.modelId, providerId: input?.providerId })}`);
       if (input?.id === 'nope') {
         const error = new Error('unknown bot "nope"');
         error.code = 'unknown_bot';
@@ -779,6 +780,15 @@ test('PATCH /v1/bots/:id edits through updateBot and maps its errors', async () 
     assert.equal(edited.status, 200);
     assert.equal((await edited.json()).description, 'Ships reviews');
     assert.ok(calls.includes('updateBot:coder'));
+
+    const cleared = await fetch(`${base}/v1/bots/coder`, {
+      method: 'PATCH',
+      headers: auth(gate),
+      body: JSON.stringify({ modelId: null, providerId: null }),
+    });
+    assert.equal(cleared.status, 200);
+    assert.ok(calls.includes('updateBot:coder'));
+    assert.ok(calls.includes('updateBot-body:{"modelId":null,"providerId":null}'));
 
     const unknown = await fetch(`${base}/v1/bots/nope`, {
       method: 'PATCH',

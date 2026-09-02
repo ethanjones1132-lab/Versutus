@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { runCli } from '../adapters/shared.mjs';
 import { createBotArgs, ensureDistinctListenKey, validateBotId } from '../hermes-bot-create.mjs';
 import { upsertProfileDescription } from '../hermes-bot-edit.mjs';
+import { removeModelPins } from '../hermes-config-edit.mjs';
 import { getHermesBot, listHermesBots, parseMultiplexEnabled, readHermesSoul, toPublicBot } from '../hermes-profiles.mjs';
 
 /** Hermes sessions are already gateway-shaped; fill only what may be absent. */
@@ -651,7 +652,8 @@ export function createHermesBackend({
      * createBot: SOUL.md and the one-line profile.yaml description are file
      * writes inside the bot's home; the model pin is the fixed
      * `hermes -p <id> config set` argv. Fields left absent are untouched;
-     * only what the request carries is applied.
+     * only what the request carries is applied. Null model fields explicitly
+     * remove that pin so Hermes falls back to its profile default.
      */
     async updateBot({ id, soul, description, modelId, providerId } = {}) {
       const botId = validateBotId(id);
@@ -695,6 +697,17 @@ export function createHermesBackend({
       if (typeof soul === 'string') {
         await mkdir(botHome, { recursive: true });
         await writeFile(join(botHome, 'SOUL.md'), soul, 'utf8');
+      }
+
+      const clearFields = [
+        modelId === null ? 'default' : null,
+        providerId === null ? 'provider' : null,
+      ].filter(Boolean);
+      if (clearFields.length > 0) {
+        const configPath = join(botHome, 'config.yaml');
+        const configText = await readFile(configPath, 'utf8').catch(() => '');
+        const nextConfig = removeModelPins(configText, clearFields);
+        if (nextConfig !== configText) await writeFile(configPath, nextConfig, 'utf8');
       }
 
       if (typeof modelId === 'string' && modelId.trim()) {
