@@ -18,17 +18,17 @@ describe('effectiveModel', () => {
     expect(effectiveModel(profile, 'codex-local')).toBe('gpt-5.5');
   });
 
-  it('falls back to the profile model when the backend has no memory', () => {
+  it('leaves the model unpinned when the selected backend has no memory', () => {
     const profile = { ...BASE, backendModels: { 'codex-local': 'gpt-5.5' } };
-    expect(effectiveModel(profile, 'opencode-local')).toBe('gateway-default');
+    expect(effectiveModel(profile, 'opencode-local')).toBeUndefined();
   });
 
   it('falls back when no backend is selected', () => {
     expect(effectiveModel(BASE, undefined)).toBe('gateway-default');
   });
 
-  it('is safe on a profile saved before backendModels existed', () => {
-    expect(effectiveModel(BASE, 'codex-local')).toBe('gateway-default');
+  it('leaves a backend unpinned on a profile saved before backendModels existed', () => {
+    expect(effectiveModel(BASE, 'codex-local')).toBeUndefined();
   });
 });
 
@@ -121,7 +121,7 @@ describe('bot-scoped model', () => {
   it('resolveSendModel uses the bot pick when selected', () => {
     const profile = { ...BASE, botModels: { researcher: 'x-ai/grok-4' }, model: 'other' };
     expect(resolveSendModel(profile, 'hermes-local', 'researcher')).toEqual({ model: 'x-ai/grok-4' });
-    expect(resolveSendModel(profile, 'hermes-local', undefined)).toEqual({ model: 'other' });
+    expect(resolveSendModel(profile, undefined, undefined)).toEqual({ model: 'other' });
   });
 });
 
@@ -180,7 +180,9 @@ describe('applyModelOverride', () => {
     expect(next.gateway.model).toBe('kimi-k3');
     expect(next.gateway.backendModels).toEqual({ 'hermes-local': 'kimi-k3' });
     expect(next.gateway.botModels).toBeUndefined();
-    expect(next.releaseSession).toBe(true);
+    // No remembered model means this is the first explicit pick for the
+    // selected backend, so the existing session does not need to be released.
+    expect(next.releaseSession).toBe(false);
   });
 
   it('does not throw the thread away when the Bot is already on that model', () => {

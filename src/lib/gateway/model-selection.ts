@@ -154,7 +154,9 @@ export function effectiveModel(
   if (selectedBotId) return gateway.botModels?.[selectedBotId];
   if (selectedBackendId) {
     const remembered = gateway.backendModels?.[selectedBackendId];
-    if (remembered) return remembered;
+    // A selected CLI environment owns its default. Falling through to the
+    // configurable-chat model would pin a first turn to the wrong model.
+    return remembered;
   }
   return gateway.model;
 }

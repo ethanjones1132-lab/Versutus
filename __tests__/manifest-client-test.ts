@@ -358,6 +358,38 @@ describe('ManifestClient.streamChat', () => {
     expect(capturedBody?.providerId).toBeUndefined();
   });
 
+  test('a selected backend with no remembered model leaves the model for its own default', async () => {
+    let capturedBody: Record<string, unknown> | undefined;
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/v1/chat/completions')) {
+        capturedBody = JSON.parse(String(init?.body));
+        const body = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        });
+        return Promise.resolve({ ok: true, status: 200, body } as unknown as Response);
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const identityWithBackend: GatewayIdentity = {
+      ...IDENTITY,
+      manifest: {
+        ...IDENTITY.manifest!,
+        backends: [{ id: 'opencode-local', label: 'OpenCode', kind: 'environment' }],
+      },
+    };
+    const client = new ManifestClient(PROFILE, identityWithBackend, {});
+    client.setBackendId('opencode-local');
+    await client.streamChat([{ role: 'user', content: 'hi' }], () => undefined);
+
+    expect(capturedBody?.backendId).toBe('opencode-local');
+    expect(capturedBody?.model).toBeUndefined();
+  });
+
   test('a chat with no explicit backend leaves the body unpinned so the Gate resolves', async () => {
     let capturedBody: Record<string, unknown> | undefined;
     (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init?: RequestInit) => {
