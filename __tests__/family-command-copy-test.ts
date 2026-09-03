@@ -1,4 +1,5 @@
 import { executeGatewaySlashCommand } from '@/lib/gateway/slash-commands';
+import { METHOD_GUIDANCE, METHOD_TO_ROUTE } from '@/lib/gateway/rpc-routes';
 
 describe('family list commands put the answer in the bubble text, not only in Raw', () => {
   test('/tools lists toolset names and descriptions as the bubble text', async () => {
@@ -137,6 +138,12 @@ describe('family list commands put the answer in the bubble text, not only in Ra
     });
     expect(gatewayRequest).toHaveBeenCalledWith('cron.list', {});
     expect(result.text).toContain('Jobs: 1');
+  });
+  test('cron.history guidance names the cron.runs read instead of denying per-job history', () => {
+    expect(METHOD_TO_ROUTE['cron.history']).toBeUndefined();
+    expect(METHOD_GUIDANCE['cron.history']).toMatch(/cron\.runs/);
+    expect(METHOD_GUIDANCE['cron.history']).toMatch(/\/v1\/capabilities\/rpc/);
+    expect(METHOD_GUIDANCE['cron.history']).not.toMatch(/no per-job run history/);
   });
   test('/plugins lists plugin rows as the bubble text', async () => {
     const gatewayRequest = jest.fn().mockResolvedValue({

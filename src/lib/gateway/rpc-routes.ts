@@ -74,7 +74,7 @@ export const METHOD_GUIDANCE: Record<string, string> = {
   'config.schema': 'Hermes config schema is host-side — no remote schema REST exists.',
   'config.diff': 'Hermes configuration is host-side — no remote config REST exists.',
   'config.rollback': 'Hermes configuration is host-side — no remote config REST exists.',
-  'cron.history': 'The Hermes Jobs API (GET /api/jobs) exposes jobs and last-run state but no per-job run history.',
+  'cron.history': 'Per-job run history is served by the Gate RPC cron.runs (POST /v1/capabilities/rpc answers {object:\"list\",data} runs) — /cron history <job> reads it there. The Hermes Jobs API (GET /api/jobs) exposes jobs and last-run state only.',
   'device.info': 'Versutus devices pair via signed access requests; Hermes has no device registry REST.',
   'device.repair': 'Versutus devices pair via signed access requests; Hermes has no device registry REST.',
   'device.revoke': 'Versutus devices pair via signed access requests; Hermes has no device registry REST.',
