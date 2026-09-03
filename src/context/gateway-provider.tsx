@@ -257,6 +257,8 @@ type GatewayContextValue = {
   autoRetry: AutoRetryPulse | null;
   setAutoConnect: (enabled: boolean) => Promise<void>;
   recentCommands: string[];
+  /** Slash-command executions held for this gateway + session (display-only). */
+  commandTranscripts: CommandTranscriptEntry[];
   retryCommand: (entry: Partial<CommandTranscriptEntry> & { input: string }) => void;
   cancelCommand: (id: string) => void;
   capabilitySnapshot: GatewayCapabilitySnapshot;
@@ -569,9 +571,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [settings]);
   const [isBootstrapped, setIsBootstrapped] = useState(false);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
-  // Write-only: command transcripts are recorded but no surface renders them
-  // yet. Removing the recording would lose the data a transcript view needs.
-  const [, setTranscripts] = useState<CommandTranscriptEntry[]>([]);
+  // Command transcripts are recorded here and rendered read-only by the
+  // chat overflow sheet's command-history section.
+  const [commandTranscripts, setTranscripts] = useState<CommandTranscriptEntry[]>([]);
   const [capabilityCheckedAt, setCapabilityCheckedAt] = useState(() => Date.now());
   const capabilityInstances = useMemo(
     () => (activeManifest ? manifestCapabilityInstances(activeManifest) : []),
@@ -2970,6 +2972,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       autoRetry,
       setAutoConnect,
       recentCommands,
+      commandTranscripts,
       retryCommand,
       cancelCommand,
       capabilitySnapshot,
@@ -3017,7 +3020,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
       cron, gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
-      setAutoConnect, recentCommands, retryCommand, cancelCommand, capabilitySnapshot,
+      setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,
       approveTlsFingerprintChange,

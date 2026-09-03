@@ -1,5 +1,6 @@
 import { StyleSheet, View } from 'react-native';
 
+import { CommandHistorySection } from '@/components/chat/command-history-section';
 import { SessionAnalytics } from '@/components/chat/session-analytics';
 import { BaseSheet, Divider, ListRow, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
@@ -70,6 +71,7 @@ export function ChatOverflowSheet({
           Last active {formatRelativeTime(lastActive)}
         </Text>
       ) : null}
+      <CommandHistorySection />
 
       <View style={styles.actions}>
         {onEditAgent ? (
