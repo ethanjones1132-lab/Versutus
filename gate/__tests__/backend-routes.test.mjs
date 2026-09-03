@@ -295,6 +295,64 @@ test('session.messages RPC reads a transcript through the Gate dialect', async (
   }
 });
 
+test('session.get, session.usage and session.restore read one session through the Gate dialect', async () => {
+  const { gate, calls } = await makeGate();
+  const rpc = async (method, params = {}) => {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/capabilities/rpc`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({ method, params }),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  try {
+    // session.get returns the record itself — the direct shape the
+    // command renderer already consumes.
+    const got = await rpc('session.get', { sessionId: 'ses_1' });
+    assert.equal(got.status, 200, `session.get should dispatch, got ${JSON.stringify(got.body)}`);
+    assert.equal(got.body.result.id, 'ses_1');
+    assert.equal(got.body.result.title, 'Stub session');
+
+    // session.usage with an id reports that session's counters.
+    const usage = await rpc('session.usage', { sessionId: 'ses_1' });
+    assert.equal(usage.status, 200, `session.usage should dispatch, got ${JSON.stringify(usage.body)}`);
+    assert.equal(usage.body.result.sessionId, 'ses_1');
+    assert.equal(usage.body.result.input_tokens, 0);
+
+    // session.usage without an id totals the catalogue instead of
+    // demanding an id.
+    const all = await rpc('session.usage', {});
+    assert.equal(all.status, 200, `bare session.usage should dispatch, got ${JSON.stringify(all.body)}`);
+    assert.equal(all.body.result.sessions, 1);
+
+    // session.restore returns the record; the app switches its open
+    // thread only after this resolves.
+    const restored = await rpc('session.restore', { sessionId: 'ses_1' });
+    assert.equal(restored.status, 200, `session.restore should dispatch, got ${JSON.stringify(restored.body)}`);
+    assert.equal(restored.body.result.id, 'ses_1');
+
+    // The lookup reads the catalogue behind every method.
+    assert.ok(calls.includes('listSessions'));
+
+    // A missing id is an honest named failure, not an empty read.
+    // (Bare session.usage needs no id — it totals the catalogue.)
+    for (const method of ['session.get', 'session.restore']) {
+      const missing = await rpc(method, {});
+      assert.equal(missing.status, 400, `${method} without an id should fail honestly`);
+      assert.match(missing.body.error.message, /sessionId is required/);
+    }
+
+    // An absent id fails honestly on all three — never a wrong session,
+    // never an empty success.
+    for (const method of ['session.get', 'session.usage', 'session.restore']) {
+      const absent = await rpc(method, { sessionId: 'ses_9' });
+      assert.equal(absent.status, 400, `${method} with an unknown id should fail honestly`);
+      assert.match(absent.body.error.message, /Session not found: ses_9/);
+    }
+  } finally {
+    await gate.close();
+  }
+});
+
 test('chat routed to a backend goes through the CLI, not the provider proxy', async () => {
   const { gate, calls } = await makeGate();
   try {

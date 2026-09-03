@@ -36,6 +36,50 @@ function jobIdOf(params) {
   return String(id);
 }
 
+/** Counters a session record carries; summed for the catalogue-wide usage. */
+const USAGE_COUNTER_FIELDS = [
+  'message_count',
+  'tool_call_count',
+  'input_tokens',
+  'output_tokens',
+  'cache_read_tokens',
+  'cache_write_tokens',
+  'reasoning_tokens',
+  'api_call_count',
+];
+
+function requiredSessionId(params) {
+  const id = params?.sessionId ?? params?.id;
+  if (!id) throw new Error('sessionId is required');
+  return String(id);
+}
+
+/**
+ * The one shared exact-id lookup behind `session.get`, `session.usage`
+ * and `session.restore`. Matches `id` exactly — never a substring — and
+ * throws a named failure for an absent id so the app can print it instead
+ * of an empty read.
+ */
+async function findSessionById(getBackend, params, sessionId) {
+  const sessions = await via(getBackend, params, 'listSessions', (b) => b.listSessions(200));
+  const match = (Array.isArray(sessions) ? sessions : []).find(
+    (session) => session != null && String(session.id) === sessionId,
+  );
+  if (!match) throw new Error(`Session not found: ${sessionId}`);
+  return match;
+}
+
+/** The token/cost counters of one session record, in its own envelope. */
+function usageOf(session) {
+  const usage = { sessionId: session?.id ?? null };
+  for (const field of USAGE_COUNTER_FIELDS) {
+    usage[field] = Number(session?.[field]) || 0;
+  }
+  usage.estimated_cost_usd = session?.estimated_cost_usd ?? null;
+  usage.actual_cost_usd = session?.actual_cost_usd ?? null;
+  return usage;
+}
+
 /**
  * @param {object} deps
  * @param {(backendId?: string) => Promise<object>} deps.getBackend
@@ -152,6 +196,36 @@ export function createGatewayMethods({ getBackend, listDevices }) {
         data: await b.listMessages(String(sessionId), Number(params?.limit) || undefined),
       }));
     },
+
+    // One shared exact-id lookup behind the session read RPCs. No backend
+    // offers a get-by-id call, so all three read the same wide catalogue
+    // page and match the id exactly. Wide on purpose: a small page would
+    // silently hide older sessions (the Hermes default-page note on
+    // listSessions above, and the cron.runs comment), and an absent id
+    // fails honestly instead of reading as empty.
+    'session.get': async (params) =>
+      findSessionById(getBackend, params, requiredSessionId(params)),
+
+    // With an id this reports that session's token/cost counters; without
+    // one it totals the whole catalogue, so the bare `/session usage`
+    // answers instead of demanding an id.
+    'session.usage': async (params) => {
+      const raw = params?.sessionId ?? params?.id;
+      if (raw) return usageOf(await findSessionById(getBackend, params, String(raw)));
+      const sessions = await via(getBackend, params, 'listSessions', (b) => b.listSessions(200));
+      const list = Array.isArray(sessions) ? sessions : [];
+      const totals = { sessions: list.length };
+      for (const field of USAGE_COUNTER_FIELDS) {
+        totals[field] = list.reduce((sum, s) => sum + (Number(s?.[field]) || 0), 0);
+      }
+      return totals;
+    },
+
+    // The lookup behind `/session restore <id>`. Returns the record; the
+    // app switches its open thread only after this resolves, so a missing
+    // id never moves local history.
+    'session.restore': async (params) =>
+      findSessionById(getBackend, params, requiredSessionId(params)),
 
     // Backend models only, matching what `models.list` returns on Hermes. The
     // Gate's merged provider+backend catalog stays at GET /v1/models, which is
