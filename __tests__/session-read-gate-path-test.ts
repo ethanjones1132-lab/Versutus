@@ -160,3 +160,57 @@ describe('getSessionMessages reads the path the host actually serves', () => {
     expect(seen.some((u) => u.includes('/v1/sessions/s-1/messages') && u.includes('limit=25'))).toBe(true);
   });
 });
+
+/**
+ * A Gate serves DELETE /v1/sessions/{id} (answering `{ deleted: true }`) and
+ * answers 404 to the Hermes-native DELETE /api/sessions/{id}; a Hermes host
+ * is the reverse. The fallback client called only the native path, so every
+ * delete through a Gate 404'd while the provider had already removed the
+ * session from its visible list only after the remote call succeeded.
+ */
+function mockDeleteHost(opts: { v1: number; api: number }) {
+  const calls: string[] = [];
+  const fetchMock = jest.fn((input: unknown, init?: { method?: string }) => {
+    const url = String(input);
+    if (url.includes('/health')) return Promise.resolve(jsonResponse({ status: 'ok' }));
+    if (url.includes('/sessions/') && init?.method === 'DELETE') {
+      if (url.includes('/v1/sessions/')) {
+        calls.push('/v1/delete');
+        if (opts.v1 === 200) return Promise.resolve(jsonResponse({ deleted: true }));
+        return Promise.resolve(jsonResponse({ error: { message: 'delete failed', code: 'session_delete_failed' } }, opts.v1));
+      }
+      calls.push('/api/delete');
+      if (opts.api === 200) return Promise.resolve(jsonResponse({ deleted: true }));
+      return Promise.resolve(jsonResponse({ error: 'Not Found' }, opts.api));
+    }
+    return Promise.resolve(jsonResponse({}));
+  });
+  (globalThis as { fetch: unknown }).fetch = fetchMock;
+  return calls;
+}
+
+describe('deleteSession deletes through the path the host actually serves', () => {
+  test('against a Gate it deletes /v1 and never falls back', async () => {
+    const calls = mockDeleteHost({ v1: 200, api: 404 });
+    await expect(new HermesGatewayClient(PROFILE).deleteSession('s-1')).resolves.toBeUndefined();
+    expect(calls).toEqual(['/v1/delete']);
+  });
+
+  test('against a Hermes host it falls back to /api delete', async () => {
+    const calls = mockDeleteHost({ v1: 404, api: 200 });
+    await expect(new HermesGatewayClient(PROFILE).deleteSession('s-1')).resolves.toBeUndefined();
+    expect(calls).toEqual(['/v1/delete', '/api/delete']);
+  });
+
+  test('a host serving neither path rejects rather than reporting a deletion', async () => {
+    const calls = mockDeleteHost({ v1: 404, api: 404 });
+    await expect(new HermesGatewayClient(PROFILE).deleteSession('s-1')).rejects.toBeDefined();
+    expect(calls).toEqual(['/v1/delete', '/api/delete']);
+  });
+
+  test('a non-404 Gate refusal surfaces instead of retrying another dialect', async () => {
+    const calls = mockDeleteHost({ v1: 502, api: 200 });
+    await expect(new HermesGatewayClient(PROFILE).deleteSession('s-1')).rejects.toThrow(/delete failed/);
+    expect(calls).toEqual(['/v1/delete']);
+  });
+});

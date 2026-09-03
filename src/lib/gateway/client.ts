@@ -324,9 +324,21 @@ export class HermesGatewayClient {
   }
 
   async deleteSession(sessionId: string): Promise<void> {
-    // A Gate serves /v1/sessions for GET and POST only -- there is no remote
-    // delete. Try the Hermes-native path and let its failure surface, rather
-    // than reporting a deletion that never happened.
+    // The Gate serves only `/v1/*`: DELETE /v1/sessions/{id} answers
+    // `{ deleted: true }`. A direct Hermes host answers the native
+    // DELETE /api/sessions/{id}. Try the Gate dialect first and keep the
+    // native one for a genuine Hermes host. Anything other than a 404 on
+    // the Gate path is the Gate's own answer and must surface rather than
+    // silently retrying another dialect.
+    try {
+      await this.transport.request<void>('DELETE', `/v1/sessions/${sessionId}`);
+      return;
+    } catch (error) {
+      // A direct Hermes host answers the `/v1/*` path 404. Anything else is
+      // the Gate's own answer and must surface rather than silently retrying
+      // another dialect.
+      if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
+    }
     await this.transport.request<void>('DELETE', `/api/sessions/${sessionId}`);
   }
 
