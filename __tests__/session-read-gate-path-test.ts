@@ -225,3 +225,62 @@ describe('deleteSession deletes through the path the host actually serves', () =
     expect(calls).toEqual(['/v1/delete']);
   });
 });
+
+describe('getSessionMessagePage threads the paging cursors through', () => {
+  function mockPageHost(opts: { v1: number; api: number; v1Body?: unknown; apiBody?: unknown }) {
+    const seen: string[] = [];
+    const fetchMock = jest.fn((input: unknown) => {
+      const url = String(input);
+      seen.push(url);
+      if (url.includes('/health')) return Promise.resolve(jsonResponse({ status: 'ok' }));
+      if (url.includes('/v1/sessions/') && url.includes('/messages')) {
+        if (opts.v1 === 200) return Promise.resolve(jsonResponse(opts.v1Body ?? GATE_MESSAGES));
+        return Promise.resolve(jsonResponse({ error: { message: 'boom', code: 'session_read_failed' } }, opts.v1));
+      }
+      if (url.includes('/api/sessions/') && url.includes('/messages')) {
+        if (opts.api === 200) return Promise.resolve(jsonResponse(opts.apiBody ?? NATIVE_MESSAGES));
+        return Promise.resolve(jsonResponse({ error: 'Not Found' }, opts.api));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    return seen;
+  }
+
+  test('against a Gate it returns messages with the hasMore/nextBefore cursors', async () => {
+    mockPageHost({ v1: 200, api: 404 });
+    const page = await new HermesGatewayClient(PROFILE).getSessionMessagePage('s-1', 50);
+    expect(page.messages.map((m) => m.id)).toEqual(['m-1', 'm-2', 'm-3']);
+    expect(page.hasMore).toBe(true);
+    expect(page.nextBefore).toBe('m-1');
+  });
+
+  test('message order and content pass through unchanged', async () => {
+    mockPageHost({ v1: 200, api: 404 });
+    const page = await new HermesGatewayClient(PROFILE).getSessionMessagePage('s-1', 50);
+    expect(page.messages.map((m) => m.id)).toEqual(['m-1', 'm-2', 'm-3']);
+    expect(page.messages[1].content).toEqual([{ type: 'text', text: 'hi there' }]);
+  });
+
+  test('the before cursor is carried on the Gate path', async () => {
+    const seen = mockPageHost({ v1: 200, api: 404 });
+    await new HermesGatewayClient(PROFILE).getSessionMessagePage('s-1', 25, 'm-1');
+    expect(seen.some((u) => u.includes('/v1/sessions/s-1/messages') && u.includes('limit=25') && u.includes('before=m-1'))).toBe(true);
+  });
+
+  test('against a Hermes host it falls back to /api messages with no paging cursors', async () => {
+    const seen = mockPageHost({ v1: 404, api: 200 });
+    const page = await new HermesGatewayClient(PROFILE).getSessionMessagePage('s-1', 50);
+    expect(page.messages).toHaveLength(2);
+    expect(page.hasMore).toBeUndefined();
+    expect(page.nextBefore).toBeUndefined();
+    expect(seen.some((u) => u.includes('/v1/sessions/s-1/messages'))).toBe(true);
+    expect(seen.some((u) => u.includes('/api/sessions/s-1/messages'))).toBe(true);
+  });
+
+  test('a non-404 Gate error surfaces instead of retrying another dialect', async () => {
+    const seen = mockPageHost({ v1: 502, api: 200 });
+    await expect(new HermesGatewayClient(PROFILE).getSessionMessagePage('s-1', 50)).rejects.toThrow(/boom/);
+    expect(seen.some((u) => u.includes('/api/'))).toBe(false);
+  });
+});

@@ -22,6 +22,7 @@ import type {
   RunResponse,
   RunStatus,
   SessionMessage,
+  SessionMessagePage,
   SessionMessagesResponse,
   SessionsResponse,
 } from '@/lib/gateway/types';
@@ -410,17 +411,37 @@ export class HermesGatewayClient {
   }
 
   async getSessionMessages(sessionId: string, limit = 50): Promise<SessionMessage[]> {
-    // The Gate serves only `/v1/*`: GET /v1/sessions/{id}/messages answers
-    // `{ object: "list", data, hasMore, nextBefore }`. A direct Hermes host
-    // answers the native GET /api/sessions/{id}/messages with `{ data }`.
-    // Try the Gate dialect first and keep the native one for a genuine Hermes
-    // host. Messages pass through in wire order with content untouched.
+    return (await this.getSessionMessagePage(sessionId, limit)).messages;
+  }
+
+  /**
+   * One page of history, oldest-first, ending just before `before`.
+   *
+   * The array-returning `getSessionMessages` cannot express "the page before
+   * this one", which forced load-earlier to re-fetch the whole window with an
+   * ever-larger limit. The Gate answers `{ object: "list", data, hasMore,
+   * nextBefore }` and those cursors travel on the page; a direct Hermes host
+   * answers the native path with `{ data }` and no cursors, so those stay
+   * undefined and the caller keeps its short-page heuristic. Messages pass
+   * through in wire order with content untouched.
+   */
+  async getSessionMessagePage(
+    sessionId: string,
+    limit = 50,
+    before?: string,
+  ): Promise<SessionMessagePage> {
+    // The Gate serves only `/v1/*`. A direct Hermes host answers the native
+    // GET /api/sessions/{id}/messages with `{ data }`. Try the Gate dialect
+    // first and keep the native one for a genuine Hermes host.
+    const query = `limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`;
     try {
       const gate = await this.transport.request<SessionMessagesResponse>(
         'GET',
-        `/v1/sessions/${sessionId}/messages?limit=${limit}`,
+        `/v1/sessions/${sessionId}/messages?${query}`,
       );
-      if (Array.isArray(gate?.data)) return gate.data;
+      if (Array.isArray(gate?.data)) {
+        return { messages: gate.data, hasMore: gate.hasMore, nextBefore: gate.nextBefore };
+      }
     } catch (error) {
       // A direct Hermes host answers the `/v1/*` path 404. Anything else is
       // the Gate's own answer and must surface rather than silently retrying
@@ -429,9 +450,9 @@ export class HermesGatewayClient {
     }
     const result = await this.transport.request<SessionMessagesResponse>(
       'GET',
-      `/api/sessions/${sessionId}/messages?limit=${limit}`,
+      `/api/sessions/${sessionId}/messages?${query}`,
     );
-    return result.data;
+    return { messages: result.data ?? [] };
   }
 
   /**
