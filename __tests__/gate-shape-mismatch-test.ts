@@ -87,3 +87,44 @@ describe('environments.list resolves to the route the Gate actually serves', () 
     expect(resolveRoute('environments.status', {})).toBeNull();
   });
 });
+
+describe('/cron renders the Gate { data: [...] } envelope as a job count', () => {
+  // The real payload: POST /v1/capabilities/rpc cron.list -> the backend's
+  // { data: [jobs] } unchanged (gate/core/capabilities/gateway-methods.mjs).
+  test('a Gate data collection reports its count, never the raw envelope', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ data: [{ id: 'job-1' }] });
+    const result = await executeGatewaySlashCommand('/cron', {
+      hello: null, gatewayRequest, runAgentCommand: jest.fn(),
+    } as never);
+    expect(result.text).toContain('Jobs: 1');
+    expect(result.text).not.toContain('data:');
+  });
+
+  test('an empty Gate catalogue reports zero jobs instead of an envelope dump', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ data: [] });
+    const result = await executeGatewaySlashCommand('/cron', {
+      hello: null, gatewayRequest, runAgentCommand: jest.fn(),
+    } as never);
+    expect(result.text).toContain('Jobs: 0');
+  });
+
+  test('the legacy { jobs, running } shape still shows runner state and count', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({
+      running: true, jobs: [{ id: 'a' }, { id: 'b' }],
+    });
+    const result = await executeGatewaySlashCommand('/cron', {
+      hello: null, gatewayRequest, runAgentCommand: jest.fn(),
+    } as never);
+    expect(result.text).toContain('Runner: running');
+    expect(result.text).toContain('Jobs: 2');
+  });
+
+  test('a genuinely unknown shape keeps its Raw diagnostic', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ nextRun: ['soon'], lastRun: { at: 'x' } } as never);
+    const result = await executeGatewaySlashCommand('/cron', {
+      hello: null, gatewayRequest, runAgentCommand: jest.fn(),
+    } as never);
+    expect(result.text).toBe('Cron: complete');
+    expect(result.raw).toContain('nextRun');
+  });
+});

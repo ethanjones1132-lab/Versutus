@@ -58,6 +58,20 @@ describe('family list commands put the answer in the bubble text, not only in Ra
     expect(result.text).toContain('Jobs: 3');
   });
 
+  test('/cron reports the Gate { data: [...] } job count instead of dumping the envelope', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({
+      data: [{ id: 'job-1' }, { id: 'job-2' }],
+    });
+    const result = await executeGatewaySlashCommand('/cron', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('cron.list', {});
+    expect(result.text).toContain('Jobs: 2');
+    expect(result.text).not.toMatch(/^object: list/m);
+  });
+
   test('/plugins lists plugin rows as the bubble text', async () => {
     const gatewayRequest = jest.fn().mockResolvedValue({
       plugins: [{ name: 'sketch', enabled: true, version: '1.0' }],

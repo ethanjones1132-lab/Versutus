@@ -1811,7 +1811,7 @@ function formatEnvironments(result: unknown): string {
 function formatCron(result: unknown): string {
   const record = isRecord(result) ? result : {};
   const running = readFirstBoolean(record, ['running', 'enabled', 'active']);
-  const jobs = readCollection(result, ['jobs', 'crons', 'items']);
+  const jobs = readCollection(result, ['data', 'jobs', 'crons', 'items']);
   const lines = ['Cron'];
   if (running !== undefined) lines.push(`Runner: ${running ? 'running' : 'stopped'}`);
   if (jobs) lines.push(`Jobs: ${jobs.length}`);
