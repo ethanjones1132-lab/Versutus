@@ -237,6 +237,51 @@ test('sessions are listed from the backend', async () => {
   }
 });
 
+test('sessions.list RPC passes the requested limit to the backend', async () => {
+  const seen = [];
+  const base = stubRegistry([]).get('stubcli');
+  const registry = {
+    get(id) {
+      if (id !== 'stubcli') throw new Error(`unknown CLI adapter "${id}"`);
+      return {
+        ...base,
+        createBackend() {
+          const backend = base.createBackend();
+          return {
+            ...backend,
+            async listSessions(limit) { seen.push(limit); return [SESSION]; },
+          };
+        },
+      };
+    },
+    list() { return [base]; },
+  };
+  const { gate } = await makeGate({ registry });
+  const rpc = async (params) => {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/capabilities/rpc`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({ method: 'sessions.list', params }),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  try {
+    // The spend read asks for 50 and the registry read asks for 10 — both
+    // must reach the backend instead of the Hermes default page answering.
+    const limited = await rpc({ limit: 50 });
+    assert.equal(limited.status, 200, `sessions.list should dispatch, got ${JSON.stringify(limited.body)}`);
+    assert.equal(limited.body.result.object, 'list');
+    assert.equal(limited.body.result.data[0].id, 'ses_1');
+    assert.equal(seen.at(-1), 50);
+
+    // Absent stays undefined so the backend keeps its default page.
+    const bare = await rpc({});
+    assert.equal(bare.status, 200, `bare sessions.list should dispatch, got ${JSON.stringify(bare.body)}`);
+    assert.equal(seen.at(-1), undefined);
+  } finally {
+    await gate.close();
+  }
+});
+
 test('a session can be created and deleted through the Gate', async () => {
   const { gate, calls } = await makeGate();
   try {

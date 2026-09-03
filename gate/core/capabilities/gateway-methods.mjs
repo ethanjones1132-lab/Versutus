@@ -181,7 +181,13 @@ export function createGatewayMethods({ getBackend, listDevices }) {
     'jobs.resume': (params) => via(getBackend, params, 'setJobPaused', (b) => b.setJobPaused(jobIdOf(params), false)),
 
     'sessions.list': async (params) =>
-      via(getBackend, params, 'listSessions', async (b) => ({ object: 'list', data: await b.listSessions() })),
+      via(getBackend, params, 'listSessions', async (b) => ({
+        object: 'list',
+        // The limit must travel: without it Hermes serves its default page
+        // and anything past that window reads as absent. Absent stays
+        // undefined so the backend keeps its default.
+        data: await b.listSessions(Number(params?.limit) || undefined),
+      })),
 
     // The transcript reader behind `/session messages <id>`. The REST route
     // already serves it at GET /v1/sessions/{id}/messages, but the app's
