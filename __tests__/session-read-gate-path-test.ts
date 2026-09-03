@@ -21,14 +21,15 @@ const SESSIONS = { object: 'list', data: [{ id: 's-1' }, { id: 's-2' }] };
  * the reverse. The client asked only for /api/sessions, so every read through a
  * Gate 404'd and the session sheet reported "Sessions could not be read".
  */
-function mockHost(opts: { v1: number; api: number }) {
+function mockHost(opts: { v1: number; api: number; v1Body?: unknown }) {
   const calls: string[] = [];
   const fetchMock = jest.fn((input: unknown) => {
     const url = String(input);
     if (url.includes('/health')) return Promise.resolve(jsonResponse({ status: 'ok' }));
     if (url.includes('/v1/sessions')) {
       calls.push('/v1/sessions');
-      return Promise.resolve(opts.v1 === 200 ? jsonResponse(SESSIONS) : jsonResponse({ error: 'Not Found' }, opts.v1));
+      if (opts.v1 === 200) return Promise.resolve(jsonResponse(SESSIONS));
+      return Promise.resolve(jsonResponse(opts.v1Body ?? { error: 'Not Found' }, opts.v1));
     }
     if (url.includes('/api/sessions')) {
       calls.push('/api/sessions');
@@ -71,6 +72,16 @@ describe('getSessions reads the path the host actually serves', () => {
   test('a host serving neither path rejects rather than reporting an empty list', async () => {
     mockHost({ v1: 404, api: 404 });
     await expect(new HermesGatewayClient(PROFILE).getSessions(20)).rejects.toBeDefined();
+  });
+
+  test('a non-404 Gate error surfaces instead of retrying another dialect', async () => {
+    const calls = mockHost({
+      v1: 500,
+      api: 200,
+      v1Body: { error: { message: 'sessions exploded', code: 'session_list_failed' } },
+    });
+    await expect(new HermesGatewayClient(PROFILE).getSessions(20)).rejects.toThrow(/sessions exploded/);
+    expect(calls).toEqual(['/v1/sessions']);
   });
 });
 

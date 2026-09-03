@@ -330,8 +330,11 @@ export class HermesGatewayClient {
     try {
       const gate = await this.transport.request<SessionsResponse>('GET', `/v1/sessions?limit=${limit}`);
       if (Array.isArray(gate?.data)) return gate.data;
-    } catch {
-      // not a Gate, or it does not serve sessions -- fall through
+    } catch (error) {
+      // A direct Hermes host answers the `/v1/*` path 404. Anything else is
+      // the Gate's own answer and must surface rather than silently retrying
+      // another dialect.
+      if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
     }
     const result = await this.transport.request<SessionsResponse>('GET', `/api/sessions?limit=${limit}`);
     return result.data ?? [];
