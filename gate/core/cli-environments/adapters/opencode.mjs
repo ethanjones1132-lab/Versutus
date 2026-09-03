@@ -21,8 +21,16 @@ export const opencodeAdapter = {
   },
 
   /** Sessions, models, tools and approvals, owned by OpenCode itself. */
-  createBackend(options) {
-    return createOpenCodeBackend(options);
+  createBackend(options = {}) {
+    // backendManager.get passes { baseUrl, credentials, record }; the health
+    // check authenticates with credentials.OPENCODE_SERVER_PASSWORD, but the
+    // backend reads only `password` — map it so a guarded server stays
+    // authenticated past attach. An explicit password still wins.
+    const { credentials, password, ...rest } = options;
+    return createOpenCodeBackend({
+      ...rest,
+      password: password ?? credentials?.OPENCODE_SERVER_PASSWORD,
+    });
   },
   operations: {
     prompt: {

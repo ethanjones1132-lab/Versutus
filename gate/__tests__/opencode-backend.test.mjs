@@ -7,6 +7,7 @@ import {
   toGatewaySession,
   toGatewayMessage,
 } from '../core/cli-environments/backends/opencode.mjs';
+import { opencodeAdapter } from '../core/cli-environments/adapters/opencode.mjs';
 
 // Shapes captured live from opencode 1.18.18 — see docs/opencode-backend-contract.md.
 const SESSION = {
@@ -256,4 +257,55 @@ test('an approval reply reaches the session permission route', async () => {
   await backend.replyApproval('ses_abc', 'perm_1', 'approve');
   assert.equal(calls[0].path, '/session/ses_abc/permission/perm_1/reply');
   assert.equal(calls[0].body.reply, 'approve');
+});
+
+// ─── guarded-server credentials ──────────────────────────────────────
+// backendManager.get passes { baseUrl, credentials, record } to the adapter,
+// but createOpenCodeBackend reads only `password` — so a guarded `opencode
+// serve` attaches healthy (the health check sends OPENCODE_SERVER_PASSWORD)
+// then 401s on every session/message call. The adapter maps the credential.
+
+function headerCaptureFetch() {
+  const seen = [];
+  const fetchImpl = async (url, init = {}) => {
+    seen.push(init.headers ?? {});
+    return { ok: true, status: 200, async json() { return []; }, async text() { return '[]'; } };
+  };
+  return { seen, fetchImpl };
+}
+
+test('a guarded server created through the adapter sends the bearer header', async () => {
+  const { seen, fetchImpl } = headerCaptureFetch();
+  const backend = opencodeAdapter.createBackend({
+    baseUrl: 'http://127.0.0.1:4096',
+    credentials: { OPENCODE_SERVER_PASSWORD: 's3cret' },
+    record: {},
+    fetchImpl,
+  });
+  await backend.listSessions();
+  assert.equal(seen[0].Authorization, 'Bearer s3cret');
+});
+
+test('a server with no password sends no auth header', async () => {
+  const { seen, fetchImpl } = headerCaptureFetch();
+  const backend = opencodeAdapter.createBackend({
+    baseUrl: 'http://127.0.0.1:4096',
+    credentials: {},
+    record: {},
+    fetchImpl,
+  });
+  await backend.listSessions();
+  assert.equal(seen[0].Authorization, undefined);
+});
+
+test('an explicit password still wins over the credential binding', async () => {
+  const { seen, fetchImpl } = headerCaptureFetch();
+  const backend = opencodeAdapter.createBackend({
+    baseUrl: 'http://127.0.0.1:4096',
+    credentials: { OPENCODE_SERVER_PASSWORD: 'bound' },
+    password: 'explicit',
+    fetchImpl,
+  });
+  await backend.listSessions();
+  assert.equal(seen[0].Authorization, 'Bearer explicit');
 });
