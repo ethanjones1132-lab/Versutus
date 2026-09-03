@@ -11,6 +11,7 @@ import {
 import {
   sessionSpendCopy,
   sessionSpendReadFromUnknown,
+  sessionUsageSpendFromUnknown,
   totalUsage,
 } from '@/lib/gateway/session-analytics';
 import type { RunOutcome } from '@/lib/gateway/runs';
@@ -1076,6 +1077,15 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
   if (sub === 'usage') {
     const params = id ? { sessionId: id } : {};
     const result = await context.gatewayRequest('session.usage', params).catch(e => ({ error: String(e) }));
+    if (isRecord(result) && typeof result.error === 'string') {
+      return directReadResult('session.usage', 'Session usage', '/session usage', result);
+    }
+    // Both Gate envelopes — bare catalogue totals and one Session's
+    // counters — render the spend line `/usage` already prints. The error
+    // path above and the unfamiliar-shape fallback below are byte-identical
+    // to before, so a rejection and an unknown record read exactly as today.
+    const spend = sessionUsageSpendFromUnknown(result);
+    if (spend) return textResult(sessionSpendCopy(spend), '/session usage', compactJson(result));
     return directReadResult('session.usage', 'Session usage', '/session usage', result);
   }
 

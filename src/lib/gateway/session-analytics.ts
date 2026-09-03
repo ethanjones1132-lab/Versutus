@@ -85,6 +85,47 @@ export function sessionSpendCopy(spend: SessionSpend): string {
   ].join('\n');
 }
 
+/**
+ * Parse a `session.usage` RPC payload into the spend `/usage` already
+ * renders. The Gate answers two shapes behind the one method
+ * (`gate/core/capabilities/gateway-methods.mjs:218-229`): bare catalogue
+ * totals (`{ sessions, input_tokens, output_tokens, ... }`, no cost fields)
+ * without an id, and one Session's counters (`{ sessionId, input_tokens,
+ * output_tokens, actual_cost_usd, estimated_cost_usd, ... }`) with one.
+ * Anything else is not a usage read — null, so the caller keeps today's
+ * title-and-Raw fallback instead of printing a spend line over it.
+ */
+export function sessionUsageSpendFromUnknown(raw: unknown): SessionSpend | null {
+  if (!isRecord(raw)) return null;
+  if (typeof raw.sessions === 'number' && Number.isFinite(raw.sessions)) {
+    const input = numberField(raw, 'input_tokens') ?? 0;
+    const output = numberField(raw, 'output_tokens') ?? 0;
+    const cost = costField(raw, 'actual_cost_usd') ?? costField(raw, 'estimated_cost_usd') ?? null;
+    return {
+      sessionCount: Math.max(0, Math.floor(raw.sessions)),
+      tokens: Math.max(0, input + output),
+      costUsd: cost,
+    };
+  }
+  // One Session's counters always carry the counter keys — the Gate's
+  // `usageOf` emits every one even when zero — so a record with none of
+  // them is not a usage read (an id alone carries no spend to render) and
+  // falls back to today's title-and-Raw instead of a zeroed spend line.
+  const hasCounters =
+    numberField(raw, 'input_tokens') !== undefined ||
+    numberField(raw, 'output_tokens') !== undefined ||
+    costField(raw, 'actual_cost_usd') !== undefined ||
+    costField(raw, 'estimated_cost_usd') !== undefined;
+  if (!hasCounters) return null;
+  const usage = sessionUsage({
+    input_tokens: numberField(raw, 'input_tokens'),
+    output_tokens: numberField(raw, 'output_tokens'),
+    actual_cost_usd: costField(raw, 'actual_cost_usd'),
+    estimated_cost_usd: costField(raw, 'estimated_cost_usd'),
+  });
+  return { sessionCount: 1, tokens: usage.tokens, costUsd: usage.costUsd };
+}
+
 export function applySessionSpendRead(
   previous: SessionSpendState,
   read: SessionSpendRead,
