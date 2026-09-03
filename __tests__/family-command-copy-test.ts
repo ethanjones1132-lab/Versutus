@@ -254,16 +254,63 @@ describe('family list commands put the answer in the bubble text, not only in Ra
     expect(result.text).toContain('Hermes has no remote agent registry');
   });
 
-  test('/skills <name> keeps the legacy single-record read shape', async () => {
-    const gatewayRequest = jest.fn().mockResolvedValue({ name: 'codemod', description: 'apply a codemod' });
+  test('/skills <name> answers from the skills.list read filtered by name', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({
+      object: 'list',
+      data: [
+        { name: 'codemod', description: 'apply a codemod' },
+        { name: 'swe', description: '' },
+      ],
+    });
     const result = await executeGatewaySlashCommand('/skills codemod', {
       hello: null,
       gatewayRequest,
       runAgentCommand: jest.fn(),
     });
-    expect(gatewayRequest).toHaveBeenCalledWith('skill.get', { id: 'codemod' });
-    expect(result.text).toBe('Skills');
+    expect(gatewayRequest).toHaveBeenCalledWith('skills.list', {});
+    expect(result.title).toBe('/skills codemod');
+    expect(result.text).toContain('/codemod');
+    expect(result.text).toContain('apply a codemod');
     expect(result.raw).toContain('codemod');
+  });
+
+  test('/skills <name> matches case-insensitively and strips a leading slash', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({
+      skills: [{ name: 'codemod', description: 'apply a codemod' }],
+    });
+    const result = await executeGatewaySlashCommand('/skills /CODEMOD', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('skills.list', {});
+    expect(result.text).toContain('/codemod');
+  });
+
+  test('/skills <unknown> says no skill instead of printing the catalogue', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({
+      object: 'list',
+      data: [{ name: 'codemod', description: 'apply a codemod' }],
+    });
+    const result = await executeGatewaySlashCommand('/skills ghost', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('skills.list', {});
+    expect(result.text).toBe("No skill named 'ghost'.");
+  });
+
+  test('a rejecting /skills <name> names the skills.list failure', async () => {
+    const gatewayRequest = jest.fn().mockRejectedValue(new Error('HTTP 500'));
+    const result = await executeGatewaySlashCommand('/skills codemod', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('skills.list', {});
+    expect(result.text).toContain('Skill codemod could not be read');
+    expect(result.text).toContain('HTTP 500');
   });
 
   test('/agents <id> keeps the legacy single-record read shape', async () => {

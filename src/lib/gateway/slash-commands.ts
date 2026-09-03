@@ -1414,6 +1414,9 @@ async function runAdvancedFamilyCommand(commandName: string, args: string[], con
   if (commandName === '/cron' && sub === 'history') {
     return runCronHistoryCommand(args.slice(1), context);
   }
+  if (commandName === '/skills' && sub) {
+    return runSkillDetailCommand(sub, context);
+  }
   let method = '';
   let title = commandName;
 
@@ -1439,7 +1442,7 @@ async function runAdvancedFamilyCommand(commandName: string, args: string[], con
       title = 'Environments';
       break;
     case '/skills':
-      method = sub ? 'skill.get' : 'skills.list';
+      method = 'skills.list';
       title = 'Skills';
       break;
     case '/artifacts':
@@ -2032,6 +2035,40 @@ function describeCronRun(value: unknown): string {
   const status = value.status === 'running' ? 'running' : 'completed';
   const turns = typeof value.turnCount === 'number' ? ` · ${value.turnCount} turns` : '';
   return `- ${truncateLine(name, 120)} · ${status}${turns}`;
+}
+
+/**
+ * `/skills <name>` answers from the `skills.list` read the Skills pane
+ * renders: no Gateway dispatches `skill.get`, so the direct read always
+ * answers unknown-method. A name match renders that skill's row; an
+ * unknown name says so instead of printing the whole catalogue.
+ */
+async function runSkillDetailCommand(name: string, context: SlashCommandContext): Promise<SlashCommandResult> {
+  const wanted = name.trim().replace(/^\/+/, '').toLowerCase();
+  const result = await context.gatewayRequest('skills.list', {}).catch(e => ({ error: String(e) }));
+  const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
+  if (error) {
+    return textResult(`Skill ${name} could not be read: ${error}`, `/skills ${name}`, compactJson(result));
+  }
+  const skills = readCollection(result, ['data', 'skills', 'items', 'available', 'installed']) ?? [];
+  const match = skills.find((entry) => {
+    const record = isRecord(entry) ? entry : {};
+    const candidate = readFirstString(record, ['name', 'id', 'slug', 'title'])?.replace(/^\/+/, '').toLowerCase();
+    return candidate === wanted;
+  });
+  if (!match) {
+    return textResult(`No skill named '${name}'.`, `/skills ${name}`, compactJson(result));
+  }
+  return textResult(formatSkillDetail(match), `/skills ${name}`, compactJson(result));
+}
+
+function formatSkillDetail(value: unknown): string {
+  const record = isRecord(value) ? value : {};
+  const name = (readFirstString(record, ['name', 'id', 'slug', 'title']) ?? 'unknown').replace(/^\/+/, '');
+  const description = readFirstString(record, ['description', 'summary', 'detail']) ?? '';
+  const category = readFirstString(record, ['category', 'group', 'kind']);
+  const head = description ? `/${name} - ${truncateLine(description, 120)}` : `/${name}`;
+  return category ? `${head}\nCategory: ${category}` : head;
 }
 
 function formatCron(result: unknown): string {

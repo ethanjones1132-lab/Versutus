@@ -80,13 +80,14 @@ describe('family commands with a registered subcommand slash', () => {
     expect(gatewayRequest).toHaveBeenCalledWith('skills.list', {});
   });
 
-  test('/skills <name> still prints metadata via skill.get', async () => {
-    const gatewayRequest = jest.fn().mockResolvedValue({ name: 'weather', description: 'Look up the forecast' });
-    await executeGatewaySlashCommand('/skills weather', {
+  test('/skills <name> answers from the skills.list read', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ skills: [{ name: 'weather', description: 'Look up the forecast' }] });
+    const result = await executeGatewaySlashCommand('/skills weather', {
       hello: null,
       gatewayRequest,
       runAgentCommand: jest.fn(),
     });
-    expect(gatewayRequest).toHaveBeenCalledWith('skill.get', { id: 'weather' });
+    expect(gatewayRequest).toHaveBeenCalledWith('skills.list', {});
+    expect(result.text).toContain('/weather');
   });
 });

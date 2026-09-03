@@ -43,15 +43,16 @@ describe('shouldPassthroughSkillSlash', () => {
 });
 
 describe('/skills <name> still prints metadata', () => {
-  test('dispatches skill.get and never pretends to invoke', async () => {
-    const gatewayRequest = jest.fn().mockResolvedValue({ name: 'weather', description: 'Look up the forecast' });
+  test('reads skills.list and never pretends to invoke', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ skills: [{ name: 'weather', description: 'Look up the forecast' }] });
     const result = await executeGatewaySlashCommand('/skills weather', {
       hello: null,
       gatewayRequest,
       runAgentCommand: jest.fn(),
     });
-    expect(gatewayRequest).toHaveBeenCalledWith('skill.get', { id: 'weather' });
+    expect(gatewayRequest).toHaveBeenCalledWith('skills.list', {});
     expect(result.text).not.toMatch(/Unknown command/);
+    expect(result.text).toContain('/weather');
   });
 });
 
