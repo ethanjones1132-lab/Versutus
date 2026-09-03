@@ -132,7 +132,10 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
     const headers = { ...(init.headers ?? {}) };
     if (init.body) headers['Content-Type'] = 'application/json';
     if (password) headers.Authorization = `Bearer ${password}`;
-    const response = await fetchImpl(`${root}${path}`, { ...init, headers });
+    const response = await fetchImpl(`${root}${path}`, { ...init, headers }).catch((err) => {
+      const cause = err?.cause?.message ?? err?.message ?? String(err);
+      throw new Error(`opencode: could not reach ${root}${path} (${cause})`);
+    });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       let message = text || `HTTP ${response.status}`;

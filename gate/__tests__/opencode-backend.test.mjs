@@ -217,6 +217,28 @@ test('a refused send surfaces the server message', async () => {
   await assert.rejects(() => backend.sendMessage('s', { text: 'x' }), /boom|UnknownError/);
 });
 
+test('a refused fetch rejects naming the baseUrl, not a bare fetch failed', async () => {
+  const backend = createOpenCodeBackend({
+    baseUrl: 'http://127.0.0.1:4096',
+    fetchImpl: async () => { throw new TypeError('fetch failed'); },
+  });
+  await assert.rejects(
+    () => backend.sendMessage('s', { text: 'x' }),
+    /opencode: could not reach http:\/\/127\.0\.0\.1:4096\/session\/s\/message \(fetch failed\)/,
+  );
+});
+
+test('a 500 body-text error message stays byte-identical', async () => {
+  const backend = createOpenCodeBackend({
+    baseUrl: 'http://127.0.0.1:4096',
+    fetchImpl: async () => ({ ok: false, status: 500, async text() { return JSON.stringify({ name: 'UnknownError', data: { message: 'boom' } }); } }),
+  });
+  await assert.rejects(
+    () => backend.sendMessage('s', { text: 'x' }),
+    (err) => err.message === 'opencode: boom',
+  );
+});
+
 // Verified live 2026-08-16: an upstream 404 from the model provider comes
 // back as a 200 from OpenCode's own /message route, with the failure folded
 // into `info.error` and `parts` left empty — never a non-ok HTTP response.
