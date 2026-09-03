@@ -1087,6 +1087,45 @@ test('the Gate dispatches the Hermes-dialect methods the app actually sends', as
   }
 });
 
+test('cron.jobs reads every jobs envelope key the Routines pane reads', async () => {
+  // The Activity tab (listCronJobs -> cron.jobs) must agree with the Routines
+  // pane (ManifestClient.listJobs) and /cron (formatCron): all four read
+  // data/jobs/crons/items, so a host answering { crons: [...] } or
+  // { items: [...] } must not read as empty here.
+  const shapes = [
+    ['data', { data: [{ id: 'job-1' }] }],
+    ['jobs', { jobs: [{ id: 'job-1' }] }],
+    ['crons', { crons: [{ id: 'job-1' }] }],
+    ['items', { items: [{ id: 'job-1' }] }],
+    ['bare-array', [{ id: 'job-1' }]],
+  ];
+  for (const [shape, listJobsResult] of shapes) {
+    const calls = [];
+    const registry = stubFrontedRegistry(calls);
+    const adapter = registry.get('stubcli');
+    const createBackend = adapter.createBackend.bind(adapter);
+    adapter.createBackend = (...args) => ({
+      ...createBackend(...args),
+      async listJobs() { calls.push('listJobs'); return listJobsResult; },
+    });
+    const { gate } = await makeGate({ calls, registry });
+    try {
+      const response = await fetch(`http://127.0.0.1:${gate.port}/v1/capabilities/rpc`, {
+        method: 'POST',
+        headers: auth(gate),
+        body: JSON.stringify({ method: 'cron.jobs', params: {} }),
+      });
+      assert.equal(response.status, 200, `cron.jobs (${shape}) should dispatch`);
+      const body = await response.json();
+      assert.equal(body.result.object, 'list');
+      assert.equal(body.result.data.length, 1, `cron.jobs (${shape}) must not read empty`);
+      assert.equal(body.result.data[0].id, 'job-1');
+    } finally {
+      await gate.close();
+    }
+  }
+});
+
 test('the manifest advertises the methods the Gate can actually dispatch', async () => {
   const calls = [];
   const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });

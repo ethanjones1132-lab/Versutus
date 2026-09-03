@@ -136,7 +136,10 @@ export function createGatewayMethods({ getBackend, listDevices }) {
     'cron.jobs': async (params) =>
       via(getBackend, params, 'listJobs', async (backend) => {
         const raw = await backend.listJobs();
-        const jobs = (raw?.data ?? raw?.jobs ?? (Array.isArray(raw) ? raw : []))
+        // Same key list formatCron and ManifestClient.listJobs read
+        // (['data', 'jobs', 'crons', 'items']): a host answering
+        // { crons: [...] } must not read as empty in the Activity tab.
+        const jobs = (raw?.data ?? raw?.jobs ?? raw?.crons ?? raw?.items ?? (Array.isArray(raw) ? raw : []))
           .map(toCronJobView)
           .filter(Boolean);
         return { object: 'list', data: jobs };
