@@ -63,6 +63,7 @@ export class HermesGatewayClient {
   private transport: HttpTransport;
   private monitor: ConnectionMonitor;
   private connectAttempt: Promise<void> | null = null;
+  private modelDialect: 'hermes' | 'gate' | null = null;
 
   constructor(
     private profile: GatewayProfile,
@@ -104,6 +105,8 @@ export class HermesGatewayClient {
       token: profile.token,
       sessionKey: profile.sessionKey,
     });
+    // A new endpoint may speak the other dialect; re-identify on next read.
+    this.modelDialect = null;
   }
 
   /**
@@ -234,7 +237,64 @@ export class HermesGatewayClient {
   async getModels(): Promise<ModelInfo[]> {
     // `/v1/models` is a single hermes-agent entry. The picker catalog is
     // GET /api/model/options (providers + their models). Older Hermes 404s
-    // that path — fall through rather than emptying the picker.
+    // that path — fall through rather than emptying the picker. A Gate is
+    // the reverse: it serves only `/v1/*` and 404s the native path, so an
+    // unremembered client pays two requests for every cold model read.
+    // Remember the dialect that answered, per connection, and lead with it
+    // next time. Direct Hermes keeps leading with its full provider catalog
+    // rather than the single compatibility model from `/v1/models`.
+    if (this.modelDialect === 'gate') {
+      try {
+        const remembered = await this.readGateModels();
+        return remembered;
+      } catch (error) {
+        // A direct Hermes host answers the `/v1/*` path 404. Anything else
+        // is the Gate's own answer and must surface rather than silently
+        // retrying another dialect.
+        if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
+        const fallback = await this.readHermesModelOptions();
+        if (fallback) {
+          this.modelDialect = 'hermes';
+          return fallback;
+        }
+        // Neither dialect answered: the Gate path already 404'd and the
+        // native path is empty or missing too. Report the Gate refusal
+        // rather than re-requesting a path that just failed.
+        throw error;
+      }
+    }
+    // Unknown or Hermes-remembered dialect: lead with the native path so a
+    // direct Hermes host keeps its full provider catalog instead of the
+    // single compatibility model from `/v1/models`. Only a missing native
+    // route (404) identifies a Gate, so a transient failure never flips a
+    // Hermes host onto the compatibility model.
+    let nativeRouteMissing = false;
+    try {
+      const options = await this.transport.request<HermesModelOptions>('GET', '/api/model/options');
+      const flattened = flattenHermesModelOptions(options);
+      if (flattened.length > 0) {
+        this.modelDialect = 'hermes';
+        return flattened.map((model) => ({
+          id: model.id,
+          object: 'model',
+          owned_by: model.providerId,
+          provider: model.provider,
+          providerId: model.providerId,
+          modelId: model.modelId,
+          available: model.available,
+        }));
+      }
+    } catch (error) {
+      nativeRouteMissing = error instanceof GatewayHttpError && error.status === 404;
+      // Any other failure falls through to the Gate path below without
+      // remembering it — the next read still leads with the full catalog.
+    }
+    const result = await this.transport.request<{ data: ModelInfo[] }>('GET', '/v1/models');
+    if (nativeRouteMissing) this.modelDialect = 'gate';
+    return result.data ?? [];
+  }
+
+  private async readHermesModelOptions(): Promise<ModelInfo[] | null> {
     try {
       const options = await this.transport.request<HermesModelOptions>('GET', '/api/model/options');
       const flattened = flattenHermesModelOptions(options);
@@ -249,9 +309,13 @@ export class HermesGatewayClient {
           available: model.available,
         }));
       }
+      return null;
     } catch {
-      // fall through
+      return null;
     }
+  }
+
+  private async readGateModels(): Promise<ModelInfo[]> {
     const result = await this.transport.request<{ data: ModelInfo[] }>('GET', '/v1/models');
     return result.data ?? [];
   }
