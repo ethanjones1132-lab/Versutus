@@ -145,6 +145,12 @@ describe('family list commands put the answer in the bubble text, not only in Ra
     expect(METHOD_GUIDANCE['cron.history']).toMatch(/\/v1\/capabilities\/rpc/);
     expect(METHOD_GUIDANCE['cron.history']).not.toMatch(/no per-job run history/);
   });
+  test('env.get guidance names the environments.check read instead of denying remote status', () => {
+    expect(METHOD_TO_ROUTE['env.get']).toBeUndefined();
+    expect(METHOD_GUIDANCE['env.get']).toMatch(/environments\.check/);
+    expect(METHOD_GUIDANCE['env.get']).toMatch(/\/v1\/capabilities\/rpc/);
+    expect(METHOD_GUIDANCE['env.get']).toMatch(/host-side/);
+  });
   test('/plugins lists plugin rows as the bubble text', async () => {
     const gatewayRequest = jest.fn().mockResolvedValue({
       plugins: [{ name: 'sketch', enabled: true, version: '1.0' }],

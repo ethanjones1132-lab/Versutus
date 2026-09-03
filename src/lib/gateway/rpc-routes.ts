@@ -81,7 +81,7 @@ export const METHOD_GUIDANCE: Record<string, string> = {
   'diagnostics.stability': 'Use /diagnostics (GET /health/detailed) for the readiness snapshot.',
   'doctor.memory': 'Memory lives on the gateway host; the API server only scopes it via the X-Hermes-Session-Key header.',
   'doctor.memory.status': 'Memory lives on the gateway host; the API server only scopes it via the X-Hermes-Session-Key header.',
-  'env.get': 'Environment and secrets management is host-side (config.yaml) — no remote REST exists.',
+  'env.get': 'Per-environment live status is served by the Gate RPC environments.check (POST /v1/capabilities/rpc answers the check record) — /env <name> reads it there. Environment and secrets values themselves remain host-side (config.yaml) — no remote REST exists for those reads.',
   'environments.status': 'Environment and secrets management is host-side — no remote REST exists.',
   'logs.tail': 'Gateway logs are host-side (hermes logs) — the API server does not expose log streaming.',
   'models.primary': 'Model routing is host config. Per-request model override is supported — use the Chat model picker.',
