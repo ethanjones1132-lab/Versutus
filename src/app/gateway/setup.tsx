@@ -10,6 +10,7 @@ import { GatewayManagementSection } from '@/components/gateway/gateway-managemen
 import { ProvidersSection } from '@/components/gateway/providers-section';
 import { Card, Chip, Screen, SegmentedControl, Text } from '@/components/ui';
 import { useGateway } from '@/context/gateway-provider';
+import { backendChipLabel } from '@/lib/gateway/backend-freshness';
 import { Spacing } from '@/constants/tokens';
 
 type Section = 'providers' | 'environments' | 'capabilities' | 'management';
@@ -54,7 +55,7 @@ export default function GatewaySetupScreen() {
               {backends.map((backend) => (
                 <Chip
                   key={backend.id}
-                  label={backend.label}
+                  label={backendChipLabel(backend)}
                   selected={backend.id === activeBackendId}
                   onPress={() => selectBackend(backend.id)}
                 />
