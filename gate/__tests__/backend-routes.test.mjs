@@ -269,6 +269,32 @@ test('session messages come back in the shape the app parses', async () => {
   }
 });
 
+test('session.messages RPC reads a transcript through the Gate dialect', async () => {
+  const { gate, calls } = await makeGate();
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/capabilities/rpc`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({ method: 'session.messages', params: { sessionId: 'ses_1', limit: 20 } }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.result.object, 'list');
+    assert.equal(body.result.data[0].role, 'user');
+    // The requested limit travels to the backend, not just the REST pager.
+    assert.ok(calls.includes('listMessages:ses_1:20'));
+
+    // A missing id is an honest named failure, not an empty read.
+    const missing = await fetch(`http://127.0.0.1:${gate.port}/v1/capabilities/rpc`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({ method: 'session.messages', params: {} }),
+    });
+    assert.equal(missing.status, 400);
+    assert.match((await missing.json()).error.message, /sessionId is required/);
+  } finally {
+    await gate.close();
+  }
+});
+
 test('chat routed to a backend goes through the CLI, not the provider proxy', async () => {
   const { gate, calls } = await makeGate();
   try {
@@ -936,6 +962,12 @@ test('the Gate dispatches the Hermes-dialect methods the app actually sends', as
       const { status, body } = await rpc(method);
       assert.equal(status, 200, `${method} should dispatch, got ${JSON.stringify(body)}`);
       assert.ok(body.result !== undefined, `${method} should return a result`);
+    }
+
+    {
+      const { status, body } = await rpc('session.messages', { sessionId: 'ses_1', limit: 10 });
+      assert.equal(status, 200, `session.messages should dispatch, got ${JSON.stringify(body)}`);
+      assert.equal(body.result.object, 'list');
     }
 
     assert.equal((await rpc('jobs.run', { jobId: 'job-1' })).status, 200);

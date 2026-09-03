@@ -139,6 +139,20 @@ export function createGatewayMethods({ getBackend, listDevices }) {
     'sessions.list': async (params) =>
       via(getBackend, params, 'listSessions', async (b) => ({ object: 'list', data: await b.listSessions() })),
 
+    // The transcript reader behind `/session messages <id>`. The REST route
+    // already serves it at GET /v1/sessions/{id}/messages, but the app's
+    // command path speaks RPC (`session.messages`), which answered
+    // `Unknown method` here. Same backend method, same normalized list
+    // envelope, with the requested limit travelling to the backend.
+    'session.messages': async (params) => {
+      const sessionId = params?.sessionId ?? params?.id;
+      if (!sessionId) throw new Error('sessionId is required');
+      return via(getBackend, params, 'listMessages', async (b) => ({
+        object: 'list',
+        data: await b.listMessages(String(sessionId), Number(params?.limit) || undefined),
+      }));
+    },
+
     // Backend models only, matching what `models.list` returns on Hermes. The
     // Gate's merged provider+backend catalog stays at GET /v1/models, which is
     // what the app's Models tab reads.
