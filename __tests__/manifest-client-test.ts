@@ -936,6 +936,82 @@ describe('ManifestClient sessions and runs when advertised', () => {
     await expect(bare.groupHistory('room1')).resolves.toEqual([]);
   });
 
+  test('collection readers accept a bare array or a { data } envelope: models', async () => {
+    const rows = [{ id: 'm1', object: 'model' }];
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ object: 'list', data: rows }))
+      .mockResolvedValueOnce(jsonResponse(rows));
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', models: '/v1/models' });
+    await expect(client.getModels()).resolves.toEqual(rows);
+    await expect(client.getModels()).resolves.toEqual(rows);
+  });
+
+  test('collection readers accept a bare array or a { data } envelope: Bots', async () => {
+    const rows = [{ id: 'default', displayName: 'default', routable: true }];
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ object: 'list', data: rows }))
+      .mockResolvedValueOnce(jsonResponse(rows));
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', bots: '/v1/bots' });
+    await expect(client.listBots()).resolves.toEqual(rows);
+    await expect(client.listBots()).resolves.toEqual(rows);
+  });
+
+  test('collection readers accept a bare array or a { data } envelope: Routines', async () => {
+    const rows = [{ id: 'j1', name: 'nightly' }];
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ object: 'list', data: rows }))
+      .mockResolvedValueOnce(jsonResponse(rows));
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', jobs: '/v1/jobs' });
+    await expect(client.listJobs()).resolves.toEqual(rows);
+    await expect(client.listJobs()).resolves.toEqual(rows);
+  });
+
+  test('collection readers accept a bare array or a { data } envelope: Groups', async () => {
+    const rows = [{ id: 'room1', name: 'crew', memberIds: ['a', 'b'] }];
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ object: 'list', data: rows }))
+      .mockResolvedValueOnce(jsonResponse(rows));
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', botGroups: '/v1/bot-groups' });
+    await expect(client.listGroups()).resolves.toEqual(rows);
+    await expect(client.listGroups()).resolves.toEqual(rows);
+  });
+
+  test('collection readers accept a bare array or a { data } envelope: Group transcript', async () => {
+    const rows = [
+      { id: 'e1', role: 'user', text: 'plan the launch', at: 1 },
+      { id: 'e2', role: 'bot', botId: 'b', text: 'on it', at: 1 },
+    ];
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ object: 'list', data: rows }))
+      .mockResolvedValueOnce(jsonResponse(rows));
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', botGroups: '/v1/bot-groups' });
+    await expect(client.groupHistory('room1')).resolves.toEqual(rows);
+    await expect(client.groupHistory('room1')).resolves.toEqual(rows);
+  });
+
+  test('collection readers keep their missing-endpoint behaviour', async () => {
+    const fetchMock = jest.fn();
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    // models is required: no manifest path names the missing capability.
+    await expect(clientWithEndpoints({ health: '/health' }).getModels()).rejects.toThrow(/models/);
+    // Bots, Routines, Groups and the Group transcript degrade to empty.
+    await expect(clientWithEndpoints({ health: '/health' }).listBots()).resolves.toEqual([]);
+    await expect(clientWithEndpoints({ health: '/health' }).listJobs()).resolves.toEqual([]);
+    await expect(clientWithEndpoints({ health: '/health' }).listGroups()).resolves.toEqual([]);
+    await expect(clientWithEndpoints({ health: '/health' }).groupHistory('room1')).resolves.toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   test('stopRun POSTs the advertised stopRun path with the run id', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

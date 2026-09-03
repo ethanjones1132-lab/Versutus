@@ -240,8 +240,11 @@ export class ManifestClient implements PortalClient {
 
   async getModels(): Promise<ModelInfo[]> {
     const path = this.requireEndpoint('models');
-    const result = await this.rootTransport.request<{ data: ModelInfo[] }>('GET', this.withScope(path));
-    return result.data;
+    const result = await this.rootTransport.request<{ data?: ModelInfo[] } | ModelInfo[]>(
+      'GET',
+      this.withScope(path),
+    );
+    return Array.isArray(result) ? result : result.data ?? [];
   }
 
   /**
@@ -544,11 +547,9 @@ export class ManifestClient implements PortalClient {
   async listJobs(): Promise<{ id: string; name?: string; paused?: boolean }[]> {
     const path = this.endpoints.jobs;
     if (!path) return [];
-    const result = await this.rootTransport.request<{ data?: { id: string; name?: string; paused?: boolean }[] }>(
-      'GET',
-      this.withBotOnly(path),
-    );
-    return result.data ?? [];
+    type JobRow = { id: string; name?: string; paused?: boolean };
+    const result = await this.rootTransport.request<{ data?: JobRow[] } | JobRow[]>('GET', this.withBotOnly(path));
+    return Array.isArray(result) ? result : result.data ?? [];
   }
 
   async createJob(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }> {
@@ -605,8 +606,8 @@ export class ManifestClient implements PortalClient {
   async listBots(): Promise<PublicBot[]> {
     const path = this.endpoints.bots;
     if (!path) return [];
-    const result = await this.rootTransport.request<{ data?: PublicBot[] }>('GET', path);
-    return result.data ?? [];
+    const result = await this.rootTransport.request<{ data?: PublicBot[] } | PublicBot[]>('GET', path);
+    return Array.isArray(result) ? result : result.data ?? [];
   }
 
   /**
@@ -619,8 +620,8 @@ export class ManifestClient implements PortalClient {
   async listGroups(): Promise<BotGroupRoom[]> {
     const path = this.endpoints.botGroups;
     if (!path) return [];
-    const result = await this.rootTransport.request<{ data?: BotGroupRoom[] }>('GET', path);
-    return result.data ?? [];
+    const result = await this.rootTransport.request<{ data?: BotGroupRoom[] } | BotGroupRoom[]>('GET', path);
+    return Array.isArray(result) ? result : result.data ?? [];
   }
 
   async createGroup(input: { name: string; memberIds: string[] }): Promise<BotGroupRoom> {
@@ -655,11 +656,11 @@ export class ManifestClient implements PortalClient {
   async groupHistory(groupId: string): Promise<GroupTranscriptEntry[]> {
     const path = this.endpoints.botGroups;
     if (!path) return [];
-    const result = await this.rootTransport.request<{ data?: GroupTranscriptEntry[] }>(
+    const result = await this.rootTransport.request<{ data?: GroupTranscriptEntry[] } | GroupTranscriptEntry[]>(
       'GET',
       `${path.replace(/\/+$/, '')}/${encodeURIComponent(groupId)}/messages`,
     );
-    return result.data ?? [];
+    return Array.isArray(result) ? result : result.data ?? [];
   }
 
   async renameGroup(groupId: string, name: string): Promise<BotGroupRoom> {
