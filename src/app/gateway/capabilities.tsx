@@ -1,6 +1,7 @@
 import { ScrollView, StyleSheet } from 'react-native';
 
 import { CapabilitiesSection } from '@/components/gateway/capabilities-section';
+import { ToolsetsSection } from '@/components/gateway/toolsets-section';
 import { Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 
@@ -18,6 +19,7 @@ export default function CapabilityEditorScreen() {
           Create, edit, and delete Gate capability instances. Provider auth and CLI environments have dedicated screens.
         </Text>
         <CapabilitiesSection />
+        <ToolsetsSection />
       </ScrollView>
     </Screen>
   );

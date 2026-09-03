@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { CapabilitiesSection } from '@/components/gateway/capabilities-section';
+import { ToolsetsSection } from '@/components/gateway/toolsets-section';
 import { EnvironmentsSection } from '@/components/gateway/environments-section';
 import { GatewayManagementSection } from '@/components/gateway/gateway-management-section';
 import { ProvidersSection } from '@/components/gateway/providers-section';
@@ -89,6 +90,7 @@ export default function GatewaySetupScreen() {
               tab — the registry no longer creates them, so a provider has exactly one home.
             </Text>
             <CapabilitiesSection />
+            <ToolsetsSection />
           </>
         ) : null}
 
