@@ -31,8 +31,10 @@ export const METHOD_TO_ROUTE: Record<string, Route> = {
   'session.chat': { method: 'POST', path: '/api/sessions/{sessionId}/chat' },
   'session.chat.stream': { method: 'POST', path: '/api/sessions/{sessionId}/chat/stream' },
   // Runs & responses
-  'responses.get': { method: 'GET', path: '/v1/responses/{responseId}' },
-  'responses.delete': { method: 'DELETE', path: '/v1/responses/{responseId}' },
+  // There is no /v1/responses surface: the Gate's allowlist (server.mjs:844-847)
+  // answers unknown routes 404, and no handler reads a response record, so a
+  // responses.get/delete route would only ever resolve into a 404. Callers hit
+  // the METHOD_GUIDANCE entries below and fail honestly instead.
   'runs.create': { method: 'POST', path: '/v1/runs' },
   // Cron (Jobs API)
   'cron.list': { method: 'GET', path: '/api/jobs' },
@@ -89,6 +91,8 @@ export const METHOD_GUIDANCE: Record<string, string> = {
   'plugin.get': 'Plugins are host-managed; the API server exposes toolsets (/tools) but not plugin management.',
   'plugins.list': 'Plugins are host-managed; the API server exposes toolsets (/tools) but not plugin management.',
   'plugins.uiDescriptors': 'Plugins are host-managed; the API server exposes no plugin UI descriptors.',
+  'responses.get': 'The Gate serves no /v1/responses surface — unknown routes answer 404. Read the run the response belongs to instead: GET /v1/runs/{run_id} for status, GET /v1/runs/{run_id}/events for the replayed stream.',
+  'responses.delete': 'The Gate serves no /v1/responses surface — unknown routes answer 404, so there is no response record to delete. Stop a live run instead: POST /v1/runs/{run_id}/stop.',
   'session.abort': 'Aborting a Hermes run: the app stop button aborts the stream; server-side stop exists per run via POST /v1/runs/{run_id}/stop.',
   'session.compact': 'No remote compaction endpoint — start a new session (POST /api/sessions) or use the session selector.',
   'session.fork': 'No remote fork endpoint — start a new session (POST /api/sessions) or use the session selector.',

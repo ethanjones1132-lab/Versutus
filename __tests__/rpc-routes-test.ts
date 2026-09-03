@@ -23,4 +23,18 @@ describe('Hermes route map', () => {
   test('maps run creation to Hermes', () => {
     expect(METHOD_TO_ROUTE['runs.create']).toEqual({ method: 'POST', path: '/v1/runs' });
   });
+
+  test('responses.get/delete have no route: the Gate serves no /v1/responses surface', () => {
+    expect(METHOD_TO_ROUTE['responses.get']).toBeUndefined();
+    expect(METHOD_TO_ROUTE['responses.delete']).toBeUndefined();
+    expect(resolveRoute('responses.get', { responseId: 'resp_1' })).toBeNull();
+    expect(resolveRoute('responses.delete', { responseId: 'resp_1' })).toBeNull();
+  });
+
+  test('responses.get/delete fail honestly with a run-read next step', () => {
+    for (const method of ['responses.get', 'responses.delete']) {
+      expect(METHOD_GUIDANCE[method]).toMatch(/\/v1\/responses.*404|no \/v1\/responses/);
+      expect(METHOD_GUIDANCE[method]).toMatch(/\/v1\/runs\//);
+    }
+  });
 });
