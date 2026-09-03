@@ -331,6 +331,23 @@ export class HermesGatewayClient {
   }
 
   async getSessionMessages(sessionId: string, limit = 50): Promise<SessionMessage[]> {
+    // The Gate serves only `/v1/*`: GET /v1/sessions/{id}/messages answers
+    // `{ object: "list", data, hasMore, nextBefore }`. A direct Hermes host
+    // answers the native GET /api/sessions/{id}/messages with `{ data }`.
+    // Try the Gate dialect first and keep the native one for a genuine Hermes
+    // host. Messages pass through in wire order with content untouched.
+    try {
+      const gate = await this.transport.request<SessionMessagesResponse>(
+        'GET',
+        `/v1/sessions/${sessionId}/messages?limit=${limit}`,
+      );
+      if (Array.isArray(gate?.data)) return gate.data;
+    } catch (error) {
+      // A direct Hermes host answers the `/v1/*` path 404. Anything else is
+      // the Gate's own answer and must surface rather than silently retrying
+      // another dialect.
+      if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
+    }
     const result = await this.transport.request<SessionMessagesResponse>(
       'GET',
       `/api/sessions/${sessionId}/messages?limit=${limit}`,
