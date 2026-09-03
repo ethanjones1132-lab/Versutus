@@ -43,3 +43,38 @@ export function rpcMethodsToggleLabel(open: boolean, count: number | undefined):
   if (count === undefined) return 'Answered RPC methods';
   return `Answered RPC methods (${count})`;
 }
+
+/** Minimal shape consulted for the slash subtitle. Both the dashboard
+ * registry (`GatewayCommand`) and the manifest dynamic commands
+ * (`GatewayCapabilityCommand`) carry it. */
+export type RpcSlashEntry = {
+  method?: string;
+  slash?: string;
+};
+
+/**
+ * First slash wins per method, from the already-held registry entries.
+ * Entries with no method or no slash are skipped; nothing is guessed, so
+ * a method the registry does not know stays absent and renders bare.
+ */
+export function buildRpcMethodSlashMap(commands: RpcSlashEntry[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const command of commands) {
+    const method = command.method;
+    const slash = command.slash;
+    if (typeof method !== 'string' || !method.trim()) continue;
+    if (typeof slash !== 'string' || !slash.trim()) continue;
+    if (map[method] !== undefined) continue;
+    map[method] = slash;
+  }
+  return map;
+}
+
+/** The slash that speaks a method, where the registry knows one. */
+export function rpcMethodSlash(
+  method: string,
+  map: Record<string, string>,
+): string | undefined {
+  if (!method.trim()) return undefined;
+  return map[method];
+}
