@@ -25,6 +25,11 @@ type ChatComposerProps = {
   onStop: () => void;
   slashSuggestions?: SlashCommandSuggestion[];
   onSelectSlashSuggestion?: (value: string) => void;
+  /** Roster Bot ids matching the @token at the caret. Shown above the input. */
+  mentionPicks?: string[];
+  onSelectMention?: (botId: string) => void;
+  /** Display name for a roster Bot id. Defaults to the id itself. */
+  mentionDisplayName?: (botId: string) => string;
   /** Open the browsable command palette. Hidden when not provided. */
   onBrowseCommands?: () => void;
   /** One-tap command seeds shown in the dock's left slot while idle. */
@@ -42,6 +47,9 @@ export const ChatComposer = memo(function ChatComposer({
   onStop,
   slashSuggestions = [],
   onSelectSlashSuggestion,
+  mentionPicks = [],
+  onSelectMention,
+  mentionDisplayName,
   onBrowseCommands,
   quickActions = [],
   isStreaming,
@@ -144,6 +152,56 @@ export const ChatComposer = memo(function ChatComposer({
             ) : null}
           </View>
         </View>
+
+        {mentionPicks.length > 0 && onSelectMention ? (
+          <View
+            style={[
+              styles.palette,
+              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.glassBorder, maxHeight: paletteMaxHeight },
+            ]}>
+            <Text variant="micro" color="tertiary" style={styles.paletteTitle}>
+              Mention
+            </Text>
+            <ScrollView
+              style={[styles.paletteScroll, { maxHeight: paletteScrollMaxHeight }]}
+              contentContainerStyle={styles.paletteContent}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}>
+              {mentionPicks.map((botId) => {
+                const label = mentionDisplayName?.(botId) ?? botId;
+                return (
+                  <PressableScale
+                    key={botId}
+                    style={[
+                      styles.paletteItem,
+                      {
+                        backgroundColor: tokens.backgroundInset,
+                        borderColor: tokens.borderSubtle,
+                      },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Mention ${label}`}
+                    onPress={async () => {
+                      await Haptics.selectionAsync();
+                      onSelectMention(botId);
+                    }}>
+                    <View style={styles.paletteRow}>
+                      <Text variant="caption" numberOfLines={1} style={styles.paletteLabel}>
+                        @{botId}
+                      </Text>
+                    </View>
+                    {label !== botId ? (
+                      <Text variant="micro" color="tertiary" numberOfLines={1} style={styles.paletteDesc}>
+                        {label}
+                      </Text>
+                    ) : null}
+                  </PressableScale>
+                );
+              })}
+            </ScrollView>
+          </View>
+        ) : null}
 
         {slashSuggestions.length > 0 ? (
           <View

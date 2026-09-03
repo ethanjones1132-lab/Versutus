@@ -102,6 +102,7 @@ import {
   saveComposerDraft,
 } from '@/lib/gateway/composer-draft';
 import { effectiveModel } from '@/lib/gateway/model-selection';
+import { insertMention, mentionPicksAtCaret } from '@/lib/gateway/mentions';
 import { sessionListTitle } from '@/lib/gateway/session-list';
 import {
   overflowNewSessionHop,
@@ -814,6 +815,25 @@ export function ChatScreen() {
   // roster do not (the room owns its transcript locally).
   const threadSurface = surface.kind === 'configurable' || surface.kind === 'bot';
 
+  // Bot Chat (and configurable chat) @-picks from the roster Bot ids, reusing
+  // the group-room helper. TextField has no selection hook, so the caret is
+  // the end of the draft — the same assumption group-room-view.tsx makes.
+  const rosterBotIds = useMemo(() => rosterBots.map((bot) => bot.id), [rosterBots]);
+  const mentionPicks = useMemo(
+    () => (threadSurface ? mentionPicksAtCaret(draft, draft.length, rosterBotIds) : []),
+    [draft, rosterBotIds, threadSurface],
+  );
+  const handleSelectMention = useCallback(
+    (botId: string) => {
+      setDraft(insertMention(draft, draft.length, botId));
+    },
+    [draft, setDraft],
+  );
+  const mentionDisplayName = useCallback(
+    (botId: string) => rosterBots.find((bot) => bot.id === botId)?.displayName ?? botId,
+    [rosterBots],
+  );
+
   // Pull-to-refresh at the top pages back into earlier history when the
   // gateway reports more (the natural "more messages" gesture — the explicit
   // header control stays as a fallback). Anywhere else, or when history is
@@ -1349,6 +1369,9 @@ export function ChatScreen() {
         onStop={stopStreaming}
         slashSuggestions={slashSuggestions}
         onSelectSlashSuggestion={setDraft}
+        mentionPicks={mentionPicks}
+        onSelectMention={handleSelectMention}
+        mentionDisplayName={mentionDisplayName}
         onBrowseCommands={openPalette}
         quickActions={quickActions}
         isStreaming={isStreaming}
