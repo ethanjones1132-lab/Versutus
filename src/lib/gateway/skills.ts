@@ -87,6 +87,32 @@ export function skillsListCopy(state: SkillsState): string | undefined {
 export const SKILLS_PANE_MAX_HEIGHT = 280;
 
 /**
+ * The exact turn text a skills-pane tap dispatches — the same `/<skill-name>`
+ * the typed path sends through `sendChatInput`, so `matchSkillSlash` and
+ * `shouldPassthroughSkillSlash` judge it identically. The pane shows the bare
+ * name, so there is no instruction to carry; the operator adds one in the
+ * thread when they want it.
+ */
+export function skillSlashText(name: string): string {
+  return `/${name.trim()}`;
+}
+
+/**
+ * Whether a pane tap can only prefill the composer. A tap dispatches through
+ * `sendChatInput`, whose skill path reaches `sendMessage` — and `sendMessage`
+ * returns silently while a turn streams (`isSending`), while a slash command
+ * runs (`isCommandRunning`), or while there is no live gateway to answer.
+ * Prefilling `/${name} ` keeps the tap honest instead of dropping it.
+ */
+export function skillInvokePrefillsComposer(state: {
+  status: string;
+  isSending: boolean;
+  isCommandRunning: boolean;
+}): boolean {
+  return state.status !== 'connected' || state.isSending || state.isCommandRunning;
+}
+
+/**
  * Hermes treats a skill as `/name` plus the rest of the line as instruction.
  * Returns null when the input is not a slash, or the first token is not a
  * fetched skill name.

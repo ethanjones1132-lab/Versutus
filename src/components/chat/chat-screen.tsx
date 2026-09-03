@@ -82,7 +82,9 @@ import {
 import {
   applySkillsRead,
   EMPTY_SKILLS,
+  skillInvokePrefillsComposer,
   skillsReadFromUnknown,
+  skillSlashText,
   type SkillsState,
 } from '@/lib/gateway/skills';
 import {
@@ -569,6 +571,24 @@ export function ChatScreen() {
       }
     },
     [sendChatInput, skillsState.skills],
+  );
+
+  // A skills-pane tap starts the same `/<skill-name>` turn typing it sends:
+  // the text goes through `sendChatInput` with the fetched skill list, so the
+  // skill passthrough judges it identically. While a turn streams, a command
+  // runs, or no gateway is connected, `sendMessage` would silently drop the
+  // turn — so the tap prefills the composer with `/<name> ` instead, and a
+  // rejected dispatch surfaces through the normal turn-error path.
+  const handleSkillInvoke = useCallback(
+    (skillName: string) => {
+      if (skillInvokePrefillsComposer({ status, isSending, isCommandRunning })) {
+        setDraft(`${skillSlashText(skillName)} `);
+        return;
+      }
+      pinnedRef.current = true;
+      void sendChatInput(skillSlashText(skillName), { skills: skillsState.skills });
+    },
+    [status, isSending, isCommandRunning, setDraft, sendChatInput, skillsState.skills],
   );
 
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -1134,6 +1154,7 @@ export function ChatScreen() {
             skills={skillsState.botId === surface.botId ? skillsState.skills : []}
             loaded={skillsState.botId === surface.botId ? skillsState.loaded : false}
             failed={skillsState.botId === surface.botId ? skillsState.failed : false}
+            onInvoke={handleSkillInvoke}
           />
           {toolsetsVisibleOn(surface) ? (
             <ToolsPane

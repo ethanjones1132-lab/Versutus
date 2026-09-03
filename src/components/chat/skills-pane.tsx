@@ -15,10 +15,13 @@ export function SkillsPane({
   skills,
   loaded,
   failed,
+  onInvoke,
 }: {
   skills: Skill[];
   loaded: boolean;
   failed: boolean;
+  /** Tap a row to start the same `/<skill-name>` turn typing it dispatches. */
+  onInvoke?: (skillName: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const state: SkillsState = { skills, loaded, failed };
@@ -50,6 +53,7 @@ export function SkillsPane({
               key={skill.name}
               title={skill.name}
               subtitle={skill.description || undefined}
+              onPress={onInvoke ? () => onInvoke(skill.name) : undefined}
             />
           ))}
         </ScrollView>
