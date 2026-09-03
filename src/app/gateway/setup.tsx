@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { CapabilitiesSection } from '@/components/gateway/capabilities-section';
+import { RpcMethodsSection } from '@/components/gateway/rpc-methods-section';
 import { ToolsetsSection } from '@/components/gateway/toolsets-section';
 import { EnvironmentsSection } from '@/components/gateway/environments-section';
 import { GatewayManagementSection } from '@/components/gateway/gateway-management-section';
@@ -91,6 +92,7 @@ export default function GatewaySetupScreen() {
             </Text>
             <CapabilitiesSection />
             <ToolsetsSection />
+            <RpcMethodsSection />
           </>
         ) : null}
 

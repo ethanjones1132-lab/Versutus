@@ -368,6 +368,12 @@ export type GatewayCapabilitySnapshot = {
   groups: GatewayCapabilityGroup[];
   methods: Record<string, GatewayMethodAvailability>;
   scopes: string[];
+  /**
+   * The live RPC dispatch table the snapshot block judges commands by, when
+   * the gateway can report one. Undefined means "unknown", never "none" —
+   * Hermes reports none and falls back to the route map in `rpc-routes.ts`.
+   */
+  rpcMethods?: string[];
 };
 
 export type CommandTranscriptEntry = {

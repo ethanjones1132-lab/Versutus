@@ -3,6 +3,7 @@ import type { GatewayBackend, GatewayCapabilityInstance } from '@/lib/portal/man
 import { capabilitiesForBackend } from '@/lib/gateway/backend-capabilities';
 import { channelGroupHealth } from '@/lib/gateway/channel-status';
 import { METHOD_TO_ROUTE } from '@/lib/gateway/rpc-routes';
+import { normalizeRpcMethods } from '@/lib/gateway/rpc-methods';
 
 export type GatewayReachabilityState =
   | 'connected'
@@ -1150,12 +1151,15 @@ export function buildCapabilitySnapshot(
     };
   });
 
+  const advertisedRpcMethods = normalizeRpcMethods(capabilities?.rpcMethods);
+
   return {
     checkedAt: lastProbeAt,
     status: overallStatus,
     groups: [...groups, ...synthesizedGroups],
     methods,
     scopes,
+    ...(advertisedRpcMethods !== undefined ? { rpcMethods: advertisedRpcMethods } : {}),
   };
 }
 

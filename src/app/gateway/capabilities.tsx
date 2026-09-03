@@ -1,6 +1,7 @@
 import { ScrollView, StyleSheet } from 'react-native';
 
 import { CapabilitiesSection } from '@/components/gateway/capabilities-section';
+import { RpcMethodsSection } from '@/components/gateway/rpc-methods-section';
 import { ToolsetsSection } from '@/components/gateway/toolsets-section';
 import { Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
@@ -20,6 +21,7 @@ export default function CapabilityEditorScreen() {
         </Text>
         <CapabilitiesSection />
         <ToolsetsSection />
+        <RpcMethodsSection />
       </ScrollView>
     </Screen>
   );
