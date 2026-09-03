@@ -82,7 +82,7 @@ describe('/device revoke forwards to the registered device-revoke entry', () => 
       },
     });
     expect(gatewayRequest).not.toHaveBeenCalled();
-    expect(result.text).toContain('no device registry REST');
+    expect(result.text).toContain('device.list');
     expect(result.text).toContain('Use /help to see what is.');
     expect(result.text).not.toContain('Device info');
   });

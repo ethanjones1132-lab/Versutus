@@ -1,4 +1,5 @@
 import { executeGatewaySlashCommand, getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
+import { METHOD_GUIDANCE, METHOD_TO_ROUTE } from '@/lib/gateway/rpc-routes';
 
 describe('slash commands', () => {
   test('executes local help without a gateway RPC', async () => {
@@ -419,6 +420,20 @@ describe('locally answered commands bypass the snapshot block', () => {
     expect(gatewayRequest).not.toHaveBeenCalledWith('device.repair', expect.anything());
     expect(result.text).toContain('Paired devices could not be read');
     expect(result.text).toContain('device.list is not supported');
+  });
+
+  test('device.* guidance names the device.list fallback instead of denying a registry', () => {
+    expect(METHOD_TO_ROUTE['device.info']).toBeUndefined();
+    expect(METHOD_TO_ROUTE['device.repair']).toBeUndefined();
+    expect(METHOD_TO_ROUTE['device.revoke']).toBeUndefined();
+    for (const key of ['device.info', 'device.repair', 'device.revoke'] as const) {
+      expect(METHOD_GUIDANCE[key]).toMatch(/device\.list/);
+      expect(METHOD_GUIDANCE[key]).toMatch(/\/v1\/capabilities\/rpc/);
+      expect(METHOD_GUIDANCE[key]).toMatch(/\{devices\}/);
+      expect(METHOD_GUIDANCE[key]).not.toMatch(/has no device registry REST/);
+      expect(METHOD_GUIDANCE[key]).toMatch(/never rendered/);
+    }
+    expect(METHOD_GUIDANCE['device.revoke']).toMatch(/device\.revoke/);
   });
 
   test('/agents still blocks with its guidance when the snapshot marks it undispatched', async () => {
