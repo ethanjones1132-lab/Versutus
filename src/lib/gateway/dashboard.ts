@@ -686,6 +686,18 @@ export const GATEWAY_COMMANDS: GatewayCommand[] = [
     description: 'Compact session history',
   },
   {
+    id: 'session-fork',
+    label: 'Fork session',
+    group: 'Sessions',
+    transport: 'rpc',
+    method: 'session.fork',
+    params: {},
+    requiredScope: 'operator.write',
+    danger: 'write',
+    slash: '/session fork',
+    description: 'Fork a session into a new thread',
+  },
+  {
     id: 'session-restore',
     label: 'Restore session',
     group: 'Sessions',

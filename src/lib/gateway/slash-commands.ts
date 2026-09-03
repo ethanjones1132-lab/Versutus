@@ -1174,6 +1174,12 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
     return sessionActionResult('compact', result);
   }
 
+  if (sub === 'fork') {
+    if (!id) return textResult('Usage: /session fork <session-id>', '/session fork');
+    const result = await context.gatewayRequest('session.fork', { sessionId: id }).catch(e => ({ error: String(e) }));
+    return sessionActionResult('fork', result);
+  }
+
   if (sub === 'restore') {
     if (!id) return textResult('Usage: /session restore <session-id>', '/session restore');
     const result = await context.gatewayRequest('session.restore', { sessionId: id }).catch(e => ({ error: String(e) }));
@@ -1192,7 +1198,7 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
   }
 
   return textResult(
-    'Usage: /session current | new [title] | list | get <id> | messages <id> | usage [id] | abort [id] | compact [id] | restore <id>',
+    'Usage: /session current | new [title] | list | get <id> | messages <id> | usage [id] | abort [id] | compact [id] | fork <id> | restore <id>',
     '/session'
   );
 }
@@ -1205,7 +1211,7 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
  * success copy, so a gateway that does dispatch `session.compact` or
  * `session.abort` behaves exactly as before.
  */
-function sessionActionResult(action: 'abort' | 'compact', result: unknown): SlashCommandResult {
+function sessionActionResult(action: 'abort' | 'compact' | 'fork', result: unknown): SlashCommandResult {
   const title = `/session ${action}`;
   const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
   if (error) {

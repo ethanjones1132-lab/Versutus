@@ -91,6 +91,7 @@ export const METHOD_GUIDANCE: Record<string, string> = {
   'plugins.uiDescriptors': 'Plugins are host-managed; the API server exposes no plugin UI descriptors.',
   'session.abort': 'Aborting a Hermes run: the app stop button aborts the stream; server-side stop exists per run via POST /v1/runs/{run_id}/stop.',
   'session.compact': 'No remote compaction endpoint — start a new session (POST /api/sessions) or use the session selector.',
+  'session.fork': 'No remote fork endpoint — start a new session (POST /api/sessions) or use the session selector.',
   'skill.get': 'Skills are enumerated via GET /v1/skills; per-skill detail is host-side.',
   'talk.catalog': 'Voice is host-side; the API server exposes no voice REST.',
   'voicewake.status': 'Voice is host-side; the API server exposes no voice REST.',
