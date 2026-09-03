@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { CapabilitiesSection } from '@/components/gateway/capabilities-section';
+import { GatewayIdentitySection } from '@/components/gateway/gateway-identity-section';
 import { RpcMethodsSection } from '@/components/gateway/rpc-methods-section';
 import { ToolsetsSection } from '@/components/gateway/toolsets-section';
 import { EnvironmentsSection } from '@/components/gateway/environments-section';
@@ -40,6 +41,8 @@ export default function GatewaySetupScreen() {
     <Screen>
       <ScrollView contentContainerStyle={styles.content}>
         <Text variant="title">Gate setup</Text>
+
+        <GatewayIdentitySection />
 
         {backends.length > 0 ? (
           <Card padding={Spacing.three} style={styles.card}>

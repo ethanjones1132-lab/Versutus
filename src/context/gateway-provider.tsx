@@ -183,6 +183,12 @@ type GatewayContextValue = {
   gatewayFetch: (path: string, init?: RequestInit) => Promise<Response>;
   /** Native environments this gateway can converse through, if any. */
   backends: import('@/lib/portal/manifest').GatewayBackend[];
+  /**
+   * The connected Gate's manifest (name, kind, version, vendor, capability
+   * flags), when it reported one. Read-only — screens render it, nobody
+   * refetches through it.
+   */
+  activeManifest: import('@/lib/portal/manifest').GatewayManifest | null;
   selectedBackendId: string | undefined;
   /** Route chat and sessions through a different native environment. */
   selectBackend: (backendId: string | undefined) => void;
@@ -2966,6 +2972,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       gatewayRequest,
       gatewayFetch,
       backends,
+      activeManifest,
       selectedBackendId,
       selectBackend,
       selectedBotId,
@@ -3033,7 +3040,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       lastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      cron, gatewayRequest, gatewayFetch, backends, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
+      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
       setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,
