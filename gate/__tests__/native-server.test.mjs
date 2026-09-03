@@ -141,6 +141,85 @@ test('ensureRunning is idempotent and does not spawn twice', async () => {
   assert.equal(spawned, 1, 'concurrent callers must share one spawn');
 });
 
+test('a healthy cached handle is reused without spawning', async () => {
+  let spawned = 0;
+  const server = createNativeServer({
+    record,
+    adapter,
+    spawnImpl: () => { spawned += 1; return fakeChild(); },
+    fetchImpl: reachable(['http://127.0.0.1:4096']),
+  });
+  const a = await server.ensureRunning();
+  const b = await server.ensureRunning();
+  assert.equal(a.baseUrl, 'http://127.0.0.1:4096');
+  assert.equal(b.baseUrl, 'http://127.0.0.1:4096');
+  assert.equal(spawned, 0, 'a live server must not cost a spawn per turn');
+});
+
+test('an attached server that goes away is replaced instead of failing later turns', async () => {
+  let attachedAlive = true;
+  let spawned = 0;
+  const ok = () => ({ ok: true, status: 200, async json() { return []; } });
+  const server = createNativeServer({
+    record,
+    adapter,
+    spawnImpl: () => { spawned += 1; return fakeChild({ port: 4599 }); },
+    fetchImpl: async (url) => {
+      const target = String(url);
+      if (target.startsWith('http://127.0.0.1:4096')) {
+        if (attachedAlive) return ok();
+        throw new Error('ECONNREFUSED');
+      }
+      if (target.startsWith('http://127.0.0.1:4599')) return ok();
+      throw new Error('ECONNREFUSED');
+    },
+  });
+
+  const first = await server.ensureRunning();
+  assert.equal(first.baseUrl, 'http://127.0.0.1:4096');
+  assert.equal(first.attached, true);
+
+  // The operator stops their own server between turns: the port goes quiet
+  // while the environment still reports ready. The next turn must recover,
+  // not hand the dead handle to the backend.
+  attachedAlive = false;
+  const second = await server.ensureRunning();
+  assert.equal(second.baseUrl, 'http://127.0.0.1:4599');
+  assert.equal(second.attached, false);
+  assert.equal(spawned, 1, 'a dead attached server must fall through to a fresh spawn');
+});
+
+test('a spawned server that later dies is respawned on the next turn', async () => {
+  const listening = new Set();
+  let spawned = 0;
+  const server = createNativeServer({
+    record,
+    adapter,
+    spawnImpl: () => {
+      spawned += 1;
+      setTimeout(() => listening.add('http://127.0.0.1:4599'), 6);
+      return fakeChild({ port: 4599 });
+    },
+    fetchImpl: async (url) => {
+      if ([...listening].some((u) => String(url).startsWith(u))) {
+        return { ok: true, status: 200, async json() { return []; } };
+      }
+      throw new Error('ECONNREFUSED');
+    },
+  });
+
+  const first = await server.ensureRunning();
+  assert.equal(first.baseUrl, 'http://127.0.0.1:4599');
+  assert.equal(spawned, 1);
+
+  // The child dies between turns. Reusing its handle would fail the turn
+  // with a transport error; the next ensureRunning must spawn again.
+  listening.delete('http://127.0.0.1:4599');
+  const second = await server.ensureRunning();
+  assert.equal(second.baseUrl, 'http://127.0.0.1:4599');
+  assert.equal(spawned, 2, 'a dead owned server must be respawned, not reused');
+});
+
 test('a server that never becomes reachable fails with a usable message', async () => {
   const server = createNativeServer({
     record,

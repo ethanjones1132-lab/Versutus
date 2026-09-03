@@ -36,6 +36,19 @@ export function createNativeServer({
   return { ensureRunning, stop, isOwned: () => owned, current: () => handle };
 
   async function ensureRunning() {
+    const descriptor = adapter?.server;
+    if (!descriptor) {
+      throw new Error(`Adapter "${adapter?.adapterId ?? 'unknown'}" does not expose a native server.`);
+    }
+    // A cached handle is a moment in time, not a lease: an attached server
+    // the operator stops, or a spawned child that dies, answers nothing from
+    // here on, and every later turn failed with a bare transport error while
+    // the environment still reported ready (that state probes the CLI binary,
+    // not this server). Revalidate before trusting it; a dead handle is
+    // dropped so start() below re-attaches or spawns fresh.
+    if (handle && !(await isHealthy(handle.baseUrl, descriptor))) {
+      await stop();
+    }
     if (handle) return handle;
     // Concurrent callers share one attempt; two spawns is the failure mode.
     if (starting) return starting;
