@@ -72,6 +72,72 @@ describe('family list commands put the answer in the bubble text, not only in Ra
     expect(result.text).not.toMatch(/^object: list/m);
   });
 
+  test('/cron history <job> reads per-job runs through cron.runs instead of the guidance refusal', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({
+      object: 'list',
+      data: [
+        { id: 'cron_nightly_1700000000000', jobId: 'nightly', at: '2026-09-01 02:00', status: 'completed', turnCount: 3 },
+        { id: 'cron_nightly_1700086400000', jobId: 'nightly', at: '2026-09-02 02:00', status: 'running', turnCount: 1 },
+      ],
+    });
+    const result = await executeGatewaySlashCommand('/cron history nightly', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('cron.runs', { jobId: 'nightly' });
+    expect(result.text).toContain('Cron history for nightly: 2');
+    expect(result.text).toContain('2026-09-01 02:00 · completed · 3 turns');
+    expect(result.text).toContain('2026-09-02 02:00 · running · 1 turns');
+    expect(result.raw).toContain('"object"');
+  });
+
+  test('/cron history without a job id answers with the usage, not a gateway call', async () => {
+    const gatewayRequest = jest.fn();
+    const result = await executeGatewaySlashCommand('/cron history', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).not.toHaveBeenCalled();
+    expect(result.text).toBe('Usage: /cron history <job>');
+  });
+
+  test('/cron history for an unknown job says no runs instead of printing an empty history', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ object: 'list', data: [] });
+    const result = await executeGatewaySlashCommand('/cron history ghost', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('cron.runs', { jobId: 'ghost' });
+    expect(result.text).toBe('No runs recorded for ghost.');
+  });
+
+  test('a rejecting /cron history names the failure instead of the success title', async () => {
+    const gatewayRequest = jest.fn().mockRejectedValue(new Error('HTTP 500'));
+    const result = await executeGatewaySlashCommand('/cron history nightly', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('cron.runs', { jobId: 'nightly' });
+    expect(result.text).toContain('Cron history for nightly could not be read');
+    expect(result.text).toContain('HTTP 500');
+  });
+
+  test('bare /cron still reads cron.list with the job count', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({
+      data: [{ id: 'job-1' }],
+    });
+    const result = await executeGatewaySlashCommand('/cron', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('cron.list', {});
+    expect(result.text).toContain('Jobs: 1');
+  });
   test('/plugins lists plugin rows as the bubble text', async () => {
     const gatewayRequest = jest.fn().mockResolvedValue({
       plugins: [{ name: 'sketch', enabled: true, version: '1.0' }],

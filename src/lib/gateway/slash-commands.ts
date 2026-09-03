@@ -1376,6 +1376,9 @@ async function runAdvancedFamilyCommand(commandName: string, args: string[], con
   if (registered) return runCommand(registered, context);
 
   const sub = (args[0] || '').toLowerCase();
+  if (commandName === '/cron' && sub === 'history') {
+    return runCronHistoryCommand(args.slice(1), context);
+  }
   let method = '';
   let title = commandName;
 
@@ -1393,7 +1396,7 @@ async function runAdvancedFamilyCommand(commandName: string, args: string[], con
       title = 'Plugins';
       break;
     case '/cron':
-      method = sub === 'history' ? 'cron.history' : 'cron.list';
+      method = 'cron.list';
       title = 'Cron';
       break;
     case '/env':
@@ -1880,6 +1883,39 @@ function formatSkills(result: unknown): string {
 
 function formatEnvironments(result: unknown): string {
   return formatStatusCollection('Environments', result, ['environments', 'items', 'envs'], ['status', 'state', 'ready', 'healthy']);
+}
+
+/**
+ * `/cron history <job>` reads the per-job run history the Activity run sheet
+ * shows. The Gate answers `cron.runs` with an `{object:"list",data}` envelope
+ * of runs, so the command renders one text line per run instead of the
+ * guidance-only `cron.history` refusal. A rejected read names the failure;
+ * a job with no runs says so instead of printing an empty history.
+ */
+async function runCronHistoryCommand(args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
+  const jobId = (args[0] || '').trim();
+  if (!jobId) return textResult('Usage: /cron history <job>', '/cron history');
+  const result = await context.gatewayRequest('cron.runs', { jobId }).catch(e => ({ error: String(e) }));
+  const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
+  if (error) {
+    return textResult(`Cron history for ${jobId} could not be read: ${error}`, `/cron history ${jobId}`, compactJson(result));
+  }
+  const runs = readCollection(result, ['data', 'runs', 'items']) ?? [];
+  if (runs.length === 0) {
+    return textResult(`No runs recorded for ${jobId}.`, `/cron history ${jobId}`, compactJson(result));
+  }
+  const lines = [`Cron history for ${jobId}: ${runs.length}`, ...runs.slice(0, 10).map(describeCronRun)];
+  return textResult(lines.join('\n'), `/cron history ${jobId}`, compactJson(result));
+}
+
+function describeCronRun(value: unknown): string {
+  if (!isRecord(value)) return `- ${truncateLine(String(value), 120)}`;
+  const name = (typeof value.at === 'string' && value.at.trim())
+    ? value.at.trim()
+    : (typeof value.id === 'string' ? value.id : 'unknown');
+  const status = value.status === 'running' ? 'running' : 'completed';
+  const turns = typeof value.turnCount === 'number' ? ` · ${value.turnCount} turns` : '';
+  return `- ${truncateLine(name, 120)} · ${status}${turns}`;
 }
 
 function formatCron(result: unknown): string {
