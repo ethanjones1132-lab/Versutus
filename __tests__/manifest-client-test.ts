@@ -972,6 +972,22 @@ describe('ManifestClient sessions and runs when advertised', () => {
     await expect(client.listJobs()).resolves.toEqual(rows);
   });
 
+  test('Routines list reads every envelope key /cron reads: { jobs }, { crons }, { items }', async () => {
+    const rows = [{ id: 'j1', name: 'nightly' }];
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ jobs: rows }))
+      .mockResolvedValueOnce(jsonResponse({ crons: rows }))
+      .mockResolvedValueOnce(jsonResponse({ items: rows }))
+      .mockResolvedValueOnce(jsonResponse({ data: rows }));
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const client = clientWithEndpoints({ health: '/health', jobs: '/v1/jobs' });
+    await expect(client.listJobs()).resolves.toEqual(rows);
+    await expect(client.listJobs()).resolves.toEqual(rows);
+    await expect(client.listJobs()).resolves.toEqual(rows);
+    await expect(client.listJobs()).resolves.toEqual(rows);
+  });
+
   test('collection readers accept a bare array or a { data } envelope: Groups', async () => {
     const rows = [{ id: 'room1', name: 'crew', memberIds: ['a', 'b'] }];
     const fetchMock = jest

@@ -548,8 +548,16 @@ export class ManifestClient implements PortalClient {
     const path = this.endpoints.jobs;
     if (!path) return [];
     type JobRow = { id: string; name?: string; paused?: boolean };
-    const result = await this.rootTransport.request<{ data?: JobRow[] } | JobRow[]>('GET', this.withBotOnly(path));
-    return Array.isArray(result) ? result : result.data ?? [];
+    type JobEnvelope = { data?: JobRow[]; jobs?: JobRow[]; crons?: JobRow[]; items?: JobRow[] };
+    const result = await this.rootTransport.request<JobEnvelope | JobRow[]>('GET', this.withBotOnly(path));
+    if (Array.isArray(result)) return result;
+    // Same key list formatCron reads (['data', 'jobs', 'crons', 'items']): a host
+    // answering { jobs: [...] } must not read as empty in the Routines pane.
+    for (const key of ['data', 'jobs', 'crons', 'items'] as const) {
+      const rows = result[key];
+      if (Array.isArray(rows)) return rows;
+    }
+    return [];
   }
 
   async createJob(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }> {
