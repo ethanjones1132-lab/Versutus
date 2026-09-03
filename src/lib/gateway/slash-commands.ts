@@ -21,6 +21,8 @@ import {
   type PairedDevice,
 } from '@/lib/gateway/paired-devices';
 import { matchSkillSlash, type Skill } from '@/lib/gateway/skills';
+import { providerUiState } from '@/lib/gateway/provider-state';
+import type { ProviderSnapshot } from '@/lib/gateway/provider-types';
 import { toolsetsReadFromUnknown } from '@/lib/gateway/toolsets';
 import type { ChatMessage, GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
 import type { GatewayCapabilityCommand } from '@/lib/portal/manifest';
@@ -477,6 +479,12 @@ export async function executeGatewaySlashCommand(
   // never the recovery read. `/device revoke` keeps today's routing through
   // the block into the registry entry, with its danger-destructive
   // confirmation and honest RPC failures.
+  //
+  // `/model auth` answers from `providers.list` — the provider registry every
+  // Gate dispatches (gate/core/providers/rpc.mjs) — rendered through
+  // `providerUiState`, the same state the Providers screen badge shows. The
+  // snapshot judges the undispatched `models.authStatus` registry method,
+  // which no dispatcher serves, so without the bypass the read never runs.
   if (commandName === '/env' && !registeredFamilySubcommand(commandName, args)) {
     return runAdvancedFamilyCommand(commandName, args, context);
   }
@@ -485,6 +493,9 @@ export async function executeGatewaySlashCommand(
   }
   if (commandName === '/device' && (args.length === 0 || args[0]?.toLowerCase() === 'repair')) {
     return runApprovalsDevicesCommand(commandName, args, context);
+  }
+  if (commandName === '/model' && (args[0]?.toLowerCase() === 'auth')) {
+    return runModelAuthCommand(context);
   }
 
   const blocked = blockUnsupportedCommand(commandName, args, context.methods);
@@ -782,7 +793,7 @@ async function runModelCommand(args: string[], context: SlashCommandContext): Pr
     return textResult(formatModelConfig(snapshot), '/model');
   }
 
-  if (subcommand === 'auth') return runRegistryCommand('model-auth', context);
+  if (subcommand === 'auth') return runModelAuthCommand(context);
 
   if (subcommand === 'routing' || subcommand === 'policy') {
     const snapshot = await readConfigSnapshot(context);
@@ -1785,6 +1796,64 @@ function formatLogs(result: unknown): string {
     return truncateLine([level ? `[${level}]` : undefined, message].filter(Boolean).join(' '), 150);
   });
   return [`Logs: last ${lines.length}`, ...lines].join('\n');
+}
+
+/**
+ * `/model auth` reads the provider registry every Gate dispatches
+ * (`providers.list` answers `{providers}` of snapshots) and renders one line
+ * per provider through `providerUiState` — the same state the Providers
+ * screen badge shows (provider-card.tsx). The `model-auth` registry entry
+ * (`models.authStatus`) is dispatched by no Gateway, so it is never called
+ * here; it stays in the registry so palette availability still judges it.
+ * A rejected read names the `providers.list` failure honestly.
+ */
+async function runModelAuthCommand(context: SlashCommandContext): Promise<SlashCommandResult> {
+  const result = await context.gatewayRequest('providers.list', {}).catch(e => ({ error: String(e) }));
+  const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
+  if (error) {
+    return textResult(`Model auth could not be read: ${error}`, '/model auth', compactJson(result));
+  }
+  return textResult(formatProviderAuth(result), '/model auth', compactJson(result));
+}
+
+/**
+ * One line per provider: the Providers screen label with its badge state,
+ * plus the catalog note the card subtitle shows. Entries that are not shaped
+ * like a snapshot fall back to the generic record line rather than crashing.
+ */
+function formatProviderAuth(result: unknown): string {
+  const providers = readCollection(result, ['providers', 'items', 'data']) ?? [];
+  if (providers.length === 0) return 'Model auth: none reported';
+  const lines = [`Model auth: ${providers.length} provider${providers.length === 1 ? '' : 's'}`];
+  for (const item of providers.slice(0, 10)) {
+    lines.push(describeProviderAuth(item));
+  }
+  if (providers.length > 10) lines.push(`...${providers.length - 10} more`);
+  return lines.join('\n');
+}
+
+function describeProviderAuth(item: unknown): string {
+  if (!isRecord(item)) return `- ${truncateLine(String(item), 120)}`;
+  let state: string | undefined;
+  try {
+    state = providerUiState(item as unknown as ProviderSnapshot);
+  } catch {
+    state = undefined;
+  }
+  if (!state) return describeNamedRecord(item, ['label', 'name', 'id'], ['status', 'state']);
+  const label = readFirstString(item, ['label', 'name', 'id']) ?? 'unknown';
+  const id = readFirstString(item, ['id']);
+  const name = id && id !== label ? `${label} (${id})` : label;
+  const catalog = isRecord(item.catalog) ? item.catalog : undefined;
+  const models = catalog && Array.isArray(catalog.models) ? catalog.models : undefined;
+  const source = catalog ? readFirstString(catalog, ['source']) : undefined;
+  const sourceNote = source === 'live' ? 'live' : source === 'last_known_good' ? 'last known good' : undefined;
+  const detail = models && sourceNote
+    ? ` (${models.length} model${models.length === 1 ? '' : 's'} · ${sourceNote})`
+    : models
+      ? ` (${models.length} model${models.length === 1 ? '' : 's'})`
+      : '';
+  return `- ${name}: ${state}${detail}`;
 }
 
 function formatModelAuth(result: unknown): string {

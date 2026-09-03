@@ -434,3 +434,83 @@ describe('locally answered commands bypass the snapshot block', () => {
     expect(result.text).toContain('agents are profiles');
   });
 });
+
+describe('/model auth from the providers registry', () => {
+  const READY_SNAPSHOT = {
+    id: 'openai',
+    label: 'OpenAI',
+    providerType: 'openai',
+    mode: 'api_key',
+    auth: { state: 'ready', credentialCustodian: 'gate' },
+    readiness: { state: 'ready', checkedAt: '2026-09-03T00:00:00.000Z' },
+    catalog: {
+      state: 'fresh',
+      source: 'live',
+      generation: 1,
+      models: [{ providerId: 'openai', id: 'gpt-5', available: true }],
+    },
+  };
+  const MISSING_SNAPSHOT = {
+    id: 'xai',
+    label: 'xAI',
+    providerType: 'xai',
+    mode: 'api_key',
+    auth: { state: 'missing', credentialCustodian: 'gate' },
+    readiness: { state: 'unavailable', checkedAt: '2026-09-03T00:00:00.000Z' },
+    catalog: { state: 'unavailable', source: 'last_known_good', generation: 0, models: [] },
+  };
+
+  test('/model auth answers from providers.list even when the snapshot blocks model-auth', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ providers: [READY_SNAPSHOT, MISSING_SNAPSHOT] });
+    const result = await executeGatewaySlashCommand('/model auth', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: { 'model-auth': { available: false, reason: 'not dispatched by this gateway' } },
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('providers.list', {});
+    expect(gatewayRequest).not.toHaveBeenCalledWith('models.authStatus', expect.anything());
+    expect(result.title).toBe('/model auth');
+    // Per-provider lines render the Providers screen state (providerUiState).
+    expect(result.text).toContain('OpenAI');
+    expect(result.text).toContain('Ready');
+    expect(result.text).toContain('xAI');
+    expect(result.text).toContain('Not configured');
+    expect(result.text).not.toContain('not available');
+  });
+
+  test('/model auth answers from providers.list with no snapshot at all', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ providers: [READY_SNAPSHOT] });
+    const result = await executeGatewaySlashCommand('/model auth', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('providers.list', {});
+    expect(gatewayRequest).not.toHaveBeenCalledWith('models.authStatus', expect.anything());
+    expect(result.text).toContain('Ready');
+  });
+
+  test('/model auth names the providers.list failure instead of the snapshot block', async () => {
+    const gatewayRequest = jest.fn().mockRejectedValue(new Error('providers.list is not supported by this gateway.'));
+    const result = await executeGatewaySlashCommand('/model auth', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: { 'model-auth': { available: false, reason: 'not dispatched by this gateway' } },
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('providers.list', {});
+    expect(result.text).toContain('Model auth could not be read');
+    expect(result.text).toContain('providers.list is not supported');
+  });
+
+  test('/model auth says none reported when the registry is empty', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ providers: [] });
+    const result = await executeGatewaySlashCommand('/model auth', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(result.text).toContain('none reported');
+  });
+});
