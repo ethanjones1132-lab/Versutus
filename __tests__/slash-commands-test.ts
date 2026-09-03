@@ -283,3 +283,117 @@ describe('/status and /diagnostics name health checks', () => {
     expect(result.text).toContain('No health checks.');
   });
 });
+
+describe('locally answered commands bypass the snapshot block', () => {
+  const BLOCKED_BY_SNAPSHOT = { available: false, reason: 'not dispatched by this gateway' };
+
+  test('/env answers from environments.list when the snapshot marks environments undispatched', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({
+      environments: [{ name: 'PGPASSWORD', status: 'set' }],
+    });
+    const result = await executeGatewaySlashCommand('/env', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: { environments: BLOCKED_BY_SNAPSHOT },
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('environments.list', {});
+    expect(result.text).toContain('PGPASSWORD (status: set)');
+    expect(result.text).not.toContain('not available');
+  });
+
+  test('/env with a name still blocks on the snapshot until the check read lands', async () => {
+    const gatewayRequest = jest.fn();
+    const result = await executeGatewaySlashCommand('/env opencode-local', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: { environments: BLOCKED_BY_SNAPSHOT },
+    });
+    expect(gatewayRequest).not.toHaveBeenCalled();
+    expect(result.text).toContain('not available');
+  });
+
+  test('/session current answers the open session id when the snapshot marks sessions.current undispatched', async () => {
+    const gatewayRequest = jest.fn();
+    const result = await executeGatewaySlashCommand('/session current', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      currentSessionId: 'sess-abc',
+      methods: { 'session-current': BLOCKED_BY_SNAPSHOT },
+    });
+    expect(gatewayRequest).not.toHaveBeenCalled();
+    expect(result.text).toContain('sess-abc');
+    expect(result.text).not.toContain('not available');
+  });
+
+  test('/session current without an open session keeps the snapshot block', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ sessionId: 'sess-remote' });
+    const result = await executeGatewaySlashCommand('/session current', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: { 'session-current': BLOCKED_BY_SNAPSHOT },
+    });
+    // No local id means no local answer: the undispatched remote read stays blocked.
+    expect(gatewayRequest).not.toHaveBeenCalled();
+    expect(result.text).toContain('not available');
+  });
+
+  test('/device answers device.info first and never asks device.list on a direct host', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ deviceId: 'phone-1', role: 'owner' });
+    const result = await executeGatewaySlashCommand('/device', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: { device: BLOCKED_BY_SNAPSHOT },
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('device.info', {});
+    expect(gatewayRequest).not.toHaveBeenCalledWith('device.list', expect.anything());
+    expect(result.text).toBe('Device info');
+    expect(result.text).not.toContain('not available');
+  });
+
+  test('/device falls back to device.list when device.info is not dispatched', async () => {
+    const gatewayRequest = jest.fn().mockImplementation((method: string) => {
+      if (method === 'device.info') return Promise.reject(new Error('device.info is not supported'));
+      return Promise.resolve({ devices: [{ deviceId: 'phone-1', role: 'owner', scopes: ['operator'], issuedAtMs: 0, revoked: false }] });
+    });
+    const result = await executeGatewaySlashCommand('/device', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: { device: BLOCKED_BY_SNAPSHOT },
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('device.info', {});
+    expect(gatewayRequest).toHaveBeenCalledWith('device.list', {});
+    expect(result.text).toContain('phone-1');
+    expect(result.text).not.toContain('not available');
+  });
+
+  test('/device names the device.info failure when both reads fail', async () => {
+    const gatewayRequest = jest.fn().mockRejectedValue(new Error('device.info is not supported'));
+    const result = await executeGatewaySlashCommand('/device', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: { device: BLOCKED_BY_SNAPSHOT },
+    });
+    expect(result.text).toContain('Device info could not be read');
+    expect(result.text).not.toContain('not available');
+  });
+
+  test('/agents still blocks with its guidance when the snapshot marks it undispatched', async () => {
+    const gatewayRequest = jest.fn();
+    const result = await executeGatewaySlashCommand('/agents', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: { agents: BLOCKED_BY_SNAPSHOT },
+    });
+    expect(gatewayRequest).not.toHaveBeenCalled();
+    expect(result.text).toContain('not available');
+    expect(result.text).toContain('agents are profiles');
+  });
+});

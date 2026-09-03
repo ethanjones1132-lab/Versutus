@@ -15,6 +15,11 @@ import {
   totalUsage,
 } from '@/lib/gateway/session-analytics';
 import type { RunOutcome } from '@/lib/gateway/runs';
+import {
+  pairedDeviceRowCopy,
+  pairedDevicesReadFromUnknown,
+  type PairedDevice,
+} from '@/lib/gateway/paired-devices';
 import { matchSkillSlash, type Skill } from '@/lib/gateway/skills';
 import { toolsetsReadFromUnknown } from '@/lib/gateway/toolsets';
 import type { ChatMessage, GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
@@ -454,6 +459,25 @@ export async function executeGatewaySlashCommand(
     return textResult('Conversation cleared. A new session is open.', '/reset');
   }
 
+  // `/env`, `/session current` and bare `/device` answer from local state plus
+  // a dispatched read (`environments.list`, the open Session id,
+  // `device.info` with a `device.list` fallback) — never from the registry
+  // method the snapshot judged (`environments.status`, `sessions.current`,
+  // `device.info`), which no Gateway dispatches. Like the local answers
+  // above, they run before the snapshot block. The Session bypass needs the
+  // open id in hand: without one there is no local answer, so the block
+  // stands and the snapshot reason is kept. Every other sub keeps today's
+  // routing, so undispatched commands keep blocking with their guidance.
+  if (commandName === '/env' && args.length === 0) {
+    return runAdvancedFamilyCommand(commandName, args, context);
+  }
+  if (commandName === '/session' && context.currentSessionId?.trim() && isLocalSessionRead(args)) {
+    return runSessionCommand(args, context);
+  }
+  if (commandName === '/device' && args.length === 0) {
+    return runApprovalsDevicesCommand(commandName, args, context);
+  }
+
   const blocked = blockUnsupportedCommand(commandName, args, context.methods);
   if (blocked) return blocked;
 
@@ -580,6 +604,34 @@ function commandIdForInput(input: string, args: string[]): string | undefined {
     if (command) return command.id;
   }
   return undefined;
+}
+
+/**
+ * The `/session` subs answered from the open Session id rather than a
+ * Gateway read. These run before the snapshot block because the block judges
+ * the undispatched `sessions.current` registry method, not the local answer.
+ */
+function isLocalSessionRead(args: string[]): boolean {
+  const sub = (args[0] || '').toLowerCase();
+  return !sub || sub === 'current' || sub === 'status';
+}
+
+/**
+ * One line per paired device, reusing the Paired devices pane row copy so the
+ * chat path and the pane never describe the same registry differently. An
+ * empty registry is an honest empty-ok read — only a failed read may claim
+ * failure, and that case never reaches here.
+ */
+function formatDeviceList(devices: PairedDevice[]): string {
+  if (devices.length === 0) return 'No paired devices.';
+  const lines = [`Devices: ${devices.length}`];
+  for (const device of devices.slice(0, 6)) {
+    const row = pairedDeviceRowCopy(device);
+    const detail = row.subtitle ? ` (${row.subtitle})` : '';
+    const revoked = row.revoked ? ' [revoked]' : '';
+    lines.push(`- ${row.title}${detail}${revoked}`);
+  }
+  return lines.join('\n');
 }
 
 function blockUnsupportedCommand(
@@ -1270,6 +1322,18 @@ async function runApprovalsDevicesCommand(commandName: string, args: string[], c
       return runRegistryCommand('device-revoke', context);
     }
     const result = await context.gatewayRequest('device.info', {}).catch(e => ({ error: String(e) }));
+    if (!(isRecord(result) && typeof result.error === 'string')) {
+      return directReadResult('device.info', 'Device info', '/device', result);
+    }
+    // `device.info` is a direct-Hermes-host read. A Gate answers `device.list`
+    // instead, so fall back to the registry before reporting the failure. A
+    // failed fallback keeps the original `device.info` failure — the first
+    // attempt stays the story, exactly as before.
+    const fallback = await context.gatewayRequest('device.list', {}).catch(e => ({ error: String(e) }));
+    const read = pairedDevicesReadFromUnknown(fallback);
+    if (read.ok) {
+      return textResult(formatDeviceList(read.devices), '/device', compactJson(fallback));
+    }
     return directReadResult('device.info', 'Device info', '/device', result);
   }
 
