@@ -37,6 +37,7 @@ import {
   prependEarlier,
 } from '@/lib/gateway/messages';
 import { liveSessionId, pinLiveSession, resolveResumeSession } from '@/lib/gateway/session-resume';
+import { threadSwitchFailureText, validateThreadSwitch } from '@/lib/gateway/thread-switch';
 import {
   applySessionListRead,
   emptySessionList,
@@ -2654,9 +2655,22 @@ const response = await executeGatewaySlashCommand(trimmed, {
     [activeGateway, closeModelPicker, sendChatInput, selectedBackendId, selectedBotId],
   );
 
-  const selectSession = useCallback((sessionId: string) => {
+  const selectSession = useCallback(async (sessionId: string) => {
     closeSessionSelector();
     const client = clientRef.current;
+    // The slash path reads `session.restore` and switches only after it
+    // resolves; the tap used to pin first and fail at the history read
+    // after. Validate through the same read ahead of the pin: a rejection
+    // names the failure and keeps the current thread. Where the method is
+    // not dispatched on this path (no client) the switch stays instant.
+    const validation = await validateThreadSwitch(
+      client?.rpcRequest.bind(client),
+      sessionId,
+    );
+    if (!validation.ok) {
+      setLastError(threadSwitchFailureText(sessionId, validation.error));
+      return;
+    }
     // Pinning the client is not enough: connect copies stored onto live
     // before disconnect can rewrite it. Same persist as createNewSession.
     const pinned = client
