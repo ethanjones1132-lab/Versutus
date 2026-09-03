@@ -93,3 +93,59 @@ describe('/session current honesty', () => {
     expect(result.raw).toBe('{}');
   });
 });
+
+describe('/session current from the app Session context', () => {
+  test('an active app Session answers with no wire call', async () => {
+    const gatewayRequest = jest.fn();
+    const result = await executeGatewaySlashCommand('/session current', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      currentSessionId: 's-live',
+    });
+    expect(gatewayRequest).not.toHaveBeenCalled();
+    expect(result.text).toBe('Current session: s-live');
+    expect(result.title).toBe('/session current');
+  });
+
+  test('bare /session and /session status take the same local branch', async () => {
+    for (const input of ['/session', '/session status']) {
+      const gatewayRequest = jest.fn();
+      const result = await executeGatewaySlashCommand(input, {
+        hello: null,
+        gatewayRequest,
+        runAgentCommand: jest.fn(),
+        currentSessionId: '  s-live  ',
+      });
+      expect(gatewayRequest).not.toHaveBeenCalled();
+      expect(result.text).toBe('Current session: s-live');
+      expect(result.title).toBe('/session current');
+    }
+  });
+
+  test('a blank context id falls through to the remote read', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ sessionId: 's-remote' });
+    const result = await executeGatewaySlashCommand('/session current', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      currentSessionId: '   ',
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('sessions.current', {});
+    expect(result.text).toBe('Current session: s-remote');
+  });
+
+  test('/session list still reads its remote collection when a Session is active', async () => {
+    const gatewayRequest = jest
+      .fn()
+      .mockResolvedValue({ object: 'list', data: [{ id: 's-live', title: 'Live talk' }] });
+    const result = await executeGatewaySlashCommand('/session list', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      currentSessionId: 's-live',
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('sessions.list', { limit: 10 });
+    expect(result.text).not.toContain('Current session: s-live');
+  });
+});

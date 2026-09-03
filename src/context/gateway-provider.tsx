@@ -2095,6 +2095,11 @@ const response = await executeGatewaySlashCommand(trimmed, {
           resetConversation: () => createNewSessionRef.current(),
           restoreSession: (sessionId) => selectSessionRef.current(sessionId),
           createNewSession: (title) => createNewSessionRef.current(title),
+          // The live Session id, so `/session current` answers from the
+          // Session the app actually has open instead of asking the Gateway
+          // for a `sessions.current` method no Gateway dispatches. The ref
+          // is live; the state mirror may be stale inside this closure.
+          currentSessionId: sessionIdRef.current,
           // Already fetched by the chat screen and handed to sendChatInput; /help
           // renders it. Passing it beats re-fetching, which put a network
           // round-trip in front of every mistyped command.

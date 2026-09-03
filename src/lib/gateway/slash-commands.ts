@@ -95,6 +95,15 @@ type SlashCommandContext = {
    */
   createNewSession?: (title?: string) => void | Promise<void>;
   /**
+   * The app's active Session id, owned by the provider. `/session current`
+   * answers from this instead of asking the Gateway for `sessions.current`,
+   * which no Gateway dispatches — the Hermes fallback route reads back a
+   * `{object:"list",data}` collection that cannot identify the current item.
+   * Absent or blank falls through to the remote read, so no active Session
+   * still produces the honest no-Session copy.
+   */
+  currentSessionId?: string;
+  /**
    * Skills the app has already fetched. `/help` renders these as slash-command
    * rows. Passed in rather than fetched: the list is already in app state, and
    * awaiting an RPC here put a network round-trip in front of every mistyped
@@ -1002,6 +1011,16 @@ async function runSessionCommand(args: string[], context: SlashCommandContext): 
   const id = args[1];
 
   if (!sub || sub === 'current' || sub === 'status') {
+    // The app knows which Session is open — the provider owns it. Answer
+    // from that instead of asking the Gateway for `sessions.current`, which
+    // no Gateway dispatches: the Hermes fallback route reads back a
+    // `{object:"list",data}` collection that cannot identify the current
+    // item. No active Session falls through to the remote read below, which
+    // keeps the honest no-Session copy.
+    const localId = context.currentSessionId?.trim() || undefined;
+    if (localId) {
+      return textResult(`Current session: ${localId}`, '/session current');
+    }
     // A bare `catch` here used to swallow the error whole: a rejected read
     // rendered "No current session" -- which may be false, there may well BE
     // one -- with no Raw to diagnose it. Name the failure the way every other
