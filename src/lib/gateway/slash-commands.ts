@@ -470,13 +470,20 @@ export async function executeGatewaySlashCommand(
   // `/env <sub>` slash (today `/env list`) keeps today's registry routing;
   // every other sub keeps the family read, so undispatched commands keep
   // blocking with their guidance.
+  //
+  // `/device repair` answers from `device.list` — the paired-devices registry
+  // every Gate dispatches — so it bypasses with bare `/device`: the snapshot
+  // judges the undispatched `device.info`/`device.repair` registry methods,
+  // never the recovery read. `/device revoke` keeps today's routing through
+  // the block into the registry entry, with its danger-destructive
+  // confirmation and honest RPC failures.
   if (commandName === '/env' && !registeredFamilySubcommand(commandName, args)) {
     return runAdvancedFamilyCommand(commandName, args, context);
   }
   if (commandName === '/session' && context.currentSessionId?.trim() && isLocalSessionRead(args)) {
     return runSessionCommand(args, context);
   }
-  if (commandName === '/device' && args.length === 0) {
+  if (commandName === '/device' && (args.length === 0 || args[0]?.toLowerCase() === 'repair')) {
     return runApprovalsDevicesCommand(commandName, args, context);
   }
 
@@ -1313,8 +1320,23 @@ async function runApprovalsDevicesCommand(commandName: string, args: string[], c
   if (commandName === '/device') {
     const sub = (args[0] || '').toLowerCase();
     if (sub === 'repair') {
-      const result = await context.gatewayRequest('device.repair', {}).catch(e => ({ error: String(e) }));
-      return directReadResult('device.repair', 'Device token repair attempted', '/device repair', result, 'Device token repair failed');
+      // `device.repair` is dispatched by no Gateway — no Hermes REST
+      // (rpc-routes.ts) and no Gate method (only `device.list` is served) —
+      // so the call could never succeed. Answer the recovery the operator
+      // can actually perform instead: read the paired-devices registry the
+      // Gate does serve and render the same state the Paired devices pane
+      // shows, with the reconnect next step. A rejected list stays honest
+      // through `device.list`, never the repair title.
+      const result = await context.gatewayRequest('device.list', {}).catch(e => ({ error: String(e) }));
+      const read = pairedDevicesReadFromUnknown(result);
+      if (read.ok) {
+        return textResult(
+          `${formatDeviceList(read.devices)}\n\nReconnect to the gateway to repair the connection — the stored token is reused.`,
+          '/device repair',
+          compactJson(result),
+        );
+      }
+      return directReadResult('device.list', 'Paired devices', '/device repair', result);
     }
     if (sub === 'revoke') {
       // Forward into the registry entry (dashboard.ts device-revoke, danger

@@ -55,17 +55,19 @@ describe('/device revoke forwards to the registered device-revoke entry', () => 
     expect(result.title).toBe('/device');
   });
 
-  test('/device repair keeps calling device.repair', async () => {
-    const gatewayRequest = jest.fn().mockResolvedValue({ ok: true });
+  test('/device repair reads the paired-devices registry instead of device.repair', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ devices: [{ deviceId: 'dev-1', role: 'owner', scopes: [], issuedAtMs: 0, revoked: false }] });
     const result = await executeGatewaySlashCommand('/device repair', {
       hello: null,
       gatewayRequest,
       runAgentCommand: jest.fn(),
     });
-    expect(gatewayRequest).toHaveBeenCalledWith('device.repair', {});
+    expect(gatewayRequest).toHaveBeenCalledWith('device.list', {});
+    expect(gatewayRequest).not.toHaveBeenCalledWith('device.repair', expect.anything());
     expect(gatewayRequest).not.toHaveBeenCalledWith('device.revoke', expect.anything());
     expect(gatewayRequest).not.toHaveBeenCalledWith('device.info', expect.anything());
-    expect(result.text).toContain('Device token repair attempted');
+    expect(result.text).toContain('dev-1');
+    expect(result.title).toBe('/device repair');
   });
 
   test('a snapshot blocking the device family answers with guidance before any RPC', async () => {

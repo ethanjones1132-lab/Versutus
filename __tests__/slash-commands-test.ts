@@ -390,6 +390,37 @@ describe('locally answered commands bypass the snapshot block', () => {
     expect(result.text).not.toContain('not available');
   });
 
+  test('/device repair reads device.list past the snapshot block and never calls device.repair', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ devices: [{ deviceId: 'phone-1', role: 'owner', scopes: ['operator'], issuedAtMs: 0, revoked: false }] });
+    const result = await executeGatewaySlashCommand('/device repair', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      methods: { device: BLOCKED_BY_SNAPSHOT },
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('device.list', {});
+    expect(gatewayRequest).not.toHaveBeenCalledWith('device.repair', expect.anything());
+    expect(gatewayRequest).not.toHaveBeenCalledWith('device.info', expect.anything());
+    expect(gatewayRequest).not.toHaveBeenCalledWith('device.revoke', expect.anything());
+    expect(result.text).toContain('phone-1');
+    expect(result.text).toContain('Reconnect');
+    expect(result.title).toBe('/device repair');
+    expect(result.text).not.toContain('not available');
+  });
+
+  test('/device repair names the device.list failure when the registry cannot be read', async () => {
+    const gatewayRequest = jest.fn().mockRejectedValue(new Error('device.list is not supported by this gateway.'));
+    const result = await executeGatewaySlashCommand('/device repair', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('device.list', {});
+    expect(gatewayRequest).not.toHaveBeenCalledWith('device.repair', expect.anything());
+    expect(result.text).toContain('Paired devices could not be read');
+    expect(result.text).toContain('device.list is not supported');
+  });
+
   test('/agents still blocks with its guidance when the snapshot marks it undispatched', async () => {
     const gatewayRequest = jest.fn();
     const result = await executeGatewaySlashCommand('/agents', {

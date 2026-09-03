@@ -1,15 +1,18 @@
 import { executeGatewaySlashCommand } from '@/lib/gateway/slash-commands';
 
 /**
- * `/device`, `/device repair`, `/talk catalog|config|mode`, `/voicewake`
+ * `/device`, `/talk catalog|config|mode`, `/voicewake`
  * and `/logs <level>` catch a rejected RPC into `{ error }` and print the
- * success title ("Device info", "Device token repair attempted", "Talk
+ * success title ("Device info", "Talk
  * catalog", "VoiceWake status", "error logs") as if the read happened —
  * the error sat only in Raw. A caught rejection must carry the failure
  * into the bubble text, with the METHOD_GUIDANCE next step when the
- * method has an entry (device.info / device.repair / talk.catalog /
+ * method has an entry (device.info / talk.catalog /
  * voicewake.status / logs.tail) and the error does not already name it;
  * resolved reads keep today's title and Raw byte-identical.
+ * `/device repair` answers from the paired-devices registry instead of an
+ * undispatched repair call: a resolving `device.list` renders the registry
+ * lines, a rejecting one names the failure.
  */
 describe('/device, /talk, /voicewake and /logs read honesty', () => {
   test('a rejecting device.info RPC names the failure, not "Device info"', async () => {
@@ -39,31 +42,32 @@ describe('/device, /talk, /voicewake and /logs read honesty', () => {
     expect(result.raw).toBe('{\n  "serial": "A1"\n}');
   });
 
-  test('a rejecting device.repair RPC names the failure, not "Device token repair attempted"', async () => {
-    const gatewayRequest = jest.fn().mockRejectedValue(new Error('device.repair is not supported by this gateway.'));
+  test('a rejecting device.list RPC behind /device repair names the failure, not a paired-devices list', async () => {
+    const gatewayRequest = jest.fn().mockRejectedValue(new Error('device.list is not supported by this gateway.'));
     const result = await executeGatewaySlashCommand('/device repair', {
       hello: null,
       gatewayRequest,
       runAgentCommand: jest.fn(),
     });
-    expect(gatewayRequest).toHaveBeenCalledWith('device.repair', {});
-    expect(result.text).toContain('Device token repair failed');
-    expect(result.text).toContain('device.repair is not supported');
-    expect(result.text).toContain('Versutus devices pair via signed access requests');
-    expect(result.text).not.toBe('Device token repair attempted');
+    expect(gatewayRequest).toHaveBeenCalledWith('device.list', {});
+    expect(gatewayRequest).not.toHaveBeenCalledWith('device.repair', expect.anything());
+    expect(result.text).toContain('Paired devices could not be read');
+    expect(result.text).toContain('device.list is not supported');
+    expect(result.text).not.toContain('Device token repair attempted');
     expect(result.raw).not.toBe('{}');
   });
 
-  test('a resolving device.repair RPC keeps today\'s title and Raw', async () => {
-    const gatewayRequest = jest.fn().mockResolvedValue({ ok: true });
+  test('a resolving device.list RPC behind /device repair renders the paired-devices state', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({ devices: [{ deviceId: 'phone-1', role: 'owner', scopes: [], issuedAtMs: 0, revoked: false }] });
     const result = await executeGatewaySlashCommand('/device repair', {
       hello: null,
       gatewayRequest,
       runAgentCommand: jest.fn(),
     });
-    expect(gatewayRequest).toHaveBeenCalledWith('device.repair', {});
-    expect(result.text).toBe('Device token repair attempted');
-    expect(result.raw).toBe('{\n  "ok": true\n}');
+    expect(gatewayRequest).toHaveBeenCalledWith('device.list', {});
+    expect(result.text).toContain('phone-1');
+    expect(result.text).toContain('Reconnect');
+    expect(result.title).toBe('/device repair');
   });
 
   test('a rejecting talk.catalog RPC names the failure with the voice guidance', async () => {
