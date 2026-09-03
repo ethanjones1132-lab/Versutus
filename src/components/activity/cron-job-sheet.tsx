@@ -7,6 +7,10 @@ import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { haptics } from '@/lib/haptics';
 import {
+  cronJobPauseLabel,
+  describeCronJobControlError,
+} from '@/lib/gateway/cron-job-controls';
+import {
   describeCronHealth,
   runElapsedLabel,
   type CronJob,
@@ -40,13 +44,19 @@ function Row({ label, value }: { label: string; value?: string | null }) {
  * story the app tells.
  */
 export function CronJobSheet({ job, onClose, onOpenRun }: CronJobSheetProps) {
-  const { cron } = useGateway();
+  const { botJobs, cron } = useGateway();
   const [runs, setRuns] = useState<CronRun[]>([]);
   const [runsError, setRunsError] = useState<string | null>(null);
+  const [controlError, setControlError] = useState<string | null>(null);
+  const [acting, setActing] = useState(false);
+  // The pause state the host last confirmed. A refused Pause/Resume keeps
+  // this, so the label never flips to a state the host did not take.
+  const [pausedOverride, setPausedOverride] = useState<boolean | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
 
   const jobId = job?.id ?? null;
+  const paused = pausedOverride ?? job?.paused ?? false;
   const loadRuns = useCallback(async () => {
     if (!jobId) return;
     try {
@@ -56,6 +66,33 @@ export function CronJobSheet({ job, onClose, onOpenRun }: CronJobSheetProps) {
       setRunsError(caught instanceof Error ? caught.message : String(caught));
     }
   }, [cron, jobId]);
+
+  const submitRun = useCallback(async () => {
+    if (!jobId || acting) return;
+    setActing(true);
+    setControlError(null);
+    try {
+      await botJobs.run(jobId);
+    } catch (caught) {
+      setControlError(describeCronJobControlError(caught));
+    } finally {
+      setActing(false);
+    }
+  }, [acting, botJobs, jobId]);
+
+  const submitTogglePause = useCallback(async () => {
+    if (!jobId || acting) return;
+    setActing(true);
+    setControlError(null);
+    try {
+      await botJobs.pause(jobId, !paused);
+      setPausedOverride(!paused);
+    } catch (caught) {
+      setControlError(describeCronJobControlError(caught));
+    } finally {
+      setActing(false);
+    }
+  }, [acting, botJobs, jobId, paused]);
 
   // Keyed by job id upstream, so each job opens as a fresh component with
   // collapsed toggles and no stale run list — no setState in the effect body.
@@ -75,6 +112,26 @@ export function CronJobSheet({ job, onClose, onOpenRun }: CronJobSheetProps) {
           {job.running ? 'Running now' : health.label}
           {health.detail ? ` — ${health.detail}` : ''}
         </Text>
+
+        <View style={styles.controls}>
+          <Button
+            label={acting ? 'Working…' : 'Run now'}
+            variant="ghost"
+            size="sm"
+            disabled={acting}
+            onPress={() => void submitRun()}
+          />
+          <Button
+            label={cronJobPauseLabel({ paused })}
+            variant="ghost"
+            size="sm"
+            disabled={acting}
+            onPress={() => void submitTogglePause()}
+          />
+        </View>
+        {controlError ? (
+          <Text variant="caption" color="statusDisconnected" selectable>{controlError}</Text>
+        ) : null}
 
         <Divider />
 
@@ -156,6 +213,7 @@ export function CronJobSheet({ job, onClose, onOpenRun }: CronJobSheetProps) {
 
 const styles = StyleSheet.create({
   body: { gap: Spacing.two, paddingBottom: Spacing.five },
+  controls: { flexDirection: 'row', gap: Spacing.two },
   field: { gap: 2 },
   row: { marginBottom: Spacing.one },
   mono: { fontFamily: 'monospace' },
