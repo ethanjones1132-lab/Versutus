@@ -460,15 +460,17 @@ export async function executeGatewaySlashCommand(
   }
 
   // `/env`, `/session current` and bare `/device` answer from local state plus
-  // a dispatched read (`environments.list`, the open Session id,
-  // `device.info` with a `device.list` fallback) — never from the registry
-  // method the snapshot judged (`environments.status`, `sessions.current`,
-  // `device.info`), which no Gateway dispatches. Like the local answers
-  // above, they run before the snapshot block. The Session bypass needs the
-  // open id in hand: without one there is no local answer, so the block
-  // stands and the snapshot reason is kept. Every other sub keeps today's
-  // routing, so undispatched commands keep blocking with their guidance.
-  if (commandName === '/env' && args.length === 0) {
+  // a dispatched read (`environments.list` / `environments.check`, the open
+  // Session id, `device.info` with a `device.list` fallback) — never from the
+  // registry method the snapshot judged (`environments.status`,
+  // `sessions.current`, `device.info`), which no Gateway dispatches. Like the
+  // local answers above, they run before the snapshot block. The Session
+  // bypass needs the open id in hand: without one there is no local answer,
+  // so the block stands and the snapshot reason is kept. A registered
+  // `/env <sub>` slash (today `/env list`) keeps today's registry routing;
+  // every other sub keeps the family read, so undispatched commands keep
+  // blocking with their guidance.
+  if (commandName === '/env' && !registeredFamilySubcommand(commandName, args)) {
     return runAdvancedFamilyCommand(commandName, args, context);
   }
   if (commandName === '/session' && context.currentSessionId?.trim() && isLocalSessionRead(args)) {
@@ -1400,7 +1402,7 @@ async function runAdvancedFamilyCommand(commandName: string, args: string[], con
       title = 'Cron';
       break;
     case '/env':
-      method = sub ? 'env.get' : 'environments.list';
+      method = sub ? 'environments.check' : 'environments.list';
       title = 'Environments';
       break;
     case '/skills':
@@ -1442,6 +1444,9 @@ function familyCommandResult(
   }
   if (!sub) {
     return textResult(formatFamilyList(commandName, title, result), commandName, compactJson(result));
+  }
+  if (commandName === '/env') {
+    return textResult(formatEnvironmentCheck(result, sub), commandName, compactJson(result));
   }
   return textResult(title, commandName, compactJson(result));
 }
@@ -1883,6 +1888,26 @@ function formatSkills(result: unknown): string {
 
 function formatEnvironments(result: unknown): string {
   return formatStatusCollection('Environments', result, ['environments', 'items', 'envs'], ['status', 'state', 'ready', 'healthy']);
+}
+
+/**
+ * `/env <name>` renders the `environments.check` answer the Environments
+ * screen shows for that same environment: the id with its live state, plus
+ * the probe's CLI version and protocol exactly as the environment card's
+ * subtitle reads them. A resolved read with no state still names the id
+ * instead of printing the bare list title; unknown names never reach here
+ * (a rejected check names the failure through the error branch above).
+ */
+function formatEnvironmentCheck(result: unknown, name: string): string {
+  const record = isRecord(result) ? result : {};
+  const id = readFirstString(record, ['id']) ?? name;
+  const state = readFirstString(record, ['state']);
+  const probe = isRecord(record.probe) ? record.probe : undefined;
+  const cliVersion = readString(probe, 'cliVersion');
+  const protocol = readString(probe, 'protocol');
+  const detail = [cliVersion, protocol].filter(Boolean).join(' · ');
+  const head = state ? `Environment ${id}: ${state}` : `Environment ${id}`;
+  return detail ? `${head} · ${detail}` : head;
 }
 
 /**

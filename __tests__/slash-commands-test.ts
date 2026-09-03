@@ -302,16 +302,22 @@ describe('locally answered commands bypass the snapshot block', () => {
     expect(result.text).not.toContain('not available');
   });
 
-  test('/env with a name still blocks on the snapshot until the check read lands', async () => {
-    const gatewayRequest = jest.fn();
+  test('/env with a name answers from environments.check instead of blocking on the snapshot', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({
+      id: 'opencode-local',
+      state: 'ready',
+      probe: { state: 'ready', cliVersion: '1.17.9', protocol: 'acp' },
+    });
     const result = await executeGatewaySlashCommand('/env opencode-local', {
       hello: null,
       gatewayRequest,
       runAgentCommand: jest.fn(),
       methods: { environments: BLOCKED_BY_SNAPSHOT },
     });
-    expect(gatewayRequest).not.toHaveBeenCalled();
-    expect(result.text).toContain('not available');
+    expect(gatewayRequest).toHaveBeenCalledWith('environments.check', { id: 'opencode-local' });
+    expect(result.text).toContain('opencode-local');
+    expect(result.text).toContain('ready');
+    expect(result.text).not.toContain('not available');
   });
 
   test('/session current answers the open session id when the snapshot marks sessions.current undispatched', async () => {

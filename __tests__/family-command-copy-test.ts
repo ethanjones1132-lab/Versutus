@@ -166,6 +166,37 @@ describe('family list commands put the answer in the bubble text, not only in Ra
     expect(result.text).toContain('PGPASSWORD (status: set)');
   });
 
+  test('/env <name> reads environments.check and renders the check state', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({
+      id: 'opencode-local',
+      state: 'ready',
+      probe: { state: 'ready', cliVersion: '1.17.9', protocol: 'acp' },
+    });
+    const result = await executeGatewaySlashCommand('/env opencode-local', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('environments.check', { id: 'opencode-local' });
+    expect(result.text).toContain('opencode-local');
+    expect(result.text).toContain('ready');
+    expect(result.text).toContain('1.17.9');
+    expect(result.raw).toContain('"state"');
+  });
+
+  test('/env <unknown> names the failure instead of claiming no remote status exists', async () => {
+    const gatewayRequest = jest.fn().mockRejectedValue(new Error('environment "ghost" not found'));
+    const result = await executeGatewaySlashCommand('/env ghost', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('environments.check', { id: 'ghost' });
+    expect(result.text).toContain('could not be read');
+    expect(result.text).toContain('environment "ghost" not found');
+    expect(result.text).not.toContain('no remote REST exists');
+  });
+
   test('/agents lists agent rows as the bubble text', async () => {
     const gatewayRequest = jest.fn().mockResolvedValue({
       agents: [
