@@ -1,5 +1,5 @@
 import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/chat-stream-delta';
-import { isAuthRejection } from '@/lib/gateway/errors';
+import { GatewayHttpError, isAuthRejection } from '@/lib/gateway/errors';
 import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 import { HttpTransport } from '@/lib/gateway/http-transport';
 import {
@@ -277,14 +277,39 @@ export class HermesGatewayClient {
    * Opens a session, pinned to `model` when one is given.
    *
    * Native Hermes takes `model` as a string on POST /api/sessions. The Gate
-   * remaps `{ modelId }` onto that field; this client talks to Hermes
-   * directly, so the string has to go on the wire. A session opened without
-   * one is stuck on the host default — Hermes refuses PATCH of `model`.
+   * serves only `/v1/*`: it takes `{ model: { modelId } }` on
+   * POST /v1/sessions and answers the session directly instead of wrapped
+   * as `{ session }`. A session opened without one is stuck on the host
+   * default — Hermes refuses PATCH of `model`.
    */
   async createSession(title?: string, model?: string): Promise<HermesSession> {
     // The Hermes API server rejects an empty JSON body with 400
     // ("Invalid JSON in request body"). Send an explicit empty-string title
     // instead so the request shape is always valid.
+    try {
+      const gate = await this.transport.request<HermesSession | { session: HermesSession }>(
+        'POST',
+        '/v1/sessions',
+        {
+          title: title ?? '',
+          // `{ modelId }` is the shape the Gate hands to backend.createSession.
+          ...(model ? { model: { modelId: model } } : {}),
+        },
+      );
+      const session = (gate as { session?: HermesSession })?.session ?? (gate as HermesSession);
+      if (session && typeof session.id === 'string') {
+        this.currentSessionId = session.id;
+        return session;
+      }
+      // A 200 without a session id is not a session — fall through to the
+      // native path rather than pin an unknown thread.
+    } catch (error) {
+      // A direct Hermes host answers the `/v1/*` path 404. Anything else is
+      // the Gate's own answer — including its `{ error: { code:
+      // 'session_create_failed' } }` refusal — and must surface rather than
+      // silently retry another dialect.
+      if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
+    }
     const result = await this.transport.request<{ session: HermesSession }>('POST', '/api/sessions', {
       title: title ?? '',
       ...(model ? { model } : {}),
