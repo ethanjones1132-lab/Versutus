@@ -28,6 +28,17 @@ export type CreateProviderInput = {
 };
 
 /**
+ * What `providers.auth.begin` answers (gate/core/providers/rpc.mjs): the
+ * attempt the Gate is tracking plus the browser URL the operator must visit.
+ * Either URL field may be absent on older Gates, so both stay optional.
+ */
+export type BeginAuthAnswer = {
+  attemptId: string;
+  redirectUri?: string;
+  authorizationUrl?: string;
+};
+
+/**
  * Build the v2 registration document from a profile choice. The Gate's schema
  * is exact and unforgiving, so assembling it here keeps every caller — screens,
  * tests, future surfaces — from having to know its shape.
@@ -82,7 +93,7 @@ export function createProviderClient(request: Rpc) {
     check: (id: string) => request<ProviderSnapshot>('providers.health.check', { id }),
     refreshCatalog: (id: string) => request<ProviderSnapshot>('providers.catalog.refresh', { id }),
     setApiKey: (id: string, value: string) => request<{ ok: boolean }>('providers.auth.setApiKey', { id, value }),
-    beginAuth: (id: string) => request('providers.auth.begin', { id }),
+    beginAuth: (id: string) => request<BeginAuthAnswer>('providers.auth.begin', { id }),
     disconnect: (id: string) => request('providers.auth.disconnect', { id }),
     remove: (id: string) => request('providers.delete', { id }),
   };

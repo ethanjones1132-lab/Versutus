@@ -8,6 +8,7 @@ import { Button, EmptyState, ErrorCard, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { createProviderClient, type CreateProviderInput } from '@/lib/gateway/provider-client';
+import { resolveOAuthBeginDisplay } from '@/lib/gateway/provider-oauth';
 import type { ProviderProfile, ProviderSnapshot } from '@/lib/gateway/provider-types';
 
 /** Model providers the Gate owns: registration, credentials, catalogs. */
@@ -20,6 +21,7 @@ export function ProvidersSection() {
   const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [oauthMessage, setOauthMessage] = useState('');
+  const [oauthUrl, setOauthUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -148,8 +150,20 @@ export function ProvidersSection() {
           onDelete={() => void client.remove(snapshot.id).then(load)}
           onSetKey={() => setEditingId(snapshot.id)}
           onAuthorize={() => {
-            setOauthMessage('Continue authorization in the desktop browser.');
-            void client.beginAuth(snapshot.id);
+            void (async () => {
+              setError(null);
+              try {
+                const answer = await client.beginAuth(snapshot.id);
+                setOauthUrl(resolveOAuthBeginDisplay(answer)?.authorizationUrl ?? null);
+                setOauthMessage('Continue authorization in the desktop browser.');
+              } catch (caught) {
+                // A begin refusal (oauth not configured on the Gate) surfaces
+                // as an error, not the progress sheet.
+                setOauthUrl(null);
+                setOauthMessage('');
+                setError(caught instanceof Error ? caught.message : String(caught));
+              }
+            })();
           }}
           onEnable={() => void client.update(snapshot.id, { enabled: true }).then(load)}
         />
@@ -163,7 +177,12 @@ export function ProvidersSection() {
         onClose={() => setEditingId(null)}
       />
 
-      <OauthProgressSheet visible={!!oauthMessage} message={oauthMessage} onClose={() => setOauthMessage('')} />
+      <OauthProgressSheet
+        visible={!!oauthMessage}
+        message={oauthMessage}
+        authorizationUrl={oauthUrl ?? undefined}
+        onClose={() => { setOauthMessage(''); setOauthUrl(null); }}
+      />
     </>
   );
 }
