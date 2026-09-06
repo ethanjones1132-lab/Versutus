@@ -111,9 +111,15 @@ export async function probeHighPriorityCandidates(
   if (successes.length === 0) return null;
 
   // Prefer a gate that advertises the Open Gateway Manifest (Versutus Gate)
-  // over a bare Hermes /health on :8642 when both answer.
-  for (const success of successes) {
-    if (await hasGatewayManifest(success.url, timeoutMs)) return success;
+  // over a bare Hermes /health on :8642 when both answer. The manifest reads
+  // fan out together so the preference check costs one fetch budget instead
+  // of one per success; hits keep probe order, so the earliest
+  // manifest-bearing success still wins.
+  const manifestHits = await Promise.all(
+    successes.map((success) => hasGatewayManifest(success.url, timeoutMs)),
+  );
+  for (let i = 0; i < successes.length; i += 1) {
+    if (manifestHits[i]) return successes[i];
   }
   return successes[0];
 }
