@@ -127,6 +127,21 @@ export function buildExplicitHostCandidates(tailscaleHost: string): string[] {
   return buildGatewayCandidates({ tailscaleHost, includeLocalFallbacks: false });
 }
 
+/**
+ * The beacon TXT kind for a URL `resolveGatewayForUrl` is about to identify,
+ * so the call can hand it to `identifyGateway` as `beaconKind` instead of
+ * re-fingerprinting a gateway whose kind discovery already advertised. Blank
+ * or absent kinds resolve to undefined, and `identifyGateway` then runs its
+ * full cascade exactly as it does today.
+ */
+export function beaconKindForUrl(
+  discovered: Pick<DiscoveredGateway, 'url' | 'kind'>[],
+  url: string,
+): string | undefined {
+  const kind = discovered.find((item) => item.url === url)?.kind?.trim();
+  return kind ? kind : undefined;
+}
+
 /** Split host:port when the user types an explicit port (IPv4 / hostname only). */
 function splitHostPort(input: string): { host: string; port?: string } {
   const match = /^([^:[\]]+):(\d{2,5})$/.exec(input);

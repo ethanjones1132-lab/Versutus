@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { AppState, Platform } from 'react-native';
 
 import { GatewayDiscoveryScanner, isNativeDiscoveryAvailable } from '@/lib/discovery/scanner';
-import { buildExplicitHostCandidates, buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/lib/gateway/candidates';
+import { beaconKindForUrl, buildExplicitHostCandidates, buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/lib/gateway/candidates';
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
 import { decideConnectionPhase } from '@/lib/connection/phase';
 import {
@@ -1190,9 +1190,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           ? 'openclaw'
           : undefined;
       // Onboarding used to leave kind unset, which defaulted the client to Hermes
-      // and broke Gate (manifest on :8760). Identify before saving.
+      // and broke Gate (manifest on :8760). Identify before saving. The
+      // discovery beacon kind travels with the call, so a gateway that
+      // advertised its kind answers from the beacon fast path with no network
+      // instead of replaying the full manifest + fingerprint cascade.
       if (!kind) {
-        const identity = await identifyGateway({ baseUrl: url });
+        const identity = await identifyGateway({ baseUrl: url, beaconKind: beaconKindForUrl(discovered, url) });
         if (identity.kind === 'custom' || identity.kind === 'hermes' || identity.kind === 'openclaw') {
           kind = identity.kind;
         }
