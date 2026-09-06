@@ -729,6 +729,26 @@ export function ChatScreen() {
     };
   }, [botSurfaceId, status, gatewayRequest]);
 
+  const handleToolsetsRetry = useCallback(() => {
+    if (!toolsSurfaceKey || status !== 'connected') return;
+    const target = toolsSurfaceKey;
+    const kind = surface.kind;
+    const backend = selectedBackendId;
+    const fold = (read: Parameters<typeof applyToolsetsRead>[1]) => {
+      setToolsetsState((prev) => {
+        const previous =
+          prev.surfaceKey === target ? prev : { ...EMPTY_TOOLSETS, surfaceKey: target };
+        return { surfaceKey: target, ...applyToolsetsRead(previous, read) };
+      });
+    };
+    void gatewayRequest('tools.list', toolsetsListParams({
+      surfaceKind: kind,
+      backendId: backend,
+    }))
+      .then((payload) => fold(toolsetsReadFromUnknown(payload)))
+      .catch(() => fold({ ok: false }));
+  }, [toolsSurfaceKey, status, surface.kind, selectedBackendId, gatewayRequest]);
+
   useEffect(() => {
     if (!toolsSurfaceKey || status !== 'connected') return;
     let cancelled = false;
@@ -1188,6 +1208,7 @@ export function ChatScreen() {
               toolsets={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.toolsets : []}
               loaded={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.loaded : false}
               failed={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.failed : false}
+              onRetry={handleToolsetsRetry}
             />
           ) : null}
           <RoutinesPane
@@ -1229,6 +1250,7 @@ export function ChatScreen() {
           toolsets={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.toolsets : []}
           loaded={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.loaded : false}
           failed={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.failed : false}
+          onRetry={handleToolsetsRetry}
         />
       ) : null}
 

@@ -15,10 +15,13 @@ export function ToolsPane({
   toolsets,
   loaded,
   failed,
+  onRetry,
 }: {
   toolsets: Toolset[];
   loaded: boolean;
   failed: boolean;
+  /** Re-run the same `tools.list` read the surface effect runs. */
+  onRetry?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const state: ToolsetsState = { toolsets, loaded, failed };
@@ -43,6 +46,9 @@ export function ToolsPane({
             <Text variant="micro" color="secondary">
               {copy}
             </Text>
+          ) : null}
+          {!loaded && failed && onRetry ? (
+            <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
           ) : null}
           {toolsets.map((toolset) => (
             <ListRow
