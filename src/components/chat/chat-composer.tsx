@@ -117,7 +117,7 @@ export const ChatComposer = memo(function ChatComposer({
                       await Haptics.selectionAsync();
                       onSelectSlashSuggestion?.(action.draft);
                     }}
-                    hitSlop={6}
+                    hitSlop={9}
                     accessibilityRole="button"
                     accessibilityLabel={`Quick action ${action.label}`}
                     style={[
