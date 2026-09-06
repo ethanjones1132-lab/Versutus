@@ -419,17 +419,24 @@ export function ChatScreen() {
   const isStreaming = isSending || messages.some((message) => message.streaming);
   const queuedCount = messages.filter((message) => message.queued).length;
   const showPairingSheet = status === 'pairing' && !!deviceId && dismissedPairingKey !== pairingKey;
-  const slashSuggestions = draft.trimStart().startsWith('/')
-    ? getSlashCommandSuggestions(
-        draft,
-        activeHello,
-        recentCommands,
-        capabilitySnapshot.methods,
-        dynamicCommands,
-        12,
-        skillsState.skills,
-      )
-    : [];
+  // The registry build walks every command, dynamic entry, and skill, so it
+  // runs only when one of its inputs changes — not on every streamed frame
+  // that re-renders this screen while the draft holds `/`.
+  const slashSuggestions = useMemo(
+    () =>
+      draft.trimStart().startsWith('/')
+        ? getSlashCommandSuggestions(
+            draft,
+            activeHello,
+            recentCommands,
+            capabilitySnapshot.methods,
+            dynamicCommands,
+            12,
+            skillsState.skills,
+          )
+        : [],
+    [draft, activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands, skillsState.skills],
+  );
   // Stable across streamed frames (icons + drafts never change) so the memoized
   // ChatComposer short-circuits when only `messages` changed.
   const quickActions: { label: string; draft: string; icon: IconName }[] = useMemo(
