@@ -76,6 +76,48 @@ describe('slash commands', () => {
     expect(result.text).toContain('laguna-xs-2.1:free');
     expect(result.text).not.toBe('No models matched.');
   });
+
+  test('/tools effective answers from the tools.list catalog instead of the undispatched method', async () => {
+    const catalog = { toolsets: [{ name: 'shell', description: 'run commands' }] };
+    const gatewayRequest = jest.fn().mockResolvedValue(catalog);
+    const result = await executeGatewaySlashCommand('/tools effective', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('tools.list', {});
+    expect(gatewayRequest).not.toHaveBeenCalledWith('tools.effective', expect.anything());
+    expect(result.text).toContain('- shell: run commands');
+  });
+
+  test('bare /tools still reads tools.list with byte-identical rows', async () => {
+    const catalog = { toolsets: [{ name: 'shell', description: 'run commands' }] };
+    const bareRequest = jest.fn().mockResolvedValue(catalog);
+    const bare = await executeGatewaySlashCommand('/tools', {
+      hello: null,
+      gatewayRequest: bareRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(bareRequest).toHaveBeenCalledWith('tools.list', {});
+    const effectiveRequest = jest.fn().mockResolvedValue(catalog);
+    const effective = await executeGatewaySlashCommand('/tools effective', {
+      hello: null,
+      gatewayRequest: effectiveRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(effective.text).toBe(bare.text);
+  });
+
+  test('/tools effective names the failure when the catalog read is refused', async () => {
+    const gatewayRequest = jest.fn().mockRejectedValue(new Error('Unknown method "tools.list"'));
+    const result = await executeGatewaySlashCommand('/tools effective', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(gatewayRequest).toHaveBeenCalledWith('tools.list', {});
+    expect(result.text).toContain('could not be read');
+  });
 });
 
 describe('slash command palette', () => {

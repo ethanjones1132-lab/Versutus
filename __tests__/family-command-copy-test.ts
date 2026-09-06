@@ -241,18 +241,18 @@ describe('family list commands put the answer in the bubble text, not only in Ra
     expect(result.text).toContain('report.pdf (size: 2048)');
   });
 
-  test('a rejecting /tools effective puts the error and the guidance into the text', async () => {
+  test('a rejecting /tools effective puts the catalog error into the text', async () => {
     const gatewayRequest = jest.fn().mockRejectedValue(new Error('HTTP 404'));
     const result = await executeGatewaySlashCommand('/tools effective', {
       hello: null,
       gatewayRequest,
       runAgentCommand: jest.fn(),
     });
-    expect(gatewayRequest).toHaveBeenCalledWith('tools.effective', { id: 'effective' });
+    expect(gatewayRequest).toHaveBeenCalledWith('tools.list', {});
+    expect(gatewayRequest).not.toHaveBeenCalledWith('tools.effective', expect.anything());
     expect(result.title).toBe('/tools');
     expect(result.text).toContain('Tools could not be read');
     expect(result.text).toContain('HTTP 404');
-    expect(result.text).toContain('Use /tools for the toolsets catalog (GET /v1/toolsets)');
   });
 
   test('a rejecting /agents names the failure and the agents.list guidance', async () => {

@@ -54,14 +54,20 @@ describe('family commands with a registered subcommand slash', () => {
     expect(gatewayRequest).toHaveBeenCalledWith('environments.list', {});
   });
 
-  test('families with no registered subcommand keep the family switch', async () => {
+  test('/tools effective answers from the tools.list catalog instead of a guessed method', async () => {
     const gatewayRequest = jest.fn().mockResolvedValue({});
-    await executeGatewaySlashCommand('/tools effective', {
+    const result = await executeGatewaySlashCommand('/tools effective', {
       hello: null,
       gatewayRequest,
       runAgentCommand: jest.fn(),
     });
-    expect(gatewayRequest).toHaveBeenCalledWith('tools.effective', { id: 'effective' });
+    expect(gatewayRequest).toHaveBeenCalledWith('tools.list', {});
+    expect(gatewayRequest).not.toHaveBeenCalledWith('tools.effective', expect.anything());
+    expect(result.title).toBe('/tools');
+  });
+
+  test('families with no registered subcommand keep the family switch', async () => {
+    const gatewayRequest = jest.fn().mockResolvedValue({});
     await executeGatewaySlashCommand('/agents alpha', {
       hello: null,
       gatewayRequest,

@@ -1431,6 +1431,9 @@ async function runAdvancedFamilyCommand(commandName: string, args: string[], con
   if (commandName === '/skills' && sub) {
     return runSkillDetailCommand(sub, context);
   }
+  if (commandName === '/tools' && sub === 'effective') {
+    return runToolsEffectiveCommand(context);
+  }
   let method = '';
   let title = commandName;
 
@@ -2113,6 +2116,17 @@ function formatSkillDetail(value: unknown): string {
   const category = readFirstString(record, ['category', 'group', 'kind']);
   const head = description ? `/${name} - ${truncateLine(description, 120)}` : `/${name}`;
   return category ? `${head}\nCategory: ${category}` : head;
+}
+
+/**
+ * `/tools effective` answers from the `tools.list` read the Tools dashboard
+ * entry renders: no Gateway dispatches `tools.effective`, so the direct
+ * read always answers unknown-method. The rows are the same `formatTools`
+ * rows bare `/tools` renders, via the empty-sub list branch.
+ */
+async function runToolsEffectiveCommand(context: SlashCommandContext): Promise<SlashCommandResult> {
+  const result = await context.gatewayRequest('tools.list', {}).catch(e => ({ error: String(e) }));
+  return familyCommandResult('/tools', 'Tools', 'tools.list', '', result);
 }
 
 function formatCron(result: unknown): string {
