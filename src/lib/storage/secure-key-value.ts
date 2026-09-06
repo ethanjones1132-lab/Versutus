@@ -41,6 +41,26 @@ export function toSecureStoreKey(key: string): string {
   return normalized || 'versutus';
 }
 
+/**
+ * Gate the plain-AsyncStorage fallback used when SecureStore is unavailable.
+ * Secrets kept there (gateway tokens, device identity keys) are unencrypted,
+ * so the fallback is a dev-runtimes-only escape hatch: simulators without a
+ * keychain keep working, but loudly. Production builds run on real devices
+ * where SecureStore is always available, so a missing SecureStore there
+ * refuses rather than silently downgrading secret storage.
+ */
+function allowInsecureFallback(operation: 'read' | 'write' | 'remove', key: string): void {
+  if (!__DEV__) {
+    throw new Error(
+      `[secure-key-value] SecureStore is unavailable, and the plain-storage fallback is development-only — refusing to ${operation} "${key}" in a production build.`,
+    );
+  }
+  console.warn(
+    `[secure-key-value] SecureStore is unavailable — ${operation} "${key}" falls back to plain AsyncStorage. ` +
+      'Secrets kept there are unencrypted; this fallback is development-only.',
+  );
+}
+
 export const secureKeyValueStorage = {
   async getItem(key: string): Promise<string | null> {
     if (Platform.OS === 'web') return readWebValue(key);
@@ -65,8 +85,9 @@ export const secureKeyValueStorage = {
         return legacyValue;
       }
     } catch {
-      // Fall through to AsyncStorage for dev runtimes.
+      // Fall through to the dev-only AsyncStorage fallback below.
     }
+    allowInsecureFallback('read', key);
     return AsyncStorage.getItem(key);
   },
 
@@ -85,8 +106,9 @@ export const secureKeyValueStorage = {
         return;
       }
     } catch {
-      // Fall through to AsyncStorage for dev runtimes.
+      // Fall through to the dev-only AsyncStorage fallback below.
     }
+    allowInsecureFallback('write', key);
     await AsyncStorage.setItem(key, value);
   },
 
@@ -104,8 +126,9 @@ export const secureKeyValueStorage = {
         return;
       }
     } catch {
-      // Fall through to AsyncStorage for dev runtimes.
+      // Fall through to the dev-only AsyncStorage fallback below.
     }
+    allowInsecureFallback('remove', key);
     await AsyncStorage.removeItem(key);
   },
 };
