@@ -1425,6 +1425,9 @@ async function runAdvancedFamilyCommand(commandName: string, args: string[], con
   if (commandName === '/cron' && sub === 'history') {
     return runCronHistoryCommand(args.slice(1), context);
   }
+  if (commandName === '/cron' && sub === 'transcript') {
+    return runCronTranscriptCommand(args.slice(1), context);
+  }
   if (commandName === '/cron' && (sub === 'run' || sub === 'pause' || sub === 'resume')) {
     return runCronActionCommand(sub, args.slice(1), context);
   }
@@ -2058,6 +2061,46 @@ function describeCronRun(value: unknown): string {
   const status = value.status === 'running' ? 'running' : 'completed';
   const turns = typeof value.turnCount === 'number' ? ` · ${value.turnCount} turns` : '';
   return `- ${truncateLine(name, 120)} · ${status}${turns}`;
+}
+
+/**
+ * `/cron transcript <runId>` reads the per-run transcript the Activity run
+ * sheet shows. The Gate answers `cron.transcript` with an `{object:"list",data}`
+ * envelope of turns, so the command renders one text line per turn instead of
+ * the list fallback. A rejected read names the failure with the
+ * METHOD_GUIDANCE next step when one exists — the same honesty rule as
+ * runCronActionCommand — so a refused transcript never reads as empty. A
+ * missing id answers usage without touching the gateway.
+ */
+async function runCronTranscriptCommand(args: string[], context: SlashCommandContext): Promise<SlashCommandResult> {
+  const runId = (args[0] || '').trim();
+  if (!runId) return textResult('Usage: /cron transcript <runId>', '/cron transcript');
+  const method = 'cron.transcript';
+  const result = await context.gatewayRequest(method, { runId }).catch(e => ({ error: String(e) }));
+  const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
+  if (error) {
+    const guidance = METHOD_GUIDANCE[method];
+    const detail = guidance && !error.includes(guidance) ? `${error} ${guidance}` : error;
+    return textResult(`Run transcript for ${runId} could not be read: ${detail}`, `/cron transcript ${runId}`, compactJson(result));
+  }
+  const turns = readCollection(result, ['data', 'turns', 'items']) ?? [];
+  if (turns.length === 0) {
+    return textResult(`No turns recorded for ${runId}.`, `/cron transcript ${runId}`, compactJson(result));
+  }
+  const lines = [`Run transcript for ${runId}: ${turns.length}`, ...turns.slice(0, 10).map(describeCronTurn)];
+  return textResult(lines.join('\n'), `/cron transcript ${runId}`, compactJson(result));
+}
+
+function describeCronTurn(value: unknown): string {
+  if (!isRecord(value)) return `- ${truncateLine(String(value), 120)}`;
+  const role = typeof value.role === 'string' && value.role.trim()
+    ? value.role.trim().toUpperCase()
+    : 'UNKNOWN';
+  const tool = typeof value.toolName === 'string' && value.toolName.trim()
+    ? ` · ${value.toolName.trim()}`
+    : '';
+  const text = typeof value.text === 'string' && value.text ? value.text : '—';
+  return `- ${role}${tool}: ${truncateLine(text, 120)}`;
 }
 
 /**
