@@ -65,6 +65,11 @@ import { formatRunFailure, modelSubstitutionNote, shouldShowModelSubstitution } 
 import { resolveDefaultBackend } from '@/lib/gateway/backend-defaults';
 import { applyModelOverride, effectiveModel, modelSwitchAnnouncement, resolveSendModel, shouldReleaseSessionForModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
+  buildEarlyProbeUrls,
+  mergeDiscoveredProbeUrls,
+  sameGatewayUrl,
+} from '@/lib/gateway/auto-connect-candidates';
+import {
   categorizeProbeError,
   GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
   GATEWAY_PROBE_TIMEOUT_MS,
@@ -1230,7 +1235,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLastError(null);
 
       try {
-        const discovered = await discoverForProbe();
+        // Discovery's fixed window runs while the synchronously-known
+        // high-priority URLs are probed, instead of before them: the first
+        // byte is probed immediately and the beacons merge when the window
+        // lands. `discovered` still flows to every downstream use below.
+        const discoveryPromise = discoverForProbe();
+        const earlyUrls = buildEarlyProbeUrls({
+          platform: Platform.OS,
+          lastSuccessfulUrl: appSettings.lastSuccessfulUrl,
+        });
+        const earlyResult =
+          earlyUrls.length > 0
+            ? await probeHighPriorityCandidates(
+                earlyUrls,
+                setProbeMessage,
+                GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
+              )
+            : null;
+        const discovered = await discoveryPromise;
 
         // Kind-flagged beacons (OpenClaw over WS) skip HTTP probing entirely.
         const wsBeacon = discovered.find(
@@ -1261,7 +1283,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               await connectGateway(saved);
               return;
             }
-            const savedProbe = await probeGatewayUrl(saved.url, GATEWAY_PROBE_TIMEOUT_MS);
+            const savedProbe =
+              earlyResult?.ok && sameGatewayUrl(earlyResult.url, saved.url)
+                ? earlyResult
+                : await probeGatewayUrl(saved.url, GATEWAY_PROBE_TIMEOUT_MS);
             if (savedProbe.ok) {
               if (autoRetryTimerRef.current) {
                 clearTimeout(autoRetryTimerRef.current);
@@ -1276,21 +1301,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        const highPriorityUrls: string[] = [];
-        if (Platform.OS === 'web') {
-          for (const localUrl of ['http://127.0.0.1:8642', 'http://localhost:8642']) {
-            if (!highPriorityUrls.includes(localUrl)) highPriorityUrls.push(localUrl);
-          }
-        }
-        const lastUrl = appSettings.lastSuccessfulUrl;
-        if (lastUrl && !highPriorityUrls.includes(lastUrl)) highPriorityUrls.push(lastUrl);
-        for (const d of discovered) {
-          if (!highPriorityUrls.includes(d.url)) highPriorityUrls.push(d.url);
-        }
+        const highPriorityUrls = mergeDiscoveredProbeUrls(earlyUrls, discovered);
 
-        let probeResult: Awaited<ReturnType<typeof probeHighPriorityCandidates>> = null;
+        let probeResult: Awaited<ReturnType<typeof probeHighPriorityCandidates>> =
+          earlyResult;
 
-        if (highPriorityUrls.length > 0) {
+        if (!probeResult?.ok && highPriorityUrls.length > 0) {
           probeResult = await probeHighPriorityCandidates(
             highPriorityUrls,
             setProbeMessage,
