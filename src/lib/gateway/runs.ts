@@ -148,6 +148,21 @@ const MAX_STATUS_POLLS = 120;
 const DEFAULT_POLL_DELAY_MS = 1000;
 
 /**
+ * Spread of the no-progress poll wait around its base delay, so runs that
+ * started together do not poll the gateway in lockstep under load.
+ */
+export const POLL_JITTER_MS = 200;
+
+/**
+ * Offset a poll delay by up to ±POLL_JITTER_MS. The sample is injectable so
+ * tests stay deterministic; production callers use the Math.random default.
+ * Clamped at zero so small custom delays never go negative.
+ */
+export function jitteredPollDelay(baseMs: number, sample: number = Math.random()): number {
+  return Math.max(0, baseMs + (sample * 2 - 1) * POLL_JITTER_MS);
+}
+
+/**
  * Start a run and drive it to a terminal state, pausing for the user's
  * decision whenever the gateway requests approval.
  */
@@ -243,7 +258,7 @@ export async function executeRun(
     // status is not a finish — back off briefly and poll again rather than
     // reporting mid-flight state as the final word.
     if (!reachedTerminal && status === previousStatus) {
-      await sleep(pollDelayMs);
+      await sleep(jitteredPollDelay(pollDelayMs));
     }
   }
 
