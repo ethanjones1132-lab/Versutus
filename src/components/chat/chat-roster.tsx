@@ -285,6 +285,8 @@ function ChatRosterImpl({
               icon={{ ios: 'exclamationmark.triangle', android: 'warning', web: 'warning' }}
               title="Couldn't load agents"
               description="The roster could not read this gateway's agent inventory — the reason is named above."
+              actionLabel="Retry"
+              onAction={handleRefresh}
             />
           ) : null}
           {emptyView.kind === 'no-match' ? (
