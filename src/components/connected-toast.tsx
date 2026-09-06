@@ -4,7 +4,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-na
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Text } from '@/components/ui';
-import { Radius, Spacing } from '@/constants/tokens';
+import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import { formatConnectedToastLabel } from '@/lib/format';
@@ -49,8 +49,12 @@ export function ConnectedToast() {
   }, [activeGateway, activeHello, status]);
 
   useEffect(() => {
-    opacity.value = withTiming(visible ? 1 : 0, { duration: visible ? 240 : 180 });
-    translateY.value = withTiming(visible ? 0 : -16, { duration: visible ? 240 : 180 });
+    opacity.value = withTiming(visible ? 1 : 0, {
+      duration: visible ? Motion.duration.normal : Motion.duration.fast,
+    });
+    translateY.value = withTiming(visible ? 0 : -16, {
+      duration: visible ? Motion.duration.normal : Motion.duration.fast,
+    });
   }, [opacity, translateY, visible]);
 
   const animatedStyle = useAnimatedStyle(() => ({
