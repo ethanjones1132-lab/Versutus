@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet } from 'react-native';
 
-import { Card, ListRow, Skeleton, Text } from '@/components/ui';
+import { Card, ErrorCard, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
@@ -71,9 +71,12 @@ export function ToolsetsSection() {
         </>
       ) : null}
       {error && !shown.loaded ? (
-        <Text variant="micro" color="statusDisconnected" selectable>
-          {error}
-        </Text>
+        <ErrorCard
+          cause={error}
+          affected="Toolsets on this gateway"
+          next="Retry, or check the Gate log for the failing call."
+          onRetry={() => void load()}
+        />
       ) : null}
       {copy ? (
         <Text variant="micro" color="secondary">
