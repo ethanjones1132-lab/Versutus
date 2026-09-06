@@ -2413,7 +2413,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
         });
 
         probeResult = await probeHighPriorityCandidates(
-          candidates,
+          // The full list opens with the explicit host the first wave just
+          // missed, so wave only the unwaved delta instead of re-probing it.
+          dropAlreadyWavedCandidates(candidates, explicitCandidates, []),
           setProbeMessage,
           GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
         );

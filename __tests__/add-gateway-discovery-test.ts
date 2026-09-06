@@ -1,4 +1,8 @@
-import { buildExplicitHostCandidates } from '@/lib/gateway/candidates';
+import {
+  buildExplicitHostCandidates,
+  buildGatewayCandidates,
+} from '@/lib/gateway/candidates';
+import { dropAlreadyWavedCandidates } from '@/lib/gateway/auto-connect-candidates';
 
 declare const __dirname: string;
 
@@ -65,4 +69,39 @@ test('an early miss still probes every candidate across both waves', () => {
   expect(setup).toContain('candidates.slice(3)');
   // The resolved gateway still sees the landed beacons for kind matching.
   expect(setup).toContain('discovered,');
+});
+
+test('the full-list head is exactly the explicit host the first wave tried', () => {
+  const explicit = buildExplicitHostCandidates('my-pc.ts.net');
+  const full = buildGatewayCandidates({
+    tailscaleHost: 'my-pc.ts.net',
+    discovered: [
+      {
+        id: 'lan',
+        name: 'lan',
+        host: '192.168.1.20',
+        port: 8642,
+        url: 'http://192.168.1.20:8642',
+        source: 'local',
+        txt: {},
+        lastSeenAt: 0,
+      },
+    ],
+    platform: 'ios',
+  });
+  // Same strings through the same push path, so the first wave already
+  // missed every one of them when the second wave runs.
+  expect(full.slice(0, explicit.length)).toEqual(explicit);
+  // Dropping the waved head keeps every unwaved candidate in listed order,
+  // so earliest-healthy-wins is unchanged and nothing is probed twice.
+  const delta = dropAlreadyWavedCandidates(full, explicit, []);
+  expect(delta.length).toBe(full.length - explicit.length);
+  expect(delta).toEqual(full.slice(explicit.length));
+  for (const url of explicit) expect(delta).not.toContain(url);
+});
+
+test('add-gateway waves only the unwaved delta on an early miss', () => {
+  const src = readProviderSource();
+  const setup = src.slice(src.indexOf('const setupFromPcAddress = useCallback'));
+  expect(setup).toContain('dropAlreadyWavedCandidates(candidates, explicitCandidates, [])');
 });
