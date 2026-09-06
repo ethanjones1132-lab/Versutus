@@ -70,7 +70,7 @@ function CapabilityFreshness({ checkedAt, status }: { checkedAt: number; status:
   const now = useNow(60_000, true);
   const staleMinutes = Math.max(0, Math.floor((now - checkedAt) / 60000));
   return (
-    <Text variant="caption" color="tertiary" style={{ fontSize: 10 }}>
+    <Text variant="micro" color="tertiary">
       {status} • {staleMinutes}m ago
     </Text>
   );
