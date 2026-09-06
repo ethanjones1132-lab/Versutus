@@ -4,7 +4,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { CronJobSheet } from '@/components/activity/cron-job-sheet';
 import { CronRunSheet } from '@/components/activity/cron-run-sheet';
-import { Badge, Button, Card, ErrorCard, ListRow, Skeleton, Text, TextField } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, ErrorCard, ListRow, Skeleton, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
@@ -139,9 +139,11 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
       ) : null}
 
       {loaded && !error && jobs.length === 0 ? (
-        <Text variant="caption" color="secondary">
-          No scheduled work on this gateway.
-        </Text>
+        <EmptyState
+          icon={{ ios: 'clock', android: 'schedule', web: 'schedule' }}
+          title="No scheduled work on this gateway"
+          description="File scheduled work with the New scheduled job form below."
+        />
       ) : null}
 
       {sorted.map((job) => {
