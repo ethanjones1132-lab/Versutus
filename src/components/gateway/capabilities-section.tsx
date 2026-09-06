@@ -175,9 +175,14 @@ export function CapabilitiesSection() {
   return (
     <>
       {error ? (
-        <Text variant="caption" color="statusDisconnected" selectable>
-          {error}
-        </Text>
+        <>
+          <Text variant="caption" color="statusDisconnected" selectable>
+            {error}
+          </Text>
+          {kinds.length === 0 && instances.length === 0 && !draft ? (
+            <Button label="Retry" variant="ghost" onPress={() => void load()} />
+          ) : null}
+        </>
       ) : null}
 
       {draft && selectedKind ? (
