@@ -5,6 +5,19 @@ import {
   paletteListMaxHeight,
 } from '@/lib/motion/slash-palette-height';
 
+declare const __dirname: string;
+
+const SEP = __dirname.includes('\\') ? '\\' : '/';
+const nodeFs = jest.requireActual('fs') as {
+  readFileSync(path: string, encoding: string): string;
+};
+
+function readSource(...parts: string[]): string {
+  return nodeFs
+    .readFileSync([__dirname, '..', ...parts].join(SEP), 'utf8')
+    .replace(/\r\n/g, '\n');
+}
+
 test('palette list keeps full 380 on tall window without IME', () => {
   const h = paletteListMaxHeight({ windowHeight: 812, insetTop: 47, insetBottom: 34 });
   expect(h).toBe(PALETTE_LIST_MAX_HEIGHT);
@@ -52,8 +65,7 @@ test('palette list stays scrollable (keyboard open yields at least min height)',
 });
 
 test('slash palette component wires dynamic maxHeight via helper', () => {
-  const nodeFs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
-  const src = nodeFs.readFileSync('C:/Projects/Versutus/src/components/chat/slash-command-palette.tsx', 'utf8');
+  const src = readSource('src', 'components', 'chat', 'slash-command-palette.tsx');
   expect(src).toContain('paletteListMaxHeight');
   expect(src).toContain('useWindowDimensions');
   expect(src).toContain('useSafeAreaInsets');
@@ -63,8 +75,7 @@ test('slash palette component wires dynamic maxHeight via helper', () => {
 });
 
 test('palette list still has a 380 base style with dynamic override', () => {
-  const nodeFs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
-  const src = nodeFs.readFileSync('C:/Projects/Versutus/src/components/chat/slash-command-palette.tsx', 'utf8');
+  const src = readSource('src', 'components', 'chat', 'slash-command-palette.tsx');
   expect(src).toContain('styles.list');
   // base style keeps 380 as fallback; dynamic style overrides it per window
   expect(src).toContain('maxHeight: 380');

@@ -7,6 +7,19 @@ import {
 } from '@/lib/motion/chat-composer-palette';
 import { paletteListMaxHeight } from '@/lib/motion/slash-palette-height';
 
+declare const __dirname: string;
+
+const SEP = __dirname.includes('\\') ? '\\' : '/';
+const nodeFs = jest.requireActual('fs') as {
+  readFileSync(path: string, encoding: string): string;
+};
+
+function readSource(...parts: string[]): string {
+  return nodeFs
+    .readFileSync([__dirname, '..', ...parts].join(SEP), 'utf8')
+    .replace(/\r\n/g, '\n');
+}
+
 test('composer palette keeps full 180 on tall window without IME', () => {
   const h = chatComposerPaletteMaxHeight({ windowHeight: 812, insetTop: 47, insetBottom: 34 });
   expect(h).toBe(CHAT_COMPOSER_PALETTE_MAX_HEIGHT);
@@ -57,8 +70,7 @@ test('composer palette never collapses below minimum on tiny or bad window', () 
 });
 
 test('composer file wires dynamic maxHeight via helper', () => {
-  const nodeFs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
-  const src = nodeFs.readFileSync('C:/Projects/Versutus/src/components/chat/chat-composer.tsx', 'utf8');
+  const src = readSource('src', 'components', 'chat', 'chat-composer.tsx');
   expect(src).toContain('chatComposerPaletteMaxHeight');
   expect(src).toContain('chatComposerPaletteScrollMaxHeight');
   expect(src).toContain('useWindowDimensions');
@@ -71,8 +83,7 @@ test('composer file wires dynamic maxHeight via helper', () => {
 });
 
 test('composer palette still has 180/150 base styles with dynamic override', () => {
-  const nodeFs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
-  const src = nodeFs.readFileSync('C:/Projects/Versutus/src/components/chat/chat-composer.tsx', 'utf8');
+  const src = readSource('src', 'components', 'chat', 'chat-composer.tsx');
   expect(src).toContain('styles.palette');
   expect(src).toContain('maxHeight: 180');
   expect(src).toContain('maxHeight: 150');

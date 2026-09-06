@@ -6,6 +6,19 @@ import {
 } from '@/lib/motion/thread-config-list-height';
 import { sheetMaxHeight } from '@/lib/motion/sheet-height';
 
+declare const __dirname: string;
+
+const SEP = __dirname.includes('\\') ? '\\' : '/';
+const nodeFs = jest.requireActual('fs') as {
+  readFileSync(path: string, encoding: string): string;
+};
+
+function readSource(...parts: string[]): string {
+  return nodeFs
+    .readFileSync([__dirname, '..', ...parts].join(SEP), 'utf8')
+    .replace(/\r\n/g, '\n');
+}
+
 test('thread config list keeps full 380 on tall window without IME', () => {
   const h = threadConfigListMaxHeight({ windowHeight: 812, insetTop: 47, insetBottom: 34 });
   expect(h).toBe(THREAD_CONFIG_LIST_MAX_HEIGHT);
@@ -63,8 +76,7 @@ test('thread config list stays scrollable (keyboard open yields at least min hei
 });
 
 test('thread config sheet wires dynamic maxHeight via helper on all three lists', () => {
-  const nodeFs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
-  const src = nodeFs.readFileSync('C:/Projects/Versutus/src/components/chat/thread-config-sheet.tsx', 'utf8');
+  const src = readSource('src', 'components', 'chat', 'thread-config-sheet.tsx');
   expect(src).toContain('threadConfigListMaxHeight');
   expect(src).toContain('useWindowDimensions');
   expect(src).toContain('useSafeAreaInsets');
@@ -76,8 +88,7 @@ test('thread config sheet wires dynamic maxHeight via helper on all three lists'
 });
 
 test('thread config list still has a flexGrow 0 base style with dynamic override', () => {
-  const nodeFs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
-  const src = nodeFs.readFileSync('C:/Projects/Versutus/src/components/chat/thread-config-sheet.tsx', 'utf8');
+  const src = readSource('src', 'components', 'chat', 'thread-config-sheet.tsx');
   expect(src).toContain('styles.list');
   expect(src).toContain('flexGrow: 0');
 });

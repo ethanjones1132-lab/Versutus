@@ -3,6 +3,19 @@ import {
   groupMemberChipPinMaxWidth,
 } from '@/lib/motion/group-member-chip-layout';
 
+declare const __dirname: string;
+
+const SEP = __dirname.includes('\\') ? '\\' : '/';
+const nodeFs = jest.requireActual('fs') as {
+  readFileSync(path: string, encoding: string): string;
+};
+
+function readSource(...parts: string[]): string {
+  return nodeFs
+    .readFileSync([__dirname, '..', ...parts].join(SEP), 'utf8')
+    .replace(/\r\n/g, '\n');
+}
+
 test('base pin maxWidth is 120 at normal scale', () => {
   expect(GROUP_MEMBER_CHIP_PIN_MAX_WIDTH).toBe(120);
   expect(groupMemberChipPinMaxWidth()).toBe(120);
@@ -49,8 +62,7 @@ test('chip pin total width on 360 stays within wrap budget even with long model 
 });
 
 test('group room view wires dynamic pin maxWidth via helper', () => {
-  const fs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
-  const src = fs.readFileSync('C:/Projects/Versutus/src/components/chat/group-room-view.tsx', 'utf8');
+  const src = readSource('src', 'components', 'chat', 'group-room-view.tsx');
   expect(src).toContain('groupMemberChipPinMaxWidth');
   expect(src).toContain('useWindowDimensions');
   expect(src).toContain('fontScale');
