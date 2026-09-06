@@ -28,6 +28,19 @@ export type ChatStreamInterpretation = {
   provider?: string;
 };
 
+/**
+ * Array-form `delta.content` block kinds known to carry tool calls. The Gate
+ * relays provider chunks verbatim, so a future provider can introduce a new
+ * kind — anything outside this set falls through to the unknown-kind fallback
+ * below instead of being silently dropped.
+ */
+const KNOWN_TOOL_BLOCK_TYPES: ReadonlySet<string> = new Set([
+  'tool_use',
+  'tool_call',
+  'function_call',
+  'tool',
+]);
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : null;
 }
@@ -103,12 +116,26 @@ export function interpretChatStreamChunk(
     for (const block of delta.content) {
       const item = asRecord(block);
       if (!item) continue;
-      if (
-        item.type !== 'tool_use' &&
-        item.type !== 'tool_call' &&
-        item.type !== 'function_call' &&
-        item.type !== 'tool'
-      ) {
+      const blockType = typeof item.type === 'string' ? item.type : undefined;
+      if (blockType === undefined || !KNOWN_TOOL_BLOCK_TYPES.has(blockType)) {
+        // A block kind no provider has sent before. The Gate relays chunks
+        // verbatim, so this is how a future tool-call shape first arrives —
+        // surface it when it carries tool-call fields instead of dropping
+        // it, loudly in dev so the new kind earns a first-class case.
+        // Content blocks (`text`, `thinking`, …) carry no name and stay silent.
+        const fallbackFn = asRecord(item.function);
+        const fallbackName =
+          (typeof item.name === 'string' && item.name) ||
+          (typeof fallbackFn?.name === 'string' && fallbackFn.name) ||
+          '';
+        if (!fallbackName) continue;
+        if (typeof __DEV__ === 'undefined' || __DEV__) {
+          console.warn(
+            `[chat-stream-delta] unknown content block type "${blockType ?? 'absent'}" ` +
+              `carried a tool call for "${fallbackName}" — treating it as a tool call.`,
+          );
+        }
+        toolCalls.push({ name: fallbackName, status: 'running' });
         continue;
       }
       const fn = asRecord(item.function);
