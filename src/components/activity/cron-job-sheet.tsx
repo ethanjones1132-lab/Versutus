@@ -2,7 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { BaseSheet, Button, Divider, ListRow, Text } from '@/components/ui';
+import { BaseSheet, Button, Divider, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { haptics } from '@/lib/haptics';
@@ -47,6 +47,10 @@ export function CronJobSheet({ job, onClose, onOpenRun }: CronJobSheetProps) {
   const { botJobs, cron } = useGateway();
   const [runs, setRuns] = useState<CronRun[]>([]);
   const [runsError, setRunsError] = useState<string | null>(null);
+  // Whether the first run-history read has landed (success or refusal).
+  // The sheet opens with runs=[] before the deferred first read, which is
+  // indistinguishable from a genuinely empty history without this flag.
+  const [runsLoaded, setRunsLoaded] = useState(false);
   const [controlError, setControlError] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
   // The pause state the host last confirmed. A refused Pause/Resume keeps
@@ -62,8 +66,10 @@ export function CronJobSheet({ job, onClose, onOpenRun }: CronJobSheetProps) {
     try {
       setRuns(await cron.runs(jobId));
       setRunsError(null);
+      setRunsLoaded(true);
     } catch (caught) {
       setRunsError(caught instanceof Error ? caught.message : String(caught));
+      setRunsLoaded(true);
     }
   }, [cron, jobId]);
 
@@ -193,7 +199,13 @@ export function CronJobSheet({ job, onClose, onOpenRun }: CronJobSheetProps) {
         {runsError ? (
           <Button label="Retry" variant="ghost" size="sm" onPress={() => void loadRuns()} />
         ) : null}
-        {!runsError && runs.length === 0 ? (
+        {!runsError && !runsLoaded ? (
+          <>
+            <Skeleton width="90%" height={44} />
+            <Skeleton width="76%" height={44} style={styles.gap} />
+          </>
+        ) : null}
+        {!runsError && runsLoaded && runs.length === 0 ? (
           <Text variant="caption" color="secondary">No runs recorded yet.</Text>
         ) : null}
         {runs.map((run) => (
@@ -219,6 +231,7 @@ const styles = StyleSheet.create({
   controls: { flexDirection: 'row', gap: Spacing.two },
   field: { gap: 2 },
   row: { marginBottom: Spacing.one },
+  gap: { marginTop: Spacing.two },
   mono: { fontFamily: 'monospace' },
   rawCard: {
     borderWidth: 1,

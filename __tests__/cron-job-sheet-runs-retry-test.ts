@@ -40,7 +40,7 @@ describe('cron job sheet runs retry', () => {
 
   test('a successful empty read still guides with the no-runs line', () => {
     const src = readSheetSource();
-    const empty = src.match(/\{\!runsError && runs\.length === 0 \? \([\s\S]*?\) : null\}/)?.[0];
+    const empty = src.match(/\{\!runsError && runsLoaded && runs\.length === 0 \? \([\s\S]*?\) : null\}/)?.[0];
     expect(empty).toBeDefined();
     expect(empty).toMatch(/No runs recorded yet\./);
   });
