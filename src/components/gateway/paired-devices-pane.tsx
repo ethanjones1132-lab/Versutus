@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet } from 'react-native';
 
-import { Badge, Card, ListRow, Skeleton, Text } from '@/components/ui';
+import { Badge, Button, Card, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
@@ -69,6 +69,9 @@ export function PairedDevicesPane() {
         <Text variant="micro" color="secondary">
           {copy}
         </Text>
+      ) : null}
+      {!shown.loaded && shown.failed ? (
+        <Button label="Retry" variant="ghost" size="sm" onPress={() => void load()} />
       ) : null}
       {shown.devices.map((device) => {
         const row = pairedDeviceRowCopy(device);
