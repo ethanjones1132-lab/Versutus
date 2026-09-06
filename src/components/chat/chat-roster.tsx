@@ -3,7 +3,7 @@ import { FlatList, Platform, RefreshControl, StyleSheet, View } from 'react-nati
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
-import { EmptyState, ListRow, Skeleton, Text, TextField } from '@/components/ui';
+import { Button, EmptyState, ListRow, Skeleton, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import {
@@ -245,6 +245,9 @@ function ChatRosterImpl({
             <Text variant="caption" color="secondary" style={styles.error}>
               {groupsError}
             </Text>
+          ) : null}
+          {groupsError && handleRefresh ? (
+            <Button label="Retry" variant="ghost" size="sm" onPress={handleRefresh} />
           ) : null}
         </View>
       }
