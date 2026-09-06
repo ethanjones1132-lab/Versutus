@@ -9,6 +9,7 @@ import {
   diagnosticsSlashCopy,
 } from '@/lib/gateway/diagnostics-read';
 import {
+  SESSION_SPEND_LIST_LIMIT,
   sessionSpendCopy,
   sessionSpendReadFromUnknown,
   sessionUsageSpendFromUnknown,
@@ -1070,10 +1071,14 @@ async function runSessionSpendCommand(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const result = await context.gatewayRequest('sessions.list', { limit: 50 });
+    const result = await context.gatewayRequest('sessions.list', { limit: SESSION_SPEND_LIST_LIMIT });
     const read = sessionSpendReadFromUnknown(result);
     if (!read.ok) return textResult('Sessions could not be read.', commandName);
-    return textResult(sessionSpendCopy(totalUsage(read.sessions)), commandName);
+    const copy = sessionSpendCopy(totalUsage(read.sessions));
+    if (read.sessions.length >= SESSION_SPEND_LIST_LIMIT) {
+      return textResult(`${copy}\nNewest ${SESSION_SPEND_LIST_LIMIT} sessions.`, commandName);
+    }
+    return textResult(copy, commandName);
   } catch {
     return textResult('Sessions could not be read.', commandName);
   }

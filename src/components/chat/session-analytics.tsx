@@ -9,6 +9,7 @@ import { formatCost, formatTokenCount } from '@/lib/format';
 import {
   relativeMeter,
   sessionUsage,
+  spendWindowCopy,
   weekBuckets,
   type SessionUsageInput,
 } from '@/lib/gateway/session-analytics';
@@ -75,7 +76,7 @@ export function SessionAnalytics({
           )}
         </Svg>
         <Text variant="micro" color="tertiary">
-          Last 7 days · from recent sessions
+          {spendWindowCopy(sessions.length)}
         </Text>
       </View>
       {typeof messageCount === 'number' ? (

@@ -252,6 +252,29 @@ function asUsageInput(raw: unknown): SessionUsageInput | null {
 }
 
 /**
+ * How many sessions.list rows the spend folds read. The Gate's own wide
+ * catalogue read totals 200 rows (`session.usage` lists 200 in
+ * `gate/core/capabilities/gateway-methods.mjs`), and the thread selector
+ * can widen to the same 200 (`SESSION_LIST_MAX` in session-list.ts), so
+ * the glance covers every thread the roster can open instead of silently
+ * stopping at 50.
+ */
+export const SESSION_SPEND_LIST_LIMIT = 200;
+
+/**
+ * Honest window line for the 7-day sparkline. A filled window may be
+ * truncated — the list endpoint takes `limit` but no cursor — so a full
+ * read names its bound instead of reading as the whole catalogue. A
+ * partial or unreadable count stays on the old recent-sessions line.
+ */
+export function spendWindowCopy(sessionCount: number): string {
+  if (Number.isFinite(sessionCount) && sessionCount >= SESSION_SPEND_LIST_LIMIT) {
+    return `Last 7 days · newest ${SESSION_SPEND_LIST_LIMIT} sessions`;
+  }
+  return 'Last 7 days · recent sessions';
+}
+
+/**
  * Parse a sessions.list payload into the fields sessionUsage already reads.
  * Gate answers `{ object: 'list', data }`; Hermes `/api/sessions` is the
  * same envelope; a raw array is also a list. Anything else is a failed

@@ -74,6 +74,7 @@ import {
   EMPTY_SESSION_SPEND,
   overflowSpendCopy,
   overflowSpendSession,
+  SESSION_SPEND_LIST_LIMIT,
   sessionSpendReadFromUnknown,
   threadSpendCopy,
   threadSpendRefreshKey,
@@ -742,7 +743,7 @@ export function ChatScreen() {
   useEffect(() => {
     if (!spendRefreshKey || !spendSurfaceKey || status !== 'connected') return;
     let cancelled = false;
-    void gatewayRequest('sessions.list', { limit: 50 })
+    void gatewayRequest('sessions.list', { limit: SESSION_SPEND_LIST_LIMIT })
       .then((payload) => {
         if (cancelled) return;
         const read = sessionSpendReadFromUnknown(payload);
