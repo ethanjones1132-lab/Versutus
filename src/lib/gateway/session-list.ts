@@ -59,6 +59,20 @@ export function sessionListMayHaveOlder(loaded: number, requested: number): bool
   return loaded >= requested;
 }
 
+/**
+ * Honest window line for the session selector. A filled window may be
+ * truncated — the list endpoint takes `limit` but no cursor — so a full
+ * read names its bound instead of reading as the whole catalogue. A
+ * partial window is the whole catalogue and needs no note. Mirrors
+ * `spendWindowCopy` for the spend glance.
+ */
+export function sessionListWindowCopy(sessionCount: number): string | undefined {
+  if (Number.isFinite(sessionCount) && sessionCount >= SESSION_LIST_MAX) {
+    return `Showing newest ${SESSION_LIST_MAX} sessions`;
+  }
+  return undefined;
+}
+
 export function applySessionListRead<T extends SessionListEntry>(
   previous: SessionListState<T>,
   read: SessionListRead<T>,

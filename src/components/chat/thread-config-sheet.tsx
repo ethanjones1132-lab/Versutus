@@ -16,7 +16,7 @@ import {
   OTHER_GROUP_KEY,
   type ModelSection,
 } from '@/lib/gateway/model-selection';
-import { filterSessions, sessionCreateTitle, sessionListTitle } from '@/lib/gateway/session-list';
+import { filterSessions, sessionCreateTitle, sessionListTitle, sessionListWindowCopy } from '@/lib/gateway/session-list';
 import { entering } from '@/lib/motion/presets';
 import type { GatewayBackend } from '@/lib/portal/manifest';
 import {
@@ -165,6 +165,7 @@ function SessionsSection({
   const [nameDraft, setNameDraft] = useState('');
   const [query, setQuery] = useState('');
   const visibleSessions = useMemo(() => filterSessions(sessions, query), [sessions, query]);
+  const windowCopy = sessionListWindowCopy(sessions.length);
 
   const confirmDelete = useCallback((item: SessionItem) => {
     setDeleteCandidate(item);
@@ -342,6 +343,10 @@ function SessionsSection({
           }}
           style={styles.refresh}
         />
+      ) : windowCopy ? (
+        <Text variant="micro" color="tertiary" style={styles.blurb}>
+          {windowCopy}
+        </Text>
       ) : null}
 
       {onRefresh && (sessions.length > 0 || sessionsError) ? (
