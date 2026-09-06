@@ -190,6 +190,9 @@ export function CronJobSheet({ job, onClose, onOpenRun }: CronJobSheetProps) {
         {runsError ? (
           <Text variant="caption" color="statusDisconnected" selectable>{runsError}</Text>
         ) : null}
+        {runsError ? (
+          <Button label="Retry" variant="ghost" size="sm" onPress={() => void loadRuns()} />
+        ) : null}
         {!runsError && runs.length === 0 ? (
           <Text variant="caption" color="secondary">No runs recorded yet.</Text>
         ) : null}
