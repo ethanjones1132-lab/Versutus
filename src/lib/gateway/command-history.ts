@@ -41,6 +41,20 @@ export function commandHistoryToggleLabel(open: boolean, count: number): string 
   return `Command history (${count})`;
 }
 
+/**
+ * Honest window line for the command history. A held count past the visible
+ * cap is truncated — the section renders only the newest slice — so an
+ * over-cap read names its bound instead of reading as the whole transcript.
+ * An at-or-under-cap held set is fully shown and needs no note. Mirrors
+ * `sessionListWindowCopy` for the session selector.
+ */
+export function commandHistoryWindowCopy(entryCount: number): string | undefined {
+  if (Number.isFinite(entryCount) && entryCount > COMMAND_HISTORY_VISIBLE_LIMIT) {
+    return `Showing newest ${COMMAND_HISTORY_VISIBLE_LIMIT}`;
+  }
+  return undefined;
+}
+
 /** Row title: the recorded title, falling back to the raw slash input. */
 export function commandHistoryRowTitle(entry: CommandTranscriptEntry): string {
   return entry.title || entry.input;

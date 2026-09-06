@@ -9,6 +9,7 @@ import {
   commandHistoryRowTitle,
   commandHistoryToggleLabel,
   commandHistoryVisible,
+  commandHistoryWindowCopy,
 } from '@/lib/gateway/command-history';
 
 /**
@@ -27,6 +28,7 @@ export function CommandHistorySection() {
     title: commandHistoryRowTitle(entry),
     subtitle: entry.summary,
   }));
+  const windowCopy = commandHistoryWindowCopy(commandTranscripts.length);
 
   return (
     <View style={styles.block}>
@@ -45,9 +47,16 @@ export function CommandHistorySection() {
             {commandHistoryEmptyCopy()}
           </Text>
         ) : (
-          rows.map((row) => (
-            <ListRow key={row.id} title={row.title} subtitle={row.subtitle} />
-          ))
+          <>
+            {rows.map((row) => (
+              <ListRow key={row.id} title={row.title} subtitle={row.subtitle} />
+            ))}
+            {windowCopy ? (
+              <Text variant="micro" color="tertiary">
+                {windowCopy}
+              </Text>
+            ) : null}
+          </>
         )
       ) : null}
     </View>
