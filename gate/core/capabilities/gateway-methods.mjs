@@ -88,8 +88,11 @@ function usageOf(session) {
  * @param {() => Promise<object[]>} [deps.listDevices]
  *   Devices that hold a token on this Gate. The store's `token` field stays
  *   in the store — this method never puts it on the wire.
+ * @param {(deviceId: string) => Promise<boolean>} [deps.revokeDevice]
+ *   Marks one device's token revoked. Returns true when an entry matched,
+ *   false when no device is on file under that id.
  */
-export function createGatewayMethods({ getBackend, listDevices }) {
+export function createGatewayMethods({ getBackend, listDevices, revokeDevice }) {
   return {
     // The Gate answers for itself; no backend required.
     health: async () => ({ status: 'ok', timestamp: new Date().toISOString() }),
@@ -117,6 +120,28 @@ export function createGatewayMethods({ getBackend, listDevices }) {
 
     status: (params) => via(getBackend, params, 'healthDetailed', (b) => b.healthDetailed()),
     'diagnostics.full': (params) => via(getBackend, params, 'healthDetailed', (b) => b.healthDetailed()),
+
+    /**
+     * Revoke one paired device's token. Answers `{ deviceId, revoked }` with
+     * public fields only — the token itself is never read, let alone sent.
+     * An unknown id throws, mirroring the host CLI's `pair revoke` copy, so
+     * the caller's honest-failure path renders it instead of a silent no-op.
+     */
+    'device.revoke': async (params) => {
+      if (typeof revokeDevice !== 'function') {
+        throw new Error('This gateway does not keep a device registry');
+      }
+      const raw = params?.deviceId ?? params?.device ?? params?.id;
+      const deviceId = typeof raw === 'string' ? raw.trim() : '';
+      if (!deviceId) {
+        throw new Error('deviceId is required');
+      }
+      const revoked = await revokeDevice(deviceId);
+      if (!revoked) {
+        throw new Error(`No device "${deviceId}" on file.`);
+      }
+      return { deviceId, revoked: true };
+    },
 
     'skills.list': (params) => via(getBackend, params, 'listSkills', (b) => b.listSkills()),
     'skills.status': (params) => via(getBackend, params, 'listSkills', (b) => b.listSkills()),

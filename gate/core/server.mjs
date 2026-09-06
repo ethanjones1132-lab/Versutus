@@ -538,6 +538,7 @@ export async function createGate(config = {}) {
   // owns the reply shape, unlike the REST routes' `resolveBackend`.
   const gatewayMethods = createGatewayMethods({
     listDevices: () => deviceTokens.list(),
+    revokeDevice: (deviceId) => deviceTokens.revoke(deviceId),
     async getBackend(backendId, method) {
       if (backendId) return backendManager.get(backendId);
       const entries = await backendManager.list();
