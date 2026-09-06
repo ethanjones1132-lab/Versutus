@@ -1,7 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { BaseSheet, Button, Divider, ListRow, Text } from '@/components/ui';
+import { BaseSheet, Button, Divider, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { haptics } from '@/lib/haptics';
 import { describeBotDetail } from '@/lib/gateway/bot-detail';
@@ -90,6 +90,9 @@ export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit, onRetry 
             <Text variant="caption" color={soulState.failed ? 'accentWarm' : 'tertiary'}>
               {soulNote}
             </Text>
+          ) : null}
+          {!soulState.loaded && !soulState.failed ? (
+            <Skeleton width="90%" height={44} />
           ) : null}
           {!soulState.loaded && soulState.failed && onRetry ? (
             <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
