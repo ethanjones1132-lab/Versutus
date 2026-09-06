@@ -317,6 +317,20 @@ export function ChatScreen() {
       cancelled = true;
     };
   }, [detailBot, status, gatewayRequest]);
+  const handleSoulRetry = useCallback(() => {
+    const openId = detailBot?.id ?? null;
+    if (!openId || status !== 'connected') return;
+    const target = openId;
+    const fold = (read: Parameters<typeof applyBotSoulRead>[1]) => {
+      setSoulState((prev) => {
+        const previous = prev.botId === target ? prev : { botId: target, ...EMPTY_BOT_SOUL };
+        return { botId: target, ...applyBotSoulRead(previous, read) };
+      });
+    };
+    void gatewayRequest('bots.get', { id: target })
+      .then((payload) => fold(botSoulReadFromUnknown(payload)))
+      .catch(() => fold({ ok: false }));
+  }, [detailBot, status, gatewayRequest]);
   // Long-press target on the roster: which room's action sheet is open.
   const [detailGroup, setDetailGroup] = useState<BotGroupRoom | null>(null);
   const [routineState, setRoutineState] = useState<RoutinesState & { botId?: string }>({
@@ -1072,6 +1086,7 @@ export function ChatScreen() {
         bot={detailBot}
         soul={detailBot && soulState.botId === detailBot.id ? soulState : undefined}
         onClose={() => setDetailBot(null)}
+        onRetry={handleSoulRetry}
         onMessage={
           detailBot
             ? () => {

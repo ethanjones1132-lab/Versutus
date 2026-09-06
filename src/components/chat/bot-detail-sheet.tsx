@@ -1,7 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { BaseSheet, Divider, ListRow, Text } from '@/components/ui';
+import { BaseSheet, Button, Divider, ListRow, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { haptics } from '@/lib/haptics';
 import { describeBotDetail } from '@/lib/gateway/bot-detail';
@@ -29,6 +29,12 @@ export type BotDetailSheetProps = {
    * edit (ADR 0011).
    */
   onEdit?: () => void;
+  /**
+   * Re-run the same `bots.get` read the detail effect runs. Rendered only
+   * on the failed-first-read soul path, so no button without a handler
+   * and none over a loaded soul.
+   */
+  onRetry?: () => void;
 };
 
 /**
@@ -38,7 +44,7 @@ export type BotDetailSheetProps = {
  * then act: message the agent, copy the id for host-side commands, or edit
  * what the Gate holds.
  */
-export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit }: BotDetailSheetProps) {
+export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit, onRetry }: BotDetailSheetProps) {
   if (!bot) return null;
   const detail = describeBotDetail(bot);
   const soulState = soul ?? EMPTY_BOT_SOUL;
@@ -84,6 +90,9 @@ export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit }: BotDet
             <Text variant="caption" color={soulState.failed ? 'accentWarm' : 'tertiary'}>
               {soulNote}
             </Text>
+          ) : null}
+          {!soulState.loaded && soulState.failed && onRetry ? (
+            <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
           ) : null}
         </View>
 
