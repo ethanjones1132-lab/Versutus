@@ -345,6 +345,10 @@ export function ChatScreen() {
   const [spendState, setSpendState] = useState<SessionSpendState & { surfaceKey?: string }>({
     ...EMPTY_SESSION_SPEND,
   });
+  // A manual re-read has no gesture to ride on — the spend refresh key is
+  // fully derived — so Retry bumps this tick, which is folded into the key
+  // below and re-runs the spend effect with the same read.
+  const [spendRetryTick, setSpendRetryTick] = useState(0);
   const [groupsState, setGroupsState] = useState(EMPTY_GROUPS);
   const [newGroupVisible, setNewGroupVisible] = useState(false);
   const [newGroupBusy, setNewGroupBusy] = useState(false);
@@ -673,6 +677,14 @@ export function ChatScreen() {
     sessionId: currentSessionId,
     sending: isSending,
   });
+  // The retry tick is the only non-derived input: bumping it re-runs the
+  // spend effect below with the same `sessions.list` read. A bump while
+  // disconnected is harmless — the effect early-returns and the new key
+  // re-reads on the next connect.
+  const spendEffectKey = spendRefreshKey ? `${spendRefreshKey}:retry${spendRetryTick}` : undefined;
+  const handleSpendRetry = useCallback(() => {
+    setSpendRetryTick((tick) => tick + 1);
+  }, []);
   const toolsSurfaceKey = toolsetsVisibleOn(surface)
     ? surface.kind === 'configurable'
       ? `cfg:${selectedBackendId ?? ''}`
@@ -797,7 +809,7 @@ export function ChatScreen() {
   }, [toolsSurfaceKey, status, surface.kind, selectedBackendId, gatewayRequest]);
 
   useEffect(() => {
-    if (!spendRefreshKey || !spendSurfaceKey || status !== 'connected') return;
+    if (!spendEffectKey || !spendSurfaceKey || status !== 'connected') return;
     let cancelled = false;
     void gatewayRequest('sessions.list', { limit: SESSION_SPEND_LIST_LIMIT })
       .then((payload) => {
@@ -824,7 +836,7 @@ export function ChatScreen() {
     return () => {
       cancelled = true;
     };
-  }, [spendRefreshKey, spendSurfaceKey, status, gatewayRequest]);
+  }, [spendEffectKey, spendSurfaceKey, status, gatewayRequest]);
 
   // Group rooms load alongside the roster. A gateway that does not advertise
   // them answers with an empty list — no error, just no section.
@@ -1204,6 +1216,14 @@ export function ChatScreen() {
           copy={
             spendState.surfaceKey === spendSurfaceKey
               ? threadSpendCopy(spendState, currentSessionId)
+              : undefined
+          }
+          // The glance owns no fetch — the retry arrives as a prop, and only
+          // on the failed-first-read state. A failed re-read keeps the last
+          // good total with its own stale copy, so no button renders there.
+          onRetry={
+            spendState.surfaceKey === spendSurfaceKey && !spendState.loaded && spendState.failed
+              ? handleSpendRetry
               : undefined
           }
         />
