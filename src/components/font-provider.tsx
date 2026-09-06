@@ -9,10 +9,15 @@ import {
 } from '@expo-google-fonts/jetbrains-mono';
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
+
+// If the font download stalls (offline CDN, hung request), useFonts never
+// resolves and the native splash would cover the app forever. After this
+// window the provider falls back to children on system fonts instead.
+export const FONT_LOAD_TIMEOUT_MS = 5000;
 
 export function FontProvider({ children }: { children: React.ReactNode }) {
   const [loaded, error] = useFonts({
@@ -22,6 +27,15 @@ export function FontProvider({ children }: { children: React.ReactNode }) {
     JetBrainsMono_500Medium,
     JetBrainsMono_700Bold,
   });
+  const [timedOut, setTimedOut] = useState(false);
+
+  useEffect(() => {
+    if (loaded || error) {
+      return;
+    }
+    const timer = setTimeout(() => setTimedOut(true), FONT_LOAD_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [loaded, error]);
 
   useEffect(() => {
     if (loaded || error) {
@@ -29,8 +43,17 @@ export function FontProvider({ children }: { children: React.ReactNode }) {
     }
   }, [loaded, error]);
 
+  useEffect(() => {
+    if (timedOut) {
+      SplashScreen.hideAsync().catch(() => undefined);
+    }
+  }, [timedOut]);
+
   // During initial load, show ActivityIndicator instead of blank
   if (!loaded && !error) {
+    if (timedOut) {
+      return children;
+    }
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={undefined} />
