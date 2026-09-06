@@ -6,7 +6,7 @@ import { BotAvatar } from '@/components/chat/bot-avatar';
 import { MarkdownText } from '@/components/chat/markdown/markdown-text';
 import { StreamingIndicator } from '@/components/chat/streaming-indicator';
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
-import { BaseSheet, Button, Chip, ConfirmSheet, Icon, PressableScale, Text, TextField } from '@/components/ui';
+import { BaseSheet, Button, Chip, ConfirmSheet, Icon, PressableScale, Skeleton, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { botChipModelPin, botChipRoutingTag, type PublicBot } from '@/lib/gateway/bots';
@@ -144,6 +144,10 @@ export function GroupRoomView({
   const pinnedRef = useRef(true);
   const [entries, setEntries] = useState<RoomEntry[]>([]);
   const [historyError, setHistoryError] = useState(false);
+  // Whether the first transcript replay has landed (stored lines or refusal).
+  // The room opens with entries=[] before the async replay, which is
+  // indistinguishable from a genuinely empty room without this flag.
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -241,11 +245,13 @@ export function GroupRoomView({
       .then((stored) => {
         if (!alive) return;
         setEntries((prev) => mergeTranscriptRows(prev, stored));
+        setHistoryLoaded(true);
       })
       .catch(() => {
         // Fail honest: say earlier replies may be missing instead of showing
         // a silently truncated room.
         if (alive) setHistoryError(true);
+        if (alive) setHistoryLoaded(true);
       });
     return () => {
       alive = false;
@@ -575,7 +581,13 @@ export function GroupRoomView({
           {historyError && loadHistory ? (
             <Button label="Retry" variant="ghost" size="sm" onPress={handleRefresh} />
           ) : null}
-          {entries.length === 0 ? (
+          {loadHistory && !historyLoaded ? (
+            <>
+              <Skeleton width="90%" height={44} />
+              <Skeleton width="76%" height={44} style={styles.gap} />
+            </>
+          ) : null}
+          {entries.length === 0 && (!loadHistory || historyLoaded) ? (
             <Text variant="caption" color="tertiary" style={styles.emptyHint}>
               Say something to the room. Every reply lands here, attributed to its bot.
             </Text>
@@ -845,6 +857,7 @@ const styles = StyleSheet.create({
   // even at the six-member cap — the wrap stays two-plus chips per line.
   memberChipPin: { maxWidth: 120 },
   emptyHint: { textAlign: 'center', paddingVertical: Spacing.four },
+  gap: { marginTop: Spacing.two },
   listHeader: { gap: Spacing.two },
   userRow: { flexDirection: 'row', justifyContent: 'flex-end' },
   userBubble: {
