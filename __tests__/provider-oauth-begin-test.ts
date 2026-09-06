@@ -62,7 +62,8 @@ describe('provider client beginAuth', () => {
 test('the Providers section reads the begin answer and refuses honestly', () => {
   const src = readSource(['src', 'components', 'gateway', 'providers-section.tsx']);
   // The answer is read, not discarded: the URL flows into sheet state.
-  expect(src).toContain('resolveOAuthBeginDisplay(answer)?.authorizationUrl');
+  expect(src).toContain('resolveOAuthBeginDisplay(answer)');
+  expect(src).toContain('display?.authorizationUrl');
   expect(src).toContain('setOauthUrl');
   // A begin refusal (oauth not configured) surfaces as an error, never the sheet.
   expect(src).toContain("setOauthMessage('')");

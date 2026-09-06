@@ -8,7 +8,13 @@ import { Button, EmptyState, ErrorCard, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { createProviderClient, type CreateProviderInput } from '@/lib/gateway/provider-client';
-import { resolveOAuthBeginDisplay } from '@/lib/gateway/provider-oauth';
+import {
+  isOAuthAttemptPollUnsupported,
+  isUnknownOAuthAttempt,
+  OAUTH_ATTEMPT_POLL_MS,
+  oauthAttemptExpired,
+  resolveOAuthBeginDisplay,
+} from '@/lib/gateway/provider-oauth';
 import type { ProviderProfile, ProviderSnapshot } from '@/lib/gateway/provider-types';
 
 /** Model providers the Gate owns: registration, credentials, catalogs. */
@@ -22,6 +28,7 @@ export function ProvidersSection() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [oauthMessage, setOauthMessage] = useState('');
   const [oauthUrl, setOauthUrl] = useState<string | null>(null);
+  const [oauthAttemptId, setOauthAttemptId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -53,6 +60,56 @@ export function ProvidersSection() {
     const timer = setTimeout(() => { void load(); }, 0);
     return () => clearTimeout(timer);
   }, [load]);
+
+  // Follow the OAuth attempt the begin answer named: while the Gate still
+  // tracks it the browser authorization is pending; once the Gate consumes it
+  // (`unknown attempt`) or its budget runs out, reload providers so the new
+  // credential shows and name the outcome in the sheet. A Gate that predates
+  // the attempt read keeps the fire-and-forget copy — no polling, no error.
+  useEffect(() => {
+    if (!oauthAttemptId) return;
+    const attemptId = oauthAttemptId;
+    let cancelled = false;
+    async function pollOnce(): Promise<boolean> {
+      try {
+        const attempt = await client.authAttempt(attemptId);
+        if (cancelled) return false;
+        if (oauthAttemptExpired(attempt)) {
+          setOauthMessage('Authorization expired before it completed. Try again.');
+          setOauthAttemptId(null);
+          void load();
+          return false;
+        }
+        return true;
+      } catch (caught) {
+        if (cancelled) return false;
+        if (isUnknownOAuthAttempt(caught)) {
+          setOauthMessage('Authorization finished. Providers reloaded.');
+          setOauthAttemptId(null);
+          void load();
+          return false;
+        }
+        if (isOAuthAttemptPollUnsupported(caught)) return false;
+        return true;
+      }
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    function schedule() {
+      if (cancelled) return;
+      timer = setTimeout(() => {
+        void pollOnce().then((keepGoing) => {
+          if (keepGoing) schedule();
+        });
+      }, OAUTH_ATTEMPT_POLL_MS);
+    }
+    void pollOnce().then((keepGoing) => {
+      if (keepGoing) schedule();
+    });
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [oauthAttemptId, client, load]);
 
   async function register(input: CreateProviderInput) {
     setBusy(true);
@@ -154,12 +211,17 @@ export function ProvidersSection() {
               setError(null);
               try {
                 const answer = await client.beginAuth(snapshot.id);
-                setOauthUrl(resolveOAuthBeginDisplay(answer)?.authorizationUrl ?? null);
+                const display = resolveOAuthBeginDisplay(answer);
+                setOauthUrl(display?.authorizationUrl ?? null);
+                // Only a begin answer with something to open starts the
+                // attempt poll; anything else keeps the fire-and-forget copy.
+                setOauthAttemptId(display?.attemptId ?? null);
                 setOauthMessage('Continue authorization in the desktop browser.');
               } catch (caught) {
                 // A begin refusal (oauth not configured on the Gate) surfaces
                 // as an error, not the progress sheet.
                 setOauthUrl(null);
+                setOauthAttemptId(null);
                 setOauthMessage('');
                 setError(caught instanceof Error ? caught.message : String(caught));
               }
@@ -181,7 +243,7 @@ export function ProvidersSection() {
         visible={!!oauthMessage}
         message={oauthMessage}
         authorizationUrl={oauthUrl ?? undefined}
-        onClose={() => { setOauthMessage(''); setOauthUrl(null); }}
+        onClose={() => { setOauthMessage(''); setOauthUrl(null); setOauthAttemptId(null); }}
       />
     </>
   );

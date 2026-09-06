@@ -39,6 +39,20 @@ export type BeginAuthAnswer = {
 };
 
 /**
+ * What `providers.auth.attempt.get` answers
+ * (gate/core/providers/rpc.mjs): the live attempt the Gate is tracking. The
+ * Gate deletes the attempt once the browser authorization is consumed, so a
+ * read that fails with `unknown attempt` means the attempt is gone — finished
+ * or expired — and the caller should reload providers instead of polling.
+ * `expiresAt` is the ms-epoch budget the attempt was created with.
+ */
+export type AuthAttempt = {
+  id: string;
+  providerId: string;
+  expiresAt: number;
+};
+
+/**
  * Build the v2 registration document from a profile choice. The Gate's schema
  * is exact and unforgiving, so assembling it here keeps every caller — screens,
  * tests, future surfaces — from having to know its shape.
@@ -94,6 +108,8 @@ export function createProviderClient(request: Rpc) {
     refreshCatalog: (id: string) => request<ProviderSnapshot>('providers.catalog.refresh', { id }),
     setApiKey: (id: string, value: string) => request<{ ok: boolean }>('providers.auth.setApiKey', { id, value }),
     beginAuth: (id: string) => request<BeginAuthAnswer>('providers.auth.begin', { id }),
+    authAttempt: (attemptId: string) =>
+      request<AuthAttempt>('providers.auth.attempt.get', { attemptId }),
     disconnect: (id: string) => request('providers.auth.disconnect', { id }),
     remove: (id: string) => request('providers.delete', { id }),
   };
