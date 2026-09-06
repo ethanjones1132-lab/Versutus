@@ -688,6 +688,21 @@ export function ChatScreen() {
     };
   }, [botSurfaceId, status, botJobs, foldRoutineRead]);
 
+  const handleSkillsRetry = useCallback(() => {
+    if (!botSurfaceId || status !== 'connected') return;
+    const target = botSurfaceId;
+    const fold = (read: Parameters<typeof applySkillsRead>[1]) => {
+      setSkillsState((prev) => {
+        const previous =
+          prev.botId === target ? prev : { ...EMPTY_SKILLS, botId: target };
+        return { botId: target, ...applySkillsRead(previous, read) };
+      });
+    };
+    void gatewayRequest('skills.list')
+      .then((payload) => fold(skillsReadFromUnknown(payload)))
+      .catch(() => fold({ ok: false }));
+  }, [botSurfaceId, status, gatewayRequest]);
+
   useEffect(() => {
     if (!botSurfaceId || status !== 'connected') return;
     let cancelled = false;
@@ -1166,6 +1181,7 @@ export function ChatScreen() {
             loaded={skillsState.botId === surface.botId ? skillsState.loaded : false}
             failed={skillsState.botId === surface.botId ? skillsState.failed : false}
             onInvoke={handleSkillInvoke}
+            onRetry={handleSkillsRetry}
           />
           {toolsetsVisibleOn(surface) ? (
             <ToolsPane

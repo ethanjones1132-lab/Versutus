@@ -16,12 +16,15 @@ export function SkillsPane({
   loaded,
   failed,
   onInvoke,
+  onRetry,
 }: {
   skills: Skill[];
   loaded: boolean;
   failed: boolean;
   /** Tap a row to start the same `/<skill-name>` turn typing it dispatches. */
   onInvoke?: (skillName: string) => void;
+  /** Re-run the same `skills.list` read the surface effect runs. */
+  onRetry?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const state: SkillsState = { skills, loaded, failed };
@@ -47,6 +50,9 @@ export function SkillsPane({
             <Text variant="micro" color="secondary">
               {copy}
             </Text>
+          ) : null}
+          {!loaded && failed && onRetry ? (
+            <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
           ) : null}
           {skills.map((skill) => (
             <ListRow
