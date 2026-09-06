@@ -1362,9 +1362,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   );
 
   const refreshGateways = useCallback(async () => {
-    const loaded = await loadGateways();
+    const [loaded, activeId] = await Promise.all([loadGateways(), loadActiveGatewayId()]);
     setGateways(loaded);
-    const activeId = await loadActiveGatewayId();
     if (!activeId) return;
     const active = loaded.find((item) => item.id === activeId) ?? null;
     setActiveGateway(active);
