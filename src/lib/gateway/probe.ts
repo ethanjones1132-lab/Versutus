@@ -1,7 +1,7 @@
 import { PROBE_WAVE_CONCURRENCY, runCapped } from '@/lib/gateway/reachability-wave';
 
 export type ProbeResult =
-  | { ok: true; url: string; latencyMs: number }
+  | { ok: true; url: string; latencyMs: number; hasManifest?: boolean }
   | { ok: false; url: string; error: string; code?: 'timeout' | 'connect-failed' | 'closed' | 'unreachable' };
 
 /**
@@ -107,7 +107,7 @@ export async function probeHighPriorityCandidates(
     }),
   );
 
-  const successes: ProbeResult[] = [];
+  const successes: Extract<ProbeResult, { ok: true }>[] = [];
   for (const settled of results) {
     if (settled.status === 'fulfilled' && settled.value.res.ok) {
       successes.push(settled.value.res);
@@ -124,9 +124,12 @@ export async function probeHighPriorityCandidates(
     successes.map((success) => hasGatewayManifest(success.url, timeoutMs)),
   );
   for (let i = 0; i < successes.length; i += 1) {
-    if (manifestHits[i]) return successes[i];
+    if (manifestHits[i]) return { ...successes[i], hasManifest: true };
   }
-  return successes[0];
+  // The wave just proved the manifest absent on the winner, so the flag
+  // travels with the result — the connect path hands it to identifyGateway
+  // as skipManifest instead of replaying the same fetch.
+  return { ...successes[0], hasManifest: false };
 }
 
 async function hasGatewayManifest(baseUrl: string, timeoutMs: number): Promise<boolean> {

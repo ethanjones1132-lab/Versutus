@@ -1176,6 +1176,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       currentGateways: GatewayProfile[],
       discovered: import('@/lib/discovery/types').DiscoveredGateway[],
       token?: string,
+      skipManifest?: boolean,
     ) => {
       const existing = currentGateways.find((item) => item.url === url);
       if (existing) {
@@ -1197,7 +1198,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // advertised its kind answers from the beacon fast path with no network
       // instead of replaying the full manifest + fingerprint cascade.
       if (!kind) {
-        const identity = await identifyGateway({ baseUrl: url, beaconKind: beaconKindForUrl(discovered, url) });
+        // A probe-wave winner known to be manifest-less skips the manifest
+        // fetch the wave already ran; every other winner re-runs it — the
+        // wave never checked the serial tail or a single-url probe.
+        const identity = await identifyGateway({ baseUrl: url, beaconKind: beaconKindForUrl(discovered, url), skipManifest });
         if (identity.kind === 'custom' || identity.kind === 'hermes' || identity.kind === 'openclaw') {
           kind = identity.kind;
         }
@@ -1356,6 +1360,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           appSettings,
           currentGateways,
           discovered,
+          undefined,
+          probeResult.hasManifest === false,
         );
         const nextSettings = await saveAppSettings({ lastSuccessfulUrl: probeResult.url });
         setSettings(nextSettings);
@@ -2448,6 +2454,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
         gateways,
         discovered,
         token,
+        probeResult.hasManifest === false,
       );
       const saved = await saveAppSettings({ lastSuccessfulUrl: probeResult.url });
       setSettings(saved);
