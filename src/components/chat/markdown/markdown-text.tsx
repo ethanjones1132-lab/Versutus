@@ -3,7 +3,7 @@ import { useMemo } from 'react';
 import { StyleSheet, Text as RNText, View } from 'react-native';
 
 import { Divider } from '@/components/ui';
-import { FontFamily, Palette, Spacing } from '@/constants/tokens';
+import { FontFamily, Palette, Spacing, Typography } from '@/constants/tokens';
 
 import { CodeBlock } from './code-block';
 import { markdownBlocksForDisplay, type MdBlock, type MdInline } from './parser';
@@ -58,10 +58,10 @@ function InlineSpans({ spans, baseColor, maxFontSizeMultiplier }: { spans: MdInl
 }
 
 const HEADING_SIZES: Record<1 | 2 | 3 | 4, { fontSize: number; lineHeight: number }> = {
-  1: { fontSize: 22, lineHeight: 28 },
-  2: { fontSize: 19, lineHeight: 25 },
-  3: { fontSize: 17, lineHeight: 23 },
-  4: { fontSize: 16, lineHeight: 22 },
+  1: { fontSize: Typography.title.fontSize, lineHeight: Typography.title.lineHeight },
+  2: { fontSize: Typography.headline.fontSize, lineHeight: Typography.headline.lineHeight },
+  3: { fontSize: Typography.body.fontSize, lineHeight: Typography.body.lineHeight },
+  4: { fontSize: Typography.caption.fontSize, lineHeight: Typography.caption.lineHeight },
 };
 
 function BlockView({ block, baseColor, compact, maxFontSizeMultiplier }: { block: MdBlock; baseColor: string; compact: boolean; maxFontSizeMultiplier?: number }) {
