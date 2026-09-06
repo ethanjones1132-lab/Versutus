@@ -394,8 +394,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   timestamp: {
-    fontSize: 10,
-    lineHeight: 13,
+    fontSize: 11,
+    lineHeight: 14,
     fontFamily: FontFamily.mono,
     paddingHorizontal: Spacing.one,
   },
