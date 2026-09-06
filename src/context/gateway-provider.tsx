@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { AppState, Platform } from 'react-native';
 
 import { GatewayDiscoveryScanner, isNativeDiscoveryAvailable } from '@/lib/discovery/scanner';
-import { buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/lib/gateway/candidates';
+import { buildExplicitHostCandidates, buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/lib/gateway/candidates';
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
 import { decideConnectionPhase } from '@/lib/connection/phase';
 import {
@@ -2377,24 +2377,40 @@ const response = await executeGatewaySlashCommand(trimmed, {
       setSettings(nextSettings);
       setNeedsOnboarding(false);
 
-      const discovered = await discoverForProbe(2500);
-
-      const candidates = buildGatewayCandidates({
-        tailscaleHost: host,
-        configuredHosts: configuredGatewayHosts(),
-        savedUrls: gateways.map((item) => item.url),
-        discovered,
-        lastSuccessfulUrl: nextSettings.lastSuccessfulUrl,
-        platform: Platform.OS,
-      });
+      // The discovery window runs while the just-typed host is probed,
+      // instead of before it: the first byte goes out immediately and the
+      // beacons merge when the window lands. `discovered` still flows to
+      // every downstream use below.
+      const discoveryPromise = discoverForProbe(2500);
+      const explicitCandidates = buildExplicitHostCandidates(host);
 
       applyConnectionPhase('searching');
 
       let probeResult = await probeHighPriorityCandidates(
-        candidates,
+        explicitCandidates,
         setProbeMessage,
         GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
       );
+
+      const discovered = await discoveryPromise;
+
+      let candidates = explicitCandidates;
+      if (!probeResult?.ok) {
+        candidates = buildGatewayCandidates({
+          tailscaleHost: host,
+          configuredHosts: configuredGatewayHosts(),
+          savedUrls: gateways.map((item) => item.url),
+          discovered,
+          lastSuccessfulUrl: nextSettings.lastSuccessfulUrl,
+          platform: Platform.OS,
+        });
+
+        probeResult = await probeHighPriorityCandidates(
+          candidates,
+          setProbeMessage,
+          GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
+        );
+      }
 
       if (!probeResult?.ok) {
         probeResult = await probeGatewayCandidates(

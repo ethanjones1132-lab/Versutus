@@ -116,6 +116,17 @@ export function buildGatewayCandidates(options: {
   }
 }
 
+/**
+ * The URLs for exactly the host the user just typed — nothing discovered,
+ * saved, or fallen back to. The add-gateway flow probes these while the
+ * discovery window runs instead of after it, so a correct address answers
+ * without paying the fixed wait first. Everything else is folded in later
+ * through `buildGatewayCandidates` when the explicit host does not answer.
+ */
+export function buildExplicitHostCandidates(tailscaleHost: string): string[] {
+  return buildGatewayCandidates({ tailscaleHost, includeLocalFallbacks: false });
+}
+
 /** Split host:port when the user types an explicit port (IPv4 / hostname only). */
 function splitHostPort(input: string): { host: string; port?: string } {
   const match = /^([^:[\]]+):(\d{2,5})$/.exec(input);
