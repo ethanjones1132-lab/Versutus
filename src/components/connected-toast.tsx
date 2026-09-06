@@ -67,7 +67,7 @@ export function ConnectedToast() {
           {
             backgroundColor: tokens.backgroundRaised,
             borderColor: tokens.statusConnectedMuted,
-            shadowColor: '#000',
+            shadowColor: tokens.overlay,
           },
         ]}>
         <View style={[styles.dot, { backgroundColor: tokens.statusConnected }]} />
