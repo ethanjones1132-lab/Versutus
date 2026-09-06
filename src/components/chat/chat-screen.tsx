@@ -1270,6 +1270,15 @@ export function ChatScreen() {
                   return room;
                 })
               }
+              onAddMembers={(memberIds) =>
+                botGroups.addMembers(activeGroup.id, memberIds).then((room) => {
+                  // The Gate's answer is the truth: refresh the roster copy
+                  // behind the room so the member chips show the joined
+                  // roster, same as the roster detail sheet's add path.
+                  void refreshGroups();
+                  return room;
+                })
+              }
               onLeave={(memberId) =>
                 botGroups.leave(activeGroup.id, memberId).then((room) => {
                   void refreshGroups();

@@ -6,18 +6,22 @@ import { BotAvatar } from '@/components/chat/bot-avatar';
 import { MarkdownText } from '@/components/chat/markdown/markdown-text';
 import { StreamingIndicator } from '@/components/chat/streaming-indicator';
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
-import { BaseSheet, Button, ConfirmSheet, Icon, PressableScale, Text, TextField } from '@/components/ui';
+import { BaseSheet, Button, Chip, ConfirmSheet, Icon, PressableScale, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { botChipModelPin, botChipRoutingTag, type PublicBot } from '@/lib/gateway/bots';
 import {
+  addableMembers,
+  canAddMember,
   canRemoveMember,
+  describeAddableExhaustion,
   describeDisbandedRound,
   describeRoomError,
   describeRoundOutcome,
   describeRoomPlan,
   formatGroupMessageTime,
   GROUP_MEMBER_FLOOR_REASON,
+  MAX_GROUP_MEMBERS,
   groupSpeakers,
   mergeTranscriptRows,
   rosterDeadMembers,
@@ -110,6 +114,7 @@ export function GroupRoomView({
   onRename,
   onLeave,
   onDisband,
+  onAddMembers,
   loadHistory,
   inventoryLoaded = true,
 }: {
@@ -119,6 +124,13 @@ export function GroupRoomView({
   onRename: (name: string) => Promise<BotGroupRoom>;
   onLeave: (memberId: string) => Promise<BotGroupRoom>;
   onDisband: () => Promise<unknown>;
+  /**
+   * Appends members to the room on the Gate; the parent refreshes the roster
+   * copy so the member chips show the joined roster. Absent on gateways
+   * without rooms — the room then offers no add picker, same honesty gate
+   * as the roster detail sheet.
+   */
+  onAddMembers?: (memberIds: string[]) => Promise<BotGroupRoom>;
   loadHistory?: () => Promise<GroupTranscriptEntry[]>;
   /** False when the phone has never completed a bot-inventory read — no
    *  routing verdicts can be drawn, so plan/outcome lines say so. */
@@ -139,6 +151,9 @@ export function GroupRoomView({
   const [renameVisible, setRenameVisible] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [renaming, setRenaming] = useState(false);
+  const [addVisible, setAddVisible] = useState(false);
+  const [addSelection, setAddSelection] = useState<string[]>([]);
+  const [adding, setAdding] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
   const [disbandVisible, setDisbandVisible] = useState(false);
   const [disbanding, setDisbanding] = useState(false);
@@ -364,6 +379,30 @@ export function GroupRoomView({
       .finally(() => setRenaming(false));
   };
 
+  // Who the room can still take: the loaded inventory's routable bots that
+  // are not already members — the same eligibility the roster detail
+  // sheet's picker follows, so the cap and the addressability checks hold
+  // in both doors.
+  const addCandidates = addableMembers(group, members);
+
+  const submitAdd = () => {
+    if (addSelection.length === 0 || adding || !onAddMembers) return;
+    setAdding(true);
+    void Promise.resolve(onAddMembers(addSelection))
+      .then(() => {
+        // The parent refreshes the roster copy behind the room, so the
+        // member chips above show the joined roster; leave the picker.
+        setAddVisible(false);
+        setAddSelection([]);
+      })
+      .catch((cause: unknown) => {
+        // Fail honest: the membership is unchanged; keep the selection so a
+        // transient failure can be retried without picking everyone again.
+        setError(describeRoomError(cause));
+      })
+      .finally(() => setAdding(false));
+  };
+
   const confirmDisband = () => {
     if (disbanding) return;
     setDisbanding(true);
@@ -441,6 +480,21 @@ export function GroupRoomView({
                   <Icon name={{ ios: 'pencil', android: 'edit', web: 'edit' }} size={12} color="textSecondary" />
                   <Text variant="micro" color="secondary">Rename</Text>
                 </PressableScale>
+                {onAddMembers && canAddMember(group) ? (
+                  <PressableScale
+                    onPress={() => {
+                      setError(undefined);
+                      setAddSelection([]);
+                      setAddVisible(true);
+                    }}
+                    hitSlop={CHIP_HIT_SLOP}
+                    accessibilityRole="button"
+                    accessibilityLabel="Add members"
+                    style={styles.renamePill}>
+                    <Icon name={{ ios: 'person.badge.plus', android: 'person-add', web: 'person-add' }} size={12} color="textSecondary" />
+                    <Text variant="micro" color="secondary">Add</Text>
+                  </PressableScale>
+                ) : null}
                 <PressableScale
                   onPress={() => setDisbandVisible(true)}
                   hitSlop={CHIP_HIT_SLOP}
@@ -685,6 +739,70 @@ export function GroupRoomView({
               variant="primary"
               disabled={renaming || !renameDraft.trim()}
               onPress={submitRename}
+            />
+          </View>
+        </ScrollView>
+      </BaseSheet>
+
+      <BaseSheet
+        visible={addVisible}
+        eyebrow="GROUP ROOMS"
+        onClose={() => {
+          if (adding) return;
+          setAddVisible(false);
+          setAddSelection([]);
+        }}
+        closeLabel="Cancel"
+        position="bottom">
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.sheetScroll}>
+          <Text variant="title">Add members</Text>
+          <Text variant="caption" color="secondary" style={styles.hint}>
+            New members join future sends — history stays as it was.
+          </Text>
+          <Text variant="caption" color="tertiary">
+            {group.memberIds.length}/{MAX_GROUP_MEMBERS} members · {addSelection.length} selected
+          </Text>
+          {addCandidates.length > 0 ? (
+            <View style={styles.chipWrap}>
+              {addCandidates.map((bot) => (
+                <Chip
+                  key={bot.id}
+                  label={displayNameOf(bot.id)}
+                  selected={addSelection.includes(bot.id)}
+                  onPress={() =>
+                    setAddSelection((prev) =>
+                      prev.includes(bot.id) ? prev.filter((id) => id !== bot.id) : [...prev, bot.id],
+                    )
+                  }
+                />
+              ))}
+            </View>
+          ) : (
+            <Text variant="caption" color="secondary">
+              {describeAddableExhaustion({ inventoryLoaded })}
+            </Text>
+          )}
+          {error ? (
+            <Text variant="caption" color="accentWarm" style={styles.sheetError}>{error}</Text>
+          ) : null}
+          <View style={styles.sheetActions}>
+            <Button
+              label="Cancel"
+              variant="ghost"
+              onPress={() => {
+                setAddVisible(false);
+                setAddSelection([]);
+              }}
+              disabled={adding}
+            />
+            <Button
+              label={adding ? 'Adding…' : 'Add to room'}
+              variant="primary"
+              disabled={adding || addSelection.length === 0}
+              onPress={submitAdd}
             />
           </View>
         </ScrollView>
