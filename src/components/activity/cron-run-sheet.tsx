@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { BaseSheet, Divider, Text } from '@/components/ui';
+import { BaseSheet, Divider, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { freshnessLabel, type CronTurn } from '@/lib/gateway/cron';
@@ -85,9 +85,17 @@ export function CronRunSheet({ runId, onClose }: CronRunSheetProps) {
         ) : null}
 
         {turns.length === 0 && !error ? (
-          <Text variant="caption" color="secondary">
-            {polledAt ? 'This run recorded no turns.' : 'Loading…'}
-          </Text>
+          <>
+            {!polledAt ? (
+              <>
+                <Skeleton width="90%" height={44} />
+                <Skeleton width="76%" height={44} style={styles.gap} />
+              </>
+            ) : null}
+            <Text variant="caption" color="secondary">
+              {polledAt ? 'This run recorded no turns.' : 'Loading…'}
+            </Text>
+          </>
         ) : null}
 
         {turns.map((turn) => (
@@ -125,4 +133,5 @@ function FreshnessLabel({ polledAt }: { polledAt: number | null }) {
 const styles = StyleSheet.create({
   body: { gap: Spacing.two, paddingBottom: Spacing.five },
   turn: { gap: 2 },
+  gap: { marginTop: Spacing.two },
 });
