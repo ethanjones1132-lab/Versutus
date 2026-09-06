@@ -1,3 +1,5 @@
+import { PROBE_WAVE_CONCURRENCY, runCapped } from '@/lib/gateway/reachability-wave';
+
 export type ProbeResult =
   | { ok: true; url: string; latencyMs: number }
   | { ok: false; url: string; error: string; code?: 'timeout' | 'connect-failed' | 'closed' | 'unreachable' };
@@ -64,9 +66,17 @@ export async function probeGatewayCandidates(
   onProgress?: (message: string) => void,
   timeoutMs = GATEWAY_PROBE_TIMEOUT_MS,
 ): Promise<ProbeResult | null> {
+  if (urls.length === 0) return null;
+  // Every candidate is attempted, so every candidate is announced up front in
+  // listed order. The pool below probes them concurrently; results keep input
+  // order, so the earliest-listed healthy candidate still wins.
   for (const url of urls) {
     onProgress?.(describeProbeTarget(url));
-    const result = await probeGatewayUrl(url, timeoutMs);
+  }
+  const results = await runCapped(urls, PROBE_WAVE_CONCURRENCY, (url) =>
+    probeGatewayUrl(url, timeoutMs),
+  );
+  for (const result of results) {
     if (result.ok) return result;
   }
   return null;
