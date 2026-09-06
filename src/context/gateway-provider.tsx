@@ -74,6 +74,7 @@ import {
   categorizeProbeError,
   GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
   GATEWAY_PROBE_TIMEOUT_MS,
+  HIGH_PRIORITY_WAVE_SIZE,
   probeGatewayCandidates,
   probeGatewayUrl,
   probeHighPriorityCandidates,
@@ -2401,9 +2402,11 @@ const response = await executeGatewaySlashCommand(trimmed, {
 
       const discovered = await discoveryPromise;
 
-      let candidates = explicitCandidates;
+      // Wave one tried the explicit host; the second wave tries this delta's
+      // head, so the serial tail below starts past that head.
+      let unwavedCandidates = explicitCandidates;
       if (!probeResult?.ok) {
-        candidates = buildGatewayCandidates({
+        const candidates = buildGatewayCandidates({
           tailscaleHost: host,
           configuredHosts: configuredGatewayHosts(),
           savedUrls: gateways.map((item) => item.url),
@@ -2412,10 +2415,11 @@ const response = await executeGatewaySlashCommand(trimmed, {
           platform: Platform.OS,
         });
 
+        // The full list opens with the explicit host the first wave just
+        // missed, so wave only the unwaved delta instead of re-probing it.
+        unwavedCandidates = dropAlreadyWavedCandidates(candidates, explicitCandidates, []);
         probeResult = await probeHighPriorityCandidates(
-          // The full list opens with the explicit host the first wave just
-          // missed, so wave only the unwaved delta instead of re-probing it.
-          dropAlreadyWavedCandidates(candidates, explicitCandidates, []),
+          unwavedCandidates,
           setProbeMessage,
           GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
         );
@@ -2423,7 +2427,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
 
       if (!probeResult?.ok) {
         probeResult = await probeGatewayCandidates(
-          candidates.slice(3),
+          unwavedCandidates.slice(HIGH_PRIORITY_WAVE_SIZE),
           setProbeMessage,
           GATEWAY_PROBE_TIMEOUT_MS,
         );
