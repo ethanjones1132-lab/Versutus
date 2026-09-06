@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Badge, Card, ListRow, Skeleton, Text } from '@/components/ui';
+import { Badge, Button, Card, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
@@ -75,6 +75,9 @@ export function HealthChecksPane() {
         <Text variant="micro" color="secondary">
           {copy}
         </Text>
+      ) : null}
+      {!shown.loaded && shown.failed ? (
+        <Button label="Retry" variant="ghost" size="sm" onPress={() => void load()} />
       ) : null}
       {shown.checks.map((check, index) => {
         const row = healthCheckRowCopy(check);
