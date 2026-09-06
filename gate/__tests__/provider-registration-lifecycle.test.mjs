@@ -8,6 +8,15 @@ import { ProviderStore } from '../core/providers/store.mjs';
 import { ProviderService } from '../core/providers/service.mjs';
 import { CredentialVault } from '../core/credentials/vault.mjs';
 
+// The default vault backend is Windows DPAPI (it shells out to powershell.exe), so a
+// vault built without one cannot encrypt off Windows. These tests care about provider
+// wiring, not about encryption at rest, so they use the passthrough backend the
+// credential-resolution tests already use.
+const passthroughBackend = {
+  protect: async (buffer) => buffer,
+  unprotect: async (buffer) => buffer,
+};
+
 const roots = [];
 
 afterEach(async () => {
@@ -38,7 +47,7 @@ async function makeService() {
   const gateHome = await mkdtemp(join(tmpdir(), 'gate-reg-'));
   roots.push(gateHome);
   const store = new ProviderStore(gateHome);
-  const vault = new CredentialVault({ gateHome });
+  const vault = new CredentialVault({ gateHome, backend: passthroughBackend });
   const service = new ProviderService({ store, vault, createAdapter: () => ({}) });
   return { service, store, vault, gateHome };
 }

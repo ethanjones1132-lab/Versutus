@@ -14,6 +14,28 @@ const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind
 const CREDENTIAL = 'nvapi-test-credential';
 const CREDENTIAL_REF = 'provider-nim-api-key';
 
+// The default vault backend is Windows DPAPI, which shells out to powershell.exe.
+// These tests are about which credential reaches the upstream, not about how it is
+// encrypted at rest, so they run on the passthrough backend the credential-resolution
+// tests already use. Without it every test here dies on `spawn powershell.exe ENOENT`
+// off Windows.
+const passthroughBackend = {
+  protect: async (buffer) => buffer,
+  unprotect: async (buffer) => buffer,
+};
+
+/**
+ * Release the upstream and everything still connected to it.
+ *
+ * `server.close()` alone only stops new connections; a keep-alive socket the gate's
+ * fetch left open keeps the handle — and the whole process — alive. `node --test`
+ * then finishes every assertion and never exits.
+ */
+async function closeUpstream(server) {
+  server.closeAllConnections?.();
+  await new Promise((resolve) => server.close(resolve));
+}
+
 /** Upstream that records what it was actually sent. */
 async function startRecordingUpstream({ stream } = {}) {
   const seen = [];
@@ -96,9 +118,10 @@ async function gateWithMigratedProvider(upstreamBaseUrl) {
     'utf8',
   );
 
-  await new CredentialVault({ gateHome }).set(CREDENTIAL_REF, CREDENTIAL);
+  const vault = new CredentialVault({ gateHome, backend: passthroughBackend });
+  await vault.set(CREDENTIAL_REF, CREDENTIAL);
 
-  const gate = await createGate({ root, port: 0, gateHome });
+  const gate = await createGate({ root, port: 0, gateHome, vault });
   return { gate, root };
 }
 
@@ -112,8 +135,9 @@ async function postChat(gate, body) {
 
 test('unscoped chat sends the v2 provider credential upstream', async () => {
   const upstream = await startRecordingUpstream({ stream: false });
-  const { gate } = await gateWithMigratedProvider(upstream.baseUrl);
+  let gate;
   try {
+    ({ gate } = await gateWithMigratedProvider(upstream.baseUrl));
     const response = await postChat(gate, {
       model: 'live-catalog-model',
       messages: [{ role: 'user', content: 'hi' }],
@@ -122,15 +146,16 @@ test('unscoped chat sends the v2 provider credential upstream', async () => {
     assert.equal(upstream.seen.length, 1, 'upstream should have been called exactly once');
     assert.equal(upstream.seen[0].authorization, `Bearer ${CREDENTIAL}`);
   } finally {
-    await gate.close();
-    upstream.server.close();
+    if (gate) await gate.close();
+    await closeUpstream(upstream.server);
   }
 });
 
 test('streaming chat sends the credential and pipes normalized SSE', async () => {
   const upstream = await startRecordingUpstream({ stream: true });
-  const { gate } = await gateWithMigratedProvider(upstream.baseUrl);
+  let gate;
   try {
+    ({ gate } = await gateWithMigratedProvider(upstream.baseUrl));
     const response = await postChat(gate, {
       model: 'live-catalog-model',
       messages: [{ role: 'user', content: 'hi' }],
@@ -143,15 +168,16 @@ test('streaming chat sends the credential and pipes normalized SSE', async () =>
     assert.match(text, /\[DONE\]/);
     assert.equal(upstream.seen[0].authorization, `Bearer ${CREDENTIAL}`);
   } finally {
-    await gate.close();
-    upstream.server.close();
+    if (gate) await gate.close();
+    await closeUpstream(upstream.server);
   }
 });
 
 test('a model from the live catalog is not gated by the stale registry model list', async () => {
   const upstream = await startRecordingUpstream({ stream: false });
-  const { gate } = await gateWithMigratedProvider(upstream.baseUrl);
+  let gate;
   try {
+    ({ gate } = await gateWithMigratedProvider(upstream.baseUrl));
     const response = await postChat(gate, {
       model: 'live-catalog-model',
       messages: [{ role: 'user', content: 'hi' }],
@@ -160,15 +186,16 @@ test('a model from the live catalog is not gated by the stale registry model lis
     assert.notEqual(body?.error?.code, 'invalid_model');
     assert.equal(response.status, 200);
   } finally {
-    await gate.close();
-    upstream.server.close();
+    if (gate) await gate.close();
+    await closeUpstream(upstream.server);
   }
 });
 
 test('scoped chat also reaches the v2 provider rather than the registry copy', async () => {
   const upstream = await startRecordingUpstream({ stream: false });
-  const { gate } = await gateWithMigratedProvider(upstream.baseUrl);
+  let gate;
   try {
+    ({ gate } = await gateWithMigratedProvider(upstream.baseUrl));
     const response = await postChat(gate, {
       providerId: 'nim',
       model: 'live-catalog-model',
@@ -177,7 +204,7 @@ test('scoped chat also reaches the v2 provider rather than the registry copy', a
     assert.equal(response.status, 200, `expected 200, body: ${await response.clone().text()}`);
     assert.equal(upstream.seen[0].authorization, `Bearer ${CREDENTIAL}`);
   } finally {
-    await gate.close();
-    upstream.server.close();
+    if (gate) await gate.close();
+    await closeUpstream(upstream.server);
   }
 });

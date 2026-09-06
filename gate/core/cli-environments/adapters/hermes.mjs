@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 
 import { probeVersion } from './shared.mjs';
 import { createHermesBackend } from '../backends/hermes.mjs';
@@ -34,7 +34,12 @@ export function resolveHermesHome({
     .exec(String(executablePath ?? ''));
   const derived = marker ? marker[1] : '';
 
-  const fallback = join(home, '.hermes');
+  // The marker regex above accepts either separator, so this function already
+  // claims to take a home of either flavour. join() is the HOST's, which turned an
+  // injected `C:\Users\ethan` into `C:\Users\ethan/.hermes` off Windows. Follow the
+  // shape of the home we were handed instead of the platform we happen to run on.
+  const looksWindows = /^[A-Za-z]:[\\/]|\\/.test(home);
+  const fallback = (looksWindows ? win32 : posix).join(home, '.hermes');
 
   // Evidence beats assertion. Preferring the ambient variable outright is what
   // let a single stale launcher take the fleet down on 2026-08-26: something

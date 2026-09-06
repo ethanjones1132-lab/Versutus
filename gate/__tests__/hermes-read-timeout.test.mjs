@@ -9,18 +9,32 @@ import { createHermesBackend } from '../core/cli-environments/backends/hermes.mj
 // the phone waited forever on a gateway that looked connected and could not list
 // one session. A metadata read now fails at 30s with a cause worth reading.
 
-/** A fetch that never settles, like the 4.8 GB host. */
+/**
+ * A fetch that never settles, like the 4.8 GB host.
+ *
+ * The in-flight timer is load-bearing and must be REF'd. `AbortSignal.timeout()`
+ * arms an UNREF'd timer, so it cannot by itself hold the process open: a real fetch
+ * keeps the loop alive with its socket, but this fake holds no handle at all. Without
+ * something ref'd here the loop drains before the ceiling is reached, the abort never
+ * fires, and `node --test` reports every one of these as "Promise resolution is still
+ * pending but the event loop has already resolved" -- which reads as a broken timeout
+ * in the backend rather than a fake that does not model a live request.
+ */
 function hangingFetch() {
   return (_url, init) =>
     new Promise((_resolve, reject) => {
       const signal = init?.signal;
       if (!signal) return; // no signal => hangs forever, the old behaviour
+      const fail = (name) =>
+        reject(Object.assign(new Error('aborted'), { name }));
       if (signal.aborted) {
-        reject(Object.assign(new Error('aborted'), { name: 'TimeoutError' }));
+        fail('TimeoutError');
         return;
       }
+      const inFlight = setTimeout(() => {}, 30_000);
       signal.addEventListener('abort', () => {
-        reject(Object.assign(new Error('aborted'), { name: signal.reason?.name ?? 'TimeoutError' }));
+        clearTimeout(inFlight);
+        fail(signal.reason?.name ?? 'TimeoutError');
       });
     });
 }

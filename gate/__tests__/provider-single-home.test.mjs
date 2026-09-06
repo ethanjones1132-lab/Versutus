@@ -6,6 +6,22 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createGate } from '../core/server.mjs';
+import { CredentialVault } from '../core/credentials/vault.mjs';
+import { useCredentialBackend } from '../core/capabilities/secrets.mjs';
+
+// The default vault backend is Windows DPAPI (it shells out to powershell.exe), so a
+// vault built without one cannot encrypt off Windows. These tests care about provider
+// wiring, not about encryption at rest, so they use the passthrough backend the
+// credential-resolution tests already use.
+const passthroughBackend = {
+  protect: async (buffer) => buffer,
+  unprotect: async (buffer) => buffer,
+};
+
+// registry.secrets.* keeps its own per-root vault cache and builds it from its own
+// backend, so the vault injected into createGate never reaches it. This is that
+// module's own injection point, used the same way secrets.test.mjs uses it.
+useCredentialBackend(passthroughBackend);
 
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 const roots = [];
@@ -20,7 +36,9 @@ async function makeGate() {
   await mkdir(join(root, 'core', 'capabilities', 'provider'), { recursive: true });
   await copyFile(kindModulePath, join(root, 'core', 'capabilities', 'provider', 'kind.mjs'));
   await mkdir(join(root, 'registry'), { recursive: true });
-  return createGate({ root, port: 0, gateHome: join(root, '.gate-home') });
+  const gateHome = join(root, '.gate-home');
+  const vault = new CredentialVault({ gateHome, backend: passthroughBackend });
+  return createGate({ root, port: 0, gateHome, vault });
 }
 
 async function rpc(gate, method, params = {}) {
