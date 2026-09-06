@@ -27,7 +27,10 @@ export const METHOD_TO_ROUTE: Record<string, Route> = {
   'session.messages': { method: 'GET', path: '/api/sessions/{sessionId}/messages' },
   'session.usage': { method: 'GET', path: '/api/sessions/{sessionId}' },
   'session.restore': { method: 'GET', path: '/api/sessions/{sessionId}' },
-  'session.fork': { method: 'POST', path: '/api/sessions/{sessionId}/fork' },
+  // No session.fork route: Hermes exposes no remote fork endpoint (see
+  // METHOD_GUIDANCE below), so this resolves to null and fails honestly
+  // instead of POSTing to a phantom path. Same standing as session.compact
+  // and session.abort, which were never mapped.
   'session.chat': { method: 'POST', path: '/api/sessions/{sessionId}/chat' },
   'session.chat.stream': { method: 'POST', path: '/api/sessions/{sessionId}/chat/stream' },
   // Runs & responses

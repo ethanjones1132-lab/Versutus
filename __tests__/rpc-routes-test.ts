@@ -24,6 +24,16 @@ describe('Hermes route map', () => {
     expect(METHOD_TO_ROUTE['runs.create']).toEqual({ method: 'POST', path: '/v1/runs' });
   });
 
+  test('session.fork has no route: Hermes exposes no remote fork endpoint', () => {
+    expect(METHOD_TO_ROUTE['session.fork']).toBeUndefined();
+    expect(resolveRoute('session.fork', { sessionId: 's-7' })).toBeNull();
+  });
+
+  test('session.fork fails honestly with a new-session next step', () => {
+    expect(METHOD_GUIDANCE['session.fork']).toMatch(/No remote fork endpoint/);
+    expect(METHOD_GUIDANCE['session.fork']).toMatch(/POST \/api\/sessions/);
+  });
+
   test('responses.get/delete have no route: the Gate serves no /v1/responses surface', () => {
     expect(METHOD_TO_ROUTE['responses.get']).toBeUndefined();
     expect(METHOD_TO_ROUTE['responses.delete']).toBeUndefined();
