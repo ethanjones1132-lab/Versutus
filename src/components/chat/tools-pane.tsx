@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { Button, ListRow, Text } from '@/components/ui';
+import { Button, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import {
   TOOLSETS_PANE_MAX_HEIGHT,
@@ -42,6 +42,12 @@ export function ToolsPane({
           nestedScrollEnabled
           showsVerticalScrollIndicator
         >
+          {!loaded && !failed ? (
+            <>
+              <Skeleton width="90%" height={44} />
+              <Skeleton width="76%" height={44} style={styles.gap} />
+            </>
+          ) : null}
           {copy ? (
             <Text variant="micro" color="secondary">
               {copy}
@@ -67,4 +73,5 @@ const styles = StyleSheet.create({
   wrap: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.one },
   scroll: { maxHeight: TOOLSETS_PANE_MAX_HEIGHT },
   body: { gap: Spacing.one, paddingTop: Spacing.one },
+  gap: { marginTop: Spacing.two },
 });
