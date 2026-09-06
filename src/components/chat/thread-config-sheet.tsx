@@ -105,6 +105,12 @@ export type ThreadConfigSheetProps = {
   currentSessionId?: string;
   onSelectSession?: (sessionId: string) => void;
   onRefreshSessions?: () => void;
+  /** True when the last read filled its window — older threads may exist. */
+  hasMoreSessions?: boolean;
+  /** True while a widened "show older" read is in flight. */
+  loadingOlderSessions?: boolean;
+  /** Re-read the window one page wider so older threads appear. */
+  onShowOlderSessions?: () => void;
   onNewSession?: (title?: string) => void;
   onDeleteSession?: (sessionId: string) => void;
   // Models section
@@ -128,6 +134,9 @@ function SessionsSection({
   currentSessionId,
   onSelect,
   onRefresh,
+  hasMoreSessions,
+  loadingOlderSessions,
+  onShowOlder,
   onNewSession,
   onDeleteSession,
 }: {
@@ -136,6 +145,9 @@ function SessionsSection({
   currentSessionId?: string;
   onSelect?: (sessionId: string) => void;
   onRefresh?: () => void;
+  hasMoreSessions?: boolean;
+  loadingOlderSessions?: boolean;
+  onShowOlder?: () => void;
   onNewSession?: (title?: string) => void;
   onDeleteSession?: (sessionId: string) => void;
 }) {
@@ -317,6 +329,20 @@ function SessionsSection({
           removeClippedSubviews
         />
       )}
+
+      {onShowOlder && hasMoreSessions ? (
+        <Button
+          label={loadingOlderSessions ? 'Loading older…' : 'Show older sessions'}
+          variant="ghost"
+          size="sm"
+          disabled={loadingOlderSessions}
+          onPress={async () => {
+            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            onShowOlder();
+          }}
+          style={styles.refresh}
+        />
+      ) : null}
 
       {onRefresh && (sessions.length > 0 || sessionsError) ? (
         <Button
@@ -626,6 +652,9 @@ export function ThreadConfigSheet({
   currentSessionId,
   onSelectSession,
   onRefreshSessions,
+  hasMoreSessions,
+  loadingOlderSessions,
+  onShowOlderSessions,
   onNewSession,
   onDeleteSession,
   models,
@@ -670,6 +699,9 @@ export function ThreadConfigSheet({
           currentSessionId={currentSessionId}
           onSelect={onSelectSession}
           onRefresh={onRefreshSessions}
+          hasMoreSessions={hasMoreSessions}
+          loadingOlderSessions={loadingOlderSessions}
+          onShowOlder={onShowOlderSessions}
           onNewSession={onNewSession}
           onDeleteSession={onDeleteSession}
         />

@@ -33,6 +33,32 @@ export function emptySessionList<T extends SessionListEntry>(): SessionListState
 
 export const EMPTY_SESSION_LIST: SessionListState = emptySessionList();
 
+/**
+ * The selector opens on the newest page only. The session endpoints take a
+ * `limit` but no offset or cursor (`gate/core/server.mjs` answers
+ * `GET /v1/sessions` with `limit` alone), so "show older" re-reads the same
+ * window with a wider limit — the same pattern history uses for "load
+ * earlier". The cap matches the wide catalogue read `session.usage` uses.
+ */
+export const SESSION_LIST_PAGE_SIZE = 20;
+export const SESSION_LIST_MAX = 200;
+
+/** Widen one session-list read by a page, never past the catalogue cap. */
+export function nextSessionListLimit(current: number): number {
+  if (!Number.isFinite(current) || current < SESSION_LIST_PAGE_SIZE) return SESSION_LIST_PAGE_SIZE;
+  return Math.min(current + SESSION_LIST_PAGE_SIZE, SESSION_LIST_MAX);
+}
+
+/**
+ * A full window may hide older threads behind the limit; a short one is the
+ * whole catalogue. At the cap there is nothing older left to ask for.
+ */
+export function sessionListMayHaveOlder(loaded: number, requested: number): boolean {
+  if (!Number.isFinite(loaded) || !Number.isFinite(requested)) return false;
+  if (requested >= SESSION_LIST_MAX) return false;
+  return loaded >= requested;
+}
+
 export function applySessionListRead<T extends SessionListEntry>(
   previous: SessionListState<T>,
   read: SessionListRead<T>,

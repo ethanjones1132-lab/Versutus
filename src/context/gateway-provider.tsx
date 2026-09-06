@@ -41,7 +41,10 @@ import { threadSwitchFailureText, validateThreadSwitch } from '@/lib/gateway/thr
 import {
   applySessionListRead,
   emptySessionList,
+  nextSessionListLimit,
   sessionListCopy,
+  sessionListMayHaveOlder,
+  SESSION_LIST_PAGE_SIZE,
   type SessionListState,
 } from '@/lib/gateway/session-list';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
@@ -321,6 +324,12 @@ type GatewayContextValue = {
   loadingEarlierHistory: boolean;
   /** Fetch and prepend the next page of older messages, deduped against what is shown. */
   loadEarlierMessages: () => Promise<void>;
+  /** True when the last selector read filled its window — older threads may exist. */
+  sessionListHasOlder: boolean;
+  /** True while a "show older" widened read is in flight. */
+  loadingOlderSessions: boolean;
+  /** Re-read the selector window one page wider so older threads appear. */
+  loadOlderSessions: () => Promise<void>;
 };
 
 /** Turns fetched per `reloadHistoryFor` call and per `loadEarlierMessages` page. */
@@ -618,6 +627,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     emptySessionList<HermesSession>(),
   );
   const [sessionSelector, setSessionSelector] = useState<{ visible: boolean }>({ visible: false });
+  // No offset/cursor on the session endpoints — "show older" re-reads with a
+  // wider limit, the same pattern history uses for "load earlier".
+  const sessionListLimitRef = useRef(SESSION_LIST_PAGE_SIZE);
+  const [sessionListHasOlder, setSessionListHasOlder] = useState(false);
+  const [loadingOlderSessions, setLoadingOlderSessions] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [loadingEarlierHistory, setLoadingEarlierHistory] = useState(false);
@@ -2274,14 +2288,40 @@ const response = await executeGatewaySlashCommand(trimmed, {
     try {
       const client = clientRef.current;
       if (client) {
-        const sessions = await client.getSessions(20);
+        // A fresh open starts back at one page — a widened window from a
+        // previous "show older" must not stick around and surprise the next
+        // open with a slower read.
+        sessionListLimitRef.current = SESSION_LIST_PAGE_SIZE;
+        const sessions = await client.getSessions(SESSION_LIST_PAGE_SIZE);
         setSessionListState((previous) => applySessionListRead(previous, { ok: true, sessions }));
+        setSessionListHasOlder(sessionListMayHaveOlder(sessions.length, SESSION_LIST_PAGE_SIZE));
       }
     } catch {
       setSessionListState((previous) => applySessionListRead(previous, { ok: false }));
     }
     setSessionSelector({ visible: true });
   }, []);
+
+  const loadOlderSessions = useCallback(async () => {
+    const client = clientRef.current;
+    if (!client || loadingOlderSessions) return;
+    const nextLimit = nextSessionListLimit(sessionListLimitRef.current);
+    if (nextLimit <= sessionListLimitRef.current) {
+      setSessionListHasOlder(false);
+      return;
+    }
+    setLoadingOlderSessions(true);
+    try {
+      const sessions = await client.getSessions(nextLimit);
+      sessionListLimitRef.current = nextLimit;
+      setSessionListState((previous) => applySessionListRead(previous, { ok: true, sessions }));
+      setSessionListHasOlder(sessionListMayHaveOlder(sessions.length, nextLimit));
+    } catch {
+      setSessionListState((previous) => applySessionListRead(previous, { ok: false }));
+    } finally {
+      setLoadingOlderSessions(false);
+    }
+  }, [loadingOlderSessions]);
 
   const closeSessionSelector = useCallback(() => {
     setSessionSelector({ visible: false });
@@ -3026,6 +3066,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
       selectSession,
       sessionList: sessionListState.sessions,
       sessionListError: sessionListCopy(sessionListState),
+      sessionListHasOlder,
+      loadingOlderSessions,
+      loadOlderSessions,
       currentSessionId,
       historyLoading,
       createNewSession,
@@ -3049,6 +3092,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       runTask, activityRuns, stopActivityRun, modelPicker, openModelPicker, closeModelPicker,
       selectModel, modelCatalog, sessionSelector,
       openSessionSelector, closeSessionSelector, selectSession, sessionListState, currentSessionId,
+      sessionListHasOlder, loadingOlderSessions, loadOlderSessions,
       historyLoading, createNewSession, deleteSessionById, deleteLocalMessage,
       tlsFingerprintChange,
       dynamicCommands,

@@ -228,6 +228,9 @@ export function ChatScreen() {
     selectSession,
     sessionList,
     sessionListError,
+    sessionListHasOlder,
+    loadingOlderSessions,
+    loadOlderSessions,
     currentSessionId,
     pendingRunApproval,
     resolveRunApproval,
@@ -1497,6 +1500,9 @@ export function ChatScreen() {
         currentSessionId={currentSessionId}
         onSelectSession={selectSession}
         onRefreshSessions={() => void openSessionSelector()}
+        hasMoreSessions={sessionListHasOlder}
+        loadingOlderSessions={loadingOlderSessions}
+        onShowOlderSessions={() => void loadOlderSessions()}
         onNewSession={(title) => void createNewSession(title)}
         onDeleteSession={(sessionId) => void deleteSessionById(sessionId)}
         models={modelRows}
