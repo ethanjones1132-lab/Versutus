@@ -1428,6 +1428,9 @@ async function runAdvancedFamilyCommand(commandName: string, args: string[], con
   if (commandName === '/cron' && (sub === 'run' || sub === 'pause' || sub === 'resume')) {
     return runCronActionCommand(sub, args.slice(1), context);
   }
+  if (commandName === '/env' && (sub === 'start' || sub === 'stop')) {
+    return runEnvLifecycleCommand(sub, args.slice(1), context);
+  }
   if (commandName === '/skills' && sub) {
     return runSkillDetailCommand(sub, context);
   }
@@ -2082,6 +2085,35 @@ async function runCronActionCommand(
     ? `Routine ${jobId} run requested`
     : action === 'pause' ? `Routine ${jobId} paused` : `Routine ${jobId} resumed`;
   return textResult(done, `/cron ${action} ${jobId}`, compactJson(result));
+}
+
+/**
+ * `/env start|stop <id>` drives the same Start / Stop pair the Environments
+ * section offers (`client.start`, `client.stop`), over the same
+ * `environments.lifecycle.*` RPCs the Gate dispatches. A rejected action
+ * names the failure with the METHOD_GUIDANCE next step when one exists —
+ * the same honesty rule as runCronActionCommand — so a refused Stop never
+ * reads as stopped. A missing id answers usage without touching the
+ * gateway. Every other `/env` form keeps its check/list read untouched.
+ */
+async function runEnvLifecycleCommand(
+  action: 'start' | 'stop',
+  args: string[],
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  const id = (args[0] || '').trim();
+  if (!id) return textResult(`Usage: /env ${action} <id>`, `/env ${action}`);
+  const method = action === 'start' ? 'environments.lifecycle.start' : 'environments.lifecycle.stop';
+  const result = await context.gatewayRequest(method, { id }).catch(e => ({ error: String(e) }));
+  const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
+  if (error) {
+    const guidance = METHOD_GUIDANCE[method];
+    const detail = guidance && !error.includes(guidance) ? `${error} ${guidance}` : error;
+    const verb = action === 'start' ? 'started' : 'stopped';
+    return textResult(`Environment ${id} could not be ${verb}: ${detail}`, `/env ${action} ${id}`, compactJson(result));
+  }
+  const done = action === 'start' ? `Environment ${id} started` : `Environment ${id} stopped`;
+  return textResult(done, `/env ${action} ${id}`, compactJson(result));
 }
 
 /**
