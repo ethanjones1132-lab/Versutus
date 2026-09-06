@@ -45,6 +45,10 @@ export const METHOD_TO_ROUTE: Record<string, Route> = {
   'jobs.run': { method: 'POST', path: '/api/jobs/{jobId}/run' },
   'jobs.pause': { method: 'POST', path: '/api/jobs/{jobId}/pause' },
   'jobs.resume': { method: 'POST', path: '/api/jobs/{jobId}/resume' },
+  // Create posts the bare jobs base — the Hermes backend's createJob posts
+  // /api/jobs (cli-environments/backends/hermes.mjs), the same call the
+  // Routines pane makes through ManifestClient.createJob.
+  'jobs.create': { method: 'POST', path: '/api/jobs' },
   // Skills & tools
   'skills.list': { method: 'GET', path: '/v1/skills' },
   'skills.status': { method: 'GET', path: '/v1/skills' },

@@ -1428,6 +1428,9 @@ async function runAdvancedFamilyCommand(commandName: string, args: string[], con
   if (commandName === '/cron' && (sub === 'run' || sub === 'pause' || sub === 'resume')) {
     return runCronActionCommand(sub, args.slice(1), context);
   }
+  if (commandName === '/cron' && sub === 'create') {
+    return runCronCreateCommand(args.slice(1).join(' '), context);
+  }
   if (commandName === '/env' && (sub === 'start' || sub === 'stop')) {
     return runEnvLifecycleCommand(sub, args.slice(1), context);
   }
@@ -2085,6 +2088,43 @@ async function runCronActionCommand(
     ? `Routine ${jobId} run requested`
     : action === 'pause' ? `Routine ${jobId} paused` : `Routine ${jobId} resumed`;
   return textResult(done, `/cron ${action} ${jobId}`, compactJson(result));
+}
+
+/**
+ * `/cron create <title> | <schedule> | <prompt>` files a scheduled job
+ * through the same `jobs.create` RPC the Activity create form's
+ * `botJobs.create` POST resolves to — the Gate dispatches it to the
+ * backend's `createJob`, Hermes-kind POSTs the jobs base. A rejected create
+ * names the failure with the METHOD_GUIDANCE next step when one exists —
+ * the same honesty rule as runCronActionCommand — so a refused create never
+ * reads as filed and never clears anything, the slash analog of the form's
+ * refusal-keeps-draft. A missing segment answers usage without touching
+ * the gateway. Every other `/cron` form keeps its list/runs/actions read
+ * untouched.
+ */
+async function runCronCreateCommand(
+  rest: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  const USAGE = 'Usage: /cron create <title> | <schedule> | <prompt>';
+  // Split on the first two pipes only: the prompt itself may contain `|`.
+  const firstPipe = rest.indexOf('|');
+  const secondPipe = firstPipe < 0 ? -1 : rest.indexOf('|', firstPipe + 1);
+  const title = firstPipe < 0 ? '' : rest.slice(0, firstPipe).trim();
+  const schedule = secondPipe < 0 ? '' : rest.slice(firstPipe + 1, secondPipe).trim();
+  const prompt = secondPipe < 0 ? '' : rest.slice(secondPipe + 1).trim();
+  if (!title || !schedule || !prompt) return textResult(USAGE, '/cron create');
+  const method = 'jobs.create';
+  const result = await context
+    .gatewayRequest(method, { name: title, schedule, prompt })
+    .catch((e) => ({ error: String(e) }));
+  const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
+  if (error) {
+    const guidance = METHOD_GUIDANCE[method];
+    const detail = guidance && !error.includes(guidance) ? `${error} ${guidance}` : error;
+    return textResult(`Routine ${title} could not be created: ${detail}`, `/cron create ${title}`, compactJson(result));
+  }
+  return textResult(`Routine ${title} created (${schedule})`, `/cron create ${title}`, compactJson(result));
 }
 
 /**

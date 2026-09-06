@@ -36,6 +36,23 @@ function jobIdOf(params) {
   return String(id);
 }
 
+/**
+ * The create body behind `jobs.create` — the same `{ name, prompt, schedule }`
+ * shape POST /v1/jobs takes and `ManifestClient.createJob` sends. Validated
+ * here so a nameless or promptless create fails before any backend is picked,
+ * mirroring the Routines pane's Add guard the Activity create form reuses.
+ */
+function jobInputOf(params) {
+  const pick = (value) => (typeof value === 'string' ? value.trim() : '');
+  const name = pick(params?.name ?? params?.title);
+  const prompt = pick(params?.prompt);
+  const schedule = pick(params?.schedule);
+  if (!name) throw new Error('name is required');
+  if (!prompt) throw new Error('prompt is required');
+  if (!schedule) throw new Error('schedule is required');
+  return { name, prompt, schedule };
+}
+
 /** Counters a session record carries; summed for the catalogue-wide usage. */
 const USAGE_COUNTER_FIELDS = [
   'message_count',
@@ -207,6 +224,7 @@ export function createGatewayMethods({ getBackend, listDevices, revokeDevice }) 
     'jobs.run': (params) => via(getBackend, params, 'runJob', (b) => b.runJob(jobIdOf(params))),
     'jobs.pause': (params) => via(getBackend, params, 'setJobPaused', (b) => b.setJobPaused(jobIdOf(params), true)),
     'jobs.resume': (params) => via(getBackend, params, 'setJobPaused', (b) => b.setJobPaused(jobIdOf(params), false)),
+    'jobs.create': (params) => via(getBackend, params, 'createJob', (b) => b.createJob(jobInputOf(params))),
 
     'sessions.list': async (params) =>
       via(getBackend, params, 'listSessions', async (b) => ({
