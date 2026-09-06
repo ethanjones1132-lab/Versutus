@@ -10,6 +10,7 @@ import type {
   EnvironmentSnapshot,
 } from '@/lib/gateway/environment-types';
 import { environmentRunBadge, environmentRunView } from '@/lib/gateway/environment-run-view';
+import { operationNeedsPromptInput, resolveLauncherOperations } from '@/lib/gateway/environment-operations';
 import { formatRunFailure } from '@/lib/gateway/run-failures';
 
 type Client = ReturnType<typeof createEnvironmentClient>;
@@ -102,6 +103,38 @@ export function EnvironmentRunLauncher({
     if (visible) refreshRuns();
   }, [visible, refreshRuns]);
 
+  /**
+   * The catalog read is best-effort: a gateway that cannot list commands
+   * must not block starting a prompt/status run. A failed read leaves the
+   * default pair in place. The catalog is tagged with the environment it
+   * was read for, so a stale answer never leaks across environments.
+   */
+  const [catalog, setCatalog] = useState<{ envId: string; operations: string[] } | null>(null);
+  useEffect(() => {
+    if (!visible || !environment) return;
+    const envId = environment.id;
+    let cancelled = false;
+    client
+      .listCommands(envId)
+      .then((entries) => {
+        if (!cancelled) setCatalog({ envId, operations: resolveLauncherOperations(entries) });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [client, environment, visible]);
+
+  const operations = useMemo(
+    () => (visible && environment && catalog?.envId === environment.id ? catalog.operations : ['prompt', 'status']),
+    [catalog, environment, visible],
+  );
+  // The catalog may not name the selected verb (e.g. switching from a
+  // prompt environment to a Codex one that serves exec): derive the first
+  // offered verb rather than running one the Gate will reject.
+  const effectiveOperation = operations.includes(operation) ? operation : operations[0];
+  const needsPromptInput = operationNeedsPromptInput(effectiveOperation);
+
   /** Stream a run to its end — or to whatever the connection leaves us with. */
   async function follow(environmentId: string, runId: string) {
     lastEventTypeRef.current = null;
@@ -141,8 +174,8 @@ export function EnvironmentRunLauncher({
     setRunning(true);
     try {
       const { runId } = await client.startRun(environment.id, {
-        operation,
-        input: operation === 'prompt' ? { prompt } : {},
+        operation: effectiveOperation,
+        input: operationNeedsPromptInput(effectiveOperation) ? { prompt } : {},
       });
       setActiveRunId(runId);
       await follow(environment.id, runId);
@@ -179,7 +212,6 @@ export function EnvironmentRunLauncher({
     setApproval(null);
   }
 
-  const operations = ['prompt', 'status'];
   const badge = detached ? { label: 'Detached', tone: 'neutral' as const } : environmentRunBadge(view, { starting: running && events.length === 0 });
 
   return (
@@ -200,14 +232,14 @@ export function EnvironmentRunLauncher({
             <Chip
               key={item}
               label={item}
-              selected={item === operation}
+              selected={item === effectiveOperation}
               onPress={() => setOperation(item)}
               disabled={running}
             />
           ))}
         </View>
 
-        {operation === 'prompt' ? (
+        {needsPromptInput ? (
           <TextField
             value={prompt}
             onChangeText={setPrompt}
@@ -293,7 +325,7 @@ export function EnvironmentRunLauncher({
             <Button
               label="Start run"
               onPress={() => void start()}
-              disabled={!environment || (operation === 'prompt' && !prompt.trim())}
+              disabled={!environment || (needsPromptInput && !prompt.trim())}
             />
           )}
           <Button label="Close" variant="secondary" onPress={onClose} />
