@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
-import { Button, Card, ConfirmSheet, Text, TextField } from '@/components/ui';
+import { Button, Card, ConfirmSheet, Skeleton, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { looksLikeCredential } from '@/lib/gateway/credential-shape';
@@ -40,6 +40,11 @@ export function CapabilitiesSection() {
   const [kinds, setKinds] = useState<GatewayCapabilityKind[]>([]);
   const [instances, setInstances] = useState<RegistryInstance[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Whether the first kinds/instances read has landed (success or refusal).
+  // The section mounts with kinds=[] and instances=[] before the deferred
+  // first read, which is indistinguishable from a genuinely empty registry
+  // without this flag.
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<RegistryInstance | null>(null);
@@ -47,6 +52,7 @@ export function CapabilitiesSection() {
   const load = useCallback(async () => {
     if (status !== 'connected') {
       setError('Connect to a Gate to manage capabilities.');
+      setLoaded(true);
       return;
     }
     try {
@@ -57,8 +63,10 @@ export function CapabilitiesSection() {
       setKinds(Array.isArray(nextKinds) ? nextKinds : []);
       setInstances(Array.isArray(nextInstances) ? nextInstances : []);
       setError(null);
+      setLoaded(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      setLoaded(true);
     }
   }, [gatewayRequest, status]);
 
@@ -244,7 +252,12 @@ export function CapabilitiesSection() {
         <>
           <Card padding={Spacing.three} style={styles.card}>
             <Text variant="headline">Configured</Text>
-            {instances.length === 0 ? (
+            {!loaded && !error ? (
+              <>
+                <Skeleton width="90%" height={44} />
+                <Skeleton width="76%" height={44} style={styles.gap} />
+              </>
+            ) : instances.length === 0 ? (
               <Text variant="caption" color="secondary">
                 No instances yet.
               </Text>
@@ -265,6 +278,12 @@ export function CapabilitiesSection() {
 
           <Card padding={Spacing.three} style={styles.card}>
             <Text variant="headline">Add</Text>
+            {!loaded && !error ? (
+              <>
+                <Skeleton width="90%" height={44} />
+                <Skeleton width="76%" height={44} style={styles.gap} />
+              </>
+            ) : null}
             {kinds.map((kind) => (
               <Button
                 key={kind.id}
@@ -310,4 +329,5 @@ const styles = StyleSheet.create({
   instanceCopy: {
     flex: 1,
   },
+  gap: { marginTop: Spacing.two },
 });
