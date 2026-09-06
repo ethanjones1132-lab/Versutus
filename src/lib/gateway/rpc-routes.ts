@@ -43,6 +43,8 @@ export const METHOD_TO_ROUTE: Record<string, Route> = {
   'cron.list': { method: 'GET', path: '/api/jobs' },
   'cron.status': { method: 'GET', path: '/api/jobs' },
   'jobs.run': { method: 'POST', path: '/api/jobs/{jobId}/run' },
+  'jobs.pause': { method: 'POST', path: '/api/jobs/{jobId}/pause' },
+  'jobs.resume': { method: 'POST', path: '/api/jobs/{jobId}/resume' },
   // Skills & tools
   'skills.list': { method: 'GET', path: '/v1/skills' },
   'skills.status': { method: 'GET', path: '/v1/skills' },

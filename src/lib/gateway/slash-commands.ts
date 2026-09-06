@@ -1425,6 +1425,9 @@ async function runAdvancedFamilyCommand(commandName: string, args: string[], con
   if (commandName === '/cron' && sub === 'history') {
     return runCronHistoryCommand(args.slice(1), context);
   }
+  if (commandName === '/cron' && (sub === 'run' || sub === 'pause' || sub === 'resume')) {
+    return runCronActionCommand(sub, args.slice(1), context);
+  }
   if (commandName === '/skills' && sub) {
     return runSkillDetailCommand(sub, context);
   }
@@ -2046,6 +2049,36 @@ function describeCronRun(value: unknown): string {
   const status = value.status === 'running' ? 'running' : 'completed';
   const turns = typeof value.turnCount === 'number' ? ` · ${value.turnCount} turns` : '';
   return `- ${truncateLine(name, 120)} · ${status}${turns}`;
+}
+
+/**
+ * `/cron run|pause|resume <job>` drives the same Run now / Pause / Resume
+ * pair the Activity job sheet offers (`botJobs.run`, `botJobs.pause`), over
+ * the same `jobs.*` RPCs the Gate dispatches. A rejected action names the
+ * failure with the METHOD_GUIDANCE next step when one exists — the same
+ * honesty rule as sessionActionResult — so a refused Pause never reads as
+ * paused. A missing id answers usage without touching the gateway.
+ */
+async function runCronActionCommand(
+  action: 'run' | 'pause' | 'resume',
+  args: string[],
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  const jobId = (args[0] || '').trim();
+  if (!jobId) return textResult(`Usage: /cron ${action} <job>`, `/cron ${action}`);
+  const method = action === 'run' ? 'jobs.run' : action === 'pause' ? 'jobs.pause' : 'jobs.resume';
+  const result = await context.gatewayRequest(method, { jobId }).catch(e => ({ error: String(e) }));
+  const error = isRecord(result) && typeof result.error === 'string' ? result.error : undefined;
+  if (error) {
+    const guidance = METHOD_GUIDANCE[method];
+    const detail = guidance && !error.includes(guidance) ? `${error} ${guidance}` : error;
+    const verb = action === 'run' ? 'run' : action === 'pause' ? 'paused' : 'resumed';
+    return textResult(`Routine ${jobId} could not be ${verb}: ${detail}`, `/cron ${action} ${jobId}`, compactJson(result));
+  }
+  const done = action === 'run'
+    ? `Routine ${jobId} run requested`
+    : action === 'pause' ? `Routine ${jobId} paused` : `Routine ${jobId} resumed`;
+  return textResult(done, `/cron ${action} ${jobId}`, compactJson(result));
 }
 
 /**
