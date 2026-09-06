@@ -10,6 +10,7 @@ import {
 import { useFonts } from 'expo-font';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 SplashScreen.preventAutoHideAsync().catch(() => undefined);
 
@@ -28,9 +29,23 @@ export function FontProvider({ children }: { children: React.ReactNode }) {
     }
   }, [loaded, error]);
 
+  // During initial load, show ActivityIndicator instead of blank
   if (!loaded && !error) {
-    return null;
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={undefined} />
+      </View>
+    );
   }
 
   return children;
 }
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "transparent",
+  },
+});
