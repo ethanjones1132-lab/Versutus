@@ -1,5 +1,5 @@
 import { createProviderClient } from '@/lib/gateway/provider-client';
-import { resolveOAuthBeginDisplay } from '@/lib/gateway/provider-oauth';
+import { isSafeAuthorizationUrl, resolveOAuthBeginDisplay } from '@/lib/gateway/provider-oauth';
 
 declare const __dirname: string;
 
@@ -14,7 +14,37 @@ function readSource(rel: string[]): string {
     .replace(/\r\n/g, '\n');
 }
 
+describe('isSafeAuthorizationUrl', () => {
+  it('accepts https and rejects every other scheme the Gate rejects', () => {
+    expect(isSafeAuthorizationUrl('https://issuer.example/authorize')).toBe(true);
+    expect(isSafeAuthorizationUrl('  HTTPS://Issuer.example/authorize  ')).toBe(true);
+    // The same three cases gate/__tests__/windows-service.test.mjs asserts against
+    // assertSafeAuthorizationUrl, so the phone and the Gate refuse the same URLs.
+    expect(isSafeAuthorizationUrl('http://issuer.example/authorize')).toBe(false);
+    expect(isSafeAuthorizationUrl('file:///etc/passwd')).toBe(false);
+    expect(isSafeAuthorizationUrl('javascript:alert(1)')).toBe(false);
+    expect(isSafeAuthorizationUrl('')).toBe(false);
+  });
+});
+
 describe('resolveOAuthBeginDisplay', () => {
+  it('refuses a non-https authorization URL instead of offering it to the browser', () => {
+    // A gateway is the thing being authorized, so its answer is not trusted:
+    // an unsafe URL degrades to the fire-and-forget copy, never an open action.
+    expect(
+      resolveOAuthBeginDisplay({
+        attemptId: 'attempt-1',
+        authorizationUrl: 'http://issuer.example/authorize',
+      }),
+    ).toBeNull();
+    expect(
+      resolveOAuthBeginDisplay({
+        attemptId: 'attempt-1',
+        authorizationUrl: 'file:///etc/passwd',
+      }),
+    ).toBeNull();
+  });
+
   it('passes the attempt id and authorization URL through trimmed', () => {
     expect(
       resolveOAuthBeginDisplay({

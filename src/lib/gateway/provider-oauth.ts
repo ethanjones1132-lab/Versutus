@@ -20,7 +20,25 @@ export function resolveOAuthBeginDisplay(
   const attemptId = (answer?.attemptId ?? '').trim();
   const authorizationUrl = (answer?.authorizationUrl ?? '').trim();
   if (!attemptId || !authorizationUrl) return null;
+  if (!isSafeAuthorizationUrl(authorizationUrl)) return null;
   return { attemptId, authorizationUrl };
+}
+
+/**
+ * Whether an authorization URL is safe to hand to the browser. The Gate already
+ * refuses to open one that is not https (`assertSafeAuthorizationUrl`,
+ * `gate/core/service/browser.mjs`, tested against `http://` and `file://` in
+ * `gate/__tests__/windows-service.test.mjs`). The phone opens the same URLs from
+ * the same answer and owes the same guard: the gateway is the thing being
+ * authorized, so its answer is not automatically trustworthy, and a cleartext
+ * authorization hop is exactly what the Gate-side check exists to prevent.
+ *
+ * A prefix test rather than `new URL()`, matching `startsWith('https://')` in
+ * `gate/core/capabilities/provider/kind.mjs` — React Native's URL support varies
+ * and a throwing parse would read as a malformed answer rather than an unsafe one.
+ */
+export function isSafeAuthorizationUrl(raw: string): boolean {
+  return raw.trim().toLowerCase().startsWith('https://');
 }
 
 /**
