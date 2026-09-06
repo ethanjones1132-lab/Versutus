@@ -66,6 +66,7 @@ import { resolveDefaultBackend } from '@/lib/gateway/backend-defaults';
 import { applyModelOverride, effectiveModel, modelSwitchAnnouncement, resolveSendModel, shouldReleaseSessionForModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   buildEarlyProbeUrls,
+  dropAlreadyWavedCandidates,
   mergeDiscoveredProbeUrls,
   sameGatewayUrl,
 } from '@/lib/gateway/auto-connect-candidates';
@@ -1318,14 +1319,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (!probeResult?.ok) {
-          const candidates = buildGatewayCandidates({
-            tailscaleHost: appSettings.tailscaleHost,
-            configuredHosts: configuredGatewayHosts(),
-            savedUrls: currentGateways.map((item) => item.url),
-            discovered,
-            lastSuccessfulUrl: appSettings.lastSuccessfulUrl,
-            platform: Platform.OS,
-          });
+          const candidates = dropAlreadyWavedCandidates(
+            buildGatewayCandidates({
+              tailscaleHost: appSettings.tailscaleHost,
+              configuredHosts: configuredGatewayHosts(),
+              savedUrls: currentGateways.map((item) => item.url),
+              discovered,
+              lastSuccessfulUrl: appSettings.lastSuccessfulUrl,
+              platform: Platform.OS,
+            }),
+            earlyUrls,
+            highPriorityUrls,
+          );
 
           if (candidates.length === 0) {
             applyConnectionPhase('failed');

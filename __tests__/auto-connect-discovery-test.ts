@@ -1,8 +1,10 @@
 import {
   buildEarlyProbeUrls,
+  dropAlreadyWavedCandidates,
   mergeDiscoveredProbeUrls,
   sameGatewayUrl,
 } from '@/lib/gateway/auto-connect-candidates';
+import { HIGH_PRIORITY_WAVE_SIZE } from '@/lib/gateway/probe';
 
 declare const __dirname: string;
 
@@ -79,4 +81,54 @@ test('an early success for the saved url skips the second probe of it', () => {
   const src = readProviderSource();
   const runAutoConnect = src.slice(src.indexOf('const runAutoConnect = useCallback'));
   expect(runAutoConnect).toContain('sameGatewayUrl(earlyResult.url, saved.url)');
+});
+
+test('the fallback drops exactly the wave heads and keeps listed order', () => {
+  expect(HIGH_PRIORITY_WAVE_SIZE).toBe(4);
+  const early = ['http://127.0.0.1:8642', 'https://abc.ts.net:8765'];
+  const merged = [...early, 'http://192.168.1.20:8642', 'http://192.168.1.21:8642'];
+  const candidates = [
+    'https://abc.ts.net:8765',
+    'http://127.0.0.1:8642',
+    'http://192.168.1.20:8642',
+    'http://192.168.1.21:8642',
+    'http://10.0.2.2:8760',
+  ];
+  // Every waved URL is dropped; the unwaved delta keeps fallback order so
+  // earliest-healthy-wins is unchanged.
+  expect(dropAlreadyWavedCandidates(candidates, early, merged)).toEqual([
+    'http://10.0.2.2:8760',
+  ]);
+});
+
+test('beacons past the wave head are never dropped', () => {
+  const early = ['http://127.0.0.1:8642'];
+  const beacons = [
+    'http://192.168.1.20:8642',
+    'http://192.168.1.21:8642',
+    'http://192.168.1.22:8642',
+    'http://192.168.1.23:8642',
+    'http://192.168.1.24:8642',
+  ];
+  const merged = [...early, ...beacons];
+  // The merged wave probes only its first 4 entries, so the 5th and 6th
+  // beacons were never tried and must still reach the fallback pool.
+  expect(dropAlreadyWavedCandidates(beacons, early, merged)).toEqual([
+    'http://192.168.1.23:8642',
+    'http://192.168.1.24:8642',
+  ]);
+});
+
+test('the fallback drop is slash-insensitive and keeps everything when nothing waved', () => {
+  expect(
+    dropAlreadyWavedCandidates(['http://x:8642/'], ['http://x:8642'], ['http://x:8642']),
+  ).toEqual([]);
+  expect(dropAlreadyWavedCandidates(['http://x:8642'], [], [])).toEqual(['http://x:8642']);
+});
+
+test('auto-connect filters the fallback through the waved drop', () => {
+  const src = readProviderSource();
+  const runAutoConnect = src.slice(src.indexOf('const runAutoConnect = useCallback'));
+  expect(runAutoConnect).toContain('dropAlreadyWavedCandidates(');
+  expect(runAutoConnect).toContain('earlyUrls,\n            highPriorityUrls,');
 });

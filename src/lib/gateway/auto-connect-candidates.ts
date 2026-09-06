@@ -8,6 +8,8 @@
  * These helpers keep that ordering in one tested place.
  */
 
+import { HIGH_PRIORITY_WAVE_SIZE } from '@/lib/gateway/probe';
+
 /** URLs known without waiting for discovery: web loopbacks + last success. */
 export function buildEarlyProbeUrls(options: {
   platform: string;
@@ -47,4 +49,28 @@ export function mergeDiscoveredProbeUrls(
  */
 export function sameGatewayUrl(a: string, b: string): boolean {
   return a.replace(/\/+$/, '') === b.replace(/\/+$/, '');
+}
+
+/**
+ * Drop the fallback candidates the probe waves already tried and missed.
+ *
+ * Each `probeHighPriorityCandidates` wave probes only the head of its list
+ * (`HIGH_PRIORITY_WAVE_SIZE`), so only those heads are dropped — beacons
+ * past the head were never probed and always survive. Order is preserved so
+ * earliest-healthy-wins is unchanged. Comparison errs toward keeping: a URL
+ * that fails to match is probed again (the old behaviour), never skipped.
+ */
+export function dropAlreadyWavedCandidates(
+  candidates: string[],
+  earlyUrls: string[],
+  highPriorityUrls: string[],
+): string[] {
+  const waved = new Set<string>();
+  for (const url of earlyUrls.slice(0, HIGH_PRIORITY_WAVE_SIZE)) {
+    waved.add(url.replace(/\/+$/, ''));
+  }
+  for (const url of highPriorityUrls.slice(0, HIGH_PRIORITY_WAVE_SIZE)) {
+    waved.add(url.replace(/\/+$/, ''));
+  }
+  return candidates.filter((candidate) => !waved.has(candidate.replace(/\/+$/, '')));
 }

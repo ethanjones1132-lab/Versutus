@@ -84,7 +84,12 @@ export async function probeGatewayCandidates(
 
 /**
  * Probe a small number of high-priority URLs in parallel.
+ *
+ * Only the head of the list is probed — the cold-start fallback relies on
+ * HIGH_PRIORITY_WAVE_SIZE to know exactly which URLs a wave already tried.
  */
+export const HIGH_PRIORITY_WAVE_SIZE = 4;
+
 export async function probeHighPriorityCandidates(
   urls: string[],
   onProgress?: (message: string) => void,
@@ -92,7 +97,7 @@ export async function probeHighPriorityCandidates(
 ): Promise<ProbeResult | null> {
   if (urls.length === 0) return null;
 
-  const top = urls.slice(0, 4);
+  const top = urls.slice(0, HIGH_PRIORITY_WAVE_SIZE);
 
   const results = await Promise.allSettled(
     top.map(async (url) => {
