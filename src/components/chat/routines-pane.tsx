@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { Button, ListRow, Text, TextField } from '@/components/ui';
+import { Button, ListRow, Skeleton, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import {
   ROUTINES_PANE_MAX_HEIGHT,
@@ -114,6 +114,12 @@ export function RoutinesPane({
               {error}
             </Text>
           ) : null}
+          {!loaded && !failed ? (
+            <>
+              <Skeleton width="90%" height={44} />
+              <Skeleton width="76%" height={44} style={styles.gap} />
+            </>
+          ) : null}
           {listCopy ? (
             <Text variant="micro" color="secondary">
               {listCopy}
@@ -160,4 +166,5 @@ const styles = StyleSheet.create({
   wrap: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.one },
   scroll: { maxHeight: ROUTINES_PANE_MAX_HEIGHT },
   body: { gap: Spacing.one, paddingTop: Spacing.one },
+  gap: { marginTop: Spacing.two },
 });
