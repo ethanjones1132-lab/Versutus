@@ -68,8 +68,13 @@ function GatewayDeepLinkRouter() {
 
 export default function RootLayout() {
   return (
-    <FontProvider>
-      <GatewayProvider>
+    // GatewayProvider stays outside FontProvider on purpose: FontProvider
+    // withholds its children until useFonts resolves, while the provider's
+    // bootstrap effect (storage reads + auto-connect) must run during that
+    // wait, not after it. The native splash still hides on font resolution
+    // and AppBootstrap still gates the Stack on isBootstrapped.
+    <GatewayProvider>
+      <FontProvider>
         <ThemeProvider value={VersutusDarkTheme}>
            <StatusBar style="light" />
            <NotificationRouter />
@@ -131,8 +136,8 @@ export default function RootLayout() {
             </View>
           </AppBootstrap>
         </ThemeProvider>
-      </GatewayProvider>
-    </FontProvider>
+      </FontProvider>
+    </GatewayProvider>
   );
 }
 
