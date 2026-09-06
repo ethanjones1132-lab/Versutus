@@ -572,6 +572,9 @@ export function GroupRoomView({
               Could not load earlier replies from the Gate — this visit may be missing older lines.
             </Text>
           ) : null}
+          {historyError && loadHistory ? (
+            <Button label="Retry" variant="ghost" size="sm" onPress={handleRefresh} />
+          ) : null}
           {entries.length === 0 ? (
             <Text variant="caption" color="tertiary" style={styles.emptyHint}>
               Say something to the room. Every reply lands here, attributed to its bot.
