@@ -55,8 +55,13 @@ export function ApprovalDecisionCard({
       opacity.value = withTiming(0, { duration: approvalExitDuration('approving') });
     } else {
       void haptics.warning();
+      // The red border flash is the Deny signal; the scale + opacity fold
+      // is the shared "card has been decided" exit so Approve and Deny
+      // leave with the same rhythm — only the durations differ.
       // eslint-disable-next-line react-hooks/immutability
       borderProgress.value = withTiming(1, { duration: approvalExitDuration('denying') });
+      scale.value = withTiming(0.92, { duration: approvalExitDuration('denying') });
+      opacity.value = withTiming(0, { duration: approvalExitDuration('denying') });
     }
     // Approve never carries feedback. Deny trims the operator's reply so the
     // gateway never receives a whitespace-only payload — but an empty trim
