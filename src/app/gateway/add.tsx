@@ -256,7 +256,11 @@ function AdvancedOptions({
 }) {
   return (
     <View style={styles.advanced}>
-      <Pressable onPress={() => onExpandedChange(!expanded)}>
+      <Pressable
+        onPress={() => onExpandedChange(!expanded)}
+        accessibilityRole="button"
+        accessibilityLabel={expanded ? 'Hide advanced' : 'Advanced options'}
+        accessibilityState={{ expanded }}>
         <Text variant="link" color="accent">
           {expanded ? 'Hide advanced' : 'Advanced options'}
         </Text>
