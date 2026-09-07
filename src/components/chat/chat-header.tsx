@@ -92,6 +92,7 @@ function ChatHeaderImpl({
       disabled={!onBackendPress || !backendLabel}
       accessibilityRole={backendLabel && onBackendPress ? 'button' : undefined}
       accessibilityLabel={backendLabel ? `Chat backend: ${backendLabel}. Change backend.` : undefined}
+      accessibilityState={{ disabled: !onBackendPress || !backendLabel }}
       style={styles.titles}>
       <Text variant="headline" numberOfLines={1} style={styles.name}>
         {title}
