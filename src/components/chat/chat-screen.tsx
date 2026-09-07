@@ -3,7 +3,7 @@ import { type Href, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Platform, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { FadeIn } from 'react-native-reanimated';
+import Animated from 'react-native-reanimated';
 
 import { ApprovalSheet } from '@/components/chat/approval-sheet';
 import { BotChrome } from '@/components/chat/bot-chrome';
@@ -30,6 +30,7 @@ import { ThreadConfigSheet, type SessionItem } from '@/components/chat/thread-co
 import { SlashCommandPalette } from '@/components/chat/slash-command-palette';
 import { Button, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text, type IconName } from '@/components/ui';
 import { Motion, Radius, Spacing } from '@/constants/tokens';
+import { entering } from '@/lib/motion/presets';
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
 import { describeGatewayError, errorBannerButton, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { useTokens } from '@/hooks/use-tokens';
@@ -183,7 +184,7 @@ function LastErrorBanner({
       break;
   }
   return (
-    <Animated.View entering={FadeIn.duration(Motion.duration.fast)} style={styles.bannerWrap}>
+    <Animated.View entering={entering.fadeIn.duration(Motion.duration.fast)} style={styles.bannerWrap}>
       <ErrorCard
         cause={humanized.cause}
         affected={humanized.affected}
@@ -1499,7 +1500,7 @@ export function ChatScreen() {
 
         {jumpVisible ? (
           <Animated.View
-            entering={FadeIn.duration(Motion.duration.fast)}
+            entering={entering.fadeIn.duration(Motion.duration.fast)}
             style={[styles.jumpWrap, { bottom: chatJumpBottom({ platform: Platform.OS, insetBottom: insets.bottom }) }]}>
             <PressableScale
               onPress={scrollToLatest}
