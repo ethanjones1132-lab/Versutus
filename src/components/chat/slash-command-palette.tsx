@@ -146,6 +146,7 @@ export function SlashCommandPalette({
                 disabled={item.unavailable}
                 accessibilityRole="button"
                 accessibilityLabel={`Command ${item.label}`}
+                accessibilityState={{ disabled: item.unavailable }}
                 onPress={async () => {
                   await Haptics.selectionAsync();
                   onSelect(item.value);
