@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button, ListRow, Skeleton, Text } from '@/components/ui';
@@ -11,7 +11,11 @@ import {
   type SkillsState,
 } from '@/lib/gateway/skills';
 
-export function SkillsPane({
+/** Bot Chat skills pane — wrapped in `memo` so a chat-screen tick that does not
+ * change `skills`, `loaded`, `failed`, `onInvoke`, or `onRetry` does not
+ * re-render this subtree (the `open` `useState`, the fresh `state`/`copy`
+ * allocations, and the `<ListRow>` rows all stay still). */
+function SkillsPaneImpl({
   skills,
   loaded,
   failed,
@@ -73,6 +77,9 @@ export function SkillsPane({
     </View>
   );
 }
+
+export const SkillsPane = memo(SkillsPaneImpl);
+SkillsPane.displayName = 'SkillsPane';
 
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.one },
