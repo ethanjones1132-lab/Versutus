@@ -8,6 +8,7 @@ import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
 import { activityKeyboardBehavior } from '@/lib/activity/keyboard-behavior';
 
 import { AgentTargets } from '@/components/activity/agent-targets';
+import { AgenticRunSheet } from '@/components/activity/agentic-run-sheet';
 import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
 import { CronSection } from '@/components/activity/cron-section';
 import { RunCard } from '@/components/activity/run-card';
@@ -41,6 +42,7 @@ export default function ActivityScreen() {
     refreshCapabilities,
     refreshGateways,
     sendChatInput,
+    loadRunEvents,
   } = useGateway();
 
   const [runPrompt, setRunPrompt] = useState('');
@@ -50,6 +52,10 @@ export default function ActivityScreen() {
   // (CronSection loads once per connection); bumping this signal reaches
   // the section's re-list without remounting the tab.
   const [cronReloadSignal, setCronReloadSignal] = useState(0);
+  // A tapped "View transcript" on a finished run card opens the sheet keyed on
+  // the run id; null closes. The sheet keys itself on the id, so a different
+  // run arrives as a fresh component with empty state.
+  const [openAgenticRunId, setOpenAgenticRunId] = useState<string | null>(null);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
 
@@ -114,7 +120,12 @@ export default function ActivityScreen() {
         case 'active':
           return <RunCard run={item.run} onStop={stopActivityRun} />;
         case 'finished':
-          return <RunCard run={item.run} />;
+          return (
+            <RunCard
+              run={item.run}
+              onOpenTranscript={setOpenAgenticRunId}
+            />
+          );
       }
     },
     [stopActivityRun],
@@ -252,6 +263,12 @@ export default function ActivityScreen() {
         ListHeaderComponent={listHeader}
         ListFooterComponent={listFooter}
         renderItem={renderItem}
+      />
+      <AgenticRunSheet
+        key={openAgenticRunId ?? 'no-run'}
+        runId={openAgenticRunId}
+        loadEvents={loadRunEvents}
+        onClose={() => setOpenAgenticRunId(null)}
       />
     </Screen>
   );

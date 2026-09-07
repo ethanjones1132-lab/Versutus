@@ -30,6 +30,13 @@ const STATUS_TONE: Record<ActivityRun['status'], 'warning' | 'accent' | 'success
 export type RunCardProps = {
   run: ActivityRun;
   onStop?: (runId: string) => void;
+  /**
+   * Open the agentic-run transcript sheet for this run. Rendered only on
+   * finished runs (a live run is already streaming its events through the
+   * preview line and benefits from the in-memory summary, not a full replay).
+   * Optional, so the live card stays byte-identical with the previous shape.
+   */
+  onOpenTranscript?: (runId: string) => void;
 };
 
 /** Ticking elapsed label for a live run; the only per-second re-render in the card. */
@@ -43,7 +50,7 @@ function LiveElapsed({ startedAt }: { startedAt: number }) {
 }
 
 /** Live run monitor card: status, elapsed, latest event, expandable event log. */
-export const RunCard = memo(function RunCard({ run, onStop }: RunCardProps) {
+export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript }: RunCardProps) {
   const tokens = useTokens();
   const [expanded, setExpanded] = useState(false);
   const live = run.status === 'running' || run.status === 'waiting-approval';
@@ -139,6 +146,25 @@ export const RunCard = memo(function RunCard({ run, onStop }: RunCardProps) {
             <Icon name={{ ios: 'stop.fill', android: 'stop', web: 'stop' }} size={11} color="statusDisconnected" />
             <Text variant="caption" color="statusDisconnected">
               Stop run
+            </Text>
+          </PressableScale>
+        ) : null}
+        {!live && onOpenTranscript ? (
+          <PressableScale
+            onPress={async () => {
+              await haptics.selection();
+              onOpenTranscript(run.id);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="View run transcript"
+            style={styles.actionButton}>
+            <Icon
+              name={{ ios: 'list.bullet.rectangle', android: 'list', web: 'list' }}
+              size={12}
+              color="accent"
+            />
+            <Text variant="caption" color="accent">
+              View transcript
             </Text>
           </PressableScale>
         ) : null}

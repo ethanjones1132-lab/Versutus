@@ -123,6 +123,7 @@ import type {
   GatewayProfile,
   HermesSession,
   PairingDetails,
+  RunEvent,
 } from '@/lib/gateway/types';
 import {
   createGatewayProfile,
@@ -300,6 +301,12 @@ type GatewayContextValue = {
   activityRuns: ActivityRun[];
   /** Stop a running run: aborts the local driver and asks the gateway to stop it. */
   stopActivityRun: (runId: string) => void;
+  /**
+   * Drain a run's full event stream from the gateway and resolve with the
+   * collected list. Used by the agentic-run transcript sheet; aborting the
+   * signal stops the collection and lets the SSE reader release the response.
+   */
+  loadRunEvents: (runId: string, signal: AbortSignal) => Promise<RunEvent[]>;
   modelPicker: {
     visible: boolean;
     mode: 'default' | 'fallbacks' | 'agent';
@@ -2060,6 +2067,34 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [patchActivityRuns],
   );
 
+  /**
+   * Drain a run's full event stream from the connected gateway. Subscribes via
+   * `client.streamRunEvents`, collects every event the stream emits, and
+   * resolves with the list when the stream closes end-to-end (the Gate sends
+   * the SSE end-marker after the replay finishes). The `signal` lets the
+   * caller cut a replay mid-stream when the sheet closes — the SSE response is
+   * released and no more events are appended.
+   */
+  const loadRunEvents = useCallback(
+    async (runId: string, signal: AbortSignal): Promise<RunEvent[]> => {
+      const client = clientRef.current;
+      if (!client || !client.streamRunEvents) {
+        throw new Error('This gateway does not expose run events.');
+      }
+      const collected: RunEvent[] = [];
+      await client.streamRunEvents(
+        runId,
+        (event) => {
+          if (signal.aborted) return;
+          collected.push(event);
+        },
+        signal,
+      );
+      return collected;
+    },
+    [],
+  );
+
   const sendChatInput = useCallback(
     async (
       text: string,
@@ -3107,6 +3142,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       runTask,
       activityRuns,
       stopActivityRun,
+      loadRunEvents,
       modelPicker,
       openModelPicker,
       closeModelPicker,
@@ -3141,7 +3177,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       pendingRunApproval, resolveRunApproval,
       approveTlsFingerprintChange,
       rejectTlsFingerprintChange,
-      runTask, activityRuns, stopActivityRun, modelPicker, openModelPicker, closeModelPicker,
+      runTask, activityRuns, stopActivityRun, loadRunEvents, modelPicker, openModelPicker, closeModelPicker,
       selectModel, modelCatalog, sessionSelector,
       openSessionSelector, closeSessionSelector, selectSession, sessionListState, currentSessionId,
       sessionListHasOlder, loadingOlderSessions, loadOlderSessions,
