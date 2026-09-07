@@ -88,6 +88,7 @@ export default function GatewayDiagnosticsScreen() {
             label={running ? 'Checking…' : 'Run live check'}
             onPress={runLive}
             disabled={!healthUrl || running}
+            busy={running}
             style={styles.button}
           />
         </Card>
