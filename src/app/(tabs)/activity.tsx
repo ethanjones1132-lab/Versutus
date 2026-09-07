@@ -191,6 +191,7 @@ export default function ActivityScreen() {
                   label={starting ? 'Starting…' : 'Run task'}
                   onPress={() => void startRun()}
                   disabled={!runPrompt.trim() || starting || status !== 'connected'}
+                  busy={starting}
                 />
               </Card>
             );
