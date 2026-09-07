@@ -29,6 +29,8 @@ export type ChatHeaderProps = {
   groupName?: string;
   onBackendPress?: () => void;
   onRosterPress?: () => void;
+  /** True while the backends section of the thread config sheet is open. */
+  backendsExpanded?: boolean;
 };
 
 /** Slim contextual chat header: orb, gateway, quick model/session chips, overflow. */
@@ -46,6 +48,7 @@ function ChatHeaderImpl({
   groupName,
   onBackendPress,
   onRosterPress,
+  backendsExpanded,
 }: ChatHeaderProps) {
   const tokens = useTokens();
   const { width: windowWidth, fontScale } = useWindowDimensions();
@@ -92,7 +95,7 @@ function ChatHeaderImpl({
       disabled={!onBackendPress || !backendLabel}
       accessibilityRole={backendLabel && onBackendPress ? 'button' : undefined}
       accessibilityLabel={backendLabel ? `Chat backend: ${backendLabel}. Change backend.` : undefined}
-      accessibilityState={{ disabled: !onBackendPress || !backendLabel }}
+      accessibilityState={{ disabled: !onBackendPress || !backendLabel, expanded: backendsExpanded ?? false }}
       style={styles.titles}>
       <Text variant="headline" numberOfLines={1} style={styles.name}>
         {title}

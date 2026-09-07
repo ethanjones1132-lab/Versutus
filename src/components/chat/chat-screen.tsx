@@ -1090,6 +1090,7 @@ export function ChatScreen() {
         groupName={surface.kind === 'group' ? activeGroup?.name : undefined}
         onBackendPress={surface.kind === 'configurable' && backends.length > 0 ? handleHeaderBackendPress : undefined}
         onRosterPress={surface.kind === 'roster' ? undefined : handleHeaderRosterPress}
+        backendsExpanded={backendPickerVisible}
       />
 
       <NewAgentSheet

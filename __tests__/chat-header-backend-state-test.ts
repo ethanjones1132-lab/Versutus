@@ -33,7 +33,7 @@ describe('Chat header backend title screen-reader state', () => {
     // same condition the platform uses for the press gate, so VoiceOver/
     // TalkBack can announce the dimmed/unpressable state to the user.
     expect(src).toMatch(
-      /<PressableScale[\s\S]*?disabled=\{!onBackendPress \|\| !backendLabel\}[\s\S]*?accessibilityState=\{\{\s*disabled:\s*!onBackendPress \|\| !backendLabel\s*\}\}[\s\S]*?\/>/,
+      /<PressableScale[\s\S]*?disabled=\{!onBackendPress \|\| !backendLabel\}[\s\S]*?accessibilityState=\{\{\s*disabled:\s*!onBackendPress \|\| !backendLabel,\s*expanded:\s*backendsExpanded \?\? false\s*\}\}[\s\S]*?\/>/,
     );
   });
 
@@ -94,7 +94,7 @@ describe('Chat header backend title screen-reader state', () => {
     )?.[0];
     expect(backendBlock).toBeDefined();
     expect(backendBlock).toMatch(
-      /accessibilityState=\{\{\s*disabled:\s*!onBackendPress \|\| !backendLabel\s*\}\}/,
+      /accessibilityState=\{\{\s*disabled:\s*!onBackendPress \|\| !backendLabel,\s*expanded:\s*backendsExpanded \?\? false\s*\}\}/,
     );
 
     // Ensure no other PressableScale in the file carries the same state
