@@ -44,6 +44,7 @@ export function GatewayManagementSection() {
             trackColor={{ true: tokens.accent, false: tokens.border }}
             thumbColor={tokens.textPrimary}
             accessibilityLabel="Connect automatically on launch"
+            accessibilityState={{ checked: settings.autoConnect }}
           />
         </View>
         <Text variant="caption" color="secondary">
