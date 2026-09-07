@@ -339,6 +339,7 @@ function SessionsSection({
           variant="ghost"
           size="sm"
           disabled={loadingOlderSessions}
+          busy={loadingOlderSessions}
           onPress={async () => {
             await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             onShowOlder();
