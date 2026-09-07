@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button, ListRow, Skeleton, Text } from '@/components/ui';
@@ -11,7 +11,11 @@ import {
   type ToolsetsState,
 } from '@/lib/gateway/toolsets';
 
-export function ToolsPane({
+/** Bot Chat tools pane — wrapped in `memo` so a chat-screen tick that does not
+ * change `toolsets`, `loaded`, `failed`, or `onRetry` does not re-render this
+ * subtree (the `open` `useState`, the fresh `state`/`copy` allocations, and
+ * the `<ListRow>` rows all stay still). */
+function ToolsPaneImpl({
   toolsets,
   loaded,
   failed,
@@ -68,6 +72,9 @@ export function ToolsPane({
     </View>
   );
 }
+
+export const ToolsPane = memo(ToolsPaneImpl);
+ToolsPane.displayName = 'ToolsPane';
 
 const styles = StyleSheet.create({
   wrap: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.one },
