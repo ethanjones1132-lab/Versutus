@@ -189,6 +189,13 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
           setOpenJob(null);
           setOpenRunId(runId);
         }}
+        onRemoved={() => {
+          // Drop the now-removed row without a remount: close the sheet
+          // (the open job no longer exists on the gateway) and re-read the
+          // job list so the parent's cron roster reflects the deletion.
+          setOpenJob(null);
+          void load();
+        }}
       />
       <CronRunSheet key={openRunId ?? 'no-run'} runId={openRunId} onClose={() => setOpenRunId(null)} />
     </Card>

@@ -337,6 +337,13 @@ export function createHermesBackend({
       return call(`/api/jobs/${encodeURIComponent(jobId)}/${action}`, { method: 'POST' });
     },
 
+    async removeJob(jobId) {
+      // Mirror deleteSession's call shape: same Hermes endpoint style
+      // (DELETE on the bare /api/jobs/{id}), no body, a successful 2xx
+      // resolves and a refusal surfaces as a thrown `hermes: <text>`.
+      await call(`/api/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+    },
+
     /**
      * Hermes exposes stop only on runs, not on a session chat turn. Left
      * unimplemented rather than faked: a no-op `abort` would tell the Gate a

@@ -225,6 +225,7 @@ export function createGatewayMethods({ getBackend, listDevices, revokeDevice }) 
     'jobs.pause': (params) => via(getBackend, params, 'setJobPaused', (b) => b.setJobPaused(jobIdOf(params), true)),
     'jobs.resume': (params) => via(getBackend, params, 'setJobPaused', (b) => b.setJobPaused(jobIdOf(params), false)),
     'jobs.create': (params) => via(getBackend, params, 'createJob', (b) => b.createJob(jobInputOf(params))),
+    'jobs.remove': (params) => via(getBackend, params, 'removeJob', (b) => b.removeJob(jobIdOf(params))),
 
     'sessions.list': async (params) =>
       via(getBackend, params, 'listSessions', async (b) => ({

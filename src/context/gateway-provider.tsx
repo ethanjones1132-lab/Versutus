@@ -232,6 +232,7 @@ type GatewayContextValue = {
     create: (input: { name: string; prompt: string; schedule: string }) => Promise<void>;
     run: (jobId: string) => Promise<void>;
     pause: (jobId: string, paused: boolean) => Promise<void>;
+    remove: (jobId: string) => Promise<void>;
   };
   /**
    * Cron transparency, read-only. `available` is false on a gateway whose
@@ -2856,6 +2857,16 @@ const response = await executeGatewaySlashCommand(trimmed, {
       const client = clientRef.current;
       if (!client?.setJobPaused) throw new Error('This gateway does not pause jobs.');
       await client.setJobPaused(jobId, paused);
+    },
+    // Destructive counterpart to run/pause. The Gate dispatches the
+    // `jobs.remove` RPC (gate/core/capabilities/gateway-methods.mjs) to the
+    // resolved backend's `removeJob`; a backend without that method throws
+    // and the caller surfaces the refusal through the same control-error
+    // path the run/pause calls already use.
+    remove: async (jobId: string) => {
+      const client = clientRef.current;
+      if (!client?.removeJob) throw new Error('This gateway does not remove jobs.');
+      await client.removeJob(jobId);
     },
   }), []);
 

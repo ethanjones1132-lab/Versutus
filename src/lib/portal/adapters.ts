@@ -94,6 +94,7 @@ export interface PortalClient {
   createJob?(input: { name: string; prompt: string; schedule: string }): Promise<{ id: string; name?: string }>;
   runJob?(jobId: string): Promise<void>;
   setJobPaused?(jobId: string, paused: boolean): Promise<void>;
+  removeJob?(jobId: string): Promise<void>;
   /** Gate-owned group rooms. Omitted when the manifest advertises no botGroups endpoint. */
   listGroups?(): Promise<BotGroupRoom[]>;
   createGroup?(input: { name: string; memberIds: string[] }): Promise<BotGroupRoom>;

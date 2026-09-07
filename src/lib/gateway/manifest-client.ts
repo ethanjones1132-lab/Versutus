@@ -588,6 +588,21 @@ export class ManifestClient implements PortalClient {
   }
 
   /**
+   * Destructive counterpart to setJobPaused. The Gate serves DELETE
+   * /v1/jobs/{id} which resolves to `removeJob` on the backend; the
+   * Hermes backend answers it with `DELETE /api/jobs/{id}`. A refused
+   * remove throws and the caller surfaces the failure.
+   */
+  async removeJob(jobId: string): Promise<void> {
+    const path = this.requireEndpoint('jobs');
+    await this.rootTransport.request(
+      'DELETE',
+      this.withBotOnly(`${path.replace(/\/+$/, '')}/${encodeURIComponent(jobId)}`),
+      this.botId ? { bot: this.botId } : {},
+    );
+  }
+
+  /**
    * Cron transparency. The Gate joins the job record, its latest execution and
    * the sessions its runs wrote; the phone never learns how the host spells a
    * cron session id. A gateway with no cron backend answers with the RPC's own

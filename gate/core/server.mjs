@@ -834,6 +834,7 @@ export async function createGate(config = {}) {
         (pathname === '/health/detailed' && method === 'GET') ||
         (pathname === '/v1/jobs' && (method === 'GET' || method === 'POST')) ||
         /^\/v1\/jobs\/[^/]+\/(run|pause|resume)$/.test(pathname) ||
+        (method === 'DELETE' && /^\/v1\/jobs\/[^/]+$/.test(pathname)) ||
         (pathname === '/v1/sessions' && (method === 'GET' || method === 'POST')) ||
         /^\/v1\/sessions\/[^/]+$/.test(pathname) ||
         /^\/v1\/sessions\/[^/]+\/messages$/.test(pathname) ||
@@ -1591,6 +1592,27 @@ export async function createGate(config = {}) {
           : await backend.setJobPaused(jobId, action === 'pause');
         res.writeHead(200);
         res.end(JSON.stringify(result ?? { ok: true }));
+        return;
+      }
+
+      // Destructive counterpart to the run/pause/resume job routes above.
+      // Mirrors their backend-resolution shape (bot-scoped via readBotId,
+      // gateway-scoped via resolveBackendFor) and the same `requireBackendMethod`
+      // guard so an unsupported backend answers 400 honestly instead of 404.
+      const jobDeleteMatch = pathname.match(/^\/v1\/jobs\/([^/]+)$/);
+      if (jobDeleteMatch && method === 'DELETE') {
+        const [, rawJobId] = jobDeleteMatch;
+        const jobId = decodeURIComponent(rawJobId);
+        const body = (await readJsonBody(req)) ?? {};
+        const botId = readBotId(url, body);
+        const backend = botId
+          ? await resolveConversationBackend(body.backendId ?? url.searchParams.get('backendId'), botId)
+          : await resolveBackendFor('removeJob');
+        if (!backend) return;
+        if (!requireBackendMethod(backend, 'removeJob')) return;
+        await backend.removeJob(jobId);
+        res.writeHead(200);
+        res.end(JSON.stringify({ ok: true }));
         return;
       }
 

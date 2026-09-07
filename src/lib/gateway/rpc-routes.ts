@@ -49,6 +49,12 @@ export const METHOD_TO_ROUTE: Record<string, Route> = {
   // /api/jobs (cli-environments/backends/hermes.mjs), the same call the
   // Routines pane makes through ManifestClient.createJob.
   'jobs.create': { method: 'POST', path: '/api/jobs' },
+  // Remove is the destructive counterpart. The Gate DELETE /v1/jobs/{id}
+  // route dispatches `removeJob` on the resolved backend; the Hermes backend
+  // answers with `DELETE /api/jobs/{id}` (matching its `deleteSession`
+  // shape). The route is what the slash-command path falls through when
+  // `jobs.remove` is invoked directly via gatewayRequest.
+  'jobs.remove': { method: 'DELETE', path: '/api/jobs/{jobId}' },
   // Skills & tools
   'skills.list': { method: 'GET', path: '/v1/skills' },
   'skills.status': { method: 'GET', path: '/v1/skills' },

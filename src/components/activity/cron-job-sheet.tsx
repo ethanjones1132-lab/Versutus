@@ -2,7 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { BaseSheet, Button, Divider, ListRow, Skeleton, Text } from '@/components/ui';
+import { BaseSheet, Button, ConfirmSheet, Divider, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { haptics } from '@/lib/haptics';
@@ -22,6 +22,12 @@ export type CronJobSheetProps = {
   onClose: () => void;
   /** Opens one run's transcript; the parent owns that surface. */
   onOpenRun: (runId: string) => void;
+  /**
+   * Fires after a confirmed, successful remove. The parent uses it to
+   * refresh the cron list so the row drops without a remount; the sheet
+   * itself only knows about one job at a time.
+   */
+  onRemoved?: () => void;
 };
 
 function Row({ label, value }: { label: string; value?: string | null }) {
@@ -43,7 +49,7 @@ function Row({ label, value }: { label: string; value?: string | null }) {
  * because "show raw" is what makes the curation trustworthy rather than a
  * story the app tells.
  */
-export function CronJobSheet({ job, onClose, onOpenRun }: CronJobSheetProps) {
+export function CronJobSheet({ job, onClose, onOpenRun, onRemoved }: CronJobSheetProps) {
   const { botJobs, cron } = useGateway();
   const [runs, setRuns] = useState<CronRun[]>([]);
   const [runsError, setRunsError] = useState<string | null>(null);
@@ -58,6 +64,10 @@ export function CronJobSheet({ job, onClose, onOpenRun }: CronJobSheetProps) {
   const [pausedOverride, setPausedOverride] = useState<boolean | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
+  // Which job is pending destructive confirmation. null = sheet closed.
+  // Snapshotted into a local inside executeRemove so a fast Cancel after
+  // Confirm still removes the job the user confirmed, never the empty state.
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
   const jobId = job?.id ?? null;
   const paused = pausedOverride ?? job?.paused ?? false;
@@ -100,6 +110,33 @@ export function CronJobSheet({ job, onClose, onOpenRun }: CronJobSheetProps) {
     }
   }, [acting, botJobs, jobId, paused]);
 
+  // Destructive counterpart to submitRun / submitTogglePause. The Gate
+  // dispatches the jobs.remove RPC to removeJob on the resolved backend;
+  // a refusal lands in controlError exactly like the run/pause calls so
+  // the failed-action path stays uniform (and the sheet stays open so the
+  // user can read the failure, retry, or cancel).
+  const executeRemove = useCallback(async () => {
+    // Snapshot the confirmed target so a fast cancel after Confirm still
+    // removes the job the user tapped (and never the empty state).
+    const target = removeTarget ?? jobId;
+    if (!target || acting) return;
+    setActing(true);
+    setControlError(null);
+    try {
+      await botJobs.remove(target);
+      setRemoveTarget(null);
+      // Tell the parent so its cron list can re-read; the parent owns the
+      // sheet mount and is the only thing that can drop the row without
+      // a remount.
+      onRemoved?.();
+    } catch (caught) {
+      setControlError(describeCronJobControlError(caught));
+      setRemoveTarget(null);
+    } finally {
+      setActing(false);
+    }
+  }, [acting, botJobs, jobId, onRemoved, removeTarget]);
+
   // Keyed by job id upstream, so each job opens as a fresh component with
   // collapsed toggles and no stale run list — no setState in the effect body.
   useEffect(() => {
@@ -134,10 +171,27 @@ export function CronJobSheet({ job, onClose, onOpenRun }: CronJobSheetProps) {
             disabled={acting}
             onPress={() => void submitTogglePause()}
           />
+          <Button
+            label="Remove"
+            variant="ghost"
+            size="sm"
+            disabled={acting}
+            onPress={() => jobId && setRemoveTarget(jobId)}
+          />
         </View>
         {controlError ? (
           <Text variant="caption" color="statusDisconnected" selectable>{controlError}</Text>
         ) : null}
+
+        <ConfirmSheet
+          visible={removeTarget !== null}
+          title="Remove scheduled job?"
+          message={`${job.title || job.id} will be removed from this gateway. Its run history stops here.`}
+          confirmLabel="Remove"
+          danger
+          onCancel={() => setRemoveTarget(null)}
+          onConfirm={() => void executeRemove()}
+        />
 
         <Divider />
 
