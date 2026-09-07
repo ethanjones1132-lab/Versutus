@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 
-import { Button, Card, Icon, PressableScale, Text } from '@/components/ui';
+import { Button, Card, Icon, PressableScale, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { haptics } from '@/lib/haptics';
@@ -16,12 +16,20 @@ export function ApprovalDecisionCard({
 }: {
   runId: string;
   prompt?: string;
-  onResolve: (approved: boolean) => void;
+  /**
+   * `feedback` is carried by Deny only and may be an empty string — an
+   * empty Deny is a valid decision. Approve never sends feedback.
+   */
+  onResolve: (approved: boolean, feedback?: string) => void;
 }) {
   const tokens = useTokens();
   const [exit, setExit] = useState<ApprovalExit>('idle');
   // Default collapsed keeps the card compact; the full prompt is one tap away.
   const [promptExpanded, setPromptExpanded] = useState(false);
+  // The operator's reply to the run's "Approve this?" question. Tracked
+  // here, surfaced on the Deny path only — Approve ignores it. Trimmed at
+  // hand-off so the gateway never sees stray whitespace.
+  const [feedbackText, setFeedbackText] = useState('');
   const locked = useRef(false);
   const scale = useSharedValue(1);
   const opacity = useSharedValue(1);
@@ -50,8 +58,13 @@ export function ApprovalDecisionCard({
       // eslint-disable-next-line react-hooks/immutability
       borderProgress.value = withTiming(1, { duration: approvalExitDuration('denying') });
     }
+    // Approve never carries feedback. Deny trims the operator's reply so the
+    // gateway never receives a whitespace-only payload — but an empty trim
+    // is forwarded as '' (a valid "deny, no comment"), not dropped.
+    const trimmed = feedbackText.trim();
+    const feedback = approved ? undefined : trimmed;
     const duration = approvalExitDuration(next);
-    setTimeout(() => onResolve(approved), duration);
+    setTimeout(() => onResolve(approved, feedback), duration);
   };
 
   const busy = exit !== 'idle';
@@ -85,6 +98,26 @@ export function ApprovalDecisionCard({
         <Text variant="mono" color="tertiary" numberOfLines={1}>
           run {runId}
         </Text>
+        {/* The reply field is always rendered (until the card exits) so a
+            Approve-with-no-comment and a Deny-with-no-comment share the
+            same layout. Approve ignores its value; only Deny forwards it. */}
+        <View style={styles.feedbackBlock}>
+          <Text variant="caption" color="secondary">
+            Reply (Deny only — Approve ignores this)
+          </Text>
+          <TextField
+            value={feedbackText}
+            onChangeText={setFeedbackText}
+            placeholder="Tell the run what to do instead…"
+            multiline
+            // The reply is prose to a model — sentences/corrections, not
+            // a URL or token, so the kit's form defaults would over-correct.
+            autoCapitalize="sentences"
+            autoCorrect
+            editable={!busy}
+            accessibilityLabel="Deny reply"
+          />
+        </View>
         <View style={styles.actions}>
           <Button label="Approve" onPress={() => decide(true)} disabled={busy} style={styles.button} />
           <Button
@@ -123,5 +156,8 @@ const styles = StyleSheet.create({
   },
   button: {
     flex: 1,
+  },
+  feedbackBlock: {
+    gap: Spacing.one,
   },
 });

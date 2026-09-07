@@ -145,7 +145,7 @@ export default function ActivityScreen() {
         <ApprovalDecisionCard
           runId={pendingRunApproval.runId}
           prompt={pendingRunApproval.prompt}
-          onResolve={(approved) => resolveRunApproval(approved)}
+          onResolve={(approved, feedback) => resolveRunApproval(approved, feedback)}
         />
       ) : null}
 
