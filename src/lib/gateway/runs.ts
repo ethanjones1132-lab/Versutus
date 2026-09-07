@@ -65,8 +65,22 @@ export const ACTIVITY_EVENT_CAP = 50;
 /** Defensive one-line preview of a run event payload. */
 export function runEventPreview(event: RunEvent): string {
   const data = event.data as Record<string, unknown> | undefined;
+  // Precedence is intentional: streaming candidates (`deltaText`, `text`,
+  // `message`) come first so a live `message.delta` event still shows its
+  // text; `status` next because a status string is often enough on its own;
+  // `error` / `errorMessage` ahead of `result` so a `run.failed` surfaces the
+  // failure, not the partial answer the run had typed before it failed; and
+  // `result` last so the common `run.completed` case reads as the final
+  // answer (docs/opencode-backend-contract.md:216) without ever beating an
+  // error or a status that explains why there is no result.
   const candidate =
-    data?.deltaText ?? data?.text ?? data?.message ?? data?.status ?? data?.error ?? data?.errorMessage;
+    data?.deltaText ??
+    data?.text ??
+    data?.message ??
+    data?.status ??
+    data?.error ??
+    data?.errorMessage ??
+    data?.result;
   const raw = typeof candidate === 'string' && candidate ? candidate : JSON.stringify(data ?? {});
   const flat = raw.replace(/\s+/g, ' ').trim();
   return flat.length > 140 ? `${flat.slice(0, 140)}…` : flat;
