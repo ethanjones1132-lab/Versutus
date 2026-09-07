@@ -77,11 +77,13 @@ describe('Chat composer Send/Stop button screen-reader state', () => {
     );
   });
 
-  test('accessibilityState appears on the Send/Stop PressableScale and is not duplicated on surrounding controls', () => {
+  test('accessibilityState appears on the Send/Stop PressableScale and the suggestion row only', () => {
     const src = readComposerSource();
-    // Only the Send/Stop PressableScale carries an accessibilityState prop.
+    // Two PressableScale controls carry an accessibilityState prop: the
+    // Send/Stop button (disabled + busy) and — since the suggestion-row
+    // item landed — the slash-suggestion row (disabled: unavailable).
     // The other PressableScale controls in the composer (quick-action chips,
-    // slash-suggestion rows, mention picks) are flat navigation buttons with
+    // mention picks, Browse-all-commands row) are flat navigation buttons with
     // no state to announce and must remain accessibilityRole="button" with
     // no accessibilityState.
     const sendBlock = src.match(/<PressableScale[\s\S]*?sendWidth\.value = withSpring\(56, springSnappy\);[\s\S]*?<\/PressableScale>/)?.[0];
@@ -91,10 +93,12 @@ describe('Chat composer Send/Stop button screen-reader state', () => {
     );
     // Ensure no other PressableScale in the file carries the same state
     // tuple (the chip rows must NOT grow an accessibilityState prop).
+    // The suggestion row is the second legitimate carrier — pinned by
+    // __tests__/composer-palette-row-state-test.ts — so the count is 2.
     const allPressables = src.match(/<PressableScale[\s\S]*?\/>/g) ?? [];
     const stateCarriers = allPressables.filter((p) =>
       /accessibilityState=\{\{/.test(p),
     );
-    expect(stateCarriers).toHaveLength(1);
+    expect(stateCarriers).toHaveLength(2);
   });
 });

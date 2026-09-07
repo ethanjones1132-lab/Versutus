@@ -235,6 +235,7 @@ export const ChatComposer = memo(function ChatComposer({
                     disabled={unavailable}
                     accessibilityRole="button"
                     accessibilityLabel={`Command ${item.label}`}
+                    accessibilityState={{ disabled: unavailable }}
                     onPress={async () => {
                       if (!unavailable) {
                         await Haptics.selectionAsync();
