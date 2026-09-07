@@ -31,6 +31,8 @@ export type ListRowProps = {
   chevron?: boolean;
   /** Screen-reader hint naming what the tap does next (e.g. a confirmation). */
   accessibilityHint?: string;
+  /** Selected state announced to screen readers when defined (e.g. a picked backend). */
+  selected?: boolean;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -46,6 +48,7 @@ export function ListRow({
   onLongPress,
   chevron,
   accessibilityHint,
+  selected,
   style,
 }: ListRowProps) {
   const tokens = useTokens();
@@ -70,6 +73,7 @@ export function ListRow({
       accessibilityRole={interactive ? 'button' : undefined}
       accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
       accessibilityHint={accessibilityHint}
+      accessibilityState={{ ...(selected !== undefined ? { selected } : null) }}
       style={[styles.row, style]}>
       {leading ? (
         leading

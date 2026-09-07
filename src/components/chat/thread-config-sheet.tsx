@@ -622,6 +622,7 @@ function BackendsSection({
           chevron={false}
           statusColor={healthy ? tokens.statusConnected : tokens.textTertiary}
           trailing={<Badge label={item.state ?? 'unknown'} tone={healthy ? 'success' : 'neutral'} dot={false} />}
+          selected={item.id === selectedBackendId}
           style={
             item.id === selectedBackendId
               ? { borderColor: tokens.accentWarm, borderWidth: StyleSheet.hairlineWidth * 2, borderRadius: Radius.lg }

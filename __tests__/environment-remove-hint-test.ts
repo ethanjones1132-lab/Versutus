@@ -32,9 +32,11 @@ describe('environment-actions-sheet remove hint', () => {
   test('ListRow forwards accessibilityHint to PressableScale', () => {
     // PressableScale spreads its props onto the inner AnimatedPressable,
     // so the only plumbing ListRow needs is to destructure the hint out
-    // of ListRowProps and pass it through. Pin both halves.
+    // of ListRowProps and pass it through. Pin both halves. The destructuring
+    // tail now also carries `selected` (the backend-picker selected row), so
+    // the pin names it explicitly rather than asserting hint-then-style.
     const row = readListRowSource();
-    expect(row).toMatch(/accessibilityHint,\n\s+style,\n\s*\}\s*:\s*ListRowProps/);
+    expect(row).toMatch(/accessibilityHint,\n\s+selected,\n\s+style,\n\s*\}\s*:\s*ListRowProps/);
     expect(row).toMatch(/accessibilityHint=\{accessibilityHint\}/);
   });
 
