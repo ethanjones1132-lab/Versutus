@@ -25,6 +25,7 @@ export function RoutinesPane({
   onCreate,
   onRun,
   onTogglePause,
+  onRetry,
 }: {
   jobs: RoutineJob[];
   loaded: boolean;
@@ -32,6 +33,8 @@ export function RoutinesPane({
   onCreate: (input: { title: string; prompt: string; schedule: string }) => Promise<unknown>;
   onRun: (jobId: string) => Promise<unknown>;
   onTogglePause: (jobId: string, paused: boolean) => Promise<unknown>;
+  /** Re-run the same `botJobs.list` read the surface effect runs. */
+  onRetry?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
@@ -119,6 +122,9 @@ export function RoutinesPane({
               <Skeleton width="90%" height={44} />
               <Skeleton width="76%" height={44} style={styles.gap} />
             </>
+          ) : null}
+          {!loaded && failed && onRetry ? (
+            <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
           ) : null}
           {listCopy ? (
             <Text variant="micro" color="secondary">

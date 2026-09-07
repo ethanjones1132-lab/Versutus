@@ -696,6 +696,24 @@ export function ChatScreen() {
       return { botId, ...applyRoutineRead(previous, read) };
     });
   }, []);
+  const handleRoutinesRetry = useCallback(() => {
+    if (!botSurfaceId || status !== 'connected') return;
+    const target = botSurfaceId;
+    void botJobs
+      .list()
+      .then((jobs) =>
+        setRoutineState((prev) => {
+          const previous = prev.botId === target ? prev : { ...EMPTY_ROUTINES, botId: target };
+          return { botId: target, ...applyRoutineRead(previous, { ok: true, jobs: routineJobsFromList(jobs) }) };
+        }),
+      )
+      .catch(() =>
+        setRoutineState((prev) => {
+          const previous = prev.botId === target ? prev : { ...EMPTY_ROUTINES, botId: target };
+          return { botId: target, ...applyRoutineRead(previous, { ok: false }) };
+        }),
+      );
+  }, [botSurfaceId, status, botJobs]);
   useEffect(() => {
     if (!botSurfaceId || status !== 'connected') return;
     let cancelled = false;
@@ -1250,6 +1268,7 @@ export function ChatScreen() {
             jobs={routineState.botId === surface.botId ? routineState.jobs : []}
             loaded={routineState.botId === surface.botId ? routineState.loaded : false}
             failed={routineState.botId === surface.botId ? routineState.failed : false}
+            onRetry={handleRoutinesRetry}
             onCreate={async (input) => {
               await botJobs.create({
                 name: routineName(surface.botId, input.title),
