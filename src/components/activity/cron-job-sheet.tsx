@@ -215,6 +215,7 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved }: CronJobShee
           label={showPrompt ? 'Hide prompt' : `Show prompt (${job.promptLength ?? 0} chars)`}
           variant="ghost"
           size="sm"
+          expanded={showPrompt}
           onPress={() => setShowPrompt((open) => !open)}
         />
         {showPrompt ? (
@@ -225,6 +226,7 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved }: CronJobShee
           label={showRaw ? 'Hide raw record' : 'Show raw record'}
           variant="ghost"
           size="sm"
+          expanded={showRaw}
           onPress={() => setShowRaw((open) => !open)}
         />
         {showRaw ? (
