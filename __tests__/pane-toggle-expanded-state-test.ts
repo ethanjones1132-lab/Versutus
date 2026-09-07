@@ -51,7 +51,7 @@ describe('pane toggle expanded state', () => {
 
   test('Button destructures the expanded prop', () => {
     const src = readButton();
-    expect(src).toMatch(/accessibilityHint,\n\s+expanded,\n(?:\s+busy,\n)?\}: ButtonProps\)/);
+    expect(src).toMatch(/accessibilityHint,\n\s+expanded,\n\s+busy,\n\s+selected,\n\}: ButtonProps\)/);
   });
 
   test('BotChrome passes expanded={open} on its toggle', () => {

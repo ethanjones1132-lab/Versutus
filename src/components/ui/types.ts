@@ -60,6 +60,13 @@ export type ButtonProps = {
    * never newly announces `busy`.
    */
   busy?: boolean;
+  /**
+   * Screen-reader selected state for a `Button` that toggles between two
+   * modes behind a swapped label (`'Inherit keys from default'` ->
+   * `'Empty key set'`). Passed through into `accessibilityState` only when
+   * defined, so a plain action `Button` never newly announces `selected`.
+   */
+  selected?: boolean;
 };
 
 export type TextProps = {

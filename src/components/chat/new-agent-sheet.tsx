@@ -204,6 +204,7 @@ export function NewAgentSheet({
           <Button
             label={inheritKeys ? 'Inherit keys from default' : 'Empty key set'}
             variant="ghost"
+            selected={inheritKeys}
             onPress={() => setInheritKeys((value) => !value)}
           />
         ) : null}

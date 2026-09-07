@@ -50,7 +50,7 @@ describe('group room busy state', () => {
 
   test('Button destructures the busy prop', () => {
     const src = readButton();
-    expect(src).toMatch(/expanded,\n\s+busy,\n\}: ButtonProps\)/);
+    expect(src).toMatch(/expanded,\n\s+busy,\n\s+selected,\n\}: ButtonProps\)/);
   });
 
   test('the Send button passes busy={sending}', () => {

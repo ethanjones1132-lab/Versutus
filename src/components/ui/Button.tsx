@@ -17,6 +17,7 @@ export function Button({
   accessibilityHint,
   expanded,
   busy,
+  selected,
 }: ButtonProps) {
   const tokens = useTokens();
 
@@ -34,7 +35,7 @@ export function Button({
       onPress={onPress}
       disabled={isDisabled}
       accessibilityRole="button"
-      accessibilityState={{ disabled: !!isDisabled, ...(expanded !== undefined ? { expanded } : null), ...(busy !== undefined ? { busy } : null) }}
+      accessibilityState={{ disabled: !!isDisabled, ...(expanded !== undefined ? { expanded } : null), ...(busy !== undefined ? { busy } : null), ...(selected !== undefined ? { selected } : null) }}
       accessibilityLabel={label}
       accessibilityHint={accessibilityHint}
       style={[
