@@ -162,6 +162,7 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved }: CronJobShee
             variant="ghost"
             size="sm"
             disabled={acting}
+            busy={acting}
             onPress={() => void submitRun()}
           />
           <Button
@@ -169,6 +170,7 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved }: CronJobShee
             variant="ghost"
             size="sm"
             disabled={acting}
+            busy={acting}
             onPress={() => void submitTogglePause()}
           />
           <Button
