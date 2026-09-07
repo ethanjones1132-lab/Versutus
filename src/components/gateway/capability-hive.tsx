@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
   cancelAnimation,
-  FadeIn,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -14,6 +13,7 @@ import { PressableScale, Text } from '@/components/ui';
 import { Palette, Spacing, type SemanticPalette } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
+import { entering } from '@/lib/motion/presets';
 import type { GatewayCapabilityGroup, GatewayCapabilitySnapshot } from '@/lib/gateway/types';
 
 /**
@@ -118,7 +118,7 @@ function HiveCell({
       style={styles.cellPress}
       hitSlop={4}>
       <Animated.View
-        entering={FadeIn.delay(index * 28).duration(280)}
+        entering={entering.fadeIn.delay(index * 28).duration(280)}
         style={[
           styles.cell,
           { backgroundColor: hiveColor(group.status, tokens) },
