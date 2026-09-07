@@ -456,7 +456,7 @@ function ModelsSection({
             disabled={item.available === false}
             accessibilityRole="button"
             accessibilityLabel={`Apply model ${name}`}
-            accessibilityState={{ selected: isCurrent }}
+            accessibilityState={{ selected: isCurrent, disabled: item.available === false }}
             onPress={async () => {
               await Haptics.selectionAsync();
               onSelect?.(item.id, item.providerId ?? item.provider);

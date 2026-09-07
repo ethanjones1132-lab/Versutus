@@ -17,9 +17,10 @@ function readThreadConfigSource(): string {
 // currentSessionId` (:189, driving borderColor at :209 and the Current Badge
 // at :223) and the model card binds `isCurrent = sameModelId(item.id,
 // currentDefault) || ...` (:432, driving borderColor at :450 and the Current
-// Badge at :465-466). Neither carries accessibilityState, so a screen reader
-// hears the label with no selected announcement. PressableScale spreads
-// PressableProps (which includes accessibilityState) onto its inner
+// Badge at :465-466). The session card carries selected-only state; the model
+// card carries selected + disabled (the disabled half landed after this file
+// was written — see thread-config-model-disabled-state-test.ts). PressableScale
+// spreads PressableProps (which includes accessibilityState) onto its inner
 // Pressable, so binding the existing boolean is a one-line call-site change
 // per card, mirroring the run-card.tsx:135 / gateway-capabilities.tsx:48 /
 // environment-card.tsx:53 expanded pattern with `selected` instead.
@@ -36,9 +37,11 @@ describe('Thread-config picker-card screen-reader state', () => {
   test('the model card declares accessibilityState.selected bound to isCurrent', () => {
     const src = readThreadConfigSource();
     // Anchor on the model card's unique label so the match cannot land on
-    // the session card or the section header.
+    // the session card or the section header. The state object also carries
+    // disabled (see thread-config-model-disabled-state-test.ts) so the pin
+    // allows the trailing disabled half after selected.
     expect(src).toMatch(
-      /accessibilityLabel=\{`Apply model \$\{name\}`\}[\s\S]*?accessibilityState=\{\{\s*selected:\s*isCurrent\s*\}\}/,
+      /accessibilityLabel=\{`Apply model \$\{name\}`\}[\s\S]*?accessibilityState=\{\{\s*selected:\s*isCurrent,\s*disabled:\s*item\.available === false\s*\}\}/,
     );
   });
 
