@@ -14,6 +14,7 @@ export function Button({
   size = 'md',
   disabled: isDisabled,
   style,
+  accessibilityHint,
 }: ButtonProps) {
   const tokens = useTokens();
 
@@ -33,6 +34,7 @@ export function Button({
       accessibilityRole="button"
       accessibilityState={{ disabled: !!isDisabled }}
       accessibilityLabel={label}
+      accessibilityHint={accessibilityHint}
       style={[
         styles.button,
         size === 'sm' && styles.buttonSm,

@@ -38,6 +38,15 @@ export type ButtonProps = {
   size?: ButtonSize;
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
+  /**
+   * Screen-reader hint that says what happens on tap. The `label` already
+   * names the control ("Revoke"); the hint names the consequence ("Opens a
+   * confirmation, then removes the token from the Gate") so a focus user
+   * can decide whether to tap without missing the on-tap confirmation.
+   * Pass only for destructive or otherwise surprising actions — a hint on
+   * a reversible control is noise.
+   */
+  accessibilityHint?: string;
 };
 
 export type TextProps = {

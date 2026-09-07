@@ -111,6 +111,7 @@ export function PairedDevicesPane() {
                     variant="ghost"
                     size="sm"
                     onPress={() => setRevokeTarget(device.deviceId)}
+                    accessibilityHint="Opens a confirmation, then removes this device's token from the Gate. Other paired devices keep working."
                   />
                 ) : null}
               </View>
