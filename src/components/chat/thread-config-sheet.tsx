@@ -228,6 +228,7 @@ function SessionsSection({
                   hitSlop={8}
                   accessibilityRole="button"
                   accessibilityLabel={`Delete session ${sessionListTitle(item.title)}`}
+                  accessibilityHint="Opens a confirmation, then removes this session from the gateway."
                   style={styles.deleteButton}>
                   <Icon name={{ ios: 'trash', android: 'delete', web: 'delete' }} size={14} color="textTertiary" />
                 </PressableScale>
