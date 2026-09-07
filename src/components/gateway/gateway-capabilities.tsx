@@ -45,7 +45,8 @@ export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilityS
         <Pressable
           onPress={() => setShowAll((value) => !value)}
           accessibilityRole="button"
-          accessibilityLabel={showAll ? 'Hide unsupported capabilities' : 'Show all capabilities'}>
+          accessibilityLabel={showAll ? 'Hide unsupported capabilities' : 'Show all capabilities'}
+          accessibilityState={{ expanded: showAll }}>
           <Text variant="caption" color="accentWarm" style={styles.toggle}>
             {showAll
               ? 'Hide unsupported'
