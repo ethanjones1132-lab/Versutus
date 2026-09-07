@@ -83,7 +83,7 @@ export function GatewayManagementSection() {
             key={gateway.id}
             gateway={gateway}
             isScanning={discovery.status === 'scanning'}
-            onAdd={() => void handleAddDiscovered(gateway.id)}
+            onAdd={handleAddDiscovered}
           />
         ))
       )}

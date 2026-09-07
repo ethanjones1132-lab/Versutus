@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { memo, useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, {
   Easing,
@@ -14,13 +14,21 @@ import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { DiscoveredGateway } from '@/lib/discovery/types';
 
-export function DiscoveredGatewayRow({
+/** Discovered gateway row — wrapped in `memo` so a Gate setup screen tick that
+ * does not change `gateway`, `onAdd`, or `isScanning` does not re-render this
+ * row. The row holds `useSharedValue` + `useAnimatedStyle` (Reanimated work
+ * runs on every render) and is mapped across `discovery.gateways`, so a memo
+ * boundary stops every parent tick from paying the Reanimated cost N times.
+ */
+function DiscoveredGatewayRowImpl({
   gateway,
   onAdd,
   isScanning = false,
 }: {
   gateway: DiscoveredGateway;
-  onAdd: () => void;
+  /** Add this row's gateway — the row supplies its own id, so the parent's
+   * callback can stay referentially stable across renders. */
+  onAdd: (gatewayId: string) => void;
   isScanning?: boolean;
 }) {
   const tokens = useTokens();
@@ -72,10 +80,13 @@ export function DiscoveredGatewayRow({
         </Text>
       </View>
 
-      <Button label="Add" onPress={onAdd} style={styles.addButton} />
+      <Button label="Add" onPress={() => onAdd(gateway.id)} style={styles.addButton} />
     </Card>
   );
 }
+
+export const DiscoveredGatewayRow = memo(DiscoveredGatewayRowImpl);
+DiscoveredGatewayRow.displayName = 'DiscoveredGatewayRow';
 
 const styles = StyleSheet.create({
   row: {
