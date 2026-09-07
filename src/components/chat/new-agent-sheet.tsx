@@ -215,6 +215,7 @@ export function NewAgentSheet({
         <Button
           label={busy ? (editing ? 'Saving…' : 'Creating…') : editing ? 'Save' : 'Create'}
           disabled={busy || !name.trim()}
+          busy={busy}
           onPress={() =>
             onSubmit({
               name: name.trim(),

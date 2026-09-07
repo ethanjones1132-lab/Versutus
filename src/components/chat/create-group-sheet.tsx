@@ -107,6 +107,7 @@ export function CreateGroupSheet({
             label={busy ? 'Creating…' : 'Create room'}
             variant="primary"
             disabled={busy || !validation.ok}
+            busy={busy}
             onPress={() => onCreate({ name: name.trim(), memberIds })}
           />
         </View>
