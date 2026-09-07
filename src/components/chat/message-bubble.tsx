@@ -144,6 +144,9 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
                   await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                   setReasoningUserOverride((prev) => (prev !== null ? !prev : !message.streaming));
                 }}
+                accessibilityRole="button"
+                accessibilityLabel={isReasoningExpanded ? 'Hide thinking' : 'Thinking'}
+                accessibilityState={{ expanded: isReasoningExpanded }}
                 hitSlop={CHIP_HIT_SLOP}
                 style={styles.reasoningToggle}>
                 <Text variant="caption" color="accent">
@@ -206,6 +209,9 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
             <View style={styles.rawSection}>
               <PressableScale
                 onPress={() => setRawOpen((open) => !open)}
+                accessibilityRole="button"
+                accessibilityLabel={rawOpen ? 'Hide raw' : 'Raw'}
+                accessibilityState={{ expanded: rawOpen }}
                 hitSlop={CHIP_HIT_SLOP}
                 style={styles.rawButton}>
                 <Text variant="caption" color="accent">
