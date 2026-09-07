@@ -124,12 +124,13 @@ export function ApprovalDecisionCard({
           />
         </View>
         <View style={styles.actions}>
-          <Button label="Approve" onPress={() => decide(true)} disabled={busy} style={styles.button} />
+          <Button label="Approve" onPress={() => decide(true)} disabled={busy} busy={busy} style={styles.button} />
           <Button
             label="Deny"
             variant="destructive"
             onPress={() => decide(false)}
             disabled={busy}
+            busy={busy}
             style={styles.button}
           />
         </View>
