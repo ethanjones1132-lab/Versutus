@@ -85,6 +85,7 @@ export function ProviderCard(props: ProviderCardProps) {
           onPress={() => setActionsVisible(true)}
           hitSlop={10}
           accessibilityRole="button"
+          accessibilityState={{ expanded: actionsVisible }}
           accessibilityLabel={`More actions for ${snapshot.label}`}
           style={styles.overflow}>
           <Icon name={{ ios: 'ellipsis', android: 'more_vert', web: 'more_vert' }} size={18} color="textSecondary" />
