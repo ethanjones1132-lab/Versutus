@@ -112,6 +112,8 @@ describe('cron-job-sheet remove hint', () => {
       /message=\{`\$\{job\.title \|\| job\.id\} will be removed from this gateway\. Its run history stops here\.`\}/,
     );
     expect(src).toMatch(/confirmLabel="Remove"/);
-    expect(src).toMatch(/danger\s*\n\s*onCancel=/);
+    // busy={acting} now sits between danger and onCancel (pinned by
+    // cron-job-remove-busy-state-test.ts); the sheet's own copy is unchanged.
+    expect(src).toMatch(/danger\s*\n\s*busy=\{acting\}\s*\n\s*onCancel=/);
   });
 });

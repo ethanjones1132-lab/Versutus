@@ -93,10 +93,12 @@ describe('confirm sheet busy state', () => {
   });
 
   test('no other ConfirmSheet call site passes busy', () => {
+    // cron-job-sheet.tsx is deliberately absent: its Remove sheet now
+    // carries busy={acting} (pinned by cron-job-remove-busy-state-test.ts),
+    // the named follow-up this kit half was shipped for.
     const others = [
       ['src', 'components', 'chat', 'thread-config-sheet.tsx'],
       ['src', 'components', 'chat', 'group-room-action-sheet.tsx'],
-      ['src', 'components', 'activity', 'cron-job-sheet.tsx'],
       ['src', 'components', 'gateway', 'environment-actions-sheet.tsx'],
       ['src', 'components', 'gateway', 'gateway-home-dashboard.tsx'],
       ['src', 'components', 'gateway', 'capabilities-section.tsx'],

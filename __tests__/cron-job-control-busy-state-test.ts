@@ -22,8 +22,10 @@ function readButton(): string {
 // but without a `busy` half a screen-reader user heard a flat disabled
 // label while a sighted user saw the in-flight state. The fix is a
 // one-line `busy={acting}` wiring on each, onto the `busy` prop the
-// group-room busy item added to `Button`. The Remove row stays unwired:
-// its in-flight half lives behind the confirm.
+// group-room busy item added to `Button`. The Remove confirm sheet now
+// carries the third `busy={acting}` (pinned by
+// cron-job-remove-busy-state-test.ts) since the Disband confirm shipped the
+// ConfirmSheet busy half.
 describe('cron-job control busy state', () => {
   test('the Run-now button passes busy={acting}', () => {
     const src = readSheet();
@@ -31,9 +33,14 @@ describe('cron-job control busy state', () => {
     expect(src).toContain('busy={acting}');
   });
 
-  test('the busy wiring lands exactly twice (Run-now + Pause/Resume)', () => {
+  test('the Button busy wiring lands exactly twice (Run-now + Pause/Resume)', () => {
     const src = readSheet();
-    expect(src.match(/busy=\{acting\}/g)?.length ?? 0).toBe(2);
+    // The third busy={acting} in the file lives on the Remove ConfirmSheet
+    // (pinned by cron-job-remove-busy-state-test.ts), so the count is scoped
+    // to Button blocks here.
+    const buttons = src.match(/<Button[\s\S]*?\/>/g) ?? [];
+    const wired = buttons.filter((block) => block.includes('busy={acting}'));
+    expect(wired.length).toBe(2);
   });
 
   test('the Run label ternary stays byte-identical', () => {

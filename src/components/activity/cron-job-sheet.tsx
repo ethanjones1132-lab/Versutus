@@ -192,6 +192,7 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved }: CronJobShee
           message={`${job.title || job.id} will be removed from this gateway. Its run history stops here.`}
           confirmLabel="Remove"
           danger
+          busy={acting}
           onCancel={() => setRemoveTarget(null)}
           onConfirm={() => void executeRemove()}
         />
