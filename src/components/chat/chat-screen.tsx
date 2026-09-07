@@ -714,6 +714,57 @@ export function ChatScreen() {
         }),
       );
   }, [botSurfaceId, status, botJobs]);
+  // The three routine actions that RoutinesPane takes as props must keep the
+  // same identity across re-renders so the pane's `React.memo` wrapper can
+  // hold: chat-screen ticks that do not change `surface.botId`, `botJobs`,
+  // `foldRoutineRead`, or `routineJobsFromList` leave these callbacks alone,
+  // and a memoized child renders only when its props change. The bodies are
+  // byte-identical to the inline closures they replaced — only the closure
+  // identity moves; the call graph (`botJobs.create`/`run`/`pause`/`.list()`
+  // in the same order) is unchanged. The early-return on a non-bot surface
+  // is defensive — BotChrome only renders for `surface.kind === 'bot'`, so
+  // the user-invoked path cannot hit it, but `useCallback` keeps the deps
+  // honest by keying on `botSurfaceId` (string | undefined) instead of the
+  // whole `surface` object.
+  const handleRoutineCreate = useCallback(
+    async (input: { title: string; prompt: string; schedule: string }) => {
+      if (!botSurfaceId) return;
+      const target = botSurfaceId;
+      await botJobs.create({
+        name: routineName(target, input.title),
+        prompt: input.prompt,
+        schedule: input.schedule,
+      });
+      // Create already landed; a failed re-list must not look like
+      // the Gate refused the job (that would keep the draft of a
+      // routine that exists). Last-good stays; staleness is named.
+      await botJobs
+        .list()
+        .then((jobs) =>
+          foldRoutineRead(target, { ok: true, jobs: routineJobsFromList(jobs) }),
+        )
+        .catch(() => foldRoutineRead(target, { ok: false }));
+    },
+    [botSurfaceId, botJobs, foldRoutineRead, routineJobsFromList],
+  );
+  const handleRoutineRun = useCallback(
+    async (jobId: string) => {
+      await botJobs.run(jobId);
+    },
+    [botJobs],
+  );
+  const handleRoutineTogglePause = useCallback(
+    async (jobId: string, paused: boolean) => {
+      await botJobs.pause(jobId, paused);
+      await botJobs
+        .list()
+        .then((jobs) =>
+          foldRoutineRead(botSurfaceId ?? '', { ok: true, jobs: routineJobsFromList(jobs) }),
+        )
+        .catch(() => foldRoutineRead(botSurfaceId ?? '', { ok: false }));
+    },
+    [botSurfaceId, botJobs, foldRoutineRead, routineJobsFromList],
+  );
   useEffect(() => {
     if (!botSurfaceId || status !== 'connected') return;
     let cancelled = false;
@@ -1269,34 +1320,9 @@ export function ChatScreen() {
             loaded={routineState.botId === surface.botId ? routineState.loaded : false}
             failed={routineState.botId === surface.botId ? routineState.failed : false}
             onRetry={handleRoutinesRetry}
-            onCreate={async (input) => {
-              await botJobs.create({
-                name: routineName(surface.botId, input.title),
-                prompt: input.prompt,
-                schedule: input.schedule,
-              });
-              // Create already landed; a failed re-list must not look like
-              // the Gate refused the job (that would keep the draft of a
-              // routine that exists). Last-good stays; staleness is named.
-              await botJobs
-                .list()
-                .then((jobs) =>
-                  foldRoutineRead(surface.botId, { ok: true, jobs: routineJobsFromList(jobs) }),
-                )
-                .catch(() => foldRoutineRead(surface.botId, { ok: false }));
-            }}
-            onRun={async (jobId) => {
-              await botJobs.run(jobId);
-            }}
-            onTogglePause={async (jobId, paused) => {
-              await botJobs.pause(jobId, paused);
-              await botJobs
-                .list()
-                .then((jobs) =>
-                  foldRoutineRead(surface.botId, { ok: true, jobs: routineJobsFromList(jobs) }),
-                )
-                .catch(() => foldRoutineRead(surface.botId, { ok: false }));
-            }}
+            onCreate={handleRoutineCreate}
+            onRun={handleRoutineRun}
+            onTogglePause={handleRoutineTogglePause}
           />
         </BotChrome>
       ) : toolsetsVisibleOn(surface) ? (

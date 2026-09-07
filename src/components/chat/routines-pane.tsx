@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button, ListRow, Skeleton, Text, TextField } from '@/components/ui';
@@ -18,7 +18,16 @@ import {
 
 export type { RoutineJob };
 
-export function RoutinesPane({
+/** Bot Chat routines pane — wrapped in `memo` so a chat-screen tick that does not
+ *  change `jobs`, `loaded`, `failed`, `onCreate`, `onRun`, `onTogglePause`, or
+ *  `onRetry` stops re-rendering this subtree (its seven `useState` hooks and the
+ *  `<ListRow>` rows it maps from `jobs`). Matches the pattern already shipped on
+ *  `ChatHeader` (chat-header.tsx:35,176), `ChatRoster` (chat-roster.tsx:320),
+ *  `SkillsPane` (skills-pane.tsx:14,81) and `ToolsPane` (tools-pane.tsx:14,81).
+ *  Holding this requires the parent to pass referentially-stable callbacks —
+ *  see the three `handleRoutine*` `useCallback`s in chat-screen.tsx.
+ */
+function RoutinesPaneImpl({
   jobs,
   loaded,
   failed,
@@ -174,3 +183,6 @@ const styles = StyleSheet.create({
   body: { gap: Spacing.one, paddingTop: Spacing.one },
   gap: { marginTop: Spacing.two },
 });
+
+export const RoutinesPane = memo(RoutinesPaneImpl);
+RoutinesPane.displayName = 'RoutinesPane';
