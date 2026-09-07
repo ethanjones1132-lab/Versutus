@@ -60,6 +60,9 @@ export function ToolCallCard({ toolCall }: { toolCall: ChatToolCall }) {
               await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               setDetailUserOverride((prev) => (prev !== null ? !prev : status !== 'error'));
             }}
+            accessibilityRole="button"
+            accessibilityLabel={isDetailExpanded ? 'Hide detail' : 'Detail'}
+            accessibilityState={{ expanded: isDetailExpanded }}
             hitSlop={CHIP_HIT_SLOP}
             style={styles.detailToggle}>
             <Text variant="caption" color="accent">
