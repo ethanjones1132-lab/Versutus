@@ -507,6 +507,7 @@ export function GroupRoomView({
                   hitSlop={CHIP_HIT_SLOP}
                   accessibilityRole="button"
                   accessibilityLabel="Disband room"
+                  accessibilityHint="Opens a confirmation, then removes this room from the roster and deletes its transcript. This cannot be undone."
                   style={styles.renamePill}>
                   <Icon name={{ ios: 'trash', android: 'delete', web: 'delete' }} size={12} color="textSecondary" />
                   <Text variant="micro" color="secondary">Disband</Text>
