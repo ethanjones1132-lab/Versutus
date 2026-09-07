@@ -195,6 +195,7 @@ export default function AddGatewayScreen() {
             label="Save & connect"
             onPress={() => void handleSave()}
             disabled={saving || !url.trim()}
+            busy={saving}
           />
         </Card>
         </ScrollView>
