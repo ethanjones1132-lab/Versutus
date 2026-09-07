@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
-import { Badge, Button, Card, ListRow, Skeleton, Text } from '@/components/ui';
+import { Badge, Button, Card, ConfirmSheet, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
@@ -17,12 +17,15 @@ import {
 } from '@/lib/gateway/paired-devices';
 
 /**
- * Devices that hold a token on this Gate. Read-only — revoke is a later
- * slice and needs a confirm. The token itself is never shown.
+ * Devices that hold a token on this Gate. The token itself is never shown.
+ * An active device can be revoked from a trailing button gated by a
+ * destructive ConfirmSheet that calls `device.revoke` and refreshes the
+ * list so the row drops to "revoked" without a remount.
  */
 export function PairedDevicesPane() {
   const { status, gatewayRequest, activeGateway } = useGateway();
   const [state, setState] = useState<PairedDevicesState & { gatewayId?: string }>(EMPTY_PAIRED_DEVICES);
+  const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
   const gatewayId = activeGateway?.id;
   const visible =
     status === 'connected' && !!gatewayId && pairedDevicesVisibleOn({ kind: activeGateway?.kind });
@@ -50,6 +53,21 @@ export function PairedDevicesPane() {
     }, 0);
     return () => clearTimeout(timer);
   }, [load, visible]);
+
+  const executeRevoke = useCallback(async () => {
+    const target = revokeTarget;
+    if (!target) return;
+    try {
+      await gatewayRequest('device.revoke', { deviceId: target });
+      setRevokeTarget(null);
+      void load();
+    } catch {
+      // device.revoke throws on unknown ids and scope mismatches. Close the
+      // sheet and let the next device.list read (or retry from the row)
+      // surface the unchanged state — no local optimistic mutation.
+      setRevokeTarget(null);
+    }
+  }, [gatewayRequest, load, revokeTarget]);
 
   if (!visible) return null;
 
@@ -81,16 +99,35 @@ export function PairedDevicesPane() {
             title={row.title}
             subtitle={row.subtitle || undefined}
             trailing={
-              row.revoked ? (
-                <Badge label="revoked" tone="danger" />
-              ) : (
-                <Badge label="active" tone="success" />
-              )
+              <View style={styles.trailing}>
+                {row.revoked ? (
+                  <Badge label="revoked" tone="danger" />
+                ) : (
+                  <Badge label="active" tone="success" />
+                )}
+                {!row.revoked ? (
+                  <Button
+                    label="Revoke"
+                    variant="ghost"
+                    size="sm"
+                    onPress={() => setRevokeTarget(device.deviceId)}
+                  />
+                ) : null}
+              </View>
             }
             style={styles.row}
           />
         );
       })}
+      <ConfirmSheet
+        visible={revokeTarget !== null}
+        title="Revoke device?"
+        message="This device's token will be removed from the Gate. Any other paired device keeps working."
+        confirmLabel="Revoke"
+        danger
+        onCancel={() => setRevokeTarget(null)}
+        onConfirm={executeRevoke}
+      />
     </Card>
   );
 }
@@ -99,4 +136,5 @@ const styles = StyleSheet.create({
   card: { gap: Spacing.two },
   row: { marginBottom: Spacing.one },
   gap: { marginTop: Spacing.two },
+  trailing: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
 });
