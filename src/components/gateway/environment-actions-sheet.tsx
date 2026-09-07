@@ -48,7 +48,7 @@ export function EnvironmentActionsSheet({
       <ListRow title="Run task" icon={{ ios: 'terminal', android: 'terminal', web: 'terminal' }} chevron={false} onPress={run(onRun)} />
       <ListRow title="Edit settings" icon={{ ios: 'pencil', android: 'edit', web: 'edit' }} chevron={false} onPress={run(onEdit)} />
       <Divider />
-      <ListRow title="Remove environment" icon={{ ios: 'trash', android: 'delete', web: 'delete' }} chevron={false} onPress={() => setRemoveVisible(true)} />
+      <ListRow title="Remove environment" icon={{ ios: 'trash', android: 'delete', web: 'delete' }} chevron={false} onPress={() => setRemoveVisible(true)} accessibilityHint="Opens a confirmation, then removes this environment from the Gate." />
 
       <ConfirmSheet
         visible={removeVisible}
