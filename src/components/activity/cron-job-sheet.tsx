@@ -176,6 +176,7 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved }: CronJobShee
             variant="ghost"
             size="sm"
             disabled={acting}
+            accessibilityHint="Opens a confirmation, then removes this scheduled job and stops its run history."
             onPress={() => jobId && setRemoveTarget(jobId)}
           />
         </View>
