@@ -333,6 +333,7 @@ export const ChatComposer = memo(function ChatComposer({
               disabled={isActionDisabled}
               accessibilityRole="button"
               accessibilityLabel={copy.sendLabel}
+              accessibilityState={{ disabled: isActionDisabled, busy: isStreaming }}
               onPressIn={() => {
                 // Reanimated shared value — mutable by design, not React state.
                 // eslint-disable-next-line react-hooks/immutability
