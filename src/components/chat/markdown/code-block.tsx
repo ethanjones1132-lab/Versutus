@@ -39,6 +39,7 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
           hitSlop={8}
           accessibilityRole="button"
           accessibilityLabel={copied ? 'Copied' : 'Copy code'}
+          accessibilityState={{ busy: copied }}
           style={styles.copyButton}>
           <Icon
             name={
