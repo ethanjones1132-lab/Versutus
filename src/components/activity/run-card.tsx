@@ -132,6 +132,7 @@ export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript, on
             }}
             accessibilityRole="button"
             accessibilityLabel={expanded ? 'Hide event log' : 'Show event log'}
+            accessibilityState={{ expanded }}
             style={styles.actionButton}>
             <Icon
               name={expanded ? { ios: 'chevron.up', android: 'expand_less', web: 'expand_less' } : { ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }}
