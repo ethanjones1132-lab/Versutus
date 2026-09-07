@@ -74,7 +74,7 @@ export function ProviderActionsSheet({
       <Divider />
       <ListRow title="Disconnect" icon={{ ios: 'link.badge.plus', android: 'link_off', web: 'link_off' }} chevron={false} onPress={run(onDisconnect)} />
       <ListRow title="Disable" icon={{ ios: 'pause.circle', android: 'pause_circle', web: 'pause_circle' }} chevron={false} onPress={run(onDisable)} />
-      <ListRow title="Remove provider" icon={{ ios: 'trash', android: 'delete', web: 'delete' }} chevron={false} onPress={confirmDelete} />
+      <ListRow title="Remove provider" icon={{ ios: 'trash', android: 'delete', web: 'delete' }} chevron={false} onPress={confirmDelete} accessibilityHint="Opens a confirmation, then removes this provider and its stored credential from the Gate." />
 
       <ConfirmSheet
         visible={deleteVisible}
