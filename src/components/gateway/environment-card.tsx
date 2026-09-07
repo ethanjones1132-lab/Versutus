@@ -46,6 +46,7 @@ export function EnvironmentCard({ environment, onCheck, onStart, onStop, onRun, 
         onPress={() => setPolicyExpanded((prev) => !prev)}
         hitSlop={CHIP_HIT_SLOP}
         accessibilityRole="button"
+        accessibilityState={{ expanded: policyExpanded }}
         accessibilityLabel={`Workspace policy for ${environment.label}`}
         style={{ flex: 1, minHeight: 36 }}>
         <Text variant="caption" color="tertiary" numberOfLines={policyExpanded ? undefined : 2}>
@@ -56,6 +57,7 @@ export function EnvironmentCard({ environment, onCheck, onStart, onStop, onRun, 
         onPress={() => setProvidersExpanded((prev) => !prev)}
         hitSlop={CHIP_HIT_SLOP}
         accessibilityRole="button"
+        accessibilityState={{ expanded: providersExpanded }}
         accessibilityLabel={`Bound providers for ${environment.label}`}
         style={{ flex: 1, minHeight: 36 }}>
         <Text variant="caption" color="tertiary" numberOfLines={providersExpanded ? undefined : 1}>
