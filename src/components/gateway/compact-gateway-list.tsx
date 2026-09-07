@@ -135,7 +135,7 @@ function GatewayRow({
           variant={isActive ? 'secondary' : 'primary'}
           style={styles.actionButton}
         />
-        <Button label="Remove" onPress={onDelete} variant="ghost" style={styles.deleteButton} />
+        <Button label="Remove" onPress={onDelete} variant="ghost" accessibilityHint="Opens a confirmation, then removes this saved gateway from the app." style={styles.deleteButton} />
       </View>
     </Card>
   );
