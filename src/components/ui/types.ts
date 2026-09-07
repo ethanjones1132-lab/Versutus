@@ -47,6 +47,12 @@ export type ButtonProps = {
    * a reversible control is noise.
    */
   accessibilityHint?: string;
+  /**
+   * Screen-reader expanded state for a `Button` that toggles a collapsible
+   * section. Passed through into `accessibilityState` only when defined, so
+   * a plain action `Button` never newly announces `collapsed`.
+   */
+  expanded?: boolean;
 };
 
 export type TextProps = {

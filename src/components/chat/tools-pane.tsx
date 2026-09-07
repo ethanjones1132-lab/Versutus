@@ -37,6 +37,7 @@ function ToolsPaneImpl({
         label={toolsetsToggleLabel(state, open)}
         variant="ghost"
         size="md"
+        expanded={open}
         onPress={() => setOpen((value) => !value)}
       />
       {open ? (

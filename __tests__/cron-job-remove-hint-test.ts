@@ -46,7 +46,7 @@ describe('cron-job-sheet remove hint', () => {
     // regression that destructures but forgets to forward would silently
     // drop the hint for every caller — pin both halves.
     const button = readButtonSource();
-    expect(button).toMatch(/accessibilityHint,\s*\n\s*\}\s*:\s*ButtonProps/);
+    expect(button).toMatch(/accessibilityHint,\n\s+expanded,\n\s*\}\s*:\s*ButtonProps/);
     expect(button).toMatch(/accessibilityHint=\{accessibilityHint\}/);
   });
 

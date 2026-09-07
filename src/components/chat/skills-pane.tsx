@@ -40,6 +40,7 @@ function SkillsPaneImpl({
         label={skillsToggleLabel(state, open)}
         variant="ghost"
         size="md"
+        expanded={open}
         onPress={() => setOpen((value) => !value)}
       />
       {open ? (

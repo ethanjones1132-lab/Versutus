@@ -15,6 +15,7 @@ export function BotChrome({ children }: { children: ReactNode }) {
           label={botChromeToggleLabel(open)}
           variant="ghost"
           size="sm"
+          expanded={open}
           onPress={() => setOpen((value) => !value)}
         />
       </View>
