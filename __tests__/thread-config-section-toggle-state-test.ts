@@ -108,14 +108,12 @@ describe('Thread-config section-header screen-reader state', () => {
     );
   });
 
-  test('accessibilityState appears on the section-header PressableScale and nowhere else in the file', () => {
+  test('accessibilityState on the section header stays expanded-bound while the picker cards carry selected', () => {
     const src = readThreadConfigSource();
-    // Only the section-header PressableScale carries accessibilityState.
-    // The other PressableScale blocks in the file (the session-card at
-    // :204-245 with the delete-button at :225-232, and the model-card at
-    // :445-485) are flat selection controls with no boolean state the
-    // header's pattern applies to — they must remain accessibilityRole=
-    // "button" with no accessibilityState. The exclusivity pin guards
+    // The section-header PressableScale carries accessibilityState.expanded.
+    // The session card and model card now carry accessibilityState.selected
+    // (the picker-selected item); only the session-delete button must remain
+    // accessibilityRole="button" with no accessibilityState. The exclusivity pin guards
     // against a future change that accidentally grows a state prop on the
     // wrong control (or duplicates the prop on this one). Anchor on the
     // unique `styles.sectionHeader` style to scope the match to the
@@ -130,14 +128,20 @@ describe('Thread-config section-header screen-reader state', () => {
     );
 
     // Ensure no other PressableScale block in the file carries an
-    // accessibilityState prop. The session-card (onPress of `async () =>
-    // { ... onSelect?.(item.id); }` at :214), the session-delete-button
-    // (onPress of `() => confirmDelete(item)` at :226), and the model-card
-    // (onPress of `async () => { ... onSelect?.(item.id, item.providerId
-    // ?? item.provider); }` at :457) are flat selection controls with no
-    // expansion state — they must NOT grow an accessibilityState prop.
-    // The accessibilityState prop is unique to the section-header block.
+    // accessibilityState prop beyond the two picker cards. The session-card
+    // (onPress of `async () => { ... onSelect?.(item.id); }`) and the
+    // model-card (onPress of `async () => { ... onSelect?.(item.id,
+    // item.providerId ?? item.provider); }`) now carry
+    // accessibilityState={{ selected: isCurrent }} (the picker-selected
+    // item), while the session-delete-button (onPress of
+    // `() => confirmDelete(item)`) is a flat destructive control with no
+    // boolean state — it must NOT grow an accessibilityState prop.
     const stateCount = (src.match(/accessibilityState=/g) ?? []).length;
-    expect(stateCount).toBe(1);
+    expect(stateCount).toBe(3);
+    const deleteBlock = src.match(
+      /accessibilityLabel=\{`Delete session \$\{sessionListTitle\(item\.title\)\}`\}[\s\S]*?<\/PressableScale>/,
+    )?.[0];
+    expect(deleteBlock).toBeDefined();
+    expect(deleteBlock).not.toMatch(/accessibilityState=/);
   });
 });
