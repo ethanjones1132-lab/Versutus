@@ -270,7 +270,7 @@ export function CapabilitiesSection() {
                       {instance.kind} · {instance.id}
                     </Text>
                   </Pressable>
-                  <Button label="Delete" variant="ghost" size="sm" onPress={() => confirmDelete(instance)} />
+                  <Button label="Delete" variant="ghost" size="sm" accessibilityHint="Opens a confirmation, then removes this instance from the Gate." onPress={() => confirmDelete(instance)} />
                 </View>
               ))
             )}
