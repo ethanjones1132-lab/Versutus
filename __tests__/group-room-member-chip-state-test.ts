@@ -78,13 +78,16 @@ describe('Group-room member-chip screen-reader state', () => {
     expect(src).toContain('accessibilityState={{ expanded: planExpanded }}');
   });
 
-  test('exactly two accessibilityState props exist in the file', () => {
+  test('exactly four accessibilityState props exist in the file', () => {
     const src = readGroupRoomViewSource();
-    // The room-plan toggle (expanded) plus the member chip (disabled).
-    // The Rename / Add / Disband pill PressableScale blocks in the same
-    // headActions block are flat action pills with no boolean state and
-    // must not grow one.
+    // The room-plan toggle (expanded), the member chip (disabled), and
+    // the Rename / Add pills (expanded, bound to renameVisible /
+    // addVisible). The Disband pill PressableScale block in the same
+    // headActions block is a flat fire-and-confirm action with no open
+    // state and must not grow one.
+    expect(src).toContain('accessibilityState={{ expanded: renameVisible }}');
+    expect(src).toContain('accessibilityState={{ expanded: addVisible }}');
     const count = (src.match(/accessibilityState=/g) ?? []).length;
-    expect(count).toBe(2);
+    expect(count).toBe(4);
   });
 });

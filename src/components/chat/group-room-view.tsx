@@ -483,6 +483,7 @@ export function GroupRoomView({
                   hitSlop={CHIP_HIT_SLOP}
                   accessibilityRole="button"
                   accessibilityLabel="Rename room"
+                  accessibilityState={{ expanded: renameVisible }}
                   style={styles.renamePill}>
                   <Icon name={{ ios: 'pencil', android: 'edit', web: 'edit' }} size={12} color="textSecondary" />
                   <Text variant="micro" color="secondary">Rename</Text>
@@ -497,6 +498,7 @@ export function GroupRoomView({
                     hitSlop={CHIP_HIT_SLOP}
                     accessibilityRole="button"
                     accessibilityLabel="Add members"
+                    accessibilityState={{ expanded: addVisible }}
                     style={styles.renamePill}>
                     <Icon name={{ ios: 'person.badge.plus', android: 'person-add', web: 'person-add' }} size={12} color="textSecondary" />
                     <Text variant="micro" color="secondary">Add</Text>

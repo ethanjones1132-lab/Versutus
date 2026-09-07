@@ -96,7 +96,7 @@ describe('Group-room plan-toggle screen-reader state', () => {
     expect(src).toMatch(/const \[planExpanded, setPlanExpanded\] = useState\(false\);/);
   });
 
-  test('accessibilityState appears on the room-plan toggle and the member chip, and nowhere else in the file', () => {
+  test('accessibilityState appears on the room-plan toggle, the member chip, and the Rename/Add pills, and nowhere else in the file', () => {
     const src = readGroupRoomViewSource();
     // Only the room-plan toggle PressableScale carries accessibilityState.
     // The other PressableScale blocks in the file (the Rename pill at
@@ -117,13 +117,16 @@ describe('Group-room plan-toggle screen-reader state', () => {
     );
 
     // Ensure no other PressableScale block in the file carries an
-    // accessibilityState prop beyond the two legitimate carriers: the
-    // room-plan toggle (expanded) and the member chip (disabled, added
+    // accessibilityState prop beyond the four legitimate carriers: the
+    // room-plan toggle (expanded), the member chip (disabled, added
     // after this test was written — same precedent as the iter-103
-    // Retry-pin flip). The Rename / Add / Disband pills are
-    // flat action buttons with no expansion state — they must NOT grow
+    // Retry-pin flip), and the Rename / Add pills (expanded, bound to
+    // renameVisible / addVisible). The Disband pill is a flat
+    // fire-and-confirm action with no open state — it must NOT grow
     // an accessibilityState prop.
+    expect(src).toContain('accessibilityState={{ expanded: renameVisible }}');
+    expect(src).toContain('accessibilityState={{ expanded: addVisible }}');
     const stateCount = (src.match(/accessibilityState=/g) ?? []).length;
-    expect(stateCount).toBe(2);
+    expect(stateCount).toBe(4);
   });
 });
