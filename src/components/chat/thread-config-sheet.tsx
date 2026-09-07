@@ -497,6 +497,7 @@ function ModelsSection({
           style={styles.sectionHeader}
           accessibilityRole="button"
           accessibilityLabel={`${open ? 'Collapse' : 'Expand'} ${section.title} models`}
+          accessibilityState={{ expanded: open }}
           onPress={() => toggleSection(section.key)}>
           <Icon
             name={
