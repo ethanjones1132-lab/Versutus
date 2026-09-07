@@ -53,6 +53,13 @@ export type ButtonProps = {
    * a plain action `Button` never newly announces `collapsed`.
    */
   expanded?: boolean;
+  /**
+   * Screen-reader busy state for a `Button` that runs async work behind a
+   * swapped label (`'Send'` -> `'Round running…'`). Passed through into
+   * `accessibilityState` only when defined, so a plain action `Button`
+   * never newly announces `busy`.
+   */
+  busy?: boolean;
 };
 
 export type TextProps = {

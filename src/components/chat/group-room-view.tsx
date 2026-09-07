@@ -677,6 +677,7 @@ export function GroupRoomView({
             variant="primary"
             size="md"
             disabled={sending || !draft.trim()}
+            busy={sending}
             onPress={handleSend}
           />
         </View>
@@ -758,6 +759,7 @@ export function GroupRoomView({
               label={renaming ? 'Renaming…' : 'Rename'}
               variant="primary"
               disabled={renaming || !renameDraft.trim()}
+              busy={renaming}
               onPress={submitRename}
             />
           </View>
@@ -822,6 +824,7 @@ export function GroupRoomView({
               label={adding ? 'Adding…' : 'Add to room'}
               variant="primary"
               disabled={adding || addSelection.length === 0}
+              busy={adding}
               onPress={submitAdd}
             />
           </View>

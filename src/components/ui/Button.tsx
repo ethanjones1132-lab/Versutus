@@ -16,6 +16,7 @@ export function Button({
   style,
   accessibilityHint,
   expanded,
+  busy,
 }: ButtonProps) {
   const tokens = useTokens();
 
@@ -33,7 +34,7 @@ export function Button({
       onPress={onPress}
       disabled={isDisabled}
       accessibilityRole="button"
-      accessibilityState={{ disabled: !!isDisabled, ...(expanded !== undefined ? { expanded } : null) }}
+      accessibilityState={{ disabled: !!isDisabled, ...(expanded !== undefined ? { expanded } : null), ...(busy !== undefined ? { busy } : null) }}
       accessibilityLabel={label}
       accessibilityHint={accessibilityHint}
       style={[
