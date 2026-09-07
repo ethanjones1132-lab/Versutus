@@ -37,6 +37,15 @@ export type RunCardProps = {
    * Optional, so the live card stays byte-identical with the previous shape.
    */
   onOpenTranscript?: (runId: string) => void;
+  /**
+   * Re-run a failed / cancelled / unresolved run with the same prompt. Hidden
+   * on live runs and on completed runs (an idempotent retry would just redo
+   * finished work) and on runs whose prompt is empty or whitespace (there is
+   * nothing to re-send). Mirrors the Activity "Start a run" card, which routes
+   * through the `/run` slash command, so a Retry lands on the same code path
+   * the operator reaches from chat.
+   */
+  onRetry?: (prompt: string) => void;
 };
 
 /** Ticking elapsed label for a live run; the only per-second re-render in the card. */
@@ -50,7 +59,7 @@ function LiveElapsed({ startedAt }: { startedAt: number }) {
 }
 
 /** Live run monitor card: status, elapsed, latest event, expandable event log. */
-export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript }: RunCardProps) {
+export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript, onRetry }: RunCardProps) {
   const tokens = useTokens();
   const [expanded, setExpanded] = useState(false);
   const live = run.status === 'running' || run.status === 'waiting-approval';
@@ -165,6 +174,25 @@ export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript }: 
             />
             <Text variant="caption" color="accent">
               View transcript
+            </Text>
+          </PressableScale>
+        ) : null}
+        {!live && onRetry && run.status !== 'complete' && run.prompt.trim() ? (
+          <PressableScale
+            onPress={async () => {
+              await haptics.selection();
+              onRetry(run.prompt);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Retry run"
+            style={styles.actionButton}>
+            <Icon
+              name={{ ios: 'arrow.clockwise', android: 'refresh', web: 'refresh' }}
+              size={12}
+              color="accent"
+            />
+            <Text variant="caption" color="accent">
+              Retry run
             </Text>
           </PressableScale>
         ) : null}

@@ -141,7 +141,7 @@ describe('agentic-run transcript wiring', () => {
     // new View transcript handler.
     const screen = readSource('src', 'app', '(tabs)', 'activity.tsx');
     expect(screen).toMatch(
-      /case 'finished':\s*return \([\s\S]*?<RunCard\s+run=\{item\.run\}\s+onOpenTranscript=\{setOpenAgenticRunId\}\s+\/>/,
+      /case 'finished':\s*return \([\s\S]*?<RunCard\s+run=\{item\.run\}\s+onOpenTranscript=\{setOpenAgenticRunId\}/,
     );
     // Live cards keep the original shape — no onOpenTranscript passed.
     expect(screen).toMatch(/case 'active':\s*return <RunCard run=\{item\.run\} onStop=\{stopActivityRun\} \/>/);

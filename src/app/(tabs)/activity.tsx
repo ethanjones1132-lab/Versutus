@@ -82,6 +82,21 @@ export default function ActivityScreen() {
     }
   };
 
+  // A failed / cancelled / unresolved run card surfaces a "Retry run" button
+  // that re-runs the same prompt through the `/run` slash command, the same
+  // path the Start-a-run card uses. No confirmation: the slash command is
+  // `danger: 'safe'` (dashboard.ts:600) so re-running is the same kind of
+  // action as starting a new run from chat — the activity card just skips the
+  // intermediate step of re-pasting the prompt.
+  const retryRun = useCallback(
+    (run: ActivityRun) => {
+      const prompt = run.prompt.trim();
+      if (!prompt) return;
+      void sendChatInput(`/run ${prompt}`);
+    },
+    [sendChatInput],
+  );
+
   const onRefresh = async () => {
     setRefreshing(true);
     const started = Date.now();
@@ -124,11 +139,12 @@ export default function ActivityScreen() {
             <RunCard
               run={item.run}
               onOpenTranscript={setOpenAgenticRunId}
+              onRetry={(prompt) => retryRun({ ...item.run, prompt })}
             />
           );
       }
     },
-    [stopActivityRun],
+    [stopActivityRun, retryRun],
   );
 
   const listHeader = (
