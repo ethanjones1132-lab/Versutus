@@ -709,6 +709,7 @@ export function GroupRoomView({
         title="Disband room"
         message={`${group.name} leaves the roster and its transcript is deleted from the Gate. This cannot be undone.`}
         confirmLabel={disbanding ? 'Disbanding…' : 'Disband'}
+        busy={disbanding}
         onCancel={() => {
           if (disbanding) return;
           setDisbandVisible(false);

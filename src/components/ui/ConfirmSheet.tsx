@@ -13,6 +13,13 @@ export type ConfirmSheetProps = {
   message: string;
   confirmLabel: string;
   danger?: boolean;
+  /**
+   * Screen-reader busy state for the confirm Button while the confirmed
+   * action is in flight (e.g. `'Disband'` -> `'Disbanding…'`). Passed
+   * through into `accessibilityState` only when defined, so a plain
+   * confirm never newly announces `busy`.
+   */
+  busy?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 };
@@ -23,6 +30,7 @@ export function ConfirmSheet({
   message,
   confirmLabel,
   danger = true,
+  busy,
   onCancel,
   onConfirm,
 }: ConfirmSheetProps) {
@@ -43,6 +51,7 @@ export function ConfirmSheet({
           <Button
             label={confirmLabel}
             variant={danger ? 'primary' : 'secondary'}
+            busy={busy}
             onPress={() => {
               void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
               onConfirm();

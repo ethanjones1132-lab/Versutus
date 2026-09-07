@@ -89,11 +89,13 @@ describe('group room busy state', () => {
     expect(src).toContain('disabled={adding || addSelection.length === 0}');
   });
 
-  test('the Disband ConfirmSheet stays byte-identical and carries no busy', () => {
+  test('the Disband confirmLabel stays byte-identical and now announces busy', () => {
     const src = readRoom();
-    // `disbanding` lives on the ConfirmSheet confirmLabel, not on a Button.
+    // `disbanding` lived only on the ConfirmSheet confirmLabel until the
+    // ConfirmSheet busy item landed; it now also reaches the confirm Button
+    // as `busy={disbanding}` via the new ConfirmSheet `busy` prop.
     expect(src).toContain("confirmLabel={disbanding ? 'Disbanding…' : 'Disband'}");
-    expect(src).not.toContain('busy={disbanding}');
+    expect(src).toContain('busy={disbanding}');
   });
 
   test('Button.ios.tsx stays untouched with no busy half', () => {
