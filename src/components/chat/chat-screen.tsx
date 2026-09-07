@@ -1091,6 +1091,7 @@ export function ChatScreen() {
         onBackendPress={surface.kind === 'configurable' && backends.length > 0 ? handleHeaderBackendPress : undefined}
         onRosterPress={surface.kind === 'roster' ? undefined : handleHeaderRosterPress}
         backendsExpanded={backendPickerVisible}
+        overflowExpanded={overflowVisible}
       />
 
       <NewAgentSheet

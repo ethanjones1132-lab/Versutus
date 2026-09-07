@@ -80,15 +80,14 @@ describe('Chat header backend title screen-reader state', () => {
     );
   });
 
-  test('accessibilityState appears on the backend-title PressableScale and is not duplicated on surrounding controls', () => {
+  test('accessibilityState appears on the backend-title and overflow PressableScales and is not duplicated on surrounding controls', () => {
     const src = readChatHeaderSource();
-    // Only the backend-title PressableScale carries an accessibilityState
-    // prop. The other PressableScale blocks in the file (Back to roster at
-    // :75-87 and Chat options at :126-139) are flat navigation buttons
-    // with no state to announce and must remain accessibilityRole="button"
-    // with no accessibilityState. The exclusivity pin guards against a
-    // future change that accidentally grows a state prop on the wrong
-    // button.
+    // The backend-title PressableScale and the Chat-options overflow
+    // PressableScale carry an accessibilityState prop. The Back to roster
+    // block at :78-91 is a flat navigation button with no state to announce
+    // and must remain accessibilityRole="button" with no accessibilityState.
+    // The exclusivity pin guards against a future change that accidentally
+    // grows a state prop on the wrong button.
     const backendBlock = src.match(
       /onPress=\{onBackendPress\}[\s\S]*?<\/PressableScale>/,
     )?.[0];
@@ -97,13 +96,12 @@ describe('Chat header backend title screen-reader state', () => {
       /accessibilityState=\{\{\s*disabled:\s*!onBackendPress \|\| !backendLabel,\s*expanded:\s*backendsExpanded \?\? false\s*\}\}/,
     );
 
-    // Ensure no other PressableScale in the file carries the same state
-    // tuple (the Back-to-roster and Chat-options buttons must NOT grow an
-    // accessibilityState prop).
+    // Ensure only the backend title and the overflow carry a state tuple
+    // (the Back-to-roster button must NOT grow an accessibilityState prop).
     const allPressables = src.match(/<PressableScale[\s\S]*?\/>/g) ?? [];
     const stateCarriers = allPressables.filter((p) =>
       /accessibilityState=\{\{/.test(p),
     );
-    expect(stateCarriers).toHaveLength(1);
+    expect(stateCarriers).toHaveLength(2);
   });
 });

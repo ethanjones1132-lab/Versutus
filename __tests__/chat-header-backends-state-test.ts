@@ -70,21 +70,24 @@ describe('Chat header backend picker expanded state', () => {
     expect(src).toMatch(/<ChatHeader[\s\S]*?backendsExpanded=\{backendPickerVisible\}[\s\S]*?\/>/);
   });
 
-  test('the expanded state lives only on the backend title, never on the overflow or back buttons', () => {
+  test('the expanded state lives on the backend title and the overflow, never on the back button', () => {
     const src = readChatHeaderSource();
     const allPressables = src.match(/<PressableScale[\s\S]*?\/>/g) ?? [];
     const stateCarriers = allPressables.filter((p) =>
       /accessibilityState=\{\{/.test(p),
     );
-    // Backend title only: Back-to-roster (:75-87) and Chat-options overflow
-    // (:127-140) are flat navigation buttons with no section to announce.
-    expect(stateCarriers).toHaveLength(1);
+    // Backend title + Chat-options overflow: Back-to-roster (:78-91) is a
+    // flat navigation button with no sheet to announce.
+    expect(stateCarriers).toHaveLength(2);
     expect(stateCarriers[0]).toMatch(/onPress=\{onBackendPress\}/);
+    expect(stateCarriers[1]).toMatch(/onPress=\{onOverflowPress\}/);
     const overflowBlock = src.match(
       /accessibilityLabel="Chat options"[\s\S]*?\/>/,
     )?.[0];
     expect(overflowBlock).toBeDefined();
-    expect(overflowBlock).not.toMatch(/accessibilityState/);
+    expect(overflowBlock).toMatch(
+      /accessibilityState=\{\{\s*expanded:\s*overflowExpanded \?\? false\s*\}\}/,
+    );
     const backBlock = src.match(
       /accessibilityLabel="Back to roster"[\s\S]*?\/>/,
     )?.[0];

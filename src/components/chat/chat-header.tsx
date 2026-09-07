@@ -31,6 +31,8 @@ export type ChatHeaderProps = {
   onRosterPress?: () => void;
   /** True while the backends section of the thread config sheet is open. */
   backendsExpanded?: boolean;
+  /** True while the chat overflow sheet is open. */
+  overflowExpanded?: boolean;
 };
 
 /** Slim contextual chat header: orb, gateway, quick model/session chips, overflow. */
@@ -49,6 +51,7 @@ function ChatHeaderImpl({
   onBackendPress,
   onRosterPress,
   backendsExpanded,
+  overflowExpanded,
 }: ChatHeaderProps) {
   const tokens = useTokens();
   const { width: windowWidth, fontScale } = useWindowDimensions();
@@ -133,6 +136,7 @@ function ChatHeaderImpl({
       hitSlop={10}
       accessibilityRole="button"
       accessibilityLabel="Chat options"
+      accessibilityState={{ expanded: overflowExpanded ?? false }}
       style={styles.overflow}>
       <Icon
         name={{ ios: 'ellipsis', android: 'more_vert', web: 'more_vert' }}
