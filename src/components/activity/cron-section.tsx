@@ -178,6 +178,7 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
       <Button
         label={creating ? 'Adding…' : 'Add'}
         disabled={creating || !canCreateGatewayJob({ title, prompt, schedule })}
+        busy={creating}
         onPress={submitCreate}
       />
 
