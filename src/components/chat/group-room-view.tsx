@@ -462,6 +462,7 @@ export function GroupRoomView({
                 onPress={() => setPlanExpanded((prev) => !prev)}
                 accessibilityRole="button"
                 accessibilityLabel={planExpanded ? 'Collapse room plan' : 'Show full room plan'}
+                accessibilityState={{ expanded: planExpanded }}
                 style={styles.roomPlanTarget}>
                 <Text variant="caption" color="secondary" numberOfLines={planExpanded ? undefined : 1}>
                   {describeRoomPlan({
