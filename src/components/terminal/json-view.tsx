@@ -113,6 +113,7 @@ function JsonTreeRowView({
       <Pressable
         onPress={() => onToggle(row.path)}
         accessibilityRole="button"
+        accessibilityState={{ expanded: row.open }}
         style={[styles.row, { paddingLeft: rowIndent(row) }]}>
         <Text variant="mono" style={[styles.text, { color: tokens.textTertiary }]}>
           {row.chevron}
