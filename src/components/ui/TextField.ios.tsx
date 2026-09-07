@@ -96,6 +96,7 @@ export function TextField({
         },
         style,
       ]}
+      accessibilityState={{ disabled: !editable }}
       accessibilityLabel={
         accessibilityLabel ??
         (validationState === 'invalid'

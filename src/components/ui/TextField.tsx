@@ -65,6 +65,7 @@ export function TextField({
       onKeyPress={onKeyPress}
       onSubmitEditing={onSubmitEditing}
       returnKeyType={returnKeyType}
+      accessibilityState={{ disabled: !editable }}
       accessibilityLabel={
         accessibilityLabel ??
         (validationState === 'invalid'
