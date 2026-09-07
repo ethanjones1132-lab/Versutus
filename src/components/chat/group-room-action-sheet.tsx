@@ -245,6 +245,7 @@ export function GroupRoomActionSheet({
                 label={removingBusy ? 'Removing…' : 'Remove from room'}
                 variant="primary"
                 disabled={removingBusy || !removeSelection}
+                busy={removingBusy}
                 onPress={submitRemove}
               />
             </View>
@@ -292,6 +293,7 @@ export function GroupRoomActionSheet({
                 label={addingBusy ? 'Adding…' : 'Add to room'}
                 variant="primary"
                 disabled={addingBusy || addSelection.length === 0}
+                busy={addingBusy}
                 onPress={submitAdd}
               />
             </View>
@@ -328,6 +330,7 @@ export function GroupRoomActionSheet({
                 label={renamingBusy ? 'Renaming…' : 'Rename'}
                 variant="primary"
                 disabled={renamingBusy || !renameDraft.trim()}
+                busy={renamingBusy}
                 onPress={submitRename}
               />
             </View>
