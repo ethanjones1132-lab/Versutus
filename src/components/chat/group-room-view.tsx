@@ -535,6 +535,7 @@ export function GroupRoomView({
                     disabled={!evictable}
                     hitSlop={evictable ? CHIP_HIT_SLOP : undefined}
                     accessibilityRole="button"
+                    accessibilityState={{ disabled: !evictable }}
                     accessibilityLabel={
                       evictable
                         ? deadMemberIds.includes(memberId)
