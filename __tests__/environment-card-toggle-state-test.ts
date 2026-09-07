@@ -104,14 +104,14 @@ describe('EnvironmentCard toggle screen-reader state', () => {
     );
   });
 
-  test('accessibilityState appears on both toggle PressableScale blocks and not on the overflow button', () => {
+  test('the overflow button now announces its sheet state while the toggles keep theirs', () => {
     const src = readEnvironmentCardSource();
-    // Only the workspace-policy and bound-providers PressableScale blocks
-    // carry an accessibilityState prop. The More-actions overflow at :78-85
-    // is a flat navigation button with no expansion state to announce and
-    // must remain accessibilityRole="button" with no accessibilityState.
+    // The workspace-policy and bound-providers PressableScale blocks carry
+    // an accessibilityState prop bound to their own toggle booleans, and the
+    // More-actions overflow now carries one bound to actionsVisible — the
+    // boolean that already drives visible={actionsVisible} on the sheet.
     // The exclusivity pin guards against a future change that accidentally
-    // grows a state prop on the wrong button.
+    // grows a state prop on the wrong button or rebinds one.
     const workspacePolicyBlock = src.match(
       /onPress=\{\(\) => setPolicyExpanded\([\s\S]*?<\/PressableScale>/,
     )?.[0];
@@ -129,12 +129,14 @@ describe('EnvironmentCard toggle screen-reader state', () => {
     );
 
     // The More-actions overflow PressableScale (the third <PressableScale> in
-    // the file) must not carry accessibilityState.
+    // the file) announces the sheet it opens.
     const overflowBlock = src.match(
       /onPress=\{\(\) => setActionsVisible\(true\)[\s\S]*?<\/PressableScale>/,
     )?.[0];
     expect(overflowBlock).toBeDefined();
-    expect(overflowBlock).not.toMatch(/accessibilityState=/);
+    expect(overflowBlock).toMatch(
+      /accessibilityState=\{\{\s*expanded:\s*actionsVisible\s*\}\}/,
+    );
   });
 
   test('both PressableScale blocks keep hitSlop={CHIP_HIT_SLOP} byte-identical', () => {

@@ -81,6 +81,7 @@ export function EnvironmentCard({ environment, onCheck, onStart, onStop, onRun, 
           onPress={() => setActionsVisible(true)}
           hitSlop={10}
           accessibilityRole="button"
+          accessibilityState={{ expanded: actionsVisible }}
           accessibilityLabel={`More actions for ${environment.label}`}
           style={styles.overflow}>
           <Icon name={{ ios: 'ellipsis', android: 'more_vert', web: 'more_vert' }} size={18} color="textSecondary" />
