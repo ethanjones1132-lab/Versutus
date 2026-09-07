@@ -114,6 +114,7 @@ function HiveCell({
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
+      accessibilityState={{ selected }}
       accessibilityLabel={`${group.label} — ${group.status}`}
       style={styles.cellPress}
       hitSlop={4}>
