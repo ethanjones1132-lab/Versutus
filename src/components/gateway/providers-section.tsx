@@ -153,6 +153,27 @@ export function ProvidersSection() {
 
   const canRegister = status === 'connected' && profiles.length > 0;
 
+  /**
+   * Rename a provider's label on the Gate. The trimmed value is what reaches
+   * `providers.update` -- the schema rejects empty strings and the Gate strips
+   * nothing, so the phone is the right place to refuse whitespace the operator
+   * could not see. The id stays in the path (not the patch); the Gate uses it
+   * to look up the stored credential at `provider/${id}/api-key`, and a
+   * renamed id would orphan the credential under a path the Gate cannot read.
+   */
+  const handleRename = useCallback(
+    async (snapshotId: string, nextLabel: string) => {
+      const trimmed = nextLabel.trim();
+      if (!trimmed) return;
+      try {
+        await client.update(snapshotId, { label: trimmed });
+      } finally {
+        await load();
+      }
+    },
+    [client, load],
+  );
+
   return (
     <>
       {error ? (
@@ -228,6 +249,7 @@ export function ProvidersSection() {
             })();
           }}
           onEnable={() => void client.update(snapshot.id, { enabled: true }).then(load)}
+          onRename={(nextLabel) => handleRename(snapshot.id, nextLabel)}
         />
       ))}
 

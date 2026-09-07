@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { ProviderRenameSheet } from '@/components/gateway/provider-rename-sheet';
 import { BaseSheet, ConfirmSheet, Divider, ListRow } from '@/components/ui';
 
 export type ProviderActionsSheetProps = {
@@ -13,6 +14,13 @@ export type ProviderActionsSheetProps = {
   onDisconnect: () => void;
   onDisable: () => void;
   onDelete: () => void;
+  /**
+   * Submit a renamed label to the Gate. The action sheet does not know how
+   * the rename is implemented -- the parent sends `providers.update({id, label})`
+   * and reloads -- so the operator's typed value is the only argument that
+   * crosses this boundary.
+   */
+  onRename: (nextLabel: string) => Promise<void> | void;
 };
 
 export function ProviderActionsSheet({
@@ -26,8 +34,10 @@ export function ProviderActionsSheet({
   onDisconnect,
   onDisable,
   onDelete,
+  onRename,
 }: ProviderActionsSheetProps) {
   const [deleteVisible, setDeleteVisible] = useState(false);
+  const [renameVisible, setRenameVisible] = useState(false);
 
   if (!visible) return null;
 
@@ -35,6 +45,14 @@ export function ProviderActionsSheet({
     action();
     onClose();
   };
+
+  function openRename() {
+    setRenameVisible(true);
+  }
+
+  function closeRename() {
+    setRenameVisible(false);
+  }
 
   function confirmDelete() {
     setDeleteVisible(true);
@@ -48,6 +66,7 @@ export function ProviderActionsSheet({
 
   return (
     <BaseSheet visible={visible} eyebrow="PROVIDER" title={label} onClose={onClose} closeLabel="Dismiss">
+      <ListRow title="Rename" icon={{ ios: 'pencil', android: 'edit', web: 'edit' }} chevron={false} onPress={openRename} />
       <ListRow title="Set key" icon={{ ios: 'key', android: 'key', web: 'key' }} chevron={false} onPress={run(onSetKey)} />
       <ListRow title="Authorize" icon={{ ios: 'person.badge.key', android: 'lock_open', web: 'lock_open' }} chevron={false} onPress={run(onAuthorize)} />
       <ListRow title="Check readiness" icon={{ ios: 'stethoscope', android: 'health_and_safety', web: 'health_and_safety' }} chevron={false} onPress={run(onCheck)} />
@@ -66,6 +85,14 @@ export function ProviderActionsSheet({
         onCancel={() => setDeleteVisible(false)}
         onConfirm={executeDelete}
       />
+
+      {renameVisible ? (
+        <ProviderRenameSheet
+          label={label}
+          onSubmit={onRename}
+          onClose={closeRename}
+        />
+      ) : null}
     </BaseSheet>
   );
 }

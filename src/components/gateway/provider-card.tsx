@@ -21,6 +21,7 @@ export type ProviderCardProps = {
   onSetKey: () => void;
   onAuthorize: () => void;
   onEnable: () => void;
+  onRename: (nextLabel: string) => Promise<void> | void;
 };
 
 export function ProviderCard(props: ProviderCardProps) {
@@ -101,6 +102,7 @@ export function ProviderCard(props: ProviderCardProps) {
         onDisconnect={props.onDisconnect}
         onDisable={props.onDisable}
         onDelete={props.onDelete}
+        onRename={props.onRename}
       />
     </Card>
   );
