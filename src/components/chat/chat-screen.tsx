@@ -1469,6 +1469,7 @@ export function ChatScreen() {
                   variant="ghost"
                   size="md"
                   disabled={loadingEarlierHistory}
+                  busy={loadingEarlierHistory}
                   onPress={() => void loadEarlierMessages()}
                 />
               </View>
