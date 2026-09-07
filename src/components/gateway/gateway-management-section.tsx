@@ -59,7 +59,7 @@ export function GatewayManagementSection() {
           </Text>
           <Text variant="headline">Nearby gateways</Text>
         </View>
-        <Pressable onPress={discovery.rescan} accessibilityRole="button">
+        <Pressable onPress={discovery.rescan} accessibilityRole="button" accessibilityState={{ busy: discovery.status === 'scanning' }}>
           <Text variant="link" color="accent">
             {discovery.status === 'scanning' ? 'Scanning…' : 'Rescan'}
           </Text>
