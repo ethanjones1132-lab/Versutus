@@ -63,6 +63,11 @@ import {
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
 import { formatRunFailure, modelSubstitutionNote, shouldShowModelSubstitution } from '@/lib/gateway/run-failures';
 import { resolveDefaultBackend } from '@/lib/gateway/backend-defaults';
+import {
+  decideEnvironmentProbe,
+  environmentProbeFailureText,
+  probeEnvironmentLifecycle,
+} from '@/lib/gateway/environment-probe';
 import { applyModelOverride, effectiveModel, modelSwitchAnnouncement, resolveSendModel, shouldReleaseSessionForModel, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   buildEarlyProbeUrls,
@@ -580,6 +585,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // Bot switch would re-run the effects that depend on their identity.
   const selectedBackendIdRef = useRef<string | undefined>(undefined);
   const selectedBotIdRef = useRef<string | undefined>(undefined);
+  // Id already probed for this activation. Cleared when backends disappear
+  // so a reconnect re-probes the same backend once, not on every render.
+  const lastProbedBackendRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     selectedBackendIdRef.current = selectedBackendId;
   }, [selectedBackendId]);
@@ -1565,46 +1573,66 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * Deliberately lighter than selectBackend: there is no thread to tear down
    * on first adoption, and clearing messages here would fight the history
    * reload the connect path is already running.
+   *
+   * The environment probe is not part of adoption. It fires whenever a
+   * backend becomes the active one — first adoption (once selectedBackendId
+   * lands), reconnect after the manifest re-lands, or an explicit switch —
+   * so the setup card reads "ready" rather than staying "stopped" after
+   * the first connect. Chat never needed it, so the probe is deferred and
+   * its failure is named without blocking the connection.
    */
   useEffect(() => {
-    if (selectedBackendId || backends.length === 0) return undefined;
-    const resolved = resolveDefaultBackend(backends, activeGatewayRef.current?.backendId);
-    if (!resolved) return undefined;
+    if (!selectedBackendId && backends.length > 0) {
+      const resolved = resolveDefaultBackend(backends, activeGatewayRef.current?.backendId);
+      if (!resolved) return undefined;
 
-    // Deferred a tick like every other loader here: writing state straight
-    // from an effect body trips react-hooks/set-state-in-effect.
+      // Deferred a tick like every other loader here: writing state straight
+      // from an effect body trips react-hooks/set-state-in-effect.
+      const timer = setTimeout(() => {
+        const client = clientRef.current as (PortalClient & { setBackendId?: (id?: string) => void }) | null;
+        client?.setBackendId?.(resolved);
+        setSelectedBackendId(resolved);
+
+        const gateway = activeGatewayRef.current;
+        if (gateway && gateway.backendId !== resolved) {
+          const updated = { ...gateway, backendId: resolved };
+          setActiveGateway(updated);
+          void upsertGateway(updated).then(setGateways);
+        }
+
+        // The connect path already loaded history, but it did so before this
+        // backend existed — an unscoped /v1/sessions resolves to whichever
+        // environment the Gate picks by capability (claude-local here), so the
+        // thread would show one backend's sessions while sends went to another.
+        // Drop any session that earlier load pinned — it was resolved without
+        // this scope and carries the wrong environment's immutable model pin —
+        // then reload so the thread re-resolves under the adopted backend.
+        sessionIdRef.current = undefined;
+        if (gateway) void reloadHistoryFor(gateway);
+      }, 0);
+      return () => clearTimeout(timer);
+    }
+
+    const decision = decideEnvironmentProbe({
+      backendId: selectedBackendId,
+      lastProbedId: lastProbedBackendRef.current,
+      backendsAvailable: backends.length > 0,
+      connected: status === 'connected',
+    });
+    if (!decision.probeId) {
+      lastProbedBackendRef.current = decision.lastProbedId;
+      return undefined;
+    }
+
+    const probeId = decision.probeId;
     const timer = setTimeout(() => {
-      const client = clientRef.current as (PortalClient & { setBackendId?: (id?: string) => void }) | null;
-      client?.setBackendId?.(resolved);
-      setSelectedBackendId(resolved);
-
-      const gateway = activeGatewayRef.current;
-      if (gateway && gateway.backendId !== resolved) {
-        const updated = { ...gateway, backendId: resolved };
-        setActiveGateway(updated);
-        void upsertGateway(updated).then(setGateways);
-      }
-
-      // Probe the environment so its card reads "ready" rather than "stopped".
-      // This is what the operator was pressing Start for: the Gate boots every
-      // environment as stopped until something probes it, and lifecycle.start
-      // IS that probe (supervisor.start === check). Chat never needed it —
-      // sessions create fine against a stopped environment — so this is
-      // best-effort and its failure must not block the connection.
-      void gatewayRequest('environments.lifecycle.start', { id: resolved }).catch(() => undefined);
-
-      // The connect path already loaded history, but it did so before this
-      // backend existed — an unscoped /v1/sessions resolves to whichever
-      // environment the Gate picks by capability (claude-local here), so the
-      // thread would show one backend's sessions while sends went to another.
-      // Drop any session that earlier load pinned — it was resolved without
-      // this scope and carries the wrong environment's immutable model pin —
-      // then reload so the thread re-resolves under the adopted backend.
-      sessionIdRef.current = undefined;
-      if (gateway) void reloadHistoryFor(gateway);
+      lastProbedBackendRef.current = decision.lastProbedId;
+      void probeEnvironmentLifecycle(gatewayRequest, probeId).then((result) => {
+        if (!result.ok) setLastError(environmentProbeFailureText(probeId, result.error));
+      });
     }, 0);
     return () => clearTimeout(timer);
-  }, [backends, gatewayRequest, reloadHistoryFor, selectedBackendId]);
+  }, [backends, gatewayRequest, reloadHistoryFor, selectedBackendId, status]);
 
 
   const runAgentCommand = useCallback(
