@@ -627,7 +627,9 @@ export function ChatScreen() {
       const idx = current.findIndex((m) => m.id === message.id);
       const previousUser = current.slice(0, idx).reverse().find((m) => m.role === 'user');
       if (previousUser?.text.trim()) {
+        pinnedRef.current = true;
         void sendChatInput(previousUser.text.trim(), { skills: skillsState.skills });
+        requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
       }
     },
     [sendChatInput, skillsState.skills],
