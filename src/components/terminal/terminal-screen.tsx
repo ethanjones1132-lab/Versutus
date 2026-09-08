@@ -245,7 +245,7 @@ export function TerminalScreen() {
         <TerminalModePicker mode={mode} onModeChange={setMode} />
       </View>
 
-      {terminalError && shellReady ? (
+      {terminalError && shellReady && mode === 'shell' ? (
         <View style={styles.bannerWrap}>
           <ErrorCard
             cause={terminalError}
