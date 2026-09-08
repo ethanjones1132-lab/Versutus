@@ -253,6 +253,7 @@ export function ChatScreen() {
     selectSession,
     sessionList,
     sessionListError,
+    sessionListLoaded,
     sessionListHasOlder,
     loadingOlderSessions,
     loadOlderSessions,
@@ -1660,6 +1661,7 @@ export function ChatScreen() {
         }}
         sessions={sessions}
         sessionsError={sessionListError}
+        sessionsLoaded={sessionListLoaded}
         currentSessionId={currentSessionId}
         onSelectSession={selectSession}
         onRefreshSessions={() => void openSessionSelector()}

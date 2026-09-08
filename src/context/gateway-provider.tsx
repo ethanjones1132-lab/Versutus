@@ -40,6 +40,7 @@ import { liveSessionId, pinLiveSession, resolveResumeSession } from '@/lib/gatew
 import { threadSwitchFailureText, validateThreadSwitch } from '@/lib/gateway/thread-switch';
 import {
   applySessionListRead,
+  beginSessionListRead,
   emptySessionList,
   nextSessionListLimit,
   sessionListCopy,
@@ -331,6 +332,8 @@ type GatewayContextValue = {
   sessionList: any[];
   /** Set when the last session-list read failed. Empty is not the same fact. */
   sessionListError?: string;
+  /** True once a session read has landed. Empty before it is not "no sessions". */
+  sessionListLoaded: boolean;
   currentSessionId?: string;
   /** True while session history is being (re)loaded — drives chat skeletons. */
   historyLoading: boolean;
@@ -655,6 +658,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [sessionSelector, setSessionSelector] = useState<{ visible: boolean }>({ visible: false });
   // No offset/cursor on the session endpoints — "show older" re-reads with a
   // wider limit, the same pattern history uses for "load earlier".
+  /** Newest open wins: a superseded read must not overwrite a fresher one. */
+  const sessionReadSeqRef = useRef(0);
+  const modelReadSeqRef = useRef(0);
   const sessionListLimitRef = useRef(SESSION_LIST_PAGE_SIZE);
   const [sessionListHasOlder, setSessionListHasOlder] = useState(false);
   const [loadingOlderSessions, setLoadingOlderSessions] = useState(false);
@@ -2418,39 +2424,68 @@ const response = await executeGatewaySlashCommand(trimmed, {
     })();
   }, [isCommandRunning, isSending, persistOfflineQueue, sendChatInput, status]);
 
+  /**
+   * Same shape as openSessionSelector: show first, read after. Awaiting
+   * `getModels()` before setting `visible` meant a tap on the model chip did
+   * nothing until the catalog answered, and a read landing after the operator
+   * dismissed the sheet re-opened it.
+   *
+   * A cached catalog stays on screen while the re-read runs, so the common
+   * case (already opened once this session) is populated immediately.
+   */
   const openModelPicker = useCallback(async (mode: 'default' | 'fallbacks' | 'agent', agentId?: string) => {
-    try {
-      const client = clientRef.current;
-      if (client) {
-        const models = await client.getModels();
-        setModelCatalog(models);
-      }
-    } catch {
-      // Keep picker usable with any cached catalog
-    }
+    const seq = modelReadSeqRef.current + 1;
+    modelReadSeqRef.current = seq;
     setModelPicker({ visible: true, mode, agentId });
+    const client = clientRef.current;
+    if (!client) return;
+    try {
+      const models = await client.getModels();
+      if (seq !== modelReadSeqRef.current) return;
+      setModelCatalog(models);
+    } catch {
+      // Keep picker usable with any cached catalog.
+    }
   }, []);
 
   const closeModelPicker = useCallback(() => {
     setModelPicker({ visible: false, mode: 'default' });
   }, []);
 
+  /**
+   * Show the sheet FIRST, then read.
+   *
+   * This used to await the session read and only then set `visible`, so a tap
+   * produced nothing at all until the network answered — up to the transport's
+   * 30s ceiling. Reported from device use: 10-11s of blank, then a sheet that
+   * opened already saying "Sessions could not be read". Worse, the tail set
+   * `visible: true` unconditionally, so a read landing after the operator
+   * dismissed the sheet re-opened it several seconds later.
+   *
+   * Opening first fixes both: the sheet is on screen in one frame, and nothing
+   * after the await can re-show it. `sessionReadSeqRef` drops a superseded read
+   * so a slow first open cannot overwrite a faster second one.
+   */
   const openSessionSelector = useCallback(async () => {
+    const seq = sessionReadSeqRef.current + 1;
+    sessionReadSeqRef.current = seq;
+    setSessionListState(beginSessionListRead);
+    setSessionSelector({ visible: true });
+    const client = clientRef.current;
+    if (!client) return;
+    // A fresh open starts back at one page — a widened window from a
+    // previous "show older" must not stick around and surprise the next
+    // open with a slower read.
+    sessionListLimitRef.current = SESSION_LIST_PAGE_SIZE;
     try {
-      const client = clientRef.current;
-      if (client) {
-        // A fresh open starts back at one page — a widened window from a
-        // previous "show older" must not stick around and surprise the next
-        // open with a slower read.
-        sessionListLimitRef.current = SESSION_LIST_PAGE_SIZE;
-        const sessions = await client.getSessions(SESSION_LIST_PAGE_SIZE);
-        setSessionListState((previous) => applySessionListRead(previous, { ok: true, sessions }));
-        setSessionListHasOlder(sessionListMayHaveOlder(sessions.length, SESSION_LIST_PAGE_SIZE));
-      }
+      const sessions = await client.getSessions(SESSION_LIST_PAGE_SIZE);
+      if (seq !== sessionReadSeqRef.current) return;
+      setSessionListState((previous) => applySessionListRead(previous, { ok: true, sessions }));
+      setSessionListHasOlder(sessionListMayHaveOlder(sessions.length, SESSION_LIST_PAGE_SIZE));
     } catch {
+      if (seq !== sessionReadSeqRef.current) return;
       setSessionListState((previous) => applySessionListRead(previous, { ok: false }));
     }
-    setSessionSelector({ visible: true });
   }, []);
 
   const loadOlderSessions = useCallback(async () => {
@@ -3251,6 +3286,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       selectSession,
       sessionList: sessionListState.sessions,
       sessionListError: sessionListCopy(sessionListState),
+      sessionListLoaded: sessionListState.loaded,
       sessionListHasOlder,
       loadingOlderSessions,
       loadOlderSessions,

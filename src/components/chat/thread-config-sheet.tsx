@@ -102,6 +102,12 @@ export type ThreadConfigSheetProps = {
   sessions?: SessionItem[];
   /** Set when the last session-list read failed. Empty is not "No sessions yet". */
   sessionsError?: string;
+  /**
+   * True once a session read has landed. The sheet now opens BEFORE its read
+   * answers, so an empty list with this false is "still reading", not "none".
+   * Without it the sheet greets every open with a confident "No sessions yet".
+   */
+  sessionsLoaded?: boolean;
   currentSessionId?: string;
   onSelectSession?: (sessionId: string) => void;
   onRefreshSessions?: () => void;
@@ -131,6 +137,7 @@ export type ThreadConfigSheetProps = {
 function SessionsSection({
   sessions = [],
   sessionsError,
+  sessionsLoaded,
   currentSessionId,
   onSelect,
   onRefresh,
@@ -142,6 +149,7 @@ function SessionsSection({
 }: {
   sessions?: SessionItem[];
   sessionsError?: string;
+  sessionsLoaded?: boolean;
   currentSessionId?: string;
   onSelect?: (sessionId: string) => void;
   onRefresh?: () => void;
@@ -301,7 +309,13 @@ function SessionsSection({
         </Text>
       ) : null}
 
-      {sessions.length === 0 ? (
+      {sessions.length === 0 && !sessionsLoaded && !sessionsError ? (
+        <EmptyState
+          icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
+          title="Reading sessions…"
+          description="The gateway is answering."
+        />
+      ) : sessions.length === 0 ? (
         <EmptyState
           icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
           title={sessionsError ?? 'No sessions yet'}
@@ -660,6 +674,7 @@ export function ThreadConfigSheet({
   onClose,
   sessions,
   sessionsError,
+  sessionsLoaded,
   currentSessionId,
   onSelectSession,
   onRefreshSessions,
@@ -707,6 +722,7 @@ export function ThreadConfigSheet({
         <SessionsSection
           sessions={sessions}
           sessionsError={sessionsError}
+          sessionsLoaded={sessionsLoaded}
           currentSessionId={currentSessionId}
           onSelect={onSelectSession}
           onRefresh={onRefreshSessions}

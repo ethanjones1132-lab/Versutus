@@ -73,6 +73,26 @@ export function sessionListWindowCopy(sessionCount: number): string | undefined 
   return undefined;
 }
 
+/**
+ * Start a fresh read.
+ *
+ * The sheet now opens before its read lands, so the state it opens onto is
+ * what the operator sees first. A list already loaded stays on screen while
+ * the re-read runs — a spinner over a good list is a downgrade. A previous
+ * attempt's FAILURE is dropped: this is a new attempt, and reporting
+ * "Sessions could not be read" before the new read has answered would be
+ * reporting the past as the present.
+ */
+export function beginSessionListRead<T extends SessionListEntry>(
+  previous: SessionListState<T>,
+): SessionListState<T> {
+  return {
+    sessions: previous.loaded ? previous.sessions : [],
+    loaded: previous.loaded,
+    failed: false,
+  };
+}
+
 export function applySessionListRead<T extends SessionListEntry>(
   previous: SessionListState<T>,
   read: SessionListRead<T>,
