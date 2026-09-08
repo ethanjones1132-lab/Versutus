@@ -17,6 +17,8 @@ import {
   type ModelSection,
 } from '@/lib/gateway/model-selection';
 import { filterSessions, sessionCreateTitle, sessionListTitle, sessionListWindowCopy } from '@/lib/gateway/session-list';
+import { openSessionByIdFailureText } from '@/lib/gateway/session-open-by-id';
+import type { ThreadSwitchValidation } from '@/lib/gateway/thread-switch';
 import { entering } from '@/lib/motion/presets';
 import type { GatewayBackend } from '@/lib/portal/manifest';
 import {
@@ -119,6 +121,11 @@ export type ThreadConfigSheetProps = {
   onShowOlderSessions?: () => void;
   onNewSession?: (title?: string) => void;
   onDeleteSession?: (sessionId: string) => void;
+  /**
+   * Exact-id read behind the sessions "Open by id" row (`session.get`).
+   * Absent hides the row (e.g. previews with no gateway).
+   */
+  onOpenSessionById?: (sessionId: string) => Promise<ThreadSwitchValidation>;
   // Models section
   models?: ModelItem[];
   currentModel?: string;
@@ -146,6 +153,7 @@ function SessionsSection({
   onShowOlder,
   onNewSession,
   onDeleteSession,
+  onOpenById,
 }: {
   sessions?: SessionItem[];
   sessionsError?: string;
@@ -158,6 +166,12 @@ function SessionsSection({
   onShowOlder?: () => void;
   onNewSession?: (title?: string) => void;
   onDeleteSession?: (sessionId: string) => void;
+  /**
+   * Exact-id read behind the "Open by id" row (`session.get`). The section
+   * calls the existing `onSelect` only after the read resolves — never on a
+   * missing id. Absent hides the row (e.g. previews with no gateway).
+   */
+  onOpenById?: (sessionId: string) => Promise<ThreadSwitchValidation>;
 }) {
   const tokens = useTokens();
   const { height: windowHeight } = useWindowDimensions();
@@ -172,6 +186,9 @@ function SessionsSection({
   const [deleteCandidate, setDeleteCandidate] = useState<SessionItem | null>(null);
   const [nameDraft, setNameDraft] = useState('');
   const [query, setQuery] = useState('');
+  const [idDraft, setIdDraft] = useState('');
+  const [openError, setOpenError] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
   const visibleSessions = useMemo(() => filterSessions(sessions, query), [sessions, query]);
   const windowCopy = sessionListWindowCopy(sessions.length);
 
@@ -191,6 +208,31 @@ function SessionsSection({
     }
     setDeleteCandidate(null);
   }, [deleteCandidate, onDeleteSession]);
+
+  const submitOpenById = useCallback(async () => {
+    const reader = onOpenById;
+    if (!reader || opening) return;
+    const id = idDraft.trim();
+    if (!id) {
+      setOpenError('Enter a session id');
+      return;
+    }
+    setOpening(true);
+    setOpenError(null);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    try {
+      const result = await reader(id);
+      if (result.ok) {
+        setIdDraft('');
+        setOpenError(null);
+        onSelect?.(id);
+      } else {
+        setOpenError(openSessionByIdFailureText(id, result.error));
+      }
+    } finally {
+      setOpening(false);
+    }
+  }, [idDraft, onOpenById, onSelect, opening]);
 
   const renderSessionItem = useCallback(
     ({ item }: { item: SessionItem }) => {
@@ -301,6 +343,39 @@ function SessionsSection({
           accessibilityLabel="Search sessions"
           style={styles.nameField}
         />
+      ) : null}
+
+      {onOpenById ? (
+        <>
+          <View style={styles.openByIdRow}>
+            <TextField
+              value={idDraft}
+              onChangeText={(text) => {
+                setIdDraft(text);
+                if (openError) setOpenError(null);
+              }}
+              placeholder="Session id"
+              autoCapitalize="none"
+              onSubmitEditing={() => void submitOpenById()}
+              returnKeyType="go"
+              accessibilityLabel="Session id"
+              style={styles.openByIdField}
+            />
+            <Button
+              label={opening ? 'Opening…' : 'Open'}
+              variant="secondary"
+              size="sm"
+              disabled={opening || idDraft.trim().length === 0}
+              busy={opening}
+              onPress={() => void submitOpenById()}
+            />
+          </View>
+          {openError ? (
+            <Text variant="caption" color="statusDisconnected" style={styles.blurb}>
+              {openError}
+            </Text>
+          ) : null}
+        </>
       ) : null}
 
       {sessionsError && sessions.length > 0 ? (
@@ -683,6 +758,7 @@ export function ThreadConfigSheet({
   onShowOlderSessions,
   onNewSession,
   onDeleteSession,
+  onOpenSessionById,
   models,
   currentModel,
   modelMode,
@@ -731,6 +807,7 @@ export function ThreadConfigSheet({
           onShowOlder={onShowOlderSessions}
           onNewSession={onNewSession}
           onDeleteSession={onDeleteSession}
+          onOpenById={onOpenSessionById}
         />
       ) : mode === 'models' ? (
         <ModelsSection
@@ -770,6 +847,18 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     paddingHorizontal: Spacing.two,
     paddingBottom: Spacing.two,
+  },
+  openByIdRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.two,
+    marginBottom: Spacing.two,
+  },
+  openByIdField: {
+    flex: 1,
+    minWidth: 0,
+    marginBottom: 0,
   },
   list: {
     flexGrow: 0,

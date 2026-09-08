@@ -38,6 +38,7 @@ import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDividerCached } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
 import { resolvePullRefreshAction } from '@/lib/gateway/messages';
+import { openSessionById } from '@/lib/gateway/session-open-by-id';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { botChromeCombined } from '@/lib/gateway/bot-chrome';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
@@ -604,6 +605,11 @@ export function ChatScreen() {
       }
     },
     [closeModelPicker, closeSessionSelector, openModelPicker, openSessionSelector],
+  );
+
+  const handleOpenSessionById = useCallback(
+    (sessionId: string) => openSessionById(gatewayRequest, sessionId),
+    [gatewayRequest],
   );
 
   const handleSend = useCallback(async () => {
@@ -1670,6 +1676,7 @@ export function ChatScreen() {
         onShowOlderSessions={() => void loadOlderSessions()}
         onNewSession={(title) => void createNewSession(title)}
         onDeleteSession={(sessionId) => void deleteSessionById(sessionId)}
+        onOpenSessionById={handleOpenSessionById}
         models={modelRows}
         currentModel={activeGateway.model}
         modelMode={modelPicker.mode}
