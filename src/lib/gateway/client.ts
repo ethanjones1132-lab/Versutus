@@ -1,5 +1,5 @@
 import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/chat-stream-delta';
-import { GatewayHttpError, isAuthRejection } from '@/lib/gateway/errors';
+import { GatewayHttpError, isAuthRejection, isConnectionError } from '@/lib/gateway/errors';
 import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 import { HttpTransport } from '@/lib/gateway/http-transport';
 import {
@@ -38,6 +38,42 @@ export type GatewayClientCallbacks = {
 };
 
 const LONG_TIMEOUT_MS = 120000;
+
+/**
+ * Connect and the connection-monitor probe share this budget.
+ *
+ * 3s was proposed so a stalled first /health fails fast. It is too short
+ * here. This app reaches the gateway over Tailscale (see extra.gatewayHosts
+ * in app.json) as well as LAN. Phone → PC over a DERP relay was measured at
+ * 0.9–1.7s RTT with loss, and a 3–3.5s /health aborts while the TCP
+ * handshake is still in SynReceived — the same measurement that set
+ * GATEWAY_PROBE_TIMEOUT_MS in probe.ts to 12s. A false negative here is
+ * "gateway down" to the whole app. 12s matches discovery so a host that
+ * passed reachability can still connect.
+ */
+export const HEALTH_CHECK_TIMEOUT_MS = 12_000;
+
+/**
+ * Per-attempt ceiling for GET /v1/sessions. The list answers in ~80ms when
+ * the host is up; 8s covers a Tailscale-cold GET without sitting on the
+ * transport's 30s default.
+ *
+ * Two retries, 500ms then 1500ms backoff, only on network errors and 5xx.
+ * Worst case on a hung gateway: 3 × 8s + 0.5s + 1.5s = 26s — under the 30s
+ * single-shot default, so a dead host is not slower than today.
+ */
+export const GET_SESSIONS_ATTEMPT_TIMEOUT_MS = 8_000;
+export const GET_SESSIONS_MAX_RETRIES = 2;
+export const GET_SESSIONS_RETRY_BACKOFF_MS = [500, 1_500] as const;
+
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetriableSessionListError(error: unknown): boolean {
+  if (error instanceof GatewayHttpError) return error.status >= 500 && error.status <= 599;
+  return isConnectionError(error);
+}
 
 type PendingRun = {
   runId: string;
@@ -214,11 +250,11 @@ export class HermesGatewayClient {
   // ─── API endpoints ────────────────────────────────────────────
 
   /**
-   * `timeoutMs` is generous on purpose: a phone radio waking from idle can take
-   * seconds to complete its first request, and a false negative here reads as
-   * "gateway down" to the whole app.
+   * `timeoutMs` defaults to HEALTH_CHECK_TIMEOUT_MS (12s). See that constant
+   * for why this is not a 3s fail-fast: a Tailscale cold path can legitimately
+   * take seconds, and aborting it reads as "gateway down".
    */
-  async healthCheck(timeoutMs = 12_000): Promise<HealthResponse | null> {
+  async healthCheck(timeoutMs = HEALTH_CHECK_TIMEOUT_MS): Promise<HealthResponse | null> {
     try {
       const result = await this.transport.request<HealthResponse>('GET', '/health', undefined, timeoutMs);
       this.lastHealthError = null;
@@ -329,16 +365,43 @@ export class HermesGatewayClient {
     // ~80ms). Try the Gate path first, keep the Hermes one for a direct
     // connection. Same shape either way: { object, data }.
     try {
-      const gate = await this.transport.request<SessionsResponse>('GET', `/v1/sessions?limit=${limit}`);
+      const gate = await this.getSessionsFromPath(`/v1/sessions?limit=${limit}`);
       if (Array.isArray(gate?.data)) return gate.data;
     } catch (error) {
       // A direct Hermes host answers the `/v1/*` path 404. Anything else is
       // the Gate's own answer and must surface rather than silently retrying
-      // another dialect.
+      // another dialect. 404 is never retried — it is the dialect signal.
       if (!(error instanceof GatewayHttpError) || error.status !== 404) throw error;
     }
     const result = await this.transport.request<SessionsResponse>('GET', `/api/sessions?limit=${limit}`);
     return result.data ?? [];
+  }
+
+  /**
+   * GET /v1/sessions with bounded retry. Network errors and 5xx retry twice
+   * (500ms, then 1500ms). 404 is not retried so the /api/sessions fallback
+   * stays a single extra request. POST is never retried through this path.
+   */
+  private async getSessionsFromPath(path: string): Promise<SessionsResponse> {
+    let attempt = 0;
+    while (true) {
+      try {
+        return await this.transport.request<SessionsResponse>(
+          'GET',
+          path,
+          undefined,
+          GET_SESSIONS_ATTEMPT_TIMEOUT_MS,
+        );
+      } catch (error) {
+        if (!isRetriableSessionListError(error) || attempt >= GET_SESSIONS_MAX_RETRIES) {
+          throw error;
+        }
+        const backoffMs = GET_SESSIONS_RETRY_BACKOFF_MS[attempt];
+        if (typeof backoffMs !== 'number') throw error;
+        await waitMs(backoffMs);
+        attempt += 1;
+      }
+    }
   }
 
   /**

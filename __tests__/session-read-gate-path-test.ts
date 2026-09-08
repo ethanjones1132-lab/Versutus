@@ -75,13 +75,33 @@ describe('getSessions reads the path the host actually serves', () => {
   });
 
   test('a non-404 Gate error surfaces instead of retrying another dialect', async () => {
-    const calls = mockHost({
-      v1: 500,
-      api: 200,
-      v1Body: { error: { message: 'sessions exploded', code: 'session_list_failed' } },
-    });
-    await expect(new HermesGatewayClient(PROFILE).getSessions(20)).rejects.toThrow(/sessions exploded/);
-    expect(calls).toEqual(['/v1/sessions']);
+    jest.useFakeTimers();
+    try {
+      const calls = mockHost({
+        v1: 500,
+        api: 200,
+        v1Body: { error: { message: 'sessions exploded', code: 'session_list_failed' } },
+      });
+      const pending = new HermesGatewayClient(PROFILE).getSessions(20);
+      const settled = pending.then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(500);
+      await Promise.resolve();
+      await Promise.resolve();
+      await jest.advanceTimersByTimeAsync(1500);
+      const result = await settled;
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error('expected getSessions to reject');
+      expect(result.error).toEqual(expect.objectContaining({ message: expect.stringMatching(/sessions exploded/) }));
+      // Same-path retries of /v1/sessions, never the Hermes-native dialect.
+      expect(calls).toEqual(['/v1/sessions', '/v1/sessions', '/v1/sessions']);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

@@ -1,3 +1,4 @@
+import { HEALTH_CHECK_TIMEOUT_MS } from '@/lib/gateway/client';
 import {
   GATEWAY_MANIFEST_PROBE_TIMEOUT_MS,
   GATEWAY_PROBE_PARALLEL_TIMEOUT_MS,
@@ -12,5 +13,11 @@ describe('gateway probe budget', () => {
     expect(GATEWAY_PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(12_000);
     expect(GATEWAY_PROBE_PARALLEL_TIMEOUT_MS).toBeGreaterThanOrEqual(10_000);
     expect(GATEWAY_MANIFEST_PROBE_TIMEOUT_MS).toBeGreaterThanOrEqual(8_000);
+  });
+
+  test('connect healthCheck is not shorter than the discovery probe', () => {
+    // A host that passed a 12s Tailscale probe must still be allowed to
+    // connect. Dropping this to 3s is the same abort-handshake failure.
+    expect(HEALTH_CHECK_TIMEOUT_MS).toBeGreaterThanOrEqual(GATEWAY_PROBE_TIMEOUT_MS);
   });
 });
