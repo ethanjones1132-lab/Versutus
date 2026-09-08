@@ -174,6 +174,43 @@ export function ProvidersSection() {
     [client, load],
   );
 
+  /**
+   * Run one card lifecycle tap (Check/Refresh/Disconnect/Disable/Delete/Enable)
+   * the way saveKey surfaces a refusal: the reason lands in the section
+   * ErrorCard, and only a success touches state — the map-snapshot replace for
+   * check/refresh, a full load() for the rest.
+   */
+  async function runCardAction(
+    id: string,
+    action: 'check' | 'refresh' | 'disconnect' | 'disable' | 'delete' | 'enable',
+  ) {
+    setError(null);
+    try {
+      if (action === 'check') {
+        const next = await client.check(id);
+        setProviders((current) => current.map((item) => (item.id === id ? next : item)));
+        return;
+      }
+      if (action === 'refresh') {
+        const next = await client.refreshCatalog(id);
+        setProviders((current) => current.map((item) => (item.id === id ? next : item)));
+        return;
+      }
+      if (action === 'disconnect') {
+        await client.disconnect(id);
+      } else if (action === 'disable') {
+        await client.update(id, { enabled: false });
+      } else if (action === 'enable') {
+        await client.update(id, { enabled: true });
+      } else {
+        await client.remove(id);
+      }
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
   return (
     <>
       {error ? (
@@ -221,11 +258,11 @@ export function ProvidersSection() {
         <ProviderCard
           key={snapshot.id}
           snapshot={snapshot}
-          onCheck={() => void client.check(snapshot.id).then((next) => setProviders((current) => current.map((item) => (item.id === snapshot.id ? next : item))))}
-          onRefresh={() => void client.refreshCatalog(snapshot.id).then((next) => setProviders((current) => current.map((item) => (item.id === snapshot.id ? next : item))))}
-          onDisconnect={() => void client.disconnect(snapshot.id).then(load)}
-          onDisable={() => void client.update(snapshot.id, { enabled: false }).then(load)}
-          onDelete={() => void client.remove(snapshot.id).then(load)}
+          onCheck={() => void runCardAction(snapshot.id, 'check')}
+          onRefresh={() => void runCardAction(snapshot.id, 'refresh')}
+          onDisconnect={() => void runCardAction(snapshot.id, 'disconnect')}
+          onDisable={() => void runCardAction(snapshot.id, 'disable')}
+          onDelete={() => void runCardAction(snapshot.id, 'delete')}
           onSetKey={() => setEditingId(snapshot.id)}
           onAuthorize={() => {
             void (async () => {
@@ -248,7 +285,7 @@ export function ProvidersSection() {
               }
             })();
           }}
-          onEnable={() => void client.update(snapshot.id, { enabled: true }).then(load)}
+          onEnable={() => void runCardAction(snapshot.id, 'enable')}
           onRename={(nextLabel) => handleRename(snapshot.id, nextLabel)}
         />
       ))}
