@@ -205,6 +205,20 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
             </PressableScale>
           ) : null}
 
+          {!isCommand && !isInterrupted && !message.streaming && !isUser && onResume && message.text.startsWith('Error:') ? (
+            <PressableScale
+              onPress={async () => {
+                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                onResume(message);
+              }}
+              hitSlop={CHIP_HIT_SLOP}
+              style={styles.actionButton}>
+              <Text variant="caption" color="accent">
+                Retry
+              </Text>
+            </PressableScale>
+          ) : null}
+
           {message.command?.raw ? (
             <View style={styles.rawSection}>
               <PressableScale
