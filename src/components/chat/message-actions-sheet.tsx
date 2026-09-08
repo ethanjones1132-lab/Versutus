@@ -27,6 +27,12 @@ export function MessageActionsSheet({
 
   const command = message.command;
   const canRetry = command?.status === 'error' && !!command.input && !!onRetry;
+  // A live turn is still owned by the stream: deleting its bubble would only
+  // drop it locally while later deltas land nowhere (the reducers no-op on a
+  // missing id) and the next history reload restores the finished turn. Hide
+  // Delete until the turn settles — a live turn ends via Cancel/Stop instead.
+  const isLive = message.streaming === true || message.command?.status === 'running';
+  const canDelete = !!onDelete && !isLive;
   const timeLabel = message.timestamp ? formatClockTime(message.timestamp) : undefined;
 
   const handleCopy = async () => {
@@ -62,7 +68,7 @@ export function MessageActionsSheet({
           }}
         />
       ) : null}
-      {onDelete ? (
+      {canDelete ? (
         <>
           <Divider />
           <ListRow
