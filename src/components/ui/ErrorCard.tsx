@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { Radius, Spacing } from '@/constants/tokens';
@@ -17,12 +18,35 @@ export type ErrorCardProps = {
   next?: string;
   onRetry?: () => void;
   retryLabel?: string;
+  /**
+   * Collapse `affected` and `next` behind a Details toggle, leaving only the
+   * cause on screen. An error the operator cannot dismiss and cannot shrink
+   * held four stacked rows over the transcript for the rest of the session.
+   */
+  collapsible?: boolean;
+  /** Render a dismiss control. Without one the card cannot be got rid of. */
+  onDismiss?: () => void;
+  dismissLabel?: string;
   style?: StyleProp<ViewStyle>;
 };
 
 /** Structured error surface per the luxury rules: cause, affected target, next action. */
-export function ErrorCard({ cause, affected, next, onRetry, retryLabel = 'Retry', style }: ErrorCardProps) {
+export function ErrorCard({
+  cause,
+  affected,
+  next,
+  onRetry,
+  retryLabel = 'Retry',
+  collapsible = false,
+  onDismiss,
+  dismissLabel = 'Dismiss',
+  style,
+}: ErrorCardProps) {
   const tokens = useTokens();
+  const [expanded, setExpanded] = useState(false);
+  // Detail is worth a toggle only when there is detail to hide.
+  const hasDetail = Boolean(affected || next);
+  const showDetail = !collapsible || !hasDetail || expanded;
 
   return (
     <Card
@@ -42,19 +66,33 @@ export function ErrorCard({ cause, affected, next, onRetry, retryLabel = 'Retry'
       <Text variant="caption" color="secondary">
         Cause: {cause}
       </Text>
-      {affected ? (
+      {showDetail && affected ? (
         <Text variant="caption" color="secondary">
           Affected: {affected}
         </Text>
       ) : null}
-      {next ? (
+      {showDetail && next ? (
         <Text variant="caption" color="secondary">
           Next: {next}
         </Text>
       ) : null}
-      {onRetry ? (
-        <Button label={retryLabel} variant="ghost" size="sm" onPress={onRetry} style={styles.retry} />
-      ) : null}
+      <View style={styles.actions}>
+        {onRetry ? (
+          <Button label={retryLabel} variant="ghost" size="sm" onPress={onRetry} />
+        ) : null}
+        {collapsible && hasDetail ? (
+          <Button
+            label={expanded ? 'Less' : 'Details'}
+            variant="ghost"
+            size="sm"
+            onPress={() => setExpanded((open) => !open)}
+            expanded={expanded}
+          />
+        ) : null}
+        {onDismiss ? (
+          <Button label={dismissLabel} variant="ghost" size="sm" onPress={onDismiss} />
+        ) : null}
+      </View>
     </Card>
   );
 }
@@ -74,8 +112,11 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  retry: {
-    alignSelf: 'flex-start',
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
     marginTop: Spacing.one,
   },
 });
