@@ -3,6 +3,7 @@
 // in-memory. Secrets never go here — only message text and run metadata.
 
 import type { ActivityRun } from '@/lib/gateway/runs';
+import { isLocalProvisionalRunId } from '@/lib/gateway/cancel';
 import { keyValueStorage } from '@/lib/storage/key-value';
 
 const OFFLINE_QUEUE_KEY = 'versutus:offline-queue';
@@ -62,15 +63,18 @@ export async function saveOfflineQueue(items: OfflineQueueItem[]): Promise<void>
 }
 
 /**
- * Runs interrupted mid-flight are marked cancelled on load — the app process
- * is gone, so local drivers and approval resolvers cannot resume them.
+ * Runs interrupted mid-flight are re-marked on load — the app process is
+ * gone, so local drivers and approval resolvers cannot resume them. A run
+ * the gateway accepted may still have finished upstream, so it restores as
+ * unresolved (the reconnect settle re-poll then learns its real fate);
+ * only `local-` provisionals the gateway never saw restore as cancelled.
  */
 export function normalizeRestoredRuns(runs: ActivityRun[]): ActivityRun[] {
   return runs.map((run) => {
     if (run.status === 'running' || run.status === 'waiting-approval') {
       return {
         ...run,
-        status: 'cancelled' as const,
+        status: (isLocalProvisionalRunId(run.id) ? 'cancelled' : 'unresolved') as ActivityRun['status'],
         finishedAt: run.finishedAt ?? Date.now(),
         summary: run.summary ?? 'Interrupted when the app closed',
       };
