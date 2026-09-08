@@ -127,6 +127,7 @@ export function TerminalScreen() {
     return () => {
       sessionRef.current?.close();
       sessionRef.current = null;
+      setTerminalConnected(false);
     };
   }, [gatewayId, status]);
 
