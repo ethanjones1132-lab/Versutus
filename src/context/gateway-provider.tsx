@@ -63,7 +63,7 @@ import {
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
 import { formatRunFailure, modelSubstitutionNote, shouldShowModelSubstitution } from '@/lib/gateway/run-failures';
 import { resolveDefaultBackend } from '@/lib/gateway/backend-defaults';
-import { applyModelOverride, effectiveModel, modelSwitchAnnouncement, resolveSendModel, shouldReleaseSessionForModel, withSelectedModel } from '@/lib/gateway/model-selection';
+import { applyModelOverride, effectiveModel, modelSwitchAnnouncement, resolveSendModel, shouldReleaseSessionForModel, staleModelPin, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   buildEarlyProbeUrls,
   dropAlreadyWavedCandidates,
@@ -1125,11 +1125,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Pin a default model so chat is not sent with model: undefined (Gate
-      // would 404 "No provider declares model undefined").
+      // would 404 "No provider declares model undefined"). Prefer a model
+      // whose provider is signed in — the first row can be a locked one.
       if (!gateway.model && isCurrent()) {
         try {
           const models = await client.getModels();
-          const first = models[0]?.id;
+          const first = models.find((model) => model.available !== false)?.id ?? models[0]?.id;
           if (first && isCurrent()) {
             const withModel = { ...gateway, model: first };
             setActiveGateway(withModel);
@@ -1139,6 +1140,59 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           // optional
         }
       }
+
+      // A pin written while its provider was signed in outlives the login:
+      // the picker's lock only applies while the picker is open, so nothing
+      // else stops a send to the now-dead model. Re-validate the stored pin
+      // against the live catalog off the connect path — a slow or failed
+      // catalog read must not hold up or fail the connect.
+      void (async () => {
+        let catalog: Awaited<ReturnType<typeof client.getModels>>;
+        try {
+          catalog = await client.getModels();
+        } catch {
+          // An unreadable catalog says nothing about the pin — keep it.
+          return;
+        }
+        if (!isCurrent()) return;
+        const backendId = selectedBackendIdRef.current;
+        const botId = selectedBotIdRef.current;
+        // Validate the live profile, not the connect-time one — the operator
+        // may have re-picked while the catalog read was in flight.
+        const current = activeGatewayRef.current ?? gateway;
+        const stale = staleModelPin(catalog, effectiveModel(current, backendId, botId));
+        if (!stale) return;
+        if (!stale.fallback) {
+          setMessages((prev) =>
+            appendSystemNote(
+              prev,
+              `Pinned model ${stale.pinned} cannot run — its provider is not signed in on the host, and the catalog has no signed-in model to switch to. Sign in (run hermes model on the host) or pick another model.`,
+            ),
+          );
+          return;
+        }
+        const updated = withSelectedModel(current, stale.fallback, backendId, botId);
+        // Same release as selectModel: the open session is pinned to the dead
+        // model and a Hermes session cannot change its own, so the next send
+        // must open a fresh one on the fallback.
+        sessionIdRef.current = undefined;
+        setCurrentSessionId(undefined);
+        const pinnedProfile = pinLiveSession({
+          client: clientRef.current ?? { setSessionId: () => undefined },
+          sessionId: undefined,
+          profile: updated,
+        });
+        const next = pinnedProfile ?? updated;
+        activeGatewayRef.current = next;
+        setActiveGateway(next);
+        void upsertGateway(next).then(setGateways);
+        setMessages((prev) =>
+          appendSystemNote(
+            prev,
+            `Pinned model ${stale.pinned} cannot run — its provider is not signed in on the host. Switched to ${stale.fallback}; a new session opens on the next send.`,
+          ),
+        );
+      })();
 
       // Fetch is cheap and idempotent; only a manifest-serving gate returns
       // providers[] at all, so this is a no-op against Hermes/OpenClaw.

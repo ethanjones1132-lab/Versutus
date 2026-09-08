@@ -86,7 +86,7 @@
     },
     "testPathIgnorePatterns": [
       "/node_modules/",
-      "/.worktrees/"
+      "<rootDir>/.worktrees/"
     ],
     "collectCoverageFrom": [
       "src/lib/gateway/**/*.ts"

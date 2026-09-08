@@ -199,6 +199,36 @@ export function resolveSendModel(
   return model ? { model } : {};
 }
 
+/**
+ * Re-validate a persisted model pin against a live catalog.
+ *
+ * The picker locks rows whose provider is not signed in, but that gate only
+ * applies while the picker is open. A pin written while its provider was
+ * signed in outlives the login: nothing re-reads the catalog on connect, so
+ * the next send goes to the dead model and the backend completes the turn
+ * with no assistant content.
+ *
+ * Returns the stale pin and the first available catalog entry to fall back
+ * to, or null when the pin is still good — including when the catalog simply
+ * does not list it. An absent match proves nothing (an older Hermes can
+ * answer a partial catalog), so only an explicit `available: false` on the
+ * matching row condemns a pin. Entries without the field at all predate the
+ * signal and count as available.
+ */
+export function staleModelPin(
+  catalog: readonly { id: string; available?: boolean }[],
+  pinnedModel: string | undefined,
+): { pinned: string; fallback?: string } | null {
+  const pinned = pinnedModel?.trim();
+  if (!pinned) return null;
+  const match = catalog.find((entry) => sameModelId(entry.id, pinned));
+  if (!match || match.available !== false) return null;
+  const fallback = catalog.find(
+    (entry) => entry.available !== false && !sameModelId(entry.id, pinned),
+  )?.id;
+  return { pinned, fallback };
+}
+
 /** One collapsible provider group in the picker's section list. */
 export type ModelSection<T extends ModelSearchable = ModelSearchable> = {
   key: string;

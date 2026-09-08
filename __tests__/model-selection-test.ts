@@ -1,6 +1,7 @@
 import { effectiveModel, resolveSendModel, withSelectedModel,
   shouldReleaseSessionForModel, applyModelOverride,
   sameModelId, flattenHermesModelOptions, modelPickerName,
+  staleModelPin,
 } from '@/lib/gateway/model-selection';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
@@ -225,6 +226,56 @@ describe('modelPickerName', () => {
       modelPickerName({ id: 'opencode-zen/laguna-s-2.1-free', providerId: 'opencode-zen' }),
     ).toBe('laguna-s-2.1-free');
     expect(modelPickerName({ id: 'gpt-5.5', providerId: 'openai' })).toBe('gpt-5.5');
+  });
+});
+
+describe('staleModelPin', () => {
+  const CATALOG = [
+    { id: 'nous/poolside/laguna-xs-2.1:free', available: false },
+    { id: 'xai/grok-4.6', available: true },
+    { id: 'nvidia/deepseek-v3' },
+  ];
+
+  it('condemns a pin whose catalog row reports the provider signed out', () => {
+    // The pin was written while Nous Portal was signed in; the login is gone
+    // now and the row stays visible but locked. Sending to it is the dead
+    // turn — "completed with no assistant content".
+    expect(staleModelPin(CATALOG, 'nous/poolside/laguna-xs-2.1:free')).toEqual({
+      pinned: 'nous/poolside/laguna-xs-2.1:free',
+      fallback: 'xai/grok-4.6',
+    });
+  });
+
+  it('matches a pin that dropped the provider prefix', () => {
+    expect(staleModelPin(CATALOG, 'poolside/laguna-xs-2.1:free')?.fallback).toBe('xai/grok-4.6');
+  });
+
+  it('keeps a pin whose provider is still signed in — a normal reconnect changes nothing', () => {
+    expect(staleModelPin(CATALOG, 'xai/grok-4.6')).toBeNull();
+  });
+
+  it('treats a row with no availability signal as available (older gateways predate the field)', () => {
+    expect(staleModelPin(CATALOG, 'nvidia/deepseek-v3')).toBeNull();
+  });
+
+  it('keeps a pin the catalog does not list — an incomplete catalog proves nothing', () => {
+    expect(staleModelPin(CATALOG, 'openai/gpt-5.5')).toBeNull();
+    expect(staleModelPin([], 'xai/grok-4.6')).toBeNull();
+  });
+
+  it('has nothing to validate when no model is pinned', () => {
+    expect(staleModelPin(CATALOG, undefined)).toBeNull();
+  });
+
+  it('reports no fallback when every other row is locked too', () => {
+    const allLocked = [
+      { id: 'nous/poolside/laguna-xs-2.1:free', available: false },
+      { id: 'qwen-oauth/qwen3', available: false },
+    ];
+    expect(staleModelPin(allLocked, 'nous/poolside/laguna-xs-2.1:free')).toEqual({
+      pinned: 'nous/poolside/laguna-xs-2.1:free',
+      fallback: undefined,
+    });
   });
 });
 
