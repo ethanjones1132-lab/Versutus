@@ -197,6 +197,11 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
           setOpenJob(null);
           void load();
         }}
+        onChanged={() => {
+          // A confirmed Run-now or Pause/Resume changed the roster the
+          // parent renders; re-read so the row reflects the host state.
+          void load();
+        }}
       />
       <CronRunSheet key={openRunId ?? 'no-run'} runId={openRunId} onClose={() => setOpenRunId(null)} />
     </Card>

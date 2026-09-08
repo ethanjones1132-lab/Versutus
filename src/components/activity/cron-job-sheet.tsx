@@ -28,6 +28,12 @@ export type CronJobSheetProps = {
    * itself only knows about one job at a time.
    */
   onRemoved?: () => void;
+  /**
+   * Fires after a confirmed, successful Run-now or Pause/Resume. The parent
+   * uses it to refresh the cron list so the roster reflects the state the
+   * host confirmed; the sheet's own run-history re-read stays local.
+   */
+  onChanged?: () => void;
 };
 
 function Row({ label, value }: { label: string; value?: string | null }) {
@@ -49,7 +55,7 @@ function Row({ label, value }: { label: string; value?: string | null }) {
  * because "show raw" is what makes the curation trustworthy rather than a
  * story the app tells.
  */
-export function CronJobSheet({ job, onClose, onOpenRun, onRemoved }: CronJobSheetProps) {
+export function CronJobSheet({ job, onClose, onOpenRun, onRemoved, onChanged }: CronJobSheetProps) {
   const { botJobs, cron } = useGateway();
   const [runs, setRuns] = useState<CronRun[]>([]);
   const [runsError, setRunsError] = useState<string | null>(null);
@@ -89,12 +95,16 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved }: CronJobShee
     setControlError(null);
     try {
       await botJobs.run(jobId);
+      // The run just started reads back through the same history the sheet
+      // renders; without this the new run is missing until a remount.
+      await loadRuns();
+      onChanged?.();
     } catch (caught) {
       setControlError(describeCronJobControlError(caught));
     } finally {
       setActing(false);
     }
-  }, [acting, botJobs, jobId]);
+  }, [acting, botJobs, jobId, loadRuns, onChanged]);
 
   const submitTogglePause = useCallback(async () => {
     if (!jobId || acting) return;
@@ -103,12 +113,13 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved }: CronJobShee
     try {
       await botJobs.pause(jobId, !paused);
       setPausedOverride(!paused);
+      onChanged?.();
     } catch (caught) {
       setControlError(describeCronJobControlError(caught));
     } finally {
       setActing(false);
     }
-  }, [acting, botJobs, jobId, paused]);
+  }, [acting, botJobs, jobId, onChanged, paused]);
 
   // Destructive counterpart to submitRun / submitTogglePause. The Gate
   // dispatches the jobs.remove RPC to removeJob on the resolved backend;
