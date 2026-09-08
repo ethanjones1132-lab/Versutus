@@ -2,8 +2,10 @@ import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/cha
 import type { PublicBot } from '@/lib/gateway/bots';
 import type { CronJob, CronRun, CronTurn } from '@/lib/gateway/cron';
 import type { BotGroupRoom, GroupReply, GroupTranscriptEntry } from '@/lib/gateway/groups';
+import { HEALTH_CHECK_TIMEOUT_MS } from '@/lib/gateway/client';
 import { isAuthRejection } from '@/lib/gateway/errors';
 import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
+import { withGetSessionsRetry } from '@/lib/gateway/get-sessions-retry';
 import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 import { HttpTransport } from '@/lib/gateway/http-transport';
 import { ConnectionMonitor, hasRecentContact } from '@/lib/gateway/connection-monitor';
@@ -225,7 +227,7 @@ export class ManifestClient implements PortalClient {
     }
   }
 
-  async healthCheck(timeoutMs = 12_000): Promise<HealthResponse | null> {
+  async healthCheck(timeoutMs = HEALTH_CHECK_TIMEOUT_MS): Promise<HealthResponse | null> {
     // Missing endpoint must surface to connect() — not be swallowed as "null health".
     const path = this.requireEndpoint('health');
     try {
@@ -733,6 +735,11 @@ export class ManifestClient implements PortalClient {
     );
   }
 
+  /**
+   * List sessions via the advertised GET path, with the same bounded retry
+   * HermesGatewayClient uses. A missing path throws immediately — that is a
+   * capability signal, not a blip, so it is not retried.
+   */
   async getSessions(limit = 20): Promise<HermesSession[]> {
     const path = this.endpoints.sessions;
     if (!path) {
@@ -741,9 +748,13 @@ export class ManifestClient implements PortalClient {
       );
     }
     const separator = path.includes('?') ? '&' : '?';
-    const result = await this.rootTransport.request<SessionsResponse | HermesSession[]>(
-      'GET',
-      this.withScope(`${path}${separator}limit=${limit}`),
+    const result = await withGetSessionsRetry((timeoutMs) =>
+      this.rootTransport.request<SessionsResponse | HermesSession[]>(
+        'GET',
+        this.withScope(`${path}${separator}limit=${limit}`),
+        undefined,
+        timeoutMs,
+      ),
     );
     return Array.isArray(result) ? result : result.data ?? [];
   }

@@ -1,5 +1,6 @@
 import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/chat-stream-delta';
-import { GatewayHttpError, isAuthRejection, isConnectionError } from '@/lib/gateway/errors';
+import { GatewayHttpError, isAuthRejection } from '@/lib/gateway/errors';
+import { withGetSessionsRetry } from '@/lib/gateway/get-sessions-retry';
 import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 import { HttpTransport } from '@/lib/gateway/http-transport';
 import {
@@ -53,27 +54,11 @@ const LONG_TIMEOUT_MS = 120000;
  */
 export const HEALTH_CHECK_TIMEOUT_MS = 12_000;
 
-/**
- * Per-attempt ceiling for GET /v1/sessions. The list answers in ~80ms when
- * the host is up; 8s covers a Tailscale-cold GET without sitting on the
- * transport's 30s default.
- *
- * Two retries, 500ms then 1500ms backoff, only on network errors and 5xx.
- * Worst case on a hung gateway: 3 × 8s + 0.5s + 1.5s = 26s — under the 30s
- * single-shot default, so a dead host is not slower than today.
- */
-export const GET_SESSIONS_ATTEMPT_TIMEOUT_MS = 8_000;
-export const GET_SESSIONS_MAX_RETRIES = 2;
-export const GET_SESSIONS_RETRY_BACKOFF_MS = [500, 1_500] as const;
-
-function waitMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isRetriableSessionListError(error: unknown): boolean {
-  if (error instanceof GatewayHttpError) return error.status >= 500 && error.status <= 599;
-  return isConnectionError(error);
-}
+export {
+  GET_SESSIONS_ATTEMPT_TIMEOUT_MS,
+  GET_SESSIONS_MAX_RETRIES,
+  GET_SESSIONS_RETRY_BACKOFF_MS,
+} from '@/lib/gateway/get-sessions-retry';
 
 type PendingRun = {
   runId: string;
@@ -378,30 +363,13 @@ export class HermesGatewayClient {
   }
 
   /**
-   * GET /v1/sessions with bounded retry. Network errors and 5xx retry twice
-   * (500ms, then 1500ms). 404 is not retried so the /api/sessions fallback
-   * stays a single extra request. POST is never retried through this path.
+   * GET /v1/sessions with the shared bounded retry. 404 is not retried so
+   * the /api/sessions fallback stays a single extra request.
    */
   private async getSessionsFromPath(path: string): Promise<SessionsResponse> {
-    let attempt = 0;
-    while (true) {
-      try {
-        return await this.transport.request<SessionsResponse>(
-          'GET',
-          path,
-          undefined,
-          GET_SESSIONS_ATTEMPT_TIMEOUT_MS,
-        );
-      } catch (error) {
-        if (!isRetriableSessionListError(error) || attempt >= GET_SESSIONS_MAX_RETRIES) {
-          throw error;
-        }
-        const backoffMs = GET_SESSIONS_RETRY_BACKOFF_MS[attempt];
-        if (typeof backoffMs !== 'number') throw error;
-        await waitMs(backoffMs);
-        attempt += 1;
-      }
-    }
+    return withGetSessionsRetry((timeoutMs) =>
+      this.transport.request<SessionsResponse>('GET', path, undefined, timeoutMs),
+    );
   }
 
   /**
