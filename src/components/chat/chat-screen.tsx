@@ -780,9 +780,20 @@ export function ChatScreen() {
   );
   const handleRoutineRun = useCallback(
     async (jobId: string) => {
+      if (!botSurfaceId) return;
+      const target = botSurfaceId;
       await botJobs.run(jobId);
+      // Run already landed; a failed re-list must not look like
+      // the Gate refused the run (that would name an error for a
+      // routine that started). Last-good stays; staleness is named.
+      await botJobs
+        .list()
+        .then((jobs) =>
+          foldRoutineRead(target, { ok: true, jobs: routineJobsFromList(jobs) }),
+        )
+        .catch(() => foldRoutineRead(target, { ok: false }));
     },
-    [botJobs],
+    [botSurfaceId, botJobs, foldRoutineRead, routineJobsFromList],
   );
   const handleRoutineTogglePause = useCallback(
     async (jobId: string, paused: boolean) => {
