@@ -2134,6 +2134,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           );
         }
         return outcome;
+      } catch (error) {
+        // A refused start (client.startRun threw before onStarted re-keyed
+        // the provisional entry) must not strand a forever-Running ghost in
+        // the In-flight filter: settle the tracked id through the same
+        // patchRun a finished run uses, then rethrow so the sendChatInput
+        // catch still names the refusal in chat. This also covers a throw
+        // later in the drive (trackedId is the real id by then), which
+        // stranded the same ghost for the same reason.
+        const message = error instanceof Error ? error.message : String(error);
+        patchRun(trackedId.current, {
+          status: 'failed',
+          summary: message.slice(0, 160) || undefined,
+          finishedAt: Date.now(),
+        });
+        throw error;
       } finally {
         runAbortControllerRef.current = null;
         activeRunTaskIdRef.current = null;
