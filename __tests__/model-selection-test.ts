@@ -143,10 +143,35 @@ test('with no session open there is nothing to release', () => {
   expect(shouldReleaseSessionForModel({ previous: 'longcat-2.0', next: 'kimi-k3', hasSession: false })).toBe(false);
 });
 
-test('a first pick on a thread with no model yet keeps the thread', () => {
-  // Nothing was overridden before, so the session is already running whatever
-  // the gateway defaulted to — resetting here would cost context for nothing.
-  expect(shouldReleaseSessionForModel({ next: 'kimi-k3', hasSession: true })).toBe(false);
+test('a first pick on a thread with no model yet releases the session', () => {
+  // REVERSED 2026-09-07. This previously asserted false, on the theory that an
+  // unpinned thread is already running the gateway's default so a first pick
+  // changes nothing. Device use disproved it: `effectiveModel` is undefined
+  // whenever no override is stored, so the app cannot know what the host
+  // opened the session with — the operator picked a model, the session kept
+  // answering as something else, and the turn came back empty. An unknown
+  // previous now means "not proven to be `next`", and the pick takes effect.
+  expect(shouldReleaseSessionForModel({ next: 'kimi-k3', hasSession: true })).toBe(true);
+});
+
+test('a first pick still keeps the thread when there is no session to release', () => {
+  expect(shouldReleaseSessionForModel({ next: 'kimi-k3', hasSession: false })).toBe(false);
+});
+
+test('an empty pick is never a reason to throw the thread away', () => {
+  expect(shouldReleaseSessionForModel({ previous: 'kimi-k3', next: '   ', hasSession: true })).toBe(false);
+});
+
+test('two names for the same model do not release the session', () => {
+  // Same rule canServeModel applies: the app carries `providerId/modelId`
+  // while a session records whichever form its creator used. A raw compare
+  // would throw away a thread that was already answering on the right model.
+  expect(shouldReleaseSessionForModel({ previous: 'openai/gpt-5', next: 'gpt-5', hasSession: true })).toBe(false);
+  expect(shouldReleaseSessionForModel({ previous: 'gpt-5', next: 'openai/gpt-5', hasSession: true })).toBe(false);
+});
+
+test('a genuinely different model still releases when both names are qualified', () => {
+  expect(shouldReleaseSessionForModel({ previous: 'openai/gpt-5', next: 'moonshot/kimi-k3', hasSession: true })).toBe(true);
 });
 
 describe('applyModelOverride', () => {
@@ -180,9 +205,11 @@ describe('applyModelOverride', () => {
     expect(next.gateway.model).toBe('kimi-k3');
     expect(next.gateway.backendModels).toEqual({ 'hermes-local': 'kimi-k3' });
     expect(next.gateway.botModels).toBeUndefined();
-    // No remembered model means this is the first explicit pick for the
-    // selected backend, so the existing session does not need to be released.
-    expect(next.releaseSession).toBe(false);
+    // REVERSED 2026-09-07, same reason as shouldReleaseSessionForModel's own
+    // first-pick case: no remembered model for the backend means the app
+    // cannot know what the open session is actually serving, so a first
+    // explicit pick MUST release it or the pick never reaches the wire.
+    expect(next.releaseSession).toBe(true);
   });
 
   it('does not throw the thread away when the Bot is already on that model', () => {

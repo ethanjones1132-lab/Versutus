@@ -244,10 +244,21 @@ export function groupByProvider<T extends ModelSearchable>(models: T[]): ModelSe
  * next send opens a fresh one pinned to it. This is the same trade the backend
  * switcher already makes, for the same reason.
  *
- * False whenever there is nothing to gain: no session open, the same model
- * re-picked, or a first pick on a thread that never had an override (there the
- * session is already running the gateway's default, and resetting would cost
- * the operator their context for nothing).
+ * False whenever there is nothing to gain: no session open, or the same model
+ * re-picked (compared on qualification-insensitive identity, so `openai/gpt-5`
+ * and `gpt-5` are not a change worth resetting a conversation for).
+ *
+ * A first pick on a thread that never had an override DOES release, reversing
+ * the earlier rule. That rule assumed an unpinned thread is "already running
+ * the gateway's default", so a first pick would match what was already
+ * serving and resetting would cost context for nothing. The assumption does
+ * not hold: `effectiveModel` returns undefined whenever no override is stored,
+ * and the app then has no idea what the host actually opened the session with.
+ * Reported from device use on 2026-09-07 — the operator picked a model, the
+ * session went on answering as something else, and the turn came back empty.
+ * A pick that silently cannot take effect is worse than losing the transcript
+ * of a no-op pick, so an unknown previous is now treated as "not proven to be
+ * `next`" and the session is released.
  */
 export function shouldReleaseSessionForModel(input: {
   previous?: string;
@@ -255,10 +266,16 @@ export function shouldReleaseSessionForModel(input: {
   hasSession: boolean;
 }): boolean {
   if (!input.hasSession) return false;
-  const previous = input.previous?.trim();
   const next = input.next?.trim();
-  if (!previous || !next) return false;
-  return previous.toLowerCase() !== next.toLowerCase();
+  if (!next) return false;
+  const previous = input.previous?.trim();
+  // Nothing to compare against: the app cannot prove the open session is
+  // already serving `next`, so it must not assume that it is.
+  if (!previous) return true;
+  // Same comparison `canServeModel` uses. A raw string compare reports a
+  // mismatch between two names for the same model and throws away a thread
+  // that was already answering on the right one.
+  return !sameModelId(previous, next);
 }
 
 /** System line for a transcript emptied because the session had to be released. */
