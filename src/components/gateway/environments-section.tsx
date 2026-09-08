@@ -107,6 +107,21 @@ export function EnvironmentsSection() {
     }
   }
 
+  /**
+   * Run one card lifecycle tap (Check/Start/Stop) the way removeEnvironment
+   * runs a remove: the refusal lands in the section ErrorCard, and only a
+   * success reloads so the card shows the fresh state.
+   */
+  async function runCardAction(id: string, action: 'check' | 'start' | 'stop') {
+    setError(null);
+    try {
+      await client[action](id);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
   const canRegister = status === 'connected' && adapters.length > 0;
 
   return (
@@ -158,9 +173,9 @@ export function EnvironmentsSection() {
         <EnvironmentCard
           key={environment.id}
           environment={environment}
-          onCheck={() => void client.check(environment.id).then(load)}
-          onStart={() => void client.start(environment.id).then(load)}
-          onStop={() => void client.stop(environment.id).then(load)}
+          onCheck={() => void runCardAction(environment.id, 'check')}
+          onStart={() => void runCardAction(environment.id, 'start')}
+          onStop={() => void runCardAction(environment.id, 'stop')}
           onRun={() => setRunTarget(environment)}
           onEdit={() => { setRegistering(false); setEditing(environment); }}
           onRemove={() => void removeEnvironment(environment.id)}
