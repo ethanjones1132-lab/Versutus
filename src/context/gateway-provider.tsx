@@ -176,6 +176,8 @@ type GatewayContextValue = {
   connectionPhase: ConnectionPhase;
   probeMessage: string;
   lastError: string | null;
+  /** Clear the banner. The surface showing an error owns dismissing it. */
+  clearLastError: () => void;
   deviceId: string | null;
   pairingDetails: PairingDetails | null;
   settings: AppSettings;
@@ -576,6 +578,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // setter is already threaded through the command paths.
   const [runningCommandLabel, setRunningCommandLabel] = useState<string | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  const clearLastError = useCallback(() => setLastError(null), []);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [selectedBackendId, setSelectedBackendId] = useState<string | undefined>(undefined);
   const [selectedBotId, setSelectedBotId] = useState<string | undefined>(undefined);
@@ -3176,6 +3179,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       connectionPhase,
       probeMessage,
       lastError,
+      clearLastError,
       deviceId,
       pairingDetails,
       settings,
@@ -3261,7 +3265,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
     }),
     [
       gateways, activeGateway, activeHello, status, statusDetail, connectionPhase, probeMessage,
-      lastError, deviceId, pairingDetails,
+      lastError, clearLastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
       cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,

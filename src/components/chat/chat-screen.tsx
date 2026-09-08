@@ -155,14 +155,24 @@ function ChatSkeleton() {
   );
 }
 
+/**
+ * How long a banner the operator cannot act on stays up before clearing
+ * itself. Only the `dismiss` kind auto-clears: a setup or reconnect banner
+ * carries the control that fixes the fault, and timing that out would take
+ * the fix away mid-read.
+ */
+const DISMISSIBLE_ERROR_TIMEOUT_MS = 12000;
+
 function LastErrorBanner({
   error,
   onSetup,
   onReconnect,
+  onDismiss,
 }: {
   error: unknown;
   onSetup: () => void;
   onReconnect: () => void;
+  onDismiss: () => void;
 }) {
   const humanized = humanizeGatewayError(error);
   const button = errorBannerButton(humanized.action);
@@ -180,9 +190,19 @@ function LastErrorBanner({
       };
       break;
     case 'dismiss':
+      // No action button: the kind IS "nothing to do but close it". It used to
+      // render no control at all, so the card could never be got rid of.
       onRetry = undefined;
       break;
   }
+
+  const selfClearing = button.kind === 'dismiss';
+  useEffect(() => {
+    if (!selfClearing) return undefined;
+    const timer = setTimeout(onDismiss, DISMISSIBLE_ERROR_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [selfClearing, onDismiss]);
+
   return (
     <Animated.View entering={entering.fadeIn.duration(Motion.duration.fast)} style={styles.bannerWrap}>
       <ErrorCard
@@ -191,6 +211,8 @@ function LastErrorBanner({
         next={humanized.next}
         retryLabel={button.kind === 'dismiss' ? undefined : button.label}
         onRetry={onRetry}
+        collapsible
+        onDismiss={onDismiss}
       />
     </Animated.View>
   );
@@ -207,6 +229,7 @@ export function ChatScreen() {
     connectionPhase,
     probeMessage,
     lastError,
+    clearLastError,
     deviceId,
     pairingDetails,
     sendChatInput,
@@ -1280,6 +1303,7 @@ export function ChatScreen() {
           error={lastError}
           onSetup={() => router.push('/gateway/setup' as Href)}
           onReconnect={() => void retryAutoConnect()}
+          onDismiss={clearLastError}
         />
       ) : null}
 
