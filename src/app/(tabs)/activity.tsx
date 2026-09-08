@@ -75,8 +75,11 @@ export default function ActivityScreen() {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
       // Route through slash so Activity + chat command bubble stay consistent.
-      await sendChatInput(`/run ${prompt}`);
-      setRunPrompt('');
+      // Clear the draft only when the command completed: a refusal still
+      // lands its "Command failed" bubble in chat, and the prompt stays so
+      // the operator can fix and resend instead of retyping it.
+      const outcome = await sendChatInput(`/run ${prompt}`);
+      if (outcome === 'complete') setRunPrompt('');
     } finally {
       setStarting(false);
     }

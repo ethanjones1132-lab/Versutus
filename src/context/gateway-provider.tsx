@@ -168,6 +168,21 @@ export type ConnectionPhase =
   | 'failed'
   | 'onboarding';
 
+/**
+ * How a `sendChatInput` call resolved, so callers that own a draft (like
+ * Activity Start-a-run) can keep it when nothing actually ran. Only
+ * `complete` means the command finished — every other outcome left the
+ * draft unsent, queued, or refused, and the caller should not clear it.
+ */
+export type SendChatInputOutcome =
+  | 'empty'
+  | 'queued'
+  | 'sent'
+  | 'busy'
+  | 'confirmation'
+  | 'complete'
+  | 'error';
+
 type GatewayContextValue = {
   gateways: GatewayProfile[];
   activeGateway: GatewayProfile | null;
@@ -275,7 +290,7 @@ type GatewayContextValue = {
   sendChatInput: (
     text: string,
     options?: { fromQueue?: boolean; messageId?: string; skills?: Skill[] },
-  ) => Promise<void>;
+  ) => Promise<SendChatInputOutcome>;
   stopStreaming: () => Promise<void>;
   reloadHistory: () => Promise<void>;
   setupFromPcAddress: (pcAddress: string, token?: string) => Promise<boolean>;
@@ -2208,7 +2223,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       options?: { fromQueue?: boolean; messageId?: string; skills?: Skill[] },
     ) => {
       const trimmed = text.trim();
-      if (!trimmed) return;
+      if (!trimmed) return 'empty';
       const fromQueue = options?.fromQueue === true;
       const client = clientRef.current;
 
@@ -2217,12 +2232,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // verification because it changes when this effect/callback re-runs.
       if (!fromQueue && (!activeGateway || !client || status !== 'connected')) {
         queueOfflineInput(trimmed);
-        return;
+        return 'queued';
       }
 
       if (!isSlashCommandInput(trimmed) || shouldPassthroughSkillSlash(trimmed, options?.skills ?? [])) {
         await sendMessage(trimmed, options?.messageId);
-        return;
+        return 'sent';
       }
 
       const busySlash = decideBusySlash(trimmed, isCommandRunning, runningCommandLabel);
@@ -2230,7 +2245,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // The guard still returns here: the note is feedback, never a second
         // concurrent command.
         appendLocalMessage('assistant', busySlash.note);
-        return;
+        return 'busy';
       }
 
       if (options?.messageId) {
@@ -2255,7 +2270,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (needsConfirmation) {
         const preview = await buildActionPreview(trimmed, matchingCmd ?? null, commandLabel, gatewayRequest);
         setPendingConfirmation(preview);
-        return;
+        return 'confirmation';
       }
 
       commandStartTimeRef.current = Date.now();
@@ -2376,6 +2391,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
             durationMs: duration,
           }).then((t) => setTranscripts(t));
         }
+        return 'complete';
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setLastError(message);
@@ -2383,6 +2399,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
           text: `Command failed: ${message}`,
           command: { input: trimmed, title: commandLabel, status: 'error', ephemeral: true },
         });
+        return 'error';
       } finally {
         setIsCommandRunning(false);
         setRunningCommandLabel(null);
