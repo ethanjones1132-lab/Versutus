@@ -28,7 +28,7 @@ import { MessageBubble } from '@/components/chat/message-bubble';
 import { PairingSheet } from '@/components/chat/pairing-sheet';
 import { ThreadConfigSheet, type SessionItem } from '@/components/chat/thread-config-sheet';
 import { SlashCommandPalette } from '@/components/chat/slash-command-palette';
-import { Button, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text, type IconName } from '@/components/ui';
+import { Button, Card, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text, type IconName } from '@/components/ui';
 import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { entering } from '@/lib/motion/presets';
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
@@ -216,6 +216,20 @@ function LastErrorBanner({
         onDismiss={onDismiss}
       />
     </Animated.View>
+  );
+}
+
+function PairingRequiredBanner({ onShow }: { onShow: () => void }) {
+  return (
+    <View style={styles.bannerWrap}>
+      <Card padding={Spacing.three} style={styles.pairingBanner}>
+        <Text variant="headline">Pairing required</Text>
+        <Text variant="caption" color="secondary">
+          Approve this phone on your PC to finish connecting.
+        </Text>
+        <Button label="Show pairing code" variant="secondary" size="sm" onPress={onShow} />
+      </Card>
+    </View>
   );
 }
 
@@ -464,6 +478,9 @@ export function ChatScreen() {
   const isStreaming = isSending || messages.some((message) => message.streaming);
   const queuedCount = messages.filter((message) => message.queued).length;
   const showPairingSheet = status === 'pairing' && !!deviceId && dismissedPairingKey !== pairingKey;
+  // Dismiss hides the sheet without ending pairing — this banner is the way
+  // back to the same approve code while status stays pairing.
+  const showPairingBanner = status === 'pairing' && !!deviceId && dismissedPairingKey === pairingKey;
   // The registry build walks every command, dynamic entry, and skill, so it
   // runs only when one of its inputs changes — not on every streamed frame
   // that re-renders this screen while the draft holds `/`.
@@ -1305,6 +1322,10 @@ export function ChatScreen() {
         onDismiss={() => setDismissedPairingKey(pairingKey)}
       />
 
+      {showPairingBanner ? (
+        <PairingRequiredBanner onShow={() => setDismissedPairingKey(null)} />
+      ) : null}
+
       {lastError ? (
         <LastErrorBanner
           error={lastError}
@@ -1701,6 +1722,9 @@ const styles = StyleSheet.create({
   bannerWrap: {
     marginHorizontal: Spacing.four,
     marginBottom: Spacing.two,
+  },
+  pairingBanner: {
+    gap: Spacing.two,
   },
   listWrap: {
     flex: 1,
