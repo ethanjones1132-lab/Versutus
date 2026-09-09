@@ -1518,6 +1518,8 @@ export function ChatScreen() {
                     ? 'Type /help to explore your gateway — /run for agentic tasks.'
                     : 'The chat goes live as soon as the gateway connects.'
                 }
+                actionLabel={status !== 'connected' ? 'Reconnect' : undefined}
+                onAction={status !== 'connected' ? () => void retryAutoConnect() : undefined}
               />
             )
           }
