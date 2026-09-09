@@ -1,5 +1,4 @@
 import * as Haptics from 'expo-haptics';
-import { useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -27,7 +26,6 @@ type ActivityItem =
   | { kind: 'finished'; id: string; run: ActivityRun };
 
 export default function ActivityScreen() {
-  const router = useRouter();
   const tokens = useTokens();
   const {
     activeGateway,
@@ -224,7 +222,7 @@ export default function ActivityScreen() {
         activeGatewayId={activeGateway?.id}
         status={status}
         onSelect={(gateway) => {
-          void connectGateway(gateway).then(() => router.push('/chat'));
+          void connectGateway(gateway);
         }}
       />
 
