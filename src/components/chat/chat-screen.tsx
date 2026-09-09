@@ -748,18 +748,21 @@ export function ChatScreen() {
         }),
       );
   }, [botSurfaceId, status, botJobs]);
-  // The three routine actions that RoutinesPane takes as props must keep the
+  // The routine actions that RoutinesPane takes as props must keep the
   // same identity across re-renders so the pane's `React.memo` wrapper can
   // hold: chat-screen ticks that do not change `surface.botId`, `botJobs`,
   // `foldRoutineRead`, or `routineJobsFromList` leave these callbacks alone,
   // and a memoized child renders only when its props change. The bodies are
   // byte-identical to the inline closures they replaced — only the closure
-  // identity moves; the call graph (`botJobs.create`/`run`/`pause`/`.list()`
+  // identity moves; the call graph (`botJobs.create`/`pause`/`.list()`
   // in the same order) is unchanged. The early-return on a non-bot surface
   // is defensive — BotChrome only renders for `surface.kind === 'bot'`, so
   // the user-invoked path cannot hit it, but `useCallback` keeps the deps
   // honest by keying on `botSurfaceId` (string | undefined) instead of the
-  // whole `surface` object.
+  // whole `surface` object. A routine row tap no longer runs the job — it
+  // opens the same CronJobSheet Activity renders, whose Run now / Pause /
+  // Remove re-list through the existing `handleRoutinesRetry` re-read, so
+  // there is no run callback to stabilize here.
   const handleRoutineCreate = useCallback(
     async (input: { title: string; prompt: string; schedule: string }) => {
       if (!botSurfaceId) return;
@@ -772,23 +775,6 @@ export function ChatScreen() {
       // Create already landed; a failed re-list must not look like
       // the Gate refused the job (that would keep the draft of a
       // routine that exists). Last-good stays; staleness is named.
-      await botJobs
-        .list()
-        .then((jobs) =>
-          foldRoutineRead(target, { ok: true, jobs: routineJobsFromList(jobs) }),
-        )
-        .catch(() => foldRoutineRead(target, { ok: false }));
-    },
-    [botSurfaceId, botJobs, foldRoutineRead, routineJobsFromList],
-  );
-  const handleRoutineRun = useCallback(
-    async (jobId: string) => {
-      if (!botSurfaceId) return;
-      const target = botSurfaceId;
-      await botJobs.run(jobId);
-      // Run already landed; a failed re-list must not look like
-      // the Gate refused the run (that would name an error for a
-      // routine that started). Last-good stays; staleness is named.
       await botJobs
         .list()
         .then((jobs) =>
@@ -1369,8 +1355,8 @@ export function ChatScreen() {
             failed={routineState.botId === surface.botId ? routineState.failed : false}
             onRetry={handleRoutinesRetry}
             onCreate={handleRoutineCreate}
-            onRun={handleRoutineRun}
             onTogglePause={handleRoutineTogglePause}
+            onChanged={handleRoutinesRetry}
           />
         </BotChrome>
       ) : toolsetsVisibleOn(surface) ? (

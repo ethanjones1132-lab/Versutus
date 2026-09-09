@@ -1,11 +1,14 @@
 import { memo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
+import { CronJobSheet } from '@/components/activity/cron-job-sheet';
+import { CronRunSheet } from '@/components/activity/cron-run-sheet';
 import { Button, ListRow, Skeleton, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import {
   ROUTINES_PANE_MAX_HEIGHT,
   applyRoutineCreate,
+  cronJobViewFromRoutine,
   DEFAULT_ROUTINE_SCHEDULE,
   describeRoutineError,
   parseRoutineName,
@@ -18,32 +21,34 @@ import {
 
 export type { RoutineJob };
 
-/** Bot Chat routines pane — wrapped in `memo` so a chat-screen tick that does not
- *  change `jobs`, `loaded`, `failed`, `onCreate`, `onRun`, `onTogglePause`, or
- *  `onRetry` stops re-rendering this subtree (its seven `useState` hooks and the
- *  `<ListRow>` rows it maps from `jobs`). Matches the pattern already shipped on
- *  `ChatHeader` (chat-header.tsx:35,176), `ChatRoster` (chat-roster.tsx:320),
- *  `SkillsPane` (skills-pane.tsx:14,81) and `ToolsPane` (tools-pane.tsx:14,81).
- *  Holding this requires the parent to pass referentially-stable callbacks —
- *  see the three `handleRoutine*` `useCallback`s in chat-screen.tsx.
+/** Bot Chat routines pane — wrapped in `memo` so a chat-screen tick that does
+ *  not change `jobs`, `loaded`, `failed`, `onCreate`, `onTogglePause`,
+ *  `onRetry`, or `onChanged` stops re-rendering this subtree (its
+ *  `useState` hooks and the `<ListRow>` rows it maps from `jobs`). Matches
+ *  the pattern already shipped on `ChatHeader` (chat-header.tsx:35,176),
+ *  `ChatRoster` (chat-roster.tsx:320), `SkillsPane` (skills-pane.tsx:14,81)
+ *  and `ToolsPane` (tools-pane.tsx:14,81). Holding this requires the parent
+ *  to pass referentially-stable callbacks — see the `handleRoutine*`
+ *  `useCallback`s in chat-screen.tsx.
  */
 function RoutinesPaneImpl({
   jobs,
   loaded,
   failed,
   onCreate,
-  onRun,
   onTogglePause,
   onRetry,
+  onChanged,
 }: {
   jobs: RoutineJob[];
   loaded: boolean;
   failed: boolean;
   onCreate: (input: { title: string; prompt: string; schedule: string }) => Promise<unknown>;
-  onRun: (jobId: string) => Promise<unknown>;
   onTogglePause: (jobId: string, paused: boolean) => Promise<unknown>;
   /** Re-run the same `botJobs.list` read the surface effect runs. */
   onRetry?: () => void;
+  /** Re-read the routine list after the job sheet's Run now / Pause / Remove landed. */
+  onChanged?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
@@ -52,9 +57,12 @@ function RoutinesPaneImpl({
   const [error, setError] = useState<string | undefined>();
   const [creating, setCreating] = useState(false);
   const [acting, setActing] = useState(false);
+  const [openJobId, setOpenJobId] = useState<string | null>(null);
+  const [openRunId, setOpenRunId] = useState<string | null>(null);
   const busy = creating || acting;
   const state: RoutinesState = { jobs, loaded, failed };
   const listCopy = routinesListCopy(state);
+  const openJob = openJobId ? jobs.find((job) => job.id === openJobId) ?? null : null;
 
   const submitCreate = () => {
     const submitted = {
@@ -81,17 +89,6 @@ function RoutinesPaneImpl({
         setError(next.error);
       })
       .finally(() => setCreating(false));
-  };
-
-  const submitRun = (jobId: string) => {
-    if (busy) return;
-    setActing(true);
-    setError(undefined);
-    void Promise.resolve(onRun(jobId))
-      .catch((cause: unknown) => {
-        setError(describeRoutineError(cause));
-      })
-      .finally(() => setActing(false));
   };
 
   const submitPause = (jobId: string, paused: boolean) => {
@@ -148,7 +145,7 @@ function RoutinesPaneImpl({
                 key={job.id}
                 title={parsed.title || job.id}
                 subtitle={routineJobSummary(job)}
-                onPress={() => submitRun(job.id)}
+                onPress={() => setOpenJobId(job.id)}
                 trailing={
                   <Button
                     label={job.paused ? 'Resume' : 'Pause'}
@@ -174,6 +171,33 @@ function RoutinesPaneImpl({
           />
         </ScrollView>
       ) : null}
+
+      {/*
+       * The same scheduled-job sheet Activity renders, fed by the slim
+       * routine view: run history, Run now, Pause/Resume, and Remove live on
+       * the row's tap instead of burying them on the Activity tab. Keyed by
+       * job id so each job opens fresh; the run transcript hides the job
+       * sheet (two BaseSheets must not stack) and closing it restores this
+       * one with the job still in state.
+       */}
+      <CronJobSheet
+        key={openJob?.id ?? 'no-job'}
+        job={openJob ? cronJobViewFromRoutine(openJob) : null}
+        onClose={() => setOpenJobId(null)}
+        onOpenRun={(runId) => setOpenRunId(runId)}
+        onRemoved={() => {
+          // The row's job no longer exists: close the sheet and let the
+          // parent re-read so the row drops without a remount.
+          setOpenJobId(null);
+          onChanged?.();
+        }}
+        onChanged={() => {
+          // Run now / Pause landed: the parent's row state (paused, next
+          // run) is stale until it re-reads.
+          onChanged?.();
+        }}
+      />
+      <CronRunSheet key={openRunId ?? 'no-run'} runId={openRunId} onClose={() => setOpenRunId(null)} />
     </View>
   );
 }

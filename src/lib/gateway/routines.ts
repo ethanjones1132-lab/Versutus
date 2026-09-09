@@ -1,4 +1,4 @@
-import { cronJobSummary } from './cron';
+import { cronJobSummary, type CronJob } from './cron';
 import { formatRunFailure } from './run-failures';
 
 export function routineName(botId: string, title: string): string {
@@ -141,6 +141,29 @@ export function routineJobSummary(job: RoutineJob, now = Date.now()): string {
     },
     now,
   );
+}
+
+/**
+ * The CronJob-shaped view of one routine, so the Bot Chat pane can mount the
+ * same CronJobSheet Activity uses. The routine read is a slim parse — fields
+ * it does not carry (prompt, model, provider, last run) stay absent, and the
+ * sheet renders its honest '—' for them rather than a curated guess. The title
+ * and owning Bot come from the `[bot:<name>]` naming convention, exactly as
+ * the row itself parses them.
+ */
+export function cronJobViewFromRoutine(job: RoutineJob): CronJob {
+  const parsed = parseRoutineName(job.name ?? job.id);
+  return {
+    id: job.id,
+    title: parsed.title || job.id,
+    name: job.name ?? null,
+    botId: parsed.botId ?? null,
+    schedule: job.schedule ?? null,
+    nextRunAt: job.nextRunAt ?? null,
+    lastStatus: job.lastStatus ?? null,
+    paused: job.paused,
+    running: job.running,
+  };
 }
 
 /** What one routine-list read produced. */

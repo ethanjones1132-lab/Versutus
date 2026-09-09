@@ -16,8 +16,8 @@ function readSource(...parts: string[]): string {
 describe('routines pane memo', () => {
   test('the pane imports memo and exports a memoized RoutinesPane', () => {
     // Every chat-screen tick that does not change `jobs`, `loaded`, `failed`,
-    // `onCreate`, `onRun`, `onTogglePause`, or `onRetry` would otherwise
-    // re-render this subtree (its seven `useState` hooks, the draft form, and
+    // `onCreate`, `onTogglePause`, `onRetry`, or `onChanged` would otherwise
+    // re-render this subtree (its `useState` hooks, the draft form, and
     // the `<ListRow>` rows mapped from `jobs`). Memo stops it. The pane now
     // matches the pattern already shipped on `ChatHeader`
     // (chat-header.tsx:35,176), `ChatRoster` (chat-roster.tsx:320),
@@ -85,32 +85,31 @@ describe('routines pane memo', () => {
   });
 
   test('chat-screen wires the pane to useCallback-stable handlers', () => {
-    // The three action callbacks the pane takes (`onCreate`, `onRun`,
-    // `onTogglePause`) were inline `async (input) => {...}` closures at
+    // The action callbacks the pane takes (`onCreate`, `onTogglePause`)
+    // were inline `async (input) => {...}` closures at
     // chat-screen.tsx:1272-1299 — fresh identities per render, so memo
     // alone would do nothing. The closures were extracted to
-    // `handleRoutineCreate`, `handleRoutineRun`, `handleRoutineTogglePause`
+    // `handleRoutineCreate` / `handleRoutineTogglePause`
     // (mirroring `handleSkillInvoke` at chat-screen.tsx:611-620), keyed on
     // `botSurfaceId`/`botJobs`/`foldRoutineRead`/`routineJobsFromList`.
+    // The sheet refresh reuses the already-stable `handleRoutinesRetry`,
+    // so a row tap opening the sheet never disturbs the memo hold.
     const screen = readSource('src', 'components', 'chat', 'chat-screen.tsx');
     expect(screen).toMatch(/const handleRoutineCreate = useCallback\(/);
-    expect(screen).toMatch(/const handleRoutineRun = useCallback\(/);
     expect(screen).toMatch(/const handleRoutineTogglePause = useCallback\(/);
     expect(screen).toContain('onCreate={handleRoutineCreate}');
-    expect(screen).toContain('onRun={handleRoutineRun}');
     expect(screen).toContain('onTogglePause={handleRoutineTogglePause}');
+    expect(screen).toContain('onChanged={handleRoutinesRetry}');
     // The inline closures that used to live at chat-screen.tsx:1272-1299 are
     // gone — otherwise memo would still see a fresh function every render.
     expect(screen).not.toMatch(/onCreate=\{async \(input\) => \{/);
-    expect(screen).not.toMatch(/onRun=\{async \(jobId\) => \{/);
     expect(screen).not.toMatch(/onTogglePause=\{async \(jobId, paused\) => \{/);
-    // The call graph is unchanged: the three handlers still invoke
-    // `botJobs.create` / `botJobs.run` / `botJobs.pause` / `botJobs.list`
+    // The call graph is unchanged for the two remaining handlers: they still
+    // invoke `botJobs.create` / `botJobs.pause` / `botJobs.list`
     // in the same order, with the same `foldRoutineRead` fold and the same
     // `routineJobsFromList` parse — extracting the closures must not change
     // what runs, only the closure identity.
     expect(screen).toMatch(/await botJobs\.create\(\{/);
-    expect(screen).toMatch(/await botJobs\.run\(jobId\)/);
     expect(screen).toMatch(/await botJobs\.pause\(jobId, paused\)/);
     expect(screen).toMatch(/await botJobs\s*\n?\s*\.list\(\)/);
     expect(screen).toMatch(/foldRoutineRead\(target, \{ ok: true, jobs: routineJobsFromList\(jobs\) \}\)/);

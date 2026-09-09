@@ -15,6 +15,8 @@ const screen = () =>
   readSource('src', 'components', 'chat', 'chat-screen.tsx');
 const pane = () =>
   readSource('src', 'components', 'chat', 'routines-pane.tsx');
+const sheet = () =>
+  readSource('src', 'components', 'activity', 'cron-job-sheet.tsx');
 
 function routineCallback(src: string, name: string): string {
   const fn = src.match(
@@ -26,52 +28,55 @@ function routineCallback(src: string, name: string): string {
   return fn ?? '';
 }
 
-// Tapping a routine row ran the job on the gateway but the pane kept the
-// old verdict until the next surface read — pausing the same row re-read
-// at once. Run now re-lists exactly like its two siblings.
-describe('routine run re-lists the roster', () => {
-  test('a successful run re-reads the routine list through the pause-shaped fold', () => {
+// A routine row tap no longer runs the job on the gateway — it opens the
+// same CronJobSheet Activity renders, and that sheet's Run now / Pause /
+// Remove re-lists the routine roster through the retry-shaped fold, exactly
+// like the create and pause siblings. These pins replaced the old
+// handleRoutineRun pins when the tap behavior moved into the sheet.
+describe('routine sheet actions re-list the roster', () => {
+  test('a landed Run now / Pause / Remove re-reads the routine list through the retry-shaped fold', () => {
     const src = screen();
-    const fn = routineCallback(src, 'handleRoutineRun');
-    expect(fn).toContain('await botJobs.run(jobId)');
-    expect(fn).toContain('foldRoutineRead(target, { ok: true, jobs: routineJobsFromList(jobs) })');
-    expect(fn).toContain('.catch(() => foldRoutineRead(target, { ok: false }))');
-    // The re-list lands inside the success path, after the run landed —
-    // a refused run throws before it and never reaches the fold.
-    const runIdx = fn.indexOf('await botJobs.run(jobId)');
-    const listIdx = fn.indexOf('.list()', runIdx);
-    const catchIdx = fn.indexOf('.catch(', runIdx);
-    expect(listIdx).toBeGreaterThan(runIdx);
-    expect(catchIdx).toBeGreaterThan(listIdx);
+    expect(src).toContain('onChanged={handleRoutinesRetry}');
+    const retry = routineCallback(src, 'handleRoutinesRetry');
+    expect(retry).toContain('botJobs');
+    expect(retry).toMatch(/\.list\(\)/);
+    expect(retry).toMatch(/applyRoutineRead\(previous,\s*\{\s*ok:\s*true,\s*jobs:\s*routineJobsFromList\(jobs\)/);
+    // The re-read failure folds { ok: false } — which keeps the last good
+    // list once loaded — and never names a refusal.
+    expect(retry).toMatch(/applyRoutineRead\(previous,\s*\{\s*ok:\s*false\s*\}/);
   });
 
-  test('a refused run never re-lists and the pane still names the refusal', () => {
-    const src = screen();
-    const fn = routineCallback(src, 'handleRoutineRun');
-    // No try around the run: a Gate refusal propagates to the pane's
-    // describeRoutineError instead of adopting a list the host refused.
-    expect(fn).not.toContain('try {');
-    expect(fn).not.toContain('describeRoutineError');
-    const runIdx = fn.indexOf('await botJobs.run(jobId)');
-    const foldIdx = fn.indexOf('foldRoutineRead(target, { ok: true');
-    expect(foldIdx).toBeGreaterThan(runIdx);
-    // The pane refusal path is untouched: a refused run keeps the draft
-    // list and says why.
-    const paneSrc = pane();
-    expect(paneSrc).toMatch(
-      /void Promise\.resolve\(onRun\(jobId\)\)\s*\.catch\(\(cause: unknown\) => \{\s*setError\(describeRoutineError\(cause\)\);/,
-    );
+  test('the pane forwards the sheet refresh to the same re-read callback, and only after a landed action', () => {
+    const src = pane();
+    const sheetMount = src.match(/<CronJobSheet[\s\S]*?\/>/)?.[0];
+    expect(sheetMount).toBeDefined();
+    expect(sheetMount).toContain('onChanged={() => {');
+    expect(sheetMount).toMatch(/onChanged\?\.\(\)/);
+    // Remove also closes the sheet: the open job no longer exists, so the
+    // row must drop and the sheet must not linger over a ghost job.
+    expect(sheetMount).toContain('setOpenJobId(null);');
+    // The sheet's own Run now calls onChanged inside its try block — a
+    // refusal jumps to catch and never reaches it — so a refused action
+    // never triggers the parent re-read.
+    const sheetSrc = sheet();
+    const toggle = sheetSrc.match(/const submitRun = useCallback\([\s\S]*?\n  \}, \[acting, botJobs, jobId, loadRuns, onChanged\]\);/)?.[0];
+    expect(toggle).toBeDefined();
+    const tryBlock = toggle?.match(/try \{[\s\S]*?\n    \} catch/)?.[0] ?? '';
+    expect(tryBlock).toContain('onChanged?.()');
+    const catchBlock = toggle?.match(/catch \(caught\) \{[\s\S]*?\n    \}/)?.[0] ?? '';
+    expect(catchBlock).not.toContain('onChanged');
   });
 
-  test('a failed re-list after a landed run names staleness, never a refusal', () => {
-    const src = screen();
-    const fn = routineCallback(src, 'handleRoutineRun');
-    // Mirrors the create-path comment: last-good stays, staleness is named.
-    expect(fn).toContain('a failed re-list must not look like');
-    expect(fn).toContain('the Gate refused the run');
-    // The re-list failure folds { ok: false } — which keeps the last good
-    // list once loaded — and never touches describeRoutineError.
-    expect(fn).toContain('.catch(() => foldRoutineRead(target, { ok: false }))');
+  test('the pane no longer runs a job itself: no run callback, no submitRun', () => {
+    // The old tap ran the job through `submitRun` + an `onRun` prop and
+    // named a refusal through describeRoutineError. Both are gone — the
+    // refusal now lands in the sheet's own controlError.
+    const src = pane();
+    expect(src).not.toContain('submitRun');
+    expect(src).not.toMatch(/\bonRun\b/);
+    expect(src).not.toContain('handleRoutineRun');
+    const sheetSrc = sheet();
+    expect(sheetSrc).toContain('describeCronJobControlError');
   });
 
   test('the create and pause siblings are byte-identical to the proven shape', () => {
@@ -91,12 +96,8 @@ describe('routine run re-lists the roster', () => {
     expect(pause).toContain('.catch(() => foldRoutineRead(botSurfaceId ?? \'\', { ok: false }));');
   });
 
-  test('all three routine callbacks stay memo-safe with stable identities', () => {
+  test('the remaining routine callbacks stay memo-safe with stable identities', () => {
     const src = screen();
-    const run = routineCallback(src, 'handleRoutineRun');
-    expect(run).toContain(
-      '[botSurfaceId, botJobs, foldRoutineRead, routineJobsFromList]',
-    );
     const create = routineCallback(src, 'handleRoutineCreate');
     expect(create).toContain(
       '[botSurfaceId, botJobs, foldRoutineRead, routineJobsFromList]',
@@ -105,9 +106,11 @@ describe('routine run re-lists the roster', () => {
     expect(pause).toContain(
       '[botSurfaceId, botJobs, foldRoutineRead, routineJobsFromList]',
     );
-    // The run callback guards the non-bot surface exactly like create, so
-    // the pane's React.memo wrapper holds across chat-screen ticks.
-    expect(run).toContain('if (!botSurfaceId) return;');
-    expect(run).toContain('const target = botSurfaceId;');
+    const retry = routineCallback(src, 'handleRoutinesRetry');
+    expect(retry).toContain('[botSurfaceId, status, botJobs]');
+    // The create callback guards the non-bot surface, so the pane's
+    // React.memo wrapper holds across chat-screen ticks.
+    expect(create).toContain('if (!botSurfaceId) return;');
+    expect(create).toContain('const target = botSurfaceId;');
   });
 });
