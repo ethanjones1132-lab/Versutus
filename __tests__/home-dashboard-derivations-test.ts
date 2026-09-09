@@ -18,7 +18,7 @@ describe('home dashboard derived values are memoized', () => {
     // channel glance and runs-supported flag on every render — including each
     // streamed frame — even though those inputs rarely change mid-turn.
     const src = readSource();
-    expect(src).toMatch(/import \{ useMemo, useState \} from 'react'/);
+    expect(src).toMatch(/import \{ useCallback, useMemo, useState \} from 'react'/);
   });
 
   test('activeRuns is inside a useMemo keyed on activityRuns', () => {

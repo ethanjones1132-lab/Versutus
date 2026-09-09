@@ -1,10 +1,11 @@
 import { type Href, Link, useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import * as Haptics from 'expo-haptics';
 
 import { PulsingDot, statusColor } from '@/components/connection-badge';
+import { DiscoveredGatewayRow } from '@/components/discovered-gateway-row';
 import { CapabilityHive } from '@/components/gateway/capability-hive';
 import { ChannelStatusRow } from '@/components/gateway/channel-status-row';
 import { CompactGatewayList } from '@/components/gateway/compact-gateway-list';
@@ -38,6 +39,7 @@ export function GatewayHomeDashboard() {
     statusDetail,
     lastError,
     connectGateway,
+    addGateway,
     deleteGateway,
     retryAutoConnect,
     autoRetry,
@@ -83,6 +85,23 @@ export function GatewayHomeDashboard() {
     () =>
       connected && capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'ready',
     [connected, capabilitySnapshot.groups],
+  );
+
+  // Empty-home discovered rows reuse Gate setup's add + connect + open-chat path.
+  const handleAddDiscovered = useCallback(
+    async (beaconId: string) => {
+      const beacon = discovery.gateways.find((item) => item.id === beaconId);
+      if (!beacon) return;
+      const profile = await addGateway({
+        name: beacon.name,
+        url: beacon.url,
+        tlsFingerprint: beacon.tlsFingerprint,
+        discoverySource: beacon.source === 'local' ? 'local' : 'tailscale',
+      });
+      await connectGateway(profile);
+      router.push('/chat');
+    },
+    [addGateway, connectGateway, discovery.gateways, router],
   );
 
   // One surface rule: with nothing saved yet this component is STILL the home
@@ -134,6 +153,14 @@ export function GatewayHomeDashboard() {
               {discovery.gateways.length} gateway{discovery.gateways.length === 1 ? '' : 's'} nearby - Versutus
               will use them automatically when connecting.
             </Text>
+            {discovery.gateways.map((gateway) => (
+              <DiscoveredGatewayRow
+                key={gateway.id}
+                gateway={gateway}
+                isScanning={discovery.status === 'scanning'}
+                onAdd={handleAddDiscovered}
+              />
+            ))}
           </GlassCollapsible>
         ) : null}
 
