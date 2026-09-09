@@ -35,6 +35,7 @@ function subscribeKeyboardHeight(onChange: () => void) {
 }
 
 function getKeyboardHeight(): number {
+  if (typeof Keyboard.metrics !== 'function') return 0;
   const height = Keyboard.metrics()?.height;
   return typeof height === 'number' && Number.isFinite(height) ? height : 0;
 }
