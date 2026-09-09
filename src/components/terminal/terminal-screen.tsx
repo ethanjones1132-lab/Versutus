@@ -376,11 +376,22 @@ export function TerminalScreen() {
             </Card>
           )}
           ListEmptyComponent={
-            <Text color="tertiary" variant="caption">
-              {status === 'connected'
-                ? 'Run a command to inspect or control the live gateway.'
-                : 'Connect to the gateway to run commands.'}
-            </Text>
+            status === 'connected' ? (
+              <Text color="tertiary" variant="caption">
+                Run a command to inspect or control the live gateway.
+              </Text>
+            ) : (
+              // Same shape as the Activity 'Connect to start runs' empty: the
+              // saved-gateway-but-disconnected case names the wait and offers
+              // the retry, instead of a caption with no tap anywhere.
+              <EmptyState
+                icon={{ ios: 'terminal', android: 'terminal', web: 'terminal' }}
+                title="Connect to run commands"
+                description="Connect to the gateway to run commands."
+                actionLabel="Reconnect"
+                onAction={() => void retryAutoConnect()}
+              />
+            )
           }
         />
       )}
