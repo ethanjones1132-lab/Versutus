@@ -19,7 +19,7 @@ import type { ProviderProfile, ProviderSnapshot } from '@/lib/gateway/provider-t
 
 /** Model providers the Gate owns: registration, credentials, catalogs. */
 export function ProvidersSection() {
-  const { status, gatewayRequest } = useGateway();
+  const { status, gatewayRequest, retryAutoConnect } = useGateway();
   const client = useMemo(() => createProviderClient(gatewayRequest), [gatewayRequest]);
   const [providers, setProviders] = useState<ProviderSnapshot[]>([]);
   const [profiles, setProfiles] = useState<ProviderProfile[]>([]);
@@ -218,7 +218,16 @@ export function ProvidersSection() {
           cause={error}
           affected="Providers on this Gate"
           next={status === 'connected' ? 'Retry, or check the Gate log for the failing call.' : 'Connect to the Gate first.'}
-          onRetry={() => void load()}
+          onRetry={() => {
+            // The disconnected card names "Connect to the Gate first" — retrying
+            // the read would only re-set the same error, so Retry re-runs the
+            // connect cycle; the connected refusal retries the failing call.
+            if (status === 'connected') {
+              void load();
+            } else {
+              void retryAutoConnect();
+            }
+          }}
         />
       ) : null}
       {notice ? <Text variant="caption">{notice}</Text> : null}
