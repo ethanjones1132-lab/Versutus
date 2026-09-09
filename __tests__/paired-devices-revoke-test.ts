@@ -32,6 +32,15 @@ function readSlashSource(): string {
     .replace(/\r\n/g, '\n');
 }
 
+function readExecuteRevoke(): string {
+  const src = readPaneSource();
+  const start = src.indexOf('const executeRevoke');
+  const end = src.indexOf('if (!visible) return null;', start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return src.slice(start, end);
+}
+
 describe('paired-devices revoke', () => {
   test('an active row exposes a Revoke action wired to a ConfirmSheet that calls device.revoke', () => {
     // The pane was a read-only stub (its own header comment said so) and
@@ -96,19 +105,66 @@ describe('paired-devices revoke', () => {
     expect(src).toMatch(/setRevokeTarget\(null\)/);
   });
 
-  test('a failed revoke keeps the row active and surfaces an honest failure', () => {
+  test('a successful revoke closes the sheet and re-reads only after device.revoke returns', () => {
+    // Closing and reloading before the Gate answers treated a throw as
+    // success — the sheet vanished, the row still said active, and
+    // nothing named the refusal. Close + load live in the try, after
+    // the await.
+    const execute = readExecuteRevoke();
+    const tryAt = execute.indexOf('try {');
+    const catchAt = execute.indexOf('} catch');
+    expect(tryAt).toBeGreaterThanOrEqual(0);
+    expect(catchAt).toBeGreaterThan(tryAt);
+    const tryBlock = execute.slice(tryAt, catchAt);
+    expect(tryBlock).toContain("await gatewayRequest('device.revoke', { deviceId: target })");
+    expect(tryBlock).toContain('setRevokeTarget(null);');
+    expect(tryBlock).toContain('void load();');
+    const requestAt = tryBlock.indexOf("await gatewayRequest('device.revoke', { deviceId: target })");
+    expect(tryBlock.indexOf('setRevokeTarget(null);')).toBeGreaterThan(requestAt);
+    expect(tryBlock.indexOf('void load();')).toBeGreaterThan(requestAt);
+  });
+
+  test('a refused revoke names the Gate reason and keeps the sheet open', () => {
     // device.revoke throws "No device \"<id>\" on file." for an unknown id
     // and surfaces a scope error for operator.read callers. The pane must
     // not silently drop the row to "revoked" — the Gate says nothing
-    // changed, and the UI must agree.
+    // changed, and the UI must agree. A throw is not a close.
+    const execute = readExecuteRevoke();
+    const catchAt = execute.indexOf('} catch');
+    expect(catchAt).toBeGreaterThanOrEqual(0);
+    const catchBlock = execute.slice(catchAt);
+    expect(catchBlock).toContain(
+      'setRevokeError(caught instanceof Error ? caught.message : String(caught));',
+    );
+    expect(catchBlock).not.toContain('setRevokeTarget(null);');
+    expect(catchBlock).not.toContain('void load();');
+  });
+
+  test('a failed revoke keeps the row active and does not mutate the list locally', () => {
     const src = readPaneSource();
-    // A revoke catch closes the sheet (clears revokeTarget) so the user
-    // can re-read the failure or retry.
-    expect(src).toMatch(/catch[\s\S]*?setRevokeTarget\(null\)/);
     // The pane does NOT mutate devices optimistically; a successful revoke
     // is reflected by the post-revoke device.list read, not by a local
     // mutation that may diverge from reality.
     expect(src).not.toMatch(/devices\.map\(\(device\)\s*=>\s*device\.deviceId\s*===\s*revokeTarget/);
+  });
+
+  test('the ConfirmSheet names a refusal in place of the confirmation copy', () => {
+    // The default confirmation copy stays the fallback so a first open
+    // still says what Revoke will do. A kept refusal replaces it so the
+    // operator sees the Gate's reason without dismissing.
+    const src = readPaneSource();
+    expect(src).toMatch(
+      /message=\{revokeError\s*\|\|\s*"This device's token will be removed from the Gate\. Any other paired device keeps working\."\}/,
+    );
+  });
+
+  test('cancel and a fresh confirm clear a previous refusal', () => {
+    const src = readPaneSource();
+    expect(src).toMatch(/onCancel=\{\(\) => \{\s*setRevokeTarget\(null\);\s*setRevokeError\(null\);\s*\}\}/);
+    const execute = readExecuteRevoke();
+    const tryAt = execute.indexOf('try {');
+    expect(tryAt).toBeGreaterThan(0);
+    expect(execute.slice(0, tryAt)).toContain('setRevokeError(null);');
   });
 
   test('the failed-first-read retry button stays byte-identical', () => {

@@ -26,6 +26,7 @@ export function PairedDevicesPane() {
   const { status, gatewayRequest, activeGateway } = useGateway();
   const [state, setState] = useState<PairedDevicesState & { gatewayId?: string }>(EMPTY_PAIRED_DEVICES);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
+  const [revokeError, setRevokeError] = useState<string | null>(null);
   const gatewayId = activeGateway?.id;
   const visible =
     status === 'connected' && !!gatewayId && pairedDevicesVisibleOn({ kind: activeGateway?.kind });
@@ -57,15 +58,16 @@ export function PairedDevicesPane() {
   const executeRevoke = useCallback(async () => {
     const target = revokeTarget;
     if (!target) return;
+    setRevokeError(null);
     try {
       await gatewayRequest('device.revoke', { deviceId: target });
       setRevokeTarget(null);
       void load();
-    } catch {
-      // device.revoke throws on unknown ids and scope mismatches. Close the
-      // sheet and let the next device.list read (or retry from the row)
-      // surface the unchanged state — no local optimistic mutation.
-      setRevokeTarget(null);
+    } catch (caught) {
+      // device.revoke throws on unknown ids and scope mismatches. Keep the
+      // sheet open and name the Gate's reason so the operator can retry —
+      // no local optimistic mutation.
+      setRevokeError(caught instanceof Error ? caught.message : String(caught));
     }
   }, [gatewayRequest, load, revokeTarget]);
 
@@ -123,10 +125,13 @@ export function PairedDevicesPane() {
       <ConfirmSheet
         visible={revokeTarget !== null}
         title="Revoke device?"
-        message="This device's token will be removed from the Gate. Any other paired device keeps working."
+        message={revokeError || "This device's token will be removed from the Gate. Any other paired device keeps working."}
         confirmLabel="Revoke"
         danger
-        onCancel={() => setRevokeTarget(null)}
+        onCancel={() => {
+          setRevokeTarget(null);
+          setRevokeError(null);
+        }}
         onConfirm={executeRevoke}
       />
     </Card>

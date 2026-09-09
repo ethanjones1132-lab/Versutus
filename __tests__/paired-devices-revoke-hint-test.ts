@@ -106,7 +106,7 @@ describe('paired-devices revoke hint', () => {
     const src = readPaneSource();
     expect(src).toMatch(/title="Revoke device\?"/);
     expect(src).toMatch(
-      /message="This device's token will be removed from the Gate\. Any other paired device keeps working\."/,
+      /"This device's token will be removed from the Gate\. Any other paired device keeps working\."/,
     );
     expect(src).toMatch(/confirmLabel="Revoke"/);
     expect(src).toMatch(/danger\s*\n\s*onCancel=/);
