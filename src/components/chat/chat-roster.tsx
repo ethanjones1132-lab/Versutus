@@ -17,7 +17,6 @@ import {
 import {
   filterGroupRooms,
   groupMemberLine,
-  MIN_GROUP_MEMBERS,
   type BotGroupRoom,
 } from '@/lib/gateway/groups';
 import { rosterBotTap } from '@/lib/gateway/roster-tap';
@@ -179,9 +178,6 @@ function ChatRosterImpl({
     hasBotManagement: canManageAgents,
     hasGroupRooms: canHostGroups,
   });
-  const routableBots = rows.filter(
-    (row): row is Extract<RosterRow, { kind: 'bot' }> => row.kind === 'bot' && row.bot.routable,
-  );
 
   // FlatList data: the configurable row, every visible bot row, then every
   // visible group room. Only these rows virtualize — search, errors, the
@@ -262,7 +258,9 @@ function ChatRosterImpl({
               style={styles.row}
             />
           ) : null}
-          {onNewGroup && routableBots.length >= MIN_GROUP_MEMBERS ? (
+          {/* Under the two-bot floor the sheet itself names the floor and
+              refuses Create — hiding the row only hid that honest copy. */}
+          {onNewGroup ? (
             <ListRow
               title="New Group Room"
               subtitle="2–6 bots reply in rounds to one message"
