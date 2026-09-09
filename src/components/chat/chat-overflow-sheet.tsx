@@ -1,8 +1,9 @@
+import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { CommandHistorySection } from '@/components/chat/command-history-section';
 import { SessionAnalytics } from '@/components/chat/session-analytics';
-import { BaseSheet, Divider, ListRow, Text } from '@/components/ui';
+import { BaseSheet, ConfirmSheet, Divider, ListRow, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { formatRelativeTime } from '@/lib/format';
 import type { SessionUsageInput } from '@/lib/gateway/session-analytics';
@@ -49,12 +50,16 @@ export function ChatOverflowSheet({
   sessions = [],
   onEditAgent,
 }: ChatOverflowSheetProps) {
+  // Disconnect arms a danger confirmation first — same pattern as session
+  // delete and group disband — so the tap cannot drop the connection alone.
+  const [disconnectArmed, setDisconnectArmed] = useState(false);
   if (!visible) return null;
 
   const lastActive = session?.lastActive ?? spendSession?.last_active;
 
   return (
-    <BaseSheet visible={visible} eyebrow="CHAT" title="Session &amp; connection" onClose={onClose} closeLabel="Dismiss">
+    <>
+      <BaseSheet visible={visible} eyebrow="CHAT" title="Session &amp; connection" onClose={onClose} closeLabel="Dismiss">
       {spendSession ? (
         <SessionAnalytics
           session={spendSession}
@@ -122,12 +127,25 @@ export function ChatOverflowSheet({
           icon={{ ios: 'power', android: 'power_settings_new', web: 'power_settings_new' }}
           chevron={false}
           onPress={() => {
-            onDisconnect();
-            onClose();
+            setDisconnectArmed(true);
           }}
         />
       </View>
-    </BaseSheet>
+      </BaseSheet>
+      <ConfirmSheet
+        visible={disconnectArmed}
+        title="Disconnect gateway?"
+        message="The gateway connection drops and this Chat clears its messages until you connect again."
+        confirmLabel="Disconnect gateway"
+        danger
+        onCancel={() => setDisconnectArmed(false)}
+        onConfirm={() => {
+          setDisconnectArmed(false);
+          onDisconnect();
+          onClose();
+        }}
+      />
+    </>
   );
 }
 
