@@ -37,6 +37,7 @@ export function ProviderActionsSheet({
   onRename,
 }: ProviderActionsSheetProps) {
   const [deleteVisible, setDeleteVisible] = useState(false);
+  const [disconnectVisible, setDisconnectVisible] = useState(false);
   const [renameVisible, setRenameVisible] = useState(false);
 
   if (!visible) return null;
@@ -64,6 +65,12 @@ export function ProviderActionsSheet({
     onClose();
   }
 
+  function executeDisconnect() {
+    onDisconnect();
+    setDisconnectVisible(false);
+    onClose();
+  }
+
   return (
     <BaseSheet visible={visible} eyebrow="PROVIDER" title={label} onClose={onClose} closeLabel="Dismiss">
       <ListRow title="Rename" icon={{ ios: 'pencil', android: 'edit', web: 'edit' }} chevron={false} onPress={openRename} />
@@ -72,9 +79,19 @@ export function ProviderActionsSheet({
       <ListRow title="Check readiness" icon={{ ios: 'stethoscope', android: 'health_and_safety', web: 'health_and_safety' }} chevron={false} onPress={run(onCheck)} />
       <ListRow title="Refresh catalog" icon={{ ios: 'arrow.clockwise', android: 'refresh', web: 'refresh' }} chevron={false} onPress={run(onRefresh)} />
       <Divider />
-      <ListRow title="Disconnect" icon={{ ios: 'link.badge.plus', android: 'link_off', web: 'link_off' }} chevron={false} onPress={run(onDisconnect)} />
+      <ListRow title="Disconnect" icon={{ ios: 'link.badge.plus', android: 'link_off', web: 'link_off' }} chevron={false} onPress={() => setDisconnectVisible(true)} />
       <ListRow title="Disable" icon={{ ios: 'pause.circle', android: 'pause_circle', web: 'pause_circle' }} chevron={false} onPress={run(onDisable)} />
       <ListRow title="Remove provider" icon={{ ios: 'trash', android: 'delete', web: 'delete' }} chevron={false} onPress={confirmDelete} accessibilityHint="Opens a confirmation, then removes this provider and its stored credential from the Gate." />
+
+      <ConfirmSheet
+        visible={disconnectVisible}
+        title="Disconnect provider?"
+        message={`The connection to ${label} ends and its stored credential is removed from the Gate.`}
+        confirmLabel="Disconnect"
+        danger
+        onCancel={() => setDisconnectVisible(false)}
+        onConfirm={executeDisconnect}
+      />
 
       <ConfirmSheet
         visible={deleteVisible}
