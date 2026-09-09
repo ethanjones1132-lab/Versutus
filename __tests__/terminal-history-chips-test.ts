@@ -49,3 +49,43 @@ describe('terminal history chips overflow', () => {
     expect(file).toMatch(/historyChip:\s*\{\s*maxWidth:\s*160/);
   });
 });
+
+describe('terminal history chips render the full stored history', () => {
+  const readScreen = () =>
+    nodeFs.readFileSync(
+      [__dirname, '..', 'src', 'components', 'terminal', 'terminal-screen.tsx'].join(SEP),
+      'utf8',
+    );
+
+  test('the chip row maps every stored input, not a slice of three', () => {
+    const file = readScreen();
+    expect(file).not.toMatch(/inputHistory\.slice\(0,\s*3\)/);
+    expect(file).toMatch(/\{inputHistory\.map\(/);
+  });
+
+  test('HISTORY_LIMIT stays 40 and the stored-history cap is intact', () => {
+    const file = readScreen();
+    expect(file).toMatch(/const HISTORY_LIMIT = 40;/);
+    expect(file).toMatch(/\.slice\(0, HISTORY_LIMIT\)/);
+  });
+
+  test('ArrowUp / ArrowDown history navigation is unchanged', () => {
+    const file = readScreen();
+    expect(file).toMatch(/ArrowUp' && inputHistory\.length > 0/);
+    expect(file).toMatch(/Math\.min\(historyIndex \+ 1, inputHistory\.length - 1\)/);
+    expect(file).toMatch(/ArrowDown' && historyIndex >= 0/);
+    expect(file).toMatch(/onKeyPress=\{handleInputKeyPress\}/);
+  });
+
+  test('Send still fires sendToTerminal and sendToTerminal still guards the session', () => {
+    const file = readScreen();
+    expect(file).toMatch(/onSubmitEditing=\{\(\) => void sendToTerminal\(\)\}/);
+    expect(file).toMatch(/<Button label="Send" size="sm" onPress=\{\(\) => void sendToTerminal\(\)\} \/>/);
+    expect(file).toMatch(/if \(!session \|\| !gateway \|\| !value\) return;/);
+  });
+
+  test('a tapped chip still writes the command into the input', () => {
+    const file = readScreen();
+    expect(file).toMatch(/onPress=\{\(\) => setInput\(command\)\}/);
+  });
+});

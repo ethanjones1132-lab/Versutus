@@ -305,7 +305,7 @@ export function TerminalScreen() {
                     keyboardShouldPersistTaps="handled"
                     style={styles.historyScroll}
                     contentContainerStyle={styles.historyRow}>
-                    {inputHistory.slice(0, 3).map((command) => (
+                    {inputHistory.map((command) => (
                       <Chip
                         key={command}
                         label={command}
