@@ -1,7 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import Animated, {
   Easing,
   Layout,
@@ -159,6 +159,20 @@ export function OnboardingScreen() {
                 Optional when the gateway is configured without authentication.
               </Text>
             </View>
+
+            {/* A scheme URL (ws://, http://) fails the hostname/IP gate above
+                on purpose — the manual add sheet accepts and canonicalizes
+                full URLs, and /gateway/add is exempt from the onboarding
+                redirect (route-guard), so this is the one path in for an
+                OpenClaw or custom-URL first run. */}
+            <Pressable
+              onPress={() => router.push('/gateway/add')}
+              accessibilityRole="button"
+              accessibilityLabel="Add a custom gateway URL">
+              <Text variant="link" color="accent">
+                Using a custom URL (ws:// or http://)? Add it manually
+              </Text>
+            </Pressable>
 
             {probeMessage && !busy ? (
               <Animated.View
