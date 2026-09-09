@@ -265,9 +265,18 @@ export function EnvironmentRunLauncher({
         </View>
 
         {detached ? (
-          <Text variant="caption" color="secondary">
-            The connection ended before the run finished. Reopen it from Recent runs — the full output replays.
-          </Text>
+          <View style={styles.detached}>
+            <Text variant="caption" color="secondary">
+              The connection ended before the run finished. Reopen it from Recent runs — the full output replays.
+            </Text>
+            {activeRunId ? (
+              <Button
+                label="Reopen"
+                onPress={() => void attach(activeRunId)}
+                disabled={!environment || running}
+              />
+            ) : null}
+          </View>
         ) : null}
 
         {approval ? (
@@ -345,6 +354,7 @@ const styles = StyleSheet.create({
   statusRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: Spacing.two, marginTop: Spacing.two },
   log: { maxHeight: 240, marginTop: Spacing.two },
   history: { marginTop: Spacing.two, gap: Spacing.one },
+  detached: { gap: Spacing.one, marginTop: Spacing.two },
   bubble: {
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Palette.border,
