@@ -1,6 +1,10 @@
+import * as Clipboard from 'expo-clipboard';
+import * as Haptics from 'expo-haptics';
 import { Link } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
+import { DeviceIdRow } from '@/components/device-id-row';
 import { TransportSecurityCard } from '@/components/gateway/transport-security-card';
 import { Badge, Card, Icon, Screen, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
@@ -8,6 +12,14 @@ import { useGateway } from '@/context/gateway-provider';
 
 export default function GatewaySettingsScreen() {
   const { activeGateway, settings, deviceId } = useGateway();
+  const [copied, setCopied] = useState<'id' | null>(null);
+
+  const copyText = useCallback(async (text: string) => {
+    await Clipboard.setStringAsync(text);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCopied('id');
+    setTimeout(() => setCopied(null), 2000);
+  }, []);
 
   return (
     <Screen>
@@ -99,9 +111,7 @@ export default function GatewaySettingsScreen() {
                 <Icon name={{ ios: 'iphone', android: 'smartphone', web: 'smartphone' }} size={18} color="accentWarm" />
               </View>
               {deviceId ? (
-                <Text variant="mono" color="secondary">
-                  {deviceId}
-                </Text>
+                <DeviceIdRow deviceId={deviceId} copied={copied} onCopy={copyText} />
               ) : (
                 <Text variant="caption" color="tertiary">
                   Loading device identity…
