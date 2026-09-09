@@ -247,6 +247,14 @@ export default function ActivityScreen() {
                   ? 'Reconnect, then start a run from this screen or Chat → overflow → Run task.'
                   : 'Start a run above, use Chat overflow → Run task, or type /run <prompt> in chat.'
           }
+          actionLabel={activeGateway && status !== 'connected' ? 'Reconnect' : undefined}
+          onAction={
+            activeGateway && status !== 'connected'
+              ? () => {
+                  void connectGateway(activeGateway);
+                }
+              : undefined
+          }
         />
       ) : null}
     </View>
