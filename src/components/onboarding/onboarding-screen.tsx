@@ -26,7 +26,7 @@ import { validatePcAddress } from '@/lib/onboarding/validate-pc-address';
 export function OnboardingScreen() {
   const router = useRouter();
   const tokens = useTokens();
-  const { setupFromPcAddress, probeMessage, connectionPhase, settings } = useGateway();
+  const { setupFromPcAddress, probeMessage, connectionPhase, settings, retryAutoConnect } = useGateway();
   const [pcAddress, setPcAddress] = useState(settings.tailscaleHost ?? '');
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -169,6 +169,15 @@ export function OnboardingScreen() {
                 {busy ? <ActivityIndicator color={tokens.accent} /> : null}
                 <Text color="secondary">{probeMessage}</Text>
               </Animated.View>
+            ) : null}
+
+            {probeMessage && !busy && connectionPhase === 'failed' ? (
+              // The failed auto-connect message says "Tap retry", and the
+              // Connect CTA above stays disabled until an address validates —
+              // on a discovery-only failure the field is empty and there was
+              // no tap anywhere. Retry re-runs the auto-connect cycle, the
+              // same affordance Home's Try-again button fires.
+              <Button label="Retry" onPress={() => void retryAutoConnect()} />
             ) : null}
 
             {error ? (
