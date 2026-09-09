@@ -133,6 +133,8 @@ export type ThreadConfigSheetProps = {
   modelAgentId?: string;
   onSelectModel?: (modelId: string, providerId?: string) => void;
   onRefreshModels?: () => void;
+  /** Set when the last model-catalog read failed. Empty is not "no catalog". */
+  modelsError?: string;
   // Backends section
   backends?: GatewayBackend[];
   selectedBackendId?: string;
@@ -470,11 +472,14 @@ function SessionsSection({
 /** Formerly model-picker-sheet: searchable, provider-grouped catalog. */
 function ModelsSection({
   models = [],
+  modelsError,
   currentDefault,
   onSelect,
   onRefresh,
 }: {
   models?: ModelItem[];
+  /** Set when the last catalog read failed. Empty is not "no catalog". */
+  modelsError?: string;
   currentDefault?: string;
   onSelect?: (modelId: string, providerId?: string) => void;
   onRefresh?: () => void;
@@ -623,11 +628,21 @@ function ModelsSection({
         />
       ) : null}
 
+      {modelsError && models.length > 0 ? (
+        <Text variant="caption" color="secondary" style={styles.blurb}>
+          {modelsError}
+        </Text>
+      ) : null}
+
       {models.length === 0 ? (
         <EmptyState
           icon={{ ios: 'cpu', android: 'memory', web: 'memory' }}
-          title="No models found"
-          description="The gateway has not reported a model catalog yet. Refresh to ask again."
+          title={modelsError ?? 'No models found'}
+          description={
+            modelsError
+              ? undefined
+              : 'The gateway has not reported a model catalog yet. Refresh to ask again.'
+          }
           actionLabel={onRefresh ? 'Refresh catalog' : undefined}
           onAction={onRefresh}
         />
@@ -765,6 +780,7 @@ export function ThreadConfigSheet({
   modelAgentId,
   onSelectModel,
   onRefreshModels,
+  modelsError,
   backends,
   selectedBackendId,
   onSelectBackend,
@@ -812,6 +828,7 @@ export function ThreadConfigSheet({
       ) : mode === 'models' ? (
         <ModelsSection
           models={models}
+          modelsError={modelsError}
           currentDefault={currentModel}
           onSelect={onSelectModel}
           onRefresh={onRefreshModels}

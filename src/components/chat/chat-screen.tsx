@@ -248,6 +248,7 @@ export function ChatScreen() {
     stopStreaming,
     selectModel,
     modelCatalog,
+    modelCatalogError,
     sessionSelector,
     openSessionSelector,
     closeSessionSelector,
@@ -1691,6 +1692,7 @@ export function ChatScreen() {
         onDeleteSession={(sessionId) => void deleteSessionById(sessionId)}
         onOpenSessionById={handleOpenSessionById}
         models={modelRows}
+        modelsError={modelCatalogError}
         currentModel={activeGateway.model}
         modelMode={modelPicker.mode}
         modelAgentId={modelPicker.agentId}

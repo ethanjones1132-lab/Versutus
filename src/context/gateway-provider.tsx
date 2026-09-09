@@ -340,6 +340,8 @@ type GatewayContextValue = {
   closeModelPicker: () => void;
   selectModel: (modelId: string, providerId?: string) => void;
   modelCatalog: any[];
+  /** Set when the last model-catalog read failed. A cached catalog stays usable. */
+  modelCatalogError?: string;
   sessionSelector: { visible: boolean };
   openSessionSelector: () => void;
   closeSessionSelector: () => void;
@@ -667,6 +669,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     agentId?: string;
   }>({ visible: false, mode: 'default' });
   const [modelCatalog, setModelCatalog] = useState<any[]>([]);
+  const [modelCatalogError, setModelCatalogError] = useState<string | undefined>(undefined);
   const [sessionListState, setSessionListState] = useState<SessionListState<HermesSession>>(
     emptySessionList<HermesSession>(),
   );
@@ -2469,14 +2472,22 @@ const response = await executeGatewaySlashCommand(trimmed, {
     const seq = modelReadSeqRef.current + 1;
     modelReadSeqRef.current = seq;
     setModelPicker({ visible: true, mode, agentId });
+    // A fresh attempt drops the past refusal — reporting it before the new
+    // read answers would be reporting the past as the present. The cached
+    // catalog stays on screen while the re-read runs.
+    setModelCatalogError(undefined);
     const client = clientRef.current;
     if (!client) return;
     try {
       const models = await client.getModels();
       if (seq !== modelReadSeqRef.current) return;
       setModelCatalog(models);
-    } catch {
-      // Keep picker usable with any cached catalog.
+      setModelCatalogError(undefined);
+    } catch (error) {
+      if (seq !== modelReadSeqRef.current) return;
+      // The sheet used to read a refused catalog as "never reported".
+      const message = error instanceof Error ? error.message : String(error);
+      setModelCatalogError(message || 'Model catalog could not be read.');
     }
   }, []);
 
@@ -3312,6 +3323,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       closeModelPicker,
       selectModel,
       modelCatalog,
+      modelCatalogError,
       sessionSelector,
       openSessionSelector,
       closeSessionSelector,
@@ -3343,7 +3355,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       approveTlsFingerprintChange,
       rejectTlsFingerprintChange,
       runTask, activityRuns, stopActivityRun, loadRunEvents, modelPicker, openModelPicker, closeModelPicker,
-      selectModel, modelCatalog, sessionSelector,
+      selectModel, modelCatalog, modelCatalogError, sessionSelector,
       openSessionSelector, closeSessionSelector, selectSession, sessionListState, currentSessionId,
       sessionListHasOlder, loadingOlderSessions, loadOlderSessions,
       historyLoading, createNewSession, deleteSessionById, deleteLocalMessage,
