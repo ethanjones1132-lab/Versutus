@@ -351,7 +351,7 @@ export function createEnvironmentClient(
       return Array.isArray(raw) ? raw : raw.adapters ?? [];
     },
     list: async () => {
-      const result = await request<{ environments?: EnvironmentSnapshot[] } | EnvironmentSnapshot[]>('environments.list').catch(() => ({ environments: [] }));
+      const result = await request<{ environments?: EnvironmentSnapshot[] } | EnvironmentSnapshot[]>('environments.list');
       return Array.isArray(result) ? result : result.environments ?? [];
     },
     check: (id: string) => request<{ id: string; state: string }>('environments.check', { id }),

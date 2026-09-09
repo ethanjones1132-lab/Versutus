@@ -124,6 +124,20 @@ export function CapabilitiesSection() {
     setError(null);
     try {
       const config = configFromDraft(selectedKind.configFields);
+      const secretField = selectedKind.configFields.find((field) => field.type === 'secret-ref');
+      const refName = secretField ? String(config[secretField.key] ?? '') : '';
+      const hasSecret = !!refName && !!draft.secretValue.trim();
+      if (hasSecret) {
+        // The Gate refuses this too, but catching it here can name the field —
+        // and it must run before create/update so a refused save leaves no
+        // instance behind that a retry then cannot re-create.
+        if (looksLikeCredential(refName)) {
+          setError(
+            `"${secretField?.label ?? 'Secret ref'}" holds the secret's name, not the secret. Put the key in "Secret value" and give this field a name like "my-api-key".`,
+          );
+          return;
+        }
+      }
       if (draft.mode === 'create') {
         await gatewayRequest('registry.instances.create', {
           id: draft.id,
@@ -138,16 +152,7 @@ export function CapabilitiesSection() {
           config,
         });
       }
-      const secretField = selectedKind.configFields.find((field) => field.type === 'secret-ref');
-      const refName = secretField ? String(config[secretField.key] ?? '') : '';
-      if (refName && draft.secretValue.trim()) {
-        // The Gate refuses this too, but catching it here can name the field.
-        if (looksLikeCredential(refName)) {
-          setError(
-            `"${secretField?.label ?? 'Secret ref'}" holds the secret's name, not the secret. Put the key in "Secret value" and give this field a name like "my-api-key".`,
-          );
-          return;
-        }
+      if (hasSecret) {
         await gatewayRequest('registry.secrets.set', { refName, value: draft.secretValue.trim() });
       }
       setDraft(null);
