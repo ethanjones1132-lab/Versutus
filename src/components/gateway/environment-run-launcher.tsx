@@ -206,10 +206,12 @@ export function EnvironmentRunLauncher({
 
   async function decide(decision: 'approve' | 'deny') {
     if (!environment || !activeRunId || !approval) return;
-    await client
-      .approveRun(environment.id, activeRunId, approval.id, decision)
-      .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught)));
-    setApproval(null);
+    try {
+      await client.approveRun(environment.id, activeRunId, approval.id, decision);
+      setApproval(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
   }
 
   const badge = detached ? { label: 'Detached', tone: 'neutral' as const } : environmentRunBadge(view, { starting: running && events.length === 0 });
