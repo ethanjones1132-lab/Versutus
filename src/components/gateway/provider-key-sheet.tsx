@@ -18,6 +18,11 @@ export type ProviderKeySheetProps = {
  */
 export function ProviderKeySheet({ visible, label, busy, onSubmit, onClose }: ProviderKeySheetProps) {
   const [value, setValue] = useState('');
+  const [wasVisible, setWasVisible] = useState(visible);
+  if (visible !== wasVisible) {
+    setWasVisible(visible);
+    if (!visible) setValue('');
+  }
   if (!visible) return null;
 
   return (
@@ -39,7 +44,6 @@ export function ProviderKeySheet({ visible, label, busy, onSubmit, onClose }: Pr
         disabled={!value || busy}
         onPress={() => {
           onSubmit(value);
-          setValue('');
         }}
       />
     </BaseSheet>

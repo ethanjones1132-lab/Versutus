@@ -68,7 +68,7 @@ describe('providers section card errors', () => {
     expect((src.match(/setError\(caught instanceof Error \? caught\.message : String\(caught\)\);/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
-  test('register/saveKey/handleRename stay untouched', () => {
+  test('register/handleRename stay untouched; saveKey still sends the key', () => {
     const src = readSection();
     expect(src).toContain('await client.create(input);');
     expect(src).toContain('await client.setApiKey(id, value);');

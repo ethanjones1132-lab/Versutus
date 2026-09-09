@@ -142,12 +142,12 @@ export function ProvidersSection() {
           `${snapshot.label}: ${snapshot.readiness?.message ?? snapshot.readiness?.state ?? 'not ready'}`,
         );
       }
+      setEditingId(null);
+      void load();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setEditingId(null);
       setBusy(false);
-      void load();
     }
   }
 
