@@ -184,10 +184,11 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
 
       <CronJobSheet
         key={openJob?.id ?? 'no-job'}
-        job={openJob}
+        // Hide while a run transcript is open so two BaseSheets do not stack;
+        // the job stays in state and closing the run restores RUN HISTORY.
+        job={openRunId ? null : openJob}
         onClose={() => setOpenJob(null)}
         onOpenRun={(runId) => {
-          setOpenJob(null);
           setOpenRunId(runId);
         }}
         onRemoved={() => {
