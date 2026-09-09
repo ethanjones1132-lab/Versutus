@@ -1,7 +1,8 @@
+import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
@@ -35,6 +36,7 @@ import {
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { appendTerminalChunk, type TerminalLine } from '@/lib/terminal/output';
+import { ansiPlainText } from '@/lib/terminal/ansi';
 import { openTerminalSession, sendTerminalInput, type TerminalSession } from '@/lib/terminal/client';
 import { describeShellUnavailable, resolveShellSupport } from '@/lib/terminal/shell-support';
 import { terminalKeyboardBehavior } from '@/lib/terminal/keyboard-behavior';
@@ -76,6 +78,8 @@ export function TerminalScreen() {
   const [runningCommandId, setRunningCommandId] = useState<string | null>(null);
   const [commandLog, setCommandLog] = useState('');
   const [logSheetVisible, setLogSheetVisible] = useState(false);
+  const [outputCopied, setOutputCopied] = useState(false);
+  const outputCopiedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
   const sessionRef = useRef<TerminalSession | null>(null);
@@ -138,6 +142,16 @@ export function TerminalScreen() {
       void startTerminal();
     }
   }, [gatewayId, mode, shellReady, startTerminal, status]);
+
+  // Same copy contract as the RPC/Agent CommandLogSheet: the visible lines go
+  // to the clipboard as plain text (ANSI stripped), with a copied flash.
+  const copyTerminalOutput = useCallback(async () => {
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await Clipboard.setStringAsync(terminalLines.map((line) => ansiPlainText(line.text)).join('\n'));
+    setOutputCopied(true);
+    if (outputCopiedResetRef.current) clearTimeout(outputCopiedResetRef.current);
+    outputCopiedResetRef.current = setTimeout(() => setOutputCopied(false), 2000);
+  }, [terminalLines]);
 
   const sendToTerminal = useCallback(async () => {
     const session = sessionRef.current;
@@ -291,6 +305,16 @@ export function TerminalScreen() {
                     : 'starting…'}
                 {terminalConnected && activeHello?.server?.version ? ` · v${activeHello.server.version}` : ''}
               </Text>
+              <Pressable
+                style={styles.terminalBannerCopy}
+                onPress={() => void copyTerminalOutput()}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel={outputCopied ? 'Output copied' : 'Copy terminal output'}>
+                <Text variant="caption" color="accentWarm">
+                  {outputCopied ? 'Copied' : 'Copy'}
+                </Text>
+              </Pressable>
             </View>
             <TerminalOutput lines={terminalLines} onScroll={onScroll} />
           </View>
@@ -443,6 +467,9 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.one,
     borderBottomWidth: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  terminalBannerCopy: {
+    marginLeft: 'auto',
   },
   terminalBannerDot: {
     width: 7,
