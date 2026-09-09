@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { BaseSheet, Divider, Skeleton, Text } from '@/components/ui';
+import { BaseSheet, Button, Divider, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { formatRunFailure } from '@/lib/gateway/run-failures';
 import { runEventPreview } from '@/lib/gateway/runs';
@@ -89,6 +89,9 @@ export function AgenticRunSheet({ runId, loadEvents, onClose }: AgenticRunSheetP
           <Text variant="caption" color="statusDisconnected" selectable>
             {formatRunFailure(error) ?? error}
           </Text>
+        ) : null}
+        {error ? (
+          <Button label="Retry" variant="ghost" size="sm" onPress={() => void fetch(runId)} />
         ) : null}
 
         {events === null && !error ? (
