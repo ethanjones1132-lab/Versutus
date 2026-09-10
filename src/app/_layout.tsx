@@ -17,6 +17,7 @@ import { TlsFingerprintGuard } from '@/components/gateway/tls-fingerprint-guard'
 import { VersutusDarkTheme } from '@/constants/navigation-theme';
 import { GatewayProvider, useGateway } from '@/context/gateway-provider';
 import { installStreamingFetch } from '@/lib/net/streaming-fetch';
+import { routeForTap } from '@/lib/notifications/tap-route';
 
 // React Native's global fetch cannot stream a response body, so SSE readers
 // throw on device. Install the WinterCG implementation before any gateway
@@ -27,9 +28,12 @@ installStreamingFetch(expoFetch as unknown as typeof globalThis.fetch);
 function NotificationRouter() {
   const router = useRouter();
   useEffect(() => {
-    const subscription = Notifications.addNotificationResponseReceivedListener(() => {
-      // Approvals + live runs are monitored on Activity (chat still has the sheet).
-      router.navigate('/activity');
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      // Route on the payload's kind: a routine notice opens Chat (its roster
+      // is the Bot list). Runs, approvals and anything unrecognized stay on
+      // Activity, where they are monitored (chat still has the sheet).
+      const route = routeForTap(response.notification.request.content.data);
+      router.navigate(route?.kind === 'routine' ? '/chat' : '/activity');
     });
     return () => subscription.remove();
   }, [router]);
