@@ -13,6 +13,7 @@ import { GatewayCapabilities } from '@/components/gateway/gateway-capabilities';
 import { HealthChecksPane } from '@/components/gateway/health-checks-pane';
 import { PairedDevicesPane } from '@/components/gateway/paired-devices-pane';
 import { GlassCollapsible } from '@/components/glass-collapsible';
+import { HomeBriefingCard } from '@/components/home-briefing-card';
 import { HomeStatusCard } from '@/components/home-status-card';
 import { PairingPanel } from '@/components/pairing-panel';
 import { Badge, Button, Card, ConfirmSheet, ErrorCard, Icon, PressableScale, StatTile, Text } from '@/components/ui';
@@ -367,6 +368,8 @@ export function GatewayHomeDashboard() {
           icon={{ ios: 'square.grid.2x2', android: 'apps', web: 'apps' }}
         />
       </View>
+
+      <HomeBriefingCard />
 
       <View style={styles.sectionHeader}>
         <Text variant="caption">Gateways</Text>
