@@ -108,9 +108,10 @@ test('the section is collapsed by default and display-only', () => {
 test('the section has one export path, and it is the Markdown composer', () => {
   const src = section();
   // Exactly one call site, and it hands the composer the entries the section
-  // holds — not a slice the section cut for itself.
+  // holds — not a slice the section cut for itself — with the one option the
+  // operator's own toggle decides.
   expect(src.match(/commandTranscriptMarkdown\(/g) ?? []).toHaveLength(1);
-  expect(src).toContain('commandTranscriptMarkdown(commandTranscripts)');
+  expect(src).toContain('commandTranscriptMarkdown(commandTranscripts, { includeRaw })');
   expect(src).toContain('Clipboard.setStringAsync');
   expect(src).toContain('label="Copy Markdown"');
   // No second way out: no direct serialization, no store re-read, no gateway.
@@ -124,8 +125,31 @@ test('the section has one export path, and it is the Markdown composer', () => {
   const emptyIdx = src.indexOf('commandHistoryEmptyCopy()');
   expect(buttonIdx).toBeGreaterThan(rowsIdx);
   expect(buttonIdx).toBeGreaterThan(emptyIdx);
-  // The default is redaction: the section never asks the composer for raw.
-  expect(src).not.toContain('includeRaw');
+});
+
+test('the raw output is behind a switch that starts off', () => {
+  const src = section();
+  // Redaction is what the operator gets without asking: the state starts off
+  // — the composer's own default — and the handler hands the composer the
+  // state, never a literal.
+  expect(src).toContain('const [includeRaw, setIncludeRaw] = useState(false)');
+  expect(src).not.toContain('includeRaw: true');
+  expect(src).not.toContain('includeRaw={true}');
+  // The repo's own switch, the scorecards opt-in's shape.
+  expect(src).toContain('<Switch');
+  expect(src).toContain('onValueChange={setIncludeRaw}');
+  expect(src).toContain('accessibilityState={{ checked: includeRaw }}');
+  // It sits beside the copy action, inside the open-and-non-empty branch —
+  // an empty history holds no raw output to carry.
+  const emptyIdx = src.indexOf('commandHistoryEmptyCopy()');
+  const switchIdx = src.indexOf('<Switch');
+  const copyIdx = src.indexOf('label="Copy Markdown"');
+  expect(switchIdx).toBeGreaterThan(emptyIdx);
+  expect(copyIdx).toBeGreaterThan(switchIdx);
+  // The label and its caption are the section's, and the caption says what
+  // the payloads are: the tool calls, verbatim.
+  expect(src).toContain('Include raw output');
+  expect(src).toContain('The tool calls and payloads, verbatim. Off keeps them redacted.');
 });
 
 test('the history block lives in the chat overflow sheet', () => {
