@@ -62,6 +62,16 @@
           "microphonePermission": "Versutus uses the microphone to turn what you say into a message draft.",
           "speechRecognitionPermission": "Versutus uses speech recognition to write down what you say so you can review it before sending."
         }
+      ],
+      [
+        "expo-share-intent",
+        {
+          "disableIOS": true,
+          "androidIntentFilters": ["text/*"],
+          "androidMainActivityAttributes": {
+            "android:launchMode": "singleTask"
+          }
+        }
       ]
     ],
     "experiments": {

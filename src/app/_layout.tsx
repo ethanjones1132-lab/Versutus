@@ -23,6 +23,11 @@ import {
 } from '@/context/gateway-provider';
 import type { ChatSurface } from '@/lib/gateway/bots';
 import { deepLinkTarget } from '@/lib/gateway/deep-link';
+import {
+  dismissSharedText,
+  listenForSharedText,
+  sharedTextRequest,
+} from '@/lib/gateway/share-intent';
 import type { ConnectionStatus } from '@/lib/gateway/types';
 import { installStreamingFetch } from '@/lib/net/streaming-fetch';
 import {
@@ -431,6 +436,65 @@ function GatewayDeepLinkRouter() {
   return null;
 }
 
+/**
+ * A text shared into Versutus from another app (item 5's Android half). The
+ * platform's share sheet hands this app a SEND intent, `expo-share-intent`
+ * reads it, and this hands the words to the provider slot the compose link
+ * already fills — the screen writes them into whatever thread is up, and
+ * nothing here sends them (FUTURE-ITEMS.md:193-194).
+ *
+ * A share names no Bot, so there is no thread to open first: the words belong
+ * to whichever thread the operator is already on, which is the screen's call
+ * (`composeRequestApplies`). A share with no words — a file, an empty payload —
+ * asks for no draft at all, and the request is what a surface elsewhere in the
+ * app can take: with no gateway connected the operator is left where the boot
+ * overlay's first-run redirect puts them, and the words wait on the provider
+ * for the thread they end up on, exactly as a held compose link does.
+ *
+ * The listener goes up only once the gateway has bootstrapped, the same guard
+ * the deep-link router keeps: a share that LAUNCHED the app is still held by
+ * the platform, so it is read rather than raced against the boot overlay.
+ */
+function SharedTextRouter() {
+  const router = useRouter();
+  const { isBootstrapped, requestComposeRequest, status } = useGateway();
+
+  useEffect(() => {
+    if (!isBootstrapped) return;
+
+    let stop: (() => void) | undefined;
+    let cancelled = false;
+
+    void listenForSharedText((payload) => {
+      const request = sharedTextRequest(payload);
+      if (!request) return;
+
+      requestComposeRequest(request);
+      // The share is forgotten the moment its words are handed over: the
+      // platform holds the intent past handing it to us, and a second read
+      // would put the same text in the draft twice.
+      void dismissSharedText();
+      if (status === 'connected') router.navigate('/chat');
+    }).then((unlisten) => {
+      // The effect can be torn down before the load answers — a status flip
+      // re-runs it — and a listener that arrives after that must not outlive
+      // the effect that asked for it.
+      if (cancelled) {
+        unlisten();
+        return;
+      }
+      stop = unlisten;
+    });
+
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, [router, isBootstrapped, status, requestComposeRequest]);
+
+  return null;
+}
+
 export default function RootLayout() {
   return (
     // GatewayProvider stays outside FontProvider on purpose: FontProvider
@@ -444,6 +508,7 @@ export default function RootLayout() {
            <StatusBar style="light" />
            <NotificationRouter />
            <GatewayDeepLinkRouter />
+           <SharedTextRouter />
           <AppBootstrap>
             <View style={styles.root}>
               <AnimatedSplashOverlay />
