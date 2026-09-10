@@ -202,7 +202,7 @@ describe('the gate and its switch', () => {
     expect(handler).not.toContain('setLocked');
   });
 
-  test('the lock edge brings the presented routes down, and only the lock edge', () => {
+  test('the lock brings the presented routes down, and the unlock path does not', () => {
     const src = gate();
     // The Stack itself stays mounted — the router, the deep-link listener and
     // the notification router keep running — but a modal route the operator
@@ -217,6 +217,24 @@ describe('the gate and its switch', () => {
     // Nothing to pop means the Stack is on its first screen: dismissing then
     // would be a navigation for nothing.
     expect(src).toMatch(/if \(!router\.canDismiss\(\)\) return;/);
+  });
+
+  test('a route that arrives while the lock is up is brought down too', () => {
+    const src = gate();
+    // react-native-screens presents a stack modal from the topmost presented
+    // controller (RNSScreenStack.mm, `changeRootController`), which while this
+    // cover is up IS the cover — so a route the lock has never seen is
+    // presented above it. The dismissal is therefore keyed on the presented
+    // route as well as on the lock edge: the arriving route comes down instead
+    // of staying legible over a locked app.
+    expect(src).toContain("import { usePathname, useRouter } from 'expo-router';");
+    expect(src).toContain('const presentedRoute = usePathname();');
+    expect(src).toMatch(/\}, \[locked, router, presentedRoute\]\);/);
+    // Still one dismissal site, so the route that arrives is brought down by
+    // the same rule as the one the lock edge already found.
+    expect(src.match(/router\.dismissAll\(\)/g)).toHaveLength(1);
+    // The lock is still the only trigger: nothing here navigates on unlock.
+    expect(src).toMatch(/if \(!locked\) return;/);
   });
 
   test('no unlock path navigates', () => {

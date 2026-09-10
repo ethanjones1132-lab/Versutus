@@ -7,16 +7,20 @@
 // The cover is a Modal — the surface a sheet is presented in (BaseSheet) —
 // because a View sitting beside the Stack is not above one: an open sheet and a
 // modal-presentation route are drawn by a native presenter, and only a later
-// Modal outranks them. The lock edge also brings the Stack's presented routes
-// down, so a modal route the operator left open is not waiting under the cover
-// for the unlock to reveal it.
+// Modal outranks them. The lock also brings the Stack's presented routes down,
+// so a modal route the operator left open is not waiting under the cover for
+// the unlock to reveal it — and neither is one that arrives AFTER the lock,
+// which is the worse case: react-native-screens presents a stack modal FROM the
+// topmost presented controller, and while this cover is up that controller is
+// the cover itself, so an arriving route is presented above it unless it comes
+// down too.
 //
 // It only ever covers a device that can answer the biometric prompt — see
 // app-lock.ts for why a removed enrollment must unlock rather than trap the
 // operator. Nothing here reaches a gateway: the lock is a device preference.
 
 import * as LocalAuthentication from 'expo-local-authentication';
-import { useRouter } from 'expo-router';
+import { usePathname, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Modal, StyleSheet, View } from 'react-native';
 
@@ -37,6 +41,10 @@ const ignoreBackPress = () => undefined;
 export function AppLockGate({ children }: { children: React.ReactNode }) {
   const tokens = useTokens();
   const router = useRouter();
+  // The presented route. Reading it is what arms the dismissal below for a
+  // route the lock has not seen yet: the Stack's route list moving is the edge
+  // a `versutus://add` link landing on a locked app produces.
+  const presentedRoute = usePathname();
   const [locked, setLocked] = useState(false);
   // The read settles once; the background listener below needs the answer
   // without re-asking the device on every app-state change.
@@ -68,17 +76,19 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
     return () => subscription.remove();
   }, []);
 
-  // The lock edge, and only the lock edge, brings the presented routes down.
-  // Being a Modal puts the cover above a sheet; a modal route is a screen this
-  // tree does not own, so it is dismissed rather than covered — the Stack
-  // itself stays mounted and the operator lands on its first screen. Dismissing
-  // is skipped when there is nothing to pop, and the unlock path never
-  // navigates.
+  // The lock, and only the lock, brings the presented routes down: the lock
+  // edge, and any route that arrives while it is up. Being a Modal puts the
+  // cover above a sheet; a modal route is a screen this tree does not own, so
+  // it is dismissed rather than covered — the Stack itself stays mounted and
+  // the operator lands on its first screen. The route is read along with the
+  // lock so that a route the lock never saw brings itself down rather than
+  // sitting above the cover. Dismissing is skipped when there is nothing to
+  // pop, and the unlock path never navigates.
   useEffect(() => {
     if (!locked) return;
     if (!router.canDismiss()) return;
     router.dismissAll();
-  }, [locked, router]);
+  }, [locked, router, presentedRoute]);
 
   const unlock = useCallback(async () => {
     try {
