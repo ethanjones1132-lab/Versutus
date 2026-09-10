@@ -1,12 +1,36 @@
 // The scorecard fold: the run rows this device persisted, gathered into one
 // card per Bot (FUTURE-ITEMS.md §D3 Build 1). A card is a claim about a Bot's
-// track record, so the two ways a count can lie are pinned here: a cancelled
-// run is not a failure (D3:803-804), and a row that names no Bot is neither
-// dropped nor guessed into someone else's card (D3:792-797).
+// track record, so the ways a count can lie are pinned here: a cancelled run is
+// not a failure (D3:803-804), a row that names no Bot is neither dropped nor
+// guessed into someone else's card (D3:792-797), and the window the fold was
+// handed is named rather than read as a gateway-side total (D3:808-810, :824-828).
 
-import { buildScorecards, scorecardFate } from '@/lib/fleet/scorecard';
+// The window line names the real cap, so this suite reads the constant off the
+// persistence module — which reaches storage only to declare itself. Nothing
+// here reads or writes a key.
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  getItem: jest.fn(async () => null),
+  setItem: jest.fn(async () => undefined),
+  removeItem: jest.fn(async () => undefined),
+}));
+
+import { buildScorecards, scorecardFate, scorecardWindowCopy, SCORECARD_FOOTER_COPY } from '@/lib/fleet/scorecard';
 import type { BotScorecard } from '@/lib/fleet/scorecard';
+import { ACTIVITY_RUNS_PERSIST_CAP } from '@/lib/gateway/session-persistence';
 import type { ActivityRun } from '@/lib/gateway/runs';
+
+declare const __dirname: string;
+
+const SEP = __dirname.includes('\\') ? '\\' : '/';
+const nodeFs = jest.requireActual('fs') as {
+  readFileSync(path: string, encoding: string): string;
+};
+
+function readSource(...parts: string[]): string {
+  return nodeFs
+    .readFileSync([__dirname, '..', ...parts].join(SEP), 'utf8')
+    .replace(/\r\n/g, '\n');
+}
 
 /**
  * A row, unattributed unless a case names a Bot — the shape of every row
@@ -158,5 +182,75 @@ describe('scorecardFate', () => {
     expect(scorecardFate('unresolved')).toBe('unresolved');
     expect(scorecardFate('running')).toBe('inFlight');
     expect(scorecardFate('waiting-approval')).toBe('inFlight');
+  });
+});
+
+describe('scorecardWindowCopy', () => {
+  test('a fold that filled the persisted cap names the cap', () => {
+    const copy = scorecardWindowCopy(ACTIVITY_RUNS_PERSIST_CAP);
+
+    expect(copy).toContain(String(ACTIVITY_RUNS_PERSIST_CAP));
+    expect(copy).toContain("past the list's cap");
+  });
+
+  test('a count over the cap still names the cap, never the larger number', () => {
+    const over = ACTIVITY_RUNS_PERSIST_CAP + 5;
+    const copy = scorecardWindowCopy(over);
+
+    expect(copy).toContain(String(ACTIVITY_RUNS_PERSIST_CAP));
+    expect(copy).not.toContain(String(over));
+  });
+
+  test('the last row under the cap is the read, and claims no bound it did not hit', () => {
+    const copy = scorecardWindowCopy(ACTIVITY_RUNS_PERSIST_CAP - 1);
+
+    expect(copy).toBe(`${ACTIVITY_RUNS_PERSIST_CAP - 1} runs in this read`);
+    expect(copy).not.toContain('cap');
+  });
+
+  test('a handful of runs is named exactly as it was handed over', () => {
+    expect(scorecardWindowCopy(7)).toBe('7 runs in this read');
+    expect(scorecardWindowCopy(1)).toBe('1 run in this read');
+  });
+
+  test('a count it cannot read prints no NaN and no settled bound', () => {
+    expect(scorecardWindowCopy(Number.NaN)).toBe('0 runs in this read');
+    expect(scorecardWindowCopy(Number.POSITIVE_INFINITY)).toBe('0 runs in this read');
+  });
+
+  test('no window line claims a gateway-side total', () => {
+    for (const count of [0, 7, ACTIVITY_RUNS_PERSIST_CAP - 1, ACTIVITY_RUNS_PERSIST_CAP]) {
+      expect(scorecardWindowCopy(count)).not.toMatch(/gateway|total|every run|all runs/i);
+    }
+  });
+});
+
+describe('SCORECARD_FOOTER_COPY', () => {
+  test('says these cards are runs this device saw', () => {
+    expect(SCORECARD_FOOTER_COPY).toContain('Runs seen from this device');
+  });
+
+  test('carries no number, so it can never be read as a count', () => {
+    expect(SCORECARD_FOOTER_COPY).not.toMatch(/[0-9]/);
+    expect(SCORECARD_FOOTER_COPY).not.toMatch(/gateway|total/i);
+  });
+
+  test('a card is numbers only, so the sentence cannot ride on one', () => {
+    const cards = buildScorecards([
+      run({ id: 'a', botId: 'atlas', status: 'complete' }),
+      run({ id: 'b', status: 'failed' }),
+    ]);
+
+    expect(cards).toHaveLength(2);
+    for (const card of cards) {
+      expect(Object.keys(card).sort()).toEqual(['botId', 'fates', 'total']);
+      expect(JSON.stringify(card)).not.toContain('seen from this device');
+    }
+  });
+
+  test('the module holds the sentence exactly once, for the one footer', () => {
+    const source = readSource('src', 'lib', 'fleet', 'scorecard.ts');
+
+    expect(source.split(SCORECARD_FOOTER_COPY)).toHaveLength(2);
   });
 });

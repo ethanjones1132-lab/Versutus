@@ -16,7 +16,12 @@
 // the desktop or the TUI never reaches this list at all. The surface owes that
 // sentence once, in its footer; nothing here may word a count as a
 // gateway-side total.
+//
+// The window line names the cap the persistence layer enforces, imported from
+// it rather than retyped, so the bound in the copy cannot drift from the bound
+// on the list it describes.
 
+import { ACTIVITY_RUNS_PERSIST_CAP } from '@/lib/gateway/session-persistence';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
 /** What became of the runs one card counted. */
@@ -84,3 +89,35 @@ export function buildScorecards(runs: readonly ActivityRun[]): BotScorecard[] {
 
   return [...cards.values()];
 }
+
+/**
+ * Honest window line for the cards (D3's Build 2, `FUTURE-ITEMS.md:808-810`).
+ *
+ * The run list this device persists is capped (`ACTIVITY_RUNS_PERSIST_CAP`), so
+ * a fold can never see more than the newest cap rows: a filled read has older
+ * runs missing off the end, and naming that bound is the difference between
+ * "these Bots ran this often" and "this is all any Bot ever did". Same
+ * discipline as `spendSessionCapCopy` over the 200-session catalogue read.
+ *
+ * Callers pass the ROW count the fold was handed, not the cards it produced, so
+ * a read that hit the cap says so even when some of its rows folded into the
+ * unattributed bucket. A partial read is everything this device holds, and
+ * claims no bound it did not hit; an unreadable count prints `0` rather than
+ * `NaN`.
+ */
+export function scorecardWindowCopy(runCount: number): string {
+  const rows = Number.isFinite(runCount) ? Math.max(0, Math.floor(runCount)) : 0;
+  if (rows >= ACTIVITY_RUNS_PERSIST_CAP) {
+    return `Newest ${ACTIVITY_RUNS_PERSIST_CAP} runs — older runs are past the list's cap`;
+  }
+  return `${rows} run${rows === 1 ? '' : 's'} in this read`;
+}
+
+/**
+ * The one sentence the Scorecards section owes its reader (D3's Constraints,
+ * `FUTURE-ITEMS.md:824-828`): these cards count the runs this app started, and
+ * a run launched from the desktop or the TUI never reaches this list at all.
+ * The section renders it once, under the cards — never on a card, and never
+ * worded as a gateway-side total.
+ */
+export const SCORECARD_FOOTER_COPY = 'Runs seen from this device — a run started from the desktop or the TUI never reaches this list.';
