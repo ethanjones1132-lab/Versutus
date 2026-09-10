@@ -1,5 +1,7 @@
 import { formatCost, formatTokenCount } from '@/lib/format';
 import {
+  SESSION_SPEND_LIST_LIMIT,
+  sessionSpendReadFromUnknown,
   sessionUsage,
   totalUsage,
   type SessionSpendRead,
@@ -13,8 +15,8 @@ import {
  * already knows every one of them — but no single read the app makes answers
  * "what did each Bot cost?". The Gate's `session.usage` totals the catalogue
  * without any cost field at all and the RPC dispatches by METHOD, so the Bot
- * never reaches the resolver; the caller therefore hands this module one
- * Bot-scoped read per roster Bot and it folds each one with the helpers the
+ * never reaches the resolver; the caller therefore injects the reads
+ * (`readBotSpend`) and this module folds each one with the helpers the
  * thread glance already uses — `sessionUsage` and `totalUsage`. No second
  * aggregation lives here.
  *
@@ -100,6 +102,71 @@ export function botSpendRowCopy(row: BotSpendRow): string {
   const tokens = `${formatTokenCount(row.tokens ?? 0)} tokens`;
   if (row.costUsd == null) return `${tokens} · no cost fields in this read`;
   return `${tokens} · ${formatCost(row.costUsd)} (${row.basis})`;
+}
+
+/**
+ * The roster entry this module needs: an id, and the Gate's name for it when
+ * one was reported. `PublicBot` satisfies it without the fold depending on
+ * every field a roster row carries.
+ */
+export type BotSpendRosterEntry = { id: string; displayName?: string };
+
+/**
+ * The two reads a per-Bot report is made of, injected so the fold stays a
+ * pure function of what the caller fetched.
+ *
+ * `readBotSessions` is optional because the capability is: an adapter that
+ * cannot scope a catalogue by Bot omits it, and that absence — known before
+ * a request that could only be refused — is what makes the report degrade
+ * to the gateway total alone rather than provoke an error.
+ */
+export type BotSpendSource = {
+  listBots: () => Promise<BotSpendRosterEntry[]>;
+  readBotSessions?: (botId: string, limit: number) => Promise<unknown>;
+};
+
+export type BotSpendReport = {
+  rows: BotSpendRow[];
+  /**
+   * True when the gateway could not be asked per Bot at all. Not the same
+   * fact as an empty roster: one has no per-Bot section because the
+   * capability is missing, the other because there are no Bots — and the
+   * section's copy has to differ.
+   */
+  degraded: boolean;
+};
+
+/**
+ * One scoped catalogue read per roster Bot, folded into rows.
+ *
+ * The reads run one at a time: each is the 200-row catalogue and the roster
+ * is short, so a screen open is a few GETs, while a burst in parallel from a
+ * phone is exactly the load `withGetSessionsRetry`'s backoff exists to
+ * absorb.
+ *
+ * A Bot whose read is refused or unreachable is caught here and kept as a
+ * named `{ ok: false }` read — dropping it would read as a Bot that spent
+ * nothing. A read that answers with something that is not a session list is
+ * the same failure, decided by `sessionSpendReadFromUnknown`.
+ */
+export async function readBotSpend(source: BotSpendSource): Promise<BotSpendReport> {
+  const readBotSessions = source.readBotSessions;
+  if (!readBotSessions) return { rows: [], degraded: true };
+  const roster = await source.listBots();
+  const reads: BotSpendRead[] = [];
+  for (const bot of roster) {
+    try {
+      const payload = await readBotSessions(bot.id, SESSION_SPEND_LIST_LIMIT);
+      reads.push({
+        botId: bot.id,
+        label: bot.displayName,
+        read: sessionSpendReadFromUnknown(payload),
+      });
+    } catch {
+      reads.push({ botId: bot.id, label: bot.displayName, read: { ok: false } });
+    }
+  }
+  return { rows: botSpendRows(reads), degraded: false };
 }
 
 /**

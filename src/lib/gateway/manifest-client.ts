@@ -760,6 +760,37 @@ export class ManifestClient implements PortalClient {
   }
 
   /**
+   * One Bot's own session catalogue, for the per-Bot spend read (P5).
+   *
+   * The app's other catalogue read cannot be scoped to a Bot: `sessions.list`
+   * travels as `{ method, params }` to the Gate's RPC, which dispatches by
+   * METHOD, so only `params.backendId` ever reaches the resolver. The Gate's
+   * REST catalogue does carry one — it reads `?bot=` and resolves that Bot's
+   * own Hermes profile — so this names the Bot in the query instead of taking
+   * whatever `setBotId` holds. A read of one Bot must not move the app's
+   * scope: `openBot` and the Bot Chat pinning both depend on it staying.
+   */
+  async listBotSessionCatalogue(botId: string, limit = 20): Promise<HermesSession[]> {
+    const path = this.endpoints.sessions;
+    if (!path) {
+      throw new Error(
+        `${this.identity.kindLabel} does not advertise session management. This gate has no /api/sessions-style endpoint declared in its manifest.`,
+      );
+    }
+    const separator = path.includes('?') ? '&' : '?';
+    const query = `bot=${encodeURIComponent(botId)}&limit=${limit}`;
+    const result = await withGetSessionsRetry((timeoutMs) =>
+      this.rootTransport.request<SessionsResponse | HermesSession[]>(
+        'GET',
+        `${path}${separator}${query}`,
+        undefined,
+        timeoutMs,
+      ),
+    );
+    return Array.isArray(result) ? result : result.data ?? [];
+  }
+
+  /**
    * Sessions live in the backend, so creation is only offered when one is
    * attached — the app hides the control rather than failing at the tap.
    */

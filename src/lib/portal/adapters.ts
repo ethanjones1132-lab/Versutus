@@ -59,6 +59,13 @@ export interface PortalClient {
   readonly canManageSessions?: boolean;
   getSessions(limit?: number): Promise<HermesSession[]>;
   /**
+   * One Bot's own catalogue, with the Bot named in the query instead of taken
+   * from the client's stored scope — the per-Bot spend read. Optional: an
+   * adapter that cannot scope a session list by Bot omits it, and the per-Bot
+   * section then degrades to the gateway total alone.
+   */
+  listBotSessionCatalogue?(botId: string, limit?: number): Promise<HermesSession[]>;
+  /**
    * `model` pins the session at creation. It cannot be applied later — a
    * Hermes session's model is immutable once opened — so a caller that has a
    * model must pass it here or the thread runs on the host default for good.
