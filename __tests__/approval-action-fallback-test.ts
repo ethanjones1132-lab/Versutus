@@ -1,13 +1,14 @@
 import { AppState } from 'react-native';
 
 import {
+  approvalDecisionCopy,
   approvalRefusalCopy,
   approvalRefusalReason,
   decisionCanReachGateway,
   isApprovalActionFor,
 } from '@/lib/notifications/approval-action';
 import { APPROVAL_NOTICE_DATA_KIND } from '@/lib/notifications/categories';
-import { notifyApprovalRefused } from '@/lib/notifications/local';
+import { notifyApprovalDecided, notifyApprovalRefused } from '@/lib/notifications/local';
 
 jest.mock('expo-notifications', () => ({
   scheduleNotificationAsync: jest.fn(),
@@ -61,6 +62,14 @@ function setAppState(value: string): void {
 }
 
 const grantedPermissions = { granted: true, status: 'granted' };
+
+// Restored once, after every describe that pins AppState: a later describe
+// setting the same property would otherwise meet the original descriptor.
+afterAll(() => {
+  if (originalStateDescriptor) {
+    Object.defineProperty(AppState, 'currentState', originalStateDescriptor);
+  }
+});
 
 describe('decisionCanReachGateway (the fail-closed gate)', () => {
   test('a live connection is the only one that carries a decision', () => {
@@ -168,7 +177,53 @@ describe('approvalRefusalCopy (one table, two honest notices)', () => {
   });
 });
 
-describe('notifyApprovalRefused', () => {
+describe('approvalDecisionCopy (the decision that landed)', () => {
+  test('an approval wears the spec copy for a run that continues', () => {
+    expect(approvalDecisionCopy('approve')).toEqual({
+      title: 'Approved',
+      body: 'Approved — run continuing',
+    });
+  });
+
+  test('a denial states the denial, never the opposite decision', () => {
+    const approve = approvalDecisionCopy('approve');
+    const deny = approvalDecisionCopy('deny');
+
+    expect(deny.body).toContain('Denied');
+    expect(deny.body).not.toContain('Approved');
+    expect(deny.title).not.toBe(approve.title);
+    expect(deny.body).not.toBe(approve.body);
+  });
+
+  test('a landed decision claims no gateway verdict and no count', () => {
+    for (const decision of ['approve', 'deny'] as const) {
+      const copy = approvalDecisionCopy(decision);
+      const spoken = `${copy.title} ${copy.body}`.toLowerCase();
+
+      // The decision was TAKEN here; the driver's own report to the gateway is
+      // what carries it, so no copy may say the gateway accepted (or refused)
+      // anything — and nothing reports a result count.
+      expect(spoken).not.toContain('gateway');
+      expect(spoken).not.toContain('accepted');
+      expect(spoken).not.toMatch(/\d/);
+    }
+  });
+
+  test('the decision copy is a table of its own, not a refusal re-used', () => {
+    const refusalBodies = [
+      approvalRefusalCopy('unreachable').body,
+      approvalRefusalCopy('no-longer-waiting').body,
+    ];
+
+    for (const decision of ['approve', 'deny'] as const) {
+      const copy = approvalDecisionCopy(decision);
+      expect(refusalBodies).not.toContain(copy.body);
+      expect(copy.body).not.toContain("Couldn't reach the gateway");
+    }
+  });
+});
+
+describe('notifyApprovalDecided', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     setAppState('background');
@@ -176,10 +231,57 @@ describe('notifyApprovalRefused', () => {
     mockSchedule.mockResolvedValue('notif-1');
   });
 
-  afterAll(() => {
-    if (originalStateDescriptor) {
-      Object.defineProperty(AppState, 'currentState', originalStateDescriptor);
+  test('a landed approval posts the outcome immediately, on the trigger the other notices use', async () => {
+    await notifyApprovalDecided('approve');
+
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+    const request = mockSchedule.mock.calls[0][0];
+    expect(request.content.title).toBe('Approved');
+    // The copy names the decision and what it asks for, and nothing else: no
+    // gateway verdict, no result count.
+    expect(request.content.body).toContain('Approved');
+    expect(request.content.body).toContain('run continuing');
+    expect(request.trigger).toBeNull();
+  });
+
+  test('a landed denial posts its own copy, not the approval wording', async () => {
+    await notifyApprovalDecided('deny');
+
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+    const request = mockSchedule.mock.calls[0][0];
+    expect(request.content.title).toBe(approvalDecisionCopy('deny').title);
+    expect(request.content.body).toBe(approvalDecisionCopy('deny').body);
+    expect(request.trigger).toBeNull();
+  });
+
+  test('the outcome wears no payload and no category: a tap cannot read it as an approval', async () => {
+    await notifyApprovalDecided('approve');
+    await notifyApprovalDecided('deny');
+
+    for (const call of mockSchedule.mock.calls) {
+      // No payload means routeForTap cannot route it and no action can be
+      // attached to it; no category means it offers no second set of buttons.
+      expect(call[0].content.data).toBeUndefined();
+      expect(call[0].content.categoryIdentifier).toBeUndefined();
     }
+  });
+
+  test('a foregrounded outcome is suppressed, exactly as the other notices are', async () => {
+    setAppState('active');
+
+    await notifyApprovalDecided('approve');
+    await notifyApprovalDecided('deny');
+
+    expect(mockSchedule).not.toHaveBeenCalled();
+  });
+});
+
+describe('notifyApprovalRefused', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setAppState('background');
+    (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue(grantedPermissions);
+    mockSchedule.mockResolvedValue('notif-1');
   });
 
   test('the unreachable refusal is an immediate notice saying the decision did not reach the gateway', async () => {
@@ -260,6 +362,33 @@ describe('NotificationRouter fail-closed wiring', () => {
     // The approval stays pending for the operator to decide in the app, so the
     // listener holds exactly one resolve call — the one in the applying branch.
     expect((listener().match(/pendingApproval\.resolve\(/g) ?? []).length).toBe(1);
+  });
+
+  test('a landed decision posts its outcome on the same branch that resolves', () => {
+    const src = listener();
+
+    // The decision, the resolve it lands through, and the follow-up that names
+    // the outcome: the follow-up sits behind the resolve, and the branch then
+    // returns — a landed decision leaves the tap path, so the follow-up is not
+    // required to sit ahead of the destination fallback.
+    const decision = src.indexOf('const decision = approvalDecisionFor(');
+    const resolve = src.indexOf('pendingApproval.resolve(decision ===');
+    const followUp = src.indexOf('void notifyApprovalDecided(decision)');
+    const destination = src.indexOf('const destination = destinationFor(');
+
+    expect(decision).toBeGreaterThan(-1);
+    expect(resolve).toBeGreaterThan(decision);
+    expect(followUp).toBeGreaterThan(resolve);
+    expect(src.slice(followUp, destination)).toContain('return;');
+  });
+
+  test('only a landed decision posts the outcome — a plain tap has none to post', () => {
+    const src = listener();
+
+    // One call, inside the branch the decision guards; the copy comes from the
+    // table, never from a hard-coded line in the listener.
+    expect((src.match(/notifyApprovalDecided\(/g) ?? []).length).toBe(1);
+    expect(src).not.toContain('Approved — run continuing');
   });
 
   test('the connection status is read from a ref, so the listener is registered once', () => {

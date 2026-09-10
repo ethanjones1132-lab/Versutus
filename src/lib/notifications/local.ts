@@ -7,7 +7,9 @@ import * as Notifications from 'expo-notifications';
 import { AppState } from 'react-native';
 
 import {
+  approvalDecisionCopy,
   approvalRefusalCopy,
+  type ApprovalDecision,
   type ApprovalRefusalReason,
 } from './approval-action';
 import { botReplyNoticeCopy, type BotReplyNoticeReason } from './bot-reply';
@@ -121,6 +123,22 @@ export async function notifyRunComplete(
  */
 export async function notifyApprovalRefused(reason: ApprovalRefusalReason): Promise<void> {
   const copy = approvalRefusalCopy(reason);
+  await present(copy.title, copy.body);
+}
+
+/**
+ * Post the follow-up for a decision that LANDED — the acknowledgement the
+ * operator's Approve / Deny asked for once the resolve has gone through and the
+ * run is under way or stopping. The decision picks the copy, and it names only
+ * what the decision asks of the run: what carries it to the gateway is the
+ * driver's own report, so the notice never says the gateway accepted it.
+ *
+ * No payload and no category, on purpose: there is nothing left to decide, so a
+ * tap on this notice is an ordinary tap (routeForTap reads no kind), and it
+ * never wears a second set of buttons.
+ */
+export async function notifyApprovalDecided(decision: ApprovalDecision): Promise<void> {
+  const copy = approvalDecisionCopy(decision);
   await present(copy.title, copy.body);
 }
 

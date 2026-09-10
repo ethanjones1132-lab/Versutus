@@ -39,6 +39,7 @@ import {
   type LaunchTap,
 } from '@/lib/notifications/launch-response';
 import {
+  notifyApprovalDecided,
   notifyApprovalRefused,
   notifyBotReplyNotSent,
 } from '@/lib/notifications/local';
@@ -189,6 +190,11 @@ function NotificationRouter() {
         isApprovalActionFor(response.notification.request.content.data, pendingApproval.runId)
       ) {
         pendingApproval.resolve(decision === 'approve');
+        // The decision landed, so acknowledge it: the resolve above hands the
+        // decision to the driver, which reports it to the gateway and carries
+        // the run on (or stops it). The copy names the decision and what it
+        // asks of the run, never a gateway verdict the app is not shown.
+        void notifyApprovalDecided(decision);
         return;
       }
       if (decision) {

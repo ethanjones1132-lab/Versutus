@@ -115,3 +115,34 @@ const APPROVAL_REFUSAL_COPY: Record<ApprovalRefusalReason, ApprovalRefusalCopy> 
 export function approvalRefusalCopy(reason: ApprovalRefusalReason): ApprovalRefusalCopy {
   return APPROVAL_REFUSAL_COPY[reason];
 }
+
+/** The copy a decision that LANDED wears; the caller posts it unchanged. */
+export interface ApprovalDecisionCopy {
+  title: string;
+  body: string;
+}
+
+/**
+ * The follow-up copy for a decision the app applied. Unlike the refusal table,
+ * this one may name the decision — the operator did press the button and the
+ * resolve did land — but it still may not claim a gateway VERDICT: what carries
+ * the decision to the run is the driver's own report to the gateway, and the
+ * app is not shown the gateway's answer. So both rows say only what the
+ * decision asks of the run this app is driving — an approval continues it, a
+ * denial stops it — and name no gateway, no count and no result.
+ */
+const APPROVAL_DECISION_COPY: Record<ApprovalDecision, ApprovalDecisionCopy> = {
+  approve: {
+    title: 'Approved',
+    body: 'Approved — run continuing',
+  },
+  deny: {
+    title: 'Denied',
+    body: 'Denied — run stopping',
+  },
+};
+
+/** The copy for a landed decision, so the listener never spells it itself. */
+export function approvalDecisionCopy(decision: ApprovalDecision): ApprovalDecisionCopy {
+  return APPROVAL_DECISION_COPY[decision];
+}
