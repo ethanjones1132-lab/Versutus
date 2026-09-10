@@ -15,7 +15,12 @@ import { ConnectedToast } from '@/components/connected-toast';
 import { FontProvider } from '@/components/font-provider';
 import { TlsFingerprintGuard } from '@/components/gateway/tls-fingerprint-guard';
 import { VersutusDarkTheme } from '@/constants/navigation-theme';
-import { GatewayProvider, useGateway } from '@/context/gateway-provider';
+import {
+  GatewayProvider,
+  useGateway,
+  type SendChatInputOutcome,
+} from '@/context/gateway-provider';
+import type { ConnectionStatus } from '@/lib/gateway/types';
 import { installStreamingFetch } from '@/lib/net/streaming-fetch';
 import {
   approvalDecisionFor,
@@ -23,13 +28,20 @@ import {
   decisionCanReachGateway,
   isApprovalActionFor,
 } from '@/lib/notifications/approval-action';
-import { registerNotificationCategories } from '@/lib/notifications/categories';
+import { botReplyFromResponse, type BotReply } from '@/lib/notifications/bot-reply';
+import {
+  BOT_MESSAGE_REPLY_ACTION_ID,
+  registerNotificationCategories,
+} from '@/lib/notifications/categories';
 import {
   isLaunchReplay,
   readLaunchResponse,
   type LaunchTap,
 } from '@/lib/notifications/launch-response';
-import { notifyApprovalRefused } from '@/lib/notifications/local';
+import {
+  notifyApprovalRefused,
+  notifyBotReplyNotSent,
+} from '@/lib/notifications/local';
 import { routeForTap } from '@/lib/notifications/tap-route';
 
 // React Native's global fetch cannot stream a response body, so SSE readers
@@ -38,9 +50,64 @@ import { routeForTap } from '@/lib/notifications/tap-route';
 // rather than imported by the transport.
 installStreamingFetch(expoFetch as unknown as typeof globalThis.fetch);
 
+/**
+ * The two provider calls a quick reply needs, narrowed to the shape the reply
+ * path uses so the listener can hold them in a ref.
+ */
+type BotReplySender = {
+  openBot: (botId: string) => Promise<void>;
+  sendChatInput: (text: string) => Promise<SendChatInputOutcome>;
+};
+
+/**
+ * Hand a reply typed on a bot-message notice to the ordinary chat send path —
+ * never a second pipeline of its own.
+ *
+ * The reply belongs in that Bot's canonical Bot Chat (ADR 0012), so the Bot is
+ * opened first: `openBot` resolves the Bot's pinned chat, creates it if it is
+ * missing and makes it the session a send goes to. The open is skipped while
+ * the connection is not `connected` — it is a gateway read that could only
+ * fail, and its failure path reports a gateway error about a gateway that is
+ * merely offline.
+ *
+ * The text goes to `sendChatInput` either way, because that call's own
+ * pre-flight guard is what parks an unsendable reply in the durable offline
+ * outbox and answers 'queued' — the same route a composer send takes, so the
+ * reply is re-surfaced and flushed after a reload exactly like any other queued
+ * chat. That outcome is what the follow-up notice reports.
+ *
+ * A reply whose Bot Chat could not be opened is NOT sent: `sendChatInput` would
+ * fall back to whichever session the client still held, putting the operator's
+ * words in a conversation they did not choose. Nothing is sent, and the notice
+ * says only that.
+ */
+async function deliverBotReply(
+  reply: BotReply,
+  sender: BotReplySender,
+  status: ConnectionStatus,
+): Promise<void> {
+  if (decisionCanReachGateway(status)) {
+    try {
+      await sender.openBot(reply.botId);
+    } catch {
+      void notifyBotReplyNotSent('bot-chat-unavailable');
+      return;
+    }
+  }
+  const outcome = await sender.sendChatInput(reply.text);
+  if (outcome === 'queued') void notifyBotReplyNotSent('queued');
+}
+
 function NotificationRouter() {
   const router = useRouter();
-  const { isBootstrapped, pendingRunApproval, resolveRunApproval, status } = useGateway();
+  const {
+    isBootstrapped,
+    pendingRunApproval,
+    resolveRunApproval,
+    status,
+    openBot,
+    sendChatInput,
+  } = useGateway();
   // The launch tap is read once, and its route is held until bootstrap has
   // mounted the Stack: navigating any earlier loses to the boot overlay's
   // first-run redirect (the wait GatewayDeepLinkRouter already does). A tap
@@ -73,6 +140,16 @@ function NotificationRouter() {
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  // The Bot Chat send path a quick reply reuses, mirrored for the same reason
+  // the approval and the status are: the listener below is registered once, and
+  // `openBot` / `sendChatInput` are rebuilt whenever the gateway or session
+  // scope changes — putting them in the listener's deps would re-register it
+  // (and re-run the held-tap apply) on every one of those changes.
+  const replySenderRef = useRef<BotReplySender | null>(null);
+  useEffect(() => {
+    replySenderRef.current = { openBot, sendChatInput };
+  }, [openBot, sendChatInput]);
 
   // The Approve / Deny buttons only exist once the category is registered, and
   // a notice may not reference a category the device has never seen — so this
@@ -128,6 +205,22 @@ function NotificationRouter() {
           pendingApproval?.runId ?? null,
         );
         if (reason) void notifyApprovalRefused(reason);
+      }
+      // A reply typed into a bot-message notice is the operator's own text, and
+      // it goes to the same send path the chat composer uses. The action
+      // identifier says it is a reply; the payload and the typed text have to
+      // name a Bot (botReplyFromResponse), or there is nothing to send and the
+      // tap's destination below is all that is left to do.
+      if (response.actionIdentifier === BOT_MESSAGE_REPLY_ACTION_ID) {
+        const reply = botReplyFromResponse(
+          response.notification.request.content.data,
+          response.userText,
+        );
+        const sender = replySenderRef.current;
+        if (reply && sender) {
+          void deliverBotReply(reply, sender, statusRef.current);
+          return;
+        }
       }
       const destination = destinationFor(response.notification.request.content.data);
       if (!isBootstrapped) {

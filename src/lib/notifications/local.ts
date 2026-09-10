@@ -10,6 +10,7 @@ import {
   approvalRefusalCopy,
   type ApprovalRefusalReason,
 } from './approval-action';
+import { botReplyNoticeCopy, type BotReplyNoticeReason } from './bot-reply';
 import {
   GATEWAY_DOWN_TITLE,
   gatewayDownNoticeData,
@@ -105,6 +106,18 @@ export async function notifyRunComplete(title: string, body: string): Promise<vo
  */
 export async function notifyApprovalRefused(reason: ApprovalRefusalReason): Promise<void> {
   const copy = approvalRefusalCopy(reason);
+  await present(copy.title, copy.body);
+}
+
+/**
+ * Post the follow-up for a reply typed on a bot-message notice that did not go
+ * out. The reason picks the copy: a reply the app had to park in the durable
+ * offline outbox says it is saved and waiting on a connection, and a reply
+ * whose Bot Chat could not be opened says nothing was sent. Neither claims the
+ * Bot received anything — the reply's own words are the only text involved.
+ */
+export async function notifyBotReplyNotSent(reason: BotReplyNoticeReason): Promise<void> {
+  const copy = botReplyNoticeCopy(reason);
   await present(copy.title, copy.body);
 }
 
