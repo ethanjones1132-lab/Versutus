@@ -21,6 +21,7 @@ import {
   scorecardApprovalCopy,
   scorecardApprovals,
   scorecardBotLabel,
+  scorecardCardAnnouncement,
   scorecardCardLine,
   scorecardDurationCopy,
   scorecardFate,
@@ -1158,5 +1159,99 @@ describe('scorecardCardLine', () => {
     expect(line).not.toContain('Median');
     expect(line).not.toContain('approval');
     expect(line).not.toContain('routine');
+  });
+});
+
+describe('scorecardCardAnnouncement', () => {
+  /**
+   * One card's six facts — the same fixture shape `scorecardCardLine` is
+   * exercised with, and long enough that a phone's one drawn line has to give
+   * some of them up. That is the whole point of this fold: the facts a card
+   * cannot DRAW are still the facts it counted, and a screen reader is told
+   * what the card counted.
+   */
+  const parts: ScorecardCardParts = {
+    fates: '4 complete · 1 failed',
+    success: '80% success',
+    timed: 'Median run 3:42',
+    approvals: '2 of 3 approvals granted',
+    routines: '2 routines · ok',
+    spend: '12.4k tokens · $0.42 (estimate)',
+  };
+
+  const name = scorecardBotLabel('atlas');
+  const wholeLine =
+    'atlas, 4 complete · 1 failed · 80% success · Median run 3:42 · 2 of 3 approvals granted · 2 routines · ok · 12.4k tokens · $0.42 (estimate)';
+
+  test('the announcement is the whole card under its name, in the line’s own order', () => {
+    expect(scorecardCardAnnouncement(name, parts)).toBe(wholeLine);
+  });
+
+  test('a fact the drawn line must give up is still announced', () => {
+    const drawn = scorecardCardLine(parts);
+
+    // The drawn line is composed to the room a row has, so it gives up the
+    // facts the budget cannot hold — here the spend and the routine verdict.
+    expect(drawn).not.toContain('12.4k');
+    expect(drawn).not.toContain('routine');
+    // Every fact the card holds is in the sentence read aloud, whatever the
+    // drawn line could fit.
+    for (const fact of Object.values(parts)) {
+      expect(scorecardCardAnnouncement(name, parts)).toContain(fact);
+    }
+    expect(scorecardCardAnnouncement(name, parts).length).toBeGreaterThan(drawn.length);
+  });
+
+  test('a fact the card does not hold takes no room, and never leaves a separator', () => {
+    expect(
+      scorecardCardAnnouncement(name, {
+        ...parts,
+        timed: '',
+        approvals: '',
+        routines: '',
+        spend: '',
+      }),
+    ).toBe('atlas, 4 complete · 1 failed · 80% success');
+    // A card holding nothing is its name alone — never a bare line and never a
+    // nameless sentence.
+    expect(
+      scorecardCardAnnouncement(name, {
+        fates: '',
+        success: '',
+        timed: '',
+        approvals: '',
+        routines: '',
+        spend: '',
+      }),
+    ).toBe('atlas');
+    expect(
+      scorecardCardAnnouncement('', {
+        fates: '',
+        success: '',
+        timed: '',
+        approvals: '',
+        routines: '',
+        spend: '',
+      }),
+    ).toBe('');
+  });
+
+  test('the name is the card’s own title, so the title and the announcement cannot disagree', () => {
+    // The same fold that titles every card, over the bucket a card is built
+    // for: the unattributed rows are announced under the module's own word.
+    expect(scorecardCardAnnouncement(scorecardBotLabel(null), parts)).toBe(
+      `Unattributed, ${scorecardCardLine(parts, 1_000)}`,
+    );
+  });
+
+  test('nothing is re-worded for the sentence, and nothing is withheld from it', () => {
+    const announcement = scorecardCardAnnouncement(name, parts);
+
+    // Every figure is one of the facts handed in, printed as it arrived.
+    for (const fact of Object.values(parts)) expect(announcement).toContain(fact);
+    // No ellipsis: the announcement is the whole card, not a shortened one — an
+    // operator who cannot see the row is told what the row counted.
+    expect(announcement).not.toMatch(/…|\.\.\./);
+    expect(announcement).not.toMatch(/average|typical|gateway|total/i);
   });
 });

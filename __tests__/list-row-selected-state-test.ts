@@ -82,8 +82,11 @@ describe('ListRow selected state screen-reader wiring', () => {
     expect(src).toContain(
       "accessibilityRole={interactive ? 'button' : undefined}",
     );
+    // The derived label is unchanged for every caller that hands no
+    // announcement of its own — only the `??` in front of it is new, and the
+    // fallback below is the label this line has always produced.
     expect(src).toContain(
-      'accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}',
+      'accessibilityLabel={accessibilityLabel ?? (subtitle ? `${title}, ${subtitle}` : title)}',
     );
     expect(src).toContain('accessibilityHint={accessibilityHint}');
   });
@@ -127,6 +130,53 @@ describe('ListRow selected state screen-reader wiring', () => {
     });
     expect(passing).toEqual([
       nodePath.join(srcRoot, 'chat', 'thread-config-sheet.tsx'),
+    ]);
+  });
+});
+
+// `ListRow` announces a row with the string it draws, so a row drawn from a
+// line composed to a budget — the Scorecards card's is (`scorecardCardLine`) —
+// would drop the same facts from the sentence a screen reader reads as from the
+// pixels. An optional announcement the kit reads verbatim is what lets such a
+// row say the whole thing while drawing what fits; a row that hands none keeps
+// the label it has always derived.
+describe('ListRow announcement screen-reader wiring', () => {
+  test('the kit declares an optional accessibilityLabel on ListRowProps', () => {
+    const src = readListRowSource();
+    // Optional, so every existing call site compiles untouched and announces
+    // exactly what it draws — the label derived from title and subtitle.
+    expect(src).toContain('accessibilityLabel?: string;');
+  });
+
+  test('a row handed an announcement reads it, and the drawn label is the fallback', () => {
+    const src = readListRowSource();
+    // ONE expression, so the two rules cannot drift: the handed string wins,
+    // and everything else is the label this row announced before the prop
+    // existed.
+    expect(src).toContain(
+      'accessibilityLabel={accessibilityLabel ?? (subtitle ? `${title}, ${subtitle}` : title)}',
+    );
+    // The row still draws what it draws: the new prop is not a visual.
+    expect(src).toContain('{subtitle}');
+  });
+
+  test('the scorecards card is the one caller that hands one', () => {
+    // Scoped to the one surface that composes a budgeted line: every other
+    // ListRow leaves accessibilityLabel undefined and derives its own label
+    // exactly as today.
+    const srcRoot = [__dirname, '..', 'src', 'components'].join(SEP);
+    const withListRow: string[] = [];
+    listFilesWithListRow(srcRoot, withListRow);
+    const callSites = withListRow.filter(
+      (file) => !file.endsWith('ui/ListRow.tsx'),
+    );
+    expect(callSites.length).toBeGreaterThan(0);
+    const passing = callSites.filter((file) => {
+      const src = nodeFs.readFileSync(file, 'utf8');
+      return /<ListRow[\s\S]*?accessibilityLabel=\{/.test(src);
+    });
+    expect(passing).toEqual([
+      nodePath.join(srcRoot, 'activity', 'scorecards-section.tsx'),
     ]);
   });
 });

@@ -91,12 +91,45 @@ describe('a card carries the run duration it can back', () => {
     // composition, which is where a card's one line is decided: an empty fact
     // takes no room, and when the line cannot hold everything the fold drops
     // whole facts rather than clipping one (scorecardCardLine, pinned in
-    // `fleet-scorecard-test.ts`). Nothing is joined here.
-    expect(src).toContain(
-      'subtitle={scorecardCardLine({ fates, success, timed, approvals, routines, spend })}',
-    );
+    // `fleet-scorecard-test.ts`). One `facts` object is handed to both folds —
+    // the drawn line and the announcement — so the two strings cannot come
+    // from two different sets of facts. Nothing is joined here.
+    expect(src).toContain('const facts = { fates, success, timed, approvals, routines, spend };');
+    expect(src).toContain('subtitle={scorecardCardLine(facts)}');
     expect(src.match(/scorecardCardLine\(/g)).toHaveLength(1);
     expect(src).not.toContain(".filter(Boolean).join(' · ')");
+    expect(src).not.toContain('.join(');
+  });
+});
+
+describe('a card the drawn line cannot hold in full is still announced in full', () => {
+  test('the announcement is the module’s unbounded fold, over the same facts', () => {
+    const src = section();
+
+    // `ListRow` announces a row with the string it draws
+    // (`src/components/ui/ListRow.tsx:74`), so a line composed to a budget
+    // would drop the same facts from the sentence a screen reader reads. The
+    // card hands the kit an announcement instead — the module's whole-card
+    // fold, over the one `facts` object the drawn line is composed from.
+    expect(src).toContain(
+      'accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId), facts)}',
+    );
+    expect(src.match(/scorecardCardAnnouncement\(/g)).toHaveLength(1);
+    // The name is the card's own title fold, not a second naming rule here.
+    expect(src).not.toContain('accessibilityLabel={`');
+  });
+
+  test('the announcement rides the one card row, and the drawn line is untouched', () => {
+    const src = section();
+    const row = src.indexOf('<ListRow');
+    const subtitle = src.indexOf('subtitle={scorecardCardLine(facts)}');
+    const announcement = src.indexOf('accessibilityLabel={scorecardCardAnnouncement(');
+
+    expect(src.match(/<ListRow/g)).toHaveLength(1);
+    // Inside the one row the cards map produces, and after the string it draws:
+    // the announcement supplements the row, it does not replace it.
+    expect(announcement).toBeGreaterThan(row);
+    expect(announcement).toBeGreaterThan(subtitle);
   });
 });
 

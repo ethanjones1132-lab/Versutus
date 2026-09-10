@@ -32,6 +32,13 @@
 // renderer. Nothing is joined here, so the rule is the module's own and is
 // pinned there.
 //
+// `ListRow` announces a row with the string it draws, so the composed line is
+// also what a screen reader reads — and a fact the line could not hold would be
+// missing from the sentence as well as the pixels. The card therefore hands the
+// row the module's other composition of the SAME facts: the whole card, no
+// budget, under the card's own title. One `facts` object is handed to both, so
+// the drawn line and the announcement cannot be composed from different sets.
+//
 // The line also carries the gateway's own verdict on this Bot's routines, when
 // the job list names any: the jobs are grouped by the `[bot:<name>]` naming
 // convention in the fold and each card looks its own bucket up, so a card can
@@ -97,6 +104,7 @@ import {
   scorecardApprovalCopy,
   scorecardApprovals,
   scorecardBotLabel,
+  scorecardCardAnnouncement,
   scorecardCardLine,
   scorecardDurationCopy,
   scorecardFateCopy,
@@ -261,11 +269,19 @@ export function ScorecardsSection({
             const approvals = scorecardApprovalCopy(scorecardApprovals(rows));
             const routines = scorecardRoutineCopy(routineHealth.get(card.botId));
             const spend = scorecardSpendCopy(card.spend);
+            // One set of facts, two sentences: the module composes the line
+            // this row DRAWS, to the room one clipped caption line has, and the
+            // whole card this row ANNOUNCES — the row reads aloud the string it
+            // draws, so a fact the budget dropped would be missing from what a
+            // screen reader says as well. One object because they are the same
+            // facts, so the two can never be composed from different ones.
+            const facts = { fates, success, timed, approvals, routines, spend };
             return (
               <ListRow
                 key={card.botId ?? 'unattributed'}
                 title={scorecardBotLabel(card.botId)}
-                subtitle={scorecardCardLine({ fates, success, timed, approvals, routines, spend })}
+                subtitle={scorecardCardLine(facts)}
+                accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId), facts)}
                 onPress={() => onSelect({ botId: card.botId })}
                 trailing={showing ? <Badge label="Showing" tone="accent" /> : undefined}
                 accessibilityHint="Shows this Bot's runs in the list above"

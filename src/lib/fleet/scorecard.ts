@@ -40,7 +40,11 @@
 // - A card's one line is composed HERE, not by the surface, and it is composed
 //   to a budget: the row that draws it gives it one clipped line, so six facts
 //   cannot all survive a phone. Facts are dropped whole and least-important
-//   first, never cut — a number clipped mid-figure is a number read wrong.
+//   first, never cut — a number clipped mid-figure is a number read wrong. And
+//   because that row announces the string it draws, the facts it cannot fit are
+//   dropped from what a screen reader reads too; the card hands it
+//   `scorecardCardAnnouncement` instead, the same facts with no budget, so an
+//   operator who cannot see the line is told what the card counted.
 //
 // These cards are observations of runs this device saw — a run started from
 // the desktop or the TUI never reaches this list at all. The surface owes that
@@ -585,6 +589,11 @@ function composedLine(
     .join(' · ');
 }
 
+/** Every fact this card holds — an empty string is a fact it does not. */
+function heldFacts(parts: ScorecardCardParts): Set<keyof ScorecardCardParts> {
+  return new Set(SCORECARD_LINE_ORDER.filter((part) => parts[part] !== ''));
+}
+
 /**
  * A card's one line, composed to a budget (D3's Build 3,
  * `FUTURE-ITEMS.md:811-812`): the facts that fit, in the order a card reads in,
@@ -601,6 +610,11 @@ function composedLine(
  * never dropped — a card with room for nothing else still says what it counted,
  * budget or no budget, because the counts are the card — and no fact is
  * re-worded or re-derived, so every number printed is one of the folds' own.
+ *
+ * This is the line a card DRAWS. What a screen reader is told is
+ * `scorecardCardAnnouncement`, which is this same set of facts with no budget:
+ * `ListRow` announces a row with the string it draws, so a fact this fold could
+ * not fit would otherwise be missing from the sentence as well as the pixels.
  */
 export function scorecardCardLine(
   parts: ScorecardCardParts,
@@ -610,9 +624,7 @@ export function scorecardCardLine(
   // Start from every fact the card holds, then drop the least important one
   // still on the line until the answer fits. A room this fold cannot read is no
   // room at all, which composes the counts rather than everything.
-  const held = new Set<keyof ScorecardCardParts>(
-    SCORECARD_LINE_ORDER.filter((part) => parts[part] !== ''),
-  );
+  const held = heldFacts(parts);
 
   for (const part of SCORECARD_LINE_DROP_ORDER) {
     // The counts are never in the drop order; the size guard keeps a malformed
@@ -622,6 +634,36 @@ export function scorecardCardLine(
   }
 
   return composedLine(parts, held);
+}
+
+/**
+ * The whole card as one sentence — the card's own title and EVERY fact it
+ * holds, in the line's order, joined with no budget.
+ *
+ * This is what a card hands `ListRow` as its announcement. The row draws a
+ * composed line (`scorecardCardLine`) and announces the string it draws — one
+ * `<Text>` clipped to one line, with the same string in its
+ * `accessibilityLabel` (`src/components/ui/ListRow.tsx:74`, `:88-95`) — so
+ * without this fold a fact the budget dropped would be dropped from the
+ * sentence a screen reader reads as well, and an operator who cannot see the
+ * row would be told strictly less than one who can. The card's facts are a
+ * count of the runs this device saw; a withheld one is not something the
+ * announcement may quietly lose.
+ *
+ * The room a sentence has is not the room a caption line has, so there is no
+ * budget here: the facts a card could not print are exactly the ones the
+ * announcement is here to recover. The title is passed in already worded —
+ * `scorecardBotLabel` for a card — so this fold re-words nothing, and the
+ * title and the announcement cannot name a card differently.
+ */
+export function scorecardCardAnnouncement(
+  title: string,
+  parts: ScorecardCardParts,
+): string {
+  const line = composedLine(parts, heldFacts(parts));
+  // A card holding no facts is its title alone, never a bare line and never a
+  // nameless sentence.
+  return line ? `${title}, ${line}` : title;
 }
 
 /**

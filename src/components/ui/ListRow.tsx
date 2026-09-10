@@ -29,6 +29,16 @@ export type ListRowProps = {
   onLongPress?: () => void;
   /** Show a trailing chevron. Default true when onPress is set. */
   chevron?: boolean;
+  /**
+   * What a screen reader reads for this row, when the row must say more than it
+   * draws. The row announces the string it draws — one clipped `subtitle`
+   * line — so a caller that composed that line to a budget (the Scorecards
+   * card's) would drop the same facts from the announcement as from the
+   * pixels. Hand this a whole sentence and it is used verbatim; leave it
+   * undefined and the label is the one derived from `title` and `subtitle`,
+   * exactly as every caller before it announced.
+   */
+  accessibilityLabel?: string;
   /** Screen-reader hint naming what the tap does next (e.g. a confirmation). */
   accessibilityHint?: string;
   /** Selected state announced to screen readers when defined (e.g. a picked backend). */
@@ -47,6 +57,7 @@ export function ListRow({
   onPress,
   onLongPress,
   chevron,
+  accessibilityLabel,
   accessibilityHint,
   selected,
   style,
@@ -71,7 +82,7 @@ export function ListRow({
       onLongPress={onLongPress ? handleLongPress : undefined}
       disabled={!interactive}
       accessibilityRole={interactive ? 'button' : undefined}
-      accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
+      accessibilityLabel={accessibilityLabel ?? (subtitle ? `${title}, ${subtitle}` : title)}
       accessibilityHint={accessibilityHint}
       accessibilityState={{ ...(selected !== undefined ? { selected } : null) }}
       style={[styles.row, style]}>
