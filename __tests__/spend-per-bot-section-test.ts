@@ -296,7 +296,7 @@ describe('the capability gate is decided before a request that could only be ref
 describe('what must keep working', () => {
   test('the window line and the basis header are still the shipped copy', () => {
     const src = spendScreen();
-    expect(src).toContain('spendWindowCopy(state.sessions.length)');
+    expect(src).toContain('spendWindowCopy(state.rowCount)');
     expect(src).toContain('spendCostBasis(state.sessions)');
     expect(src).toContain('spendBasisCopy(basis)');
   });

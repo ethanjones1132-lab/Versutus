@@ -119,22 +119,30 @@ describe('sessionSpendReadFromUnknown', () => {
     expect(sessionSpendReadFromUnknown({ object: 'list', data: [session] })).toEqual({
       ok: true,
       sessions: [session],
+      rowCount: 1,
     });
-    expect(sessionSpendReadFromUnknown([session])).toEqual({ ok: true, sessions: [session] });
+    expect(sessionSpendReadFromUnknown([session])).toEqual({
+      ok: true,
+      sessions: [session],
+      rowCount: 1,
+    });
     expect(sessionSpendReadFromUnknown({ sessions: [session] })).toEqual({
       ok: true,
       sessions: [session],
+      rowCount: 1,
     });
   });
 
   test('an empty list is empty-ok', () => {
-    expect(sessionSpendReadFromUnknown([])).toEqual({ ok: true, sessions: [] });
-    expect(sessionSpendReadFromUnknown({ data: [] })).toEqual({ ok: true, sessions: [] });
+    expect(sessionSpendReadFromUnknown([])).toEqual({ ok: true, sessions: [], rowCount: 0 });
+    expect(sessionSpendReadFromUnknown({ data: [] })).toEqual({ ok: true, sessions: [], rowCount: 0 });
   });
 
   test('non-object items are dropped, not a failed read', () => {
     const read = sessionSpendReadFromUnknown([null, 42, { input_tokens: 3 }]);
-    expect(read).toEqual({ ok: true, sessions: [{ input_tokens: 3 }] });
+    // Three rows came back and one of them had nothing to fold: the read is
+    // still three rows wide, which is what a bound line reads.
+    expect(read).toEqual({ ok: true, sessions: [{ input_tokens: 3 }], rowCount: 3 });
   });
 
   test('an unparseable payload is a failed read, not zero spend', () => {
@@ -147,14 +155,17 @@ describe('sessionSpendReadFromUnknown', () => {
     expect(sessionSpendReadFromUnknown([{ id: 's1', input_tokens: 4 }])).toEqual({
       ok: true,
       sessions: [{ id: 's1', input_tokens: 4 }],
+      rowCount: 1,
     });
     expect(sessionSpendReadFromUnknown([{ sessionId: 's2', output_tokens: 1 }])).toEqual({
       ok: true,
       sessions: [{ id: 's2', output_tokens: 1 }],
+      rowCount: 1,
     });
     expect(sessionSpendReadFromUnknown([{ name: 's3', actual_cost_usd: 0.1 }])).toEqual({
       ok: true,
       sessions: [{ id: 's3', actual_cost_usd: 0.1 }],
+      rowCount: 1,
     });
   });
 
@@ -164,6 +175,7 @@ describe('sessionSpendReadFromUnknown', () => {
     ).toEqual({
       ok: true,
       sessions: [{ id: 'keep', input_tokens: 1 }],
+      rowCount: 1,
     });
   });
 });
@@ -182,6 +194,7 @@ describe('applySessionSpendRead', () => {
     const loaded = applySessionSpendRead(EMPTY_SESSION_SPEND, {
       ok: true,
       sessions: [{ id: 's1', input_tokens: 100, output_tokens: 50, actual_cost_usd: 0.42 }],
+      rowCount: 1,
     });
     const stale = applySessionSpendRead(loaded, { ok: false });
     expect(stale.sessions).toEqual([
@@ -196,10 +209,12 @@ describe('applySessionSpendRead', () => {
     const previous = applySessionSpendRead(EMPTY_SESSION_SPEND, {
       ok: true,
       sessions: [{ id: 's1', input_tokens: 10 }],
+      rowCount: 1,
     });
     const next = applySessionSpendRead(previous, {
       ok: true,
       sessions: [{ id: 's1', input_tokens: 20, actual_cost_usd: 0.42 }],
+      rowCount: 1,
     });
     expect(next.failed).toBe(false);
     expect(threadSpendCopy(next, 's1')).toBe('20 · $0.42');
@@ -229,6 +244,7 @@ describe('threadSpendCopy', () => {
     const state = applySessionSpendRead(EMPTY_SESSION_SPEND, {
       ok: true,
       sessions: [{ id: 's1', input_tokens: 1400, output_tokens: 100, actual_cost_usd: 0.42 }],
+      rowCount: 1,
     });
     expect(threadSpendCopy(state, 's1')).toBe('1.5k · $0.42');
   });
@@ -237,6 +253,7 @@ describe('threadSpendCopy', () => {
     const state = applySessionSpendRead(EMPTY_SESSION_SPEND, {
       ok: true,
       sessions: [{ id: 's1', input_tokens: 10 }],
+      rowCount: 1,
     });
     expect(threadSpendCopy(state, 's1')).toBe('10 · —');
   });
@@ -245,6 +262,7 @@ describe('threadSpendCopy', () => {
     const state = applySessionSpendRead(EMPTY_SESSION_SPEND, {
       ok: true,
       sessions: [{ id: 'other', input_tokens: 10, actual_cost_usd: 1 }],
+      rowCount: 1,
     });
     expect(threadSpendCopy(state, 'new-session')).toBeUndefined();
     expect(threadSpendCopy(EMPTY_SESSION_SPEND, 's1')).toBeUndefined();
@@ -254,6 +272,7 @@ describe('threadSpendCopy', () => {
     const loaded = applySessionSpendRead(EMPTY_SESSION_SPEND, {
       ok: true,
       sessions: [{ id: 'other', input_tokens: 10 }],
+      rowCount: 1,
     });
     const stale = applySessionSpendRead(loaded, { ok: false });
     expect(threadSpendCopy(stale, 'open')).toBe('Could not re-read spend — showing the last total.');
@@ -272,6 +291,7 @@ describe('overflowSpendCopy', () => {
     const emptyOk = applySessionSpendRead(EMPTY_SESSION_SPEND, {
       ok: true,
       sessions: [{ id: 'other', input_tokens: 10, actual_cost_usd: 1 }],
+      rowCount: 1,
     });
     expect(overflowSpendCopy(emptyOk, 's1')).toBeUndefined();
   });
@@ -280,6 +300,7 @@ describe('overflowSpendCopy', () => {
     const state = applySessionSpendRead(EMPTY_SESSION_SPEND, {
       ok: true,
       sessions: [{ id: 's1', input_tokens: 1400, output_tokens: 100, actual_cost_usd: 0.42 }],
+      rowCount: 1,
     });
     expect(overflowSpendCopy(state, 's1')).toBe(threadSpendCopy(state, 's1'));
     expect(overflowSpendCopy(state, 's1')).toBe('1.5k · $0.42');
@@ -289,6 +310,7 @@ describe('overflowSpendCopy', () => {
     const loaded = applySessionSpendRead(EMPTY_SESSION_SPEND, {
       ok: true,
       sessions: [{ id: 's1', input_tokens: 100, output_tokens: 50, actual_cost_usd: 0.42 }],
+      rowCount: 1,
     });
     const stale = applySessionSpendRead(loaded, { ok: false });
     expect(overflowSpendCopy(stale, 's1')).toBe('150 · $0.42');
@@ -301,6 +323,7 @@ describe('overflowSpendSession', () => {
     const state = applySessionSpendRead(EMPTY_SESSION_SPEND, {
       ok: true,
       sessions: [{ id: 's1', input_tokens: 100, output_tokens: 50, actual_cost_usd: 0.42 }],
+      rowCount: 1,
     });
     expect(overflowSpendSession(state, 's1')).toEqual({
       id: 's1',
@@ -322,6 +345,7 @@ describe('overflowSpendSession', () => {
         { id: 's1', input_tokens: 100, output_tokens: 50, last_active: 1_700_000_000 },
         { id: 'other', input_tokens: 10 },
       ],
+      rowCount: 2,
     });
     const stale = applySessionSpendRead(loaded, { ok: false });
     expect(overflowSpendSession(stale, 's1')).toEqual({
@@ -336,6 +360,7 @@ describe('overflowSpendSession', () => {
     const state = applySessionSpendRead(EMPTY_SESSION_SPEND, {
       ok: true,
       sessions: [{ id: 'other', input_tokens: 10 }],
+      rowCount: 1,
     });
     expect(overflowSpendSession(state, 's1')).toBeUndefined();
     expect(overflowSpendSession(EMPTY_SESSION_SPEND, 's1')).toBeUndefined();

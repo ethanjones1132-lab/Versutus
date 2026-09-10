@@ -45,7 +45,7 @@ describe('thread spend retry', () => {
   test('the failed-first-read micro copy still names the failure', () => {
     const src = readSource('src', 'components', 'chat', 'thread-spend-glance.tsx');
     expect(src).toContain('{copy}');
-    expect(threadSpendCopy({ sessions: [], loaded: false, failed: true }, 's1')).toBe(
+    expect(threadSpendCopy({ sessions: [], loaded: false, failed: true, rowCount: 0 }, 's1')).toBe(
       'Spend could not be read.',
     );
   });
@@ -59,9 +59,10 @@ describe('thread spend retry', () => {
       sessions: [{ id: 's1', input_tokens: 100, output_tokens: 50, actual_cost_usd: 0.42 }],
       loaded: true,
       failed: false,
+      rowCount: 1,
     };
     const next = applySessionSpendRead(loaded, { ok: false });
-    expect(next).toEqual({ sessions: loaded.sessions, loaded: true, failed: true });
+    expect(next).toEqual({ sessions: loaded.sessions, loaded: true, failed: true, rowCount: 1 });
     expect(threadSpendCopy(next, 'gone')).toBe(
       'Could not re-read spend — showing the last total.',
     );
@@ -83,6 +84,7 @@ describe('thread spend retry', () => {
     const state = applySessionSpendRead(EMPTY_SESSION_SPEND, {
       ok: true,
       sessions: [{ id: 's1', input_tokens: 1500, output_tokens: 0, actual_cost_usd: 0.42 }],
+      rowCount: 1,
     });
     expect(threadSpendCopy(state, 's1')).toBe('1.5k · $0.42');
   });

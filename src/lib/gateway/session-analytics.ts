@@ -18,7 +18,17 @@ export type SessionSpend = {
 };
 
 export type SessionSpendRead =
-  | { ok: true; sessions: SessionUsageInput[] }
+  | {
+      ok: true;
+      sessions: SessionUsageInput[];
+      /**
+       * How many rows the payload held, parsed or not. A row that is not a
+       * record carries no spend to fold, so `sessions` may be shorter than the
+       * read — but a read that took the endpoint's whole cap hit that cap
+       * either way, and a bound line must read this.
+       */
+      rowCount: number;
+    }
   | { ok: false };
 
 /**
@@ -30,6 +40,13 @@ export type SessionSpendRead =
  */
 export type SessionSpendState = {
   sessions: SessionUsageInput[];
+  /**
+   * Rows the last successful read held (`SessionSpendRead.rowCount`), which is
+   * not `sessions.length`: a row with nothing to parse is dropped, and a
+   * retained last-good list keeps the count it was read at. A bound line reads
+   * this, so a capped read names its cap even when a row could not be parsed.
+   */
+  rowCount: number;
   /** True once a successful read has landed. */
   loaded: boolean;
   failed: boolean;
@@ -37,6 +54,7 @@ export type SessionSpendState = {
 
 export const EMPTY_SESSION_SPEND: SessionSpendState = {
   sessions: [],
+  rowCount: 0,
   loaded: false,
   failed: false,
 };
@@ -137,9 +155,20 @@ export function applySessionSpendRead(
   previous: SessionSpendState,
   read: SessionSpendRead,
 ): SessionSpendState {
-  if (read.ok) return { sessions: read.sessions, loaded: true, failed: false };
-  if (previous.loaded) return { sessions: previous.sessions, loaded: true, failed: true };
-  return { sessions: [], loaded: false, failed: true };
+  if (read.ok) {
+    return { sessions: read.sessions, rowCount: read.rowCount, loaded: true, failed: false };
+  }
+  // The retained last-good list keeps the row count it was read at: the bound
+  // line describes that list, not the read that failed.
+  if (previous.loaded) {
+    return {
+      sessions: previous.sessions,
+      rowCount: previous.rowCount,
+      loaded: true,
+      failed: true,
+    };
+  }
+  return { sessions: [], rowCount: 0, loaded: false, failed: true };
 }
 
 /** This open thread's tokens and cost — not the total of every session. */
@@ -271,8 +300,11 @@ export const SESSION_SPEND_LIST_LIMIT = 200;
 /**
  * Honest window line for the 7-day sparkline. A filled window may be
  * truncated — the list endpoint takes `limit` but no cursor — so a full
- * read names its bound instead of reading as the whole catalogue. A
- * partial or unreadable count stays on the old recent-sessions line.
+ * read names its bound instead of reading as the whole catalogue. Callers
+ * pass the read's ROW count (`SessionSpendRead.rowCount`), not the sessions
+ * that parsed, or a capped read that dropped an unparseable row would name
+ * no bound at all. A partial or unreadable count stays on the old
+ * recent-sessions line.
  */
 export function spendWindowCopy(sessionCount: number): string {
   if (Number.isFinite(sessionCount) && sessionCount >= SESSION_SPEND_LIST_LIMIT) {
@@ -286,6 +318,10 @@ export function spendWindowCopy(sessionCount: number): string {
  * Gate answers `{ object: 'list', data }`; Hermes `/api/sessions` is the
  * same envelope; a raw array is also a list. Anything else is a failed
  * read — never zero spend.
+ *
+ * `rowCount` is the rows the payload held, which is what a bound line reads:
+ * a row with nothing to parse is dropped from `sessions` — it carries no
+ * spend — but it was still a row of the window the endpoint returned.
  */
 export function sessionSpendReadFromUnknown(raw: unknown): SessionSpendRead {
   const items = sessionItems(raw);
@@ -295,7 +331,7 @@ export function sessionSpendReadFromUnknown(raw: unknown): SessionSpendRead {
     const session = asUsageInput(item);
     if (session) sessions.push(session);
   }
-  return { ok: true, sessions };
+  return { ok: true, sessions, rowCount: items.length };
 }
 
 export function relativeMeter(value: number, weekMax: number): RelativeMeter {

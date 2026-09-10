@@ -1,6 +1,10 @@
 import {
+  applySessionSpendRead,
+  EMPTY_SESSION_SPEND,
   SESSION_SPEND_LIST_LIMIT,
+  sessionSpendReadFromUnknown,
   spendWindowCopy,
+  totalUsage,
   weekBuckets,
   type SessionUsageInput,
 } from '@/lib/gateway/session-analytics';
@@ -157,7 +161,7 @@ describe('the cap is named, never silently truncated', () => {
 
   test('the bound is the shared constant, and the table renders it', () => {
     expect(SESSION_SPEND_LIST_LIMIT).toBe(200);
-    expect(table()).toContain('{spendSessionCapCopy(rows.length)}');
+    expect(table()).toContain('{spendSessionCapCopy(rowCount)}');
   });
 });
 
@@ -166,7 +170,7 @@ describe('the table paints the shipped folds and aggregates nothing itself', () 
     const src = table();
     expect(src).toContain("from '@/lib/gateway/spend-report'");
     expect(src).toContain('{spendSessionRowCopy(row)}');
-    expect(src).toContain('{spendSessionCapCopy(rows.length)}');
+    expect(src).toContain('{spendSessionCapCopy(rowCount)}');
   });
 
   test('no number is computed on the table', () => {
@@ -206,5 +210,82 @@ describe('what must keep working', () => {
   test('weekBuckets still folds the same seven days', () => {
     const empty: SessionUsageInput[] = [];
     expect(weekBuckets(empty, 1_700_000_000_000)).toHaveLength(7);
+  });
+});
+
+// A payload the endpoint filled to its cap can still carry a row with nothing
+// to parse — `asUsageInput` drops anything that is not a record. The read hit
+// the cap all the same, so both bound lines decide from the rows the payload
+// held, never from the shorter list that parsed.
+describe('a capped read names its bound even when it dropped a row', () => {
+  const cappedPayload = () => ({
+    object: 'list',
+    data: [
+      ...Array.from({ length: SESSION_SPEND_LIST_LIMIT - 1 }, (_, index) => ({
+        id: `s${index}`,
+        input_tokens: 1,
+      })),
+      'not a record',
+    ],
+  });
+
+  const cappedState = () =>
+    applySessionSpendRead(EMPTY_SESSION_SPEND, sessionSpendReadFromUnknown(cappedPayload()));
+
+  test('the read carries the rows the payload held, beside the ones that parsed', () => {
+    const read = sessionSpendReadFromUnknown(cappedPayload());
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.rowCount).toBe(SESSION_SPEND_LIST_LIMIT);
+    expect(read.sessions).toHaveLength(SESSION_SPEND_LIST_LIMIT - 1);
+  });
+
+  test('the total and the table still fold exactly the sessions that parse', () => {
+    const state = cappedState();
+    expect(state.rowCount).toBe(SESSION_SPEND_LIST_LIMIT);
+    expect(totalUsage(state.sessions).sessionCount).toBe(SESSION_SPEND_LIST_LIMIT - 1);
+    expect(spendSessionRows(state.sessions)).toHaveLength(SESSION_SPEND_LIST_LIMIT - 1);
+  });
+
+  test('both bound lines name the cap this read stopped at', () => {
+    const state = cappedState();
+    expect(spendWindowCopy(state.rowCount)).toBe(
+      `Last 7 days · newest ${SESSION_SPEND_LIST_LIMIT} sessions`,
+    );
+    expect(spendSessionCapCopy(state.rowCount)).toBe(
+      `Newest ${SESSION_SPEND_LIST_LIMIT} sessions — older sessions are past the list's cap`,
+    );
+  });
+
+  test('a short read that dropped a row claims no cap it did not hit', () => {
+    const state = applySessionSpendRead(
+      EMPTY_SESSION_SPEND,
+      sessionSpendReadFromUnknown({ data: [{ id: 'a', input_tokens: 1 }, {}, 'junk'] }),
+    );
+    expect(state.rowCount).toBe(3);
+    expect(state.sessions).toHaveLength(2);
+    expect(spendSessionCapCopy(state.rowCount)).toBe('3 sessions in this read');
+    expect(spendSessionCapCopy(state.rowCount)).not.toMatch(/cap|older/);
+    expect(spendWindowCopy(state.rowCount)).toBe('Last 7 days · recent sessions');
+  });
+
+  test('a payload that is not a session list is still a failed read', () => {
+    const read = sessionSpendReadFromUnknown({ error: 'boom' });
+    expect(read).toEqual({ ok: false });
+    const state = applySessionSpendRead(EMPTY_SESSION_SPEND, read);
+    expect(state.rowCount).toBe(0);
+    expect(state.loaded).toBe(false);
+  });
+
+  test('a failed re-read keeps the row count of the list it kept', () => {
+    const stale = applySessionSpendRead(cappedState(), { ok: false });
+    expect(stale.rowCount).toBe(SESSION_SPEND_LIST_LIMIT);
+    expect(stale.sessions).toHaveLength(SESSION_SPEND_LIST_LIMIT - 1);
+    expect(stale.failed).toBe(true);
+  });
+
+  test('the table and the screen decide their bound from the read, not the rows', () => {
+    expect(table()).toContain('{spendSessionCapCopy(rowCount)}');
+    expect(spendScreen()).toContain('spendWindowCopy(state.rowCount)');
   });
 });

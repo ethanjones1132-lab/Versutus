@@ -53,7 +53,7 @@ describe('the Spend route makes exactly the read the shipped folds need', () => 
 
   test('the window line and the basis header are the shipped copy', () => {
     const src = spendScreen();
-    expect(src).toContain('spendWindowCopy(state.sessions.length)');
+    expect(src).toContain('spendWindowCopy(state.rowCount)');
     expect(src).toContain('spendCostBasis(state.sessions)');
     expect(src).toContain('spendBasisCopy(basis)');
     expect(src).toContain('{sessionSpendCopy(spend)}');

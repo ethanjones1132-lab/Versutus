@@ -25,6 +25,7 @@ function readSource(...parts: string[]): string {
 const ok = (...sessions: SessionUsageInput[]): BotSpendRead['read'] => ({
   ok: true,
   sessions,
+  rowCount: sessions.length,
 });
 
 describe('spendCostBasis', () => {

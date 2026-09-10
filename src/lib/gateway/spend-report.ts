@@ -309,7 +309,9 @@ export function spendSessionRowCopy(row: SpendSessionRow): string {
  * The list endpoint takes a `limit` but no cursor (`spendWindowCopy`'s note),
  * so a full read has sessions missing off the end and says so instead of
  * reading as the whole catalogue; a partial read is everything this device
- * could see, and claims no bound it did not hit.
+ * could see, and claims no bound it did not hit. Callers pass the read's ROW
+ * count — `SessionSpendState.rowCount` — so a capped read names its cap even
+ * when a row it could not parse was dropped from the rows listed.
  */
 export function spendSessionCapCopy(sessionCount: number): string {
   if (Number.isFinite(sessionCount) && sessionCount >= SESSION_SPEND_LIST_LIMIT) {

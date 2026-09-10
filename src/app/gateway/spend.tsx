@@ -49,6 +49,10 @@ import {
  * (`spendSessionRows`) — the same rows, once, in the read the screen already
  * made.
  *
+ * Both bound lines on this screen — the total's window line and the table's
+ * cap — are decided by `state.rowCount`, the rows the read held, so a capped
+ * read names its cap even when a row it could not parse was dropped.
+ *
  * The 7-day chart and the entry points are their own slices of P5.
  */
 export default function GatewaySpendScreen() {
@@ -120,7 +124,7 @@ export default function GatewaySpendScreen() {
           <Card variant="hero" padding={Spacing.three} style={styles.card}>
             <Text variant="headline">{spendBasisCopy(basis)}</Text>
             <Text variant="caption" color="secondary">
-              {spendWindowCopy(state.sessions.length)}
+              {spendWindowCopy(state.rowCount)}
             </Text>
             <Text variant="mono" color="secondary" style={styles.total}>
               {sessionSpendCopy(spend)}
@@ -145,7 +149,7 @@ export default function GatewaySpendScreen() {
 
         {botReport ? <SpendPerBotSection report={botReport} /> : null}
 
-        <SpendSessionTable rows={sessionRows} />
+        <SpendSessionTable rows={sessionRows} rowCount={state.rowCount} />
       </ScrollView>
     </Screen>
   );

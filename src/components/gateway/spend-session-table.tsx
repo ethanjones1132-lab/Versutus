@@ -24,16 +24,19 @@ import {
  *     sessions has no sessions to list; an empty frame under either would read
  *     as "nothing was spent";
  *   - rows — the caption names the read's bound, so a capped list says older
- *     sessions are past it rather than reading as the whole catalogue.
+ *     sessions are past it rather than reading as the whole catalogue. That
+ *     bound is `rowCount` — the rows the payload held — not the rows that
+ *     parsed: a row with nothing to fold is dropped from the list, but the
+ *     read still stopped at the same cap.
  */
-export function SpendSessionTable({ rows }: { rows: SpendSessionRow[] }) {
+export function SpendSessionTable({ rows, rowCount }: { rows: SpendSessionRow[]; rowCount: number }) {
   if (rows.length === 0) return null;
 
   return (
     <Card variant="surface" padding={Spacing.three} style={styles.card}>
       <Text variant="headline">Sessions by cost</Text>
       <Text variant="caption" color="secondary">
-        {spendSessionCapCopy(rows.length)}
+        {spendSessionCapCopy(rowCount)}
       </Text>
       {rows.map((row) => (
         <View key={row.key} style={styles.row}>
