@@ -13,13 +13,26 @@
 // The tap is the filter: a card hands the tab its bucket, which puts the run
 // list above on that Bot's runs. While a filter is set, the way back to the
 // unfiltered list is a control here rather than something to hunt for.
+//
+// The weekly operator report is opted into from here (D3 Build 5) — one local
+// notice, off by default. The switch paints the device's stored flag and
+// nothing else, so it can never show "on" for a notice the phone does not hold.
 
-import { useMemo } from 'react';
-import { StyleSheet } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { StyleSheet, Switch, View } from 'react-native';
 
-import { Badge, Button, Card, ListRow, Text } from '@/components/ui';
+import { Badge, Button, Card, Divider, ListRow, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
+import { useTokens } from '@/hooks/use-tokens';
 import type { ActivityRun } from '@/lib/gateway/runs';
+import {
+  loadWeeklyReportOptIn,
+  setWeeklyReportOptIn,
+} from '@/lib/notifications/weekly-report';
+import {
+  WEEKLY_REPORT_OPT_IN_LABEL,
+  WEEKLY_REPORT_OPT_IN_SUMMARY,
+} from '@/lib/notifications/weekly-report-schedule';
 import {
   buildScorecards,
   scorecardBotLabel,
@@ -40,8 +53,35 @@ export function ScorecardsSection({
   filter: ScorecardFilter;
   onSelect: (filter: ScorecardFilter) => void;
 }) {
+  const tokens = useTokens();
   // Fold the list the tab was handed, exactly as the tab's own filter does.
   const cards = useMemo(() => buildScorecards(runs), [runs]);
+
+  // Off until the stored flag says otherwise: D3's weekly report is opt-in and
+  // a device that never asked holds no flag at all.
+  const [weeklyReport, setWeeklyReport] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    // `loadWeeklyReportOptIn` never rejects — a store it cannot read reads as
+    // off, the fail-closed direction.
+    void loadWeeklyReportOptIn().then((enabled) => {
+      if (live) setWeeklyReport(enabled);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  /**
+   * The switch answers the finger, then the device has the last word: a
+   * declined permission or a failed schedule leaves no opt-in behind, so the
+   * control snaps back instead of promising a notice that is not there.
+   */
+  const handleWeeklyReport = (next: boolean) => {
+    setWeeklyReport(next);
+    void setWeeklyReportOptIn(next).then((inForce) => setWeeklyReport(inForce));
+  };
 
   // No runs on this device is no section at all: a placeholder would read as
   // every Bot doing fine, and this surface has nothing to say about a device
@@ -86,6 +126,26 @@ export function ScorecardsSection({
         />
       ) : null}
 
+      {/* One local notice a week, off by default — the label and the line are
+          the module's, so the honesty rule is pinned where it is decided. */}
+      <Divider />
+      <View style={styles.optIn}>
+        <View style={styles.optInCopy}>
+          <Text variant="body">{WEEKLY_REPORT_OPT_IN_LABEL}</Text>
+          <Text variant="caption" color="secondary">
+            {WEEKLY_REPORT_OPT_IN_SUMMARY}
+          </Text>
+        </View>
+        <Switch
+          value={weeklyReport}
+          onValueChange={handleWeeklyReport}
+          trackColor={{ true: tokens.accent, false: tokens.border }}
+          thumbColor={tokens.textPrimary}
+          accessibilityLabel={WEEKLY_REPORT_OPT_IN_LABEL}
+          accessibilityState={{ checked: weeklyReport }}
+        />
+      </View>
+
       <Text variant="micro" color="tertiary">
         {SCORECARD_FOOTER_COPY}
       </Text>
@@ -99,5 +159,15 @@ const styles = StyleSheet.create({
   },
   row: {
     paddingHorizontal: 0,
+  },
+  optIn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+  },
+  optInCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
   },
 });

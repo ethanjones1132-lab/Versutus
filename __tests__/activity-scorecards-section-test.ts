@@ -160,3 +160,49 @@ describe('what must keep working', () => {
     expect(src).toContain('<SpendEntryRow />');
   });
 });
+
+describe('the weekly operator report is opted into here, off by default', () => {
+  test('the opt-in says what the module decided, not what this file invents', () => {
+    const src = section();
+
+    expect(src).toContain("from '@/lib/notifications/weekly-report-schedule'");
+    expect(src).toContain('{WEEKLY_REPORT_OPT_IN_LABEL}');
+    expect(src).toContain('{WEEKLY_REPORT_OPT_IN_SUMMARY}');
+    // The notice's own words — including the title a tray shows — are the
+    // module's, so nothing about the report is re-authored on the surface.
+    expect(src).not.toContain('Your weekly agent report');
+  });
+
+  test('the switch shows the stored flag, and a declined opt-in snaps it back', () => {
+    const src = section();
+
+    // Off until the device's own flag says otherwise.
+    expect(src).toContain('useState(false)');
+    expect(src).toContain('loadWeeklyReportOptIn()');
+    // The state this device holds after the attempt is what the switch paints,
+    // so it can never show "on" for a notice that is not scheduled.
+    expect(src).toContain('setWeeklyReportOptIn(next).then((inForce) => setWeeklyReport(inForce))');
+  });
+
+  test('the surface asks for the notice and schedules nothing itself', () => {
+    const src = section();
+
+    // Scheduling and its bookkeeping live in the notifications module, which
+    // is where the honesty rules are pinned. Nothing here touches the API.
+    expect(src).not.toContain('scheduleNotificationAsync');
+    expect(src).not.toContain('cancelScheduledNotificationAsync');
+    expect(src).not.toContain("from 'expo-notifications'");
+    expect(src).not.toContain('expo-notifications');
+  });
+
+  test('the opt-in sits inside the card, above the footer sentence that closes it', () => {
+    const src = section();
+    const optIn = src.indexOf('{WEEKLY_REPORT_OPT_IN_LABEL}');
+    const footer = src.indexOf('{SCORECARD_FOOTER_COPY}');
+    const close = src.indexOf('</Card>');
+
+    expect(optIn).toBeGreaterThanOrEqual(0);
+    expect(footer).toBeGreaterThan(optIn);
+    expect(close).toBeGreaterThan(footer);
+  });
+});
