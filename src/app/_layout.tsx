@@ -20,6 +20,7 @@ import {
   useGateway,
   type SendChatInputOutcome,
 } from '@/context/gateway-provider';
+import type { ChatSurface } from '@/lib/gateway/bots';
 import type { ConnectionStatus } from '@/lib/gateway/types';
 import { installStreamingFetch } from '@/lib/net/streaming-fetch';
 import {
@@ -52,12 +53,13 @@ import { routeForTap } from '@/lib/notifications/tap-route';
 installStreamingFetch(expoFetch as unknown as typeof globalThis.fetch);
 
 /**
- * The two provider calls a quick reply needs, narrowed to the shape the reply
- * path uses so the listener can hold them in a ref.
+ * The provider calls a quick reply needs, narrowed to the shape the reply path
+ * uses so the listener can hold them in a ref.
  */
 type BotReplySender = {
   openBot: (botId: string) => Promise<void>;
   sendChatInput: (text: string) => Promise<SendChatInputOutcome>;
+  requestSurface: (surface: ChatSurface) => void;
 };
 
 /**
@@ -81,6 +83,12 @@ type BotReplySender = {
  * fall back to whichever session the client still held, putting the operator's
  * words in a conversation they did not choose. Nothing is sent, and the notice
  * says only that.
+ *
+ * Opening the Bot Chat reloads the transcript the chat context shares, but the
+ * screen showing it keeps its own record of which surface is up — its header,
+ * its panes and its backends picker all read that state. So the screen is asked
+ * to move to that Bot Chat once the open has landed; a reply that never opened
+ * one asks for nothing, since then nothing on screen has changed.
  */
 async function deliverBotReply(
   reply: BotReply,
@@ -94,6 +102,7 @@ async function deliverBotReply(
       void notifyBotReplyNotSent('bot-chat-unavailable');
       return;
     }
+    sender.requestSurface({ kind: 'bot', botId: reply.botId });
   }
   const outcome = await sender.sendChatInput(reply.text);
   if (outcome === 'queued') void notifyBotReplyNotSent('queued');
@@ -108,6 +117,7 @@ function NotificationRouter() {
     status,
     openBot,
     sendChatInput,
+    requestSurface,
   } = useGateway();
   // The launch tap is read once, and its route is held until bootstrap has
   // mounted the Stack: navigating any earlier loses to the boot overlay's
@@ -149,8 +159,8 @@ function NotificationRouter() {
   // (and re-run the held-tap apply) on every one of those changes.
   const replySenderRef = useRef<BotReplySender | null>(null);
   useEffect(() => {
-    replySenderRef.current = { openBot, sendChatInput };
-  }, [openBot, sendChatInput]);
+    replySenderRef.current = { openBot, sendChatInput, requestSurface };
+  }, [openBot, sendChatInput, requestSurface]);
 
   // The Approve / Deny buttons only exist once the category is registered, and
   // a notice may not reference a category the device has never seen — so this

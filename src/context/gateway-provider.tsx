@@ -52,8 +52,10 @@ import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import {
   hasBotManagement as probeBotManagement,
   loadBotChat,
+  type ChatSurface,
   type PublicBot,
 } from '@/lib/gateway/bots';
+import { pendingSurface } from '@/lib/gateway/surface-request';
 import { onboardingCompletionForAddedGateway } from '@/lib/onboarding/completion-from-add';
 import {
   hasGroupRooms as probeGroupRooms,
@@ -252,6 +254,17 @@ type GatewayContextValue = {
   hasGroupRooms: boolean;
   openBot: (botId: string) => Promise<void>;
   clearBot: () => void;
+  /**
+   * A surface the chat screen should move to, or null. Requested from outside
+   * the screen (a quick reply opens a Bot Chat and the screen has to follow,
+   * so its header names the thread whose transcript is on it); the screen
+   * applies it and clears it.
+   */
+  requestedSurface: ChatSurface | null;
+  /** Ask the chat screen to show a surface. A repeat of the pending one is a no-op. */
+  requestSurface: (surface: ChatSurface) => void;
+  /** Mark the pending request as applied. */
+  clearRequestedSurface: () => void;
   botJobs: {
     list: () => Promise<{ id: string; name?: string; paused?: boolean }[]>;
     /** Resolves to the created job's id so a caller can keep the phone-side notice in step. */
@@ -3164,6 +3177,18 @@ const response = await executeGatewaySlashCommand(trimmed, {
     setSelectedBotId(undefined);
   }, []);
 
+  // A surface the chat screen must move to, asked for from outside it. The
+  // screen owns which surface it shows — its header, its panes and its backends
+  // picker all hang off that state — while the quick-reply path opens a Bot Chat
+  // here in the provider. Held on the provider, not mirrored into the screen,
+  // because a reply can land while the Chat tab is unmounted: it is applied
+  // when that screen is there to consume it.
+  const [requestedSurface, setRequestedSurface] = useState<ChatSurface | null>(null);
+  const requestSurface = useCallback((surface: ChatSurface) => {
+    setRequestedSurface((prev) => pendingSurface(prev, surface));
+  }, []);
+  const clearRequestedSurface = useCallback(() => setRequestedSurface(null), []);
+
   const openBot = useCallback(async (botId: string) => {
     const client = clientRef.current;
     if (!client?.setBotId || !client.createSession) {
@@ -3316,6 +3341,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
       hasGroupRooms,
       openBot,
       clearBot,
+      requestedSurface,
+      requestSurface,
+      clearRequestedSurface,
       botJobs,
       botGroups,
       cron,
@@ -3379,7 +3407,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       lastError, clearLastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
+      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
       setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

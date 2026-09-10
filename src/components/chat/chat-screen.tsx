@@ -308,6 +308,8 @@ export function ChatScreen() {
     botGroups,
     selectedBotId,
     gatewayRequest,
+    requestedSurface,
+    clearRequestedSurface,
   } = useGateway();
 
   // The transcript and its send state come from the chat-surface context so
@@ -457,6 +459,23 @@ export function ChatScreen() {
     setBackendPickerVisible(false);
     setSurface(next);
   }, []);
+
+  // A request to move the surface, from outside this screen — the quick-reply
+  // path opens a Bot Chat in the provider, which reloads the transcript this
+  // screen renders but cannot reach `showSurface`. Without this the header and
+  // the backends picker would keep naming the thread the operator left, over a
+  // transcript that is now the Bot Chat's. Applied once and cleared, so it can
+  // never fight the operator's own next navigation.
+  useEffect(() => {
+    if (!requestedSurface) return undefined;
+    // Deferred a tick like every other producer in this repo: writing state
+    // straight from an effect body trips react-hooks/set-state-in-effect.
+    const timer = setTimeout(() => {
+      showSurface(requestedSurface);
+      clearRequestedSurface();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [requestedSurface, showSurface, clearRequestedSurface]);
 
   // Stable header callbacks. The chat header is memoized (chat-header.tsx) so it
   // skips a re-render when only the transcript changes; inline arrow wrappers here

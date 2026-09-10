@@ -276,7 +276,7 @@ describe('NotificationRouter quick-reply wiring', () => {
   test('the send path is mirrored into a ref, so the listener is still registered once', () => {
     const src = between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
 
-    expect(src).toContain('replySenderRef.current = { openBot, sendChatInput }');
+    expect(src).toContain('replySenderRef.current = { openBot, sendChatInput, requestSurface }');
     const listenerEnd = src.slice(src.indexOf('addNotificationResponseReceivedListener'));
     expect(listenerEnd).toContain('}, [router, isBootstrapped]);');
   });
