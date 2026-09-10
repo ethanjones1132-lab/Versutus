@@ -59,7 +59,11 @@
 //
 // The tap is the filter: a card hands the tab its bucket, which puts the run
 // list above on that Bot's runs. While a filter is set, the way back to the
-// unfiltered list is a control here rather than something to hunt for.
+// unfiltered list is a control here rather than something to hunt for. The
+// filtered card says so twice off the one `showing` this file computes: the
+// module's word in a badge for the eye, and the module's sentence appended to
+// the announcement — a badge is a visual inside a row the row says nothing
+// about, so without the second the filtered card would read like every other.
 //
 // The weekly operator report is opted into from here (D3 Build 5) — one local
 // notice, off by default. The switch paints the state this device actually
@@ -116,6 +120,7 @@ import {
   scorecardWindowCopy,
   withSpend,
   SCORECARD_FOOTER_COPY,
+  SCORECARD_SHOWING_LABEL,
   type ScorecardFilter,
 } from '@/lib/fleet/scorecard';
 
@@ -244,10 +249,12 @@ export function ScorecardsSection({
 
       {hasCards
         ? cards.map((card) => {
-            // The one visual difference between the cards: the one whose runs
-            // the list above is showing. (ListRow's own `selected` is the
-            // backend picker's announced state, and
-            // `list-row-selected-state-test.ts` keeps that pass scoped to it.)
+            // The card's own state, not ListRow's `selected` — that one is the
+            // backend picker's announced state and
+            // `list-row-selected-state-test.ts` keeps that pass scoped to it.
+            // One computation, used twice: the badge draws the module's word for
+            // it, and the card's sentence names it too, so an operator who
+            // cannot see the badge is not told this card reads like every other.
             const showing = filter ? card.botId === filter.botId : false;
             // The card's line: the counts it folded, the share of them that
             // succeeded, and — when its own runs can back them — the median
@@ -274,16 +281,18 @@ export function ScorecardsSection({
             // whole card this row ANNOUNCES — the row reads aloud the string it
             // draws, so a fact the budget dropped would be missing from what a
             // screen reader says as well. One object because they are the same
-            // facts, so the two can never be composed from different ones.
+            // facts, so the two can never be composed from different ones. The
+            // card's own state is handed to the announcement on top of them: the
+            // badge draws it, and the sentence says it.
             const facts = { fates, success, timed, approvals, routines, spend };
             return (
               <ListRow
                 key={card.botId ?? 'unattributed'}
                 title={scorecardBotLabel(card.botId)}
                 subtitle={scorecardCardLine(facts)}
-                accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId), facts)}
+                accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId), facts, showing)}
                 onPress={() => onSelect({ botId: card.botId })}
-                trailing={showing ? <Badge label="Showing" tone="accent" /> : undefined}
+                trailing={showing ? <Badge label={SCORECARD_SHOWING_LABEL} tone="accent" /> : undefined}
                 accessibilityHint="Shows this Bot's runs in the list above"
                 style={styles.row}
               />

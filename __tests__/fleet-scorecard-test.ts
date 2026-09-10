@@ -36,6 +36,8 @@ import {
   withSpend,
   SCORECARD_CARD_LINE_MAX,
   SCORECARD_FOOTER_COPY,
+  SCORECARD_SHOWING_COPY,
+  SCORECARD_SHOWING_LABEL,
 } from '@/lib/fleet/scorecard';
 import type {
   BotScorecard,
@@ -1253,5 +1255,56 @@ describe('scorecardCardAnnouncement', () => {
     // operator who cannot see the row is told what the row counted.
     expect(announcement).not.toMatch(/…|\.\.\./);
     expect(announcement).not.toMatch(/average|typical|gateway|total/i);
+  });
+
+  test('a card the list above is filtered to says so, and every other card says nothing', () => {
+    // The one state a card is DRAWN in that its own line cannot carry: the card
+    // is marked with a badge, and a badge is a visual inside a row whose
+    // announcement is the string it is handed. The sentence has to say the
+    // state — and only for the card that is in it, so every other card is
+    // announced exactly as it was before the state existed.
+    expect(scorecardCardAnnouncement(name, parts, true)).toBe(
+      `${wholeLine}, ${SCORECARD_SHOWING_COPY}`,
+    );
+    expect(scorecardCardAnnouncement(name, parts, false)).toBe(wholeLine);
+    expect(scorecardCardAnnouncement(name, parts)).toBe(wholeLine);
+  });
+
+  test('the state follows the whole card, costing it no fact and claiming no figure', () => {
+    const showing = scorecardCardAnnouncement(name, parts, true);
+
+    // Every fact the card holds is still announced, in the line's own order,
+    // and the state is appended after them: it supplements the sentence rather
+    // than taking a fact's place on it.
+    for (const fact of Object.values(parts)) expect(showing).toContain(fact);
+    expect(showing.indexOf(SCORECARD_SHOWING_COPY)).toBeGreaterThan(
+      showing.indexOf(parts.spend),
+    );
+    // The state's words are its own and claim no statistic: no figure, and
+    // nothing about a gateway.
+    expect(SCORECARD_SHOWING_COPY).not.toMatch(/\d|average|typical|gateway|total/i);
+  });
+
+  test('a card holding no facts is still named, state and all — never a bare line', () => {
+    const empty: ScorecardCardParts = {
+      fates: '',
+      success: '',
+      timed: '',
+      approvals: '',
+      routines: '',
+      spend: '',
+    };
+
+    expect(scorecardCardAnnouncement(name, empty, true)).toBe(
+      `${name}, ${SCORECARD_SHOWING_COPY}`,
+    );
+  });
+
+  test('the badge’s own word is the state’s first word, so one state is not named two ways', () => {
+    // The badge DRAWS `SCORECARD_SHOWING_LABEL` and the announcement SAYS
+    // `SCORECARD_SHOWING_COPY`; one word for one state, from the one module
+    // that decided it.
+    expect(SCORECARD_SHOWING_LABEL).toBe('Showing');
+    expect(SCORECARD_SHOWING_COPY.startsWith(SCORECARD_SHOWING_LABEL)).toBe(true);
   });
 });

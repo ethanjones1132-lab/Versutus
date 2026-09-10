@@ -32,6 +32,9 @@ describe('the section paints the shipped fold, and aggregates nothing itself', (
     expect(src).toContain('const fates = scorecardFateCopy(card.fates);');
     expect(src).toContain('{scorecardWindowCopy(runs.length)}');
     expect(src).toContain('{SCORECARD_FOOTER_COPY}');
+    // The card's own state is worded by the module too: the badge draws the
+    // module's word for it, and the announcement appends the module's sentence.
+    expect(src).toContain('SCORECARD_SHOWING_LABEL,');
   });
 
   test('the window line names the read the fold was handed, not the cards it produced', () => {
@@ -50,7 +53,13 @@ describe('the section paints the shipped fold, and aggregates nothing itself', (
     // picker's announced state and `list-row-selected-state-test.ts` keeps the
     // pass scoped to it.
     expect(src).toContain('const showing = filter ? card.botId === filter.botId : false;');
-    expect(src).toContain('trailing={showing ? <Badge label="Showing" tone="accent" /> : undefined}');
+    // One state, one source of its word: the badge draws the module's word for
+    // it (the visual is exactly what it was — a `Showing` badge on the card the
+    // list is filtered to) and the announcement appends the module's sentence.
+    expect(src).toContain(
+      'trailing={showing ? <Badge label={SCORECARD_SHOWING_LABEL} tone="accent" /> : undefined}',
+    );
+    expect(src).not.toContain('label="Showing"');
     expect(src).not.toContain('selected=');
   });
 
@@ -110,9 +119,10 @@ describe('a card the drawn line cannot hold in full is still announced in full',
     // (`src/components/ui/ListRow.tsx:74`), so a line composed to a budget
     // would drop the same facts from the sentence a screen reader reads. The
     // card hands the kit an announcement instead — the module's whole-card
-    // fold, over the one `facts` object the drawn line is composed from.
+    // fold, over the one `facts` object the drawn line is composed from, with
+    // the card's own state as its third argument (pinned below).
     expect(src).toContain(
-      'accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId), facts)}',
+      'accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId), facts, showing)}',
     );
     expect(src.match(/scorecardCardAnnouncement\(/g)).toHaveLength(1);
     // The name is the card's own title fold, not a second naming rule here.
@@ -130,6 +140,25 @@ describe('a card the drawn line cannot hold in full is still announced in full',
     // the announcement supplements the row, it does not replace it.
     expect(announcement).toBeGreaterThan(row);
     expect(announcement).toBeGreaterThan(subtitle);
+  });
+
+  test('the announcement is handed the same showing the badge is drawn from', () => {
+    const src = section();
+    const showing = src.indexOf('const showing = filter ?');
+    const announcement = src.indexOf('accessibilityLabel={scorecardCardAnnouncement(');
+    const badge = src.indexOf('trailing={showing ?');
+
+    // The state is computed once and used twice: the badge the operator sees and
+    // the sentence a screen reader hears. It reaches the fold as that one
+    // `showing` — never a literal that could disagree with the badge — and is
+    // decided before the row that carries both.
+    expect(src.match(/const showing = /g)).toHaveLength(1);
+    expect(showing).toBeGreaterThanOrEqual(0);
+    expect(announcement).toBeGreaterThan(showing);
+    expect(badge).toBeGreaterThan(showing);
+    expect(src).toMatch(/scorecardCardAnnouncement\([\s\S]*?facts, showing\)/);
+    expect(src).not.toContain('facts, true)');
+    expect(src).not.toContain('facts, false)');
   });
 });
 

@@ -45,6 +45,13 @@
 //   dropped from what a screen reader reads too; the card hands it
 //   `scorecardCardAnnouncement` instead, the same facts with no budget, so an
 //   operator who cannot see the line is told what the card counted.
+// - A card that is DRAWN as the filtered one says so. That state is not a fact
+//   about the Bot's runs, so it is on neither the drawn line nor the folds:
+//   the caller that knows it is showing — the surface, which computes it for
+//   the badge — hands it to `scorecardCardAnnouncement`, which appends
+//   `SCORECARD_SHOWING_COPY` to the sentence, and a card that is not showing
+//   says nothing about it. The word the badge draws is `SCORECARD_SHOWING_LABEL`,
+//   held here beside that sentence so one state has one vocabulary.
 //
 // These cards are observations of runs this device saw — a run started from
 // the desktop or the TUI never reaches this list at all. The surface owes that
@@ -637,6 +644,25 @@ export function scorecardCardLine(
 }
 
 /**
+ * The word a card DRAWS when the run list above is filtered to it. It rides the
+ * card's badge (`src/components/activity/scorecards-section.tsx`), which is a
+ * VISUAL inside the row: `ListRow` announces the string it is handed, so a
+ * badge marks a card for the eye alone. It lives here rather than on the
+ * surface so the badge and the sentence a screen reader hears cannot end up
+ * naming one state two ways.
+ */
+export const SCORECARD_SHOWING_LABEL = 'Showing';
+
+/**
+ * What a card's announcement appends when that card is the one the run list
+ * above is filtered to — the one state a card is DRAWN in that its own line
+ * cannot carry, and the only fact on the sentence that is not about the Bot's
+ * runs. It begins with the badge's own word (`SCORECARD_SHOWING_LABEL`), and a
+ * card that is not showing says nothing about it at all.
+ */
+export const SCORECARD_SHOWING_COPY = `${SCORECARD_SHOWING_LABEL} this Bot's runs in the list above`;
+
+/**
  * The whole card as one sentence — the card's own title and EVERY fact it
  * holds, in the line's order, joined with no budget.
  *
@@ -655,15 +681,24 @@ export function scorecardCardLine(
  * announcement is here to recover. The title is passed in already worded —
  * `scorecardBotLabel` for a card — so this fold re-words nothing, and the
  * title and the announcement cannot name a card differently.
+ *
+ * `showing` is the one state a card is DRAWN in that its own line cannot carry
+ * — the run list above is filtered to this Bot — and it comes from the caller
+ * that draws the card's badge, so the state the operator sees and the state the
+ * sentence says are one computation. It is appended AFTER the whole card: it is
+ * not a fact about this Bot's runs, so it takes no fact's place, and a card
+ * that is not showing is announced exactly as it was before this state existed.
  */
 export function scorecardCardAnnouncement(
   title: string,
   parts: ScorecardCardParts,
+  showing = false,
 ): string {
   const line = composedLine(parts, heldFacts(parts));
   // A card holding no facts is its title alone, never a bare line and never a
   // nameless sentence.
-  return line ? `${title}, ${line}` : title;
+  const card = line ? `${title}, ${line}` : title;
+  return showing ? `${card}, ${SCORECARD_SHOWING_COPY}` : card;
 }
 
 /**
