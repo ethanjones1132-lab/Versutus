@@ -44,6 +44,7 @@ import {
   notifyApprovalRefused,
   notifyBotReplyNotSent,
 } from '@/lib/notifications/local';
+import type { RunFocus } from '@/lib/notifications/run-focus';
 import { routeForTap } from '@/lib/notifications/tap-route';
 
 // React Native's global fetch cannot stream a response body, so SSE readers
@@ -129,6 +130,7 @@ function NotificationRouter() {
     openBot,
     sendChatInput,
     requestSurface,
+    requestRunFocus,
   } = useGateway();
   // The launch tap is read once, and its route is held until bootstrap has
   // mounted the Stack: navigating any earlier loses to the boot overlay's
@@ -136,6 +138,10 @@ function NotificationRouter() {
   // delivered to the live listener during that same window is held here too.
   const launchReadRef = useRef(false);
   const pendingTapRef = useRef<'/chat' | '/activity' | null>(null);
+  // The run a held tap named, applied with the held destination. A run notice
+  // is usually tapped from a cold start, and a focus dropped on the way through
+  // the bootstrap wait is the mis-landing this router exists to prevent.
+  const pendingRunFocusRef = useRef<RunFocus | null>(null);
   // The launch tap's identifier while its replay window is open, so the same
   // tap arriving at the live listener cannot route a second time.
   const launchTapRef = useRef<LaunchTap | null>(null);
@@ -173,6 +179,14 @@ function NotificationRouter() {
     replySenderRef.current = { openBot, sendChatInput, requestSurface };
   }, [openBot, sendChatInput, requestSurface]);
 
+  // The run-focus request, mirrored for the same reason the reply sender is:
+  // the listener below is registered once, and `requestRunFocus` must not join
+  // its deps.
+  const runFocusRef = useRef<((focus: RunFocus) => void) | null>(null);
+  useEffect(() => {
+    runFocusRef.current = requestRunFocus;
+  }, [requestRunFocus]);
+
   // The Approve / Deny buttons only exist once the category is registered, and
   // a notice may not reference a category the device has never seen — so this
   // runs at mount, ahead of any notice the provider can post.
@@ -187,6 +201,16 @@ function NotificationRouter() {
     const destinationFor = (data: unknown): '/chat' | '/activity' => {
       const route = routeForTap(data);
       return route?.kind === 'routine' ? '/chat' : '/activity';
+    };
+
+    // The run a payload named, if it named one. The destination above drops the
+    // id — Activity is one tab, so there is no route to carry it — and the run
+    // rides beside it instead: the tab drops whatever Bot filter could be
+    // hiding it. A notice naming no run asks for no focus at all, and the id
+    // never selects a row: a run this device does not hold has no row to reach.
+    const runFocusFor = (data: unknown): RunFocus | null => {
+      const route = routeForTap(data);
+      return route?.kind === 'run' ? { runId: route.runId } : null;
     };
 
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -250,15 +274,20 @@ function NotificationRouter() {
         }
       }
       const destination = destinationFor(response.notification.request.content.data);
+      const runFocus = runFocusFor(response.notification.request.content.data);
       if (!isBootstrapped) {
         // Boot overlay: the Stack is not mounted yet, so navigating now
         // loses to the first-run redirect. Hold the destination in the same
         // slot the launch tap uses; the run below routes it once the Stack
         // is up.
         pendingTapRef.current = destination;
+        pendingRunFocusRef.current = runFocus;
         return;
       }
       router.navigate(destination);
+      // The tab may be filtered to a Bot the notice's run does not belong to,
+      // so the filter is dropped. The tab applies the request and clears it.
+      if (runFocus) runFocusRef.current?.(runFocus);
     });
 
     // A tap that LAUNCHED the app is not replayed to a listener registered
@@ -275,6 +304,7 @@ function NotificationRouter() {
           at: Date.now(),
         };
         pendingTapRef.current = destinationFor(launch.notification.request.content.data);
+        pendingRunFocusRef.current = runFocusFor(launch.notification.request.content.data);
       }
     }
 
@@ -284,7 +314,10 @@ function NotificationRouter() {
     if (isBootstrapped && pendingTapRef.current) {
       const destination = pendingTapRef.current;
       pendingTapRef.current = null;
+      const runFocus = pendingRunFocusRef.current;
+      pendingRunFocusRef.current = null;
       router.navigate(destination);
+      if (runFocus) runFocusRef.current?.(runFocus);
     }
 
     return () => subscription.remove();

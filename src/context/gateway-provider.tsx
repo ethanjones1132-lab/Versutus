@@ -124,6 +124,7 @@ import {
   notifyGatewayDown,
   notifyRunComplete,
 } from '@/lib/notifications/local';
+import { pendingRunFocus, type RunFocus } from '@/lib/notifications/run-focus';
 import { rearmRoutineNotifications } from '@/lib/notifications/routine-sync';
 import type {
   ChatMessage,
@@ -281,6 +282,17 @@ type GatewayContextValue = {
   requestSurface: (surface: ChatSurface) => void;
   /** Mark the pending request as applied. */
   clearRequestedSurface: () => void;
+  /**
+   * A run a notification tap named, waiting for the Activity tab to drop any
+   * Bot filter that could be hiding it, or null. Requested from outside the tab
+   * (the tap router has no other way to reach the screen); the tab applies it
+   * and clears it.
+   */
+  requestedRunFocus: RunFocus | null;
+  /** Ask the Activity tab to drop its filter for the run a tap named. */
+  requestRunFocus: (focus: RunFocus) => void;
+  /** Mark the pending run focus as applied. */
+  clearRequestedRunFocus: () => void;
   botJobs: {
     list: () => Promise<{ id: string; name?: string; paused?: boolean }[]>;
     /** Resolves to the created job's id so a caller can keep the phone-side notice in step. */
@@ -3224,6 +3236,17 @@ const response = await executeGatewaySlashCommand(trimmed, {
   }, []);
   const clearRequestedSurface = useCallback(() => setRequestedSurface(null), []);
 
+  // A run notice's tap names the run it settled, and the Activity list can be
+  // filtered to a different Bot at the moment the tap lands (the Scorecards tap
+  // leaves the tab's own filter set). Held on the provider for the same reason
+  // the requested surface is: the tap can arrive while the tab is unmounted, and
+  // it is applied when that screen is there to consume it.
+  const [requestedRunFocus, setRequestedRunFocus] = useState<RunFocus | null>(null);
+  const requestRunFocus = useCallback((focus: RunFocus) => {
+    setRequestedRunFocus((prev) => pendingRunFocus(prev, focus));
+  }, []);
+  const clearRequestedRunFocus = useCallback(() => setRequestedRunFocus(null), []);
+
   const openBot = useCallback(async (botId: string) => {
     const client = clientRef.current;
     if (!client?.setBotId || !client.createSession) {
@@ -3438,6 +3461,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
       requestedSurface,
       requestSurface,
       clearRequestedSurface,
+      requestedRunFocus,
+      requestRunFocus,
+      clearRequestedRunFocus,
       botJobs,
       botGroups,
       cron,
@@ -3501,7 +3527,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       lastError, clearLastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
+      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
       setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

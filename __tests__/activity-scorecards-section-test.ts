@@ -122,6 +122,47 @@ describe('the Activity tab owns one filter state over the provider’s runs', ()
   });
 });
 
+describe('a run notice’s tap drops a stale Bot filter', () => {
+  test('the tab consumes the run focus the provider was handed', () => {
+    const src = tab();
+
+    expect(src).toContain('requestedRunFocus');
+    expect(src).toContain('clearRequestedRunFocus');
+  });
+
+  test('applying the request drops the filter, deferred, and retires the request with it', () => {
+    const src = tab();
+    const guard = src.indexOf('if (!requestedRunFocus) return undefined;');
+    const drop = src.indexOf('setScorecardFilter(null)');
+    const clear = src.indexOf('clearRequestedRunFocus()');
+
+    expect(guard).toBeGreaterThanOrEqual(0);
+    expect(drop).toBeGreaterThan(guard);
+    expect(clear).toBeGreaterThan(drop);
+    // Deferred a tick, like every other producer of state from an effect in
+    // this repo — and the request is cleared with the filter, so it can never
+    // fight the operator's own next navigation.
+    expect(src.slice(guard, clear)).toContain('setTimeout(');
+  });
+
+  test('the named run is not selected — a row this read cannot prove is not shown', () => {
+    const src = tab();
+    const guard = src.indexOf('if (!requestedRunFocus) return undefined;');
+    const clear = src.indexOf('clearRequestedRunFocus()');
+    const body = src.slice(guard, clear);
+
+    // The id on the request makes two taps the same tap; the tab drops the
+    // filter and never narrows the list to a run the read may not hold.
+    expect(body).toContain('setScorecardFilter(null)');
+    expect(body).not.toContain('runId');
+    expect(body).not.toContain('setOpenAgenticRunId');
+  });
+
+  test('the unfiltered default is untouched', () => {
+    expect(tab()).toContain('useState<ScorecardFilter>(null)');
+  });
+});
+
 describe('the section sits in the Activity footer, above the scheduled work', () => {
   test('footer, then the cards, then CronSection', () => {
     const src = tab();

@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -44,6 +44,8 @@ export default function ActivityScreen() {
     refreshGateways,
     sendChatInput,
     loadRunEvents,
+    requestedRunFocus,
+    clearRequestedRunFocus,
   } = useGateway();
 
   const [runPrompt, setRunPrompt] = useState('');
@@ -63,6 +65,23 @@ export default function ActivityScreen() {
   const [scorecardFilter, setScorecardFilter] = useState<ScorecardFilter>(null);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
+
+  // A run notice's tap names a run, and the list can be filtered to another Bot
+  // at that moment (a scorecard tap's filter is sticky state on this tab). The
+  // filter goes, so the run the notice was about is not hidden behind a Bot it
+  // never belonged to — and only the filter: a run this device does not hold has
+  // no row to reach, so nothing here selects one the read cannot prove is there.
+  // Deferred a tick like every other state write from an effect in this repo,
+  // and the request is retired with it so it cannot fight the operator's own
+  // next navigation.
+  useEffect(() => {
+    if (!requestedRunFocus) return undefined;
+    const timer = setTimeout(() => {
+      setScorecardFilter(null);
+      clearRequestedRunFocus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [requestedRunFocus, clearRequestedRunFocus]);
 
   const visibleRuns = useMemo(
     () => filterRunsByBot(activityRuns, scorecardFilter),

@@ -191,3 +191,67 @@ describe('NotificationRouter launch routing', () => {
     expect(src).toContain("pathname: '/gateway/add'");
   });
 });
+
+describe('a run notice asks for the run the Activity list must show', () => {
+  const routerSource = () =>
+    between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
+
+  test('only a run route becomes a run focus', () => {
+    const src = routerSource();
+
+    // The destination drops the id — Activity is one tab, so there is no route
+    // to carry it — and the run rides beside it instead. A routine, a weekly
+    // report and an unrecognized payload all ask for no focus at all.
+    expect(src).toContain("route?.kind === 'run' ? { runId: route.runId } : null");
+  });
+
+  test('the tap lands, then the tab is asked to drop a filter that could hide the run', () => {
+    const src = routerSource();
+    const listener = between(
+      src,
+      'addNotificationResponseReceivedListener',
+      'return () => subscription.remove()',
+    );
+
+    const navigate = listener.indexOf('router.navigate(destination)');
+    const ask = listener.indexOf('runFocusRef.current?.(runFocus)');
+    expect(navigate).toBeGreaterThan(-1);
+    expect(ask).toBeGreaterThan(navigate);
+    expect(listener).toContain(
+      'const runFocus = runFocusFor(response.notification.request.content.data)',
+    );
+  });
+
+  test('a tap that launched the app keeps its run focus across the bootstrap wait', () => {
+    const src = routerSource();
+
+    // Held in the same slot the destination is: a run notice is usually tapped
+    // exactly that way, and a focus dropped on the way is the defect back.
+    expect(src).toContain(
+      'pendingRunFocusRef.current = runFocusFor(launch.notification.request.content.data)',
+    );
+    expect(src).toContain('const runFocus = pendingRunFocusRef.current');
+    expect(src).toContain('pendingRunFocusRef.current = null');
+  });
+
+  test('the request is mirrored into a ref, so the listener is still registered once', () => {
+    const src = routerSource();
+
+    expect(src).toContain('runFocusRef.current = requestRunFocus');
+    const listenerEnd = src.slice(src.indexOf('addNotificationResponseReceivedListener'));
+    expect(listenerEnd).toContain('}, [router, isBootstrapped]);');
+  });
+
+  test('the request reaches the tab through the provider value memo, deps included', () => {
+    // Without the three keys in the memo's dep array the value never rebuilds,
+    // so the request is silently dropped and the tab never hears about a run a
+    // notice named — a lint warning, not an error, is the only other thing that
+    // notices a missing dep here.
+    const block = readSource('src', 'context', 'gateway-provider.tsx').match(
+      /const value = useMemo<GatewayContextValue>\([\s\S]*?\n  \);/,
+    )?.[0];
+
+    expect(block).toBeDefined();
+    expect(block).toContain('requestedRunFocus, requestRunFocus, clearRequestedRunFocus,');
+  });
+});
