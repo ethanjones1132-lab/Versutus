@@ -173,8 +173,59 @@ describe('the gate and its switch', () => {
     // The Stack keeps rendering behind an opaque cover: unmounting it would
     // cost the router, the deep-link listeners and the notification router.
     expect(src).toContain('{children}');
-    expect(src).toMatch(/\{locked \? \(/);
-    expect(src).toMatch(/position: 'absolute'/);
+    expect(src).toMatch(/<Modal/);
+    expect(src).toMatch(/visible=\{locked\}/);
+  });
+
+  test('the cover is presented the way a sheet is, so it outranks one', () => {
+    const src = gate();
+    // A sheet is a react-native Modal (BaseSheet.tsx) and the Stack's routed
+    // screens are presented natively, so a View sitting beside the Stack in
+    // this tree cannot be above either. The cover rides the same surface.
+    expect(src).toMatch(/<Modal[\s\S]*?\btransparent\b/);
+    // One mechanism, not two: nothing here covers the app by absolute
+    // positioning beside the Stack any more.
+    expect(src).not.toMatch(/position: 'absolute'/);
+    expect(src).not.toContain('zIndex');
+    // A fade would leave the app legible under the cover for the length of the
+    // animation, which is the leak the lock is for.
+    expect(src).toMatch(/animationType="none"/);
+  });
+
+  test('the Android back button cannot lift the lock', () => {
+    const src = gate();
+    // Modal asks for a back handler on Android; a cover a hardware back could
+    // dismiss would not be a lock.
+    const handler = /onRequestClose=\{([^}]+)\}/.exec(src)?.[1] ?? '';
+    expect(handler.length).toBeGreaterThan(0);
+    expect(handler).not.toContain('unlock');
+    expect(handler).not.toContain('setLocked');
+  });
+
+  test('the lock edge brings the presented routes down, and only the lock edge', () => {
+    const src = gate();
+    // The Stack itself stays mounted — the router, the deep-link listener and
+    // the notification router keep running — but a modal route the operator
+    // left open must not sit under the cover waiting for the unlock to reveal
+    // it.
+    const guard = src.indexOf('if (!locked) return;');
+    const canDismiss = src.indexOf('router.canDismiss()');
+    const dismissAll = src.indexOf('router.dismissAll()');
+    expect(guard).toBeGreaterThan(-1);
+    expect(canDismiss).toBeGreaterThan(guard);
+    expect(dismissAll).toBeGreaterThan(canDismiss);
+    // Nothing to pop means the Stack is on its first screen: dismissing then
+    // would be a navigation for nothing.
+    expect(src).toMatch(/if \(!router\.canDismiss\(\)\) return;/);
+  });
+
+  test('no unlock path navigates', () => {
+    const src = gate();
+    const body =
+      /const unlock = useCallback\(async \(\) => \{([\s\S]*?)\n {2}\}, \[/.exec(src)?.[1] ?? '';
+    expect(body.length).toBeGreaterThan(0);
+    expect(body).not.toContain('router');
+    expect(body).not.toContain('setLocked(true)');
   });
 
   test('the gate asks the device through the module, never itself', () => {
