@@ -177,6 +177,7 @@ import {
   loadTranscripts,
   updateTranscript,
 } from '@/lib/gateway/transcript';
+import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
 import { writeWidgetSnapshot } from '@/lib/widget/widget-device';
 export type ConnectionPhase =
@@ -2017,12 +2018,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
     // Transcripts are keyed by gateway id and outlive the profile otherwise.
     // The cascade can take child profiles with it, so clear everything that
-    // disappeared rather than only the id we were handed.
+    // disappeared rather than only the id we were handed. A session's labels
+    // are keyed by the same gateway id and outlive it the same way.
     const removedIds = new Set<string>([id]);
     for (const gateway of before) {
       if (!next.some((remaining) => remaining.id === gateway.id)) removedIds.add(gateway.id);
     }
     await Promise.all([...removedIds].map((removedId) => clearTranscriptsForGateway(removedId)));
+    await Promise.all([...removedIds].map((removedId) => clearSessionLabelsForGateway(removedId)));
 
     // Cascade removes child profiles too — tear down if the active gateway
     // was the deleted parent or one of its children.

@@ -9,7 +9,9 @@
 // The fold rules are the honesty rules: a blank rename clears the name
 // rather than printing an empty row, a stored blob that is not what it
 // claims to be reads as no label at all, and persistence is best-effort —
-// a refused write must never break the selector it was called from.
+// a refused write must never break the selector it was called from. A
+// gateway the operator removes takes its labels with it, the way it takes
+// its command transcript.
 
 import { keyValueStorage } from '@/lib/storage/key-value';
 import { sessionListTitle } from '@/lib/gateway/session-list';
@@ -77,6 +79,30 @@ export function clearSessionLabel(
   if (!(key in labels)) return labels;
   const next = { ...labels };
   delete next[key];
+  return next;
+}
+
+/**
+ * Drop every label belonging to one gateway. Called when its profile is
+ * deleted — without this the entries outlive the gateway forever, the same
+ * way an uncleared transcript key would (`transcript.ts:54-65`).
+ *
+ * A label entry lives INSIDE the one blob rather than under a key of its
+ * own, so this is a fold over the blob rather than the key sweep the
+ * transcript needs: the gateway is the entry key's own prefix, matched with
+ * its trailing separator so `gw-1` does not also clear `gw-10`. A map
+ * holding nothing of this gateway comes back as the very map it was given,
+ * so a caller can tell "nothing of mine was there" from "something left".
+ */
+export function dropSessionLabelsForGateway(
+  labels: Record<string, SessionLabel>,
+  gatewayId: string,
+): Record<string, SessionLabel> {
+  const prefix = `${gatewayId}:`;
+  const owned = Object.keys(labels).filter((key) => key.startsWith(prefix));
+  if (owned.length === 0) return labels;
+  const next = { ...labels };
+  for (const key of owned) delete next[key];
   return next;
 }
 
@@ -155,4 +181,18 @@ export async function saveSessionLabels(labels: Record<string, SessionLabel>): P
   } catch {
     // best-effort: a label must never break the selector
   }
+}
+
+/**
+ * Retire a deleted gateway's labels, at the same moment its transcript is
+ * retired. Built from the best-effort pair above, so it cannot throw out of
+ * the deletion that called it: a store that refuses either the read or the
+ * write leaves the blob as it was. A gateway the blob holds nothing for is
+ * not written back at all.
+ */
+export async function clearSessionLabelsForGateway(gatewayId: string): Promise<void> {
+  const labels = await loadSessionLabels();
+  const next = dropSessionLabelsForGateway(labels, gatewayId);
+  if (next === labels) return;
+  await saveSessionLabels(next);
 }

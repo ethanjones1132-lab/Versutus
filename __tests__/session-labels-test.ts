@@ -12,6 +12,8 @@ import { keyValueStorage } from '@/lib/storage/key-value';
 import {
   applySessionLabel,
   clearSessionLabel,
+  clearSessionLabelsForGateway,
+  dropSessionLabelsForGateway,
   loadSessionLabels,
   orderSessionsByLabel,
   saveSessionLabels,
@@ -351,6 +353,98 @@ describe('loadSessionLabels / saveSessionLabels', () => {
   test('a refused read does not throw — an unread label set is empty', async () => {
     mockGet.mockRejectedValue(new Error('disk full'));
     await expect(loadSessionLabels()).resolves.toEqual({});
+  });
+});
+
+describe('dropSessionLabelsForGateway', () => {
+  const GW_ONE = 'gw-1';
+  const GW_TEN = 'gw-10';
+
+  test("only the removed gateway's entries drop", () => {
+    const labels: Record<string, SessionLabel> = {
+      [sessionLabelKey(GATE, 'ses_crew')]: { pinned: true },
+      [sessionLabelKey(OTHER_GATE, 'ses_crew')]: { label: 'Crew chat' },
+    };
+    expect(dropSessionLabelsForGateway(labels, GATE)).toEqual({
+      [sessionLabelKey(OTHER_GATE, 'ses_crew')]: { label: 'Crew chat' },
+    });
+  });
+
+  test('a pin and a rename on the removed gateway both go', () => {
+    const labels = applySessionLabel({}, sessionLabelKey(GATE, 'ses_crew'), {
+      pinned: true,
+      label: 'Crew chat',
+    });
+    expect(dropSessionLabelsForGateway(labels, GATE)).toEqual({});
+  });
+
+  test('a gateway whose id only shares a prefix survives', () => {
+    // The trailing separator is what keeps `gw-1` from also clearing `gw-10`
+    // — the transcript's own rule (`transcript.ts:59-61`).
+    const labels: Record<string, SessionLabel> = {
+      [sessionLabelKey(GW_ONE, 'ses_crew')]: { pinned: true },
+      [sessionLabelKey(GW_TEN, 'ses_crew')]: { pinned: true },
+    };
+    expect(dropSessionLabelsForGateway(labels, GW_ONE)).toEqual({
+      [sessionLabelKey(GW_TEN, 'ses_crew')]: { pinned: true },
+    });
+  });
+
+  test('an id with nothing stored returns the same map', () => {
+    const labels = applySessionLabel({}, sessionLabelKey(GATE, 'ses_crew'), { pinned: true });
+    expect(dropSessionLabelsForGateway(labels, 'gw-absent')).toBe(labels);
+  });
+
+  test('does not mutate the map it was given', () => {
+    const before = applySessionLabel({}, sessionLabelKey(GATE, 'ses_crew'), { pinned: true });
+    dropSessionLabelsForGateway(before, GATE);
+    expect(before).toEqual({ [sessionLabelKey(GATE, 'ses_crew')]: { pinned: true } });
+  });
+});
+
+describe('clearSessionLabelsForGateway', () => {
+  const backing = new Map<string, string>();
+
+  beforeEach(() => {
+    backing.clear();
+    mockGet.mockReset().mockImplementation(async (key: string) => backing.get(key) ?? null);
+    mockSet.mockReset().mockImplementation(async (key: string, value: string) => {
+      backing.set(key, value);
+    });
+  });
+
+  test("a deleted gateway's labels leave the blob and another gateway keeps its own", async () => {
+    await saveSessionLabels({
+      [sessionLabelKey(GATE, 'ses_crew')]: { pinned: true },
+      [sessionLabelKey(OTHER_GATE, 'ses_lab')]: { label: 'Lab notes' },
+    });
+    await clearSessionLabelsForGateway(GATE);
+    await expect(loadSessionLabels()).resolves.toEqual({
+      [sessionLabelKey(OTHER_GATE, 'ses_lab')]: { label: 'Lab notes' },
+    });
+  });
+
+  test('a gateway with nothing stored writes nothing back', async () => {
+    await clearSessionLabelsForGateway('gw-absent');
+    expect(mockSet).not.toHaveBeenCalled();
+  });
+
+  test('a refused write does not throw — deleting a gateway must keep working', async () => {
+    mockSet.mockRejectedValue(new Error('disk full'));
+    await expect(clearSessionLabelsForGateway(GATE)).resolves.toBeUndefined();
+  });
+
+  test('a refused read does not throw', async () => {
+    mockGet.mockRejectedValue(new Error('disk full'));
+    await expect(clearSessionLabelsForGateway(GATE)).resolves.toBeUndefined();
+  });
+});
+
+describe('the profile-delete path', () => {
+  test('a deleted gateway drops its labels where it drops its transcript', () => {
+    const src = readSource('src', 'context', 'gateway-provider.tsx');
+    expect(src).toContain('clearTranscriptsForGateway(removedId)');
+    expect(src).toContain('clearSessionLabelsForGateway(removedId)');
   });
 });
 
