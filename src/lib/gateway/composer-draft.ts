@@ -2,15 +2,26 @@
 // One useState leaked a half-typed prompt from researcher onto coder.
 // Drafts are keyed by gateway + surface + session so leaving a thread
 // and coming back restores that thread's text, never someone else's.
-// Persistence is best-effort, same as recents: a storage failure must
-// not break typing.
+// A group room is a thread of this store too — it has no session, so
+// its key names the room and the workspace alone. Persistence is
+// best-effort, same as recents: a storage failure must not break typing.
 
 import type { ChatSurface } from '@/lib/gateway/bots';
 import { keyValueStorage } from '@/lib/storage/key-value';
 
+/**
+ * The surfaces whose composer is this screen's composer. The roster keeps none
+ * of these — a row there decides which thread the operator opens, it is not a
+ * thread itself.
+ */
+export type ComposerDraftSurface = Extract<
+  ChatSurface,
+  { kind: 'configurable' } | { kind: 'bot' } | { kind: 'group' }
+>;
+
 export type ComposerDraftThread = {
   gatewayId: string;
-  surface: Extract<ChatSurface, { kind: 'configurable' } | { kind: 'bot' }>;
+  surface: ComposerDraftSurface;
   sessionId: string;
 };
 
@@ -20,7 +31,8 @@ export function composerDraftThread(input: {
   sessionId: string | undefined;
 }): ComposerDraftThread | undefined {
   if (!input.gatewayId) return undefined;
-  if (input.surface.kind !== 'configurable' && input.surface.kind !== 'bot') {
+  const kind = input.surface.kind;
+  if (kind !== 'configurable' && kind !== 'bot' && kind !== 'group') {
     return undefined;
   }
   return {
@@ -33,6 +45,11 @@ export function composerDraftThread(input: {
 export function composerDraftKey(thread: ComposerDraftThread): string {
   if (thread.surface.kind === 'configurable') {
     return `${thread.gatewayId}:configurable:${thread.sessionId}`;
+  }
+  if (thread.surface.kind === 'group') {
+    // A room holds no session: the draft belongs to the room, so a session id
+    // carried in from the thread the operator came from cannot split it.
+    return `${thread.gatewayId}:group:${thread.surface.groupId}`;
   }
   return `${thread.gatewayId}:bot:${thread.surface.botId}:${thread.sessionId}`;
 }

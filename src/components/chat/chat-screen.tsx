@@ -1844,6 +1844,8 @@ export function ChatScreen() {
                           key={activeGroup.id}
                           group={activeGroup}
                           members={rosterBots}
+                          draft={draft}
+                          onDraftChange={setDraft}
                           // Verified-inventory honesty: only a completed, error-free read
                           // counts, plus rows that survive from an earlier success. A FAILED
                           // read verifies nothing even though its spinner stopped — the room

@@ -110,6 +110,8 @@ function botByline(name: string, at?: number): string {
 export function GroupRoomView({
   group,
   members,
+  draft,
+  onDraftChange,
   onSend,
   onRename,
   onLeave,
@@ -120,6 +122,13 @@ export function GroupRoomView({
 }: {
   group: BotGroupRoom;
   members: PublicBot[];
+  /** The room's unsent text, held in this device's draft store under the
+   *  room's own key — the same store a Bot Chat's composer uses, so leaving
+   *  the room and coming back restores it and a shared text can land here.
+   *  The room keeps no draft state and no storage of its own: it draws what
+   *  the screen hands it and writes through the screen's one writer. */
+  draft: string;
+  onDraftChange: (text: string) => void;
   onSend: (text: string, mentionedIds: string[]) => Promise<{ replies: GroupReply[]; roomDisbanded?: boolean }>;
   onRename: (name: string) => Promise<BotGroupRoom>;
   onLeave: (memberId: string) => Promise<BotGroupRoom>;
@@ -149,7 +158,6 @@ export function GroupRoomView({
   // indistinguishable from a genuinely empty room without this flag.
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [renameVisible, setRenameVisible] = useState(false);
@@ -312,7 +320,7 @@ export function GroupRoomView({
         rosterLoaded: inventoryLoaded,
       },
     ]);
-    setDraft('');
+    onDraftChange('');
     setSending(true);
     setError(undefined);
     scrollToBottom();
@@ -363,7 +371,7 @@ export function GroupRoomView({
         // typed into a busy room is lost, and the refusal speaks the same
         // desktop-parity verdict + fix every other failure surface shows
         // instead of raw wire text.
-        setDraft(text);
+        onDraftChange(text);
         setEntries((prev) => prev.filter((entry) => entry.id !== entryId));
         setError(describeRoomError(cause));
       })
@@ -647,7 +655,7 @@ export function GroupRoomView({
               {mentionPicks.map((memberId) => (
                 <PressableScale
                   key={memberId}
-                  onPress={() => setDraft(insertMention(draft, draft.length, memberId))}
+                  onPress={() => onDraftChange(insertMention(draft, draft.length, memberId))}
                   accessibilityRole="button"
                   accessibilityLabel={`Mention ${displayNameOf(memberId)}`}
                   style={[
@@ -666,7 +674,7 @@ export function GroupRoomView({
         <View style={styles.dockRow}>
           <TextField
             value={draft}
-            onChangeText={setDraft}
+            onChangeText={onDraftChange}
             placeholder={`Message ${group.name}…`}
             editable={!sending}
             multiline

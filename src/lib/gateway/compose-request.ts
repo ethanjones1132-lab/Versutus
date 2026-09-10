@@ -78,10 +78,12 @@ export function pendingComposeRequest(
  * has up — a shared text arrives with no opinion about where it goes, so it
  * lands where the operator is looking rather than pulling them somewhere else.
  *
- * The roster and a group room are not that thread: the roster has no composer
- * of this screen's, and a group room keeps its own draft to itself, so a shared
- * text handed to either could not be written. The screen holds the request
+ * The roster is not that thread: it has no composer of this screen's, so a
+ * shared text handed to it could not be written. The screen holds the request
  * instead (the rule `composerFocusApplies` already follows for another thread).
+ * A group room IS that thread — its composer is a draft of the same store a
+ * Bot Chat's is (`composerDraftThread` keys it by the room), so the words the
+ * operator shared land in the room they are sitting in.
  */
 export function composeRequestApplies(
   request: ComposeRequest | null,
@@ -93,7 +95,7 @@ export function composeRequestApplies(
   if (request.botId !== undefined) {
     return surface.kind === 'bot' && surface.botId === request.botId;
   }
-  return surface.kind === 'bot' || surface.kind === 'configurable';
+  return surface.kind === 'bot' || surface.kind === 'configurable' || surface.kind === 'group';
 }
 
 // ─── What the roster says it is holding ──────────────────────────

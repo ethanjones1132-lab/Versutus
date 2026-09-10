@@ -59,6 +59,24 @@ function bot(botId: string, sessionId = 'ses_bot'): ComposerDraftThread {
   return thread;
 }
 
+function group(groupId: string, sessionId = 'ses_room'): ComposerDraftThread {
+  const thread = composerDraftThread({
+    gatewayId: GATE,
+    surface: { kind: 'group', groupId },
+    sessionId,
+  });
+  if (!thread) throw new Error('expected group thread');
+  return thread;
+}
+
+function between(src: string, startMarker: string, endMarker: string): string {
+  const start = src.indexOf(startMarker);
+  if (start === -1) return '';
+  const rest = src.slice(start + startMarker.length);
+  const end = rest.indexOf(endMarker);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
 describe('composerDraftThread', () => {
   test('roster is not a composer thread', () => {
     expect(
@@ -70,14 +88,17 @@ describe('composerDraftThread', () => {
     ).toBeUndefined();
   });
 
-  test('a group room is not this composer — it owns its own draft', () => {
-    expect(
-      composerDraftThread({
-        gatewayId: GATE,
-        surface: { kind: 'group', groupId: 'room-1' },
-        sessionId: 'ses_x',
-      }),
-    ).toBeUndefined();
+  test('a group room is a composer thread of its own, keyed by the room', () => {
+    // The room's composer is this screen's composer — holding the draft of its
+    // own, not a useState the room loses the moment it unmounts — so a shared
+    // text naming no Bot can be written into the room the operator sits in.
+    const thread = composerDraftThread({
+      gatewayId: GATE,
+      surface: { kind: 'group', groupId: 'room-1' },
+      sessionId: 'ses_x',
+    });
+    expect(thread?.surface).toEqual({ kind: 'group', groupId: 'room-1' });
+    expect(thread ? composerDraftKey(thread) : undefined).toBe('gw-home:group:room-1');
   });
 
   test('no gateway means no thread to key a draft on', () => {
@@ -131,6 +152,39 @@ describe('composerDraftKey', () => {
       composerDraftKey(bot('researcher', 'ses_shared')),
     );
   });
+
+  test('the shipped keys are unchanged — a Bot and a configurable surface key as they always did', () => {
+    // The room joins the store BESIDE these two: every draft already on disk
+    // has to keep being found under the key it was written with.
+    expect(composerDraftKey(bot('researcher', 'ses_crew'))).toBe('gw-home:bot:researcher:ses_crew');
+    expect(composerDraftKey(configurable('ses_crew'))).toBe('gw-home:configurable:ses_crew');
+  });
+
+  test('two rooms on one gateway do not share a key', () => {
+    expect(composerDraftKey(group('room-1'))).not.toBe(composerDraftKey(group('room-2')));
+  });
+
+  test('the same room on two gateways does not share a key', () => {
+    const other = composerDraftThread({
+      gatewayId: OTHER_GATE,
+      surface: { kind: 'group', groupId: 'room-1' },
+      sessionId: group('room-1').sessionId,
+    });
+    if (!other) throw new Error('expected other gateway room');
+    expect(composerDraftKey(other)).not.toBe(composerDraftKey(group('room-1')));
+  });
+
+  test('a room holds no session, so a session it was opened from cannot split its key', () => {
+    // A room has no session of its own: whatever session id the screen was
+    // holding when the operator walked into the room is not part of what the
+    // room's draft belongs to, so the same room is one key.
+    expect(composerDraftKey(group('room-1', 'ses_a'))).toBe(composerDraftKey(group('room-1', 'ses_b')));
+  });
+
+  test('a room and a thread of another kind never meet, even sharing an id', () => {
+    expect(composerDraftKey(group('researcher'))).not.toBe(composerDraftKey(bot('researcher')));
+    expect(composerDraftKey(group('researcher'))).not.toBe(composerDraftKey(configurable('researcher')));
+  });
 });
 
 describe('applyComposerDraft / readComposerDraft', () => {
@@ -150,6 +204,15 @@ describe('applyComposerDraft / readComposerDraft', () => {
     drafts = applyComposerDraft(drafts, extra, 'scratch idea');
     expect(readComposerDraft(drafts, standing)).toBe('continue the review');
     expect(readComposerDraft(drafts, extra)).toBe('scratch idea');
+  });
+
+  test('a draft typed in one room is still there after you type in another', () => {
+    const first = group('room-1');
+    const second = group('room-2');
+    let drafts = applyComposerDraft({}, first, 'brief the room');
+    drafts = applyComposerDraft(drafts, second, 'ask the other room');
+    expect(readComposerDraft(drafts, first)).toBe('brief the room');
+    expect(readComposerDraft(drafts, second)).toBe('ask the other room');
   });
 
   test('an unknown thread reads as empty, not someone else\'s draft', () => {
@@ -201,6 +264,21 @@ describe('loadComposerDraft / saveComposerDraft', () => {
     await saveComposerDraft(coder, 'ship the patch');
     expect(await loadComposerDraft(researcher)).toBe('look at the logs');
     expect(await loadComposerDraft(coder)).toBe('ship the patch');
+  });
+
+  test('a room draft is what you get back after leaving the room', async () => {
+    const room = group('room-1');
+    await saveComposerDraft(room, 'brief the room');
+    expect(await loadComposerDraft(room)).toBe('brief the room');
+  });
+
+  test('a room draft and a Bot draft in one workspace never meet', async () => {
+    const room = group('room-1');
+    const researcher = bot('researcher');
+    await saveComposerDraft(room, 'brief the room');
+    await saveComposerDraft(researcher, 'look at the logs');
+    expect(await loadComposerDraft(room)).toBe('brief the room');
+    expect(await loadComposerDraft(researcher)).toBe('look at the logs');
   });
 
   test('a missing draft loads as empty', async () => {
@@ -435,6 +513,40 @@ describe('a shared text composed onto a thread that already holds a draft', () =
     // reading was, so an empty stored draft is a reading like any other.
     expect(composerDraftKey(researcher) in drafts).toBe(true);
     expect(readComposerDraft(drafts, researcher)).toBe('');
+  });
+});
+
+describe('the room composer draws the store draft, not one of its own', () => {
+  test('the room is handed its draft and writes through the one writer it is given', () => {
+    const room = readSource('src', 'components', 'chat', 'group-room-view.tsx');
+
+    // A room that keeps its text in a useState loses it when the surface
+    // unmounts, and no shared text could ever be written into it: the store is
+    // what makes the room a thread like a Bot Chat. The room authors no draft
+    // state and no storage of its own — it draws what it is handed.
+    expect(room).toContain('draft: string;');
+    expect(room).toContain('onDraftChange: (text: string) => void;');
+    expect(room).not.toMatch(/const \[draft, setDraft\] = useState/);
+    expect(room).not.toMatch(/saveComposerDraft|loadComposerDraft|composer-draft/);
+  });
+
+  test('the screen hands the room the same draft its thread key holds', () => {
+    const screen = readSource('src', 'components', 'chat', 'chat-screen.tsx');
+    const call = between(screen, '<GroupRoomView', '\n            />');
+
+    // One draft map for the whole screen: the room takes the value the chat
+    // screen read off its own draft thread and writes through the screen's own
+    // writer, so the shared-text handoff writes into the room by construction.
+    expect(call).toContain('draft={draft}');
+    expect(call).toContain('onDraftChange={setDraft}');
+  });
+
+  test('nothing on the room draft path sends', () => {
+    const room = readSource('src', 'components', 'chat', 'group-room-view.tsx');
+
+    // The store holds a draft; the room's own Send control is the only thing
+    // that leaves the phone, and it is the operator's tap.
+    expect(room).not.toMatch(/saveComposerDraft/);
   });
 });
 

@@ -113,12 +113,27 @@ describe('composeRequestApplies (which thread may take the shared text)', () => 
     expect(composeRequestApplies({ text: 'look' }, { kind: 'configurable' })).toBe(true);
   });
 
-  test('a request naming no Bot is not for a surface with no composer of this screen', () => {
-    // The roster has no composer and a group room keeps its own draft to
-    // itself, so a shared text handed to either could not be written — the
-    // screen holds the request instead of consuming it.
+  test('a request naming no Bot is not for the roster, which has no composer of this screen', () => {
+    // The roster has no composer of this screen's, so a shared text handed to
+    // it could not be written — the screen holds the request instead of
+    // consuming it.
     expect(composeRequestApplies({ text: 'look' }, { kind: 'roster' })).toBe(false);
-    expect(composeRequestApplies({ text: 'look' }, { kind: 'group', groupId: 'scout' })).toBe(false);
+  });
+
+  test('a request naming no Bot lands in the room the operator is sitting in', () => {
+    // A room's composer is a thread of the same store a Bot Chat's is (the
+    // room has a draft thread of its own), so words with no opinion about where
+    // they go land in whichever thread is up — a room included.
+    expect(composeRequestApplies({ text: 'look' }, { kind: 'group', groupId: 'room-1' })).toBe(true);
+  });
+
+  test('a room is only the room of the workspace the words arrived in', () => {
+    const request = { text: 'look', gatewayId: 'gw-1' };
+
+    expect(composeRequestApplies(request, { kind: 'group', groupId: 'room-1' }, 'gw-1')).toBe(true);
+    // The same defect one surface over: a room draft is saved under its own
+    // gateway's key, so words shared into another workspace must not land here.
+    expect(composeRequestApplies(request, { kind: 'group', groupId: 'room-1' }, 'gw-2')).toBe(false);
   });
 
   test('a request naming a workspace is not the thread of another one', () => {
