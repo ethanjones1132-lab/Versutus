@@ -17,13 +17,18 @@ import { TlsFingerprintGuard } from '@/components/gateway/tls-fingerprint-guard'
 import { VersutusDarkTheme } from '@/constants/navigation-theme';
 import { GatewayProvider, useGateway } from '@/context/gateway-provider';
 import { installStreamingFetch } from '@/lib/net/streaming-fetch';
-import { approvalDecisionFor, isApprovalActionFor } from '@/lib/notifications/approval-action';
+import {
+  approvalDecisionFor,
+  decisionCanReachGateway,
+  isApprovalActionFor,
+} from '@/lib/notifications/approval-action';
 import { registerNotificationCategories } from '@/lib/notifications/categories';
 import {
   isLaunchReplay,
   readLaunchResponse,
   type LaunchTap,
 } from '@/lib/notifications/launch-response';
+import { notifyApprovalUnreachable } from '@/lib/notifications/local';
 import { routeForTap } from '@/lib/notifications/tap-route';
 
 // React Native's global fetch cannot stream a response body, so SSE readers
@@ -34,7 +39,7 @@ installStreamingFetch(expoFetch as unknown as typeof globalThis.fetch);
 
 function NotificationRouter() {
   const router = useRouter();
-  const { isBootstrapped, pendingRunApproval, resolveRunApproval } = useGateway();
+  const { isBootstrapped, pendingRunApproval, resolveRunApproval, status } = useGateway();
   // The launch tap is read once, and its route is held until bootstrap has
   // mounted the Stack: navigating any earlier loses to the boot overlay's
   // first-run redirect (the wait GatewayDeepLinkRouter already does). A tap
@@ -58,6 +63,15 @@ function NotificationRouter() {
       ? { runId: pendingRunApproval.runId, resolve: resolveRunApproval }
       : null;
   }, [pendingRunApproval, resolveRunApproval]);
+
+  // The live connection status, for the same reason the approval is mirrored:
+  // a decision can only reach its run while the connection is up, and the
+  // listener's deps must stay [router, isBootstrapped] so a status flip never
+  // re-registers it (and never re-runs the held-tap apply below).
+  const statusRef = useRef(status);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   // The Approve / Deny buttons only exist once the category is registered, and
   // a notice may not reference a category the device has never seen — so this
@@ -84,20 +98,28 @@ function NotificationRouter() {
         return;
       }
       // An Approve / Deny button decides the run from the banner: the action
-      // identifier is the discriminator, and the payload must name the
-      // approval pending right now. A decision that lands leaves the tap
-      // path — the operator decided, so nothing else happens; a decision that
-      // cannot be applied falls through to the destination below, exactly as
-      // any other tap on this notice does.
+      // identifier is the discriminator, the payload must name the approval
+      // pending right now, and the connection must still be live so the
+      // decision can reach the run. A decision that lands leaves the tap path
+      // — the operator decided, so nothing else happens.
       const decision = approvalDecisionFor(response.actionIdentifier);
       const pendingApproval = approvalRef.current;
       if (
         decision &&
         pendingApproval &&
+        decisionCanReachGateway(statusRef.current) &&
         isApprovalActionFor(response.notification.request.content.data, pendingApproval.runId)
       ) {
         pendingApproval.resolve(decision === 'approve');
         return;
+      }
+      if (decision) {
+        // Fail closed. An approval only exists while this app drives the run
+        // (CONTEXT.md) and a decision can only reach the gateway over a live
+        // connection, so a refused action leaves the approval pending, says so
+        // honestly, and lets the destination below bring the operator to the
+        // surface where they can still decide it.
+        void notifyApprovalUnreachable();
       }
       const destination = destinationFor(response.notification.request.content.data);
       if (!isBootstrapped) {

@@ -91,6 +91,17 @@ export async function notifyRunComplete(title: string, body: string): Promise<vo
 }
 
 /**
+ * Post the fail-closed notice for an Approve / Deny action that could not be
+ * applied — the connection is gone, or the payload no longer names the approval
+ * pending here. The approval stays pending for the operator to decide in the
+ * app; nothing in this copy claims the run was decided, and nothing claims the
+ * gateway ran anything.
+ */
+export async function notifyApprovalUnreachable(): Promise<void> {
+  await present('Approval not sent', "Couldn't reach the gateway — open Versutus to decide");
+}
+
+/**
  * Post the "gateway unreachable" notice for one gateway and record its
  * identifier under that gateway's key. The gateway key travels in the
  * notification payload as well, so a process restarted while the notice sits
