@@ -6,6 +6,8 @@ import {
   loadComposerDraft,
   readComposerDraft,
   saveComposerDraft,
+  spokenDraftHold,
+  spokenDraftText,
   type ComposerDraftThread,
 } from '@/lib/gateway/composer-draft';
 
@@ -20,6 +22,19 @@ jest.mock('@/lib/storage/key-value', () => ({
 const mockGet = keyValueStorage.getItem as jest.Mock;
 const mockSet = keyValueStorage.setItem as jest.Mock;
 const mockRemove = keyValueStorage.removeItem as jest.Mock;
+
+declare const __dirname: string;
+
+const SEP = __dirname.includes('\\') ? '\\' : '/';
+const nodeFs = jest.requireActual('fs') as {
+  readFileSync(path: string, encoding: string): string;
+};
+
+function readSource(...parts: string[]): string {
+  return nodeFs
+    .readFileSync([__dirname, '..', ...parts].join(SEP), 'utf8')
+    .replace(/\r\n/g, '\n');
+}
 
 const GATE = 'gw-home';
 const OTHER_GATE = 'gw-other';
@@ -224,5 +239,159 @@ describe('loadComposerDraft / saveComposerDraft', () => {
   test('a refused read does not throw — a missing draft is empty', async () => {
     mockGet.mockRejectedValue(new Error('disk full'));
     await expect(loadComposerDraft(bot('researcher'))).resolves.toBe('');
+  });
+});
+
+describe('spokenDraftText', () => {
+  test('a transcript lands on top of what the operator already typed', () => {
+    expect(spokenDraftText('check the logs', 'and the disk')).toBe('check the logs and the disk');
+  });
+
+  test('an empty draft becomes the transcript, with no room left in front of it', () => {
+    expect(spokenDraftText('', 'check the logs')).toBe('check the logs');
+  });
+
+  test('an empty transcript leaves the draft byte-identical', () => {
+    expect(spokenDraftText('check the logs', '')).toBe('check the logs');
+    expect(spokenDraftText('', '')).toBe('');
+  });
+
+  test('a transcript carrying no words leaves the draft byte-identical', () => {
+    expect(spokenDraftText('check the logs', '   ')).toBe('check the logs');
+  });
+
+  test('typed text that already ends in whitespace does not gain a second one', () => {
+    expect(spokenDraftText('check the logs ', 'and the disk')).toBe('check the logs and the disk');
+    expect(spokenDraftText('check the logs\n', 'and the disk')).toBe('check the logs\nand the disk');
+  });
+
+  test("the transcript's own characters are what lands — nothing is re-worded", () => {
+    expect(spokenDraftText('', 'log the  disk,  twice')).toBe('log the  disk,  twice');
+    expect(spokenDraftText('  ', 'log the  disk')).toBe('  log the  disk');
+  });
+
+  test('the same transcript composes the same draft however often it is reported', () => {
+    // The transcript is cumulative: each report carries the words so far, not
+    // the words since the last one, so the fold is asked about the same base
+    // every time and cannot double what was already heard.
+    const heard = 'hello world';
+    expect(spokenDraftText('note: ', heard)).toBe(spokenDraftText('note: ', heard));
+  });
+});
+
+describe('spokenDraftHold', () => {
+  test('each transcript is written through the one writer it was handed', () => {
+    const write = jest.fn();
+    const hold = spokenDraftHold('note: ', write);
+
+    hold.onTranscript('hel');
+    hold.onTranscript('hello');
+
+    expect(write.mock.calls).toEqual([['note: hel'], ['note: hello']]);
+  });
+
+  test('a later report replaces the earlier one rather than doubling it', () => {
+    const write = jest.fn();
+    const hold = spokenDraftHold('note: ', write);
+
+    hold.onTranscript('hello');
+    hold.onTranscript('hello world');
+
+    expect(write).toHaveBeenLastCalledWith('note: hello world');
+    expect(write).not.toHaveBeenCalledWith('note: hello hello world');
+  });
+
+  test('a transcript carrying no words writes the typed text back unchanged', () => {
+    const write = jest.fn();
+    const hold = spokenDraftHold('check the logs', write);
+
+    hold.onTranscript('');
+
+    expect(write).toHaveBeenCalledWith('check the logs');
+  });
+
+  test('a cancelled hold puts the typed text back and drops what was heard', () => {
+    const write = jest.fn();
+    const hold = spokenDraftHold('check the logs', write);
+
+    hold.onTranscript('and the disk');
+    hold.onCancelled();
+
+    expect(write).toHaveBeenLastCalledWith('check the logs');
+  });
+
+  test('a cancelled hold on an empty composer writes nothing to keep', () => {
+    const write = jest.fn();
+    const hold = spokenDraftHold('', write);
+
+    hold.onCancelled();
+
+    expect(write).toHaveBeenCalledWith('');
+  });
+
+  test('a hold has two edges and neither of them sends', () => {
+    expect(Object.keys(spokenDraftHold('', jest.fn())).sort()).toEqual([
+      'onCancelled',
+      'onTranscript',
+    ]);
+  });
+});
+
+describe('a spoken draft and the draft map', () => {
+  test('a spoken draft lands under the held thread and leaves another one alone', () => {
+    const researcher = bot('researcher');
+    const coder = bot('coder');
+    let drafts = applyComposerDraft({}, researcher, 'check the logs');
+    const hold = spokenDraftHold(readComposerDraft(drafts, researcher), (text) => {
+      drafts = applyComposerDraft(drafts, researcher, text);
+    });
+
+    hold.onTranscript('and the disk');
+
+    expect(readComposerDraft(drafts, researcher)).toBe('check the logs and the disk');
+    expect(readComposerDraft(drafts, coder)).toBe('');
+  });
+
+  test('a transcript carrying no words leaves the map the very one it was', () => {
+    const thread = bot('researcher');
+    let drafts = applyComposerDraft({}, thread, 'check the logs');
+    const before = drafts;
+    const hold = spokenDraftHold(readComposerDraft(drafts, thread), (text) => {
+      drafts = applyComposerDraft(drafts, thread, text);
+    });
+
+    hold.onTranscript('');
+
+    // Byte-identical, so the merge rule short-circuits: no new map means no
+    // re-render and no write for a hold the recognizer had nothing to say to.
+    expect(drafts).toBe(before);
+  });
+
+  test('a cancelled hold leaves the typed text in the thread it was held in', () => {
+    const researcher = bot('researcher');
+    let drafts = applyComposerDraft({}, researcher, 'check the logs');
+    const hold = spokenDraftHold(readComposerDraft(drafts, researcher), (text) => {
+      drafts = applyComposerDraft(drafts, researcher, text);
+    });
+
+    hold.onTranscript('and the disk');
+    expect(readComposerDraft(drafts, researcher)).toBe('check the logs and the disk');
+    hold.onCancelled();
+
+    expect(readComposerDraft(drafts, researcher)).toBe('check the logs');
+  });
+});
+
+describe('the speech path and the send path', () => {
+  test('the module that composes a spoken draft reaches no send', () => {
+    const source = readSource('src', 'lib', 'gateway', 'composer-draft.ts');
+    expect(source).not.toMatch(/onSend/);
+  });
+
+  test('the shipped fold and the shipped map rules are still what the module holds', () => {
+    const source = readSource('src', 'lib', 'gateway', 'composer-draft.ts');
+    expect(source).toMatch(/export function applyComposerDraft/);
+    expect(source).toMatch(/export function composerDraftKey/);
+    expect(source).toMatch(/export async function saveComposerDraft/);
   });
 });

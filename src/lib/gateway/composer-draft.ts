@@ -54,6 +54,51 @@ export function applyComposerDraft(
   return { ...drafts, [key]: text };
 }
 
+// ─── The spoken draft ─────────────────────────────────────────────
+// A hold-to-talk transcript is cumulative: every result the recognizer
+// reports carries the words so far, not the words since the last one. So a
+// hold does not append to the draft as it goes — it composes what the
+// operator had already typed with the transcript it is handed, which is what
+// makes the answer for a given transcript the same however many times that
+// transcript is reported. The composer's own change handler is the only
+// writer on this path: a hold reports words, it never sends, so the operator
+// always reviews what was said before anything leaves the phone.
+
+/**
+ * The operator's typed text with a live transcript composed onto it. A
+ * transcript that carries no words — an empty result, or one that is only
+ * whitespace — leaves the typed text byte-identical, so a hold the recognizer
+ * had nothing to say to never touches the draft. The transcript's own
+ * characters are what lands: this fold adds the words, it does not re-word
+ * them.
+ */
+export function spokenDraftText(typed: string, transcript: string): string {
+  if (!transcript.trim()) return typed;
+  if (!typed) return transcript;
+  return /\s$/.test(typed) ? `${typed}${transcript}` : `${typed} ${transcript}`;
+}
+
+/**
+ * A hold's two edges over the one writer the composer already has. The
+ * transcript edge composes what was heard onto the typed text; the cancelled
+ * edge puts the typed text back and drops the words, because a cancel is the
+ * operator saying it did not happen. Neither edge sends.
+ */
+export type SpokenDraftHold = {
+  onTranscript: (transcript: string) => void;
+  onCancelled: () => void;
+};
+
+export function spokenDraftHold(
+  typedBeforeHold: string,
+  write: (text: string) => void,
+): SpokenDraftHold {
+  return {
+    onTranscript: (transcript) => write(spokenDraftText(typedBeforeHold, transcript)),
+    onCancelled: () => write(typedBeforeHold),
+  };
+}
+
 function storageKey(thread: ComposerDraftThread): string {
   return `composer-draft:${composerDraftKey(thread)}`;
 }
