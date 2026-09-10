@@ -2135,14 +2135,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       runAbortControllerRef.current = abortController;
 
       // Activity tracking: a provisional entry keyed by a local id until the
-      // gateway returns the real run id (onStarted re-keys it).
+      // gateway returns the real run id (onStarted re-keys it). The entry also
+      // remembers the Bot it was started for — the app's selected Bot scope at
+      // creation, which is absent for configurable chat. Scorecards fold on it
+      // (D3); no later mutation writes it, because a run cannot change Bot.
       const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const startedAt = Date.now();
       const patchRun = (runId: string, patch: Partial<ActivityRun>) => {
         patchActivityRuns((prev) => prev.map((run) => (run.id === runId ? { ...run, ...patch } : run)));
       };
       patchActivityRuns((prev) => [
-        { id: localId, prompt, status: 'running', startedAt, events: [] },
+        { id: localId, prompt, status: 'running', startedAt, events: [], botId: selectedBotIdRef.current },
         ...prev,
       ]);
       const trackedId = { current: localId };

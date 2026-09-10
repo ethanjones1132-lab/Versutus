@@ -58,6 +58,13 @@ export type ActivityRun = {
   /** Recent event previews, capped (newest last). */
   events: { type: string; preview: string; timestamp?: number }[];
   approved?: boolean;
+  /**
+   * The Bot this run was started for — the app's selected Bot scope when the
+   * row was created. Absent on configurable chat and on every row persisted
+   * before this field existed; those aggregate as unattributed and are never
+   * guessed into a Bot (D3's step zero, FUTURE-ITEMS.md:792-797).
+   */
+  botId?: string;
 };
 
 export const ACTIVITY_EVENT_CAP = 50;
