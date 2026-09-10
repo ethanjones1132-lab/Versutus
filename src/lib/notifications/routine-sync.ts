@@ -67,7 +67,7 @@ async function cancelKnownNotice(jobId: string): Promise<void> {
 
 /**
  * Schedule the local "due" notice for one routine, replacing any notice the
- * same job already holds: cancel-then-schedule leaves exactly one
+ * same job already holds: schedule-then-cancel leaves exactly one
  * notification per job. A paused routine schedules nothing and clears any
  * held notice.
  *
@@ -84,6 +84,11 @@ async function cancelKnownNotice(jobId: string): Promise<void> {
  * retire a notice nothing replaces (the house rule "absent data reads as
  * UNKNOWN", cron.ts). Only a pause — a decision — retires the held notice
  * with nothing new to schedule.
+ *
+ * The schedule comes before the retirement too, for the same reason one step
+ * further out: a replacement the phone refuses (no permission, a throwing
+ * scheduler) must leave the held notice exactly where it was, so the notice
+ * this job already holds is retired only once a replacement has landed.
  */
 export async function syncRoutineNotification(job: RoutineJob): Promise<void> {
   // A pause is a decision, not missing data: a paused routine's notice must
@@ -100,8 +105,6 @@ export async function syncRoutineNotification(job: RoutineJob): Promise<void> {
   // silence a routine the operator scheduled.
   if (!trigger) return;
 
-  // A replacement exists: retire the held notice, then schedule exactly one.
-  await cancelKnownNotice(job.id);
   const data = routineNoticeData(job.id, botId ?? '');
 
   try {
@@ -117,9 +120,14 @@ export async function syncRoutineNotification(job: RoutineJob): Promise<void> {
     });
     // A null identifier means the schedule failed — keep no mapping behind
     // a phantom id, or the next cancel would target nothing.
-    if (identifier) {
-      await keyValueStorage.setItem(noticeKey(job.id), identifier);
-    }
+    if (!identifier) return;
+    // The replacement landed, so only now is the notice this job already
+    // holds retired — `cancelKnownNotice` reads the identifier this job was
+    // scheduled under — and only now is the new one recorded. A schedule the
+    // phone refused returned above, leaving the held notice in place instead
+    // of trading it for nothing.
+    await cancelKnownNotice(job.id);
+    await keyValueStorage.setItem(noticeKey(job.id), identifier);
   } catch {
     // best-effort: notification must never break the app flow
   }
@@ -141,7 +149,7 @@ export async function cancelRoutineNotification(jobId: string): Promise<void> {
  * a one-shot DATE at the next fire the GATEWAY reported (§1a) — a trigger
  * that leaves nothing behind once it lands, so without this the routine would
  * fall silent until the operator edited it. Re-syncing from a fresh read
- * rebuilds that one-shot; the cancel-then-schedule inside
+ * rebuilds that one-shot; the schedule-then-cancel inside
  * syncRoutineNotification keeps exactly ONE notice per job, so a re-arm can
  * never stack a second copy of a notice that is already waiting.
  *

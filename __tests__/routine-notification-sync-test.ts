@@ -70,6 +70,43 @@ const complexJob = {
   nextRunAt: NEXT_FIRE,
 };
 
+// A decline can only be exercised before any case in this file grants the
+// permission: `ensurePermission` caches ONE granted answer for the life of the
+// process, so this suite sits ABOVE the granted-permission suite below and
+// never asks for a grant. Nothing is scheduled here — the point is what the
+// sync does NOT do when the phone refuses.
+describe('a phone that declines the schedule', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setAppState('background');
+    mockCancel.mockResolvedValue(undefined);
+    (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: false });
+  });
+
+  test('a first sync the phone declines stores no identifier', async () => {
+    await syncRoutineNotification(dailyJob);
+
+    expect(mockSchedule).not.toHaveBeenCalled();
+    await expect(storedIdFor('job-1')).resolves.toBeNull();
+  });
+
+  test('a held notice survives a re-sync the phone declines', async () => {
+    // The phone already holds this job's notice — the persisted mapping is the
+    // identifier it was scheduled under.
+    await keyValueStorage.setItem('versutus:routine-notification:job-7', 'notif-held');
+    mockCancel.mockClear();
+
+    // Permission stays refused, so the replacement never lands and the held
+    // notice must not be retired for it: no identifier was ever stored for a
+    // replacement that does not exist.
+    await syncRoutineNotification({ ...dailyJob, id: 'job-7' });
+
+    expect(mockSchedule).not.toHaveBeenCalled();
+    expect(mockCancel).not.toHaveBeenCalled();
+    await expect(storedIdFor('job-7')).resolves.toBe('notif-held');
+  });
+});
+
 describe('routine notification sync/cancel bookkeeping', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -260,5 +297,37 @@ describe('routine notification sync/cancel bookkeeping', () => {
 
     await expect(syncRoutineNotification(dailyJob)).resolves.toBeUndefined();
     await expect(storedIdFor('job-1')).resolves.toBeNull();
+  });
+
+  test('a thrown schedule leaves the held notice in place', async () => {
+    await keyValueStorage.setItem('versutus:routine-notification:job-5', 'notif-held');
+    mockSchedule.mockRejectedValue(new Error('scheduler unavailable'));
+    mockCancel.mockClear();
+
+    // The replacement never landed, so the retirement has nothing to act on:
+    // a scheduler that throws must not cost the operator the notice they hold.
+    await expect(syncRoutineNotification({ ...dailyJob, id: 'job-5' })).resolves.toBeUndefined();
+
+    expect(mockCancel).not.toHaveBeenCalled();
+    await expect(storedIdFor('job-5')).resolves.toBe('notif-held');
+  });
+
+  test('a landed replacement retires the held notice only after it landed', async () => {
+    await keyValueStorage.setItem('versutus:routine-notification:job-6', 'notif-held');
+    mockSchedule.mockResolvedValue('notif-new');
+    mockCancel.mockClear();
+
+    await syncRoutineNotification({ ...dailyJob, id: 'job-6' });
+
+    // Exactly one notice survives: the held identifier is cancelled and the
+    // mapping holds only the live id — and the cancel comes AFTER the schedule
+    // that priced it, which is the ordering the held notice's survival rests on.
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+    expect(mockCancel).toHaveBeenCalledWith('notif-held');
+    expect(mockCancel).not.toHaveBeenCalledWith('notif-new');
+    expect(mockSchedule.mock.invocationCallOrder[0]).toBeLessThan(
+      mockCancel.mock.invocationCallOrder[0],
+    );
+    await expect(storedIdFor('job-6')).resolves.toBe('notif-new');
   });
 });
