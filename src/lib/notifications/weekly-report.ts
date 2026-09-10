@@ -8,7 +8,8 @@
 //
 // Honesty rule: the notice says the report is ready and counts nothing — it
 // fires at its scheduled time whether or not the gateway ran. Nothing here is
-// push: the schedule is the device's own.
+// push: the schedule is the device's own. Its one payload marker is the kind
+// that routes a tap to the scorecard surface (tap-route.ts).
 
 import * as Notifications from 'expo-notifications';
 
@@ -20,6 +21,7 @@ import {
   WEEKLY_REPORT_NOTICE_TITLE,
   WEEKLY_REPORT_OPT_IN_KEY,
   WEEKLY_REPORT_OPT_IN_ON,
+  weeklyReportNoticeData,
   weeklyReportTrigger,
 } from './weekly-report-schedule';
 
@@ -119,6 +121,7 @@ export async function setWeeklyReportOptIn(enabled: boolean): Promise<boolean> {
       content: {
         title: WEEKLY_REPORT_NOTICE_TITLE,
         body: WEEKLY_REPORT_NOTICE_BODY,
+        data: weeklyReportNoticeData(),
         sound: 'default',
       },
       trigger: weeklyReportTrigger(),

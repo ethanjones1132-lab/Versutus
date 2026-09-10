@@ -14,12 +14,14 @@ import {
   isWeeklyReportEnabled,
   weeklyReportTrigger,
   WEEKLY_REPORT_NOTICE_BODY,
+  WEEKLY_REPORT_NOTICE_DATA_KIND,
   WEEKLY_REPORT_NOTICE_KEY,
   WEEKLY_REPORT_NOTICE_TITLE,
   WEEKLY_REPORT_OPT_IN_KEY,
   WEEKLY_REPORT_OPT_IN_LABEL,
   WEEKLY_REPORT_OPT_IN_ON,
   WEEKLY_REPORT_OPT_IN_SUMMARY,
+  weeklyReportNoticeData,
 } from '@/lib/notifications/weekly-report-schedule';
 
 // The mock replaces the module, so the trigger-type constants the pure
@@ -53,6 +55,7 @@ import {
   loadWeeklyReportOptIn,
   setWeeklyReportOptIn,
 } from '@/lib/notifications/weekly-report';
+import { routeForTap } from '@/lib/notifications/tap-route';
 import { keyValueStorage } from '@/lib/storage/key-value';
 
 const mockSchedule = Notifications.scheduleNotificationAsync as jest.Mock;
@@ -140,6 +143,19 @@ describe('opting in schedules exactly one weekly notice', () => {
     await expect(storedOptIn()).resolves.toBe(WEEKLY_REPORT_OPT_IN_ON);
     // The flag and the notice agree: what the toggle shows is what the phone holds.
     await expect(loadWeeklyReportOptIn()).resolves.toBe(true);
+  });
+
+  test('the notice carries its tap marker, and the marker is the route', async () => {
+    await setWeeklyReportOptIn(true);
+
+    const request = mockSchedule.mock.calls[0][0];
+    // Without the payload a tap on the report is an unrecognized notice; with
+    // it, the tap opens the scorecard surface, which reads this device's runs
+    // when it opens (D3 Build 4) — and the marker names no id, because the
+    // destination takes no argument.
+    expect(request.content.data).toEqual(weeklyReportNoticeData());
+    expect(request.content.data.kind).toBe(WEEKLY_REPORT_NOTICE_DATA_KIND);
+    expect(routeForTap(request.content.data)).toEqual({ kind: 'weekly-report' });
   });
 
   test('a second opt-in replaces the notice the first one holds, never stacks it', async () => {

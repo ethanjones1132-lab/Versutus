@@ -10,7 +10,8 @@
 // not the gateway ran, and it cannot know the week's figures while the app is
 // closed. So the copy announces a report that is READY and counts nothing —
 // no number, no verdict — and the tap opens the surface that computes it
-// live. Nothing here is true push; that is Solution A's, still deferred.
+// live, which is what the notice's one marker (its `kind`) routes. Nothing
+// here is true push; that is Solution A's, still deferred.
 
 import { SchedulableTriggerInputTypes } from 'expo-notifications';
 
@@ -52,6 +53,26 @@ export type WeeklyReportTrigger = {
  */
 export function weeklyReportTrigger(): WeeklyReportTrigger {
   return { type: SchedulableTriggerInputTypes.WEEKLY, weekday: 2, hour: 9, minute: 0 };
+}
+
+/**
+ * data.kind marker the weekly notice carries, so a tap knows it opened the
+ * report rather than a run or a routine. It is the whole payload: the tap's
+ * destination takes no argument, because the Scorecards section reads the runs
+ * this device holds when it opens. When Solution A ships, the Gate's push may
+ * add the week's real figures beside this kind (the A5 payload-shape rule);
+ * the kind stays the contract that decides the route.
+ */
+export const WEEKLY_REPORT_NOTICE_DATA_KIND = 'weekly-report';
+
+/** The payload the weekly notice carries, so a tap can route on `kind`. */
+export type WeeklyReportNoticeData = {
+  kind: typeof WEEKLY_REPORT_NOTICE_DATA_KIND;
+};
+
+/** The data payload for the weekly report's notice, shaped for the tap router. */
+export function weeklyReportNoticeData(): WeeklyReportNoticeData {
+  return { kind: WEEKLY_REPORT_NOTICE_DATA_KIND };
 }
 
 /** The tray title: the report exists, and that is all a schedule can know. */

@@ -7,6 +7,10 @@ import {
   ROUTINE_NOTICE_DATA_KIND,
   routineNoticeData,
 } from '@/lib/notifications/routine-schedule';
+import {
+  WEEKLY_REPORT_NOTICE_DATA_KIND,
+  weeklyReportNoticeData,
+} from '@/lib/notifications/weekly-report-schedule';
 
 declare const __dirname: string;
 
@@ -42,6 +46,22 @@ describe('routeForTap (pure notification tap routing)', () => {
       kind: 'run',
       runId: 'run-7',
     });
+  });
+
+  test('a weekly report notice routes on its own kind, and carries no id', () => {
+    // D3 Build 4: the weekly notice's tap opens the scorecard surface, which
+    // computes when it opens — so the destination takes no argument and the
+    // payload is only its kind.
+    expect(routeForTap(weeklyReportNoticeData())).toEqual({ kind: 'weekly-report' });
+  });
+
+  test('a weekly report payload that later carries real figures still routes by kind', () => {
+    // D3: when Solution A ships, the Gate can send the week's real numbers in
+    // this payload (the A5 payload-shape rule). The kind is the contract that
+    // decides the route; extra keys ride along unread.
+    expect(
+      routeForTap({ kind: WEEKLY_REPORT_NOTICE_DATA_KIND, runs: 12, spendUsd: 3.5 }),
+    ).toEqual({ kind: 'weekly-report' });
   });
 
   test('a payload with no kind is unrecognized — the Activity fallback', () => {
@@ -88,6 +108,20 @@ describe('NotificationRouter', () => {
     expect(src).toContain("route?.kind === 'routine'");
     expect(src).toContain("'/chat'");
     expect(src).toContain("'/activity'");
+  });
+
+  test('a weekly report tap opens the scorecard surface on Activity, not Chat', () => {
+    const src = between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
+    // Only a routine route opens Chat. A weekly report's destination takes no
+    // argument — the Scorecards section reads this device's runs when it opens
+    // — so the weekly route keeps the Activity landing the section is mounted on.
+    expect(src).toContain("route?.kind === 'routine' ? '/chat' : '/activity'");
+  });
+
+  test('the launch tap is still read once and retired before it can route twice', () => {
+    const src = between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
+    expect(src).toContain('launchReadRef.current');
+    expect(src).toContain('isLaunchReplay(');
   });
 
   test('the deep-link router keeps its add / gateway/add handling', () => {
