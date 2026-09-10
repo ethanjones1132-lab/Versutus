@@ -11,6 +11,7 @@ import {
   gatewayDownNoticeData,
   isDownNoticeFor,
 } from './gateway-down-notice';
+import { APPROVAL_CATEGORY_ID, APPROVAL_NOTICE_DATA_KIND } from './categories';
 
 let permissionGranted = false;
 
@@ -42,12 +43,19 @@ async function present(
   body: string,
   allowForeground = false,
   data?: Record<string, unknown>,
+  categoryIdentifier?: string,
 ): Promise<string | null> {
   if (isForegrounded() && !allowForeground) return null;
   if (!(await ensurePermission())) return null;
   try {
     return await Notifications.scheduleNotificationAsync({
-      content: { title, body, sound: 'default', ...(data ? { data } : {}) },
+      content: {
+        title,
+        body,
+        sound: 'default',
+        ...(data ? { data } : {}),
+        ...(categoryIdentifier ? { categoryIdentifier } : {}),
+      },
       trigger: null,
     });
   } catch {
@@ -56,11 +64,26 @@ async function present(
   }
 }
 
-export async function notifyApprovalRequired(prompt: string): Promise<void> {
+/**
+ * Post the approval request. The payload names the run awaiting the decision
+ * and the gateway that issued it, so an Approve / Deny action can only resolve
+ * this app's own pending approval, and the category supplies the buttons.
+ */
+export async function notifyApprovalRequired(
+  prompt: string,
+  runId: string,
+  gatewayKey: string,
+): Promise<void> {
   const title = 'Approval required';
   const body = prompt.length > 80 ? `${prompt.slice(0, 80)}…` : prompt;
   // No identifier to keep — these notices have no lifecycle beyond posting.
-  await present(title, body);
+  await present(
+    title,
+    body,
+    undefined,
+    { kind: APPROVAL_NOTICE_DATA_KIND, runId, gatewayKey },
+    APPROVAL_CATEGORY_ID,
+  );
 }
 
 export async function notifyRunComplete(title: string, body: string): Promise<void> {

@@ -2117,7 +2117,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           onApprovalRequired: (runId) => {
             patchRun(trackedId.current, { status: 'waiting-approval' });
             setPendingRunApproval({ runId, prompt });
-            void notifyApprovalRequired(prompt);
+            void notifyApprovalRequired(prompt, runId, activeGatewayRef.current?.id ?? '');
             onApprovalWaiting?.();
             return new Promise<{ approved: boolean; feedback?: string }>((resolve) => {
               const onAbort = () => {

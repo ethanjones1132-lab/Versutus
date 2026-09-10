@@ -26,6 +26,13 @@ import * as Notifications from 'expo-notifications';
  */
 export const APPROVAL_CATEGORY_ID = 'approval';
 
+/**
+ * `data.kind` marker an approval notice carries. Same word as the category on
+ * purpose — one notice, one name — and the marker is what a tap or an action
+ * reads to know the payload belongs to an approval rather than a run.
+ */
+export const APPROVAL_NOTICE_DATA_KIND = 'approval';
+
 /** Action identifier for approving the pending run; arrives as `actionIdentifier`. */
 export const APPROVAL_APPROVE_ACTION_ID = 'approve';
 
