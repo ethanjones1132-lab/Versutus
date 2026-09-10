@@ -36,3 +36,39 @@ describe('chat-screen session and model derivations', () => {
     expect(screen).toMatch(/models=\{\s*modelRows\s*\}/);
   });
 });
+
+describe('chat-screen speaker wiring', () => {
+  test('the toggle reads the store’s own rule and is offered only where the device has a voice', () => {
+    const screen = readSource('components/chat/chat-screen.tsx');
+    // The flag is this conversation's, keyed by the shipped draft key and read
+    // through the store's own fold: the screen authors no key and no rule.
+    expect(screen).toMatch(/speakerPreferenceKey\(draftThread\)/);
+    expect(screen).toMatch(/readSpeakerOn\(stored, speakerKey\)/);
+    // The platform's own answer decides whether the header is handed a control
+    // at all, so a device with no voice is offered no tap that could not finish.
+    expect(screen).toMatch(
+      /onSpeakerPress=\{\s*threadSurface && speakerKey && speechReady \? handleSpeakerPress : undefined,?\s*\}/,
+    );
+    // A toggle-off silences the queue on its way out.
+    expect(screen).toMatch(/if \(!next\) void stopSpeech\(\);/);
+  });
+
+  test('a completed reply is read once, through the transcript rule', () => {
+    const screen = readSource('components/chat/chat-screen.tsx');
+    // What to do about the transcript's tail is the pure fold's answer, never a
+    // chain of conditions re-authored here.
+    expect(screen).toMatch(/const action = speakerAction\(transcriptTail\);/);
+    // A reply already read is not read again: the memory is the message id, so
+    // a re-render during a reply cannot speak it twice.
+    expect(screen).toMatch(/if \(memory\.id === transcriptTail\?\.id\) return;/);
+    expect(screen).toMatch(/void speakReply\(action\.text\);/);
+  });
+
+  test('a new turn silences the queue, and a silent conversation is never asked', () => {
+    const screen = readSource('components/chat/chat-screen.tsx');
+    // The silence edge is the fold's, and it stops what is still queued.
+    expect(screen).toMatch(/if \(action\.kind === 'silence'\) \{\s*void stopSpeech\(\);\s*return;\s*\}/);
+    // Nothing is spoken while the flag is off: the fold is not even asked.
+    expect(screen).toMatch(/if \(!speakerOn\) return;\s*const action = speakerAction\(transcriptTail\);/);
+  });
+});

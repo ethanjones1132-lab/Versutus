@@ -128,6 +128,15 @@ import {
   threadConfigOfferedModes,
   type ThreadConfigMode,
 } from '@/lib/gateway/thread-config';
+import { speakerAction } from '@/lib/voice/speech-reply';
+import { speakReply, speechAvailable, stopSpeech } from '@/lib/voice/speech';
+import {
+  applySpeakerOn,
+  loadVoicePreferences,
+  readSpeakerOn,
+  saveVoicePreferences,
+  speakerPreferenceKey,
+} from '@/lib/voice/voice-preferences';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { chatTranscriptContentPaddingBottom } from '@/lib/motion/chat-transcript-insets';
@@ -462,6 +471,67 @@ export function ChatScreen() {
       cancelled = true;
     };
   }, [sessionSelector.visible]);
+  // The speaker is one conversation's own opt-in (B2), held in this device's
+  // store beside a Bot's voice, so the flag is read and written here and the
+  // gateway is asked nothing. Whether this device has a voice to read a reply
+  // in is the platform's own answer, read alongside it: the header offers the
+  // control only where a tap can finish.
+  const speakerKey = draftThread ? speakerPreferenceKey(draftThread) : undefined;
+  const [speakerOn, setSpeakerOn] = useState(false);
+  const [speechReady, setSpeechReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void loadVoicePreferences().then((stored) => {
+      if (!cancelled) setSpeakerOn(speakerKey ? readSpeakerOn(stored, speakerKey) : false);
+    });
+    void speechAvailable().then((available) => {
+      if (!cancelled) setSpeechReady(available);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [speakerKey]);
+  const handleSpeakerPress = useCallback(() => {
+    const key = speakerKey;
+    if (!key) return;
+    const next = !speakerOn;
+    // A toggle-off is one of the two ways a reply is silenced (B2), and it
+    // silences it while the flag it belongs to is still on.
+    if (!next) void stopSpeech();
+    setSpeakerOn(next);
+    // The blob is read back and folded before it is written, so this one
+    // conversation's flag moves without dropping a Bot's voice beside it.
+    void loadVoicePreferences().then((stored) => saveVoicePreferences(applySpeakerOn(stored, key, next)));
+  }, [speakerKey, speakerOn]);
+
+  // The transcript's own tail decides what the speaker owes — the rule is
+  // `speakerAction`'s, in `src/lib/voice/speech-reply.ts` — so a finished
+  // reply is read, a new turn silences the queue, and everything still
+  // arriving is left alone. What has been read is remembered by message id,
+  // per conversation and per flag: a re-render cannot read one reply twice,
+  // and a thread just opened or a speaker just turned on is not read back at
+  // the operator — only what arrives from there is new.
+  const transcriptTail = messages.length ? messages[messages.length - 1] : undefined;
+  const speakerMemoryRef = useRef<{ thread?: string; flag: boolean; id?: string }>({
+    flag: false,
+  });
+  useEffect(() => {
+    const memory = speakerMemoryRef.current;
+    if (memory.thread !== speakerKey || memory.flag !== speakerOn) {
+      speakerMemoryRef.current = { thread: speakerKey, flag: speakerOn, id: transcriptTail?.id };
+      return;
+    }
+    if (!speakerOn) return;
+    const action = speakerAction(transcriptTail);
+    if (action.kind === 'silence') {
+      void stopSpeech();
+      return;
+    }
+    if (action.kind !== 'speak') return;
+    if (memory.id === transcriptTail?.id) return;
+    speakerMemoryRef.current = { thread: speakerKey, flag: speakerOn, id: transcriptTail?.id };
+    void speakReply(action.text);
+  }, [transcriptTail, speakerKey, speakerOn]);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<TranscriptItem>>(null);
@@ -1243,6 +1313,13 @@ export function ChatScreen() {
         onRosterPress={surface.kind === 'roster' ? undefined : handleHeaderRosterPress}
         backendsExpanded={backendPickerVisible}
         overflowExpanded={overflowVisible}
+        // The speaker is this thread's own, and it is offered only where this
+        // device has a voice: a conversation that cannot be read aloud shows
+        // no control at all.
+        speakerOn={threadSurface ? speakerOn : undefined}
+        onSpeakerPress={
+          threadSurface && speakerKey && speechReady ? handleSpeakerPress : undefined
+        }
       />
 
       <NewAgentSheet

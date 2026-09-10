@@ -33,6 +33,10 @@ export type ChatHeaderProps = {
   backendsExpanded?: boolean;
   /** True while the chat overflow sheet is open. */
   overflowExpanded?: boolean;
+  /** True while this conversation reads each completed reply aloud. */
+  speakerOn?: boolean;
+  /** Present only when this device has a voice to read replies in. */
+  onSpeakerPress?: () => void;
 };
 
 /** Slim contextual chat header: orb, gateway, quick model/session chips, overflow. */
@@ -52,6 +56,8 @@ function ChatHeaderImpl({
   onRosterPress,
   backendsExpanded,
   overflowExpanded,
+  speakerOn = false,
+  onSpeakerPress,
 }: ChatHeaderProps) {
   const tokens = useTokens();
   const { width: windowWidth, fontScale } = useWindowDimensions();
@@ -130,6 +136,31 @@ function ChatHeaderImpl({
         style={[styles.chip, { maxWidth: chipMaxWidth }]}
       />
     ) : null;
+
+  // Reading replies aloud is this conversation's own opt-in (B2), so the
+  // control is drawn only where this device has a voice to read them in:
+  // `onSpeakerPress` is absent on a build without one, and the button is the
+  // same 32px square the back and overflow controls beside it use. Its state
+  // is in the label and the glyph rather than in an `accessibilityState`,
+  // which the two controls above are the header's only carriers of.
+  const speaker = onSpeakerPress ? (
+    <PressableScale
+      onPress={onSpeakerPress}
+      hitSlop={10}
+      accessibilityRole="button"
+      accessibilityLabel={speakerOn ? 'Stop reading replies aloud' : 'Read replies aloud'}
+      style={styles.overflow}>
+      <Icon
+        name={{
+          ios: speakerOn ? 'speaker.wave.2.fill' : 'speaker.slash.fill',
+          android: speakerOn ? 'volume_up' : 'volume_off',
+          web: speakerOn ? 'volume_up' : 'volume_off',
+        }}
+        size={18}
+        color={speakerOn ? 'accentWarm' : 'textSecondary'}
+      />
+    </PressableScale>
+  ) : null;
   const overflow = onOverflowPress ? (
     <PressableScale
       onPress={onOverflowPress}
@@ -159,6 +190,7 @@ function ChatHeaderImpl({
               {orb}
               {back}
               {titles}
+              {speaker}
               {overflow}
             </View>
             <View style={styles.chipRow}>
@@ -173,6 +205,7 @@ function ChatHeaderImpl({
             {titles}
             {modelChip}
             {sessionChip}
+            {speaker}
             {overflow}
           </>
         )}
