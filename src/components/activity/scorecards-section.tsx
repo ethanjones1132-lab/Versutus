@@ -20,10 +20,12 @@
 // unfiltered list is a control here rather than something to hunt for.
 //
 // The weekly operator report is opted into from here (D3 Build 5) — one local
-// notice, off by default. The switch paints the device's stored flag and
-// nothing else, so it can never show "on" for a notice the phone does not hold;
-// and an opt-in the phone declined says so, in the module's own words, so a
-// device that refused the notice does not read like one nobody ever asked.
+// notice, off by default. The switch paints the state this device actually
+// holds, never a flag on its own, so it cannot show "on" for a notice the tray
+// will not show: not after an attempt the phone declined, and not after a
+// permission revoked in Settings under a notice already scheduled. Either way
+// the module's own words say why, so a device that refused the notice does not
+// read like one nobody ever asked.
 
 import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Switch, View } from 'react-native';
@@ -33,7 +35,7 @@ import { Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { ActivityRun } from '@/lib/gateway/runs';
 import {
-  loadWeeklyReportOptIn,
+  readWeeklyReportOptIn,
   setWeeklyReportOptIn,
 } from '@/lib/notifications/weekly-report';
 import {
@@ -77,10 +79,15 @@ export function ScorecardsSection({
 
   useEffect(() => {
     let live = true;
-    // `loadWeeklyReportOptIn` never rejects — a store it cannot read reads as
-    // off, the fail-closed direction.
-    void loadWeeklyReportOptIn().then((enabled) => {
-      if (live) setWeeklyReport(enabled);
+    // `readWeeklyReportOptIn` never rejects — a store it cannot read reads as
+    // off, the fail-closed direction, and a permission it could not read is
+    // not blamed. The read is the device's state, so it paints both halves: a
+    // permission turned off in Settings under a held flag opens on the
+    // module's own line rather than on a switch quietly reading on.
+    void readWeeklyReportOptIn().then((state) => {
+      if (!live) return;
+      setWeeklyReport(weeklyReportOptInHolds(state));
+      setWeeklyReportRefusal(weeklyReportRefusedBy(state));
     });
     return () => {
       live = false;

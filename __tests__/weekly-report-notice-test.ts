@@ -35,6 +35,7 @@ jest.mock('expo-notifications', () => ({
   scheduleNotificationAsync: jest.fn(),
   cancelScheduledNotificationAsync: jest.fn(),
   requestPermissionsAsync: jest.fn(),
+  getPermissionsAsync: jest.fn(),
 }));
 
 jest.mock('@react-native-async-storage/async-storage', () => {
@@ -56,6 +57,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import {
   loadWeeklyReportOptIn,
+  readWeeklyReportOptIn,
   setWeeklyReportOptIn,
 } from '@/lib/notifications/weekly-report';
 import { routeForTap } from '@/lib/notifications/tap-route';
@@ -131,13 +133,17 @@ describe('a refused opt-in says why', () => {
     expect(weeklyReportRefusedBy({ state: 'off' })).toBeNull();
   });
 
-  test('a declined permission names where to turn notifications back on, claims no push', () => {
+  test('a refused permission names where to turn notifications back on, claims no push', () => {
     const copy = weeklyReportRefusalCopy('permission');
 
     expect(copy).toMatch(/notifications are off/i);
     expect(copy).toMatch(/settings/i);
     expect(copy).not.toMatch(/push/i);
     expect(copy).not.toMatch(/\d/);
+    // The same line covers a permission revoked under a notice the OS still
+    // holds, so it must not claim nothing was scheduled: that notice is on the
+    // queue, and the tray's refusal is the only thing left to name.
+    expect(copy).not.toMatch(/schedul/i);
   });
 
   test('a schedule that could not be placed never blames the permission', () => {
@@ -301,5 +307,98 @@ describe('opting in schedules exactly one weekly notice', () => {
     (AsyncStorage.getItem as jest.Mock).mockRejectedValueOnce(new Error('store locked'));
 
     await expect(loadWeeklyReportOptIn()).resolves.toBe(false);
+  });
+});
+
+describe('a permission revoked after the opt-in does not read as on', () => {
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    await keyValueStorage.removeItem(WEEKLY_REPORT_NOTICE_KEY);
+    await keyValueStorage.removeItem(WEEKLY_REPORT_OPT_IN_KEY);
+    mockSchedule.mockResolvedValue('notif-1');
+    mockCancel.mockResolvedValue(undefined);
+    (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
+  });
+
+  test('a granted permission on a held notice still reads on', async () => {
+    await setWeeklyReportOptIn(true);
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+
+    await expect(readWeeklyReportOptIn()).resolves.toEqual({ state: 'on' });
+  });
+
+  test('a permission turned off in Settings reads refused, and names that reason', async () => {
+    await setWeeklyReportOptIn(true);
+    mockSchedule.mockClear();
+    mockCancel.mockClear();
+    // The operator opted in, then revoked notifications in the OS Settings:
+    // the flag and the identifier are still here, and the tray will not show
+    // what they stand for.
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: false });
+
+    const state = await readWeeklyReportOptIn();
+
+    expect(state).toEqual({ state: 'refused', reason: 'permission' });
+    // The switch snaps back, and the module's own line — the Settings one —
+    // explains it, exactly as a declined opt-in does.
+    expect(weeklyReportOptInHolds(state)).toBe(false);
+    expect(weeklyReportRefusedBy(state)).toBe('permission');
+    expect(weeklyReportRefusalCopy('permission')).toMatch(/settings/i);
+  });
+
+  test('the read schedules nothing and cancels nothing', async () => {
+    await setWeeklyReportOptIn(true);
+    mockSchedule.mockClear();
+    mockCancel.mockClear();
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: false });
+
+    await readWeeklyReportOptIn();
+
+    // A read is a read: the held notice is exactly where it was, so restoring
+    // the permission restores the report instead of losing it.
+    expect(mockSchedule).not.toHaveBeenCalled();
+    expect(mockCancel).not.toHaveBeenCalled();
+    await expect(heldId()).resolves.toBe('notif-1');
+    await expect(storedOptIn()).resolves.toBe(WEEKLY_REPORT_OPT_IN_ON);
+  });
+
+  test('the read never asks for the permission — only the opt-in attempt does', async () => {
+    await setWeeklyReportOptIn(true);
+    (Notifications.requestPermissionsAsync as jest.Mock).mockClear();
+
+    await readWeeklyReportOptIn();
+
+    // Opening the tab must not fire a system dialog the operator never asked
+    // for: the mount read is `getPermissionsAsync`, which has no user-facing
+    // effect.
+    expect(Notifications.requestPermissionsAsync).not.toHaveBeenCalled();
+    expect(Notifications.getPermissionsAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test('a device that never opted in is never asked, and reads off', async () => {
+    await expect(readWeeklyReportOptIn()).resolves.toEqual({ state: 'off' });
+
+    // Nothing off a held flag is asked: a device with no opt-in has no notice
+    // whose permission could matter.
+    expect(Notifications.getPermissionsAsync).not.toHaveBeenCalled();
+    expect(Notifications.requestPermissionsAsync).not.toHaveBeenCalled();
+  });
+
+  test('a permission this platform cannot answer names no reason at all', async () => {
+    await setWeeklyReportOptIn(true);
+    // What a platform with no notification permission module does: expo
+    // rejects with an UnavailabilityError rather than answering.
+    (Notifications.getPermissionsAsync as jest.Mock).mockRejectedValue(
+      new Error('not available on this platform'),
+    );
+
+    const state = await readWeeklyReportOptIn();
+
+    // Nothing was read, so nothing is blamed — the surface must not send the
+    // operator to Settings over a fact this device never reported. The state
+    // is the one this device's own record holds.
+    expect(state).toEqual({ state: 'on' });
+    expect(weeklyReportRefusedBy(state)).toBeNull();
   });
 });

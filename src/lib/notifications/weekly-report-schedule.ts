@@ -125,12 +125,18 @@ export function weeklyReportRefusedBy(state: WeeklyReportOptInState): WeeklyRepo
 }
 
 /**
- * The line a declined notification permission shows. It names the one thing
- * the operator can act on and counts nothing, like every other string about
- * this report.
+ * The line a refused notification permission shows. It names the one thing the
+ * operator can act on and counts nothing, like every other string about this
+ * report.
+ *
+ * It says the report cannot be SHOWN rather than that it could not be
+ * scheduled, because the same line covers both ways this device reaches this
+ * reason: an attempt the phone declined, which scheduled nothing, and a
+ * permission revoked in Settings after the opt-in, where the held notice is
+ * still on the OS queue and only the tray's refusal is left to name.
  */
 export const WEEKLY_REPORT_PERMISSION_REFUSAL_COPY =
-  'Notifications are off for Versutus, so the weekly report cannot be scheduled — turn them on in Settings.';
+  'Notifications are off for Versutus, so the weekly report cannot be shown — turn them on in Settings.';
 
 /**
  * The line a schedule that could not be placed shows. Deliberately silent

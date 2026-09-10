@@ -41,6 +41,27 @@ export async function loadWeeklyReportOptIn(): Promise<boolean> {
 }
 
 /**
+ * The opt-in state this device holds, as a read of what it can still deliver:
+ * the stored flag, and — when that flag says on — whether the phone still
+ * allows notifications.
+ *
+ * Without the second half, an operator who opts in and then turns notifications
+ * off in the OS Settings opens the app to a switch reading on for a notice the
+ * tray cannot show. With it, that case lands on the same
+ * `{ state: 'refused', reason: 'permission' }` an attempt the phone declined
+ * lands on, so the surface's one line explains it.
+ *
+ * Reads only: it schedules nothing, cancels nothing, and asks the operator for
+ * nothing, so a surface may call it every time it mounts.
+ */
+export async function readWeeklyReportOptIn(): Promise<WeeklyReportOptInState> {
+  if (!(await loadWeeklyReportOptIn())) return { state: 'off' };
+  return (await readPermissionGranted()) === false
+    ? { state: 'refused', reason: 'permission' }
+    : { state: 'on' };
+}
+
+/**
  * The identifier of the notice this device holds, or null. A locked store
  * reads as none, which is the same landing as a device that never opted in.
  */
@@ -85,6 +106,28 @@ async function ensurePermission(): Promise<boolean> {
     return settings.granted;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Whether the phone still allows notifications, as a READ of the permission it
+ * holds now — `getPermissionsAsync`, never the request, because this decides
+ * what a surface paints and must not fire a system dialog the operator did not
+ * ask for. It also decides by the same field `ensurePermission` does, so the
+ * read and the attempt can never disagree about the same device.
+ *
+ * `null` is a permission this platform cannot answer: expo rejects with an
+ * `UnavailabilityError` where no permission module is installed. Nothing was
+ * read there, so nothing is named — the caller keeps the state the device's own
+ * record holds rather than sending the operator to Settings over a fact this
+ * device never reported.
+ */
+async function readPermissionGranted(): Promise<boolean | null> {
+  try {
+    const settings = await Notifications.getPermissionsAsync();
+    return settings.granted;
+  } catch {
+    return null;
   }
 }
 

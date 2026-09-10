@@ -259,14 +259,31 @@ describe('the weekly operator report is opted into here, off by default', () => 
   test('the switch shows the stored flag, and a declined opt-in snaps it back', () => {
     const src = section();
 
-    // Off until the device's own flag says otherwise.
+    // Off until the device's own state says otherwise — and that state is the
+    // permission-aware read, never the stored flag alone: a flag whose
+    // permission the phone has since revoked must not paint on.
     expect(src).toContain('useState(false)');
-    expect(src).toContain('loadWeeklyReportOptIn()');
+    expect(src).toContain('readWeeklyReportOptIn()');
+    expect(src).not.toContain('loadWeeklyReportOptIn()');
     // The state this device holds after the attempt is what the switch paints,
     // so it can never show "on" for a notice that is not scheduled.
     expect(src).toContain('setWeeklyReportOptIn(next).then((state) => {');
     expect(src).toContain('setWeeklyReport(weeklyReportOptInHolds(state));');
     expect(src).toContain('setWeeklyReportRefusal(weeklyReportRefusedBy(state));');
+  });
+
+  test('the mount read paints the state this device holds, a refusal included', () => {
+    const src = section();
+    const read = src.indexOf('readWeeklyReportOptIn()');
+    const holds = src.indexOf('setWeeklyReport(weeklyReportOptInHolds(state));');
+    const refusal = src.indexOf('setWeeklyReportRefusal(weeklyReportRefusedBy(state));');
+
+    // The mount read answers both halves: the switch, and the line under it —
+    // so an opt-in the phone stopped allowing opens on an explained refusal
+    // rather than on a switch quietly reading off.
+    expect(read).toBeGreaterThanOrEqual(0);
+    expect(holds).toBeGreaterThan(read);
+    expect(refusal).toBeGreaterThan(read);
   });
 
   test('a refused opt-in says why, in the module copy, under the switch', () => {
