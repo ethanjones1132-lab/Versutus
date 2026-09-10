@@ -13,7 +13,9 @@
 //     than sealing the operator out of their own gateway.
 //
 // The native probe lives in `app-lock-device.ts`; this module stays pure plus
-// one key-value blob, so the rules are testable without a device.
+// one key-value blob, so the rules are testable without a device. The gate's
+// hold on a route it brought down is composed here too, so what the unlock
+// re-opens is a rule a case can call rather than a string built in a screen.
 
 import { keyValueStorage } from '@/lib/storage/key-value';
 
@@ -33,6 +35,12 @@ export const APP_LOCK_UNLOCK_LABEL = 'Unlock';
 
 /** Why this device cannot hold the lock. Null means it can. */
 export type AppLockUnavailableReason = 'unsupported' | 'not-enrolled';
+
+/**
+ * A presented route's query, as expo-router hands it over: a repeated param
+ * arrives as an array and an absent one as undefined.
+ */
+export type HeldRouteQuery = Record<string, undefined | string | string[]>;
 
 /**
  * Read the stored opt-in. Only a stored `true` is on — absent, false, or a
@@ -63,6 +71,28 @@ export function appLockUnavailableCopy(reason: AppLockUnavailableReason): string
   return reason === 'not-enrolled'
     ? 'No Face ID or fingerprint is enrolled on this device. Enroll one in the device settings to use the lock.'
     : 'This device cannot ask for Face ID or a fingerprint.';
+}
+
+/**
+ * The link the lock holds for the unlock to re-open: a presented route's own
+ * path with its own query, in one string, so a route brought down while the
+ * lock was up comes back AS THE LINK ASKED for it — the add sheet's prefill is
+ * its query, and a path alone would re-open it blank.
+ *
+ * A param is carried only as a non-empty string, the rule `deepLinkTarget`
+ * already applies to a link's own query, and the pairs are ordered, so one
+ * route is one string whatever order the router handed its params over in.
+ */
+export function heldRouteHref(pathname: string, query: HeldRouteQuery): string {
+  const search = Object.keys(query)
+    .sort()
+    .flatMap((key): string[] => {
+      const value = query[key];
+      if (typeof value !== 'string' || value.length === 0) return [];
+      return [`${encodeURIComponent(key)}=${encodeURIComponent(value)}`];
+    })
+    .join('&');
+  return search ? `${pathname}?${search}` : pathname;
 }
 
 /** Read this device's stored opt-in. Absent and corrupt both read as off. */

@@ -15,12 +15,18 @@
 // the cover itself, so an arriving route is presented above it unless it comes
 // down too.
 //
+// A route the lock brings down that ARRIVED, though, is one a link asked for —
+// the `versutus://add` sheet and its prefill — so it is held for the unlock to
+// re-open rather than left lost: the operator unlocks onto the sheet the link
+// asked for, not onto the Stack's first screen. A route the lock edge found is
+// the operator's own and stays down.
+//
 // It only ever covers a device that can answer the biometric prompt — see
 // app-lock.ts for why a removed enrollment must unlock rather than trap the
 // operator. Nothing here reaches a gateway: the lock is a device preference.
 
 import * as LocalAuthentication from 'expo-local-authentication';
-import { usePathname, useRouter } from 'expo-router';
+import { type Href, useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Modal, StyleSheet, View } from 'react-native';
 
@@ -32,6 +38,7 @@ import {
   APP_LOCK_COVER_BODY,
   APP_LOCK_COVER_TITLE,
   APP_LOCK_UNLOCK_LABEL,
+  heldRouteHref,
 } from '@/lib/settings/app-lock';
 import { deviceAppLockState } from '@/lib/settings/app-lock-device';
 
@@ -45,10 +52,21 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
   // route the lock has not seen yet: the Stack's route list moving is the edge
   // a `versutus://add` link landing on a locked app produces.
   const presentedRoute = usePathname();
+  // The route's own query, so the link the lock holds comes back with the
+  // params its sheet was prefilled from.
+  const routeParams = useGlobalSearchParams();
+  const heldHref = heldRouteHref(presentedRoute, routeParams);
   const [locked, setLocked] = useState(false);
   // The read settles once; the background listener below needs the answer
   // without re-asking the device on every app-state change.
   const lockableRef = useRef(false);
+  // The route this gate last accounted for. A route that differs from it
+  // arrived while the lock was up, which is the one to hold below.
+  const accountedRouteRef = useRef(presentedRoute);
+  // The link the lock brought down, waiting for the unlock to re-open it. A
+  // ref, not state: nothing renders it, so holding one must not cost a render
+  // — nor may it be lost to the renders the dismissal itself causes.
+  const heldRouteRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,12 +101,36 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
   // the operator lands on its first screen. The route is read along with the
   // lock so that a route the lock never saw brings itself down rather than
   // sitting above the cover. Dismissing is skipped when there is nothing to
-  // pop, and the unlock path never navigates.
+  // pop, and the unlock never dismisses. The one route that is not left on the
+  // first screen is one that ARRIVED while the lock was up: it is what a link
+  // asked for, so it is held for the unlock to re-open.
   useEffect(() => {
+    // Accounted for before the lock is consulted: a route the app presented
+    // while it was open is the operator's own, not a link's arrival to hold.
+    const arrived = presentedRoute !== accountedRouteRef.current;
+    accountedRouteRef.current = presentedRoute;
     if (!locked) return;
+    // Nothing presented is the Stack on its first screen, so dismissing would
+    // be a navigation for nothing — and it is the state this very dismissal
+    // leaves behind, the pop landing here. That is why the hold is taken below
+    // this guard: a route coming back down is not a new arrival to hold.
     if (!router.canDismiss()) return;
+    if (arrived) heldRouteRef.current = heldHref;
     router.dismissAll();
-  }, [locked, router, presentedRoute]);
+  }, [locked, router, presentedRoute, heldHref]);
+
+  // The unlock edge re-opens the link the lock brought down: the operator asked
+  // for that route before the lock took it away. Its own effect rather than a
+  // step inside `unlock`, because the unlock has to have landed first —
+  // re-applying while `locked` is still true would hand the route straight back
+  // to the dismissal above. Nothing navigates while the cover is up.
+  useEffect(() => {
+    if (locked) return;
+    const held = heldRouteRef.current;
+    if (!held) return;
+    heldRouteRef.current = null;
+    router.push(held as Href);
+  }, [locked, router]);
 
   const unlock = useCallback(async () => {
     try {

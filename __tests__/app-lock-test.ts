@@ -23,6 +23,7 @@ import {
   appLockFromStored,
   appLockUnavailableCopy,
   appLockUnavailableReason,
+  heldRouteHref,
   loadAppLock,
   saveAppLock,
 } from '@/lib/settings/app-lock';
@@ -135,6 +136,30 @@ describe('the stored flag', () => {
   });
 });
 
+describe('heldRouteHref', () => {
+  test('the route keeps its own query, so the sheet comes back as the link asked', () => {
+    expect(heldRouteHref('/gateway/add', { name: 'Home PC', url: 'ws://home:9000' })).toBe(
+      '/gateway/add?name=Home%20PC&url=ws%3A%2F%2Fhome%3A9000',
+    );
+  });
+
+  test('a route with nothing to carry is the bare path', () => {
+    expect(heldRouteHref('/gateway/settings', {})).toBe('/gateway/settings');
+  });
+
+  test('a blank, absent or repeated param is dropped, never held as an empty query', () => {
+    expect(heldRouteHref('/gateway/add', { url: '', name: undefined, bot: ['one', 'two'] })).toBe(
+      '/gateway/add',
+    );
+  });
+
+  test('the query is ordered, so one link is one string', () => {
+    expect(heldRouteHref('/gateway/add', { url: 'ws://a:1', name: 'Home' })).toBe(
+      heldRouteHref('/gateway/add', { name: 'Home', url: 'ws://a:1' }),
+    );
+  });
+});
+
 describe('deviceAppLockState', () => {
   test('a device that never opted in is not locked, whatever it can do', async () => {
     mockGetItem.mockResolvedValueOnce('false');
@@ -227,18 +252,52 @@ describe('the gate and its switch', () => {
     // presented above it. The dismissal is therefore keyed on the presented
     // route as well as on the lock edge: the arriving route comes down instead
     // of staying legible over a locked app.
-    expect(src).toContain("import { usePathname, useRouter } from 'expo-router';");
+    expect(src).toContain(
+      "import { type Href, useGlobalSearchParams, usePathname, useRouter } from 'expo-router';",
+    );
     expect(src).toContain('const presentedRoute = usePathname();');
-    expect(src).toMatch(/\}, \[locked, router, presentedRoute\]\);/);
+    expect(src).toMatch(/\}, \[locked, router, presentedRoute, heldHref\]\);/);
     // Still one dismissal site, so the route that arrives is brought down by
     // the same rule as the one the lock edge already found.
     expect(src.match(/router\.dismissAll\(\)/g)).toHaveLength(1);
-    // The lock is still the only trigger: nothing here navigates on unlock.
+    // The lock is still the only DISMISSAL trigger; what the unlock edge does
+    // with a route this brought down is pinned in its own case below.
     expect(src).toMatch(/if \(!locked\) return;/);
   });
 
-  test('no unlock path navigates', () => {
+  test('the link the lock brought down is held, and the unlock re-opens it', () => {
     const src = gate();
+    // A route that arrives while the lock is up is one a LINK asked for, so
+    // bringing it down cannot be the end of it: the route is remembered with
+    // its own query — the params the add sheet is prefilled from — and it is
+    // re-opened once the operator is back in, instead of leaving them on the
+    // Stack's first screen with the link lost.
+    expect(src).toContain('const heldHref = heldRouteHref(presentedRoute, routeParams);');
+    expect(src).toContain('if (arrived) heldRouteRef.current = heldHref;');
+    // The hold is taken AFTER the nothing-to-pop guard and BEFORE the
+    // dismissal, so the pop this very rule causes — which lands back on the
+    // Stack's first screen — cannot overwrite the link with that screen.
+    const canDismiss = src.indexOf('if (!router.canDismiss()) return;');
+    const hold = src.indexOf('if (arrived) heldRouteRef.current = heldHref;');
+    const dismissAll = src.indexOf('router.dismissAll()');
+    expect(canDismiss).toBeGreaterThan(-1);
+    expect(hold).toBeGreaterThan(canDismiss);
+    expect(dismissAll).toBeGreaterThan(hold);
+    // One re-open, and it is the unlock edge that re-opens it.
+    expect(src.match(/router\.push\(held as Href\)/g)).toHaveLength(1);
+  });
+
+  test('nothing navigates while the lock is up, and the unlock callback itself reaches no router', () => {
+    const src = gate();
+    // The re-open rides the unlock EDGE — the commit in which the lock comes
+    // down — and not the prompt's own callback: a cancelled prompt leaves the
+    // link held for the next unlock, and nothing navigates while the cover is
+    // up, or the dismissal above would take the re-opened route straight back
+    // down.
+    const guard = src.indexOf('if (locked) return;');
+    const push = src.indexOf('router.push(held as Href);');
+    expect(guard).toBeGreaterThan(-1);
+    expect(push).toBeGreaterThan(guard);
     const body =
       /const unlock = useCallback\(async \(\) => \{([\s\S]*?)\n {2}\}, \[/.exec(src)?.[1] ?? '';
     expect(body.length).toBeGreaterThan(0);
