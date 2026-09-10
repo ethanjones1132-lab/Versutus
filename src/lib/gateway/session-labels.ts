@@ -111,6 +111,32 @@ export function sessionLabelTitle(
   return named ?? sessionListTitle(gatewayTitle);
 }
 
+/**
+ * The order the selector shows a read in: a pinned session leads, and every
+ * other row keeps the position the read gave it. The two groups each stay in
+ * the read's own order — this is a stable partition, never a second sort, so
+ * nothing here can disagree with the gateway about which thread is newest.
+ *
+ * A list with nothing pinned comes back as the read gave it, the same array
+ * the read handed over, so an unlabelled selector is byte-for-byte what it
+ * always was. Without a gateway there is no key to look a label up by, so the
+ * list is left alone rather than matched against a junk key.
+ */
+export function orderSessionsByLabel<T extends { id: string }>(
+  sessions: T[],
+  labels: Record<string, SessionLabel>,
+  gatewayId?: string,
+): T[] {
+  if (!gatewayId) return sessions;
+  const pinned: T[] = [];
+  const rest: T[] = [];
+  for (const session of sessions) {
+    if (labels[sessionLabelKey(gatewayId, session.id)]?.pinned === true) pinned.push(session);
+    else rest.push(session);
+  }
+  return pinned.length === 0 ? sessions : [...pinned, ...rest];
+}
+
 /** Read every stored label. A refused or unreadable store is no labels. */
 export async function loadSessionLabels(): Promise<Record<string, SessionLabel>> {
   try {

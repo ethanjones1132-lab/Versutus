@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { useCallback, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { FlatList, Keyboard, SectionList, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated from 'react-native-reanimated';
@@ -17,6 +17,15 @@ import {
   type ModelSection,
 } from '@/lib/gateway/model-selection';
 import { filterSessions, sessionCreateTitle, sessionListTitle, sessionListWindowCopy } from '@/lib/gateway/session-list';
+import {
+  applySessionLabel,
+  loadSessionLabels,
+  orderSessionsByLabel,
+  saveSessionLabels,
+  sessionLabelKey,
+  sessionLabelTitle,
+  type SessionLabel,
+} from '@/lib/gateway/session-labels';
 import { openSessionByIdFailureText } from '@/lib/gateway/session-open-by-id';
 import type { ThreadSwitchValidation } from '@/lib/gateway/thread-switch';
 import { entering } from '@/lib/motion/presets';
@@ -105,6 +114,12 @@ export type ThreadConfigSheetProps = {
   /** Set when the last session-list read failed. Empty is not "No sessions yet". */
   sessionsError?: string;
   /**
+   * The gateway whose sessions these are. Session pins and names are this
+   * device's and are keyed gateway + session, so with no id there is no key
+   * to read or write a label under — and the row offers no such control.
+   */
+  gatewayId?: string;
+  /**
    * True once a session read has landed. The sheet now opens BEFORE its read
    * answers, so an empty list with this false is "still reading", not "none".
    * Without it the sheet greets every open with a confident "No sessions yet".
@@ -147,6 +162,7 @@ function SessionsSection({
   sessions = [],
   sessionsError,
   sessionsLoaded,
+  gatewayId,
   currentSessionId,
   onSelect,
   onRefresh,
@@ -160,6 +176,7 @@ function SessionsSection({
   sessions?: SessionItem[];
   sessionsError?: string;
   sessionsLoaded?: boolean;
+  gatewayId?: string;
   currentSessionId?: string;
   onSelect?: (sessionId: string) => void;
   onRefresh?: () => void;
@@ -191,7 +208,33 @@ function SessionsSection({
   const [idDraft, setIdDraft] = useState('');
   const [openError, setOpenError] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
-  const visibleSessions = useMemo(() => filterSessions(sessions, query), [sessions, query]);
+  // P3's pin/rename half: the pins and names THIS device keeps, keyed gateway
+  // + session by the store. Read once per open — the section unmounts between
+  // opens — and written back through the store's own folds, so a blank rename
+  // clears a name and an unpin of an unlabelled row stores nothing.
+  const [labels, setLabels] = useState<Record<string, SessionLabel>>({});
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    void loadSessionLabels().then((stored) => {
+      if (!cancelled) setLabels(stored);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const labelFor = useCallback(
+    (sessionId: string) => (gatewayId ? labels[sessionLabelKey(gatewayId, sessionId)] : undefined),
+    [gatewayId, labels],
+  );
+  // Pinned first, then the read's own order. This runs BEFORE the search
+  // narrows the list, so a search keeps the pinned-first ordering.
+  const ordered = useMemo(
+    () => orderSessionsByLabel(sessions, labels, gatewayId),
+    [sessions, labels, gatewayId],
+  );
+  const visibleSessions = useMemo(() => filterSessions(ordered, query), [ordered, query]);
   const windowCopy = sessionListWindowCopy(sessions.length);
 
   const confirmDelete = useCallback((item: SessionItem) => {
@@ -210,6 +253,55 @@ function SessionsSection({
     }
     setDeleteCandidate(null);
   }, [deleteCandidate, onDeleteSession]);
+
+  /**
+   * Write one session's label through the store's folds and persist the whole
+   * blob. No gateway id means no key, and no control that could call this is
+   * rendered without one.
+   */
+  const writeLabel = useCallback(
+    (sessionId: string, patch: SessionLabel) => {
+      if (!gatewayId) return;
+      const next = applySessionLabel(labels, sessionLabelKey(gatewayId, sessionId), patch);
+      setLabels(next);
+      void saveSessionLabels(next);
+    },
+    [gatewayId, labels],
+  );
+
+  const togglePin = useCallback(
+    async (item: SessionItem) => {
+      await Haptics.selectionAsync();
+      writeLabel(item.id, { pinned: labelFor(item.id)?.pinned !== true });
+    },
+    [labelFor, writeLabel],
+  );
+
+  const startRename = useCallback(
+    async (item: SessionItem) => {
+      await Haptics.selectionAsync();
+      // A second tap on the same row's Rename closes the field unwritten.
+      if (renamingId === item.id) {
+        setRenamingId(null);
+        setRenameDraft('');
+        return;
+      }
+      setRenamingId(item.id);
+      setRenameDraft(labelFor(item.id)?.label ?? '');
+    },
+    [labelFor, renamingId],
+  );
+
+  const submitRename = useCallback(
+    (item: SessionItem) => {
+      // A blank name clears the label, which is how the gateway's own title
+      // comes back — the store's rule, not a second one on this surface.
+      writeLabel(item.id, { label: renameDraft });
+      setRenamingId(null);
+      setRenameDraft('');
+    },
+    [renameDraft, writeLabel],
+  );
 
   const submitOpenById = useCallback(async () => {
     const reader = onOpenById;
@@ -240,6 +332,9 @@ function SessionsSection({
     ({ item }: { item: SessionItem }) => {
       const isCurrent = item.id === currentSessionId;
       const botChatBadge = sessionBotChatBadge(item);
+      const label = labelFor(item.id);
+      const pinned = label?.pinned === true;
+      const renaming = renamingId === item.id;
       const stats = [
         item.numMessages !== undefined ? `${item.numMessages} msgs` : undefined,
         item.totalTokens !== undefined && item.totalTokens > 0
@@ -262,18 +357,60 @@ function SessionsSection({
               },
             ]}
             accessibilityRole="button"
-            accessibilityLabel={`Switch to session ${sessionListTitle(item.title)}`}
+            accessibilityLabel={`Switch to session ${sessionLabelTitle(item.title, label)}`}
             accessibilityState={{ selected: isCurrent }}
             onPress={async () => {
               await Haptics.selectionAsync();
               onSelect?.(item.id);
             }}>
             <View style={styles.sessionHeader}>
-              <Text variant="body" numberOfLines={1} style={styles.sessionTitle}>
-                {sessionListTitle(item.title)}
-              </Text>
+              {renaming ? (
+                <TextField
+                  value={renameDraft}
+                  onChangeText={setRenameDraft}
+                  placeholder={sessionListTitle(item.title)}
+                  autoCapitalize="sentences"
+                  onSubmitEditing={() => submitRename(item)}
+                  returnKeyType="done"
+                  accessibilityLabel={`Name for session ${sessionListTitle(item.title)}`}
+                  style={styles.renameField}
+                />
+              ) : (
+                <Text variant="body" numberOfLines={1} style={styles.sessionTitle}>
+                  {sessionLabelTitle(item.title, label)}
+                </Text>
+              )}
               {botChatBadge ? <Badge label={botChatBadge} tone="neutral" dot={false} /> : null}
               {isCurrent ? <Badge label="Current" tone="accent" dot={false} /> : null}
+              {pinned ? <Badge label="Pinned" tone="neutral" dot={false} /> : null}
+              {gatewayId ? (
+                <PressableScale
+                  onPress={() => void togglePin(item)}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${pinned ? 'Unpin' : 'Pin'} session ${sessionListTitle(item.title)}`}
+                  style={styles.rowAction}>
+                  <Icon
+                    name={{ ios: pinned ? 'pin.fill' : 'pin', android: 'push_pin', web: 'push_pin' }}
+                    size={14}
+                    color={pinned ? 'accentWarm' : 'textTertiary'}
+                  />
+                </PressableScale>
+              ) : null}
+              {gatewayId ? (
+                <PressableScale
+                  onPress={() => void startRename(item)}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Rename session ${sessionListTitle(item.title)}`}
+                  style={styles.rowAction}>
+                  <Icon
+                    name={{ ios: 'pencil', android: 'edit', web: 'edit' }}
+                    size={14}
+                    color="textTertiary"
+                  />
+                </PressableScale>
+              ) : null}
               {onDeleteSession && !isCurrent ? (
                 <PressableScale
                   onPress={() => confirmDelete(item)}
@@ -286,6 +423,23 @@ function SessionsSection({
                 </PressableScale>
               ) : null}
             </View>
+            {renaming ? (
+              <>
+                <Text variant="micro" color="tertiary">
+                  {`Kept on this device — the gateway still calls this session “${sessionListTitle(
+                    item.title,
+                  )}”. Clear the name to use the gateway’s own.`}
+                </Text>
+                <View style={styles.renameRow}>
+                  <Button
+                    label="Save name"
+                    variant="secondary"
+                    size="sm"
+                    onPress={() => submitRename(item)}
+                  />
+                </View>
+              </>
+            ) : null}
             {item.preview ? (
               <Text variant="caption" color="secondary" numberOfLines={1}>
                 {item.preview}
@@ -303,8 +457,15 @@ function SessionsSection({
     [
       confirmDelete,
       currentSessionId,
+      gatewayId,
+      labelFor,
       onDeleteSession,
       onSelect,
+      renamingId,
+      renameDraft,
+      startRename,
+      submitRename,
+      togglePin,
       tokens.accentWarm,
       tokens.backgroundInset,
       tokens.borderSubtle,
@@ -765,6 +926,7 @@ export function ThreadConfigSheet({
   sessions,
   sessionsError,
   sessionsLoaded,
+  gatewayId,
   currentSessionId,
   onSelectSession,
   onRefreshSessions,
@@ -815,6 +977,7 @@ export function ThreadConfigSheet({
           sessions={sessions}
           sessionsError={sessionsError}
           sessionsLoaded={sessionsLoaded}
+          gatewayId={gatewayId}
           currentSessionId={currentSessionId}
           onSelect={onSelectSession}
           onRefresh={onRefreshSessions}
@@ -859,6 +1022,16 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.two,
     minHeight: 0,
   },
+  renameField: {
+    flex: 1,
+    minWidth: 0,
+    marginBottom: 0,
+  },
+  renameRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: Spacing.one,
+  },
   newRow: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
@@ -898,6 +1071,12 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   deleteButton: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowAction: {
     width: 28,
     height: 28,
     alignItems: 'center',

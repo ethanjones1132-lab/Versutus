@@ -13,6 +13,7 @@ import {
   applySessionLabel,
   clearSessionLabel,
   loadSessionLabels,
+  orderSessionsByLabel,
   saveSessionLabels,
   sessionLabelKey,
   sessionLabelsFromUnknown,
@@ -217,6 +218,80 @@ describe('sessionLabelTitle', () => {
 
   test('a stored rename is printed trimmed', () => {
     expect(sessionLabelTitle('Session 4', { label: '  Crew chat  ' })).toBe('Crew chat');
+  });
+});
+
+describe('orderSessionsByLabel', () => {
+  const CREW_ROW = { id: 'ses_crew', title: 'Crew chat' };
+  const LAB_ROW = { id: 'ses_lab', title: 'Lab notes' };
+  const NIGHT_ROW = { id: 'ses_night', title: 'Night shift' };
+  const READ_ORDER = [CREW_ROW, LAB_ROW, NIGHT_ROW];
+
+  test('a pinned session leads the list', () => {
+    const labels = applySessionLabel({}, sessionLabelKey(GATE, 'ses_lab'), { pinned: true });
+    expect(orderSessionsByLabel(READ_ORDER, labels, GATE).map((s) => s.id)).toEqual([
+      'ses_lab',
+      'ses_crew',
+      'ses_night',
+    ]);
+  });
+
+  test('pinned rows keep the read order among themselves', () => {
+    let labels = applySessionLabel({}, sessionLabelKey(GATE, 'ses_night'), { pinned: true });
+    labels = applySessionLabel(labels, sessionLabelKey(GATE, 'ses_crew'), { pinned: true });
+    // The read listed crew before night, so crew still leads the pinned group.
+    expect(orderSessionsByLabel(READ_ORDER, labels, GATE).map((s) => s.id)).toEqual([
+      'ses_crew',
+      'ses_night',
+      'ses_lab',
+    ]);
+  });
+
+  test('a list with nothing pinned comes back exactly as the read gave it', () => {
+    expect(orderSessionsByLabel(READ_ORDER, {}, GATE)).toBe(READ_ORDER);
+    const renamed = applySessionLabel({}, sessionLabelKey(GATE, 'ses_night'), {
+      label: 'Night shift',
+    });
+    expect(orderSessionsByLabel(READ_ORDER, renamed, GATE)).toBe(READ_ORDER);
+  });
+
+  test('a rename alone never moves a row', () => {
+    const labels = applySessionLabel({}, sessionLabelKey(GATE, 'ses_night'), { label: 'Later' });
+    expect(orderSessionsByLabel(READ_ORDER, labels, GATE).map((s) => s.id)).toEqual(
+      READ_ORDER.map((s) => s.id),
+    );
+  });
+
+  test("another gateway's pin does not move this gateway's rows", () => {
+    // `sessionLabelKey` folds the gateway id in, so one gateway's pin is not
+    // another's. The separator is what keeps `gw-1` from also matching `gw-10`.
+    const other = applySessionLabel({}, sessionLabelKey('gw-10', 'ses_lab'), { pinned: true });
+    expect(orderSessionsByLabel(READ_ORDER, other, 'gw-1')).toBe(READ_ORDER);
+    const prefixed = applySessionLabel({}, sessionLabelKey(GATE, 'ses_lab'), { pinned: true });
+    expect(orderSessionsByLabel(READ_ORDER, prefixed, GATE).map((s) => s.id)[0]).toBe('ses_lab');
+  });
+
+  test('a cleared pin is no pin, so the row goes back where the read had it', () => {
+    let labels = applySessionLabel({}, sessionLabelKey(GATE, 'ses_lab'), { pinned: true });
+    labels = applySessionLabel(labels, sessionLabelKey(GATE, 'ses_lab'), { pinned: false });
+    expect(orderSessionsByLabel(READ_ORDER, labels, GATE)).toBe(READ_ORDER);
+  });
+
+  test('an unknown session id in the store moves nothing', () => {
+    const labels = applySessionLabel({}, sessionLabelKey(GATE, 'ses_gone'), { pinned: true });
+    expect(orderSessionsByLabel(READ_ORDER, labels, GATE)).toBe(READ_ORDER);
+  });
+
+  test('without a gateway there is no key — the list is left alone', () => {
+    const labels = applySessionLabel({}, sessionLabelKey(GATE, 'ses_lab'), { pinned: true });
+    expect(orderSessionsByLabel(READ_ORDER, labels, undefined)).toBe(READ_ORDER);
+    expect(orderSessionsByLabel(READ_ORDER, labels, '')).toBe(READ_ORDER);
+  });
+
+  test('it does not rearrange the array it was given', () => {
+    const labels = applySessionLabel({}, sessionLabelKey(GATE, 'ses_lab'), { pinned: true });
+    orderSessionsByLabel(READ_ORDER, labels, GATE);
+    expect(READ_ORDER.map((s) => s.id)).toEqual(['ses_crew', 'ses_lab', 'ses_night']);
   });
 });
 

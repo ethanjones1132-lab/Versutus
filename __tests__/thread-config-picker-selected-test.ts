@@ -28,9 +28,12 @@ describe('Thread-config picker-card screen-reader state', () => {
   test('the session card declares accessibilityState.selected bound to isCurrent', () => {
     const src = readThreadConfigSource();
     // Anchor on the session card's unique label so the match cannot land on
-    // the model card or the section header (which use different labels).
+    // the model card or the section header (which use different labels). The
+    // label names the row through `sessionLabelTitle`, so a row the operator
+    // renamed is announced by the name they gave it — the same name the row
+    // prints (see session-pin-rename-sheet-test.ts).
     expect(src).toMatch(
-      /accessibilityLabel=\{`Switch to session \$\{sessionListTitle\(item\.title\)\}`\}[\s\S]*?accessibilityState=\{\{\s*selected:\s*isCurrent\s*\}\}/,
+      /accessibilityLabel=\{`Switch to session \$\{sessionLabelTitle\(item\.title, label\)\}`\}[\s\S]*?accessibilityState=\{\{\s*selected:\s*isCurrent\s*\}\}/,
     );
   });
 
@@ -48,15 +51,25 @@ describe('Thread-config picker-card screen-reader state', () => {
   test('both cards keep accessibilityRole="button" byte-identical', () => {
     const src = readThreadConfigSource();
     // Both cards are tappable rows; the role is what the screen reader uses
-    // for the control verb. accessibilityState supplements it.
+    // for the control verb. accessibilityState supplements it. The session
+    // row's own controls count too: the delete button, and the Pin and
+    // Rename buttons P3 added (a control without a role is announced as a
+    // plain view).
     const roles = src.match(/accessibilityRole="button"/g) ?? [];
-    // Session card, session-delete button, model card, section header.
-    expect(roles.length).toBe(4);
+    // Session card, session-delete button, session Pin, session Rename,
+    // model card, section header.
+    expect(roles.length).toBe(6);
   });
 
   test('both picker labels stay byte-identical', () => {
     const src = readThreadConfigSource();
-    expect(src).toContain('accessibilityLabel={`Switch to session ${sessionListTitle(item.title)}`}');
+    // The session card names the row the way the row prints it — through
+    // `sessionLabelTitle`, which prefers the operator's own rename. That is
+    // the one deliberate change to this line; the model card's label is
+    // untouched.
+    expect(src).toContain(
+      'accessibilityLabel={`Switch to session ${sessionLabelTitle(item.title, label)}`}',
+    );
     expect(src).toContain('accessibilityLabel={`Apply model ${name}`}');
   });
 

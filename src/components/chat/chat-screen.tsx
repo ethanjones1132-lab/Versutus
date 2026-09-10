@@ -1742,6 +1742,7 @@ export function ChatScreen() {
         sessions={sessions}
         sessionsError={sessionListError}
         sessionsLoaded={sessionListLoaded}
+        gatewayId={activeGateway.id}
         currentSessionId={currentSessionId}
         onSelectSession={selectSession}
         onRefreshSessions={() => void openSessionSelector()}

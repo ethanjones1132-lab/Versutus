@@ -71,9 +71,11 @@ describe('Thread-config model-card disabled screen-reader state', () => {
   test('the session card stays selected-only with no disabled half', () => {
     const src = readThreadConfigSource();
     // The session card is never disabled, so its state object must not grow
-    // a disabled key — anchor on its unique label.
+    // a disabled key — anchor on its unique label. The label names the row by
+    // the operator's own rename when they gave one, so the anchor follows
+    // `sessionLabelTitle` (see session-pin-rename-sheet-test.ts).
     expect(src).toMatch(
-      /accessibilityLabel=\{`Switch to session \$\{sessionListTitle\(item\.title\)\}`\}[\s\S]*?accessibilityState=\{\{\s*selected:\s*isCurrent\s*\}\}/,
+      /accessibilityLabel=\{`Switch to session \$\{sessionLabelTitle\(item\.title, label\)\}`\}[\s\S]*?accessibilityState=\{\{\s*selected:\s*isCurrent\s*\}\}/,
     );
   });
 
