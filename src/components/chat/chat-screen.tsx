@@ -115,7 +115,7 @@ import {
   saveComposerDraft,
   spokenDraftText,
 } from '@/lib/gateway/composer-draft';
-import { composeRequestApplies } from '@/lib/gateway/compose-request';
+import { composeRequestApplies, composeRequestHoldCopy } from '@/lib/gateway/compose-request';
 import { effectiveModel } from '@/lib/gateway/model-selection';
 import { insertMention, mentionPicksAtCaret } from '@/lib/gateway/mentions';
 import {
@@ -1798,6 +1798,12 @@ export function ChatScreen() {
           error={rosterError}
           groups={groupsState.rooms}
           groupsError={groupsListCopy(groupsState)}
+          // The shared text this screen is holding, stated where the operator
+          // can see it: the roster has no composer to write it into, so their
+          // own tap on a row is what decides the thread it lands in. Read from
+          // the same pending request the writer consumes, folded against this
+          // workspace so the line can never promise a draft it would refuse.
+          heldShareCopy={composeRequestHoldCopy(requestedComposeRequest, activeGateway?.id)}
           onSelectConfigurable={() => {
             clearBot();
             showSurface({ kind: 'configurable' });

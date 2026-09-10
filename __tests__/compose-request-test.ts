@@ -1,6 +1,8 @@
 import {
   composeRequestApplies,
   composeRequestArrival,
+  composeRequestHoldCopy,
+  COMPOSE_REQUEST_HOLD_COPY,
   pendingComposeRequest,
 } from '@/lib/gateway/compose-request';
 
@@ -171,6 +173,47 @@ describe('composeRequestArrival (the workspace a shared text arrived in)', () =>
   });
 });
 
+describe('composeRequestHoldCopy (what the roster states while it holds the words)', () => {
+  test('a held shared text is stated in the module’s own words', () => {
+    expect(composeRequestHoldCopy({ text: 'look at this' }, 'gw-1')).toBe(COMPOSE_REQUEST_HOLD_COPY);
+  });
+
+  test('the line names no Bot, because the operator’s own tap decides the thread', () => {
+    // The roster is where the operator has not chosen a thread yet. What the
+    // line may promise is the composer of the row they tap — no Bot in it, and
+    // no result: a shared text is a draft, never something already on its way.
+    const line = composeRequestHoldCopy({ text: 'look at this' }, 'gw-1') ?? '';
+
+    expect(line).not.toMatch(/bot/i);
+    expect(line).toMatch(/draft/);
+    expect(line).not.toMatch(/send|sent/i);
+  });
+
+  test('nothing pending says nothing', () => {
+    expect(composeRequestHoldCopy(null, 'gw-1')).toBeUndefined();
+  });
+
+  test('a request naming a Bot is not the roster’s to state', () => {
+    // Its link opened that Bot’s Bot Chat, so the roster is never the surface
+    // that decides those words — a line here would sit between the open and the
+    // draft it belongs to.
+    expect(composeRequestHoldCopy({ text: 'look', botId: 'scout' }, 'gw-1')).toBeUndefined();
+  });
+
+  test('another workspace’s held words are not this roster’s to promise', () => {
+    // A tap on this roster writes into THIS workspace’s draft, and the screen
+    // refuses a request that arrived elsewhere — so a line here would promise a
+    // drop that never comes.
+    expect(composeRequestHoldCopy({ text: 'look', gatewayId: 'gw-2' }, 'gw-1')).toBeUndefined();
+  });
+
+  test('a request that arrived with no workspace is stated wherever it comes up', () => {
+    // Shared into an app with nothing connected: the words wait for the thread
+    // the operator ends up on, so whichever roster comes up is theirs to state.
+    expect(composeRequestHoldCopy({ text: 'look' }, 'gw-2')).toBe(COMPOSE_REQUEST_HOLD_COPY);
+  });
+});
+
 describe('the pending compose request is provider-owned', () => {
   test('the request is held on the gateway context and cleared by its consumer', () => {
     const src = provider();
@@ -292,6 +335,40 @@ describe('the Chat screen writes a shared text into the thread\'s own draft', ()
 
     expect(block).not.toContain('sendChatInput');
     expect(block).not.toContain('send(');
+  });
+});
+
+describe('the roster states the shared text the screen is holding', () => {
+  const chatScreen = () => readSource('src', 'components', 'chat', 'chat-screen.tsx');
+  const chatRoster = () => readSource('src', 'components', 'chat', 'chat-roster.tsx');
+
+  test('the roster takes the line and authors none of it', () => {
+    // A shared text held while the roster is up was held in silence. The words
+    // are the module's; the roster only draws what it is handed — it knows no
+    // pending request and no copy of its own about one.
+    const roster = chatRoster();
+
+    expect(roster).toContain('heldShareCopy?: string;');
+    expect(roster).toContain('{heldShareCopy ? (');
+    expect(roster).toContain('{heldShareCopy}');
+    expect(roster).not.toContain('compose-request');
+  });
+
+  test('the line is fixed chrome beside the errors, not a windowed row', () => {
+    // The render-cost split the roster keeps: the words must not unmount as the
+    // operator scrolls the list they came to look at.
+    const header = between(chatRoster(), 'ListHeaderComponent={', 'ListFooterComponent={');
+
+    expect(header).toContain('{heldShareCopy}');
+  });
+
+  test('the screen hands it the fold of the request the context is holding', () => {
+    // One fact, read once: the same pending request the writer consumes is what
+    // the roster is told about, folded against the workspace on screen so the
+    // line can never promise a draft this workspace would refuse.
+    expect(chatScreen()).toContain(
+      'heldShareCopy={composeRequestHoldCopy(requestedComposeRequest, activeGateway?.id)}',
+    );
   });
 });
 

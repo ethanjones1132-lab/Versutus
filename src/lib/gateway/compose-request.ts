@@ -95,3 +95,43 @@ export function composeRequestApplies(
   }
   return surface.kind === 'bot' || surface.kind === 'configurable';
 }
+
+// ─── What the roster says it is holding ──────────────────────────
+// The roster is the surface a share lands on most often: the Chat tab opens
+// there, and a fresh app has no thread up. That is exactly the surface that
+// cannot write the request (`composeRequestApplies`), so the screen holds the
+// words — and until this line existed it held them in silence, leaving the
+// operator with a tab that looks untouched and no reason to open a thread.
+
+/** The roster's one line, in the module's own words. */
+export const COMPOSE_REQUEST_HOLD_COPY =
+  'A shared text is waiting — open a chat and it lands in the composer as a draft.';
+
+/**
+ * What the roster states while it holds a shared text, or nothing at all.
+ *
+ * The line promises exactly what the operator's next tap will do — open a chat
+ * row and find the words in that composer as a draft — so it names no thread
+ * and no result. Three requests are not the roster's to state:
+ *
+ * - nothing pending: there is nothing to say;
+ * - one that names a Bot: its link already opened that Bot's Bot Chat, so the
+ *   roster is never the surface that decides those words, and a line here
+ *   would sit between the open and the draft it belongs to;
+ * - one that arrived in another workspace: a tap on THIS roster writes into
+ *   this workspace's draft, and the screen refuses a request from elsewhere —
+ *   a line here would promise a drop that never comes.
+ *
+ * A request that arrived with no workspace belongs to whichever one comes up,
+ * so it is stated wherever the operator is looking — the same rule the writer
+ * follows.
+ */
+export function composeRequestHoldCopy(
+  request: ComposeRequest | null,
+  gatewayId?: string,
+): string | undefined {
+  if (!request) return undefined;
+  if (request.gatewayId !== undefined && request.gatewayId !== gatewayId) return undefined;
+  if (request.botId !== undefined) return undefined;
+  return COMPOSE_REQUEST_HOLD_COPY;
+}

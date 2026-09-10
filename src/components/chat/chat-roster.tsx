@@ -33,6 +33,14 @@ export type ChatRosterProps = {
    * agent-inventory `error` — a rooms blip must not look like agents failed.
    */
   groupsError?: string;
+  /**
+   * The line for a shared text this roster is holding: there is no thread up
+   * to take it, so the operator's own tap on a row is what decides which
+   * composer the words land in. Authored by the module that holds the request
+   * (`composeRequestHoldCopy`) — absent where nothing is held, so the roster
+   * draws no copy of its own about it.
+   */
+  heldShareCopy?: string;
   onSelectConfigurable: () => void;
   onSelectBot: (bot: PublicBot) => void;
   /**
@@ -69,6 +77,7 @@ function ChatRosterImpl({
   error,
   groups = [],
   groupsError,
+  heldShareCopy,
   onSelectConfigurable,
   onSelectBot,
   onBotDetail,
@@ -223,6 +232,11 @@ function ChatRosterImpl({
       }
       ListHeaderComponent={
         <View>
+          {heldShareCopy ? (
+            <Text variant="caption" color="secondary" style={styles.heldShare}>
+              {heldShareCopy}
+            </Text>
+          ) : null}
           {rows.length > 1 ? (
             <TextField
               value={query}
@@ -324,6 +338,7 @@ const styles = StyleSheet.create({
   row: { marginBottom: Spacing.one },
   gap: { marginTop: Spacing.two },
   error: { marginBottom: Spacing.two },
+  heldShare: { marginBottom: Spacing.two },
   sectionLabel: { marginTop: Spacing.three, marginBottom: Spacing.one + 2, paddingHorizontal: Spacing.one },
   capability: { marginTop: Spacing.two },
 });
