@@ -355,6 +355,16 @@ export default function RootLayout() {
                   }}
                 />
                 <Stack.Screen
+                  name="gateway/spend"
+                  options={{
+                    presentation: 'modal',
+                    headerShown: true,
+                    title: 'Spend',
+                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                    headerTintColor: VersutusDarkTheme.colors.text,
+                  }}
+                />
+                <Stack.Screen
                   name="gateway/setup"
                   options={{
                     presentation: 'modal',
