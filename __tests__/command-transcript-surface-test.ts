@@ -152,6 +152,40 @@ test('the raw output is behind a switch that starts off', () => {
   expect(src).toContain('The tool calls and payloads, verbatim. Off keeps them redacted.');
 });
 
+test('the transcript can also leave as a file through the system share sheet', () => {
+  const src = section();
+  // Two routes out, and each says which one it is: the system sheet is handed
+  // the file, the clipboard keeps the offline path. Nothing here calls the
+  // clipboard route a share.
+  expect(src).toContain('label="Share file"');
+  expect(src).toContain('label="Copy Markdown"');
+  expect(src).toContain('shareTranscriptFile(');
+  // The shared file is named by the shipped fold, keyed by the session the held
+  // entries were recorded under — no clock, no counter, no entry data.
+  expect(src).toContain('transcriptShareFileName(sessionKey)');
+  expect(src).toContain('commandTranscripts[commandTranscripts.length - 1]?.sessionKey');
+  expect(src).not.toContain('Date.now');
+  // One composition, handed to both routes: the file holds exactly the bytes
+  // the copy action takes, raw output and all.
+  expect(src.match(/commandTranscriptMarkdown\(/g) ?? []).toHaveLength(1);
+  // A device with no share sheet is offered no share control: the surface asks
+  // the platform first rather than drawing a button that cannot finish.
+  expect(src).toContain('transcriptShareAvailable');
+  expect(src).toMatch(/canShare \? [\s\S]*?label="Share file"/);
+  // The share sits with the copy action, under the rows, inside the
+  // open-and-non-empty branch — an empty history has no file to hand over.
+  const rowsIdx = src.indexOf('<ListRow');
+  const emptyIdx = src.indexOf('commandHistoryEmptyCopy()');
+  const shareIdx = src.indexOf('label="Share file"');
+  const copyIdx = src.indexOf('label="Copy Markdown"');
+  expect(shareIdx).toBeGreaterThan(rowsIdx);
+  expect(shareIdx).toBeGreaterThan(emptyIdx);
+  expect(copyIdx).toBeGreaterThan(rowsIdx);
+  // Closing this section's comment: the copy action is no longer the only way
+  // out of the app, and the doc says so.
+  expect(src).not.toContain('The one way out of the app is the copy action');
+});
+
 test('the history block lives in the chat overflow sheet', () => {
   const sheet = readSource('src', 'components', 'chat', 'chat-overflow-sheet.tsx');
   expect(sheet).toContain('CommandHistorySection');

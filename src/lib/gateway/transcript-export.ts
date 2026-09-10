@@ -16,6 +16,10 @@
  *   older stored entry writes no payload rather than "undefined".
  * - A held set past the visible cap names its bound in the sheet's own words,
  *   so the file never reads as the whole transcript.
+ * - The name a shared file takes is the session key and nothing else, so a
+ *   session's own second share replaces its first rather than littering the
+ *   cache. Naming is here because it is a rule; opening the sheet is the seam
+ *   in `transcript-share.ts`.
  */
 import type { CommandTranscriptEntry } from '@/lib/gateway/types';
 import {
@@ -32,6 +36,26 @@ export type CommandTranscriptExportOptions = {
    */
   includeRaw?: boolean;
 };
+
+/** The app's own stem, so a shared file reads as ours in the share sheet. */
+const TRANSCRIPT_SHARE_FILE_STEM = 'versutus-transcript-';
+
+/**
+ * The cache file the composer's Markdown is written to before the system share
+ * sheet opens on it. The name is the transcript's own session key — put through
+ * the store's key rule (`[:/\\]` → `_`, the substitution `transcriptKey` writes
+ * sessions under) and nothing else: no clock, no counter, no entry data. Two
+ * sessions therefore share into two files, and a session's own second share
+ * replaces its first instead of leaving a trail in the cache.
+ *
+ * A key that is absent, blank or not a string names a file anyway — the
+ * transcript's own word for a session with no key — so the share never writes
+ * over the cache root.
+ */
+export function transcriptShareFileName(sessionKey: string | null | undefined): string {
+  const safe = typeof sessionKey === 'string' ? sessionKey.trim().replace(/[:/\\]/g, '_') : '';
+  return `${TRANSCRIPT_SHARE_FILE_STEM}${safe || 'session'}.md`;
+}
 
 /**
  * The raw output this entry may print, or undefined when there is none to

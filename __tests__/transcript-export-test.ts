@@ -3,7 +3,10 @@ import {
   commandHistoryEmptyCopy,
   commandHistoryWindowCopy,
 } from '@/lib/gateway/command-history';
-import { commandTranscriptMarkdown } from '@/lib/gateway/transcript-export';
+import {
+  commandTranscriptMarkdown,
+  transcriptShareFileName,
+} from '@/lib/gateway/transcript-export';
 import type { CommandTranscriptEntry } from '@/lib/gateway/types';
 
 declare const __dirname: string;
@@ -158,4 +161,29 @@ test('the composer reaches no gateway, reads no store and invents no second rule
   expect(src).toContain('commandHistoryWindowCopy(');
   expect(src).toContain('commandHistoryRowTitle(');
   expect(src).not.toContain('COMMAND_HISTORY_VISIBLE_LIMIT');
+});
+
+test('a shared transcript is named for the session its entries were recorded under', () => {
+  expect(transcriptShareFileName('session-a')).toBe('versutus-transcript-session-a.md');
+  // The store's own key rule — `[:/\\]` → `_`, the substitution
+  // `transcriptKey` writes sessions under — so a path-shaped session key is
+  // still one filename segment, never a directory the cache does not have.
+  expect(transcriptShareFileName('gw-1/thread:2')).toBe('versutus-transcript-gw-1_thread_2.md');
+  expect(transcriptShareFileName('  session-b  ')).toBe('versutus-transcript-session-b.md');
+});
+
+test('the shared name carries no clock, no counter and no entry data', () => {
+  const name = transcriptShareFileName('session-a');
+  // The same session shares into the same cache file: the second share
+  // replaces the first rather than leaving a trail of exports behind it.
+  expect(transcriptShareFileName('session-a')).toBe(name);
+  expect(name.endsWith('.md')).toBe(true);
+  expect(name).not.toContain('/');
+  expect(name).not.toMatch(/\d{6,}/);
+  // A session key that names nothing still names a file — the transcript's own
+  // word for a session, never the cache root and never an empty stem.
+  expect(transcriptShareFileName('')).toBe('versutus-transcript-session.md');
+  expect(transcriptShareFileName('   ')).toBe('versutus-transcript-session.md');
+  expect(transcriptShareFileName(undefined)).toBe('versutus-transcript-session.md');
+  expect(transcriptShareFileName(null)).toBe('versutus-transcript-session.md');
 });
