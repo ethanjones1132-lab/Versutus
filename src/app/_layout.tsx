@@ -357,6 +357,13 @@ function GatewayDeepLinkRouter() {
       return;
     }
 
+    // The only other target answered here is a chat link. The fold knows a
+    // third — `compose` (item 5's shared text), whose own branch is a later
+    // slice — and nothing here may read it as a Bot Chat: an unanswered link
+    // is left unmarked, exactly as a path the fold does not know, so it waits
+    // for its branch instead of riding whatever Bot id the union carries.
+    if (target.kind !== 'chat') return;
+
     // A Bot Chat link opens the way a roster tap opens one: the Chat tab is
     // brought up and the screen is asked for that Bot's surface, while
     // `openBot` resolves the Bot's canonical Bot Chat (ADR 0012) — the

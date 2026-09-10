@@ -76,12 +76,83 @@ describe('deepLinkTarget (the app link vocabulary)', () => {
     });
   });
 
+  test('a compose link carries the shared text, and the Bot only when it names one', () => {
+    // Item 5's internal handoff: the share sheet's own link. The text rides
+    // into the composer's draft, addressed to a Bot when the link names one
+    // and to the Chat tab's own surface when it does not.
+    expect(deepLinkTarget('compose', { text: 'look at this', bot: 'scout' })).toEqual({
+      kind: 'compose',
+      text: 'look at this',
+      botId: 'scout',
+    });
+    expect(deepLinkTarget('compose', { text: 'look at this' })).toEqual({
+      kind: 'compose',
+      text: 'look at this',
+    });
+    expect(deepLinkTarget('/compose', { text: 'hi', bot: 'scout' })).toEqual({
+      kind: 'compose',
+      text: 'hi',
+      botId: 'scout',
+    });
+  });
+
+  test('a compose link with nothing to prefill is a no-op', () => {
+    // Nothing to put in the draft is nothing to do — the rule a `chat` link
+    // with no Bot already follows. A Bot does not make it mean something.
+    expect(deepLinkTarget('compose', {})).toBeNull();
+    expect(deepLinkTarget('compose', { text: '' })).toBeNull();
+    expect(deepLinkTarget('compose', { text: '   ' })).toBeNull();
+    expect(deepLinkTarget('compose', { text: undefined })).toBeNull();
+    expect(deepLinkTarget('compose', { text: '\n\t ' })).toBeNull();
+    expect(deepLinkTarget('compose', { bot: 'scout' })).toBeNull();
+  });
+
+  test('a compose link carries the text as it arrived, and a repeat takes its first value', () => {
+    // Shared content is untrusted input: the composer composes these very
+    // characters onto the draft, so the fold must not re-word them — the rule
+    // `spokenDraftText` states for a transcript. A repeated param is one
+    // param, and its first value is the one the link meant.
+    expect(deepLinkTarget('compose', { text: '  spaced  ' })).toEqual({
+      kind: 'compose',
+      text: '  spaced  ',
+    });
+    expect(deepLinkTarget('compose', { text: ['first', 'second'] })).toEqual({
+      kind: 'compose',
+      text: 'first',
+    });
+  });
+
+  test("a compose link's Bot is trimmed like a chat link's, and an empty one names no Bot", () => {
+    expect(deepLinkTarget('compose', { text: 'hi', bot: '  scout  ' })).toEqual({
+      kind: 'compose',
+      text: 'hi',
+      botId: 'scout',
+    });
+    expect(deepLinkTarget('compose', { text: 'hi', bot: ['scout', 'night'] })).toEqual({
+      kind: 'compose',
+      text: 'hi',
+      botId: 'scout',
+    });
+    // Absent, empty and whitespace-only all mean the same thing: the shared
+    // text is for the surface already up, not a guessed thread.
+    expect(deepLinkTarget('compose', { text: 'hi', bot: '   ' })).toEqual({
+      kind: 'compose',
+      text: 'hi',
+    });
+    expect(deepLinkTarget('compose', { text: 'hi', bot: undefined })).toEqual({
+      kind: 'compose',
+      text: 'hi',
+    });
+  });
+
   test('every other path is nothing at all', () => {
     expect(deepLinkTarget('settings', { bot: 'scout' })).toBeNull();
     // The vocabulary is case-sensitive and has no trailing-slash spelling:
     // an unrecognized path is a no-op, not a guess at the nearest one.
     expect(deepLinkTarget('CHAT', { bot: 'scout' })).toBeNull();
     expect(deepLinkTarget('chat/', { bot: 'scout' })).toBeNull();
+    expect(deepLinkTarget('COMPOSE', { text: 'hi' })).toBeNull();
+    expect(deepLinkTarget('compose/', { text: 'hi' })).toBeNull();
     expect(deepLinkTarget('gateway/spend', {})).toBeNull();
     expect(deepLinkTarget('', {})).toBeNull();
     expect(deepLinkTarget(null, {})).toBeNull();
@@ -189,5 +260,18 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
     expect(focus).toBeGreaterThan(open);
     expect(src).toContain('requestComposerFocus,');
     expect(src).not.toContain('sendChatInput');
+  });
+
+  test('a target that is neither add nor chat is left unanswered, never read as a Bot Chat', () => {
+    const src = routerSource();
+
+    // The fold answers a third thing now — item 5's `versutus://compose` — and
+    // this router's branch for it is a later slice. The chat branch may only
+    // read a chat target's Bot id, so the guard stands between them: a compose
+    // link opens nothing until its own branch lands, instead of riding the
+    // union's Bot id into `openBot`.
+    const guard = src.indexOf("if (target.kind !== 'chat') return;");
+    expect(guard).toBeGreaterThan(src.indexOf('params: target.params'));
+    expect(guard).toBeLessThan(src.indexOf('openBot(target.botId)'));
   });
 });
