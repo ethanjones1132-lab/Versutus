@@ -162,6 +162,42 @@ describe('a card the drawn line cannot hold in full is still announced in full',
   });
 });
 
+describe('a card promises only the tap it can deliver', () => {
+  test('the hint is the module’s, decided off the same showing the state rides', () => {
+    const src = section();
+
+    // The hint answers a different question from the badge and the
+    // announcement — what the TAP does — and on this one card the tap
+    // re-applies the filter the list already carries
+    // (`onPress={() => onSelect({ botId: card.botId })}`), so the shipped
+    // promise is exactly what it cannot deliver. One expression, off the same
+    // `showing`: the module decides which cards promise and which do not, and
+    // this file words no hint of its own.
+    expect(src).toContain('accessibilityHint={scorecardCardHint(showing)}');
+    expect(src.match(/scorecardCardHint\(/g)).toHaveLength(1);
+    expect(src).not.toContain('accessibilityHint="');
+    expect(src).not.toContain('scorecardCardHint(true)');
+    expect(src).not.toContain('scorecardCardHint(false)');
+  });
+
+  test('the hint is decided from the state, after the state is computed', () => {
+    const src = section();
+    const showing = src.indexOf('const showing = filter ?');
+    const hint = src.indexOf('accessibilityHint={scorecardCardHint(showing)}');
+
+    expect(showing).toBeGreaterThanOrEqual(0);
+    expect(hint).toBeGreaterThan(showing);
+    expect(src.match(/const showing = /g)).toHaveLength(1);
+  });
+
+  test('every other card keeps the shipped hint, character for character', () => {
+    // The wording itself is the module's (pinned in `fleet-scorecard-test.ts`),
+    // and a card that is not showing is handed it unchanged: this file holds no
+    // hint string at all, so the two states cannot be worded apart.
+    expect(section()).not.toContain("Shows this Bot's runs in the list above");
+  });
+});
+
 describe('a card states the success rate of the runs that reached a verdict', () => {
   test('the rate is the module’s, taken off the counts the card already folded', () => {
     const src = section();

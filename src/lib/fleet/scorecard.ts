@@ -52,6 +52,12 @@
 //   `SCORECARD_SHOWING_COPY` to the sentence, and a card that is not showing
 //   says nothing about it. The word the badge draws is `SCORECARD_SHOWING_LABEL`,
 //   held here beside that sentence so one state has one vocabulary.
+// - A card's hint is what its tap does NEXT, which is a different question from
+//   the state above, and this is the one card whose tap has nothing left to do:
+//   re-applying the filter the list already carries shows no new list, so
+//   `scorecardCardHint` hands that card no hint at all rather than the promise
+//   every other card can keep. The state is said once, by the announcement, and
+//   never a second time as an action.
 //
 // These cards are observations of runs this device saw — a run started from
 // the desktop or the TUI never reaches this list at all. The surface owes that
@@ -699,6 +705,41 @@ export function scorecardCardAnnouncement(
   // nameless sentence.
   const card = line ? `${title}, ${line}` : title;
   return showing ? `${card}, ${SCORECARD_SHOWING_COPY}` : card;
+}
+
+/**
+ * What a card's tap does NEXT, as the hint `ListRow` reads after a card's
+ * announcement — the shipped affordance, unchanged, and never said about a
+ * card it is not true of.
+ *
+ * This is the question the announcement above does not answer: that one says
+ * the STATE (this card is drawn as the filtered one), this one says the ACTION
+ * (the tap puts this Bot's runs in the list above). A hint that answers the
+ * state's question again would tell the operator the same thing twice and
+ * promise, in the imperative register, the action it cannot deliver — so the
+ * two states have two answers, and only one of them is this string.
+ *
+ * It lives here rather than on the surface so the cards are worded in one
+ * place: the surface hands the row `scorecardCardHint(showing)` and authors
+ * nothing.
+ */
+export const SCORECARD_CARD_HINT = "Shows this Bot's runs in the list above";
+
+/**
+ * The hint a card carries, decided off the one `showing` the caller draws the
+ * card's badge from.
+ *
+ * A card the list above is NOT filtered to promises what its tap does, which
+ * is true of it: the tap filters the list to this Bot. A card that IS showing
+ * has no action left on the row at all — its tap hands the tab the same bucket
+ * the list already carries, so nothing above it changes — and the module's
+ * answer for that state is therefore no hint: silence rather than a promise of
+ * a list the tap cannot produce, and rather than the announcement's own
+ * sentence said over again. A card that cannot say what its tap does says
+ * nothing.
+ */
+export function scorecardCardHint(showing: boolean): string | undefined {
+  return showing ? undefined : SCORECARD_CARD_HINT;
 }
 
 /**

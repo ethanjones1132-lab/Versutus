@@ -22,6 +22,7 @@ import {
   scorecardApprovals,
   scorecardBotLabel,
   scorecardCardAnnouncement,
+  scorecardCardHint,
   scorecardCardLine,
   scorecardDurationCopy,
   scorecardFate,
@@ -34,6 +35,7 @@ import {
   scorecardWindowCopy,
   watchedRunSpanMs,
   withSpend,
+  SCORECARD_CARD_HINT,
   SCORECARD_CARD_LINE_MAX,
   SCORECARD_FOOTER_COPY,
   SCORECARD_SHOWING_COPY,
@@ -1306,5 +1308,33 @@ describe('scorecardCardAnnouncement', () => {
     // that decided it.
     expect(SCORECARD_SHOWING_LABEL).toBe('Showing');
     expect(SCORECARD_SHOWING_COPY.startsWith(SCORECARD_SHOWING_LABEL)).toBe(true);
+  });
+});
+
+describe('scorecardCardHint', () => {
+  test('a card the list above is not showing keeps the shipped hint, character for character', () => {
+    // What a card's tap does next, as `ListRow`'s hint — the affordance every
+    // card carried before this state existed, worded in this module now so the
+    // surface authors no hint of its own and the filtered card's answer cannot
+    // drift from it.
+    expect(SCORECARD_CARD_HINT).toBe("Shows this Bot's runs in the list above");
+    expect(scorecardCardHint(false)).toBe(SCORECARD_CARD_HINT);
+  });
+
+  test('a card holding the filter is handed no hint, never a promise it cannot keep', () => {
+    // The card's tap re-applies the filter the list already carries
+    // (`scorecards-section.tsx`'s `onPress`), so there is no list left for the
+    // shipped promise to show. The hint answers the TAP and the announcement
+    // answers the STATE, so this state's answer is that there is no action left
+    // on this row — not the state's sentence said a second time.
+    expect(scorecardCardHint(true)).toBeUndefined();
+  });
+
+  test('one state has one hint, and neither state borrows the other’s words', () => {
+    expect(scorecardCardHint(false)).not.toBeUndefined();
+    expect(scorecardCardHint(true)).not.toBe(SCORECARD_CARD_HINT);
+    // The state's sentence belongs to the announcement
+    // (`scorecardCardAnnouncement`), which already reads it out on this card.
+    expect(SCORECARD_CARD_HINT).not.toBe(SCORECARD_SHOWING_COPY);
   });
 });
