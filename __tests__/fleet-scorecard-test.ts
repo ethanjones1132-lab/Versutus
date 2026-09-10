@@ -18,6 +18,8 @@ import {
   buildScorecards,
   filterRunsByBot,
   medianRunMs,
+  scorecardApprovalCopy,
+  scorecardApprovals,
   scorecardBotLabel,
   scorecardDurationCopy,
   scorecardFate,
@@ -26,7 +28,7 @@ import {
   watchedRunSpanMs,
   SCORECARD_FOOTER_COPY,
 } from '@/lib/fleet/scorecard';
-import type { BotScorecard, ScorecardFates } from '@/lib/fleet/scorecard';
+import type { BotScorecard, ScorecardApprovals, ScorecardFates } from '@/lib/fleet/scorecard';
 import { ACTIVITY_RUNS_PERSIST_CAP, normalizeRestoredRuns } from '@/lib/gateway/session-persistence';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
@@ -351,6 +353,134 @@ describe('scorecardFateCopy', () => {
 
   test('nothing at all prints nothing, never a zero', () => {
     expect(scorecardFateCopy(fates({}))).toBe('');
+  });
+});
+
+describe('scorecardApprovals', () => {
+  /** A row that met an approval gate: the decision the provider recorded on it. */
+  const decided = (approved: boolean, over: Partial<ActivityRun> = {}): ActivityRun =>
+    run({ status: approved ? 'complete' : 'failed', approved, ...over });
+
+  test('counts each approval the card’s rows recorded', () => {
+    const approvals = scorecardApprovals([
+      decided(true, { id: 'granted' }),
+      decided(false, { id: 'denied' }),
+      run({ id: 'waiting', status: 'waiting-approval', finishedAt: undefined }),
+      run({ id: 'plain', status: 'complete' }),
+    ]);
+
+    expect(approvals).toEqual({ asked: 3, granted: 1, denied: 1, pending: 1 });
+  });
+
+  test('a row that never met an approval gate counts in none of them', () => {
+    // The shape of every row persisted before the field existed, and of every
+    // run that just ran: no decision and no wait, so it is not a denial either.
+    const approvals = scorecardApprovals([
+      run({ id: 'legacy', status: 'complete' }),
+      run({ id: 'failed-without-a-gate', status: 'failed' }),
+      run({ id: 'stopped', status: 'cancelled' }),
+      run({ id: 'unknown', status: 'unresolved' }),
+    ]);
+
+    expect(approvals).toEqual({ asked: 0, granted: 0, denied: 0, pending: 0 });
+  });
+
+  test('a half-shaped decision is not a decision', () => {
+    // `approved` is typed on the row, but a row read back off disk is not a
+    // row this module can trust: only a real boolean counts, so a value that
+    // is merely truthy cannot read as a refusal the operator made.
+    const approvals = scorecardApprovals([
+      run({ id: 'corrupt', approved: 'yes' as unknown as boolean }),
+    ]);
+
+    expect(approvals.asked).toBe(0);
+    expect(approvals.denied).toBe(0);
+  });
+
+  test('every approval lands in exactly one count, and asked is their sum', () => {
+    const approvals = scorecardApprovals([
+      decided(true, { id: 'a' }),
+      decided(true, { id: 'b', status: 'running', finishedAt: undefined }),
+      decided(false, { id: 'c' }),
+      run({ id: 'd', status: 'waiting-approval', finishedAt: undefined }),
+      run({ id: 'e', status: 'complete' }),
+      run({ id: 'f' }),
+    ]);
+
+    expect(approvals.asked).toBe(approvals.granted + approvals.denied + approvals.pending);
+    expect(approvals.asked).toBe(4);
+  });
+
+  test('a request the app was killed under is not still waiting', () => {
+    // The restore re-marks every in-flight row, so the resolver that promise
+    // pointed at is gone: nothing on this device can answer it any more, and
+    // a card must not read as blocked on an operator who cannot decide it.
+    const restored = normalizeRestoredRuns([
+      run({ id: 'killed', status: 'waiting-approval', finishedAt: undefined }),
+    ]);
+
+    expect(restored[0].status).toBe('unresolved');
+    expect(scorecardApprovals(restored)).toEqual({ asked: 0, granted: 0, denied: 0, pending: 0 });
+  });
+
+  test('a card with no runs at all asked for nothing', () => {
+    expect(scorecardApprovals([])).toEqual({ asked: 0, granted: 0, denied: 0, pending: 0 });
+  });
+});
+
+describe('scorecardApprovalCopy', () => {
+  const approvals = (over: Partial<ScorecardApprovals>): ScorecardApprovals => ({
+    asked: 0,
+    granted: 0,
+    denied: 0,
+    pending: 0,
+    ...over,
+  });
+
+  test('states the rate over the approvals the operator answered', () => {
+    expect(scorecardApprovalCopy(approvals({ asked: 3, granted: 2, denied: 1 }))).toBe(
+      '2 of 3 approvals granted',
+    );
+  });
+
+  test('a request still waiting is named beside the rate, never counted as one', () => {
+    const copy = scorecardApprovalCopy(approvals({ asked: 4, granted: 2, denied: 1, pending: 1 }));
+
+    expect(copy).toBe('2 of 3 approvals granted · 1 waiting on you');
+    // The unanswered request is not in the denominator: `2 of 4` would read as
+    // a refusal the operator never made.
+    expect(copy).not.toContain('of 4');
+  });
+
+  test('approvals merely asked for carry no rate at all', () => {
+    const copy = scorecardApprovalCopy(approvals({ asked: 2, pending: 2 }));
+
+    expect(copy).toBe('2 waiting on you');
+    expect(copy).not.toMatch(/granted|%/);
+  });
+
+  test('a card whose approvals were all refused says 0 granted, never 0%', () => {
+    // A true count is honest where a rate over rows that decided nothing
+    // would not be.
+    expect(scorecardApprovalCopy(approvals({ asked: 2, denied: 2 }))).toBe(
+      '0 of 2 approvals granted',
+    );
+  });
+
+  test('one approval is one approval', () => {
+    expect(scorecardApprovalCopy(approvals({ asked: 1, granted: 1 }))).toBe(
+      '1 of 1 approval granted',
+    );
+  });
+
+  test('a card whose rows met no gate says nothing, never 0 of 0', () => {
+    expect(scorecardApprovalCopy(approvals({}))).toBe('');
+  });
+
+  test('claims no statistic this module did not compute', () => {
+    const copy = scorecardApprovalCopy(approvals({ asked: 3, granted: 2, denied: 1 }));
+
+    expect(copy).not.toMatch(/average|rate|gateway|total|%/i);
   });
 });
 

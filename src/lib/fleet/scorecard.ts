@@ -11,6 +11,11 @@
 //   never as one of the settled fates.
 // - A row naming no Bot is not dropped and never guessed into a card: all of
 //   them share the one unattributed bucket (D3:792-797).
+// - An approval count is read off the row that recorded it and never inferred:
+//   a decision the operator made is the `approved` written on the row, a
+//   request still blocked on them is the row's own live `waiting-approval`
+//   status, and a row that met no gate counts in none of them — it is not a
+//   refusal the operator never made.
 // - A duration is only read off a run this device watched END. A live row has
 //   no finish at all, and an `unresolved` row's finish is the moment this
 //   client stopped polling rather than the moment the run finished
@@ -51,6 +56,27 @@ export type BotScorecard = {
   /** Every row counted here — the fates always sum to it. */
   total: number;
   fates: ScorecardFates;
+};
+
+/**
+ * The approval pressure one card's own rows recorded (D3's Build 1,
+ * `FUTURE-ITEMS.md:805-806`: "approvals requested vs granted"). A request is
+ * visible on a row two ways and both are needed: the decision the operator
+ * made, written onto the row the moment the run left `waiting-approval`
+ * (`approved`, gateway-provider.tsx:2217), and a request with no answer yet,
+ * which is the row's own live status (`waiting-approval`, :2207). A row that
+ * never met a gate carries neither, so it counts in none of these — never as a
+ * refusal the operator did not make.
+ */
+export type ScorecardApprovals = {
+  /** Every approval this card's rows asked for: the decided ones plus the waits. */
+  asked: number;
+  /** Decisions that let the run continue. */
+  granted: number;
+  /** Decisions that stopped it. */
+  denied: number;
+  /** Asked and never answered — the run is still blocked on the operator. */
+  pending: number;
 };
 
 /**
@@ -208,6 +234,63 @@ export function scorecardFateCopy(fates: ScorecardFates): string {
   return FATE_COPY.filter(([fate]) => fates[fate] > 0)
     .map(([fate, word]) => `${fates[fate]} ${word}`)
     .join(' · ');
+}
+
+/**
+ * The approval pressure a card's rows recorded, by the one rule that separates
+ * an answer from a wait: a row is pending while its own status says the run is
+ * still blocked on the operator, and otherwise counts the decision written on
+ * it. Only a real boolean is a decision — a value that is merely truthy is a
+ * row this module cannot read as either, the same discipline `scorecardBotId`
+ * applies to an id.
+ *
+ * The rows are the caller's own, so a card's pressure is folded from the runs
+ * that card counted and never from another Bot's.
+ */
+export function scorecardApprovals(runs: readonly ActivityRun[]): ScorecardApprovals {
+  const approvals: ScorecardApprovals = { asked: 0, granted: 0, denied: 0, pending: 0 };
+
+  for (const run of runs) {
+    if (run.status === 'waiting-approval') {
+      approvals.pending += 1;
+    } else if (run.approved === true) {
+      approvals.granted += 1;
+    } else if (run.approved === false) {
+      approvals.denied += 1;
+    } else {
+      // A row that never met a gate: no decision and no wait, so it is not an
+      // approval at all rather than one nobody answered.
+      continue;
+    }
+    approvals.asked += 1;
+  }
+
+  return approvals;
+}
+
+/**
+ * A card's one approval line — the pressure its own rows recorded, e.g.
+ * `2 of 3 approvals granted · 1 waiting on you` — or nothing at all.
+ *
+ * The rate is stated over the approvals the operator ANSWERED, never over the
+ * ones merely asked for: a request nobody has decided is not a refusal, and
+ * `0 of 3 granted` for three waits would read as three decisions that were
+ * never made. Every count still appears beside the rate rather than being
+ * replaced by it, and a card whose rows met no gate says nothing rather than
+ * `0 of 0 granted`.
+ */
+export function scorecardApprovalCopy(approvals: ScorecardApprovals): string {
+  if (approvals.asked <= 0) return '';
+
+  const decided = approvals.granted + approvals.denied;
+  const parts: string[] = [];
+  if (decided > 0) {
+    parts.push(`${approvals.granted} of ${decided} approval${decided === 1 ? '' : 's'} granted`);
+  }
+  if (approvals.pending > 0) {
+    parts.push(`${approvals.pending} waiting on you`);
+  }
+  return parts.join(' · ');
 }
 
 /**

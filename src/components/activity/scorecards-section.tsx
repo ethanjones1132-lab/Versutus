@@ -16,6 +16,13 @@
 // A card whose rows carry no span this device watched end keeps its counts and
 // says no duration, rather than a number it cannot back.
 //
+// The line carries the approval pressure those same rows recorded too, and by
+// the same rule: what the operator decided is read off the rows that decided
+// it, a request still blocked on them is named, and a card whose rows met no
+// gate says nothing about approvals at all. Every part of the line is dropped
+// from the composition when it is empty, so a card never prints a placeholder
+// for a fact it does not hold.
+//
 // That empty-device rule is about the CARDS, never about this section: the
 // weekly report is opted into from here (D3 Build 5), so a device that has run
 // nothing — exactly the device the report exists to bring back — still gets
@@ -63,6 +70,8 @@ import {
   buildScorecards,
   filterRunsByBot,
   medianRunMs,
+  scorecardApprovalCopy,
+  scorecardApprovals,
   scorecardBotLabel,
   scorecardDurationCopy,
   scorecardFateCopy,
@@ -185,20 +194,22 @@ export function ScorecardsSection({
             // `list-row-selected-state-test.ts` keeps that pass scoped to it.)
             const showing = filter ? card.botId === filter.botId : false;
             // The card's line: the counts it folded, and — when its own runs
-            // can back one — the median span they ended on. The rows come
-            // through the fold's own attribution rule, so one card's line can
-            // never borrow another card's runs; and a card whose rows carry no
-            // span this device watched end says its counts alone rather than a
-            // duration it cannot back.
+            // can back them — the median span they ended on and the approval
+            // pressure they recorded. The rows come through the fold's own
+            // attribution rule, once, so one card's line can never borrow
+            // another card's runs; and each part is dropped when it is empty,
+            // so a card whose rows carry no span this device watched end, or
+            // that met no approval gate, says its counts rather than a
+            // duration or an approval it cannot back.
+            const rows = filterRunsByBot(runs, { botId: card.botId });
             const fates = scorecardFateCopy(card.fates);
-            const timed = scorecardDurationCopy(
-              medianRunMs(filterRunsByBot(runs, { botId: card.botId })),
-            );
+            const timed = scorecardDurationCopy(medianRunMs(rows));
+            const approvals = scorecardApprovalCopy(scorecardApprovals(rows));
             return (
               <ListRow
                 key={card.botId ?? 'unattributed'}
                 title={scorecardBotLabel(card.botId)}
-                subtitle={timed ? `${fates} · ${timed}` : fates}
+                subtitle={[fates, timed, approvals].filter(Boolean).join(' · ')}
                 onPress={() => onSelect({ botId: card.botId })}
                 trailing={showing ? <Badge label="Showing" tone="accent" /> : undefined}
                 accessibilityHint="Shows this Bot's runs in the list above"

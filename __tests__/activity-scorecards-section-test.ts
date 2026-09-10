@@ -70,9 +70,11 @@ describe('a card carries the run duration it can back', () => {
     const src = section();
 
     expect(src).toContain('scorecardDurationCopy(');
-    expect(src).toContain('medianRunMs(filterRunsByBot(runs, { botId: card.botId }))');
+    expect(src).toContain('const rows = filterRunsByBot(runs, { botId: card.botId });');
+    expect(src).toContain('medianRunMs(rows)');
     // One attribution rule in the file, and it is the fold's own — a card's
     // line can never be timed over another card's runs.
+    expect(src.match(/filterRunsByBot\(/g)).toHaveLength(1);
     expect(src).not.toContain('runs.filter(');
   });
 
@@ -85,9 +87,33 @@ describe('a card carries the run duration it can back', () => {
     expect(fates).toBeGreaterThanOrEqual(0);
     expect(timed).toBeGreaterThan(fates);
     expect(subtitle).toBeGreaterThan(timed);
-    // An empty duration is appended to nothing: a card whose rows carry no
-    // trustworthy span reads as its counts rather than as a 0:00 run.
-    expect(src).toContain('subtitle={timed ? `${fates} · ${timed}` : fates}');
+    // An empty part is appended to nothing: a card whose rows carry no
+    // trustworthy span reads as its counts rather than as a 0:00 run, and a
+    // card whose rows met no approval gate says nothing about approvals.
+    expect(src).toContain("subtitle={[fates, timed, approvals].filter(Boolean).join(' · ')}");
+  });
+});
+
+describe('a card carries the approval pressure its own rows recorded', () => {
+  test('the approval line is the module’s, folded over that card’s own rows', () => {
+    const src = section();
+
+    expect(src).toContain('scorecardApprovalCopy(');
+    expect(src).toContain('scorecardApprovals(rows)');
+    // The same one attribution rule: the pressure is folded from the rows this
+    // card counted, never from the whole read and never from a second rule.
+    expect(src.match(/filterRunsByBot\(/g)).toHaveLength(1);
+    expect(src).not.toContain('runs.filter(');
+  });
+
+  test('the approval line is decided after the counts and before the line is composed', () => {
+    const src = section();
+    const fates = src.indexOf('const fates = scorecardFateCopy(card.fates);');
+    const approvals = src.indexOf('const approvals = scorecardApprovalCopy(');
+    const subtitle = src.indexOf('subtitle={');
+
+    expect(approvals).toBeGreaterThan(fates);
+    expect(subtitle).toBeGreaterThan(approvals);
   });
 });
 
