@@ -15,6 +15,7 @@ import {
 } from '@/lib/gateway/command-history';
 import {
   commandTranscriptMarkdown,
+  shareRefusalCopy,
   transcriptShareFileName,
 } from '@/lib/gateway/transcript-export';
 import {
@@ -33,7 +34,8 @@ import { haptics } from '@/lib/haptics';
  * Two ways out of the app, and each says which one it is: the Markdown leaves
  * as a file through the system share sheet, or onto the clipboard when there
  * is no sheet to open (web) or the operator wants the text. Both hold the same
- * bytes and come from the one composer call below.
+ * bytes and come from the one composer call below, and a share the platform
+ * refuses says so under the two actions rather than acknowledging nothing.
  *
  * The composer redacts an entry's raw output unless it is asked for that
  * explicitly, so the ask lives here: a switch beside the copy action, off by
@@ -48,6 +50,9 @@ export function CommandHistorySection() {
   const [open, setOpen] = useState(false);
   const [includeRaw, setIncludeRaw] = useState(false);
   const [canShare, setCanShare] = useState(false);
+  // The refusal's line, or nothing while no share has been refused. Set from
+  // the module's own copy, never written here.
+  const [shareRefusal, setShareRefusal] = useState<string | null>(null);
 
   // Ask the platform once, on the surface that would draw the control: a
   // device with no share sheet is offered no share rather than a button that
@@ -86,11 +91,21 @@ export function CommandHistorySection() {
   };
 
   const shareMarkdown = async () => {
-    // A refusal is left unhapticked: nothing appeared, so nothing is
-    // celebrated. The control is only drawn where the sheet answered.
-    if (await shareTranscriptFile(transcriptShareFileName(sessionKey), transcriptMarkdown())) {
+    // Every attempt states its own outcome: the line the last tap left is
+    // dropped as this one starts, so a refusal cannot outlive its own tap.
+    setShareRefusal(null);
+    const opened = await shareTranscriptFile(
+      transcriptShareFileName(sessionKey),
+      transcriptMarkdown(),
+    );
+    if (opened) {
       await haptics.success();
+      return;
     }
+    // A refusal is left unhapticked — nothing appeared, so nothing is
+    // celebrated — and it is not left silent either: the control is drawn only
+    // where the platform answered, so a tap that produced no sheet says so.
+    setShareRefusal(shareRefusalCopy());
   };
 
   return (
@@ -149,6 +164,11 @@ export function CommandHistorySection() {
               size="sm"
               onPress={() => void copyMarkdown()}
             />
+            {shareRefusal ? (
+              <Text variant="micro" color="tertiary">
+                {shareRefusal}
+              </Text>
+            ) : null}
           </>
         )
       ) : null}

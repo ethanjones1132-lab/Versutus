@@ -191,6 +191,36 @@ test('the history block lives in the chat overflow sheet', () => {
   expect(sheet).toContain('CommandHistorySection');
 });
 
+test('a share the platform refuses says so instead of nothing', () => {
+  const src = section();
+  // The line is the module's own, written beside the seam's answer — the
+  // surface never re-authors a refusal's wording.
+  expect(src).toContain('shareRefusalCopy()');
+  // The handler reads whether the sheet opened, and that line is the refusal's
+  // own arm: a tap that produced no sheet is a line, not silence.
+  const openedIdx = src.indexOf('const opened = await shareTranscriptFile(');
+  const branchIdx = src.indexOf('if (opened) {');
+  const refusalIdx = src.indexOf('setShareRefusal(shareRefusalCopy())');
+  expect(openedIdx).toBeGreaterThan(-1);
+  expect(branchIdx).toBeGreaterThan(openedIdx);
+  expect(refusalIdx).toBeGreaterThan(branchIdx);
+  // A new attempt clears what the last one left, so the line cannot outlive
+  // the refusal that made it.
+  const clearIdx = src.indexOf('setShareRefusal(null)');
+  expect(clearIdx).toBeGreaterThan(-1);
+  expect(clearIdx).toBeLessThan(openedIdx);
+  // It starts silent: nothing is drawn until an attempt refused.
+  expect(src).toContain('const [shareRefusal, setShareRefusal] = useState<string | null>(null)');
+  // The line renders UNDER the actions, inside the open-and-non-empty branch —
+  // where the share control itself lives.
+  const shareIdx = src.indexOf('label="Share file"');
+  const copyIdx = src.indexOf('label="Copy Markdown"');
+  const noteIdx = src.indexOf('{shareRefusal ?');
+  expect(noteIdx).toBeGreaterThan(shareIdx);
+  expect(noteIdx).toBeGreaterThan(copyIdx);
+  expect(src).toContain('{shareRefusal}');
+});
+
 test('recording, keying, and reload-rehydrate stay untouched', () => {
   const provider = readSource('src', 'context', 'gateway-provider.tsx');
   expect(provider).toContain('appendTranscript(activeGateway.id, sessionKey, entry)');

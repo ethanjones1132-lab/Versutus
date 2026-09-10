@@ -20,6 +20,9 @@
  *   session's own second share replaces its first rather than littering the
  *   cache. Naming is here because it is a rule; opening the sheet is the seam
  *   in `transcript-share.ts`.
+ * - A share that produced no sheet says so, in the words below, so a refused
+ *   tap is never silent. Like the naming rule, the wording lives here because
+ *   it is a rule; the surface only draws the control.
  */
 import type { CommandTranscriptEntry } from '@/lib/gateway/types';
 import {
@@ -55,6 +58,18 @@ const TRANSCRIPT_SHARE_FILE_STEM = 'versutus-transcript-';
 export function transcriptShareFileName(sessionKey: string | null | undefined): string {
   const safe = typeof sessionKey === 'string' ? sessionKey.trim().replace(/[:/\\]/g, '_') : '';
   return `${TRANSCRIPT_SHARE_FILE_STEM}${safe || 'session'}.md`;
+}
+
+/**
+ * What the surface says when the seam answered `false` — this platform has no
+ * sheet, or the cache write or the sheet itself threw. One line, and it states
+ * the OUTCOME rather than the mechanism: the operator reads that nothing left
+ * the app, never which native call refused, so the three refusals read alike.
+ * Always a line to draw, because the surface only offers the control where a
+ * sheet exists — a tap there that produced none is a fact, not a hiccup.
+ */
+export function shareRefusalCopy(): string {
+  return 'The share sheet did not open — nothing was shared.';
 }
 
 /**

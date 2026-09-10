@@ -5,6 +5,7 @@ import {
 } from '@/lib/gateway/command-history';
 import {
   commandTranscriptMarkdown,
+  shareRefusalCopy,
   transcriptShareFileName,
 } from '@/lib/gateway/transcript-export';
 import type { CommandTranscriptEntry } from '@/lib/gateway/types';
@@ -186,4 +187,17 @@ test('the shared name carries no clock, no counter and no entry data', () => {
   expect(transcriptShareFileName('   ')).toBe('versutus-transcript-session.md');
   expect(transcriptShareFileName(undefined)).toBe('versutus-transcript-session.md');
   expect(transcriptShareFileName(null)).toBe('versutus-transcript-session.md');
+});
+
+test('a refused share has a line of its own, and it states the outcome', () => {
+  // The wording sits here, beside the naming rule, so the surface never
+  // re-authors it. It says what the operator did NOT get — a share — and not
+  // which call refused, so a write failure and a sheet failure read alike.
+  const copy = shareRefusalCopy();
+  expect(copy).toBe('The share sheet did not open — nothing was shared.');
+  expect(copy).not.toContain('expo-sharing');
+  expect(copy).not.toContain('error');
+  // Always the same line: a refusal carries no mechanism, no identifier, no
+  // path — nothing the operator would have to interpret.
+  expect(shareRefusalCopy()).toBe(copy);
 });
