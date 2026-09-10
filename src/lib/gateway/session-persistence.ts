@@ -104,6 +104,31 @@ export async function saveOfflineQueue(items: OfflineQueueItem[]): Promise<void>
   await keyValueStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(items));
 }
 
+/**
+ * The rows the durable copy must hold. A flush takes its batch off the queue so
+ * no second flush can pick it up, but those rows are still the operator's unsent
+ * words: the copy on disk is the queue PLUS every row the flush still owes, so a
+ * process the OS reclaims mid-flush (a streamed reply is seconds long) comes back
+ * to exactly the rows whose sends never returned instead of losing them.
+ *
+ * A row is written once. The flush's own put-back can leave a row on the queue
+ * while the flush still lists it as owed, and the operator's line must not grow a
+ * second copy in the outbox over that bookkeeping order. The queue's own rows keep
+ * their order and the still-owed rows follow them.
+ *
+ * Nothing owed hands back the queue itself, so a write with no flush in flight is
+ * the one this file always made.
+ */
+export function durableQueueRows(
+  queue: OfflineQueueItem[],
+  stillOwed: Iterable<OfflineQueueItem>,
+): OfflineQueueItem[] {
+  const owed = [...stillOwed];
+  if (owed.length === 0) return queue;
+  const onQueue = new Set(queue.map((item) => item.id));
+  return [...queue, ...owed.filter((item) => !onQueue.has(item.id))];
+}
+
 /** The thread a history reload painted: its gateway, and the Bot Chat it shows. */
 export type OfflineQueueScope = Pick<OfflineQueueItem, 'gatewayId' | 'botId'>;
 

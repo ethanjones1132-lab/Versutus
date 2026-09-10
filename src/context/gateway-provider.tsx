@@ -108,6 +108,7 @@ import {
 } from '@/lib/gateway/runs';
 import { routineJobsFromList } from '@/lib/gateway/routines';
 import {
+  durableQueueRows,
   loadActivityRuns,
   loadOfflineQueue,
   resurfaceOfflineQueue,
@@ -792,9 +793,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const offlineQueueRef = useRef<OfflineQueueItem[]>([]);
   const flushingOfflineRef = useRef(false);
+  /**
+   * The rows the in-flight flush has taken off the queue and still owes a send.
+   * The queue's ref does not hold them while the flush runs, so this is what
+   * keeps them in the durable copy: `persistOfflineQueue` writes the queue plus
+   * these, and a row leaves the set exactly where the flush stops owing it —
+   * when its send returns, or when the Bot-open path puts it back on the queue.
+   * Null when no flush is in flight.
+   *
+   * The flush registers its own `unsent` set here rather than a copy of it, so
+   * "what the rescue must put back" and "what the copy on disk must hold" cannot
+   * drift apart.
+   */
+  const flushingOwedRef = useRef<Set<OfflineQueueItem> | null>(null);
 
   const persistOfflineQueue = useCallback(() => {
-    void saveOfflineQueue(offlineQueueRef.current);
+    void saveOfflineQueue(durableQueueRows(offlineQueueRef.current, flushingOwedRef.current ?? []));
   }, []);
 
   const patchActivityRuns = useCallback((updater: (prev: ActivityRun[]) => ActivityRun[]) => {
@@ -3314,15 +3328,19 @@ const response = await executeGatewaySlashCommand(trimmed, {
     if (forActive.length === 0) return;
 
     flushingOfflineRef.current = true;
+    // The rows of this batch that still owe a send. It is the flush's own record
+    // of which of the operator's lines have not moved: a row leaves it when its
+    // send comes back or when the Bot-open path puts it back on the queue, and
+    // whatever is left when the loop escapes is handed to the queue again by the
+    // rescue below. Registering it BEFORE the queue is trimmed and persisted is
+    // what keeps the batch on disk: the flush owns these rows for the duration,
+    // but they are still unsent, so they stay in the durable copy until each one
+    // settles and a process killed mid-flight re-flushes exactly them.
+    const unsent = new Set(forActive);
+    flushingOwedRef.current = unsent;
     offlineQueueRef.current = remainder;
     persistOfflineQueue();
     void (async () => {
-      // The rows of this batch that still owe a send. The batch is off the
-      // queue and off disk by now, so this is the only record of which of the
-      // operator's lines have not moved: a row leaves it when its send comes
-      // back or when the Bot-open path puts it back, and whatever is left when
-      // the loop escapes is handed to the queue again by the rescue below.
-      const unsent = new Set(forActive);
       try {
         for (const item of forActive) {
           if (item.botId) {
@@ -3336,7 +3354,8 @@ const response = await executeGatewaySlashCommand(trimmed, {
               offlineQueueRef.current.push(item);
               persistOfflineQueue();
               // Settled by that put-back, so the rescue below cannot hand this
-              // same row to the queue a second time.
+              // same row to the queue a second time — and the durable copy holds
+              // it once, because it is already back on the queue.
               unsent.delete(item);
               continue;
             }
@@ -3345,7 +3364,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
             requestSurface({ kind: 'bot', botId: item.botId });
           }
           await sendChatInput(item.text, { fromQueue: true, messageId: item.id });
+          // This row has moved: it is off the queue and off the copy on disk,
+          // and the write is what says so before the next send begins.
           unsent.delete(item);
+          persistOfflineQueue();
         }
       } catch {
         // Re-queue anything that did not clear so a kill mid-flush is not data loss.
@@ -3356,6 +3378,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
         }
       } finally {
         flushingOfflineRef.current = false;
+        // The flush owes nothing now, so the queue is the whole truth again and
+        // every later write is the queue alone. The rescue above has already put
+        // back everything it did not send.
+        flushingOwedRef.current = null;
       }
     })();
   }, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, sendChatInput, status]);

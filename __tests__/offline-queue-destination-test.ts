@@ -17,6 +17,7 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 import {
+  durableQueueRows,
   loadOfflineQueue,
   saveOfflineQueue,
   type OfflineQueueItem,
@@ -313,5 +314,102 @@ describe('the send path hands a destination to the queue', () => {
     expect(src).toContain(
       'offlineQueueRef.current.push({ id, text, gatewayId, createdAt: Date.now(), ...destination });',
     );
+  });
+});
+
+describe('the durable copy holds the batch a flush still owes', () => {
+  test('the copy is the queue plus every row the flush has not settled', () => {
+    const queue = [row({ id: 'later' })];
+    const owed = [row({ id: 'in-flight' }), row({ id: 'in-flight-2' })];
+
+    // The queue's own rows keep their order and the rows a flush still owes
+    // follow them, so a kill mid-flush re-flushes exactly those rows.
+    expect(durableQueueRows(queue, owed)).toEqual([...queue, ...owed]);
+    // The flush holds its batch in a Set, and that is what the copy is composed
+    // from — the caller does not build a second list to keep in step.
+    expect(durableQueueRows(queue, new Set(owed))).toEqual([...queue, ...owed]);
+  });
+
+  test('a row that is on the queue and still owed is written once', () => {
+    const putBack = row({ id: 'a' });
+
+    // The flush's own Bot-open put-back can leave a row on the queue while the
+    // flush still lists it as owed: the operator's line must not be written
+    // twice over that bookkeeping order.
+    expect(durableQueueRows([putBack], [putBack])).toEqual([putBack]);
+  });
+
+  test('nothing owed copies the queue itself, so an idle write is what it always was', () => {
+    const queue = [row({ id: 'a' }), row({ id: 'b' })];
+
+    const copy = durableQueueRows(queue, []);
+
+    expect(copy).toEqual(queue);
+    expect(copy).toHaveLength(2);
+  });
+
+  test('a queue a flush has emptied still keeps the rows it owes', () => {
+    const owed = row({ id: 'only' });
+
+    expect(durableQueueRows([], [owed])).toEqual([owed]);
+  });
+});
+
+describe('a batch the flush is holding stays on disk until each row settles', () => {
+  const provider = () => readSource('src', 'context', 'gateway-provider.tsx');
+  const CLEAR = 'unsent.delete(item);';
+  const PACK = 'persistOfflineQueue();';
+  const RELEASE = 'flushingOfflineRef.current = false;';
+  const SEND = 'await sendChatInput(item.text, { fromQueue: true, messageId: item.id });';
+
+  /** The batch: from the queue split to the moment the flush is released. */
+  const flush = () =>
+    between(provider(), '// Only flush items destined for the active gateway.', RELEASE);
+
+  test('the batch is registered as still owed before the queue is trimmed', () => {
+    const src = flush();
+    const owed = src.indexOf('flushingOwedRef.current = unsent;');
+    const split = src.indexOf('offlineQueueRef.current = remainder;');
+    const packed = src.indexOf(PACK, split);
+
+    expect(src).toContain('const unsent = new Set(forActive);');
+    expect(owed).toBeGreaterThan(-1);
+    // The batch leaves the queue, not the copy on disk: the owed set is in
+    // place before the queue is trimmed and before the write that follows it.
+    expect(split).toBeGreaterThan(owed);
+    expect(packed).toBeGreaterThan(split);
+  });
+
+  test('the one write path packs the queue together with what the flush owes', () => {
+    const src = between(
+      provider(),
+      'const persistOfflineQueue = useCallback',
+      'const patchActivityRuns',
+    );
+
+    expect(src).toContain(
+      'durableQueueRows(offlineQueueRef.current, flushingOwedRef.current ?? [])',
+    );
+    expect(src).toContain('saveOfflineQueue(');
+  });
+
+  test('a send that returns clears its row from the queue and from the durable copy', () => {
+    const tail = between(flush(), SEND, '} catch {');
+
+    expect(tail).toContain(CLEAR);
+    expect(tail.indexOf(PACK)).toBeGreaterThan(tail.indexOf(CLEAR));
+  });
+
+  test('the Bot-open put-back settles its row on disk too, and the queue still holds it', () => {
+    const body = between(flush(), 'offlineQueueRef.current.push(item);', 'continue;');
+
+    expect(body).toContain(CLEAR);
+    expect(body).toContain(PACK);
+  });
+
+  test('the flush releases the copy when it ends, so a later write is the queue alone', () => {
+    const after = between(provider(), RELEASE, '})();');
+
+    expect(after).toContain('flushingOwedRef.current = null;');
   });
 });
