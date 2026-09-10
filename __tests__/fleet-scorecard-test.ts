@@ -14,8 +14,16 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   removeItem: jest.fn(async () => undefined),
 }));
 
-import { buildScorecards, scorecardFate, scorecardWindowCopy, SCORECARD_FOOTER_COPY } from '@/lib/fleet/scorecard';
-import type { BotScorecard } from '@/lib/fleet/scorecard';
+import {
+  buildScorecards,
+  filterRunsByBot,
+  scorecardBotLabel,
+  scorecardFate,
+  scorecardFateCopy,
+  scorecardWindowCopy,
+  SCORECARD_FOOTER_COPY,
+} from '@/lib/fleet/scorecard';
+import type { BotScorecard, ScorecardFates } from '@/lib/fleet/scorecard';
 import { ACTIVITY_RUNS_PERSIST_CAP } from '@/lib/gateway/session-persistence';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
@@ -252,5 +260,93 @@ describe('SCORECARD_FOOTER_COPY', () => {
     const source = readSource('src', 'lib', 'fleet', 'scorecard.ts');
 
     expect(source.split(SCORECARD_FOOTER_COPY)).toHaveLength(2);
+  });
+});
+
+describe('filterRunsByBot', () => {
+  test('no filter passes the list through unchanged', () => {
+    const runs = [run({ id: 'a', botId: 'atlas' }), run({ id: 'b' })];
+
+    // Not merely the same rows: the tab's unfiltered read, untouched.
+    expect(filterRunsByBot(runs, null)).toBe(runs);
+  });
+
+  test("a Bot's card keeps only that Bot's rows, in the order they were read", () => {
+    const runs = [
+      run({ id: 'a', botId: 'atlas' }),
+      run({ id: 'b', botId: 'bramble' }),
+      run({ id: 'c', botId: 'atlas' }),
+    ];
+
+    expect(filterRunsByBot(runs, { botId: 'atlas' }).map((entry) => entry.id)).toEqual(['a', 'c']);
+  });
+
+  test('the unattributed card is its own selection, and keeps the rows that name no Bot', () => {
+    const runs = [
+      run({ id: 'legacy' }),
+      run({ id: 'empty', botId: '' }),
+      run({ id: 'atlas-run', botId: 'atlas' }),
+    ];
+
+    // A half-shaped id is not a Bot, so it is unattributed too — the same rule
+    // the fold buckets by.
+    expect(filterRunsByBot(runs, { botId: null }).map((entry) => entry.id)).toEqual(['legacy', 'empty']);
+  });
+
+  test('a card for a Bot this read holds no rows for is empty, never someone else’s rows', () => {
+    const runs = [run({ id: 'a', botId: 'atlas' })];
+
+    expect(filterRunsByBot(runs, { botId: 'bramble' })).toEqual([]);
+  });
+});
+
+describe('scorecardBotLabel', () => {
+  test('a card is titled with the Bot it counts', () => {
+    expect(scorecardBotLabel('atlas')).toBe('atlas');
+  });
+
+  test('the rows that name no Bot get one heading, not a Bot named after them', () => {
+    const label = scorecardBotLabel(null);
+
+    expect(label).toBe('Unattributed');
+    expect(label).not.toBe('');
+  });
+});
+
+describe('scorecardFateCopy', () => {
+  const fates = (over: Partial<ScorecardFates>): ScorecardFates => ({
+    complete: 0,
+    failed: 0,
+    cancelled: 0,
+    unresolved: 0,
+    inFlight: 0,
+    ...over,
+  });
+
+  test('lists the counts the card holds, in the fold’s own order', () => {
+    const copy = scorecardFateCopy(
+      fates({ complete: 3, failed: 1, cancelled: 2, unresolved: 1, inFlight: 1 }),
+    );
+
+    expect(copy).toBe('3 complete · 1 failed · 2 cancelled · 1 unresolved · 1 in flight');
+  });
+
+  test('a fate with no runs is not printed as a zero', () => {
+    expect(scorecardFateCopy(fates({ complete: 4 }))).toBe('4 complete');
+  });
+
+  test('a cancelled run reads as cancelled, never folded into a failure', () => {
+    const copy = scorecardFateCopy(fates({ cancelled: 2 }));
+
+    expect(copy).toBe('2 cancelled');
+    expect(copy).not.toContain('failed');
+  });
+
+  test('a run still going reads as in flight, not as a settled fate', () => {
+    expect(scorecardFateCopy(fates({ inFlight: 2 }))).toBe('2 in flight');
+  });
+
+  test('nothing at all prints nothing, never a zero', () => {
+    expect(scorecardFateCopy(fates({}))).toBe('');
   });
 });

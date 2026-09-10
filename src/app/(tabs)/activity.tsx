@@ -11,11 +11,13 @@ import { AgenticRunSheet } from '@/components/activity/agentic-run-sheet';
 import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
 import { CronSection } from '@/components/activity/cron-section';
 import { RunCard } from '@/components/activity/run-card';
+import { ScorecardsSection } from '@/components/activity/scorecards-section';
 import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
 import { Badge, Button, Card, EmptyState, Screen, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
+import { filterRunsByBot, type ScorecardFilter } from '@/lib/fleet/scorecard';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { tabContentPaddingBottom } from '@/lib/motion/tab-insets';
@@ -55,11 +57,19 @@ export default function ActivityScreen() {
   // the run id; null closes. The sheet keys itself on the id, so a different
   // run arrives as a fresh component with empty state.
   const [openAgenticRunId, setOpenAgenticRunId] = useState<string | null>(null);
+  // The Scorecards section's tap: the bucket the run list is filtered to, or
+  // null for no filter. Null is the default and passes the provider's list
+  // through untouched, so the tab opens exactly as it did before scorecards.
+  const [scorecardFilter, setScorecardFilter] = useState<ScorecardFilter>(null);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
 
-  const activeRuns = activityRuns.filter((run) => run.status === 'running' || run.status === 'waiting-approval');
-  const finishedRuns = activityRuns.filter((run) => !activeRuns.includes(run));
+  const visibleRuns = useMemo(
+    () => filterRunsByBot(activityRuns, scorecardFilter),
+    [activityRuns, scorecardFilter],
+  );
+  const activeRuns = visibleRuns.filter((run) => run.status === 'running' || run.status === 'waiting-approval');
+  const finishedRuns = visibleRuns.filter((run) => !activeRuns.includes(run));
   const runsSupported =
     status === 'connected' &&
     capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'ready';
@@ -213,6 +223,11 @@ export default function ActivityScreen() {
 
   const listFooter = (
     <View style={styles.footer}>
+      {/* Per-Bot track records, folded from the same persisted runs the list
+          above renders. A tapped card filters that list; it folds the whole
+          read, so the cards stay whole while the list narrows. */}
+      <ScorecardsSection runs={activityRuns} filter={scorecardFilter} onSelect={setScorecardFilter} />
+
       {/* Scheduled work sits with live runs: Activity is the one place that
           answers "what is this gateway doing". Renders nothing on a gateway
           that cannot report cron. */}

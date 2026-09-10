@@ -91,6 +91,61 @@ export function buildScorecards(runs: readonly ActivityRun[]): BotScorecard[] {
 }
 
 /**
+ * What the Activity tab's run list is filtered to. `null` is no filter at all —
+ * the unfiltered list the tab showed before scorecards existed — so tapping the
+ * unattributed card (`{ botId: null }`) stays a state of its own rather than
+ * quietly meaning "show everything".
+ */
+export type ScorecardFilter = { botId: string | null } | null;
+
+/**
+ * The runs one card counted, in the order they were read. A row that names no
+ * Bot — or names a Bot other than the selected one — belongs to another card
+ * and is left out rather than shown under the wrong heading. No filter is the
+ * list the tab already showed, returned as it arrived: the tab must be
+ * byte-identical to what it rendered before scorecards existed.
+ */
+export function filterRunsByBot(
+  runs: readonly ActivityRun[],
+  filter: ScorecardFilter,
+): readonly ActivityRun[] {
+  if (!filter) return runs;
+  const wanted = scorecardBotId(filter.botId);
+  return runs.filter((run) => scorecardBotId(run.botId) === wanted);
+}
+
+/**
+ * What a card is titled. A Bot's own id is its name; the rows that name no Bot
+ * share one heading, worded the spec's way ("unattributed", D3:792-797) rather
+ * than as an id, so the bucket is never read as a Bot of that name.
+ */
+export function scorecardBotLabel(botId: string | null): string {
+  return scorecardBotId(botId) ?? 'Unattributed';
+}
+
+/** The fates in the fold's own order, with the word each one reads as. */
+const FATE_COPY: readonly (readonly [keyof ScorecardFates, string])[] = [
+  ['complete', 'complete'],
+  ['failed', 'failed'],
+  ['cancelled', 'cancelled'],
+  ['unresolved', 'unresolved'],
+  ['inFlight', 'in flight'],
+];
+
+/**
+ * A card's one counts line, e.g. `3 complete · 1 failed · 2 in flight`. Only
+ * the fates this card actually holds are printed: a zero would be noise, and
+ * a settled count is never dressed as another (a cancelled run is not a
+ * failure, an unresolved run is not one either). A card with nothing to count
+ * prints nothing rather than `0`.
+ */
+export function scorecardFateCopy(fates: ScorecardFates): string {
+  return FATE_COPY.filter(([fate]) => fates[fate] > 0)
+    .map(([fate, word]) => `${fates[fate]} ${word}`)
+    .join(' · ');
+}
+
+/**
  * Honest window line for the cards (D3's Build 2, `FUTURE-ITEMS.md:808-810`).
  *
  * The run list this device persists is capped (`ACTIVITY_RUNS_PERSIST_CAP`), so
