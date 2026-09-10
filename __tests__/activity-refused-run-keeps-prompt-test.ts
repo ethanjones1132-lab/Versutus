@@ -49,7 +49,9 @@ describe('activity refused run keeps the typed prompt', () => {
 
   test('the offline-queue busy-slash and confirmation early returns still resolve as today', () => {
     const src = readProvider();
-    expect(src).toContain('queueOfflineInput(trimmed);');
+    // Queued with the destination the caller named (no caller but a quick reply
+    // names one), and still the operator's trimmed words that are parked.
+    expect(src).toContain('queueOfflineInput(trimmed, { botId: options?.botId, sessionId: options?.sessionId });');
     expect(src).toContain("appendLocalMessage('assistant', busySlash.note);");
     expect(src).toContain('setPendingConfirmation(preview);');
   });

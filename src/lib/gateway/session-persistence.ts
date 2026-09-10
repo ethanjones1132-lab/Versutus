@@ -17,7 +17,23 @@ export type OfflineQueueItem = {
   text: string;
   gatewayId: string;
   createdAt: number;
+  /**
+   * The Bot whose canonical Bot Chat the text was typed for, when it was a
+   * reply to a notice rather than a composer line (ADR 0012). Absent on a
+   * composer send and on every row written before this field existed, and an
+   * absent destination flushes exactly as it always did.
+   */
+  botId?: string;
+  /**
+   * The session the notice was about. Carried as the row's own record: the Bot
+   * is what steers the flush, because the destination is that Bot's canonical
+   * Bot Chat rather than whichever session the payload happened to name.
+   */
+  sessionId?: string;
 };
+
+/** Where a queued line was typed for, when it was a reply to a notice. */
+export type OfflineQueueDestination = Pick<OfflineQueueItem, 'botId' | 'sessionId'>;
 
 function isOfflineQueueItem(value: unknown): value is OfflineQueueItem {
   if (!value || typeof value !== 'object') return false;
@@ -28,6 +44,32 @@ function isOfflineQueueItem(value: unknown): value is OfflineQueueItem {
     typeof raw.gatewayId === 'string' &&
     typeof raw.createdAt === 'number'
   );
+}
+
+/** An id is an id only when it is present and not empty — anything else is not one. */
+function destinationId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/**
+ * The row as it must be held: the validated fields kept, and a destination
+ * read the way this app reads every other id. An id it cannot read is not an
+ * id, so it is dropped rather than steering a send somewhere the payload never
+ * named — and the FIELD is what is dropped, not the row: the operator's words
+ * are worth more than the destination beside them.
+ */
+function normalizeOfflineQueueItem(item: OfflineQueueItem): OfflineQueueItem {
+  const next: OfflineQueueItem = {
+    id: item.id,
+    text: item.text,
+    gatewayId: item.gatewayId,
+    createdAt: item.createdAt,
+  };
+  const botId = destinationId(item.botId);
+  if (botId) next.botId = botId;
+  const sessionId = destinationId(item.sessionId);
+  if (sessionId) next.sessionId = sessionId;
+  return next;
 }
 
 function isActivityRun(value: unknown): value is ActivityRun {
@@ -48,7 +90,7 @@ export async function loadOfflineQueue(): Promise<OfflineQueueItem[]> {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isOfflineQueueItem);
+    return parsed.filter(isOfflineQueueItem).map(normalizeOfflineQueueItem);
   } catch {
     return [];
   }

@@ -212,9 +212,13 @@ describe('NotificationRouter quick-reply wiring', () => {
     // Open the Bot's canonical Bot Chat first, then send through the same call
     // the chat composer uses.
     const open = src.indexOf('sender.openBot(reply.botId)');
-    const send = src.indexOf('sender.sendChatInput(reply.text)');
+    const send = src.indexOf('sender.sendChatInput(reply.text, {');
     expect(open).toBeGreaterThan(-1);
     expect(send).toBeGreaterThan(open);
+    // The destination the notice named goes with the words, so a reply parked in
+    // the outbox is still a reply for that Bot Chat when the flush runs.
+    expect(src).toContain('botId: reply.botId,');
+    expect(src).toContain('sessionId: reply.sessionId,');
     // No second pipeline: no client, no HTTP, no notice-as-a-send, and no
     // touching the outbox directly — the queued fallback is the send call's own.
     expect(src).not.toContain('clientRef');
@@ -229,7 +233,7 @@ describe('NotificationRouter quick-reply wiring', () => {
 
     const catchAt = src.indexOf('} catch {');
     const refusal = src.indexOf("notifyBotReplyNotSent('bot-chat-unavailable')");
-    const send = src.indexOf('sender.sendChatInput(reply.text)');
+    const send = src.indexOf('sender.sendChatInput(reply.text, {');
     expect(catchAt).toBeGreaterThan(-1);
     expect(refusal).toBeGreaterThan(catchAt);
     // The refusal returns before the send: an unopened Bot Chat means the send

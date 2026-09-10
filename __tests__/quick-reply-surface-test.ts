@@ -152,7 +152,7 @@ describe('a quick reply asks for the Bot Chat it just opened', () => {
     const src = delivery();
     const open = src.indexOf('await sender.openBot(reply.botId)');
     const request = src.indexOf("sender.requestSurface({ kind: 'bot', botId: reply.botId })");
-    const send = src.indexOf('sender.sendChatInput(reply.text)');
+    const send = src.indexOf('sender.sendChatInput(reply.text, {');
 
     expect(open).toBeGreaterThan(-1);
     expect(request).toBeGreaterThan(open);

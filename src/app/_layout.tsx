@@ -58,7 +58,10 @@ installStreamingFetch(expoFetch as unknown as typeof globalThis.fetch);
  */
 type BotReplySender = {
   openBot: (botId: string) => Promise<void>;
-  sendChatInput: (text: string) => Promise<SendChatInputOutcome>;
+  sendChatInput: (
+    text: string,
+    destination?: { botId?: string; sessionId?: string },
+  ) => Promise<SendChatInputOutcome>;
   requestSurface: (surface: ChatSurface) => void;
 };
 
@@ -78,6 +81,11 @@ type BotReplySender = {
  * outbox and answers 'queued' — the same route a composer send takes, so the
  * reply is re-surfaced and flushed after a reload exactly like any other queued
  * chat. That outcome is what the follow-up notice reports.
+ *
+ * The destination rides with the words: the reply's Bot and the session the
+ * notice was about are handed to `sendChatInput`, so a reply parked in the
+ * outbox is still a reply for that Bot Chat — the flush opens it before the
+ * text moves, instead of sending into whatever thread is current by then.
  *
  * A reply whose Bot Chat could not be opened is NOT sent: `sendChatInput` would
  * fall back to whichever session the client still held, putting the operator's
@@ -104,7 +112,10 @@ async function deliverBotReply(
     }
     sender.requestSurface({ kind: 'bot', botId: reply.botId });
   }
-  const outcome = await sender.sendChatInput(reply.text);
+  const outcome = await sender.sendChatInput(reply.text, {
+    botId: reply.botId,
+    sessionId: reply.sessionId,
+  });
   if (outcome === 'queued') void notifyBotReplyNotSent('queued');
 }
 

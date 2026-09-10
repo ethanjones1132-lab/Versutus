@@ -112,6 +112,7 @@ import {
   loadOfflineQueue,
   saveActivityRuns,
   saveOfflineQueue,
+  type OfflineQueueDestination,
   type OfflineQueueItem,
 } from '@/lib/gateway/session-persistence';
 import { syncChildProfiles } from '@/lib/gateway/child-sync';
@@ -319,7 +320,14 @@ type GatewayContextValue = {
   disconnectGateway: () => void;
   sendChatInput: (
     text: string,
-    options?: { fromQueue?: boolean; messageId?: string; skills?: Skill[] },
+    options?: {
+      fromQueue?: boolean;
+      messageId?: string;
+      skills?: Skill[];
+      /** The Bot Chat a reply was typed for, so a queued reply keeps its destination. */
+      botId?: string;
+      sessionId?: string;
+    },
   ) => Promise<SendChatInputOutcome>;
   stopStreaming: () => Promise<void>;
   reloadHistory: () => Promise<void>;
@@ -1827,11 +1835,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [activeGateway],
   );
 
+  /**
+   * Park a line in the durable outbox. A reply typed on a bot-message notice
+   * names the Bot Chat it was for, and that destination is stored with the
+   * text: without it the flush would hand the operator's words to whichever
+   * conversation the client holds when the connection returns. A composer line
+   * names none, and a row with no destination flushes exactly as it always did.
+   */
   const queueOfflineInput = useCallback(
-    (text: string) => {
+    (text: string, destination?: OfflineQueueDestination) => {
       const gatewayId = activeGatewayRef.current?.id ?? '';
       const id = appendLocalMessage('user', text, undefined, true);
-      offlineQueueRef.current.push({ id, text, gatewayId, createdAt: Date.now() });
+      offlineQueueRef.current.push({ id, text, gatewayId, createdAt: Date.now(), ...destination });
       persistOfflineQueue();
       setLastError(null);
     },
@@ -2264,7 +2279,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const sendChatInput = useCallback(
     async (
       text: string,
-      options?: { fromQueue?: boolean; messageId?: string; skills?: Skill[] },
+      options?: {
+        fromQueue?: boolean;
+        messageId?: string;
+        skills?: Skill[];
+        botId?: string;
+        sessionId?: string;
+      },
     ) => {
       const trimmed = text.trim();
       if (!trimmed) return 'empty';
@@ -2275,7 +2296,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // Converting to statusRef or the connection reducer needs live-device
       // verification because it changes when this effect/callback re-runs.
       if (!fromQueue && (!activeGateway || !client || status !== 'connected')) {
-        queueOfflineInput(trimmed);
+        queueOfflineInput(trimmed, { botId: options?.botId, sessionId: options?.sessionId });
         return 'queued';
       }
 
@@ -2467,38 +2488,6 @@ const response = await executeGatewaySlashCommand(trimmed, {
       queueOfflineInput,
     ],
   );
-
-  useEffect(() => {
-    // Pre-flight guard: a stale read only pauses a retryable flush.
-    // Converting to statusRef or the connection reducer needs live-device
-    // verification because it changes when this effect re-runs.
-    if (status !== 'connected' || isSending || isCommandRunning || flushingOfflineRef.current || offlineQueueRef.current.length === 0) {
-      return;
-    }
-
-    const activeId = activeGatewayRef.current?.id;
-    if (!activeId) return;
-
-    // Only flush items destined for the active gateway.
-    const forActive = offlineQueueRef.current.filter((item) => item.gatewayId === activeId || !item.gatewayId);
-    const remainder = offlineQueueRef.current.filter((item) => item.gatewayId && item.gatewayId !== activeId);
-    if (forActive.length === 0) return;
-
-    flushingOfflineRef.current = true;
-    offlineQueueRef.current = remainder;
-    persistOfflineQueue();
-    void (async () => {
-      try {
-        for (const item of forActive) {
-          await sendChatInput(item.text, { fromQueue: true, messageId: item.id });
-        }
-      } catch {
-        // Re-queue anything that did not clear so a kill mid-flush is not data loss.
-      } finally {
-        flushingOfflineRef.current = false;
-      }
-    })();
-  }, [isCommandRunning, isSending, persistOfflineQueue, sendChatInput, status]);
 
   /**
    * Same shape as openSessionSelector: show first, read after. Awaiting
@@ -3266,6 +3255,63 @@ const response = await executeGatewaySlashCommand(trimmed, {
       throw error;
     }
   }, [activeGateway, reloadHistoryFor]);
+
+  /**
+   * Flush the durable outbox once the connection is back.
+   *
+   * A row that names a Bot Chat — a reply typed on a bot-message notice — is
+   * opened into that Bot's canonical Bot Chat first, exactly as the live reply
+   * path does, because a send lands in the session the client is scoped to.
+   * That is why this effect sits below `openBot`: a callback listed in the
+   * dependency array cannot be declared after the effect that lists it.
+   */
+  useEffect(() => {
+    // Pre-flight guard: a stale read only pauses a retryable flush.
+    // Converting to statusRef or the connection reducer needs live-device
+    // verification because it changes when this effect re-runs.
+    if (status !== 'connected' || isSending || isCommandRunning || flushingOfflineRef.current || offlineQueueRef.current.length === 0) {
+      return;
+    }
+
+    const activeId = activeGatewayRef.current?.id;
+    if (!activeId) return;
+
+    // Only flush items destined for the active gateway.
+    const forActive = offlineQueueRef.current.filter((item) => item.gatewayId === activeId || !item.gatewayId);
+    const remainder = offlineQueueRef.current.filter((item) => item.gatewayId && item.gatewayId !== activeId);
+    if (forActive.length === 0) return;
+
+    flushingOfflineRef.current = true;
+    offlineQueueRef.current = remainder;
+    persistOfflineQueue();
+    void (async () => {
+      try {
+        for (const item of forActive) {
+          if (item.botId) {
+            try {
+              await openBot(item.botId);
+            } catch {
+              // The Bot Chat did not open, so this text is NOT sent: the send
+              // would land in whichever conversation the client still holds.
+              // It stays queued for the next connection rather than being
+              // guessed into a thread the operator did not choose.
+              offlineQueueRef.current.push(item);
+              persistOfflineQueue();
+              continue;
+            }
+            // The shared transcript is that Bot Chat's now, so the screen is
+            // asked to follow — the request the live reply path makes.
+            requestSurface({ kind: 'bot', botId: item.botId });
+          }
+          await sendChatInput(item.text, { fromQueue: true, messageId: item.id });
+        }
+      } catch {
+        // Re-queue anything that did not clear so a kill mid-flush is not data loss.
+      } finally {
+        flushingOfflineRef.current = false;
+      }
+    })();
+  }, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, sendChatInput, status]);
 
   const createNewSession = useCallback(async (title?: string) => {
     const client = clientRef.current;
