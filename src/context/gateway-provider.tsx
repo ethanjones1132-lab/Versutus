@@ -3317,6 +3317,12 @@ const response = await executeGatewaySlashCommand(trimmed, {
     offlineQueueRef.current = remainder;
     persistOfflineQueue();
     void (async () => {
+      // The rows of this batch that still owe a send. The batch is off the
+      // queue and off disk by now, so this is the only record of which of the
+      // operator's lines have not moved: a row leaves it when its send comes
+      // back or when the Bot-open path puts it back, and whatever is left when
+      // the loop escapes is handed to the queue again by the rescue below.
+      const unsent = new Set(forActive);
       try {
         for (const item of forActive) {
           if (item.botId) {
@@ -3329,6 +3335,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
               // guessed into a thread the operator did not choose.
               offlineQueueRef.current.push(item);
               persistOfflineQueue();
+              // Settled by that put-back, so the rescue below cannot hand this
+              // same row to the queue a second time.
+              unsent.delete(item);
               continue;
             }
             // The shared transcript is that Bot Chat's now, so the screen is
@@ -3336,9 +3345,15 @@ const response = await executeGatewaySlashCommand(trimmed, {
             requestSurface({ kind: 'bot', botId: item.botId });
           }
           await sendChatInput(item.text, { fromQueue: true, messageId: item.id });
+          unsent.delete(item);
         }
       } catch {
         // Re-queue anything that did not clear so a kill mid-flush is not data loss.
+        const stranded = forActive.filter((item) => unsent.has(item));
+        if (stranded.length > 0) {
+          offlineQueueRef.current.push(...stranded);
+          persistOfflineQueue();
+        }
       } finally {
         flushingOfflineRef.current = false;
       }

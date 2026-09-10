@@ -233,6 +233,64 @@ describe('the flush opens the Bot Chat a queued reply was for, before it sends',
   });
 });
 
+describe('a flush that escapes mid-batch keeps the lines it has not sent', () => {
+  const provider = () => readSource('src', 'context', 'gateway-provider.tsx');
+  const SEND = 'await sendChatInput(item.text, { fromQueue: true, messageId: item.id });';
+  const CLEAR = 'unsent.delete(item);';
+  const RESCUE = '// Re-queue anything that did not clear so a kill mid-flush is not data loss.';
+  const RELEASE = 'flushingOfflineRef.current = false;';
+
+  /** The batch: from the queue split to the moment the flush is released. */
+  const flush = () =>
+    between(provider(), '// Only flush items destined for the active gateway.', RELEASE);
+
+  /** What takes over when the loop escapes — the rescue's comment to the release. */
+  const rescue = () => between(provider(), RESCUE, RELEASE);
+
+  test('the loop holds the rows it still owes, and a row is cleared only once its send returned', () => {
+    const src = flush();
+    const sent = src.indexOf(SEND);
+    const cleared = src.indexOf(CLEAR, sent);
+
+    expect(src).toContain('const unsent = new Set(forActive);');
+    expect(sent).toBeGreaterThan(-1);
+    // Clearing is what the send's return does, so a row whose send never came
+    // back is still owed when the loop escapes below. The one clear source-line
+    // ahead of the send is the Bot-open path's own put-back, asserted separately.
+    expect(cleared).toBeGreaterThan(sent);
+    // Exactly the two settles — the send, and the Bot-open path putting the row
+    // back — so no third place can drop a line without saying so.
+    expect(src.split(CLEAR).length - 1).toBe(2);
+  });
+
+  test('an escape puts every row it did not send back on the queue and persists them', () => {
+    const body = rescue();
+
+    expect(body).toContain('const stranded = forActive.filter((item) => unsent.has(item));');
+    expect(body).toContain('offlineQueueRef.current.push(...stranded);');
+    expect(body).toContain('persistOfflineQueue();');
+    // The words are durable before the flush is released, so a connection that
+    // returns later finds every line that never left — and nothing here sends.
+    expect(body).not.toContain('sendChatInput(');
+  });
+
+  test('a row the Bot-open path already put back is settled once, never pushed twice', () => {
+    const src = flush();
+    const open = src.indexOf('await openBot(item.botId);');
+    const body = src.slice(src.indexOf('} catch {', open), src.indexOf(RESCUE));
+    const pushed = body.indexOf('offlineQueueRef.current.push(item);');
+    const settled = body.indexOf(CLEAR);
+
+    expect(open).toBeGreaterThan(-1);
+    expect(pushed).toBeGreaterThan(-1);
+    expect(body).toContain('persistOfflineQueue();');
+    expect(body).toContain('continue;');
+    // Put back first, then settled: the batch-wide rescue below cannot hand the
+    // same row to the queue a second time.
+    expect(settled).toBeGreaterThan(pushed);
+  });
+});
+
 describe('the send path hands a destination to the queue', () => {
   const provider = () => readSource('src', 'context', 'gateway-provider.tsx');
 
