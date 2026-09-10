@@ -30,6 +30,12 @@
 // its own words — "N routines · <verdict>" — rather than being folded into the
 // run-derived counts, and a Bot with no routines says nothing about them.
 //
+// P5's spend arrives the same way, as rows the tab read: `withSpend` merges
+// each Bot's row onto the card that Bot's runs produced, and the card prints
+// the row's own wording. A card the read holds no row for says nothing about
+// spend rather than a zero nobody read, and a Bot with spend but no runs here
+// gets no card at all — the cards stay the runs this device saw.
+//
 // That empty-device rule is about the CARDS, never about this section: the
 // weekly report is opted into from here (D3 Build 5), so a device that has run
 // nothing — exactly the device the report exists to bring back — still gets
@@ -62,6 +68,7 @@ import { Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { CronJob } from '@/lib/gateway/cron';
 import type { ActivityRun } from '@/lib/gateway/runs';
+import type { BotSpendRow } from '@/lib/gateway/spend-report';
 import {
   readWeeklyReportOptIn,
   setWeeklyReportOptIn,
@@ -85,7 +92,9 @@ import {
   scorecardFateCopy,
   scorecardRoutineCopy,
   scorecardRoutineHealth,
+  scorecardSpendCopy,
   scorecardWindowCopy,
+  withSpend,
   SCORECARD_FOOTER_COPY,
   type ScorecardFilter,
 } from '@/lib/fleet/scorecard';
@@ -93,6 +102,7 @@ import {
 export function ScorecardsSection({
   runs,
   jobs,
+  spendRows,
   filter,
   onSelect,
 }: {
@@ -100,13 +110,21 @@ export function ScorecardsSection({
   runs: readonly ActivityRun[];
   /** The gateway's own scheduled jobs, for the routine health a card can carry. */
   jobs: readonly CronJob[];
+  /**
+   * P5's per-Bot spend, as the tab's own read folded it. Merged onto the cards
+   * by the fold's id rule; a Bot with spend but no runs here still gets no card.
+   */
+  spendRows: readonly BotSpendRow[];
   /** The bucket the tab is filtered to, or null for no filter. */
   filter: ScorecardFilter;
   onSelect: (filter: ScorecardFilter) => void;
 }) {
   const tokens = useTokens();
-  // Fold the list the tab was handed, exactly as the tab's own filter does.
-  const cards = useMemo(() => buildScorecards(runs), [runs]);
+  // Fold the list the tab was handed, exactly as the tab's own filter does,
+  // then merge the spend read onto it — the cards decide the list, so a Bot
+  // with spend but no runs on this device cannot appear as one that fails at
+  // nothing.
+  const cards = useMemo(() => withSpend(buildScorecards(runs), spendRows), [runs, spendRows]);
   // Fold the gateway's job list once, by the naming rule the jobs were filed
   // under: a card looks its own bucket up rather than filtering the list here,
   // so one card's line can never carry another Bot's routines. The count is
@@ -220,17 +238,20 @@ export function ScorecardsSection({
             // that met no approval gate, says its counts rather than a
             // duration or an approval it cannot back. The routine verdict is
             // the gateway's own and keeps its own words, looked up by this
-            // card's bucket.
+            // card's bucket, and the spend is P5's read merged onto this card —
+            // each keeps its own words, and a card the spend read holds no row
+            // for says nothing about spend rather than a zero.
             const rows = filterRunsByBot(runs, { botId: card.botId });
             const fates = scorecardFateCopy(card.fates);
             const timed = scorecardDurationCopy(medianRunMs(rows));
             const approvals = scorecardApprovalCopy(scorecardApprovals(rows));
             const routines = scorecardRoutineCopy(routineHealth.get(card.botId));
+            const spend = scorecardSpendCopy(card.spend);
             return (
               <ListRow
                 key={card.botId ?? 'unattributed'}
                 title={scorecardBotLabel(card.botId)}
-                subtitle={[fates, timed, approvals, routines].filter(Boolean).join(' · ')}
+                subtitle={[fates, timed, approvals, routines, spend].filter(Boolean).join(' · ')}
                 onPress={() => onSelect({ botId: card.botId })}
                 trailing={showing ? <Badge label="Showing" tone="accent" /> : undefined}
                 accessibilityHint="Shows this Bot's runs in the list above"

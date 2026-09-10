@@ -26,8 +26,10 @@ import {
   scorecardFateCopy,
   scorecardRoutineCopy,
   scorecardRoutineHealth,
+  scorecardSpendCopy,
   scorecardWindowCopy,
   watchedRunSpanMs,
+  withSpend,
   SCORECARD_FOOTER_COPY,
 } from '@/lib/fleet/scorecard';
 import type {
@@ -38,6 +40,7 @@ import type {
 } from '@/lib/fleet/scorecard';
 import { ACTIVITY_RUNS_PERSIST_CAP, normalizeRestoredRuns } from '@/lib/gateway/session-persistence';
 import type { CronJob } from '@/lib/gateway/cron';
+import { botSpendRowCopy, SPEND_UNREAD_COPY, type BotSpendRow } from '@/lib/gateway/spend-report';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
 declare const __dirname: string;
@@ -626,6 +629,144 @@ describe('scorecardRoutineCopy', () => {
     // The count says what it counts: a bare number here would read as runs.
     expect(copy).toMatch(/^2 routines · /);
     expect(copy).not.toMatch(/complete|approval|median|%/i);
+  });
+});
+
+describe('withSpend', () => {
+  /** One Bot's spend, as P5's `readBotSpend` folds it — costed until a case says otherwise. */
+  const spendRow = (over: Partial<BotSpendRow> = {}): BotSpendRow => ({
+    botId: 'atlas',
+    label: 'Atlas',
+    basis: 'actual',
+    tokens: 12_345,
+    costUsd: 0.42,
+    failed: false,
+    ...over,
+  });
+
+  /** Two cards, so a row can be shown to land on its own Bot's and no other. */
+  const cards = (): BotScorecard[] =>
+    buildScorecards([
+      run({ id: 'a', botId: 'atlas', status: 'complete' }),
+      run({ id: 'b', botId: 'bramble', status: 'failed' }),
+    ]);
+
+  test('a card carries the spend row its own Bot’s read folded', () => {
+    const merged = withSpend(cards(), [
+      spendRow({ botId: 'atlas' }),
+      spendRow({ botId: 'bramble', tokens: 200, costUsd: 1.5 }),
+    ]);
+
+    expect(cardFor(merged, 'atlas').spend?.tokens).toBe(12_345);
+    expect(cardFor(merged, 'bramble').spend?.tokens).toBe(200);
+    // The card is otherwise the fold's own: the spend is a field on it, not a
+    // second fold of the runs.
+    expect(cardFor(merged, 'atlas').fates.complete).toBe(1);
+  });
+
+  test('a card the spend read holds no row for carries no spend at all', () => {
+    const merged = withSpend(cards(), [spendRow({ botId: 'atlas' })]);
+
+    expect(cardFor(merged, 'bramble').spend).toBeUndefined();
+    // No empty field, so nothing on that card can print a zero it never read.
+    expect(Object.keys(cardFor(merged, 'bramble')).sort()).toEqual(['botId', 'fates', 'total']);
+  });
+
+  test('an empty spend read spends nothing, rather than zero per card', () => {
+    const merged = withSpend(cards(), []);
+
+    expect(merged.every((card) => card.spend === undefined)).toBe(true);
+  });
+
+  test('an id that is not an id is the unattributed row, never a Bot’s', () => {
+    const merged = withSpend(
+      buildScorecards([run({ id: 'legacy' }), run({ id: 'atlas-run', botId: 'atlas' })]),
+      [spendRow({ botId: '', label: 'Not a Bot' })],
+    );
+
+    // The same rule the fold buckets a run row by, applied to both sides.
+    expect(cardFor(merged, null).spend?.label).toBe('Not a Bot');
+    expect(cardFor(merged, 'atlas').spend).toBeUndefined();
+  });
+
+  test('a Bot the spend read holds but this device has no runs for gets no card', () => {
+    const merged = withSpend(buildScorecards([run({ id: 'atlas-run', botId: 'atlas' })]), [
+      spendRow({ botId: 'echo', label: 'Echo' }),
+    ]);
+
+    // An empty card would read as a Bot that fails at nothing.
+    expect(merged.map((card) => card.botId)).toEqual(['atlas']);
+    expect(cardFor(merged, 'atlas').spend).toBeUndefined();
+  });
+
+  test('a failed read is merged as the failure it is, never as a zero', () => {
+    const merged = withSpend(cards(), [
+      spendRow({ botId: 'atlas', failed: true, basis: null, tokens: null, costUsd: null }),
+    ]);
+    const card = cardFor(merged, 'atlas');
+
+    expect(card.spend?.failed).toBe(true);
+    expect(card.spend?.tokens).toBeNull();
+    expect(card.spend?.costUsd).toBeNull();
+  });
+
+  test('the cards the fold built are left as they were', () => {
+    const original = cards();
+    const merged = withSpend(original, [spendRow()]);
+
+    expect(merged).not.toBe(original);
+    expect(original.every((card) => card.spend === undefined)).toBe(true);
+    expect(merged.map((card) => card.botId)).toEqual(original.map((card) => card.botId));
+  });
+});
+
+describe('scorecardSpendCopy', () => {
+  /** One Bot's spend, as P5's `readBotSpend` folds it — costed until a case says otherwise. */
+  const spendRow = (over: Partial<BotSpendRow> = {}): BotSpendRow => ({
+    botId: 'atlas',
+    label: 'Atlas',
+    basis: 'actual',
+    tokens: 12_345,
+    costUsd: 0.42,
+    failed: false,
+    ...over,
+  });
+
+  test('a card states its Bot’s spend in the read’s own words', () => {
+    const spend = spendRow();
+
+    expect(scorecardSpendCopy(spend)).toBe(botSpendRowCopy(spend));
+    expect(scorecardSpendCopy(spend)).toContain('tokens');
+  });
+
+  test('the basis travels with the number, so no card is read as a bill', () => {
+    const copy = scorecardSpendCopy(spendRow({ basis: 'estimated' }));
+
+    expect(copy).toContain('estimated');
+  });
+
+  test('a read that failed keeps its unread line rather than a zero', () => {
+    const copy = scorecardSpendCopy(
+      spendRow({ failed: true, basis: null, tokens: null, costUsd: null }),
+    );
+
+    expect(copy).toBe(SPEND_UNREAD_COPY);
+    expect(copy).not.toMatch(/0 tokens|\$0/);
+  });
+
+  test('a card with no spend row says nothing at all', () => {
+    expect(scorecardSpendCopy(undefined)).toBe('');
+  });
+
+  test('one wording for one fact, so the Spend screen and a card cannot disagree', () => {
+    // Every row shape the spend read can fold, re-worded nowhere.
+    for (const spend of [
+      spendRow(),
+      spendRow({ basis: 'none', costUsd: null }),
+      spendRow({ failed: true, basis: null, tokens: null, costUsd: null }),
+    ]) {
+      expect(scorecardSpendCopy(spend)).toBe(botSpendRowCopy(spend));
+    }
   });
 });
 

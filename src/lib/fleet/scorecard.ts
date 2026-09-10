@@ -28,6 +28,10 @@
 //   nobody rather than guessed into a card, and the count and the verdict stay
 //   their own part of a card's line — so a gateway-side number can never be
 //   read as one of the run-derived counts.
+// - A spend number is the spend read's own (`readBotSpend`, P5) and is merged
+//   onto a card by the id rule above, never re-derived here: a card the read
+//   holds no row for says nothing about spend, and a row whose read failed
+//   keeps the read's own unread wording rather than becoming a zero.
 //
 // These cards are observations of runs this device saw — a run started from
 // the desktop or the TUI never reaches this list at all. The surface owes that
@@ -42,6 +46,7 @@ import { formatDuration } from '@/lib/format';
 import { describeCronHealth, type CronHealth, type CronJob } from '@/lib/gateway/cron';
 import { parseRoutineName } from '@/lib/gateway/routines';
 import { ACTIVITY_RUNS_PERSIST_CAP } from '@/lib/gateway/session-persistence';
+import { botSpendRowCopy, type BotSpendRow } from '@/lib/gateway/spend-report';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
 /** What became of the runs one card counted. */
@@ -63,6 +68,12 @@ export type BotScorecard = {
   /** Every row counted here — the fates always sum to it. */
   total: number;
   fates: ScorecardFates;
+  /**
+   * This Bot's spend, once `withSpend` has merged P5's read onto the card.
+   * Absent otherwise: a card the read holds no row for prints no spend at all
+   * rather than a zero it never read.
+   */
+  spend?: BotSpendRow;
 };
 
 /**
@@ -384,6 +395,48 @@ export function scorecardRoutineHealth(
 export function scorecardRoutineCopy(health: ScorecardRoutineHealth | undefined): string {
   if (!health || health.routines <= 0) return '';
   return `${health.routines} routine${health.routines === 1 ? '' : 's'} · ${health.verdict.label}`;
+}
+
+/**
+ * The cards with each Bot's spend merged on (D3's Build 1, `FUTURE-ITEMS.md:807`:
+ * "spend from P5"). The rows are P5's own read — `readBotSpend` answers them and
+ * the surface hands them here — so this fold only decides which card owns which
+ * row, and no number is ever derived a second time.
+ *
+ * The two folds meet on the id rule this module already applies
+ * (`scorecardBotId`): a row whose id is present but empty is the unattributed
+ * row and lands on the unattributed card rather than on some Bot. The cards
+ * decide the list, so a Bot the spend read holds but this device has no runs
+ * for gets no card — an empty card would read as a Bot that fails at nothing —
+ * and a card the read holds no row for carries no `spend` field at all, so a
+ * surface prints nothing rather than a zero it never read.
+ */
+export function withSpend(
+  cards: readonly BotScorecard[],
+  rows: readonly BotSpendRow[],
+): BotScorecard[] {
+  const spendByBot = new Map<string | null, BotSpendRow>();
+  for (const row of rows) {
+    spendByBot.set(scorecardBotId(row.botId), row);
+  }
+
+  return cards.map((card) => {
+    const spend = spendByBot.get(scorecardBotId(card.botId));
+    return spend ? { ...card, spend } : card;
+  });
+}
+
+/**
+ * A card's spend, in the words the Spend screen already prints — or nothing at
+ * all. `botSpendRowCopy` is the row's one wording, reused rather than
+ * re-authored, so a card and P5's per-Bot section cannot describe one read two
+ * ways: a costed row carries its tokens, its cost and the basis they are
+ * claimed on, and a read that failed keeps its own unread line instead of a
+ * zero. A card with no spend row says nothing.
+ */
+export function scorecardSpendCopy(spend: BotSpendRow | undefined): string {
+  if (!spend) return '';
+  return botSpendRowCopy(spend);
 }
 
 /**

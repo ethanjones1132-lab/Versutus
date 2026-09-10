@@ -23,6 +23,7 @@ import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { tabContentPaddingBottom } from '@/lib/motion/tab-insets';
 import type { CronJob } from '@/lib/gateway/cron';
+import { readBotSpend, type BotSpendRow } from '@/lib/gateway/spend-report';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
 type ActivityItem =
@@ -49,6 +50,9 @@ export default function ActivityScreen() {
     requestedRunFocus,
     clearRequestedRunFocus,
     cron,
+    listBots,
+    readBotSessions,
+    canReadBotSessions,
   } = useGateway();
 
   const [runPrompt, setRunPrompt] = useState('');
@@ -64,6 +68,10 @@ export default function ActivityScreen() {
   // read — and this read never adds a card: the cards stay the runs this
   // device holds.
   const [routineJobs, setRoutineJobs] = useState<CronJob[]>([]);
+  // P5's per-Bot spend, so a card can carry what its Bot cost. Empty until a
+  // read lands — which is also what a refused or failed read leaves, so no
+  // card ever claims a spend nobody read.
+  const [spendRows, setSpendRows] = useState<BotSpendRow[]>([]);
   // A tapped "View transcript" on a finished run card opens the sheet keyed on
   // the run id; null closes. The sheet keys itself on the id, so a different
   // run arrives as a fresh component with empty state.
@@ -176,6 +184,37 @@ export default function ActivityScreen() {
     return () => clearTimeout(timer);
   }, [loadRoutineJobs, cronReloadSignal]);
 
+  // P5's per-Bot spend, read for the cards' spend line: the read is the Spend
+  // screen's own (`readBotSpend`), so a card and that screen word one read the
+  // same way. It hangs off the same two edges as the job list above, and the
+  // scoped read joins the source only when the client advertises it — a gateway
+  // that could only refuse is never asked. A refused or failed read leaves no
+  // rows, so every card says nothing about spend rather than a zero nobody read.
+  const loadBotSpend = useCallback(() => {
+    let live = true;
+    const read =
+      status === 'connected'
+        ? readBotSpend(canReadBotSessions ? { listBots, readBotSessions } : { listBots })
+            .then((report) => report.rows)
+            .catch(() => [] as BotSpendRow[])
+        : Promise.resolve<BotSpendRow[]>([]);
+    void read.then((rows) => {
+      if (live) setSpendRows(rows);
+    });
+    return () => {
+      live = false;
+    };
+  }, [status, canReadBotSessions, listBots, readBotSessions]);
+
+  useFocusEffect(loadBotSpend);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void loadBotSpend();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [loadBotSpend, cronReloadSignal]);
+
   // One windowed list carries both run sections so a gateway with a long run
   // history lays out only the few cards on screen, not hundreds at once.
   const listData = useMemo<ActivityItem[]>(() => {
@@ -280,10 +319,10 @@ export default function ActivityScreen() {
   const listFooter = (
     <View style={styles.footer}>
       {/* Per-Bot track records, folded from the same persisted runs the list
-          above renders, with the gateway's own routine health beside them. A
-          tapped card filters that list; it folds the whole read, so the cards
-          stay whole while the list narrows. */}
-      <ScorecardsSection runs={activityRuns} jobs={routineJobs} filter={scorecardFilter} onSelect={setScorecardFilter} />
+          above renders, with the gateway's own routine health and P5's spend
+          beside them. A tapped card filters that list; it folds the whole
+          read, so the cards stay whole while the list narrows. */}
+      <ScorecardsSection runs={activityRuns} jobs={routineJobs} spendRows={spendRows} filter={scorecardFilter} onSelect={setScorecardFilter} />
 
       {/* Scheduled work sits with live runs: Activity is the one place that
           answers "what is this gateway doing". Renders nothing on a gateway

@@ -89,9 +89,10 @@ describe('a card carries the run duration it can back', () => {
     expect(subtitle).toBeGreaterThan(timed);
     // An empty part is appended to nothing: a card whose rows carry no
     // trustworthy span reads as its counts rather than as a 0:00 run, a card
-    // whose rows met no approval gate says nothing about approvals, and one
-    // whose Bot has no routines says nothing about them either.
-    expect(src).toContain("subtitle={[fates, timed, approvals, routines].filter(Boolean).join(' · ')}");
+    // whose rows met no approval gate says nothing about approvals, one whose
+    // Bot has no routines says nothing about them either, and one the spend
+    // read holds no row for says nothing about spend.
+    expect(src).toContain("subtitle={[fates, timed, approvals, routines, spend].filter(Boolean).join(' · ')}");
   });
 });
 
@@ -140,6 +141,30 @@ describe('a card carries the approval pressure its own rows recorded', () => {
 
     expect(approvals).toBeGreaterThan(fates);
     expect(subtitle).toBeGreaterThan(approvals);
+  });
+});
+
+describe('a card carries its Bot’s spend from P5’s read', () => {
+  test('the spend line is the module’s, merged by the fold’s own id rule', () => {
+    const src = section();
+
+    // The rows are P5's read, handed in by the tab: this file performs no
+    // gateway read of its own, and the merge rule stays in the fold.
+    expect(src).toContain('withSpend(buildScorecards(runs), spendRows)');
+    expect(src).toContain('scorecardSpendCopy(card.spend)');
+    expect(src).not.toContain('listBots');
+    expect(src).not.toContain('useGateway');
+    expect(src).not.toContain('runs.filter(');
+  });
+
+  test('the spend line is decided after the routine line, before the line is composed', () => {
+    const src = section();
+    const routines = src.indexOf('const routines = scorecardRoutineCopy(');
+    const spend = src.indexOf('const spend = scorecardSpendCopy(card.spend);');
+    const subtitle = src.indexOf('subtitle={');
+
+    expect(spend).toBeGreaterThan(routines);
+    expect(subtitle).toBeGreaterThan(spend);
   });
 });
 
@@ -312,6 +337,36 @@ describe('the tab reads the gateway’s jobs, so a card can carry its Bot’s ro
     // that fails while Activity is backgrounded is caught on the way back in.
     expect(src).toContain('useFocusEffect(loadRoutineJobs)');
     expect(src).toContain('cronReloadSignal');
+  });
+});
+
+describe('the tab reads P5’s per-Bot spend, so a card can carry what its Bot cost', () => {
+  test('the section is handed the spend beside the runs and the jobs', () => {
+    const src = tab();
+
+    expect(src).toContain(
+      '<ScorecardsSection runs={activityRuns} jobs={routineJobs} spendRows={spendRows}',
+    );
+  });
+
+  test('the read is P5’s own, and a gateway that cannot be asked is never asked', () => {
+    const src = tab();
+
+    // The Spend screen's own read, so a card and that screen word one read the
+    // same way — and the scoped read joins the source only where the client
+    // advertises it.
+    expect(src).toContain('readBotSpend(');
+    expect(src).toContain('canReadBotSessions ? { listBots, readBotSessions } : { listBots }');
+    expect(src).toContain('useFocusEffect(loadBotSpend)');
+    expect(src).toContain('cronReloadSignal');
+  });
+
+  test('a read that fails leaves no rows, so no card claims a spend nobody read', () => {
+    const src = tab();
+
+    expect(src).toContain('status === \'connected\'');
+    expect(src).toContain('.catch(() => [] as BotSpendRow[])');
+    expect(src).toContain('useState<BotSpendRow[]>([])');
   });
 });
 
