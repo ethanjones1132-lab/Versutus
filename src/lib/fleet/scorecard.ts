@@ -15,7 +15,9 @@
 //   no finish at all, and an `unresolved` row's finish is the moment this
 //   client stopped polling rather than the moment the run finished
 //   (`runs.ts:25-30`) — a span it cannot back, so a card shows no duration
-//   rather than one that is really time-to-app-close or time-to-give-up.
+//   rather than one that is really time-to-app-close or time-to-give-up. The
+//   rule is `watchedRunSpanMs`, shared with the run card that prints a single
+//   run's span, so the two surfaces cannot drift.
 //
 // These cards are observations of runs this device saw — a run started from
 // the desktop or the TUI never reaches this list at all. The surface owes that
@@ -121,16 +123,16 @@ export function filterRunsByBot(
 }
 
 /**
- * The median span this card's runs took (D3's Build 1, `FUTURE-ITEMS.md:804-805`).
+ * The span this device watched one run END on — the only duration any surface
+ * may claim — or `null` when no read here can back one.
  *
- * Only the spans this device watched END are counted, because a duration is a
- * claim about how long the work took:
- * - A live row has no finish, so it cannot be timed at all.
- * - An `unresolved` row is out even though it is settled, and this is the rule
- *   that keeps a restored row's time-to-app-close out of a card: `unresolved`
- *   means the client stopped watching, so its finish is when polling gave up
- *   rather than when the run ended (`runs.ts:25-30`). That span is a lower
- *   bound, and a median built from lower bounds is not a run time.
+ * `medianRunMs` folds over this and `RunCard` prints its answer, so a Bot's
+ * card and a single run's card claim a duration by one rule rather than two:
+ * - Only `complete`, `failed` and `cancelled` are timeable. A live row has no
+ *   finish at all, and an `unresolved` row is out even though it is settled:
+ *   it means the client stopped watching, so its finish is when polling gave
+ *   up rather than when the run ended (`runs.ts:25-30`). That span is a lower
+ *   bound, and a lower bound is not a run time.
  * - A finish past `now` is a placeholder rather than an end this device
  *   reached, and a finish at or before its own start is no span at all — the
  *   same discipline `buildHomeBriefing` applies to a finish that lies past its
@@ -138,27 +140,36 @@ export function filterRunsByBot(
  * - A `startedAt`/`finishedAt` a read cannot trust as a number is not a span
  *   either, so a half-shaped row cannot put a `NaN` into the answer.
  *
- * `now` is injectable for tests; in production it is the fold's own clock at
- * the moment it runs. An odd count answers with its middle span, an even one
- * with the midpoint of its two middle spans, and a card with nothing it can
- * time answers `null` rather than `0` — a Bot whose runs this device never
- * timed must not read as one whose runs took no time.
+ * `now` is injectable for tests; in production it is the caller's own clock at
+ * the moment it reads. A caller that prints this answer as a duration owed the
+ * reader a span this device watched end, and the rule lives here so it cannot
+ * drift from the fold that already decides it.
+ */
+export function watchedRunSpanMs(run: ActivityRun, now: number = Date.now()): number | null {
+  if (run.status !== 'complete' && run.status !== 'failed' && run.status !== 'cancelled') return null;
+  const { startedAt, finishedAt } = run;
+  if (typeof startedAt !== 'number' || !Number.isFinite(startedAt)) return null;
+  if (typeof finishedAt !== 'number' || !Number.isFinite(finishedAt)) return null;
+  if (finishedAt > now) return null;
+  const span = finishedAt - startedAt;
+  if (span <= 0) return null;
+  return span;
+}
+
+/**
+ * The median span this card's runs took (D3's Build 1, `FUTURE-ITEMS.md:804-805`),
+ * folded over `watchedRunSpanMs` — the one rule for which rows a duration may
+ * be claimed from. A card with nothing it can time answers `null` rather than
+ * `0` — a Bot whose runs this device never timed must not read as one whose
+ * runs took no time. An odd count answers with its middle span, an even one
+ * with the midpoint of its two middle spans.
  */
 export function medianRunMs(runs: readonly ActivityRun[], now: number = Date.now()): number | null {
   const spans: number[] = [];
 
   for (const run of runs) {
-    // The fates this device watched end — `unresolved` is settled for the
-    // counts and deliberately not for a duration, and `running` /
-    // `waiting-approval` have no finish to read.
-    if (run.status !== 'complete' && run.status !== 'failed' && run.status !== 'cancelled') continue;
-    const { startedAt, finishedAt } = run;
-    if (typeof startedAt !== 'number' || !Number.isFinite(startedAt)) continue;
-    if (typeof finishedAt !== 'number' || !Number.isFinite(finishedAt)) continue;
-    if (finishedAt > now) continue;
-    const span = finishedAt - startedAt;
-    if (span <= 0) continue;
-    spans.push(span);
+    const span = watchedRunSpanMs(run, now);
+    if (span !== null) spans.push(span);
   }
 
   if (spans.length === 0) return null;

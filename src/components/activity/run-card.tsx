@@ -5,6 +5,7 @@ import { Badge, Card, Icon, PressableScale, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { useNow } from '@/hooks/use-now';
+import { watchedRunSpanMs } from '@/lib/fleet/scorecard';
 import { formatDuration, formatRelativeTime } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
 import type { ActivityRun } from '@/lib/gateway/runs';
@@ -64,6 +65,16 @@ export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript, on
   const [expanded, setExpanded] = useState(false);
   const live = run.status === 'running' || run.status === 'waiting-approval';
   const latestEvent = run.events.length > 0 ? run.events[run.events.length - 1] : null;
+  /**
+   * The span this card may print, or `null` for a run this device never watched
+   * end. It is the fold's own rule (`watchedRunSpanMs`, the one the Bot
+   * scorecards count a median over) rather than a second copy of it on this
+   * surface: a row restored from disk carries no finish of its own — the load
+   * stamps one at read time (`normalizeRestoredRuns`) — so an `unresolved` row
+   * would otherwise show how long the APP was closed as how long the RUN took.
+   * Its own status says this device never learned the end of it (`runs.ts:25-30`).
+   */
+  const span = watchedRunSpanMs(run);
 
   return (
     <Card
@@ -88,7 +99,8 @@ export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript, on
           <LiveElapsed startedAt={run.startedAt} />
         ) : (
           <Text variant="micro" color="tertiary">
-            {formatDuration((run.finishedAt ?? run.startedAt) - run.startedAt)} · {formatRelativeTime(run.finishedAt ?? run.startedAt)}
+            {span === null ? '' : `${formatDuration(span)} · `}
+            {formatRelativeTime(run.finishedAt ?? run.startedAt)}
           </Text>
         )}
       </View>

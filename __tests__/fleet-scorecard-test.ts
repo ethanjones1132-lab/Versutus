@@ -23,6 +23,7 @@ import {
   scorecardFate,
   scorecardFateCopy,
   scorecardWindowCopy,
+  watchedRunSpanMs,
   SCORECARD_FOOTER_COPY,
 } from '@/lib/fleet/scorecard';
 import type { BotScorecard, ScorecardFates } from '@/lib/fleet/scorecard';
@@ -350,6 +351,57 @@ describe('scorecardFateCopy', () => {
 
   test('nothing at all prints nothing, never a zero', () => {
     expect(scorecardFateCopy(fates({}))).toBe('');
+  });
+});
+
+describe('watchedRunSpanMs', () => {
+  const NOW = 1_757_400_000_000;
+
+  /** A row that ended `ms` before NOW — one span this device watched end. */
+  const endedIn = (ms: number, over: Partial<ActivityRun> = {}): ActivityRun =>
+    run({ startedAt: NOW - ms, finishedAt: NOW, ...over });
+
+  test('a run this device watched end answers its span', () => {
+    // The one rule the run card and the median fold share, so a single run's
+    // card and a Bot's card cannot disagree about what counts as a time.
+    expect(watchedRunSpanMs(endedIn(30_000), NOW)).toBe(30_000);
+    expect(watchedRunSpanMs(endedIn(30_000, { status: 'failed' }), NOW)).toBe(30_000);
+    expect(watchedRunSpanMs(endedIn(30_000, { status: 'cancelled' }), NOW)).toBe(30_000);
+  });
+
+  test('a run whose end this device never learned answers no span', () => {
+    // `unresolved` is settled for the counts and out for a duration: its finish
+    // is when this client stopped polling (runs.ts:25-30).
+    expect(watchedRunSpanMs(endedIn(900_000, { status: 'unresolved' }), NOW)).toBeNull();
+    expect(
+      watchedRunSpanMs(run({ status: 'running', startedAt: NOW - 900_000, finishedAt: undefined }), NOW),
+    ).toBeNull();
+    expect(
+      watchedRunSpanMs(
+        run({ status: 'waiting-approval', startedAt: NOW - 900_000, finishedAt: undefined }),
+        NOW,
+      ),
+    ).toBeNull();
+  });
+
+  test('the row the app interrupted on load answers no span', () => {
+    const restored = normalizeRestoredRuns([
+      run({ id: 'killed', status: 'running', startedAt: NOW - 900_000, finishedAt: undefined }),
+    ]);
+
+    // The load-time stamp is how long the app was CLOSED, never a run time.
+    expect(restored[0].status).toBe('unresolved');
+    expect(watchedRunSpanMs(restored[0])).toBeNull();
+  });
+
+  test('a finish this read cannot trust is no span either', () => {
+    // A placeholder past the fold's clock, a finish at or before its own start,
+    // a half-shaped row and a timestamp that is not a number are all refused.
+    expect(watchedRunSpanMs(endedIn(60_000, { finishedAt: NOW + 5_000 }), NOW)).toBeNull();
+    expect(watchedRunSpanMs(endedIn(0), NOW)).toBeNull();
+    expect(watchedRunSpanMs(run({ startedAt: NOW, finishedAt: NOW - 5_000 }), NOW)).toBeNull();
+    expect(watchedRunSpanMs(run({ startedAt: Number.NaN, finishedAt: NOW }), NOW)).toBeNull();
+    expect(watchedRunSpanMs(run({ startedAt: NOW - 1_000, finishedAt: undefined }), NOW)).toBeNull();
   });
 });
 

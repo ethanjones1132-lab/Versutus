@@ -26,9 +26,11 @@ describe('run card tick scope', () => {
   test('the live header line renders LiveElapsed from the run start; finished lines are static', () => {
     const src = readRunCardSource();
     expect(src).toMatch(/<LiveElapsed startedAt=\{run\.startedAt\}\s*\/>/);
-    // A finished run never ticks: its line is the fixed duration and the
-    // relative time, both derived from finishedAt with no clock involved.
-    expect(src).toMatch(/formatDuration\(\(run\.finishedAt \?\? run\.startedAt\) - run\.startedAt\)/);
+    // A finished run never ticks: its line is the span the fold backs and the
+    // relative time, with no clock involved. The span is the shipped
+    // `watchedRunSpanMs` answer — run-card-duration-claim-test.ts pins the
+    // guard that keeps a row this device never watched end out of it.
+    expect(src).toMatch(/formatDuration\(span\)/);
     expect(src).toMatch(/formatRelativeTime\(run\.finishedAt \?\? run\.startedAt\)/);
   });
 
