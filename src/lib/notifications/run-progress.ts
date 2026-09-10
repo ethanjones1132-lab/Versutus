@@ -59,6 +59,24 @@ export function runProgressNoticeIdentifier(runId: string): string {
 }
 
 /**
+ * The body's own lines, on their own.
+ *
+ * `body` below is these joined and nothing else, so they are phrased here once:
+ * a surface with room for one reading rather than three — §7's Live Activity
+ * draws the elapsed span in the Dynamic Island, where a three-line body does not
+ * fit (`run-activity.ts`) — reads the line instead of re-parsing prose, and a
+ * surface that re-words it is a second voice for the same fact.
+ */
+export type RunProgressLines = {
+  /** 'Elapsed 3:42' — how long this device has watched the run, when readable. */
+  elapsed?: string;
+  /** The newest step the run stream delivered, when it delivered words. */
+  step?: string;
+  /** 'Last update 14:02' — when all of the above was true, in this clock. */
+  updated: string;
+};
+
+/**
  * What the poster does with this fold, and the copy when there is any: an
  * `update` is re-posted under `identifier`, over whatever notice is already
  * there; a `retire` carries no title and no body, because a notice that is
@@ -70,6 +88,7 @@ export type RunProgressNotice =
       identifier: string;
       title: string;
       body: string;
+      lines: RunProgressLines;
       data: RunProgressData;
     }
   | {
@@ -96,31 +115,33 @@ export function runProgressNotice(run: ActivityRun, now: number = Date.now()): R
   const data = runProgressNoticeData(run.id);
   if (!IN_FLIGHT_RUN_STATUSES.has(run.status)) return { verb: 'retire', identifier, data };
 
+  const lines = progressLines(run, now);
   return {
     verb: 'update',
     identifier,
     title: run.status === 'waiting-approval' ? RUN_APPROVAL_TITLE : RUN_PROGRESS_TITLE,
-    body: progressBody(run, now),
+    body: progressBody(lines),
+    lines,
     data,
   };
 }
 
 /**
- * The body: how long this device has watched the run, the newest step the run
- * stream delivered, and when all of that was true. Every line is a fact about
- * what was read, never a claim about a gateway this app can no longer see.
+ * The readings: how long this device has watched the run, the newest step the
+ * run stream delivered, and when all of that was true. Every line is a fact
+ * about what was read, never a claim about a gateway this app can no longer
+ * see.
  */
-function progressBody(run: ActivityRun, now: number): string {
-  const lines: string[] = [];
-
+function progressLines(run: ActivityRun, now: number): RunProgressLines {
   // The span is stated only when it can be read as one: a `startedAt` that is
   // not a finite instant, or one this client would have to read as the future,
   // is no watch length at all — `formatDuration` answers both `0:00`
   // (format.ts:102), which would be an elapsed time nobody measured. The
   // scorecard's `watchedRunSpanMs` refuses a span the same way (scorecard.ts:236-241).
-  if (Number.isFinite(run.startedAt) && run.startedAt <= now) {
-    lines.push(`Elapsed ${formatDuration(now - run.startedAt)}`);
-  }
+  const elapsed =
+    Number.isFinite(run.startedAt) && run.startedAt <= now
+      ? `Elapsed ${formatDuration(now - run.startedAt)}`
+      : undefined;
 
   // The row holds the previews the driver already folded with `runEventPreview`
   // (gateway-provider.tsx:2230) and carries no raw event payload, so this reads
@@ -128,12 +149,19 @@ function progressBody(run: ActivityRun, now: number): string {
   // that helper on a stored row, whose answer would be its own `'{}'` fallback
   // (runs.ts:91) — would be this fold inventing a step the run never reported.
   // A preview that holds no words is no step either.
-  const step = run.events[run.events.length - 1]?.preview;
-  if (step && step.trim()) lines.push(step);
+  const preview = run.events[run.events.length - 1]?.preview;
+  const step = preview && preview.trim() ? preview : undefined;
 
-  // §7's Constraints: the process can be killed and the notice then freezes, so
-  // the copy says when it was written instead of implying it is still moving.
-  lines.push(`Last update ${formatClockTime(now)}`);
+  return {
+    ...(elapsed ? { elapsed } : {}),
+    ...(step ? { step } : {}),
+    // §7's Constraints: the process can be killed and the notice then freezes, so
+    // the copy says when it was written instead of implying it is still moving.
+    updated: `Last update ${formatClockTime(now)}`,
+  };
+}
 
-  return lines.join('\n');
+/** The body the poster draws: the same readings, in the order they were taken. */
+function progressBody(lines: RunProgressLines): string {
+  return [lines.elapsed, lines.step, lines.updated].filter(Boolean).join('\n');
 }

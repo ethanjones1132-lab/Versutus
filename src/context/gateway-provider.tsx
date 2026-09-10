@@ -133,6 +133,7 @@ import {
   notifyRunComplete,
   notifyRunProgress,
 } from '@/lib/notifications/local';
+import { syncRunActivities } from '@/lib/notifications/run-activity-device';
 import { pendingRunFocus, type RunFocus } from '@/lib/notifications/run-focus';
 import { runProgressNotice } from '@/lib/notifications/run-progress';
 import { rearmRoutineNotifications } from '@/lib/notifications/routine-sync';
@@ -826,12 +827,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * return re-folds and re-posts what the tray owes, because nothing was drawn
    * for the foregrounded stretch it just left. The ending is not this effect's
    * to say: that stays `notifyRunComplete`'s.
+   *
+   * §7's iOS half rides the same pass and the same folds: the Lock Screen
+   * activity is handed the identical notices, and — unlike the tray — is asked
+   * for whether or not the app is up, because a Live Activity is drawn on a
+   * pocketed phone whatever this process is doing. Neither surface is asked for
+   * by a poller, and neither is asked for twice.
    */
   useEffect(() => {
     const held = runProgressNoticeIdsRef.current;
+    const notices = activityRuns.map((run) => runProgressNotice(run));
+    void syncRunActivities(notices);
     const next = new Set<string>();
-    for (const run of activityRuns) {
-      const notice = runProgressNotice(run);
+    for (const notice of notices) {
       if (notice.verb === 'update') {
         next.add(notice.identifier);
         // Nothing is drawn while the app is up, so the notice is not asked for
