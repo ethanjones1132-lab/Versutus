@@ -117,3 +117,24 @@ export async function syncRoutineNotification(job: RoutineJob): Promise<void> {
 export async function cancelRoutineNotification(jobId: string): Promise<void> {
   await cancelKnownNotice(jobId);
 }
+
+/**
+ * Re-arm every unpaused routine's notice from one fresh gateway read.
+ *
+ * A routine whose cron is not one of the two repeating shapes is scheduled as
+ * a one-shot DATE at the next fire the GATEWAY reported (§1a) — a trigger
+ * that leaves nothing behind once it lands, so without this the routine would
+ * fall silent until the operator edited it. Re-syncing from a fresh read
+ * rebuilds that one-shot; the cancel-then-schedule inside
+ * syncRoutineNotification keeps exactly ONE notice per job, so a re-arm can
+ * never stack a second copy of a notice that is already waiting.
+ *
+ * Paused jobs are skipped rather than cancelled: the pause already retired
+ * their notice, and a stale OR re-armed notice for a paused routine is the
+ * lie this module exists to avoid. Best-effort throughout — sync never
+ * rejects, so a re-arm is safe to fire and forget.
+ */
+export async function rearmRoutineNotifications(jobs: RoutineJob[]): Promise<void> {
+  const live = jobs.filter((job) => !job.paused);
+  await Promise.all(live.map((job) => syncRoutineNotification(job)));
+}

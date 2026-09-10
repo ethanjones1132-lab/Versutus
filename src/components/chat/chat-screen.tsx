@@ -41,6 +41,7 @@ import { haptics } from '@/lib/haptics';
 // mutation below keeps it in step (fire-and-forget, best-effort).
 import {
   cancelRoutineNotification,
+  rearmRoutineNotifications,
   syncRoutineNotification,
 } from '@/lib/notifications/routine-sync';
 import { resolvePullRefreshAction } from '@/lib/gateway/messages';
@@ -839,7 +840,14 @@ export function ChatScreen() {
       .list()
       .then((jobs) => {
         if (cancelled) return;
-        foldRoutineRead(botSurfaceId, { ok: true, jobs: routineJobsFromList(jobs) });
+        const read = routineJobsFromList(jobs);
+        foldRoutineRead(botSurfaceId, { ok: true, jobs: read });
+        // This read is the only one that carries this Bot's routines and the
+        // gateway's CURRENT next fire for each: re-arm their one-shot notices
+        // from it, so a cadence beyond the two repeating shapes that already
+        // fired is rebuilt the moment the operator opens the Bot Chat. Same
+        // helper and same must-still as the provider's connected re-arm.
+        void rearmRoutineNotifications(read);
       })
       .catch(() => {
         if (cancelled) return;

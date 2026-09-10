@@ -103,6 +103,7 @@ import {
   type ActivityRun,
   type RunCapableClient,
 } from '@/lib/gateway/runs';
+import { routineJobsFromList } from '@/lib/gateway/routines';
 import {
   loadActivityRuns,
   loadOfflineQueue,
@@ -118,6 +119,7 @@ import {
   notifyGatewayDown,
   notifyRunComplete,
 } from '@/lib/notifications/local';
+import { rearmRoutineNotifications } from '@/lib/notifications/routine-sync';
 import type {
   ChatMessage,
   CommandTranscriptEntry,
@@ -3037,6 +3039,30 @@ const response = await executeGatewaySlashCommand(trimmed, {
       await client.removeJob(jobId);
     },
   }), []);
+
+  // Re-arm routine notices on app open while connected. A routine whose cron
+  // is not one of the two repeating shapes is scheduled as a one-shot DATE at
+  // the next fire the GATEWAY reported (§1a); that trigger leaves nothing
+  // behind once it lands, so without this the routine falls silent until the
+  // operator edits it. Reading the routine list as the connection comes up and
+  // re-syncing each unpaused job rebuilds that one-shot from a fresh
+  // `nextRunAt` — the same read and the same parse the Routines pane uses, so
+  // the two can never disagree about which jobs exist or when they fire next.
+  const rearmRoutineNotices = useCallback(async () => {
+    try {
+      const jobs = routineJobsFromList(await botJobs.list());
+      await rearmRoutineNotifications(jobs);
+    } catch {
+      // best-effort: a failed routine read re-arms nothing and breaks no
+      // connection flow; the next connected transition tries again
+    }
+  }, [botJobs]);
+
+  useEffect(() => {
+    if (status !== 'connected') return;
+    // Fire-and-forget: the connection must never wait on a notification read.
+    void rearmRoutineNotices();
+  }, [rearmRoutineNotices, status]);
 
   const cron = useMemo(() => ({
     get available() {
