@@ -72,19 +72,31 @@ function advance(engine: SpeechEngine, owner: number, voice: ReplyVoice): boolea
 }
 
 /**
+ * The voices this device offers, or none where the platform cannot say. The
+ * list is handed on in the platform's own shape, unread: `botVoiceRows` in
+ * `bot-voices.ts` is what decides whether a row is a voice this device can be
+ * handed, so nothing here has to guess what a voice looks like. A build with
+ * no engine and a list that cannot be read are both "no voice" rather than a
+ * rejection into the surface that asked.
+ */
+export async function availableVoices(): Promise<unknown[]> {
+  const engine = await loadSpeechEngine();
+  if (!engine) return [];
+  try {
+    return await engine.getAvailableVoicesAsync();
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Whether this device has a voice to read a reply in. The platform's own list
- * of voices is the question: a device that names none has nothing to speak
- * with, and a list that cannot be read is the same answer rather than a
- * toggle whose tap could only be silent.
+ * of voices is the question — the same read the picker's rows come from — so a
+ * device that names none has nothing to speak with, and a list that cannot be
+ * read is the same answer rather than a toggle whose tap could only be silent.
  */
 export async function speechAvailable(): Promise<boolean> {
-  const engine = await loadSpeechEngine();
-  if (!engine) return false;
-  try {
-    return (await engine.getAvailableVoicesAsync()).length > 0;
-  } catch {
-    return false;
-  }
+  return (await availableVoices()).length > 0;
 }
 
 /**

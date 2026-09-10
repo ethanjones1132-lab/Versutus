@@ -128,11 +128,16 @@ import {
   threadConfigOfferedModes,
   type ThreadConfigMode,
 } from '@/lib/gateway/thread-config';
+import { botVoiceOptions } from '@/lib/voice/bot-voices';
 import { speakerAction } from '@/lib/voice/speech-reply';
-import { speakReply, speechAvailable, stopSpeech } from '@/lib/voice/speech';
+import { availableVoices, speakReply, speechAvailable, stopSpeech } from '@/lib/voice/speech';
 import {
+  applyBotVoice,
   applySpeakerOn,
+  botVoicePreferenceKey,
+  clearVoicePreference,
   loadVoicePreferences,
+  readBotVoice,
   readSpeakerOn,
   saveVoicePreferences,
   speakerPreferenceKey,
@@ -471,6 +476,9 @@ export function ChatScreen() {
       cancelled = true;
     };
   }, [sessionSelector.visible]);
+  // The active Bot, named once for every Bot-keyed surface below (its skills,
+  // its tools, and the voice its replies are read in).
+  const botSurfaceId = surface.kind === 'bot' ? surface.botId : undefined;
   // The speaker is one conversation's own opt-in (B2), held in this device's
   // store beside a Bot's voice, so the flag is read and written here and the
   // gateway is asked nothing. Whether this device has a voice to read a reply
@@ -504,6 +512,57 @@ export function ChatScreen() {
     void loadVoicePreferences().then((stored) => saveVoicePreferences(applySpeakerOn(stored, key, next)));
   }, [speakerKey, speakerOn]);
 
+  // A Bot's own voice (B2) is the same device store's, keyed by the gateway and
+  // the Bot so one name on two gateways is two voices. The rows are this
+  // device's own list through the pure fold, the choice is read with the
+  // store's own read, and the reply is read in it — the screen authors neither
+  // the key, the order nor the rule.
+  const botVoiceKey =
+    activeGateway && botSurfaceId ? botVoicePreferenceKey(activeGateway.id, botSurfaceId) : undefined;
+  const [botVoiceId, setBotVoiceId] = useState<string | undefined>(undefined);
+  const [deviceVoices, setDeviceVoices] = useState<unknown[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void availableVoices().then((voices) => {
+      if (!cancelled) setDeviceVoices(voices);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    void loadVoicePreferences().then((stored) => {
+      if (!cancelled) {
+        setBotVoiceId(botVoiceKey ? readBotVoice(stored, botVoiceKey)?.voiceIdentifier : undefined);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [botVoiceKey]);
+  const botVoiceChoices = useMemo(
+    () => botVoiceOptions(deviceVoices, botVoiceId),
+    [deviceVoices, botVoiceId],
+  );
+  const handleBotVoiceSelect = useCallback(
+    (identifier: string | undefined) => {
+      const key = botVoiceKey;
+      if (!key) return;
+      setBotVoiceId(identifier);
+      // The blob is read back and folded before it is written, so one Bot's
+      // voice moves without dropping this conversation's speaker flag.
+      void loadVoicePreferences().then((stored) =>
+        saveVoicePreferences(
+          identifier
+            ? applyBotVoice(stored, key, { voiceIdentifier: identifier })
+            : clearVoicePreference(stored, key),
+        ),
+      );
+    },
+    [botVoiceKey],
+  );
+
   // The transcript's own tail decides what the speaker owes — the rule is
   // `speakerAction`'s, in `src/lib/voice/speech-reply.ts` — so a finished
   // reply is read, a new turn silences the queue, and everything still
@@ -530,8 +589,11 @@ export function ChatScreen() {
     if (action.kind !== 'speak') return;
     if (memory.id === transcriptTail?.id) return;
     speakerMemoryRef.current = { thread: speakerKey, flag: speakerOn, id: transcriptTail?.id };
-    void speakReply(action.text);
-  }, [transcriptTail, speakerKey, speakerOn]);
+    // The Bot's own voice, where this device stored one: a Bot with none is
+    // read with the platform's own defaults, which is exactly what an empty
+    // `ReplyVoice` leaves standing.
+    void speakReply(action.text, botVoiceId ? { voiceIdentifier: botVoiceId } : {});
+  }, [transcriptTail, speakerKey, speakerOn, botVoiceId]);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<TranscriptItem>>(null);
@@ -870,7 +932,6 @@ export function ChatScreen() {
     };
   }, [surface.kind, status, listBots]);
 
-  const botSurfaceId = surface.kind === 'bot' ? surface.botId : undefined;
   const spendSurfaceKey =
     surface.kind === 'bot'
       ? `bot:${surface.botId}`
@@ -1535,7 +1596,14 @@ export function ChatScreen() {
       ) : null}
 
       {botChromeCombined(surface) ? (
-        <BotChrome>
+        <BotChrome
+          // The voice this Bot's replies are read in: this device's own list
+          // through the picker's fold, offered only where there is a Bot to key
+          // a voice to (the fold answers no rows for a device with no voice, so
+          // a platform that named none draws no Voice section).
+          voiceOptions={botVoiceKey ? botVoiceChoices : undefined}
+          onVoiceSelect={botVoiceKey ? handleBotVoiceSelect : undefined}
+        >
           <SkillsPane
             skills={skillsState.botId === surface.botId ? skillsState.skills : []}
             loaded={skillsState.botId === surface.botId ? skillsState.loaded : false}

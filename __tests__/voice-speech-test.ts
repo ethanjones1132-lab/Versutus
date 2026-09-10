@@ -33,7 +33,7 @@ jest.mock('@/lib/voice/speech-device', () => ({
   loadSpeechEngine: () => mockLoad(),
 }));
 
-import { speakReply, speechAvailable, stopSpeech } from '@/lib/voice/speech';
+import { availableVoices, speakReply, speechAvailable, stopSpeech } from '@/lib/voice/speech';
 
 /** The options the seam hands the platform for one utterance. */
 type SpeakOptions = {
@@ -45,10 +45,10 @@ type SpeakOptions = {
   onError?: () => void;
 };
 
-const voice = (identifier: string) => ({
+const voice = (identifier: string, quality: 'Default' | 'Enhanced' = 'Default') => ({
   identifier,
   name: identifier,
-  quality: 'Default',
+  quality,
   language: 'en-US',
 });
 
@@ -141,6 +141,37 @@ describe('the availability answer', () => {
     engine.getAvailableVoicesAsync.mockRejectedValue(new Error('no speech service'));
     mockLoad.mockResolvedValue(engine);
 
+    await expect(speechAvailable()).resolves.toBe(false);
+  });
+});
+
+describe('the voices this device offers', () => {
+  test('the platform’s own list is handed on as it answered', async () => {
+    const engine = fakeEngine({ voices: [voice('voice.one'), voice('voice.two', 'Enhanced')] });
+    mockLoad.mockResolvedValue(engine);
+
+    // Unread: the order the picker draws and what counts as a voice are
+    // `botVoiceRows`'s rules, so the seam hands on exactly what it was given.
+    await expect(availableVoices()).resolves.toEqual([
+      voice('voice.one'),
+      voice('voice.two', 'Enhanced'),
+    ]);
+  });
+
+  test('a client with no native module offers no voices', async () => {
+    mockLoad.mockResolvedValue(null);
+
+    await expect(availableVoices()).resolves.toEqual([]);
+  });
+
+  test('a list that cannot be read is no voices rather than a guess', async () => {
+    const engine = fakeEngine();
+    engine.getAvailableVoicesAsync.mockRejectedValue(new Error('no speech service'));
+    mockLoad.mockResolvedValue(engine);
+
+    await expect(availableVoices()).resolves.toEqual([]);
+    // The availability answer is that same read, so neither can disagree with
+    // the other about what this device has.
     await expect(speechAvailable()).resolves.toBe(false);
   });
 });
