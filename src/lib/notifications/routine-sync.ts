@@ -76,16 +76,32 @@ async function cancelKnownNotice(jobId: string): Promise<void> {
  * reported. When neither shape nor next fire exists, nothing is scheduled
  * rather than a guess. Best-effort throughout: scheduling must never break
  * the calling flow.
+ *
+ * The decision comes BEFORE the retirement, because an absent read must not
+ * destroy a notice a past read produced: this sync runs on every connected
+ * re-arm and on every Bot Chat routine read, so one list response that omits
+ * `next_run_at` for a cadence beyond the repeating shapes would otherwise
+ * retire a notice nothing replaces (the house rule "absent data reads as
+ * UNKNOWN", cron.ts). Only a pause — a decision — retires the held notice
+ * with nothing new to schedule.
  */
 export async function syncRoutineNotification(job: RoutineJob): Promise<void> {
-  // A paused routine's notice must not survive: retire the old one even
-  // though nothing new is scheduled.
-  await cancelKnownNotice(job.id);
+  // A pause is a decision, not missing data: a paused routine's notice must
+  // not survive, so it is retired up front.
+  if (job.paused) {
+    await cancelKnownNotice(job.id);
+    return;
+  }
 
-  if (job.paused) return;
   const { botId, title } = parseRoutineName(job.name ?? job.id);
   const trigger = cronToTrigger(job.schedule ?? '', job.nextRunAt);
-  if (!trigger) return; // honest null: no repeating shape, no gateway next fire
+  // Honest null: no repeating shape and no next fire the gateway named. The
+  // notice already held stays — retiring it here would let missing data
+  // silence a routine the operator scheduled.
+  if (!trigger) return;
+
+  // A replacement exists: retire the held notice, then schedule exactly one.
+  await cancelKnownNotice(job.id);
   const data = routineNoticeData(job.id, botId ?? '');
 
   try {

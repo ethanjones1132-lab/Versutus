@@ -84,7 +84,8 @@ describe('re-arming routine notices as the connection comes up', () => {
   });
 
   test("the gateway's fresh next fire rebuilds the one-shot", async () => {
-    // The stale read is what the fired notice left behind: cancel-only.
+    // A read that can only price a fire already behind us schedules nothing —
+    // and, holding no mapping, retires nothing either.
     await syncRoutineNotification(sweep(FIRED));
     expect(mockSchedule).not.toHaveBeenCalled();
 
@@ -92,6 +93,25 @@ describe('re-arming routine notices as the connection comes up', () => {
 
     expect(mockSchedule).toHaveBeenCalledTimes(1);
     expect(mockSchedule.mock.calls[0][0].trigger).toEqual({ type: 'date', date: Date.parse(DUE) });
+    await expect(storedIdFor('job-sweep')).resolves.toBe('notif-1');
+  });
+
+  test('a re-arm whose read names no next fire leaves the held one-shot in place', async () => {
+    await rearmRoutineNotifications([sweep(DUE)]);
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+    mockSchedule.mockClear();
+    mockCancel.mockClear();
+
+    // This read is the only one that can price a cadence beyond the two
+    // repeating shapes, and it named no fire. Absent data is UNKNOWN: the
+    // re-arm must not retire the notice the operator already holds — only a
+    // fresh fire, or a pause, may replace or drop it.
+    await rearmRoutineNotifications([
+      { id: 'job-sweep', name: '[bot:scout] Minute sweep', schedule: '*/5 * * * *' },
+    ]);
+
+    expect(mockSchedule).not.toHaveBeenCalled();
+    expect(mockCancel).not.toHaveBeenCalled();
     await expect(storedIdFor('job-sweep')).resolves.toBe('notif-1');
   });
 
@@ -174,5 +194,29 @@ describe('the Bot Chat re-arms from the routine read only it can make', () => {
     expect(effect).toContain('foldRoutineRead(botSurfaceId, { ok: true, jobs: read })');
     expect(effect).toContain('void rearmRoutineNotifications(read);');
     expect((effect?.match(/botJobs\s*\n?\s*\.list\(\)/g) ?? []).length).toBe(1);
+  });
+});
+
+describe('the sync decides before it retires', () => {
+  /** The unpaused half of syncRoutineNotification, up to the next export. */
+  const syncBody = () => {
+    const src = readSource('src', 'lib', 'notifications', 'routine-sync.ts');
+    const start = src.indexOf('export async function syncRoutineNotification');
+    const end = src.indexOf('export async function cancelRoutineNotification');
+    return start === -1 || end === -1 ? '' : src.slice(start, end);
+  };
+
+  test('a read that prices no fire returns before it can cancel the held notice', () => {
+    const body = syncBody();
+    const decision = body.indexOf('if (!trigger) return;');
+    expect(decision).toBeGreaterThan(-1);
+    // The retirement on the replacement path sits AFTER the decision: a read
+    // that names no fire can no longer retire a notice nothing replaces.
+    expect(body.lastIndexOf('await cancelKnownNotice(job.id)')).toBeGreaterThan(decision);
+    // A pause IS a decision: it retires the held notice before the trigger is
+    // even computed, so an unpriceable paused row still goes.
+    const pauseGuard = body.indexOf('if (job.paused)');
+    expect(pauseGuard).toBeGreaterThan(-1);
+    expect(pauseGuard).toBeLessThan(decision);
   });
 });

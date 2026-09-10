@@ -147,6 +147,87 @@ describe('routine notification sync/cancel bookkeeping', () => {
     await expect(storedIdFor('job-3')).resolves.toBeNull();
   });
 
+  test('a re-sync that cannot name the next fire keeps the notice already held', async () => {
+    // An earlier read priced this job; its notice is waiting on the phone.
+    await syncRoutineNotification(dailyJob);
+    mockSchedule.mockClear();
+    mockCancel.mockClear();
+
+    // The fresh read prices nothing: the cadence is beyond the two repeating
+    // shapes and it names no next fire. Absent data is UNKNOWN, not an
+    // instruction to retire — the operator's held notice survives.
+    await syncRoutineNotification({
+      id: 'job-1',
+      name: '[bot:scout] Morning briefing',
+      schedule: '*/5 * * * *',
+    });
+
+    expect(mockSchedule).not.toHaveBeenCalled();
+    expect(mockCancel).not.toHaveBeenCalled();
+    await expect(storedIdFor('job-1')).resolves.toBe('notif-1');
+  });
+
+  test('a fire already behind us keeps the held notice until the gateway names a fresh one', async () => {
+    await syncRoutineNotification(dailyJob);
+    mockSchedule.mockClear();
+    mockCancel.mockClear();
+
+    // A fire in the past cannot price a one-shot — the same landing as no
+    // fire at all, and the held notice is not retired for it either.
+    await syncRoutineNotification({
+      id: 'job-1',
+      name: '[bot:scout] Morning briefing',
+      schedule: '*/5 * * * *',
+      nextRunAt: '2001-01-01T09:00:00.000Z',
+    });
+
+    expect(mockSchedule).not.toHaveBeenCalled();
+    expect(mockCancel).not.toHaveBeenCalled();
+    await expect(storedIdFor('job-1')).resolves.toBe('notif-1');
+  });
+
+  test('a pause still retires the held notice when the row prices no fire', async () => {
+    await syncRoutineNotification(dailyJob);
+    mockSchedule.mockClear();
+    mockCancel.mockClear();
+
+    // A pause is a decision, not missing data: it retires the notice even
+    // when the row cannot name a schedulable fire.
+    await syncRoutineNotification({
+      id: 'job-1',
+      name: '[bot:scout] Morning briefing',
+      schedule: '*/5 * * * *',
+      paused: true,
+    });
+
+    expect(mockSchedule).not.toHaveBeenCalled();
+    expect(mockCancel).toHaveBeenCalledWith('notif-1');
+    await expect(storedIdFor('job-1')).resolves.toBeNull();
+  });
+
+  test('an edit that produces a trigger still replaces the held notice exactly once', async () => {
+    mockSchedule.mockResolvedValueOnce('notif-1').mockResolvedValueOnce('notif-2');
+
+    // Hold a one-shot first — a cadence only the gateway's next fire prices.
+    // A job id no earlier case has mapped, so the counts below are this case's.
+    await syncRoutineNotification({
+      id: 'job-4',
+      name: '[bot:scout] Minute sweep',
+      schedule: '*/5 * * * *',
+      nextRunAt: '2999-01-01T09:00:00.000Z',
+    });
+
+    // The edit names a mappable cadence: the held one-shot goes and exactly
+    // one notice takes its place.
+    await syncRoutineNotification({ ...dailyJob, id: 'job-4' });
+
+    expect(mockCancel).toHaveBeenCalledTimes(1);
+    expect(mockCancel).toHaveBeenCalledWith('notif-1');
+    expect(mockSchedule).toHaveBeenCalledTimes(2);
+    expect(mockSchedule.mock.calls[1][0].trigger).toEqual({ type: 'daily', hour: 9, minute: 0 });
+    await expect(storedIdFor('job-4')).resolves.toBe('notif-2');
+  });
+
   test('a scheduling failure persists no identifier behind a phantom id', async () => {
     mockSchedule.mockRejectedValue(new Error('scheduler unavailable'));
 
