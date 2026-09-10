@@ -339,7 +339,8 @@ function NotificationRouter() {
 function GatewayDeepLinkRouter() {
   const router = useRouter();
   const url = Linking.useURL();
-  const { isBootstrapped, openBot, requestSurface, requestComposerFocus, status } = useGateway();
+  const { isBootstrapped, openBot, requestSurface, requestComposerFocus, requestComposeRequest, status } =
+    useGateway();
   const handledRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -357,12 +358,40 @@ function GatewayDeepLinkRouter() {
       return;
     }
 
-    // The only other target answered here is a chat link. The fold knows a
-    // third — `compose` (item 5's shared text), whose own branch is a later
-    // slice — and nothing here may read it as a Bot Chat: an unanswered link
-    // is left unmarked, exactly as a path the fold does not know, so it waits
-    // for its branch instead of riding whatever Bot id the union carries.
-    if (target.kind !== 'chat') return;
+    // A compose link (item 5's shared text) carries words rather than an open:
+    // it brings the Chat tab up and hands the text to the screen, which is
+    // where a thread's draft lives. Where the link names a Bot it opens that
+    // Bot Chat first — the same open, the same landing and the same answered
+    // refusal as a chat link, so a refused open asks for no draft instead of
+    // leaving words waiting on a thread that never opened. Where it names none
+    // the text belongs to whichever thread is already up, which is the screen's
+    // call (`composeRequestApplies`) and not this router's.
+    //
+    // Shared content is untrusted input: what the link carries becomes a draft
+    // the operator reviews, and nothing here sends it (FUTURE-ITEMS.md:193-194).
+    if (target.kind === 'compose') {
+      if (status !== 'connected') return;
+      handledRef.current = url;
+      router.navigate('/chat');
+      if (!target.botId) {
+        requestComposeRequest({ text: target.text });
+        return;
+      }
+      const botId = target.botId;
+      void openBot(botId)
+        .then((opened) => {
+          if (!opened) {
+            requestSurface({ kind: 'roster' });
+            return;
+          }
+          requestSurface({ kind: 'bot', botId });
+          requestComposeRequest({ text: target.text, botId });
+        })
+        .catch(() => requestSurface({ kind: 'roster' }));
+      return;
+    }
+
+    // The last target the fold answers is a chat link.
 
     // A Bot Chat link opens the way a roster tap opens one: the Chat tab is
     // brought up and the screen is asked for that Bot's surface, while
@@ -397,7 +426,7 @@ function GatewayDeepLinkRouter() {
         requestComposerFocus({ botId: target.botId });
       })
       .catch(() => requestSurface({ kind: 'roster' }));
-  }, [router, url, isBootstrapped, status, openBot, requestSurface, requestComposerFocus]);
+  }, [router, url, isBootstrapped, status, openBot, requestSurface, requestComposerFocus, requestComposeRequest]);
 
   return null;
 }

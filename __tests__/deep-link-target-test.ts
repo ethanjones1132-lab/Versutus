@@ -190,7 +190,9 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
 
   test('a chat link lands on the Chat tab and opens that Bot Chat', () => {
     const src = routerSource();
-    const chat = src.slice(src.indexOf("if (target.kind === 'add')"));
+    // From the chat branch's own comment down: the add push and the compose
+    // branch sit above it and are not what these cases are about.
+    const chat = src.slice(src.indexOf('// A Bot Chat link opens the way a roster tap opens one'));
 
     const navigate = chat.indexOf("router.navigate('/chat')");
     const open = chat.indexOf('openBot(target.botId)');
@@ -205,7 +207,9 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
 
   test('an open that fails falls back to the roster, never a bot surface', () => {
     const src = routerSource();
-    const chat = src.slice(src.indexOf("if (target.kind === 'add')"));
+    // From the chat branch's own comment down: the add push and the compose
+    // branch sit above it and are not what these cases are about.
+    const chat = src.slice(src.indexOf('// A Bot Chat link opens the way a roster tap opens one'));
 
     // The same landing a failed roster tap takes: the operator reads the Bot
     // list rather than a header naming a thread that never opened.
@@ -214,7 +218,9 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
 
   test('the Bot surface is asked for only on a landed open, the roster on a refusal', () => {
     const src = routerSource();
-    const chat = src.slice(src.indexOf("if (target.kind === 'add')"));
+    // From the chat branch's own comment down: the add push and the compose
+    // branch sit above it and are not what these cases are about.
+    const chat = src.slice(src.indexOf('// A Bot Chat link opens the way a roster tap opens one'));
 
     // `openBot` answers whether it opened. A gateway whose client cannot scope
     // Bots REFUSES rather than throwing, and nothing may be asked for off that
@@ -233,8 +239,9 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
 
   test('the connection is checked before the link is consumed', () => {
     const src = routerSource();
-    // Everything after the add push is the chat branch — the add link needs no
-    // connection, and its own mark is the one before this cut.
+    // Everything after the add push is the compose and chat branches — neither
+    // link branch checks the connection after it consumes, and each one's own
+    // mark is behind its gate.
     const chat = src.slice(src.indexOf('params: target.params'));
 
     const gate = chat.indexOf("status !== 'connected'");
@@ -262,16 +269,78 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
     expect(src).not.toContain('sendChatInput');
   });
 
-  test('a target that is neither add nor chat is left unanswered, never read as a Bot Chat', () => {
+  test('a compose link lands on the Chat tab and hands its text to the screen', () => {
+    const src = routerSource();
+    const compose = src.slice(
+      src.indexOf("if (target.kind === 'compose')"),
+      src.indexOf('// A Bot Chat link opens the way a roster tap opens one'),
+    );
+
+    expect(compose.length).toBeGreaterThan(0);
+    const navigate = compose.indexOf("router.navigate('/chat')");
+    const ask = compose.indexOf('requestComposeRequest({ text: target.text })');
+    expect(navigate).toBeGreaterThan(-1);
+    // The tab is brought up first (a link may arrive on any tab), and the text
+    // is handed to the screen as a REQUEST: the screen is what decides where a
+    // text can be written, and it writes a draft rather than sending.
+    expect(ask).toBeGreaterThan(navigate);
+  });
+
+  test('a compose link naming a Bot opens it first, and asks for the draft on that open', () => {
+    const src = routerSource();
+    const compose = src.slice(
+      src.indexOf("if (target.kind === 'compose')"),
+      src.indexOf('// A Bot Chat link opens the way a roster tap opens one'),
+    );
+
+    // The same open a chat link takes, in the same order: the text's own Bot
+    // Chat has to be the thread on screen before a draft for it means anything.
+    const open = compose.indexOf('openBot(botId)');
+    const landed = compose.indexOf('.then((opened) => {');
+    const surface = compose.indexOf("requestSurface({ kind: 'bot', botId })");
+    const ask = compose.indexOf('requestComposeRequest({ text: target.text, botId })');
+    expect(open).toBeGreaterThan(-1);
+    expect(landed).toBeGreaterThan(open);
+    expect(surface).toBeGreaterThan(landed);
+    expect(ask).toBeGreaterThan(surface);
+  });
+
+  test('a refused open asks for neither the surface nor the draft', () => {
+    const src = routerSource();
+    const compose = src.slice(
+      src.indexOf("if (target.kind === 'compose')"),
+      src.indexOf('// A Bot Chat link opens the way a roster tap opens one'),
+    );
+
+    // The refusal branch is everything from its own `if (!opened) {` to the
+    // `return;` that ends it.
+    const refusalStart = compose.indexOf('if (!opened) {');
+    const refusal = compose.slice(refusalStart, compose.indexOf('return;', refusalStart));
+
+    expect(refusal).toContain("requestSurface({ kind: 'roster' })");
+    // A refused open is a Bot Chat that never opened: nothing waits on it, so
+    // the words are not held for a thread that is not there.
+    expect(refusal).not.toContain('requestComposeRequest');
+    expect(refusal).not.toContain("requestSurface({ kind: 'bot'");
+  });
+
+  test('every target the fold answers has a branch, and none of them sends', () => {
     const src = routerSource();
 
-    // The fold answers a third thing now — item 5's `versutus://compose` — and
-    // this router's branch for it is a later slice. The chat branch may only
-    // read a chat target's Bot id, so the guard stands between them: a compose
-    // link opens nothing until its own branch lands, instead of riding the
-    // union's Bot id into `openBot`.
-    const guard = src.indexOf("if (target.kind !== 'chat') return;");
-    expect(guard).toBeGreaterThan(src.indexOf('params: target.params'));
-    expect(guard).toBeLessThan(src.indexOf('openBot(target.botId)'));
+    // FUTURE-ITEMS.md:193-194 — shared content is untrusted input and lands as
+    // a draft the operator reviews. No branch of this router sends it.
+    expect(src).not.toContain('sendChatInput');
+
+    // The fold answers exactly three targets and each has a branch of its own,
+    // in that order: no target can fall through unhandled and ride the union's
+    // Bot id into `openBot` — the guard that stood in for the compose branch
+    // while it was a later slice has nothing left to hold back.
+    const add = src.indexOf("if (target.kind === 'add')");
+    const compose = src.indexOf("if (target.kind === 'compose')");
+    const chat = src.indexOf('// A Bot Chat link opens the way a roster tap opens one');
+    expect(add).toBeGreaterThan(-1);
+    expect(compose).toBeGreaterThan(add);
+    expect(chat).toBeGreaterThan(compose);
+    expect(src).not.toContain("if (target.kind !== 'chat') return;");
   });
 });

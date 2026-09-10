@@ -382,6 +382,62 @@ describe('a spoken draft and the draft map', () => {
   });
 });
 
+describe('a shared text composed onto a thread that already holds a draft', () => {
+  test('what was typed is kept and the shared text follows it', () => {
+    const researcher = bot('researcher');
+    let drafts = applyComposerDraft({}, researcher, 'check the logs');
+
+    // Item 5's compose handoff writes through the composer's one writer and
+    // composes with the rule the spoken draft states, so a thread the operator
+    // was already typing in does not lose what they typed.
+    drafts = applyComposerDraft(
+      drafts,
+      researcher,
+      spokenDraftText(readComposerDraft(drafts, researcher), 'look at this\nand this'),
+    );
+
+    expect(readComposerDraft(drafts, researcher)).toBe('check the logs look at this\nand this');
+  });
+
+  test('a thread holding nothing takes the shared text as its own characters', () => {
+    const researcher = bot('researcher');
+    const shared = '  log the  disk,  twice';
+    let drafts = applyComposerDraft({}, researcher, '');
+
+    drafts = applyComposerDraft(drafts, researcher, spokenDraftText(readComposerDraft(drafts, researcher), shared));
+
+    // Untrusted input is not re-worded and not trimmed: what lands is what was
+    // shared, for the operator to review before anything leaves the phone.
+    expect(readComposerDraft(drafts, researcher)).toBe(shared);
+  });
+
+  test('the shared text lands under the thread it names and leaves another one alone', () => {
+    const researcher = bot('researcher');
+    const coder = bot('coder');
+    let drafts = applyComposerDraft({}, coder, 'ship it');
+
+    drafts = applyComposerDraft(
+      drafts,
+      researcher,
+      spokenDraftText(readComposerDraft(drafts, researcher), 'look at this'),
+    );
+
+    expect(readComposerDraft(drafts, researcher)).toBe('look at this');
+    expect(readComposerDraft(drafts, coder)).toBe('ship it');
+  });
+
+  test('a thread that reads as empty still records a reading, which is how the screen knows a load settled', () => {
+    const researcher = bot('researcher');
+    const drafts = applyComposerDraft({}, researcher, '');
+
+    // The screen holds a shared text until the thread's own stored draft has
+    // been read, and this is what tells it so: the key is present whatever the
+    // reading was, so an empty stored draft is a reading like any other.
+    expect(composerDraftKey(researcher) in drafts).toBe(true);
+    expect(readComposerDraft(drafts, researcher)).toBe('');
+  });
+});
+
 describe('the speech path and the send path', () => {
   test('the module that composes a spoken draft reaches no send', () => {
     const source = readSource('src', 'lib', 'gateway', 'composer-draft.ts');

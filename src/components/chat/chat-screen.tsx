@@ -113,7 +113,9 @@ import {
   loadComposerDraft,
   readComposerDraft,
   saveComposerDraft,
+  spokenDraftText,
 } from '@/lib/gateway/composer-draft';
+import { composeRequestApplies } from '@/lib/gateway/compose-request';
 import { effectiveModel } from '@/lib/gateway/model-selection';
 import { insertMention, mentionPicksAtCaret } from '@/lib/gateway/mentions';
 import {
@@ -341,6 +343,8 @@ export function ChatScreen() {
     clearRequestedSurface,
     requestedComposerFocus,
     clearRequestedComposerFocus,
+    requestedComposeRequest,
+    clearRequestedComposeRequest,
   } = useGateway();
 
   // The transcript and its send state come from the chat-surface context so
@@ -745,6 +749,49 @@ export function ChatScreen() {
     }, 0);
     return () => clearTimeout(timer);
   }, [requestedComposerFocus, isFocused, surface, clearRequestedComposerFocus]);
+
+  // A shared text that arrived from outside the app — item 5's
+  // `versutus://compose` link, and a native share later — waits on the provider
+  // until the thread it is for is the one in front of the operator. It is
+  // written through the composer's one writer and composed with the rule the
+  // spoken draft states, so words already typed are never dropped and the
+  // shared text is never re-worded: shared content is untrusted input, and what
+  // lands is a draft the operator reviews — nothing on this path sends. Applied
+  // once and cleared, because a request is a one-shot like a focus and must not
+  // fight the operator's own next edit. A request naming another thread, or one
+  // that arrives before a thread is up, is HELD rather than dropped: the
+  // promise was that thread's draft. Writing the key is what makes the hold
+  // safe against the load above — the async read fills a thread's draft only
+  // where nothing has written it yet.
+  useEffect(() => {
+    if (!requestedComposeRequest || !isFocused || !draftThread) return undefined;
+    if (!composeRequestApplies(requestedComposeRequest, surface)) return undefined;
+    // The thread's own stored draft has to have been read first. On a cold
+    // start the load above and this effect are in flight together, and that
+    // load keeps whatever a thread already holds (`if (prev[key] !== undefined)
+    // return prev;`): a shared text written before the read lands is the value
+    // that stays, and the words the operator had left in that thread never
+    // arrive. A reading is recorded even when it is empty, so the key's
+    // presence is the answer.
+    if (drafts[composerDraftKey(draftThread)] === undefined) return undefined;
+    // Deferred a tick like every other producer in this repo — and the field
+    // has to be mounted before it can take the cursor.
+    const timer = setTimeout(() => {
+      setDraft(spokenDraftText(draft, requestedComposeRequest.text));
+      composerInputRef.current?.focus();
+      clearRequestedComposeRequest();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [
+    requestedComposeRequest,
+    isFocused,
+    draftThread,
+    drafts,
+    draft,
+    surface,
+    setDraft,
+    clearRequestedComposeRequest,
+  ]);
 
   // Stable header callbacks. The chat header is memoized (chat-header.tsx) so it
   // skips a re-render when only the transcript changes; inline arrow wrappers here

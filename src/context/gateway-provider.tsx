@@ -57,6 +57,7 @@ import {
   type PublicBot,
 } from '@/lib/gateway/bots';
 import { pendingComposerFocus, type ComposerFocus } from '@/lib/gateway/composer-focus';
+import { pendingComposeRequest, type ComposeRequest } from '@/lib/gateway/compose-request';
 import { pendingSurface } from '@/lib/gateway/surface-request';
 import { onboardingCompletionForAddedGateway } from '@/lib/onboarding/completion-from-add';
 import {
@@ -302,6 +303,18 @@ type GatewayContextValue = {
   requestComposerFocus: (focus: ComposerFocus) => void;
   /** Mark the pending focus request as applied. */
   clearRequestedComposerFocus: () => void;
+  /**
+   * Text a shared link asked to put in a thread's composer — item 5's compose
+   * handoff — together with the thread it named, or null. Held on the provider
+   * beside the requested composer focus and for the same reason: the link is
+   * answered in the router, while the draft it feeds belongs to the Chat
+   * screen, so the request waits for the screen that can write it.
+   */
+  requestedComposeRequest: ComposeRequest | null;
+  /** Ask the Chat screen to put a shared text in the thread it names. A repeat of the pending one is a no-op. */
+  requestComposeRequest: (request: ComposeRequest) => void;
+  /** Mark the pending compose request as applied. */
+  clearRequestedComposeRequest: () => void;
   /**
    * A run a notification tap named, waiting for the Activity tab to drop any
    * Bot filter that could be hiding it, or null. Requested from outside the tab
@@ -3280,6 +3293,17 @@ const response = await executeGatewaySlashCommand(trimmed, {
   }, []);
   const clearRequestedComposerFocus = useCallback(() => setRequestedComposerFocus(null), []);
 
+  // Text a shared link wants written into a thread's composer (item 5). Held
+  // beside the requested composer focus, and for the same reason: the link is
+  // answered from outside the screen, so a share that lands while the Chat tab
+  // is not showing the thread it names waits for the screen that can write it.
+  // A request carries no send — a shared text is a draft the operator reviews.
+  const [requestedComposeRequest, setRequestedComposeRequest] = useState<ComposeRequest | null>(null);
+  const requestComposeRequest = useCallback((request: ComposeRequest) => {
+    setRequestedComposeRequest((prev) => pendingComposeRequest(prev, request));
+  }, []);
+  const clearRequestedComposeRequest = useCallback(() => setRequestedComposeRequest(null), []);
+
   // A run notice's tap names the run it settled, and the Activity list can be
   // filtered to a different Bot at the moment the tap lands (the Scorecards tap
   // leaves the tab's own filter set). Held on the provider for the same reason
@@ -3549,6 +3573,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
       requestedComposerFocus,
       requestComposerFocus,
       clearRequestedComposerFocus,
+      requestedComposeRequest,
+      requestComposeRequest,
+      clearRequestedComposeRequest,
       requestedRunFocus,
       requestRunFocus,
       clearRequestedRunFocus,
@@ -3615,7 +3642,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       lastError, clearLastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedComposerFocus, requestComposerFocus, clearRequestedComposerFocus, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
+      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedComposerFocus, requestComposerFocus, clearRequestedComposerFocus, requestedComposeRequest, requestComposeRequest, clearRequestedComposeRequest, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
       setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,
