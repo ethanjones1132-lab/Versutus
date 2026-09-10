@@ -18,6 +18,7 @@ export { Skeleton } from './Skeleton';
 export { StatTile } from './StatTile';
 export { Text } from './Text';
 export { TextField } from './TextField';
+export type { TextFieldHandle } from './TextField';
 export type { BadgeProps, BadgeTone } from './Badge';
 export type { ChipProps } from './Chip';
 export type { DividerProps } from './Divider';

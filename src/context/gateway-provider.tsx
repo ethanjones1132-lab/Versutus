@@ -56,6 +56,7 @@ import {
   type ChatSurface,
   type PublicBot,
 } from '@/lib/gateway/bots';
+import { pendingComposerFocus, type ComposerFocus } from '@/lib/gateway/composer-focus';
 import { pendingSurface } from '@/lib/gateway/surface-request';
 import { onboardingCompletionForAddedGateway } from '@/lib/onboarding/completion-from-add';
 import {
@@ -283,6 +284,17 @@ type GatewayContextValue = {
   requestSurface: (surface: ChatSurface) => void;
   /** Mark the pending request as applied. */
   clearRequestedSurface: () => void;
+  /**
+   * A Bot Chat whose composer the operator asked for — the Bot Chat link opens
+   * a thread and puts the cursor in it (item 8) — or null. Held on the provider
+   * for the same reason the requested surface is: the open is a gateway read,
+   * and the request is applied when the Chat screen can honour it.
+   */
+  requestedComposerFocus: ComposerFocus | null;
+  /** Ask for the cursor in a Bot Chat's composer. A repeat of the pending one is a no-op. */
+  requestComposerFocus: (focus: ComposerFocus) => void;
+  /** Mark the pending focus request as applied. */
+  clearRequestedComposerFocus: () => void;
   /**
    * A run a notification tap named, waiting for the Activity tab to drop any
    * Bot filter that could be hiding it, or null. Requested from outside the tab
@@ -3250,6 +3262,17 @@ const response = await executeGatewaySlashCommand(trimmed, {
   }, []);
   const clearRequestedSurface = useCallback(() => setRequestedSurface(null), []);
 
+  // A request to put the cursor in the composer of a Bot Chat that is being
+  // opened from outside the screen — the Bot Chat link is the only producer.
+  // Held beside the requested surface so a link that lands before the screen is
+  // there still opens the thread with the composer focused (item 8), and cleared
+  // by the screen as it applies it: a focus is a one-shot, not a surface.
+  const [requestedComposerFocus, setRequestedComposerFocus] = useState<ComposerFocus | null>(null);
+  const requestComposerFocus = useCallback((focus: ComposerFocus) => {
+    setRequestedComposerFocus((prev) => pendingComposerFocus(prev, focus));
+  }, []);
+  const clearRequestedComposerFocus = useCallback(() => setRequestedComposerFocus(null), []);
+
   // A run notice's tap names the run it settled, and the Activity list can be
   // filtered to a different Bot at the moment the tap lands (the Scorecards tap
   // leaves the tab's own filter set). Held on the provider for the same reason
@@ -3502,6 +3525,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
       requestedSurface,
       requestSurface,
       clearRequestedSurface,
+      requestedComposerFocus,
+      requestComposerFocus,
+      clearRequestedComposerFocus,
       requestedRunFocus,
       requestRunFocus,
       clearRequestedRunFocus,
@@ -3568,7 +3594,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       lastError, clearLastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
+      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedComposerFocus, requestComposerFocus, clearRequestedComposerFocus, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
       setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

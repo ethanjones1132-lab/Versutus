@@ -157,13 +157,18 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
     expect(mark).toBeGreaterThan(gate);
   });
 
-  test('the composer is not focused: this slice is the link only', () => {
+  test('the focus the link asks for rides behind the landed open, and it never sends', () => {
     const src = routerSource();
 
     // FUTURE-ITEMS item 8 asks for the Bot Chat "with the composer focused".
-    // That half is its own slice; this one opens the thread and nothing else,
-    // and it never sends what a link carries.
-    expect(src).not.toMatch(/focusComposer|requestComposerFocus/);
+    // The request names the Bot the open resolved and sits inside the branch
+    // that open lands in — the screen, not the router, decides where it can be
+    // honoured — and a link never sends what it carries.
+    const open = src.indexOf('openBot(target.botId)');
+    const focus = src.indexOf('requestComposerFocus({ botId: target.botId })');
+    expect(open).toBeGreaterThan(-1);
+    expect(focus).toBeGreaterThan(open);
+    expect(src).toContain('requestComposerFocus,');
     expect(src).not.toContain('sendChatInput');
   });
 });

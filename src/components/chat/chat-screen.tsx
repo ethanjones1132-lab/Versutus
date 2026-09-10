@@ -1,5 +1,5 @@
 import * as Clipboard from 'expo-clipboard';
-import { type Href, useRouter } from 'expo-router';
+import { type Href, useIsFocused, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Platform, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -28,7 +28,7 @@ import { MessageBubble } from '@/components/chat/message-bubble';
 import { PairingSheet } from '@/components/chat/pairing-sheet';
 import { ThreadConfigSheet, type SessionItem } from '@/components/chat/thread-config-sheet';
 import { SlashCommandPalette } from '@/components/chat/slash-command-palette';
-import { Button, Card, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text, type IconName } from '@/components/ui';
+import { Button, Card, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skeleton, Text, type IconName, type TextFieldHandle } from '@/components/ui';
 import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { entering } from '@/lib/motion/presets';
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
@@ -48,6 +48,7 @@ import { resolvePullRefreshAction } from '@/lib/gateway/messages';
 import { openSessionById } from '@/lib/gateway/session-open-by-id';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { botChromeCombined } from '@/lib/gateway/bot-chrome';
+import { composerFocusApplies } from '@/lib/gateway/composer-focus';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
 import {
   applyBotSoulRead,
@@ -310,6 +311,8 @@ export function ChatScreen() {
     gatewayRequest,
     requestedSurface,
     clearRequestedSurface,
+    requestedComposerFocus,
+    clearRequestedComposerFocus,
   } = useGateway();
 
   // The transcript and its send state come from the chat-surface context so
@@ -440,6 +443,10 @@ export function ChatScreen() {
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<TranscriptItem>>(null);
+  // The composer's input, so a Bot Chat link can put the cursor in the composer
+  // it opens (item 8). The screen holds the handle because the screen decides
+  // whether the request applies at all; the composer just hands its field over.
+  const composerInputRef = useRef<TextFieldHandle>(null);
   const pinnedRef = useRef(true);
   const atTopRef = useRef(true);
   const jumpVisibleRef = useRef(false);
@@ -476,6 +483,27 @@ export function ChatScreen() {
     }, 0);
     return () => clearTimeout(timer);
   }, [requestedSurface, showSurface, clearRequestedSurface]);
+
+  // A Bot Chat link opens a thread and asks for the cursor in the composer it
+  // opens (item 8). The request rides on the provider because the open is a
+  // gateway read; it is applied only where it can be honoured — this screen,
+  // while it is the tab in front of the operator, showing the Bot Chat the
+  // request names — so it can never open the keyboard over a screen the
+  // operator has left. A request that names another thread is held rather than
+  // dropped: the promise was that Bot Chat. Cleared as it is applied, because a
+  // focus is a one-shot and not a surface.
+  const isFocused = useIsFocused();
+  useEffect(() => {
+    if (!requestedComposerFocus || !isFocused) return undefined;
+    if (!composerFocusApplies(requestedComposerFocus, surface)) return undefined;
+    // Deferred a tick like every other producer in this repo — and the field
+    // has to be mounted before it can take the cursor.
+    const timer = setTimeout(() => {
+      composerInputRef.current?.focus();
+      clearRequestedComposerFocus();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [requestedComposerFocus, isFocused, surface, clearRequestedComposerFocus]);
 
   // Stable header callbacks. The chat header is memoized (chat-header.tsx) so it
   // skips a re-render when only the transcript changes; inline arrow wrappers here
@@ -1640,6 +1668,9 @@ export function ChatScreen() {
         isStreaming={isStreaming}
         status={status}
         queuedCount={queuedCount}
+        // The cursor a Bot Chat link asked for lands in this field; the screen
+        // owns the handle and focuses it only on the Bot Chat the link named.
+        inputRef={composerInputRef}
         // Allow send while disconnected so the offline outbox can queue; the
         // provider flushes on reconnect. Block only when no gateway exists.
         canSend={!!activeGateway && !isCommandRunning}

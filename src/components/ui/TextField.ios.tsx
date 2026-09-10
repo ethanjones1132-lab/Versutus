@@ -1,4 +1,4 @@
-import { Host, SecureField, TextField as SwiftTextField, useNativeState } from '@expo/ui/swift-ui';
+import { Host, SecureField, TextField as SwiftTextField, useNativeState, type TextFieldRef } from '@expo/ui/swift-ui';
 import {
   autocorrectionDisabled,
   background,
@@ -22,6 +22,7 @@ import {
   submitLabelFor,
   usesSecureField,
 } from './text-field-ios';
+import type { Ref } from 'react';
 import type { TextFieldProps } from './types';
 
 // Platform contract, kept honest instead of silent: the SwiftUI-backed field
@@ -31,6 +32,23 @@ import type { TextFieldProps } from './types';
 // counterpart is onKeyPress — hardware-key events don't cross this bridge —
 // so surfaces owning key behaviors keep an explicit on-screen affordance
 // (a send button, e.g.) so the action stays reachable on iOS.
+
+/**
+ * The handle this field hands back: on this platform the SwiftUI field's own
+ * (`focus()`, `blur()`, `setText()` …). The same name the base field exports,
+ * so a host asked for a cursor does not care which field it holds.
+ */
+export type TextFieldHandle = TextFieldRef;
+
+type TextFieldIosProps = TextFieldProps & {
+  /**
+   * The field's own handle, for a host that has to drive it (a Bot Chat link
+   * opens the composer and puts the cursor in it). Optional: a field with no
+   * handle renders exactly as it did.
+   */
+  inputRef?: Ref<TextFieldHandle>;
+};
+
 export function TextField({
   value,
   onChangeText,
@@ -47,7 +65,8 @@ export function TextField({
   onBlur,
   accessibilityLabel,
   style,
-}: TextFieldProps) {
+  inputRef,
+}: TextFieldIosProps) {
   const tokens = useTokens();
   const textState = useNativeState(value);
 
@@ -108,6 +127,7 @@ export function TextField({
       <Host matchContents={{ horizontal: true, vertical: true }}>
         {secure ? (
           <SecureField
+            ref={inputRef}
             text={textState}
             placeholder={placeholder}
             onTextChange={onChangeText}
@@ -116,6 +136,7 @@ export function TextField({
           />
         ) : (
           <SwiftTextField
+            ref={inputRef}
             text={textState}
             placeholder={placeholder}
             onTextChange={onChangeText}

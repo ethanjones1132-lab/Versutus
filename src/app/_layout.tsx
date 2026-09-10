@@ -330,7 +330,7 @@ function NotificationRouter() {
 function GatewayDeepLinkRouter() {
   const router = useRouter();
   const url = Linking.useURL();
-  const { isBootstrapped, openBot, requestSurface, status } = useGateway();
+  const { isBootstrapped, openBot, requestSurface, requestComposerFocus, status } = useGateway();
   const handledRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -356,6 +356,11 @@ function GatewayDeepLinkRouter() {
     // so an open that fails asks for the roster instead: the operator reads
     // the Bot list rather than a header naming a thread that never opened.
     //
+    // The link also asks for the cursor in that Bot Chat's composer (item 8).
+    // It rides with the surface request, behind the same landed open, and the
+    // screen decides where it can be honoured — a refused open asks for no
+    // cursor, so nothing waits on a thread that never opened.
+    //
     // The open is a gateway read, so it waits for the connection. A link that
     // lands while the connection is still coming up is NOT marked handled, so
     // it is answered once the gateway is there; a link that lands with no
@@ -365,9 +370,12 @@ function GatewayDeepLinkRouter() {
     handledRef.current = url;
     router.navigate('/chat');
     void openBot(target.botId)
-      .then(() => requestSurface({ kind: 'bot', botId: target.botId }))
+      .then(() => {
+        requestSurface({ kind: 'bot', botId: target.botId });
+        requestComposerFocus({ botId: target.botId });
+      })
       .catch(() => requestSurface({ kind: 'roster' }));
-  }, [router, url, isBootstrapped, status, openBot, requestSurface]);
+  }, [router, url, isBootstrapped, status, openBot, requestSurface, requestComposerFocus]);
 
   return null;
 }

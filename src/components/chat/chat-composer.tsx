@@ -1,11 +1,11 @@
 import * as Haptics from 'expo-haptics';
-import { memo, useState, useSyncExternalStore } from 'react';
+import { memo, useState, useSyncExternalStore, type Ref } from 'react';
 import { Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
-import { Badge, Card, Icon, PressableScale, Text, TextField, type IconName } from '@/components/ui';
+import { Badge, Card, Icon, PressableScale, Text, TextField, type IconName, type TextFieldHandle } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { composerCopy, composerDockUtilities } from '@/lib/gateway/composer-copy';
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
@@ -38,6 +38,12 @@ type ChatComposerProps = {
   canSend: boolean;
   status: ConnectionStatus;
   queuedCount?: number;
+  /**
+   * The input's own handle, for a host that has to put the cursor in it (a Bot
+   * Chat link opens this composer and focuses it). `undefined` for every other
+   * caller: the composer renders the same field with or without a handle.
+   */
+  inputRef?: Ref<TextFieldHandle>;
 };
 
 export const ChatComposer = memo(function ChatComposer({
@@ -56,6 +62,7 @@ export const ChatComposer = memo(function ChatComposer({
   canSend,
   status,
   queuedCount,
+  inputRef,
 }: ChatComposerProps) {
   const tokens = useTokens();
   const [focused, setFocused] = useState(false);
@@ -306,6 +313,7 @@ export const ChatComposer = memo(function ChatComposer({
             { borderColor: focused ? tokens.borderStrong : tokens.glassBorder },
           ]}>
           <TextField
+            inputRef={inputRef}
             value={draft}
             onChangeText={onChangeText}
             placeholder={copy.placeholder}
