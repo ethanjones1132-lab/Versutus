@@ -807,12 +807,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   /** The runs this process is holding a progress notice for. */
   const runProgressNoticeIdsRef = useRef<Set<string>>(new Set());
   /**
+   * Whether this app is up, raised by the lifecycle listener further down and
+   * read by §7's write point below. `present` refuses to draw anything for a
+   * foregrounded app (`src/lib/notifications/local.ts:70`), so without this the
+   * notice a run leaves in the tray is the last one a backgrounded stretch
+   * wrote — the live reading would be at its least current exactly when the
+   * operator has put the phone away. Seeded from the platform, not defaulted:
+   * an app that is already up is not a pocketed one.
+   */
+  const [appInForeground, setAppInForeground] = useState(() => AppState.currentState === 'active');
+  /**
    * §7's write point for a run's ongoing notice: one notice per run in flight,
    * folded from the row this device already holds and kept in step by
    * re-posting that run's own identifier. The dependency list IS the driver — a
    * start, an approval wait, a decision, an event, a stop and the disconnect
-   * settle each move `activityRuns` — and nothing here ticks on its own. The
-   * ending is not this effect's to say: that stays `notifyRunComplete`'s.
+   * settle each move `activityRuns` — and nothing here ticks on its own.
+   * `appInForeground` is the edge `activityRuns` cannot see: the background
+   * return re-folds and re-posts what the tray owes, because nothing was drawn
+   * for the foregrounded stretch it just left. The ending is not this effect's
+   * to say: that stays `notifyRunComplete`'s.
    */
   useEffect(() => {
     const held = runProgressNoticeIdsRef.current;
@@ -821,7 +834,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const notice = runProgressNotice(run);
       if (notice.verb === 'update') {
         next.add(notice.identifier);
-        void notifyRunProgress(notice);
+        // Nothing is drawn while the app is up, so the notice is not asked for
+        // either — the identifier is still held, and the return to the
+        // background re-posts it. A retire is not skipped this way: a notice
+        // posted earlier has to go whether or not the operator is watching.
+        if (!appInForeground) void notifyRunProgress(notice);
       } else if (held.has(notice.identifier)) {
         void dismissRunProgress(notice.identifier);
       }
@@ -832,7 +849,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (!next.has(identifier)) void dismissRunProgress(identifier);
     }
     runProgressNoticeIdsRef.current = next;
-  }, [activityRuns]);
+  }, [activityRuns, appInForeground]);
   const runApprovalResolverRef = useRef<((approved: boolean, feedback?: string) => void) | null>(null);
   const runAbortControllerRef = useRef<AbortController | null>(null);
   const activeRunTaskIdRef = useRef<string | null>(null);
@@ -2889,6 +2906,13 @@ const response = await executeGatewaySlashCommand(trimmed, {
   // (timers are throttled anyway), heal fast on return to foreground.
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
+      // §7's write point re-folds on this edge, and this listener is the only
+      // place it is heard. The state is already the NEW one here — AppState
+      // assigns `currentState` in the listener it registers when the module is
+      // built (AppState.js:87-90) before a `change` handler added afterwards
+      // runs (`:125-127`) — so the re-fold's own `present` call reads the truth
+      // rather than the state being left.
+      setAppInForeground(state === 'active');
       if (state !== 'active') {
         clientRef.current?.suspendReconnect();
         if (autoRetryTimerRef.current) {

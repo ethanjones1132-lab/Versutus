@@ -307,10 +307,14 @@ describe('the shipped presenters', () => {
 describe('the provider writes the notice as run state changes', () => {
   const provider = (): string => readSource('src', 'context', 'gateway-provider.tsx');
 
-  /** The progress notice's write point, as written. */
+  /**
+   * The progress notice's write point, as written — body AND dependency list,
+   * since the driver is this effect's whole subject. The match runs to the
+   * closing `}, [...]);` whatever that list carries.
+   */
   const noticeEffect = (): string =>
     provider().match(
-      /useEffect\(\(\) => \{\n    const held = runProgressNoticeIdsRef[\s\S]*?\n  \}, \[activityRuns\]\);/,
+      /useEffect\(\(\) => \{\n    const held = runProgressNoticeIdsRef[\s\S]*?\n  \}, \[[^\]]*\]\);/,
     )?.[0] ?? '';
 
   test('the write point is the run rows, and nothing here ticks on its own', () => {
@@ -344,5 +348,31 @@ describe('the provider writes the notice as run state changes', () => {
     expect(provider()).toMatch(/notifyRunComplete\(/);
     // The progress effect authors no ending of its own: item 7b hands off.
     expect(noticeEffect()).not.toContain('notifyRunComplete');
+  });
+
+  test('the write point re-folds on the app’s own foreground edge, not on a timer', () => {
+    const effect = noticeEffect();
+    // `present` refuses to draw for a foregrounded app (local.ts:70), so a run
+    // that moves while the operator is looking at it contributes nothing to the
+    // tray — hence the reading the operator pockets being the last one the
+    // backgrounded stretch could have written. The app's own foreground state is
+    // in the dependency list so the return to the background re-folds and
+    // re-posts what the tray owes, and the foregrounded stretch asks for no
+    // notice the gate would only refuse.
+    expect(effect).toContain('[activityRuns, appInForeground]');
+    expect(effect).toContain('if (!appInForeground)');
+    // §7: no poller. A timer here would be a second driver beside the run rows.
+    expect(effect).not.toMatch(/setInterval|setTimeout/);
+  });
+
+  test('that state is raised by the provider’s own lifecycle listener, and starts true on a live app', () => {
+    const src = provider();
+    // One subscription for the process, and it is the listener the provider
+    // already had — the driver above adds no listener of its own.
+    expect(src.match(/AppState\.addEventListener\('change'/g)).toHaveLength(1);
+    expect(src).toContain("setAppInForeground(state === 'active')");
+    // Seeded from the platform rather than defaulted, so the first render of an
+    // app already up is not read as a pocketed one and asked for a notice.
+    expect(src).toContain('useState(() => AppState.currentState === \'active\')');
   });
 });
