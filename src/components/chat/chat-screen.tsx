@@ -1,7 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
-import { type Href, useIsFocused, useRouter } from 'expo-router';
+import { type Href, useFocusEffect, useIsFocused, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Platform, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { AppState, FlatList, Platform, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated from 'react-native-reanimated';
 
@@ -551,15 +551,31 @@ export function ChatScreen() {
     activeGateway && botSurfaceId ? botVoicePreferenceKey(activeGateway.id, botSurfaceId) : undefined;
   const [botVoiceId, setBotVoiceId] = useState<string | undefined>(undefined);
   const [deviceVoices, setDeviceVoices] = useState<unknown[]>([]);
-  useEffect(() => {
-    let cancelled = false;
+  // The list is this device's, and a voice is installed in the phone's own
+  // settings while this app is alive — so it is read again on every return to
+  // this surface rather than once at a mount a tab screen never repeats. Both
+  // routes back in are needed: a download is made by LEAVING the app, which
+  // backgrounds this screen rather than blurring its route, so the foreground
+  // edge is what catches that trip and the tab's own focus is what asks the
+  // device again once the operator is back. What the rows are drawn from is
+  // unchanged — the fold still decides what a usable row is, and a device the
+  // platform names no voice for is still handed nothing to draw.
+  const refreshDeviceVoices = useCallback(() => {
+    let live = true;
     void availableVoices().then((voices) => {
-      if (!cancelled) setDeviceVoices(voices);
+      if (live) setDeviceVoices(voices);
     });
     return () => {
-      cancelled = true;
+      live = false;
     };
   }, []);
+  useFocusEffect(refreshDeviceVoices);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refreshDeviceVoices();
+    });
+    return () => subscription.remove();
+  }, [refreshDeviceVoices]);
   useEffect(() => {
     let cancelled = false;
     void loadVoicePreferences().then((stored) => {

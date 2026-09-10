@@ -105,6 +105,28 @@ describe('chat-screen Bot voice wiring', () => {
     // its own rule, so a Bot's voice can never move it.
     expect(screen).toMatch(/applySpeakerOn\(stored, key, next\)/);
   });
+
+  test('a voice the operator installs mid-session is offered on the way back in', () => {
+    const screen = readSource('components/chat/chat-screen.tsx');
+    // The list is this device's, and a voice is installed in the phone's own
+    // settings while this app is alive — so it is read again on every return to
+    // this surface rather than once at a mount a tab screen never repeats. Both
+    // routes back in are needed: a download is made by LEAVING the app, which
+    // backgrounds the screen rather than blurring its route, so the foreground
+    // edge is what catches that trip and the tab's own focus is what asks the
+    // device again once the operator is back.
+    expect(screen).toMatch(/useFocusEffect\(refreshDeviceVoices\)/);
+    expect(screen).toMatch(/if \(state === 'active'\) refreshDeviceVoices\(\);/);
+    // It is the same seam read the rows are folded from, so the rows this
+    // device is offered are the list it has now.
+    expect(screen).toMatch(/void availableVoices\(\)\.then\(\(voices\) => \{/);
+    // Must still: which surfaces draw a Voice section is the fold's answer, not
+    // the read's — a device the platform named no voice for is handed nothing.
+    expect(screen).toMatch(/botVoiceOptions\(deviceVoices, botVoiceId\)/);
+    expect(screen).toMatch(/voiceOptions=\{botVoiceKey \? botVoiceChoices : undefined\}/);
+    // Must still: the header toggle's own availability read is unchanged.
+    expect(screen).toMatch(/void speechAvailable\(\)\.then\(\(available\) => \{/);
+  });
 });
 
 describe('chat-screen silent-mode hint wiring', () => {
