@@ -6,6 +6,7 @@ const SEP = __dirname.includes('\\') ? '\\' : '/';
 
 const nodeFs = jest.requireActual('fs') as {
   readFileSync(path: string, encoding: string): string;
+  readdirSync(path: string): string[];
 };
 
 function readSource(...parts: string[]): string {
@@ -15,6 +16,10 @@ function readSource(...parts: string[]): string {
 }
 
 const layout = () => readSource('src', 'app', '_layout.tsx');
+
+/** The entries of `src/app`, and of the Chat tab's own folder. */
+const appEntries = () => nodeFs.readdirSync([__dirname, '..', 'src', 'app'].join(SEP));
+const tabEntries = () => nodeFs.readdirSync([__dirname, '..', 'src', 'app', '(tabs)'].join(SEP));
 
 function between(src: string, startMarker: string, endMarker: string): string {
   const start = src.indexOf(startMarker);
@@ -342,5 +347,38 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
     expect(compose).toBeGreaterThan(add);
     expect(chat).toBeGreaterThan(compose);
     expect(src).not.toContain("if (target.kind !== 'chat') return;");
+  });
+});
+
+describe('a compose link has a landing of its own', () => {
+  test('the compose path is a route this folder resolves, and it lands on the Chat tab', () => {
+    // A path with no route of its own is answered by expo-router's GENERATED
+    // `+not-found` (getRoutes.js marks it `notFound: true` and renders
+    // views/Unmatched), so a shared text arriving at `versutus://compose?…`
+    // met "Unmatched Route" underneath the Chat tab the deep-link router
+    // pushes on top of it. This route is what the link arrives AT.
+    const landing = readSource('src', 'app', 'compose.tsx');
+
+    expect(landing).toContain("from 'expo-router'");
+    expect(landing).toContain('<Redirect');
+    expect(landing).toContain('href="/chat"');
+    // A landing that navigated or sent would be a second decision about what
+    // the link means, beside the router that owns that decision.
+    expect(landing).not.toContain('sendChatInput');
+
+    // The tab the redirect names is a route this app really holds — a rename
+    // of the Chat tab has to reach this landing, not strand the link.
+    expect(tabEntries().some((name) => /^chat(\.[\w-]+)?\.tsx$/.test(name))).toBe(true);
+  });
+
+  test('the app authors no unmatched fallback of its own to swallow a path', () => {
+    // The fix is one landing for the compose path, not a catch-all: an
+    // app-authored `+not-found` would catch every path the fold answers null
+    // for — a typo, an `add` link's `/add`, a word the vocabulary does not
+    // hold yet — and send it wherever it redirected, which is "nothing
+    // navigates on a path the fold does not answer" broken silently.
+    const fallbacks = appEntries().filter((name) => name.startsWith('+not-found'));
+
+    expect(fallbacks).toEqual([]);
   });
 });
