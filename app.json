@@ -55,7 +55,14 @@
       ],
       "expo-secure-store",
       "expo-web-browser",
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Versutus uses the microphone to turn what you say into a message draft.",
+          "speechRecognitionPermission": "Versutus uses speech recognition to write down what you say so you can review it before sending."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
