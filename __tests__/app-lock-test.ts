@@ -199,7 +199,8 @@ describe('the gate and its switch', () => {
     // cost the router, the deep-link listeners and the notification router.
     expect(src).toContain('{children}');
     expect(src).toMatch(/<Modal/);
-    expect(src).toMatch(/visible=\{locked\}/);
+    // The cover is drawn on the one answer that means locked.
+    expect(src).toContain("visible={phase === 'locked'}");
   });
 
   test('the cover is presented the way a sheet is, so it outranks one', () => {
@@ -224,7 +225,7 @@ describe('the gate and its switch', () => {
     const handler = /onRequestClose=\{([^}]+)\}/.exec(src)?.[1] ?? '';
     expect(handler.length).toBeGreaterThan(0);
     expect(handler).not.toContain('unlock');
-    expect(handler).not.toContain('setLocked');
+    expect(handler).not.toContain('setPhase');
   });
 
   test('the lock brings the presented routes down, and the unlock path does not', () => {
@@ -233,7 +234,7 @@ describe('the gate and its switch', () => {
     // the notification router keep running — but a modal route the operator
     // left open must not sit under the cover waiting for the unlock to reveal
     // it.
-    const guard = src.indexOf('if (!locked) return;');
+    const guard = src.indexOf("if (phase !== 'locked') return;");
     const canDismiss = src.indexOf('router.canDismiss()');
     const dismissAll = src.indexOf('router.dismissAll()');
     expect(guard).toBeGreaterThan(-1);
@@ -256,13 +257,13 @@ describe('the gate and its switch', () => {
       "import { type Href, useGlobalSearchParams, usePathname, useRouter } from 'expo-router';",
     );
     expect(src).toContain('const presentedRoute = usePathname();');
-    expect(src).toMatch(/\}, \[locked, router, presentedRoute, heldHref\]\);/);
+    expect(src).toMatch(/\}, \[phase, router, presentedRoute, heldHref\]\);/);
     // Still one dismissal site, so the route that arrives is brought down by
     // the same rule as the one the lock edge already found.
     expect(src.match(/router\.dismissAll\(\)/g)).toHaveLength(1);
     // The lock is still the only DISMISSAL trigger; what the unlock edge does
     // with a route this brought down is pinned in its own case below.
-    expect(src).toMatch(/if \(!locked\) return;/);
+    expect(src).toMatch(/if \(phase !== 'locked'\) return;/);
   });
 
   test('the link the lock brought down is held, and the unlock re-opens it', () => {
@@ -294,7 +295,7 @@ describe('the gate and its switch', () => {
     // link held for the next unlock, and nothing navigates while the cover is
     // up, or the dismissal above would take the re-opened route straight back
     // down.
-    const guard = src.indexOf('if (locked) return;');
+    const guard = src.indexOf("if (phase !== 'open') return;");
     const push = src.indexOf('router.push(held as Href);');
     expect(guard).toBeGreaterThan(-1);
     expect(push).toBeGreaterThan(guard);
@@ -302,7 +303,64 @@ describe('the gate and its switch', () => {
       /const unlock = useCallback\(async \(\) => \{([\s\S]*?)\n {2}\}, \[/.exec(src)?.[1] ?? '';
     expect(body.length).toBeGreaterThan(0);
     expect(body).not.toContain('router');
-    expect(body).not.toContain('setLocked(true)');
+    expect(body).not.toContain("setPhase('locked')");
+  });
+
+  test('an unanswered gate is its own state, and disposes of nothing before the device answers', () => {
+    const src = gate();
+    // The gate mounts a commit before it can answer, and a cold-start
+    // `versutus://add` link is pushed into exactly that window: AppBootstrap
+    // withholds the Stack until `isBootstrapped` and GatewayDeepLinkRouter
+    // pushes the add sheet as soon as it is, while the answer here waits on a
+    // storage read plus the biometric probe. Treating that window as
+    // "answered, not locked" consumed the arriving route before the lock ever
+    // saw it, so the lock edge brought it down with nothing held.
+    expect(src).toContain("type LockPhase = 'pending' | 'locked' | 'open';");
+    expect(src).toContain("const [phase, setPhase] = useState<LockPhase>('pending');");
+    // One place settles it, from the device's own answer.
+    expect(src).toContain("setPhase(lockable ? 'locked' : 'open');");
+    // The pending guard sits BEFORE the arrival is folded and accounted for:
+    // a route that lands in this window is not consumed, so it is still an
+    // arrival when the answer lands.
+    const pending = src.indexOf("if (phase === 'pending') return;");
+    const fold = src.indexOf('const arrived = presentedRoute !== accountedRouteRef.current;');
+    const account = src.indexOf('accountedRouteRef.current = presentedRoute;');
+    expect(pending).toBeGreaterThan(-1);
+    expect(fold).toBeGreaterThan(pending);
+    expect(account).toBeGreaterThan(pending);
+  });
+
+  test('a route the app started on is an arrival too, not one the gate has seen', () => {
+    const src = gate();
+    // expo-router seeds its navigation state from the URL that launched the
+    // app (`getInitialURL`, native), so a cold-start `versutus://add` link can
+    // already be the route on screen when this gate mounts — before it has
+    // ever answered. The gate accounts for nothing until it has an answer, so
+    // that route is still an arrival when the answer lands: a "locked" answer
+    // holds it rather than dismissing it and forgetting the link.
+    expect(src).toContain('const accountedRouteRef = useRef<string | null>(null);');
+  });
+
+  test('an answer of "not locked" leaves the arriving route presented and re-plays nothing', () => {
+    const src = gate();
+    // The device can answer that there is no lock to hold — the opt-in was
+    // never stored, or the enrollment behind it was removed — and then the
+    // route a link asked for is the operator's to keep: it is neither brought
+    // down nor pushed a second time.
+    const account = src.indexOf('accountedRouteRef.current = presentedRoute;');
+    const lockGuard = src.indexOf("if (phase !== 'locked') return;");
+    const hold = src.indexOf('if (arrived) heldRouteRef.current = heldHref;');
+    expect(account).toBeGreaterThan(-1);
+    expect(lockGuard).toBeGreaterThan(account);
+    expect(hold).toBeGreaterThan(lockGuard);
+    // The re-open is the locked→open edge alone, so an unanswered gate cannot
+    // push: its guard is before the held link is read and before the push.
+    const openGuard = src.indexOf("if (phase !== 'open') return;");
+    const read = src.indexOf('const held = heldRouteRef.current;');
+    const push = src.indexOf('router.push(held as Href);');
+    expect(openGuard).toBeGreaterThan(-1);
+    expect(openGuard).toBeLessThan(read);
+    expect(openGuard).toBeLessThan(push);
   });
 
   test('the gate asks the device through the module, never itself', () => {

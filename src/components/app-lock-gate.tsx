@@ -21,6 +21,16 @@
 // asked for, not onto the Stack's first screen. A route the lock edge found is
 // the operator's own and stays down.
 //
+// The gate has an unanswered window of its own, and the route at risk is the
+// one that arrives in it: this gate mounts a commit before the device has
+// answered — AppBootstrap withholds the Stack until it is bootstrapped and the
+// deep-link router pushes into that same commit, which is how a
+// `versutus://add` link tapped in a message cold-starts the app — while the
+// answer waits on a storage read plus the biometric probe. So "not yet
+// answered" is a state of its own, in which the gate dismisses nothing and
+// consumes no arrival, and the answer decides whether that route is a link to
+// hold or the operator's to keep.
+//
 // It only ever covers a device that can answer the biometric prompt — see
 // app-lock.ts for why a removed enrollment must unlock rather than trap the
 // operator. Nothing here reaches a gateway: the lock is a device preference.
@@ -45,6 +55,12 @@ import { deviceAppLockState } from '@/lib/settings/app-lock-device';
 /** Modal asks Android for a back handler; the lock is not dismissable. */
 const ignoreBackPress = () => undefined;
 
+/**
+ * The gate's own answer about this device, and the window before it has one:
+ * `pending` until `deviceAppLockState()` resolves, then `locked` or `open`.
+ */
+type LockPhase = 'pending' | 'locked' | 'open';
+
 export function AppLockGate({ children }: { children: React.ReactNode }) {
   const tokens = useTokens();
   const router = useRouter();
@@ -56,13 +72,22 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
   // params its sheet was prefilled from.
   const routeParams = useGlobalSearchParams();
   const heldHref = heldRouteHref(presentedRoute, routeParams);
-  const [locked, setLocked] = useState(false);
+  // The device's answer, before it has one: the gate mounts a commit before
+  // the read can settle, and that window is where a cold-start link's push
+  // lands.
+  const [phase, setPhase] = useState<LockPhase>('pending');
   // The read settles once; the background listener below needs the answer
   // without re-asking the device on every app-state change.
   const lockableRef = useRef(false);
-  // The route this gate last accounted for. A route that differs from it
-  // arrived while the lock was up, which is the one to hold below.
-  const accountedRouteRef = useRef(presentedRoute);
+  // The route this gate last accounted for. A route that differs from it is
+  // one that arrived since the gate last had an answer, which is the one to
+  // hold below — the unanswered window consumes nothing, so a route from it is
+  // still an arrival when the answer lands. Nothing is accounted before the
+  // first answer, so a route the app STARTED on is an arrival too: expo-router
+  // seeds its navigation state from the URL that launched the app
+  // (`getInitialURL`, native), which is how a cold-start `versutus://add` link
+  // can already be the route on screen before this gate has ever answered.
+  const accountedRouteRef = useRef<string | null>(null);
   // The link the lock brought down, waiting for the unlock to re-open it. A
   // ref, not state: nothing renders it, so holding one must not cost a render
   // — nor may it be lost to the renders the dismissal itself causes.
@@ -75,7 +100,7 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
       if (cancelled) return;
       const lockable = state.enabled && state.reason === null;
       lockableRef.current = lockable;
-      setLocked(lockable);
+      setPhase(lockable ? 'locked' : 'open');
     })();
     return () => {
       cancelled = true;
@@ -89,7 +114,7 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
   // the one edge that only a real leave produces.
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'background' && lockableRef.current) setLocked(true);
+      if (state === 'background' && lockableRef.current) setPhase('locked');
     });
     return () => subscription.remove();
   }, []);
@@ -103,13 +128,23 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
   // sitting above the cover. Dismissing is skipped when there is nothing to
   // pop, and the unlock never dismisses. The one route that is not left on the
   // first screen is one that ARRIVED while the lock was up: it is what a link
-  // asked for, so it is held for the unlock to re-open.
+  // asked for, so it is held for the unlock to re-open. An unanswered gate is
+  // exempt from all of it — that is the window a cold-start link's push lands
+  // in, before the device's answer here is known.
   useEffect(() => {
-    // Accounted for before the lock is consulted: a route the app presented
-    // while it was open is the operator's own, not a link's arrival to hold.
+    // Nothing happens until the device has answered, and nothing is consumed
+    // either: a route that arrives in this window is still an arrival when the
+    // answer lands. Accounting for it here is what left the lock edge to bring
+    // the link's route down with nothing held.
+    if (phase === 'pending') return;
+    // Accounted for before the lock is consulted, so a route the app presented
+    // while it had an answer is the operator's own — accounted for as it was
+    // presented — rather than a link's arrival to hold. Only the first answer
+    // can fold a route the gate has never seen, which is the link that
+    // cold-started the app into its sheet.
     const arrived = presentedRoute !== accountedRouteRef.current;
     accountedRouteRef.current = presentedRoute;
-    if (!locked) return;
+    if (phase !== 'locked') return;
     // Nothing presented is the Stack on its first screen, so dismissing would
     // be a navigation for nothing — and it is the state this very dismissal
     // leaves behind, the pop landing here. That is why the hold is taken below
@@ -117,20 +152,21 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
     if (!router.canDismiss()) return;
     if (arrived) heldRouteRef.current = heldHref;
     router.dismissAll();
-  }, [locked, router, presentedRoute, heldHref]);
+  }, [phase, router, presentedRoute, heldHref]);
 
   // The unlock edge re-opens the link the lock brought down: the operator asked
   // for that route before the lock took it away. Its own effect rather than a
   // step inside `unlock`, because the unlock has to have landed first —
-  // re-applying while `locked` is still true would hand the route straight back
-  // to the dismissal above. Nothing navigates while the cover is up.
+  // re-applying under any answer but `open` would hand the route straight back
+  // to the dismissal above. Nothing navigates while the cover is up, and an
+  // unanswered gate has held no link yet to re-open.
   useEffect(() => {
-    if (locked) return;
+    if (phase !== 'open') return;
     const held = heldRouteRef.current;
     if (!held) return;
     heldRouteRef.current = null;
     router.push(held as Href);
-  }, [locked, router]);
+  }, [phase, router]);
 
   const unlock = useCallback(async () => {
     try {
@@ -139,7 +175,7 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
       const result = await LocalAuthentication.authenticateAsync({
         promptMessage: APP_LOCK_UNLOCK_LABEL,
       });
-      if (result.success) setLocked(false);
+      if (result.success) setPhase('open');
     } catch {
       // A prompt that could not run leaves the cover up; Unlock is the retry.
     }
@@ -149,7 +185,7 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
     <>
       {children}
       <Modal
-        visible={locked}
+        visible={phase === 'locked'}
         transparent
         // No animation: a fade would leave the app legible under the cover for
         // the length of the fade, which is the leak the lock is for.
