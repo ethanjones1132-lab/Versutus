@@ -1,0 +1,293 @@
+// P3's pin/rename half (`FUTURE-ITEMS.md:523-531`): session pins and names
+// are this DEVICE's, held in key-value storage keyed by gateway + session
+// the way the command transcript is, because no gateway route can carry a
+// rename. This suite pins both halves — the pure folds in
+// `session-labels.ts` and the one blob they are persisted in.
+//
+// The honesty rules the copy has to keep: a blank rename clears the label
+// rather than printing an empty row, and a stored blob that is not what it
+// claims to be reads as no label at all, never a guess.
+
+import { keyValueStorage } from '@/lib/storage/key-value';
+import {
+  applySessionLabel,
+  clearSessionLabel,
+  loadSessionLabels,
+  saveSessionLabels,
+  sessionLabelKey,
+  sessionLabelsFromUnknown,
+  sessionLabelTitle,
+  type SessionLabel,
+} from '@/lib/gateway/session-labels';
+
+jest.mock('@/lib/storage/key-value', () => ({
+  keyValueStorage: {
+    getItem: jest.fn(),
+    setItem: jest.fn(),
+    removeItem: jest.fn(),
+  },
+}));
+
+declare const __dirname: string;
+
+const SEP = __dirname.includes('\\') ? '\\' : '/';
+const nodeFs = jest.requireActual('fs') as {
+  readFileSync(path: string, encoding: string): string;
+};
+
+function readSource(...parts: string[]): string {
+  return nodeFs
+    .readFileSync([__dirname, '..', ...parts].join(SEP), 'utf8')
+    .replace(/\r\n/g, '\n');
+}
+
+const mockGet = keyValueStorage.getItem as jest.Mock;
+const mockSet = keyValueStorage.setItem as jest.Mock;
+
+const GATE = 'gw-home';
+const OTHER_GATE = 'gw-other';
+
+const CREW = sessionLabelKey(GATE, 'ses_crew');
+const LAB = sessionLabelKey(GATE, 'ses_lab');
+
+describe('sessionLabelKey', () => {
+  test('two sessions on one gateway do not share a key', () => {
+    expect(sessionLabelKey(GATE, 'ses_a')).not.toBe(sessionLabelKey(GATE, 'ses_b'));
+  });
+
+  test('the same session id on two gateways does not share a key', () => {
+    expect(sessionLabelKey(GATE, 'ses_a')).not.toBe(sessionLabelKey(OTHER_GATE, 'ses_a'));
+  });
+
+  test('a path-shaped session id is normalized into one flat key', () => {
+    // A Hermes session key can be shaped like a path. The command transcript
+    // normalizes the same separators; a key that kept them would read as a
+    // nested location rather than one session's identity.
+    const key = sessionLabelKey(GATE, 'agent/ses:1\\x');
+    expect(key).not.toContain('/');
+    expect(key).not.toContain('\\');
+    expect(key.split(':')).toHaveLength(2);
+  });
+});
+
+describe('applySessionLabel', () => {
+  test('a pin on one session leaves another session alone', () => {
+    const labels = applySessionLabel({}, CREW, { pinned: true });
+    expect(labels).toEqual({ [CREW]: { pinned: true } });
+    expect(labels[LAB]).toBeUndefined();
+  });
+
+  test('a rename lands under the session it was typed on', () => {
+    const labels = applySessionLabel({}, CREW, { label: 'Crew chat' });
+    expect(labels[CREW]).toEqual({ label: 'Crew chat' });
+  });
+
+  test('a patch merges — pinning a renamed session keeps the name', () => {
+    let labels = applySessionLabel({}, CREW, { label: 'Crew chat' });
+    labels = applySessionLabel(labels, CREW, { pinned: true });
+    expect(labels[CREW]).toEqual({ pinned: true, label: 'Crew chat' });
+  });
+
+  test('a rename is trimmed before it is stored', () => {
+    const labels = applySessionLabel({}, CREW, { label: '  Crew chat  ' });
+    expect(labels[CREW]).toEqual({ label: 'Crew chat' });
+  });
+
+  test('a blank rename clears the name and keeps the pin', () => {
+    let labels = applySessionLabel({}, CREW, { pinned: true, label: 'Crew chat' });
+    labels = applySessionLabel(labels, CREW, { label: '   ' });
+    expect(labels[CREW]).toEqual({ pinned: true });
+  });
+
+  test('a blank rename on a session with nothing else stored drops the key', () => {
+    let labels = applySessionLabel({}, CREW, { label: 'Crew chat' });
+    labels = applySessionLabel(labels, CREW, { label: '' });
+    expect(labels[CREW]).toBeUndefined();
+    expect(labels).toEqual({});
+  });
+
+  test('unpinning a renamed session keeps the name', () => {
+    let labels = applySessionLabel({}, CREW, { pinned: true, label: 'Crew chat' });
+    labels = applySessionLabel(labels, CREW, { pinned: false });
+    expect(labels[CREW]).toEqual({ label: 'Crew chat' });
+  });
+
+  test('an unpin on a session with no label stores nothing at all', () => {
+    // An entry holding only `pinned: false` is not a label; keeping it would
+    // make an unlabelled session look labelled to every later read.
+    const labels = applySessionLabel({}, CREW, { pinned: false });
+    expect(labels[CREW]).toBeUndefined();
+    expect(labels).toEqual({});
+  });
+
+  test('does not mutate the map it was given', () => {
+    const before: Record<string, SessionLabel> = {};
+    applySessionLabel(before, CREW, { pinned: true });
+    expect(before).toEqual({});
+  });
+});
+
+describe('clearSessionLabel', () => {
+  test('clears a pin and a rename together', () => {
+    const labels = clearSessionLabel({ [CREW]: { pinned: true, label: 'Crew chat' } }, CREW);
+    expect(labels[CREW]).toBeUndefined();
+    expect(labels).toEqual({});
+  });
+
+  test('clearing a session that carries no label returns the same map', () => {
+    const labels: Record<string, SessionLabel> = { [CREW]: { pinned: true } };
+    expect(clearSessionLabel(labels, LAB)).toBe(labels);
+  });
+
+  test('does not mutate the map it was given', () => {
+    const before: Record<string, SessionLabel> = { [CREW]: { pinned: true } };
+    clearSessionLabel(before, CREW);
+    expect(before).toEqual({ [CREW]: { pinned: true } });
+  });
+});
+
+describe('sessionLabelsFromUnknown', () => {
+  test('a well-formed blob is read back field by field', () => {
+    expect(sessionLabelsFromUnknown({ [CREW]: { pinned: true, label: 'Crew chat' } })).toEqual({
+      [CREW]: { pinned: true, label: 'Crew chat' },
+    });
+  });
+
+  test('a non-record reads as no labels at all', () => {
+    expect(sessionLabelsFromUnknown(undefined)).toEqual({});
+    expect(sessionLabelsFromUnknown(null)).toEqual({});
+    expect(sessionLabelsFromUnknown('{"a":1}')).toEqual({});
+    expect(sessionLabelsFromUnknown(7)).toEqual({});
+    expect(sessionLabelsFromUnknown(true)).toEqual({});
+    expect(sessionLabelsFromUnknown([{ pinned: true }])).toEqual({});
+  });
+
+  test('a non-boolean pin is not a pin', () => {
+    expect(sessionLabelsFromUnknown({ [CREW]: { pinned: 'yes' } })).toEqual({});
+    expect(sessionLabelsFromUnknown({ [CREW]: { pinned: 1 } })).toEqual({});
+  });
+
+  test('a non-string label is not a label', () => {
+    expect(sessionLabelsFromUnknown({ [CREW]: { label: 7 } })).toEqual({});
+    expect(sessionLabelsFromUnknown({ [CREW]: { label: null } })).toEqual({});
+    expect(sessionLabelsFromUnknown({ [CREW]: { label: { text: 'Crew chat' } } })).toEqual({});
+  });
+
+  test('a blank label is not a label', () => {
+    expect(sessionLabelsFromUnknown({ [CREW]: { label: '   ' } })).toEqual({});
+  });
+
+  test('an entry carrying neither is dropped, never an empty row', () => {
+    expect(sessionLabelsFromUnknown({ [CREW]: {} })).toEqual({});
+    expect(sessionLabelsFromUnknown({ [CREW]: 'Crew chat' })).toEqual({});
+    expect(sessionLabelsFromUnknown({ [CREW]: null })).toEqual({});
+  });
+
+  test('a good entry beside a junk one keeps only the good one', () => {
+    const parsed = sessionLabelsFromUnknown({
+      [CREW]: { pinned: true, label: 'Crew chat' },
+      [LAB]: { label: 42 },
+    });
+    expect(parsed).toEqual({ [CREW]: { pinned: true, label: 'Crew chat' } });
+  });
+});
+
+describe('sessionLabelTitle', () => {
+  test("the operator's rename wins over the gateway's own title", () => {
+    expect(sessionLabelTitle('Session 4', { label: 'Crew chat' })).toBe('Crew chat');
+  });
+
+  test('a session with no label keeps the gateway title it always had', () => {
+    expect(sessionLabelTitle('Crew chat', undefined)).toBe('Crew chat');
+  });
+
+  test('a pin with no rename keeps the gateway title', () => {
+    expect(sessionLabelTitle('Crew chat', { pinned: true })).toBe('Crew chat');
+  });
+
+  test('a rename can name a session the gateway left untitled', () => {
+    expect(sessionLabelTitle(undefined, { label: 'Night shift' })).toBe('Night shift');
+    expect(sessionLabelTitle(null, { label: 'Night shift' })).toBe('Night shift');
+  });
+
+  test('a blank stored label cannot print an empty row', () => {
+    expect(sessionLabelTitle('Crew chat', { label: '   ' })).toBe('Crew chat');
+    expect(sessionLabelTitle(undefined, { label: '   ' })).toBe('Untitled');
+  });
+
+  test('a stored rename is printed trimmed', () => {
+    expect(sessionLabelTitle('Session 4', { label: '  Crew chat  ' })).toBe('Crew chat');
+  });
+});
+
+describe('loadSessionLabels / saveSessionLabels', () => {
+  const backing = new Map<string, string>();
+
+  beforeEach(() => {
+    backing.clear();
+    mockGet.mockReset().mockImplementation(async (key: string) => backing.get(key) ?? null);
+    mockSet.mockReset().mockImplementation(async (key: string, value: string) => {
+      backing.set(key, value);
+    });
+  });
+
+  test('a saved label set is what you get back after leaving the selector', async () => {
+    await saveSessionLabels({ [CREW]: { pinned: true, label: 'Crew chat' } });
+    await expect(loadSessionLabels()).resolves.toEqual({
+      [CREW]: { pinned: true, label: 'Crew chat' },
+    });
+  });
+
+  test('a missing blob loads as empty, not as a failure', async () => {
+    await expect(loadSessionLabels()).resolves.toEqual({});
+  });
+
+  test('malformed storage loads as empty, not a throw', async () => {
+    await saveSessionLabels({ [CREW]: { pinned: true } });
+    const storedKey = mockSet.mock.calls[0]?.[0] as string;
+    backing.set(storedKey, '{not-json');
+    await expect(loadSessionLabels()).resolves.toEqual({});
+  });
+
+  test('a blob holding junk entries keeps only the honest ones', async () => {
+    await saveSessionLabels({ [CREW]: { pinned: true } });
+    const storedKey = mockSet.mock.calls[0]?.[0] as string;
+    backing.set(
+      storedKey,
+      JSON.stringify({ [CREW]: { pinned: true }, [LAB]: { pinned: 'yes', label: 3 } }),
+    );
+    await expect(loadSessionLabels()).resolves.toEqual({ [CREW]: { pinned: true } });
+  });
+
+  test('a refused write does not throw — labelling must keep working', async () => {
+    mockSet.mockRejectedValue(new Error('disk full'));
+    await expect(saveSessionLabels({ [CREW]: { pinned: true } })).resolves.toBeUndefined();
+  });
+
+  test('a refused read does not throw — an unread label set is empty', async () => {
+    mockGet.mockRejectedValue(new Error('disk full'));
+    await expect(loadSessionLabels()).resolves.toEqual({});
+  });
+});
+
+describe('a label never leaves the device', () => {
+  const source = () => readSource('src', 'lib', 'gateway', 'session-labels.ts');
+
+  test('the module can reach no gateway transport and makes no request', () => {
+    const src = source();
+    expect(src).not.toContain('fetch(');
+    // The strongest statement the file allows: nothing that talks to a
+    // gateway is imported, so no pin or rename can be sent anywhere.
+    const imports = src.match(/^import .*$/gm) ?? [];
+    expect(imports).toHaveLength(2);
+    expect(imports.join('\n')).toContain("from '@/lib/storage/key-value'");
+    expect(imports.join('\n')).toContain("from '@/lib/gateway/session-list'");
+  });
+
+  test("the Untitled fallback stays sessionListTitle's own, not a second rule", () => {
+    const src = source();
+    expect(src).toContain("from '@/lib/gateway/session-list'");
+    expect(src).toContain('sessionListTitle(');
+    expect(src).not.toContain("'Untitled'");
+  });
+});
