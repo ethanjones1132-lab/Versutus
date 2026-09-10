@@ -271,7 +271,14 @@ type GatewayContextValue = {
   hasBotManagement: boolean;
   /** Whether this gateway hosts Gate-owned group rooms at all — room creation gates on it. */
   hasGroupRooms: boolean;
-  openBot: (botId: string) => Promise<void>;
+  /**
+   * Open a Bot's canonical Bot Chat (ADR 0012) and make it the session a send
+   * goes to. Answers WHETHER it opened: a gateway whose client cannot scope
+   * Bots at all refuses this — `false`, with nothing opened — so a caller only
+   * moves onto a Bot surface on a landed open. A genuine failure still rejects,
+   * which is what a caller's own catch is for.
+   */
+  openBot: (botId: string) => Promise<boolean>;
   clearBot: () => void;
   /**
    * A surface the chat screen should move to, or null. Requested from outside
@@ -3284,11 +3291,16 @@ const response = await executeGatewaySlashCommand(trimmed, {
   }, []);
   const clearRequestedRunFocus = useCallback(() => setRequestedRunFocus(null), []);
 
-  const openBot = useCallback(async (botId: string) => {
+  const openBot = useCallback(async (botId: string): Promise<boolean> => {
     const client = clientRef.current;
     if (!client?.setBotId || !client.createSession) {
       setLastError('This gateway does not expose bots.');
-      return;
+      // Nothing opened, and nothing is going to: this client cannot scope a
+      // session to a Bot at all. A caller that asks for a surface off this call
+      // has to be able to tell that REFUSAL from a landed open, so it is
+      // answered rather than thrown — an exception here would read as a gateway
+      // that broke, which is a different thing to say to the operator.
+      return false;
     }
     client.setBotId(botId);
     setSelectedBotId(botId);
@@ -3317,6 +3329,8 @@ const response = await executeGatewaySlashCommand(trimmed, {
         void upsertGateway(pinned).then(setGateways);
       }
       if (activeGateway) void reloadHistoryFor(activeGateway);
+      // The Bot Chat is the session a send goes to now, so the open landed.
+      return true;
     } catch (error) {
       client.setBotId(undefined);
       setSelectedBotId(undefined);
@@ -3367,9 +3381,16 @@ const response = await executeGatewaySlashCommand(trimmed, {
       try {
         for (const item of forActive) {
           if (item.botId) {
+            let opened = false;
             try {
-              await openBot(item.botId);
+              opened = await openBot(item.botId);
             } catch {
+              // A throw is a failed open, and a gateway whose client cannot
+              // scope Bots REFUSES one instead (it answers false) — both are
+              // non-answers, and the put-back below takes both.
+              opened = false;
+            }
+            if (!opened) {
               // The Bot Chat did not open, so this text is NOT sent: the send
               // would land in whichever conversation the client still holds.
               // It stays queued for the next connection rather than being

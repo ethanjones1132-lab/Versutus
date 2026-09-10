@@ -141,6 +141,25 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
     expect(chat).toContain("requestSurface({ kind: 'roster' })");
   });
 
+  test('the Bot surface is asked for only on a landed open, the roster on a refusal', () => {
+    const src = routerSource();
+    const chat = src.slice(src.indexOf("if (target.kind === 'add')"));
+
+    // `openBot` answers whether it opened. A gateway whose client cannot scope
+    // Bots REFUSES rather than throwing, and nothing may be asked for off that
+    // non-answer — the link would otherwise claim a Bot Chat the app never
+    // opened, over whatever thread the provider still holds.
+    expect(chat).toContain('.then((opened) => {');
+
+    const refusal = chat.slice(
+      chat.indexOf('if (!opened) {'),
+      chat.indexOf("requestSurface({ kind: 'bot', botId: target.botId })"),
+    );
+
+    expect(refusal).toContain("requestSurface({ kind: 'roster' })");
+    expect(refusal).toContain('return;');
+  });
+
   test('the connection is checked before the link is consumed', () => {
     const src = routerSource();
     // Everything after the add push is the chat branch — the add link needs no

@@ -241,6 +241,22 @@ describe('NotificationRouter quick-reply wiring', () => {
     expect(src.indexOf('return;', catchAt)).toBeLessThan(send);
   });
 
+  test('the gate reads the open\'s answer, so a refusal is not sent as if it had landed', () => {
+    const src = delivery();
+
+    // `openBot` answers whether it opened, and a gateway whose client cannot
+    // scope Bots REFUSES rather than throwing. The reply is not sent on that
+    // non-answer either, or the operator's words would land in whichever
+    // session the client still held.
+    const opened = src.indexOf('opened = await sender.openBot(reply.botId);');
+    const refusal = src.indexOf('if (!opened) {');
+    const send = src.indexOf('sender.sendChatInput(reply.text, {');
+
+    expect(opened).toBeGreaterThan(-1);
+    expect(refusal).toBeGreaterThan(opened);
+    expect(src.indexOf('return;', refusal)).toBeLessThan(send);
+  });
+
   test('only the send path decides that a reply had to be queued', () => {
     const src = delivery();
 

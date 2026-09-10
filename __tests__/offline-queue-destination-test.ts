@@ -200,18 +200,34 @@ describe('the flush opens the Bot Chat a queued reply was for, before it sends',
   test('a Bot Chat that could not be opened sends nothing, and the words stay queued', () => {
     const src = flush();
     const open = src.indexOf(OPEN);
-    const catchAt = src.indexOf('} catch {', open);
-    const body = src.slice(catchAt + 1, src.indexOf('}', catchAt + 1));
+    // The put-back is the non-answer's own block, and BOTH non-answers land
+    // there: a throw, and a gateway whose client cannot scope Bots at all —
+    // which REFUSES, answering false, rather than throwing.
+    const refusalAt = src.indexOf('if (!opened) {', open);
+    const body = src.slice(refusalAt, src.indexOf('}', refusalAt));
     const send = src.indexOf(SEND);
 
-    expect(catchAt).toBeGreaterThan(open);
+    expect(refusalAt).toBeGreaterThan(open);
     expect(body).toContain('offlineQueueRef.current.push(item);');
     expect(body).toContain('continue;');
     // Nothing is sent on that path, and the row is persisted again rather than
     // dropped: the send would land in whichever conversation the client still
     // holds, and losing the words is worse than waiting for the next connection.
     expect(body).not.toContain('sendChatInput(');
-    expect(send).toBeGreaterThan(catchAt);
+    expect(send).toBeGreaterThan(refusalAt);
+  });
+
+  test('a throw and a refusal are the same non-answer, and take the same put-back', () => {
+    const src = flush();
+    const open = src.indexOf(OPEN);
+    const catchAt = src.indexOf('} catch {', open);
+    const caught = src.slice(catchAt, src.indexOf('if (!opened) {', catchAt));
+
+    expect(catchAt).toBeGreaterThan(open);
+    expect(caught).toContain('opened = false;');
+    // One put-back in the loop, not two: a refusal cannot persist the row a
+    // second time over the bookkeeping the rescue below reads.
+    expect(src.split('offlineQueueRef.current.push(item);').length - 1).toBe(1);
   });
 
   test('sendChatInput is still the only thing that sends from the outbox', () => {
@@ -411,5 +427,43 @@ describe('a batch the flush is holding stays on disk until each row settles', ()
     const after = between(provider(), RELEASE, '})();');
 
     expect(after).toContain('flushingOwedRef.current = null;');
+  });
+});
+
+describe('the open answers whether it opened', () => {
+  const provider = () => readSource('src', 'context', 'gateway-provider.tsx');
+
+  /** The open's own body — its refusal, its landed path and its failure. */
+  const open = () =>
+    between(provider(), 'const openBot = useCallback(', '}, [activeGateway, reloadHistoryFor]);');
+
+  test('the context hands its callers the answer, not a promise of nothing', () => {
+    expect(provider()).toContain('openBot: (botId: string) => Promise<boolean>;');
+    expect(open()).toContain('async (botId: string): Promise<boolean> => {');
+  });
+
+  test('a gateway that cannot scope Bots answers false instead of throwing', () => {
+    const src = open();
+    const refusal = src.slice(
+      src.indexOf('if (!client?.setBotId || !client.createSession) {'),
+      src.indexOf('client.setBotId(botId);'),
+    );
+
+    // A refusal is a non-answer, not a failure: it still says why on the
+    // provider, and it hands its caller a false the caller can act on. An
+    // exception here would be indistinguishable from a gateway that broke.
+    expect(refusal).toContain('return false;');
+    expect(refusal).toContain("setLastError('This gateway does not expose bots.')");
+  });
+
+  test('a landed open answers true, and a genuine failure still rejects', () => {
+    const src = open();
+    const landed = src.indexOf('return true;');
+    const failure = src.indexOf('throw error;');
+
+    expect(landed).toBeGreaterThan(-1);
+    // The landed answer sits above the catch, so a real failure still reaches
+    // the caller's own `.catch` — only a refusal is answered.
+    expect(failure).toBeGreaterThan(landed);
   });
 });

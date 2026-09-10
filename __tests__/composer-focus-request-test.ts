@@ -122,7 +122,7 @@ describe('the Bot Chat link asks for the focus once the open has landed', () => 
     // One ask, in the branch the open resolves into — the refused-open path
     // (the roster fallback) asks for no cursor anywhere.
     expect(src.indexOf('requestComposerFocus(', focus + 1)).toBe(-1);
-    expect(between(src, '.then(() => {', '.catch(')).toContain(
+    expect(between(src, '.then((opened) => {', '.catch(')).toContain(
       'requestComposerFocus({ botId: target.botId })',
     );
   });

@@ -60,7 +60,7 @@ installStreamingFetch(expoFetch as unknown as typeof globalThis.fetch);
  * uses so the listener can hold them in a ref.
  */
 type BotReplySender = {
-  openBot: (botId: string) => Promise<void>;
+  openBot: (botId: string) => Promise<boolean>;
   sendChatInput: (
     text: string,
     destination?: { botId?: string; sessionId?: string },
@@ -93,7 +93,10 @@ type BotReplySender = {
  * A reply whose Bot Chat could not be opened is NOT sent: `sendChatInput` would
  * fall back to whichever session the client still held, putting the operator's
  * words in a conversation they did not choose. Nothing is sent, and the notice
- * says only that.
+ * says only that. `openBot` answers whether it opened, so the gate below reads
+ * the ANSWER rather than the absence of a throw: a gateway whose client cannot
+ * scope Bots refuses the open instead of failing it, and that refusal means
+ * nothing was opened just as surely as a thrown error does.
  *
  * Opening the Bot Chat reloads the transcript the chat context shares, but the
  * screen showing it keeps its own record of which surface is up — its header,
@@ -107,9 +110,15 @@ async function deliverBotReply(
   status: ConnectionStatus,
 ): Promise<void> {
   if (decisionCanReachGateway(status)) {
+    let opened = false;
     try {
-      await sender.openBot(reply.botId);
+      opened = await sender.openBot(reply.botId);
     } catch {
+      // A throw is a failed open; the notice below says only that nothing was
+      // sent, and never that the words reached the Bot.
+      opened = false;
+    }
+    if (!opened) {
       void notifyBotReplyNotSent('bot-chat-unavailable');
       return;
     }
@@ -352,9 +361,11 @@ function GatewayDeepLinkRouter() {
     // brought up and the screen is asked for that Bot's surface, while
     // `openBot` resolves the Bot's canonical Bot Chat (ADR 0012) — the
     // provider reloads the transcript, but the surface on screen is the
-    // screen's own state, so it has to be told. The pair reports no outcome,
-    // so an open that fails asks for the roster instead: the operator reads
-    // the Bot list rather than a header naming a thread that never opened.
+    // screen's own state, so it has to be told. The open ANSWERS whether it
+    // opened: a gateway whose client cannot scope Bots refuses instead of
+    // failing, so the surface is asked for only on a landed open and a refusal
+    // takes the roster — the operator reads the Bot list rather than a header
+    // naming a thread that never opened.
     //
     // The link also asks for the cursor in that Bot Chat's composer (item 8).
     // It rides with the surface request, behind the same landed open, and the
@@ -370,7 +381,11 @@ function GatewayDeepLinkRouter() {
     handledRef.current = url;
     router.navigate('/chat');
     void openBot(target.botId)
-      .then(() => {
+      .then((opened) => {
+        if (!opened) {
+          requestSurface({ kind: 'roster' });
+          return;
+        }
         requestSurface({ kind: 'bot', botId: target.botId });
         requestComposerFocus({ botId: target.botId });
       })
