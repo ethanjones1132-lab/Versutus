@@ -314,6 +314,29 @@ export function spendWindowCopy(sessionCount: number): string {
 }
 
 /**
+ * Honest bound line for the gateway total.
+ *
+ * The total is folded from the whole catalogue read (`totalUsage`), not from
+ * a window: nothing filters it by age, so a session older than seven days is
+ * inside the number and `spendWindowCopy` — whose "Last 7 days" is literal —
+ * cannot caption it. That line belongs to the 7-day chart, which is the
+ * surface actually read over `weekBuckets`. What the total can name is the
+ * bound its read stopped at: the list endpoint takes `limit` but no cursor, so
+ * a filled read is capped and a partial one is everything this device could
+ * see. Callers pass the read's ROW count (`SessionSpendRead.rowCount`), not
+ * the sessions that parsed, so a capped read that dropped an unparseable row
+ * still names its cap — and an unreadable count prints no number rather than
+ * "NaN".
+ */
+export function spendTotalBoundCopy(sessionCount: number): string {
+  const rows = Number.isFinite(sessionCount) ? Math.max(0, Math.floor(sessionCount)) : 0;
+  if (rows >= SESSION_SPEND_LIST_LIMIT) {
+    return `Across the newest ${SESSION_SPEND_LIST_LIMIT} sessions — older sessions are past the list's cap`;
+  }
+  return `Across the ${rows} sessions in this read`;
+}
+
+/**
  * Parse a sessions.list payload into the fields sessionUsage already reads.
  * Gate answers `{ object: 'list', data }`; Hermes `/api/sessions` is the
  * same envelope; a raw array is also a list. Anything else is a failed

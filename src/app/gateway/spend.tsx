@@ -12,7 +12,7 @@ import {
   applySessionSpendRead,
   sessionSpendCopy,
   sessionSpendReadFromUnknown,
-  spendWindowCopy,
+  spendTotalBoundCopy,
   totalUsage,
   type SessionSpendState,
 } from '@/lib/gateway/session-analytics';
@@ -31,7 +31,7 @@ import {
  * One read answers the total — the same `sessions.list` catalogue the thread
  * glance reads, at the same cap — and every number on screen comes from the
  * folds that read already feeds (`totalUsage`, `sessionSpendCopy`,
- * `spendWindowCopy`, `spendCostBasis` / `spendBasisCopy`). Nothing is
+ * `spendTotalBoundCopy`, `spendCostBasis` / `spendBasisCopy`). Nothing is
  * aggregated a second time here.
  *
  * A spend surface is a claim, so `applySessionSpendRead` is the only thing
@@ -49,9 +49,12 @@ import {
  * (`spendSessionRows`) — the same rows, once, in the read the screen already
  * made.
  *
- * Both bound lines on this screen — the total's window line and the table's
+ * Both bound lines on this screen — the total's bound line and the table's
  * cap — are decided by `state.rowCount`, the rows the read held, so a capped
- * read names its cap even when a row it could not parse was dropped.
+ * read names its cap even when a row it could not parse was dropped. The
+ * total's line names that cap without a window claim: this total folds the
+ * whole catalogue read, whose age is unbounded, so the "Last 7 days" line
+ * (`spendWindowCopy`) belongs to the 7-day chart and not here.
  *
  * The 7-day chart and the entry points are their own slices of P5.
  */
@@ -124,7 +127,7 @@ export default function GatewaySpendScreen() {
           <Card variant="hero" padding={Spacing.three} style={styles.card}>
             <Text variant="headline">{spendBasisCopy(basis)}</Text>
             <Text variant="caption" color="secondary">
-              {spendWindowCopy(state.rowCount)}
+              {spendTotalBoundCopy(state.rowCount)}
             </Text>
             <Text variant="mono" color="secondary" style={styles.total}>
               {sessionSpendCopy(spend)}

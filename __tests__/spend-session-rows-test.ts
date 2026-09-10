@@ -286,6 +286,6 @@ describe('a capped read names its bound even when it dropped a row', () => {
 
   test('the table and the screen decide their bound from the read, not the rows', () => {
     expect(table()).toContain('{spendSessionCapCopy(rowCount)}');
-    expect(spendScreen()).toContain('spendWindowCopy(state.rowCount)');
+    expect(spendScreen()).toContain('spendTotalBoundCopy(state.rowCount)');
   });
 });
