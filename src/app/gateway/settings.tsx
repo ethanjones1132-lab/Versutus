@@ -5,6 +5,7 @@ import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { DeviceIdRow } from '@/components/device-id-row';
+import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
 import { TransportSecurityCard } from '@/components/gateway/transport-security-card';
 import { Badge, Card, Icon, Screen, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
@@ -49,6 +50,8 @@ export default function GatewaySettingsScreen() {
             </Card>
           </Pressable>
         </Link>
+
+        <SpendEntryRow />
 
         {settings.tailscaleHost ? (
           <Card variant="surface" padding={Spacing.three} style={styles.card}>

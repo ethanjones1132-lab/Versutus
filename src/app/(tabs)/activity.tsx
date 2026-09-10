@@ -11,6 +11,7 @@ import { AgenticRunSheet } from '@/components/activity/agentic-run-sheet';
 import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
 import { CronSection } from '@/components/activity/cron-section';
 import { RunCard } from '@/components/activity/run-card';
+import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
 import { Badge, Button, Card, EmptyState, Screen, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
@@ -216,6 +217,10 @@ export default function ActivityScreen() {
           answers "what is this gateway doing". Renders nothing on a gateway
           that cannot report cron. */}
       <CronSection cronReloadSignal={cronReloadSignal} />
+
+      {/* Spend is the gateway-wide readout, so it sits with the gateway-wide
+          work. Renders nothing while no connection can answer it. */}
+      <SpendEntryRow />
 
       <AgentTargets
         gateways={gateways}
