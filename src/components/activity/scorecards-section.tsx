@@ -25,9 +25,12 @@
 // The line carries the approval pressure those same rows recorded too, and by
 // the same rule: what the operator decided is read off the rows that decided
 // it, a request still blocked on them is named, and a card whose rows met no
-// gate says nothing about approvals at all. Every part of the line is dropped
-// from the composition when it is empty, so a card never prints a placeholder
-// for a fact it does not hold.
+// gate says nothing about approvals at all. The line itself is composed by the
+// fold, to the room a row's one clipped line has: a fact this card does not
+// hold takes no room, and a card that cannot hold everything drops whole facts
+// — least important first — rather than having one cut mid-number by the
+// renderer. Nothing is joined here, so the rule is the module's own and is
+// pinned there.
 //
 // The line also carries the gateway's own verdict on this Bot's routines, when
 // the job list names any: the jobs are grouped by the `[bot:<name>]` naming
@@ -94,6 +97,7 @@ import {
   scorecardApprovalCopy,
   scorecardApprovals,
   scorecardBotLabel,
+  scorecardCardLine,
   scorecardDurationCopy,
   scorecardFateCopy,
   scorecardRoutineCopy,
@@ -242,14 +246,14 @@ export function ScorecardsSection({
             // span they ended on and the approval pressure they recorded. The
             // rows come through the fold's own
             // attribution rule, once, so one card's line can never borrow
-            // another card's runs; and each part is dropped when it is empty,
-            // so a card whose rows carry no span this device watched end, or
-            // that met no approval gate, says its counts rather than a
-            // duration or an approval it cannot back. The routine verdict is
-            // the gateway's own and keeps its own words, looked up by this
-            // card's bucket, and the spend is P5's read merged onto this card —
-            // each keeps its own words, and a card the spend read holds no row
-            // for says nothing about spend rather than a zero.
+            // another card's runs; each part is the module's own wording, and
+            // the module composes the line — dropping a fact this card does not
+            // hold, and dropping whole facts least-important-first when the one
+            // line cannot hold them all. The routine verdict is the gateway's
+            // own and keeps its own words, looked up by this card's bucket, and
+            // the spend is P5's read merged onto this card — each keeps its own
+            // words, and a card the spend read holds no row for says nothing
+            // about spend rather than a zero.
             const rows = filterRunsByBot(runs, { botId: card.botId });
             const fates = scorecardFateCopy(card.fates);
             const success = scorecardSuccessCopy(scorecardSuccessRate(card.fates));
@@ -261,7 +265,7 @@ export function ScorecardsSection({
               <ListRow
                 key={card.botId ?? 'unattributed'}
                 title={scorecardBotLabel(card.botId)}
-                subtitle={[fates, success, timed, approvals, routines, spend].filter(Boolean).join(' · ')}
+                subtitle={scorecardCardLine({ fates, success, timed, approvals, routines, spend })}
                 onPress={() => onSelect({ botId: card.botId })}
                 trailing={showing ? <Badge label="Showing" tone="accent" /> : undefined}
                 accessibilityHint="Shows this Bot's runs in the list above"

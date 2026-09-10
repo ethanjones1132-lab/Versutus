@@ -87,13 +87,16 @@ describe('a card carries the run duration it can back', () => {
     expect(fates).toBeGreaterThanOrEqual(0);
     expect(timed).toBeGreaterThan(fates);
     expect(subtitle).toBeGreaterThan(timed);
-    // An empty part is appended to nothing: a card whose rows carry no
-    // trustworthy span reads as its counts rather than as a 0:00 run, a card
-    // whose rows met no approval gate says nothing about approvals, one whose
-    // Bot has no routines says nothing about them either, and one the spend
-    // read holds no row for says nothing about spend. The rate sits beside the
-    // counts it was taken off.
-    expect(src).toContain("subtitle={[fates, success, timed, approvals, routines, spend].filter(Boolean).join(' · ')}");
+    // Each part is the module's own wording and is handed to the module's own
+    // composition, which is where a card's one line is decided: an empty fact
+    // takes no room, and when the line cannot hold everything the fold drops
+    // whole facts rather than clipping one (scorecardCardLine, pinned in
+    // `fleet-scorecard-test.ts`). Nothing is joined here.
+    expect(src).toContain(
+      'subtitle={scorecardCardLine({ fates, success, timed, approvals, routines, spend })}',
+    );
+    expect(src.match(/scorecardCardLine\(/g)).toHaveLength(1);
+    expect(src).not.toContain(".filter(Boolean).join(' · ')");
   });
 });
 

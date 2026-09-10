@@ -21,6 +21,7 @@ import {
   scorecardApprovalCopy,
   scorecardApprovals,
   scorecardBotLabel,
+  scorecardCardLine,
   scorecardDurationCopy,
   scorecardFate,
   scorecardFateCopy,
@@ -32,11 +33,13 @@ import {
   scorecardWindowCopy,
   watchedRunSpanMs,
   withSpend,
+  SCORECARD_CARD_LINE_MAX,
   SCORECARD_FOOTER_COPY,
 } from '@/lib/fleet/scorecard';
 import type {
   BotScorecard,
   ScorecardApprovals,
+  ScorecardCardParts,
   ScorecardFates,
   ScorecardRoutineHealth,
 } from '@/lib/fleet/scorecard';
@@ -1038,5 +1041,122 @@ describe('scorecardDurationCopy', () => {
 
   test('claims no statistic this module did not compute', () => {
     expect(scorecardDurationCopy(222_000)).not.toMatch(/average|typical|gateway|total/i);
+  });
+});
+
+describe('scorecardCardLine', () => {
+  /**
+   * One card's six facts, long enough that a phone's one line cannot hold them
+   * all — which is the case this fold exists for. The counts and the rate are
+   * the pair the card is for; the other four are progressively more
+   * expendable.
+   */
+  const parts: ScorecardCardParts = {
+    fates: '4 complete · 1 failed',
+    success: '80% success',
+    timed: 'Median run 3:42',
+    approvals: '2 of 3 approvals granted',
+    routines: '2 routines · ok',
+    spend: '12.4k tokens · $0.42 (estimate)',
+  };
+
+  /**
+   * Every line these facts can compose to, as whole facts joined in the order
+   * a card reads in — the set a composed line must land in, whatever the room.
+   */
+  const wholeLines = (() => {
+    const order = ['fates', 'success', 'timed', 'approvals', 'routines', 'spend'] as const;
+    const lines = new Set<string>();
+    for (let mask = 1; mask < 2 ** order.length; mask += 1) {
+      if (!(mask & 1)) continue; // the counts are on every line
+      lines.add(
+        order
+          .filter((_, index) => mask & (1 << index))
+          .map((part) => parts[part])
+          .join(' · '),
+      );
+    }
+    return lines;
+  })();
+
+  test('a card with room prints every fact it holds, in the line’s own order', () => {
+    expect(scorecardCardLine(parts, 200)).toBe(
+      '4 complete · 1 failed · 80% success · Median run 3:42 · 2 of 3 approvals granted · 2 routines · ok · 12.4k tokens · $0.42 (estimate)',
+    );
+  });
+
+  test('a fact the card does not hold takes no room, and leaves no separator', () => {
+    expect(
+      scorecardCardLine({ ...parts, timed: '', approvals: '', routines: '', spend: '' }, 200),
+    ).toBe('4 complete · 1 failed · 80% success');
+    // A card holding nothing composes nothing — never a line of separators.
+    expect(
+      scorecardCardLine(
+        { fates: '', success: '', timed: '', approvals: '', routines: '', spend: '' },
+        200,
+      ),
+    ).toBe('');
+  });
+
+  test('the line gives up the facts another surface owns before the ones about its own runs', () => {
+    // As the room shrinks, the facts go in the module's stated order: the spend
+    // (whose own home is the Spend screen, in the same words), then the
+    // gateway's routine verdict (whose home is the Routine surfaces), then the
+    // median span this device watched, then the approval recap. The counts and
+    // the rate they earned stay longest.
+    expect(scorecardCardLine(parts, 100)).toBe(
+      '4 complete · 1 failed · 80% success · Median run 3:42 · 2 of 3 approvals granted · 2 routines · ok',
+    );
+    expect(scorecardCardLine(parts, 75)).toBe('4 complete · 1 failed · 80% success · 2 of 3 approvals granted');
+    expect(scorecardCardLine(parts, 40)).toBe('4 complete · 1 failed · 80% success');
+    expect(scorecardCardLine(parts, 20)).toBe('4 complete · 1 failed');
+  });
+
+  test('the counts are never the fact that is dropped, even when they alone overflow', () => {
+    // A card that cannot print what it counted prints nothing worth printing,
+    // so the counts stay on the line past the budget rather than at its cost.
+    expect(scorecardCardLine(parts, 0)).toBe('4 complete · 1 failed');
+    expect(scorecardCardLine(parts, 1)).toBe('4 complete · 1 failed');
+    // A room this fold cannot read is no room at all, not all of it.
+    expect(scorecardCardLine(parts, Number.NaN)).toBe('4 complete · 1 failed');
+  });
+
+  test('the budget a caller does not name is the module’s own', () => {
+    expect(scorecardCardLine(parts)).toBe(scorecardCardLine(parts, SCORECARD_CARD_LINE_MAX));
+    expect(SCORECARD_CARD_LINE_MAX).toBeGreaterThan(0);
+    // The default room holds the counts AND the rate they earned: the pair the
+    // card is for is the pair it must not have to give up first.
+    expect(scorecardCardLine(parts)).toBe('4 complete · 1 failed · 80% success');
+  });
+
+  test('a line the card cannot fit is whole facts, never a number cut in half', () => {
+    for (let budget = 0; budget <= 140; budget += 1) {
+      const line = scorecardCardLine(parts, budget);
+
+      // Whatever the room, the answer is a join of whole facts in the line's
+      // own order — the set `wholeLines` holds and nothing outside it.
+      expect(wholeLines.has(line)).toBe(true);
+      // No fact is cut, and no separator is left where one was dropped.
+      expect(line).not.toMatch(/…|\.\.\./);
+      expect(line.startsWith(' · ')).toBe(false);
+      expect(line.endsWith(' · ')).toBe(false);
+      // Past the budget only the counts can be left; nothing else survives it.
+      if (line !== parts.fates) expect(line.length).toBeLessThanOrEqual(budget);
+      // One more character of room never costs the card a fact it already had.
+      expect(scorecardCardLine(parts, budget + 1).length).toBeGreaterThanOrEqual(line.length);
+    }
+  });
+
+  test('a fact the card cannot fit is absent, never re-worded', () => {
+    const line = scorecardCardLine(parts, 40);
+
+    // Every figure on the line is one of the facts handed in, printed as it
+    // arrived; the budget decides which, never what they say.
+    expect(line).toContain(parts.fates);
+    expect(line).toContain(parts.success);
+    expect(line).not.toContain('12.4k');
+    expect(line).not.toContain('Median');
+    expect(line).not.toContain('approval');
+    expect(line).not.toContain('routine');
   });
 });

@@ -37,6 +37,10 @@
 //   onto a card by the id rule above, never re-derived here: a card the read
 //   holds no row for says nothing about spend, and a row whose read failed
 //   keeps the read's own unread wording rather than becoming a zero.
+// - A card's one line is composed HERE, not by the surface, and it is composed
+//   to a budget: the row that draws it gives it one clipped line, so six facts
+//   cannot all survive a phone. Facts are dropped whole and least-important
+//   first, never cut — a number clipped mid-figure is a number read wrong.
 //
 // These cards are observations of runs this device saw — a run started from
 // the desktop or the TUI never reaches this list at all. The surface owes that
@@ -483,6 +487,141 @@ export function withSpend(
 export function scorecardSpendCopy(spend: BotSpendRow | undefined): string {
   if (!spend) return '';
   return botSpendRowCopy(spend);
+}
+
+/**
+ * The facts one card's line can carry, each already in this module's own words
+ * — the folds above decide each one, and `scorecardCardLine` decides which of
+ * them one clipped line holds. An empty string is a fact this card does not
+ * hold, and takes no room on the line at all.
+ */
+export type ScorecardCardParts = {
+  /** The counts — the one fact a card never drops. */
+  fates: string;
+  success: string;
+  timed: string;
+  approvals: string;
+  routines: string;
+  spend: string;
+};
+
+/**
+ * The order a card's line reads in — the order it has read in since each of
+ * those folds shipped, so a card with room looks exactly as it always did.
+ */
+const SCORECARD_LINE_ORDER: readonly (keyof ScorecardCardParts)[] = [
+  'fates',
+  'success',
+  'timed',
+  'approvals',
+  'routines',
+  'spend',
+];
+
+/**
+ * What a card gives up first when its one line cannot hold everything, least
+ * important first. The reason is whose fact each one is rather than how long it
+ * is: a card is a record of the runs this device saw, so the facts ABOUT those
+ * runs — the counts, the rate they earned, the span they ended on, the
+ * approvals they recorded — outrank the two another surface owns. The spend's
+ * own home is the Spend screen, which prints it in these same words beside the
+ * cap it was read at; the routine verdict's home is the Routine surfaces, which
+ * is where a host state belongs. Within the run-derived facts the softer one
+ * goes first: a median span this device watched is the least actionable thing
+ * on the card, while an approval recap can name a request still waiting on the
+ * operator — the only fact here the operator is asked to act on.
+ *
+ * The counts are not on this list at all: a card that cannot print what it
+ * counted prints nothing worth printing.
+ */
+const SCORECARD_LINE_DROP_ORDER: readonly (keyof ScorecardCardParts)[] = [
+  'spend',
+  'routines',
+  'timed',
+  'approvals',
+  'success',
+];
+
+/**
+ * The room a card's one line has, in characters.
+ *
+ * `ListRow` draws it as ONE caption line (`numberOfLines={1}`,
+ * `src/components/ui/ListRow.tsx:88-95`) inside a row whose chevron, gaps and
+ * trailing badge have already taken their share, so a line longer than the room
+ * is not shortened by the renderer — it is CLIPPED, and the number it was in
+ * the middle of is what the operator loses. This fold composes to a budget
+ * instead and drops whole facts, so nothing is ever half-printed.
+ *
+ * The number is the narrowest state a card is drawn in — the card carrying the
+ * `Showing` badge while the list above is filtered to it, which is the card the
+ * operator is looking at — and it is an ESTIMATE from the repo's own spacing
+ * and type tokens, not a measurement. A phone-width column, from
+ * `src/constants/tokens.ts`: 390pt less the Activity list's own `Spacing.four`
+ * gutter either side (48) and the card's `Spacing.three` padding (32) is 310pt;
+ * the row's chevron (14) and its two `Spacing.three - 4` gaps leave 272pt; the
+ * badge — a `micro` label with a dot and `Spacing.two` padding — takes roughly
+ * 200pt more, leaving ~200pt. A caption glyph at `Typography.caption.fontSize`
+ * 13 advances about half an em, so ~200pt is about thirty characters — and the
+ * budget is 36, deliberately a little over that arithmetic rather than at it.
+ * The estimate stacks three guesses (a phone's width, a glyph's advance, the
+ * badge's own width) whose error is larger than a character or two, and the
+ * counts and the rate they earned are the pair a card is FOR: a typical pair is
+ * around 35 characters (`4 complete · 1 failed · 80% success`) and must survive
+ * on a card. The budget is a parameter for exactly this reason: a surface that
+ * can measure its own line hands its own number, and the rule below is the same
+ * rule either way. Erring small costs the card a whole fact, which is the
+ * failure this fold is here to CHOOSE; erring large clips one, which is the
+ * failure it is here to stop.
+ */
+export const SCORECARD_CARD_LINE_MAX = 36;
+
+/** The facts still held, joined in the order a card's line reads in. */
+function composedLine(
+  parts: ScorecardCardParts,
+  held: ReadonlySet<keyof ScorecardCardParts>,
+): string {
+  return SCORECARD_LINE_ORDER.filter((part) => held.has(part))
+    .map((part) => parts[part])
+    .join(' · ');
+}
+
+/**
+ * A card's one line, composed to a budget (D3's Build 3,
+ * `FUTURE-ITEMS.md:811-812`): the facts that fit, in the order a card reads in,
+ * with the rest dropped whole.
+ *
+ * `ListRow` gives this string one line and clips what it cannot fit, so a line
+ * that cannot hold everything does not lose its tail gracefully — it loses a
+ * figure mid-number, and a truncated count reads as a count. This fold drops
+ * whole FACTS instead, least important first
+ * (`SCORECARD_LINE_DROP_ORDER`), and its answer is never a fragment.
+ *
+ * `maxLength` is the room the line has; the default is
+ * `SCORECARD_CARD_LINE_MAX`. Two rules hold at every budget: the counts are
+ * never dropped — a card with room for nothing else still says what it counted,
+ * budget or no budget, because the counts are the card — and no fact is
+ * re-worded or re-derived, so every number printed is one of the folds' own.
+ */
+export function scorecardCardLine(
+  parts: ScorecardCardParts,
+  maxLength: number = SCORECARD_CARD_LINE_MAX,
+): string {
+  const budget = Number.isFinite(maxLength) ? Math.max(0, Math.floor(maxLength)) : 0;
+  // Start from every fact the card holds, then drop the least important one
+  // still on the line until the answer fits. A room this fold cannot read is no
+  // room at all, which composes the counts rather than everything.
+  const held = new Set<keyof ScorecardCardParts>(
+    SCORECARD_LINE_ORDER.filter((part) => parts[part] !== ''),
+  );
+
+  for (const part of SCORECARD_LINE_DROP_ORDER) {
+    // The counts are never in the drop order; the size guard keeps a malformed
+    // line (no counts at all) from composing to nothing.
+    if (held.size <= 1 || composedLine(parts, held).length <= budget) break;
+    held.delete(part);
+  }
+
+  return composedLine(parts, held);
 }
 
 /**
