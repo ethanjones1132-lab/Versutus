@@ -272,18 +272,43 @@ describe('the weekly operator report is opted into here, off by default', () => 
     expect(src).toContain('setWeeklyReportRefusal(weeklyReportRefusedBy(state));');
   });
 
-  test('the mount read paints the state this device holds, a refusal included', () => {
+  test('the read paints the state this device holds, a refusal included', () => {
     const src = section();
     const read = src.indexOf('readWeeklyReportOptIn()');
     const holds = src.indexOf('setWeeklyReport(weeklyReportOptInHolds(state));');
     const refusal = src.indexOf('setWeeklyReportRefusal(weeklyReportRefusedBy(state));');
 
-    // The mount read answers both halves: the switch, and the line under it —
-    // so an opt-in the phone stopped allowing opens on an explained refusal
-    // rather than on a switch quietly reading off.
+    // The read answers both halves: the switch, and the line under it — so an
+    // opt-in the phone stopped allowing opens on an explained refusal rather
+    // than on a switch quietly reading off.
     expect(read).toBeGreaterThanOrEqual(0);
     expect(holds).toBeGreaterThan(read);
     expect(refusal).toBeGreaterThan(read);
+  });
+
+  test('the read is taken on every return to the surface, never only at mount', () => {
+    const src = section();
+    const refresh = src.indexOf('const refreshWeeklyReport = useCallback(');
+    const read = src.indexOf('readWeeklyReportOptIn()');
+    const focus = src.indexOf('useFocusEffect(refreshWeeklyReport)');
+    const foreground = src.indexOf("AppState.addEventListener('change'");
+
+    // A tab screen keeps its children mounted for the life of the app, so mount
+    // is never the edge that catches a revocation the app lived through: the
+    // read hangs off the returns themselves. Both of the repo's returns are
+    // needed — focus for a return to the tab (cron-section.tsx), and the
+    // foreground edge for a trip to OS Settings, which backgrounds the app
+    // without blurring the route (index.tsx).
+    expect(src).toMatch(/import \{ useFocusEffect \} from 'expo-router';/);
+    expect(refresh).toBeGreaterThanOrEqual(0);
+    expect(read).toBeGreaterThan(refresh);
+    expect(focus).toBeGreaterThan(refresh);
+    expect(foreground).toBeGreaterThan(refresh);
+    // One call site, inside the one refresh the two returns share, so neither
+    // edge can drift into reading a state the other never paints.
+    expect(src.match(/readWeeklyReportOptIn\(\)/g)).toHaveLength(1);
+    // The foreground arm reads on the way back only, never as the app leaves.
+    expect(src).toMatch(/state === 'active'\) refreshWeeklyReport\(\)/);
   });
 
   test('a refused opt-in says why, in the module copy, under the switch', () => {

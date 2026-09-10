@@ -25,10 +25,15 @@
 // will not show: not after an attempt the phone declined, and not after a
 // permission revoked in Settings under a notice already scheduled. Either way
 // the module's own words say why, so a device that refused the notice does not
-// read like one nobody ever asked.
+// read like one nobody ever asked. That state is read on every return to this
+// surface, not once at mount: a tab screen keeps its children alive for the
+// life of the app, so a revocation the app lived through is only ever caught
+// on the way back in — and both ways in, focus and foreground, are the repo's
+// own (cron-section.tsx, index.tsx).
 
-import { useEffect, useMemo, useState } from 'react';
-import { StyleSheet, Switch, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import { AppState, StyleSheet, Switch, View } from 'react-native';
 
 import { Badge, Button, Card, Divider, ListRow, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
@@ -77,13 +82,15 @@ export function ScorecardsSection({
   // a device nobody ever asked never shows one.
   const [weeklyReportRefusal, setWeeklyReportRefusal] = useState<WeeklyReportRefusal | null>(null);
 
-  useEffect(() => {
+  // Paint both halves from one read of the device's state — the switch through
+  // `weeklyReportOptInHolds`, the line under it through `weeklyReportRefusedBy`.
+  // `readWeeklyReportOptIn` never rejects: a store it cannot read reads as off,
+  // the fail-closed direction, and a permission it could not read is not
+  // blamed. The read is the device's state, so a permission turned off in
+  // Settings under a held flag opens on the module's own line rather than on a
+  // switch quietly reading on.
+  const refreshWeeklyReport = useCallback(() => {
     let live = true;
-    // `readWeeklyReportOptIn` never rejects — a store it cannot read reads as
-    // off, the fail-closed direction, and a permission it could not read is
-    // not blamed. The read is the device's state, so it paints both halves: a
-    // permission turned off in Settings under a held flag opens on the
-    // module's own line rather than on a switch quietly reading on.
     void readWeeklyReportOptIn().then((state) => {
       if (!live) return;
       setWeeklyReport(weeklyReportOptInHolds(state));
@@ -93,6 +100,20 @@ export function ScorecardsSection({
       live = false;
     };
   }, []);
+
+  // Read on every return to this surface, by both routes the operator takes —
+  // and both are needed. Focus catches a return to the tab (cron-section.tsx's
+  // seam); a permission revoked in OS Settings is reached by LEAVING the app,
+  // which backgrounds it rather than blurring the route, so the foreground edge
+  // (index.tsx's AppState seam) is what catches that trip.
+  useFocusEffect(refreshWeeklyReport);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refreshWeeklyReport();
+    });
+    return () => subscription.remove();
+  }, [refreshWeeklyReport]);
 
   /**
    * The switch answers the finger, then the device has the last word: a

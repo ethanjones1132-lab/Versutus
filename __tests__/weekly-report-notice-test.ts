@@ -401,4 +401,42 @@ describe('a permission revoked after the opt-in does not read as on', () => {
     expect(state).toEqual({ state: 'on' });
     expect(weeklyReportRefusedBy(state)).toBeNull();
   });
+
+  test('a second read after a revocation answers refused too, because the read is repeatable', async () => {
+    await setWeeklyReportOptIn(true);
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: false });
+
+    // The section re-reads this on every focus, so one session reads the same
+    // device many times over: the second read must answer the device, never a
+    // cached first answer.
+    await expect(readWeeklyReportOptIn()).resolves.toEqual({
+      state: 'refused',
+      reason: 'permission',
+    });
+    await expect(readWeeklyReportOptIn()).resolves.toEqual({
+      state: 'refused',
+      reason: 'permission',
+    });
+  });
+
+  test('a focus read follows the device, so restoring the permission restores the report', async () => {
+    await setWeeklyReportOptIn(true);
+
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: false });
+    await expect(readWeeklyReportOptIn()).resolves.toEqual({
+      state: 'refused',
+      reason: 'permission',
+    });
+
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
+    await expect(readWeeklyReportOptIn()).resolves.toEqual({ state: 'on' });
+
+    // Repainting the switch is all a focus read does: it schedules nothing,
+    // retires nothing and asks for nothing, so the notice the operator holds
+    // is exactly where the one opt-in put it.
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+    expect(mockCancel).not.toHaveBeenCalled();
+    expect(Notifications.requestPermissionsAsync).toHaveBeenCalledTimes(1);
+    await expect(heldId()).resolves.toBe('notif-1');
+  });
 });

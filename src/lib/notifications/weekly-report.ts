@@ -52,7 +52,9 @@ export async function loadWeeklyReportOptIn(): Promise<boolean> {
  * lands on, so the surface's one line explains it.
  *
  * Reads only: it schedules nothing, cancels nothing, and asks the operator for
- * nothing, so a surface may call it every time it mounts.
+ * nothing, so a surface may call it on every mount, every return to its tab and
+ * every return to the foreground — the read answers the device that is there
+ * now, never a cached first answer.
  */
 export async function readWeeklyReportOptIn(): Promise<WeeklyReportOptInState> {
   if (!(await loadWeeklyReportOptIn())) return { state: 'off' };
