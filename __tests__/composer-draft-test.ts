@@ -550,6 +550,34 @@ describe('the room composer draws the store draft, not one of its own', () => {
   });
 });
 
+describe('the shared-text handoff reaches a room the way it reaches a Bot Chat', () => {
+  test('the room takes an input handle and hands it to its one composer field', () => {
+    const room = readSource('src', 'components', 'chat', 'group-room-view.tsx');
+
+    // Iter-108 made the room's dock a thread of the same draft store, so a
+    // shared text lands there — and the handoff that writes the words also
+    // opens the field. The room hands that field over, the way ChatComposer
+    // does; it authors no focus of its own, because the screen decides whether
+    // a request applies at all.
+    expect(room).toContain('inputRef?: Ref<TextFieldHandle>;');
+    expect(room).toContain('inputRef,');
+    expect(room).toContain('inputRef={inputRef}');
+    expect(room).not.toContain('.focus()');
+  });
+
+  test('the screen hands the room the same handle the thread composer takes', () => {
+    const screen = readSource('src', 'components', 'chat', 'chat-screen.tsx');
+    const call = between(screen, '<GroupRoomView', '\n            />');
+
+    // One handle for the whole screen. Only one of the two composer surfaces is
+    // ever mounted, so `composerInputRef.current` is the field of the surface
+    // that is up — and the handoff's `focus()` reaches the room's dock exactly
+    // as it reaches a Bot Chat's composer.
+    expect(call).toContain('inputRef={composerInputRef}');
+    expect((screen.match(/inputRef=\{composerInputRef\}/g) ?? []).length).toBe(2);
+  });
+});
+
 describe('the speech path and the send path', () => {
   test('the module that composes a spoken draft reaches no send', () => {
     const source = readSource('src', 'lib', 'gateway', 'composer-draft.ts');

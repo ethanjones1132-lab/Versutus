@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -6,7 +6,7 @@ import { BotAvatar } from '@/components/chat/bot-avatar';
 import { MarkdownText } from '@/components/chat/markdown/markdown-text';
 import { StreamingIndicator } from '@/components/chat/streaming-indicator';
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
-import { BaseSheet, Button, Chip, ConfirmSheet, Icon, PressableScale, Skeleton, Text, TextField } from '@/components/ui';
+import { BaseSheet, Button, Chip, ConfirmSheet, Icon, PressableScale, Skeleton, Text, TextField, type TextFieldHandle } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { botChipModelPin, botChipRoutingTag, type PublicBot } from '@/lib/gateway/bots';
@@ -112,6 +112,7 @@ export function GroupRoomView({
   members,
   draft,
   onDraftChange,
+  inputRef,
   onSend,
   onRename,
   onLeave,
@@ -129,6 +130,11 @@ export function GroupRoomView({
    *  the screen hands it and writes through the screen's one writer. */
   draft: string;
   onDraftChange: (text: string) => void;
+  /** The dock field's own handle, so a shared text that lands in the room takes
+   *  the cursor the way it does in a Bot Chat (the screen focuses the field of
+   *  whichever composer surface is up). Optional: a room with no handle
+   *  renders exactly as it did, and the room never drives the field itself. */
+  inputRef?: Ref<TextFieldHandle>;
   onSend: (text: string, mentionedIds: string[]) => Promise<{ replies: GroupReply[]; roomDisbanded?: boolean }>;
   onRename: (name: string) => Promise<BotGroupRoom>;
   onLeave: (memberId: string) => Promise<BotGroupRoom>;
@@ -673,6 +679,7 @@ export function GroupRoomView({
         ) : null}
         <View style={styles.dockRow}>
           <TextField
+            inputRef={inputRef}
             value={draft}
             onChangeText={onDraftChange}
             placeholder={`Message ${group.name}…`}

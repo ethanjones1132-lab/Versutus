@@ -218,8 +218,9 @@ describe('the composer hands its field the input handle', () => {
   });
 
   test('a field with no handle is unchanged', () => {
-    // Optional on every field: the composer is the only caller that passes one,
-    // and every other TextField in the app keeps rendering as it did.
+    // Optional on every field: only a composer surface that has to take a
+    // cursor passes one (ChatComposer's field, and a group room's dock), and
+    // every other TextField in the app keeps rendering as it did.
     expect(field()).toContain('inputRef,');
     expect(fieldIos()).toContain('inputRef,');
   });

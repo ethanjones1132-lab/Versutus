@@ -688,9 +688,12 @@ export function ChatScreen() {
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<TranscriptItem>>(null);
-  // The composer's input, so a Bot Chat link can put the cursor in the composer
-  // it opens (item 8). The screen holds the handle because the screen decides
-  // whether the request applies at all; the composer just hands its field over.
+  // The composer's input of whichever composer surface is up, so a Bot Chat
+  // link (item 8) and a shared text (item 5) can put the cursor in the field
+  // they open. The screen holds the handle because the screen decides whether a
+  // request applies at all; the composer — and a group room's dock, a thread of
+  // the same draft store — just hands its field over. Only one of the two is
+  // ever mounted, so the handle is the field that is actually on screen.
   const composerInputRef = useRef<TextFieldHandle>(null);
   const pinnedRef = useRef(true);
   const atTopRef = useRef(true);
@@ -1846,6 +1849,11 @@ export function ChatScreen() {
                           members={rosterBots}
                           draft={draft}
                           onDraftChange={setDraft}
+                          // The cursor a shared text asked for lands in this
+                          // dock, through the same handle the thread composer
+                          // takes — a group surface is not a thread surface, so
+                          // ChatComposer is not mounted beside it.
+                          inputRef={composerInputRef}
                           // Verified-inventory honesty: only a completed, error-free read
                           // counts, plus rows that survive from an earlier success. A FAILED
                           // read verifies nothing even though its spinner stopped — the room
