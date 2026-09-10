@@ -763,9 +763,14 @@ export function ChatScreen() {
   // promise was that thread's draft. Writing the key is what makes the hold
   // safe against the load above — the async read fills a thread's draft only
   // where nothing has written it yet.
+  //
+  // The workspace is part of whether a request is for this thread: a request
+  // names the workspace it arrived in, and the draft this writes is saved under
+  // the draft key's own gateway (`draftThread.gatewayId`) — so words shared
+  // into one workspace are never written into another's thread.
   useEffect(() => {
     if (!requestedComposeRequest || !isFocused || !draftThread) return undefined;
-    if (!composeRequestApplies(requestedComposeRequest, surface)) return undefined;
+    if (!composeRequestApplies(requestedComposeRequest, surface, draftThread.gatewayId)) return undefined;
     // The thread's own stored draft has to have been read first. On a cold
     // start the load above and this effect are in flight together, and that
     // load keeps whatever a thread already holds (`if (prev[key] !== undefined)

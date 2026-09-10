@@ -57,7 +57,11 @@ import {
   type PublicBot,
 } from '@/lib/gateway/bots';
 import { pendingComposerFocus, type ComposerFocus } from '@/lib/gateway/composer-focus';
-import { pendingComposeRequest, type ComposeRequest } from '@/lib/gateway/compose-request';
+import {
+  composeRequestArrival,
+  pendingComposeRequest,
+  type ComposeRequest,
+} from '@/lib/gateway/compose-request';
 import { pendingSurface } from '@/lib/gateway/surface-request';
 import { onboardingCompletionForAddedGateway } from '@/lib/onboarding/completion-from-add';
 import {
@@ -3298,9 +3302,17 @@ const response = await executeGatewaySlashCommand(trimmed, {
   // answered from outside the screen, so a share that lands while the Chat tab
   // is not showing the thread it names waits for the screen that can write it.
   // A request carries no send — a shared text is a draft the operator reviews.
+  //
+  // The workspace the request ARRIVED in is stamped on as it is held: a draft
+  // is written and saved under the gateway on screen, so words shared into one
+  // workspace must never land in another's thread. The workspace is read off
+  // `activeGatewayRef` rather than the state so this callback keeps one
+  // identity — a producer that re-subscribes on every gateway switch is a
+  // share lost mid-flap.
   const [requestedComposeRequest, setRequestedComposeRequest] = useState<ComposeRequest | null>(null);
   const requestComposeRequest = useCallback((request: ComposeRequest) => {
-    setRequestedComposeRequest((prev) => pendingComposeRequest(prev, request));
+    const arrival = composeRequestArrival(request, activeGatewayRef.current?.id);
+    setRequestedComposeRequest((prev) => pendingComposeRequest(prev, arrival));
   }, []);
   const clearRequestedComposeRequest = useCallback(() => setRequestedComposeRequest(null), []);
 

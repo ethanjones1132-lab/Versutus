@@ -1,4 +1,8 @@
-import { composeRequestApplies, pendingComposeRequest } from '@/lib/gateway/compose-request';
+import {
+  composeRequestApplies,
+  composeRequestArrival,
+  pendingComposeRequest,
+} from '@/lib/gateway/compose-request';
 
 declare const __dirname: string;
 
@@ -62,6 +66,25 @@ describe('pendingComposeRequest (the fold the provider holds the request in)', (
     expect(next).not.toBe(pending);
   });
 
+  test('the same words in another workspace are a new request', () => {
+    // The workspace a request arrived in is part of what makes it that
+    // request: a share of the same words into another gateway belongs to that
+    // gateway, and must not be answered as the one already held.
+    const pending = { text: 'look at this', gatewayId: 'gw-1' };
+
+    const next = pendingComposeRequest(pending, { text: 'look at this', gatewayId: 'gw-2' });
+    expect(next).toEqual({ text: 'look at this', gatewayId: 'gw-2' });
+    expect(next).not.toBe(pending);
+  });
+
+  test('the same words for the same thread in the same workspace keep the value', () => {
+    const pending = { text: 'look at this', botId: 'scout', gatewayId: 'gw-1' };
+
+    expect(
+      pendingComposeRequest(pending, { text: 'look at this', botId: 'scout', gatewayId: 'gw-1' }),
+    ).toBe(pending);
+  });
+
   test('a cleared request is gone: the same text next time is a fresh request', () => {
     // The screen clears as it applies, so the pending slot is null again — and
     // a share of the same words again is a new ask, not the old one returned.
@@ -96,9 +119,55 @@ describe('composeRequestApplies (which thread may take the shared text)', () => 
     expect(composeRequestApplies({ text: 'look' }, { kind: 'group', groupId: 'scout' })).toBe(false);
   });
 
+  test('a request naming a workspace is not the thread of another one', () => {
+    const request = { text: 'look', gatewayId: 'gw-1' };
+
+    expect(composeRequestApplies(request, { kind: 'bot', botId: 'scout' }, 'gw-1')).toBe(true);
+    expect(composeRequestApplies(request, { kind: 'configurable' }, 'gw-1')).toBe(true);
+    // The defect this closes: words shared into one workspace written into the
+    // next workspace's thread, and SAVED there (`saveComposerDraft`).
+    expect(composeRequestApplies(request, { kind: 'bot', botId: 'scout' }, 'gw-2')).toBe(false);
+    expect(composeRequestApplies(request, { kind: 'configurable' }, 'gw-2')).toBe(false);
+    // No workspace in front of the operator is no thread of that workspace's.
+    expect(composeRequestApplies(request, { kind: 'bot', botId: 'scout' }, undefined)).toBe(false);
+  });
+
+  test('a request naming a Bot is only that Bot, in the workspace it arrived in', () => {
+    const request = { text: 'look', botId: 'scout', gatewayId: 'gw-1' };
+
+    expect(composeRequestApplies(request, { kind: 'bot', botId: 'scout' }, 'gw-1')).toBe(true);
+    expect(composeRequestApplies(request, { kind: 'bot', botId: 'coder' }, 'gw-1')).toBe(false);
+    expect(composeRequestApplies(request, { kind: 'bot', botId: 'scout' }, 'gw-2')).toBe(false);
+  });
+
+  test('a request that arrived with no workspace waits for the thread that comes up', () => {
+    // A share that launched the app before any gateway existed has no
+    // workspace to name — the platform read it in an app with nothing
+    // connected — so the words wait for the thread the operator ends up on.
+    expect(composeRequestApplies({ text: 'look' }, { kind: 'bot', botId: 'scout' }, 'gw-2')).toBe(true);
+    expect(composeRequestApplies({ text: 'look' }, { kind: 'configurable' }, 'gw-2')).toBe(true);
+  });
+
   test('nothing pending applies to nothing', () => {
     expect(composeRequestApplies(null, { kind: 'bot', botId: 'scout' })).toBe(false);
     expect(composeRequestApplies(null, { kind: 'configurable' })).toBe(false);
+  });
+});
+
+describe('composeRequestArrival (the workspace a shared text arrived in)', () => {
+  test('the workspace in front of the operator is stamped onto the request', () => {
+    expect(composeRequestArrival({ text: 'look' }, 'gw-1')).toEqual({ text: 'look', gatewayId: 'gw-1' });
+    expect(composeRequestArrival({ text: 'look', botId: 'scout' }, 'gw-1')).toEqual({
+      text: 'look',
+      botId: 'scout',
+      gatewayId: 'gw-1',
+    });
+  });
+
+  test('a request that arrived with no workspace carries none, so a repeat keeps it', () => {
+    const request = { text: 'look', botId: 'scout' };
+
+    expect(composeRequestArrival(request, undefined)).toBe(request);
   });
 });
 
@@ -112,10 +181,22 @@ describe('the pending compose request is provider-owned', () => {
     expect(src).toContain(
       'const [requestedComposeRequest, setRequestedComposeRequest] = useState<ComposeRequest | null>(null);',
     );
-    expect(src).toContain('setRequestedComposeRequest((prev) => pendingComposeRequest(prev, request));');
+    expect(src).toContain('const arrival = composeRequestArrival(request, activeGatewayRef.current?.id);');
+    expect(src).toContain('setRequestedComposeRequest((prev) => pendingComposeRequest(prev, arrival));');
     expect(src).toContain('requestedComposeRequest: ComposeRequest | null;');
     expect(src).toContain('requestComposeRequest: (request: ComposeRequest) => void;');
     expect(src).toContain('clearRequestedComposeRequest: () => void;');
+  });
+
+  test('the workspace the request arrived in is read off the ref, not the state', () => {
+    const src = provider();
+
+    // The request is the workspace's it arrived in, and the workspace it
+    // arrived in is the one in front of the operator AS IT IS HELD — read
+    // through the ref every other long-lived callback uses, so this callback
+    // keeps one identity and no producer re-subscribes on a gateway switch.
+    expect(src).toContain('const arrival = composeRequestArrival(request, activeGatewayRef.current?.id);');
+    expect(src).not.toContain('pendingComposeRequest(prev, request))');
   });
 
   test('the value memo hands the request, its setter and its clear to every consumer', () => {
@@ -158,7 +239,11 @@ describe('the Chat screen writes a shared text into the thread\'s own draft', ()
 
     expect(src).toContain('requestedComposeRequest,');
     expect(src).toContain('clearRequestedComposeRequest,');
-    expect(src).toContain('composeRequestApplies(requestedComposeRequest, surface)');
+    // The workspace in front of the operator is the third fact: a request is
+    // only this screen's to write where it arrived in the workspace on screen.
+    // It is read off the draft thread — the key the write lands under — so the
+    // request and the draft can never disagree about which workspace it is.
+    expect(src).toContain('composeRequestApplies(requestedComposeRequest, surface, draftThread.gatewayId)');
   });
 
   test('the shared text is composed onto the thread\'s draft through the one writer', () => {
@@ -178,7 +263,7 @@ describe('the Chat screen writes a shared text into the thread\'s own draft', ()
     // The guard and the applies-check come before the write: a request for
     // another thread — or one landed before a thread is up — stays pending for
     // the thread it names, because the promise was that thread's draft.
-    const applies = block.indexOf('composeRequestApplies(requestedComposeRequest, surface)');
+    const applies = block.indexOf('composeRequestApplies(requestedComposeRequest, surface, draftThread.gatewayId)');
     expect(applies).toBeGreaterThan(-1);
     expect(applies).toBeLessThan(block.indexOf('setTimeout('));
     expect(chatScreen()).toContain('if (!requestedComposeRequest || !isFocused || !draftThread) return undefined;');
@@ -211,8 +296,10 @@ describe('the Chat screen writes a shared text into the thread\'s own draft', ()
 });
 
 describe('a shared text can only ever be a draft', () => {
-  test('the request shapes as a text and a Bot id, and nothing else', () => {
-    expect(requestModule()).toContain('export type ComposeRequest = { text: string; botId?: string };');
+  test('the request shapes as a text, a Bot id and the workspace it arrived in, and nothing else', () => {
+    expect(requestModule()).toContain(
+      'export type ComposeRequest = { text: string; botId?: string; gatewayId?: string };',
+    );
   });
 
   test('the module that carries it has no send in it', () => {
