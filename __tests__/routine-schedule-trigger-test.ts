@@ -6,6 +6,14 @@ import {
   type RoutineNoticeData,
 } from '@/lib/notifications/routine-schedule';
 
+// The fire the gateway reported for the unmappable-cadence cases. A literal
+// calendar instant makes this suite expire: a fire that is not still ahead of
+// the clock is refused, so the day the machine clock passes the fixture its
+// case goes red for reasons that have nothing to do with the change under
+// test. The far end of the range is therefore pinned past every clock, the
+// same way the re-arm suite pins its own.
+const NEXT_FIRE = '2999-01-01T09:00:00.000Z';
+
 describe('routine cron → local-notification trigger mapping (pure helpers)', () => {
   test("the default routine schedule maps to a daily trigger at the cron's hour and minute", () => {
     // DEFAULT_ROUTINE_SCHEDULE = '0 9 * * *' — the shape the create form
@@ -36,15 +44,28 @@ describe('routine cron → local-notification trigger mapping (pure helpers)', (
   });
 
   test('an unmappable cron falls back to a one-shot at the next fire the gateway reported', () => {
-    const nextRunAt = '2026-09-10T09:00:00.000Z';
-    expect(cronToTrigger('0 9 1 * *', nextRunAt)).toEqual({
+    expect(cronToTrigger('0 9 1 * *', NEXT_FIRE)).toEqual({
       type: 'date',
-      date: Date.parse(nextRunAt),
+      date: Date.parse(NEXT_FIRE),
     });
-    expect(cronToTrigger('*/5 * * * *', nextRunAt)).toEqual({
+    expect(cronToTrigger('*/5 * * * *', NEXT_FIRE)).toEqual({
       type: 'date',
-      date: Date.parse(nextRunAt),
+      date: Date.parse(NEXT_FIRE),
     });
+  });
+
+  test('a clock moved past the fixture fire still prices the one-shot it reports', () => {
+    // `now` is passed explicitly, three hours on from the instant a wall-clock
+    // fixture carries. A fire behind the clock is refused outright — the
+    // second assertion is that refusal, and it is exactly how such a fixture
+    // takes this suite red once the machine clock catches up with it.
+    expect(cronToTrigger('*/5 * * * *', NEXT_FIRE, Date.parse('2026-09-10T12:00:00.000Z'))).toEqual({
+      type: 'date',
+      date: Date.parse(NEXT_FIRE),
+    });
+    expect(
+      cronToTrigger('*/5 * * * *', '2026-09-10T09:00:00.000Z', Date.parse('2026-09-10T12:00:00.000Z')),
+    ).toBeNull();
   });
 
   test('an unmappable cron with no next fire maps to nothing rather than guessing', () => {

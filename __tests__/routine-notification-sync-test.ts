@@ -55,11 +55,19 @@ const dailyJob = {
   schedule: '0 9 * * *',
 };
 
+// The fire the gateway reported for the unmappable-cadence fixture. A literal
+// calendar instant makes this suite expire: `cronToTrigger` refuses a fire
+// that is not still ahead of now, so the day the machine clock passes the
+// fixture it goes red for reasons that have nothing to do with the change
+// under test. The far end of the range is therefore pinned past every clock,
+// the same way the re-arm suite pins its own.
+const NEXT_FIRE = '2999-01-01T09:00:00.000Z';
+
 const complexJob = {
   id: 'job-2',
   name: '[bot:scout] Minute sweep',
   schedule: '*/5 * * * *',
-  nextRunAt: '2026-09-10T09:00:00.000Z',
+  nextRunAt: NEXT_FIRE,
 };
 
 describe('routine notification sync/cancel bookkeeping', () => {
@@ -138,6 +146,25 @@ describe('routine notification sync/cancel bookkeeping', () => {
         trigger: { type: 'date', date: Date.parse(complexJob.nextRunAt) },
       }),
     );
+  });
+
+  test('the one-shot fixture survives a clock moved past the fire it names', async () => {
+    // The machine clock is moved three hours on from the instant a wall-clock
+    // fixture would carry. A fixture pinned to a real calendar date fails
+    // here — a fire that is not still ahead of now is refused — so this case
+    // is what stops the suite expiring mid-sprint.
+    jest.useFakeTimers({ now: Date.parse('2026-09-10T12:00:00.000Z') });
+    try {
+      await syncRoutineNotification(complexJob);
+
+      expect(mockSchedule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          trigger: { type: 'date', date: Date.parse(complexJob.nextRunAt) },
+        }),
+      );
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   test('an unmappable cron with no next fire schedules nothing rather than guessing', async () => {
