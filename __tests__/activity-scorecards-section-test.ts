@@ -29,7 +29,7 @@ describe('the section paints the shipped fold, and aggregates nothing itself', (
     expect(src).toContain("from '@/lib/fleet/scorecard'");
     expect(src).toContain('buildScorecards(runs)');
     expect(src).toContain('{scorecardBotLabel(card.botId)}');
-    expect(src).toContain('{scorecardFateCopy(card.fates)}');
+    expect(src).toContain('const fates = scorecardFateCopy(card.fates);');
     expect(src).toContain('{scorecardWindowCopy(runs.length)}');
     expect(src).toContain('{SCORECARD_FOOTER_COPY}');
   });
@@ -62,6 +62,32 @@ describe('the section paints the shipped fold, and aggregates nothing itself', (
     expect(src).not.toContain('listBots');
     expect(src).not.toContain('useGateway');
     expect(src).not.toContain('fetch(');
+  });
+});
+
+describe('a card carries the run duration it can back', () => {
+  test('the duration line is the module’s, timed over that card’s own rows', () => {
+    const src = section();
+
+    expect(src).toContain('scorecardDurationCopy(');
+    expect(src).toContain('medianRunMs(filterRunsByBot(runs, { botId: card.botId }))');
+    // One attribution rule in the file, and it is the fold's own — a card's
+    // line can never be timed over another card's runs.
+    expect(src).not.toContain('runs.filter(');
+  });
+
+  test('a card that cannot back a duration shows its counts alone, never a zero', () => {
+    const src = section();
+    const fates = src.indexOf('const fates = scorecardFateCopy(card.fates);');
+    const timed = src.indexOf('scorecardDurationCopy(');
+    const subtitle = src.indexOf('subtitle={');
+
+    expect(fates).toBeGreaterThanOrEqual(0);
+    expect(timed).toBeGreaterThan(fates);
+    expect(subtitle).toBeGreaterThan(timed);
+    // An empty duration is appended to nothing: a card whose rows carry no
+    // trustworthy span reads as its counts rather than as a 0:00 run.
+    expect(src).toContain('subtitle={timed ? `${fates} · ${timed}` : fates}');
   });
 });
 

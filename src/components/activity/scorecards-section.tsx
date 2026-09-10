@@ -10,6 +10,12 @@
 // fails at nothing; and no roster is read here, so the section can only ever
 // name a Bot the runs already named.
 //
+// A card's line also carries the median span its own runs ended on, when the
+// fold can back one — read from that card's own rows, through the same
+// attribution rule the fold bucketed by, so no card can borrow another's runs.
+// A card whose rows carry no span this device watched end keeps its counts and
+// says no duration, rather than a number it cannot back.
+//
 // That empty-device rule is about the CARDS, never about this section: the
 // weekly report is opted into from here (D3 Build 5), so a device that has run
 // nothing — exactly the device the report exists to bring back — still gets
@@ -55,7 +61,10 @@ import {
 } from '@/lib/notifications/weekly-report-schedule';
 import {
   buildScorecards,
+  filterRunsByBot,
+  medianRunMs,
   scorecardBotLabel,
+  scorecardDurationCopy,
   scorecardFateCopy,
   scorecardWindowCopy,
   SCORECARD_FOOTER_COPY,
@@ -175,11 +184,21 @@ export function ScorecardsSection({
             // backend picker's announced state, and
             // `list-row-selected-state-test.ts` keeps that pass scoped to it.)
             const showing = filter ? card.botId === filter.botId : false;
+            // The card's line: the counts it folded, and — when its own runs
+            // can back one — the median span they ended on. The rows come
+            // through the fold's own attribution rule, so one card's line can
+            // never borrow another card's runs; and a card whose rows carry no
+            // span this device watched end says its counts alone rather than a
+            // duration it cannot back.
+            const fates = scorecardFateCopy(card.fates);
+            const timed = scorecardDurationCopy(
+              medianRunMs(filterRunsByBot(runs, { botId: card.botId })),
+            );
             return (
               <ListRow
                 key={card.botId ?? 'unattributed'}
                 title={scorecardBotLabel(card.botId)}
-                subtitle={scorecardFateCopy(card.fates)}
+                subtitle={timed ? `${fates} · ${timed}` : fates}
                 onPress={() => onSelect({ botId: card.botId })}
                 trailing={showing ? <Badge label="Showing" tone="accent" /> : undefined}
                 accessibilityHint="Shows this Bot's runs in the list above"

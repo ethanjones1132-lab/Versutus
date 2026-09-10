@@ -17,14 +17,16 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 import {
   buildScorecards,
   filterRunsByBot,
+  medianRunMs,
   scorecardBotLabel,
+  scorecardDurationCopy,
   scorecardFate,
   scorecardFateCopy,
   scorecardWindowCopy,
   SCORECARD_FOOTER_COPY,
 } from '@/lib/fleet/scorecard';
 import type { BotScorecard, ScorecardFates } from '@/lib/fleet/scorecard';
-import { ACTIVITY_RUNS_PERSIST_CAP } from '@/lib/gateway/session-persistence';
+import { ACTIVITY_RUNS_PERSIST_CAP, normalizeRestoredRuns } from '@/lib/gateway/session-persistence';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
 declare const __dirname: string;
@@ -348,5 +350,104 @@ describe('scorecardFateCopy', () => {
 
   test('nothing at all prints nothing, never a zero', () => {
     expect(scorecardFateCopy(fates({}))).toBe('');
+  });
+});
+
+describe('medianRunMs', () => {
+  const NOW = 1_757_400_000_000;
+
+  /** A row that ended `ms` before NOW — one span this device watched end. */
+  const endedIn = (ms: number, over: Partial<ActivityRun> = {}): ActivityRun =>
+    run({ startedAt: NOW - ms, finishedAt: NOW, ...over });
+
+  test('the middle span of an odd count of runs', () => {
+    expect(medianRunMs([endedIn(20_000), endedIn(30_000), endedIn(50_000)], NOW)).toBe(30_000);
+  });
+
+  test('an even count answers with the midpoint of its two middle spans', () => {
+    const spans = [endedIn(80_000), endedIn(10_000), endedIn(40_000), endedIn(20_000)];
+
+    expect(medianRunMs(spans, NOW)).toBe(30_000);
+  });
+
+  test('only the rows this device watched end are timed', () => {
+    const rows = [
+      endedIn(30_000, { id: 'ok' }),
+      run({ id: 'going', status: 'running', startedAt: NOW - 900_000, finishedAt: undefined }),
+      run({ id: 'stuck', status: 'waiting-approval', startedAt: NOW - 900_000, finishedAt: undefined }),
+    ];
+
+    // The two live rows are still on the card's counts; they are not time.
+    expect(medianRunMs(rows, NOW)).toBe(30_000);
+  });
+
+  test('an unresolved run contributes no duration — its finish is when this device stopped watching', () => {
+    const stopped = endedIn(900_000, { id: 'unresolved', status: 'unresolved' });
+
+    // The run may still have been going server-side when this client gave up
+    // (runs.ts:25-30), so its span is a lower bound dressed up as a run time.
+    expect(medianRunMs([endedIn(30_000, { id: 'ok' }), stopped], NOW)).toBe(30_000);
+    expect(medianRunMs([stopped], NOW)).toBeNull();
+  });
+
+  test('the row the app interrupted on load contributes no time-to-app-close', () => {
+    const restored = normalizeRestoredRuns([
+      run({ id: 'killed', status: 'running', startedAt: NOW - 900_000, finishedAt: undefined }),
+    ]);
+
+    // A kill re-marks the row on the next load and stamps `finishedAt` with the
+    // moment it reads it, so the span that falls out is how long the app was
+    // CLOSED — never how long the run took.
+    expect(restored[0].status).toBe('unresolved');
+    expect(medianRunMs(restored)).toBeNull();
+  });
+
+  test('a finish past the fold’s own clock is not a duration this device reached', () => {
+    // An unsettled record may carry a placeholder, and the fold never reads one
+    // as an end (the rule `buildHomeBriefing` applies, briefing.ts:47-49).
+    expect(medianRunMs([endedIn(60_000, { finishedAt: NOW + 5_000 })], NOW)).toBeNull();
+  });
+
+  test('a span that is not positive is not a run time', () => {
+    expect(medianRunMs([endedIn(0)], NOW)).toBeNull();
+    expect(
+      medianRunMs(
+        [run({ id: 'skew', status: 'complete', startedAt: NOW, finishedAt: NOW - 5_000 })],
+        NOW,
+      ),
+    ).toBeNull();
+  });
+
+  test('a card with nothing it can time says nothing rather than 0', () => {
+    expect(medianRunMs([], NOW)).toBeNull();
+    expect(medianRunMs([run({ id: 'going', status: 'running', finishedAt: undefined })], NOW)).toBeNull();
+  });
+
+  test('a card is timed over its own rows, by the fold’s own attribution rule', () => {
+    const rows = [
+      endedIn(20_000, { id: 'atlas-run', botId: 'atlas' }),
+      endedIn(900_000, { id: 'bramble-run', botId: 'bramble' }),
+    ];
+
+    expect(medianRunMs(filterRunsByBot(rows, { botId: 'atlas' }), NOW)).toBe(20_000);
+    // The rows that name no Bot are their own card, and this read has none.
+    expect(medianRunMs(filterRunsByBot(rows, { botId: null }), NOW)).toBeNull();
+  });
+});
+
+describe('scorecardDurationCopy', () => {
+  test('names the median span the card can back', () => {
+    expect(scorecardDurationCopy(222_000)).toBe('Median run 3:42');
+  });
+
+  test('a card with nothing it can time prints nothing, never a zero', () => {
+    // `0:00` would read as a Bot whose runs took no time at all.
+    expect(scorecardDurationCopy(null)).toBe('');
+    expect(scorecardDurationCopy(0)).toBe('');
+    expect(scorecardDurationCopy(Number.NaN)).toBe('');
+  });
+
+  test('claims no statistic this module did not compute', () => {
+    expect(scorecardDurationCopy(222_000)).not.toMatch(/average|typical|gateway|total/i);
   });
 });

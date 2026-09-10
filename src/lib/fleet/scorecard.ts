@@ -11,6 +11,11 @@
 //   never as one of the settled fates.
 // - A row naming no Bot is not dropped and never guessed into a card: all of
 //   them share the one unattributed bucket (D3:792-797).
+// - A duration is only read off a run this device watched END. A live row has
+//   no finish at all, and an `unresolved` row's finish is the moment this
+//   client stopped polling rather than the moment the run finished
+//   (`runs.ts:25-30`) — a span it cannot back, so a card shows no duration
+//   rather than one that is really time-to-app-close or time-to-give-up.
 //
 // These cards are observations of runs this device saw — a run started from
 // the desktop or the TUI never reaches this list at all. The surface owes that
@@ -21,6 +26,7 @@
 // it rather than retyped, so the bound in the copy cannot drift from the bound
 // on the list it describes.
 
+import { formatDuration } from '@/lib/format';
 import { ACTIVITY_RUNS_PERSIST_CAP } from '@/lib/gateway/session-persistence';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
@@ -115,6 +121,54 @@ export function filterRunsByBot(
 }
 
 /**
+ * The median span this card's runs took (D3's Build 1, `FUTURE-ITEMS.md:804-805`).
+ *
+ * Only the spans this device watched END are counted, because a duration is a
+ * claim about how long the work took:
+ * - A live row has no finish, so it cannot be timed at all.
+ * - An `unresolved` row is out even though it is settled, and this is the rule
+ *   that keeps a restored row's time-to-app-close out of a card: `unresolved`
+ *   means the client stopped watching, so its finish is when polling gave up
+ *   rather than when the run ended (`runs.ts:25-30`). That span is a lower
+ *   bound, and a median built from lower bounds is not a run time.
+ * - A finish past `now` is a placeholder rather than an end this device
+ *   reached, and a finish at or before its own start is no span at all — the
+ *   same discipline `buildHomeBriefing` applies to a finish that lies past its
+ *   clock (`briefing.ts:47-49`).
+ * - A `startedAt`/`finishedAt` a read cannot trust as a number is not a span
+ *   either, so a half-shaped row cannot put a `NaN` into the answer.
+ *
+ * `now` is injectable for tests; in production it is the fold's own clock at
+ * the moment it runs. An odd count answers with its middle span, an even one
+ * with the midpoint of its two middle spans, and a card with nothing it can
+ * time answers `null` rather than `0` — a Bot whose runs this device never
+ * timed must not read as one whose runs took no time.
+ */
+export function medianRunMs(runs: readonly ActivityRun[], now: number = Date.now()): number | null {
+  const spans: number[] = [];
+
+  for (const run of runs) {
+    // The fates this device watched end — `unresolved` is settled for the
+    // counts and deliberately not for a duration, and `running` /
+    // `waiting-approval` have no finish to read.
+    if (run.status !== 'complete' && run.status !== 'failed' && run.status !== 'cancelled') continue;
+    const { startedAt, finishedAt } = run;
+    if (typeof startedAt !== 'number' || !Number.isFinite(startedAt)) continue;
+    if (typeof finishedAt !== 'number' || !Number.isFinite(finishedAt)) continue;
+    if (finishedAt > now) continue;
+    const span = finishedAt - startedAt;
+    if (span <= 0) continue;
+    spans.push(span);
+  }
+
+  if (spans.length === 0) return null;
+  spans.sort((a, b) => a - b);
+  const middle = spans.length >> 1;
+  if (spans.length % 2 === 1) return spans[middle];
+  return Math.round((spans[middle - 1] + spans[middle]) / 2);
+}
+
+/**
  * What a card is titled. A Bot's own id is its name; the rows that name no Bot
  * share one heading, worded the spec's way ("unattributed", D3:792-797) rather
  * than as an id, so the bucket is never read as a Bot of that name.
@@ -143,6 +197,19 @@ export function scorecardFateCopy(fates: ScorecardFates): string {
   return FATE_COPY.filter(([fate]) => fates[fate] > 0)
     .map(([fate, word]) => `${fates[fate]} ${word}`)
     .join(' · ');
+}
+
+/**
+ * A card's one duration line — the median span its own runs ended on, e.g.
+ * `Median run 3:42` — or nothing at all. `null` is `medianRunMs`'s answer when
+ * no row could back a span, and the card then shows its counts alone: a `0:00`
+ * would read as a Bot whose runs took no time at all rather than as one this
+ * device never timed. The figure is formatted by the shared duration
+ * formatter, the same one an elapsed run card uses.
+ */
+export function scorecardDurationCopy(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms) || ms <= 0) return '';
+  return `Median run ${formatDuration(ms)}`;
 }
 
 /**
