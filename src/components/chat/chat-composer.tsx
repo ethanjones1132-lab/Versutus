@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { memo, useState, useSyncExternalStore, type Ref } from 'react';
+import { memo, useEffect, useRef, useState, useSyncExternalStore, type Ref } from 'react';
 import { Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,14 +8,22 @@ import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
 import { Badge, Card, Icon, PressableScale, Text, TextField, type IconName, type TextFieldHandle } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { composerCopy, composerDockUtilities } from '@/lib/gateway/composer-copy';
+import { spokenDraftHold, type SpokenDraftHold } from '@/lib/gateway/composer-draft';
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
 import type { ConnectionStatus } from '@/lib/gateway/types';
+import { haptics } from '@/lib/haptics';
 import { chatComposerKeyboardOffset } from '@/lib/motion/chat-composer-layout';
 import {
   chatComposerPaletteMaxHeight,
   chatComposerPaletteScrollMaxHeight,
 } from '@/lib/motion/chat-composer-palette';
 import { springSnappy } from '@/lib/motion/presets';
+import { micControlState } from '@/lib/voice/mic-state';
+import {
+  startSpeechRecognition,
+  speechRecognitionAvailable,
+  stopSpeechRecognition,
+} from '@/lib/voice/speech-recognition';
 import { useTokens } from '@/hooks/use-tokens';
 
 type ChatComposerProps = {
@@ -66,9 +74,25 @@ export const ChatComposer = memo(function ChatComposer({
 }: ChatComposerProps) {
   const tokens = useTokens();
   const [focused, setFocused] = useState(false);
+  const [micAvailable, setMicAvailable] = useState(false);
   const sendWidth = useSharedValue(56);
+
+  // Whether this build carries a recognizer is a device answer the composer
+  // cannot know until it asks. Read once: a client with no native module
+  // answers no, and the mic is then not drawn at all.
+  useEffect(() => {
+    let cancelled = false;
+    void speechRecognitionAvailable().then((available) => {
+      if (!cancelled) setMicAvailable(available);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const copy = composerCopy({ canSend, isStreaming, status, queuedCount });
   const dockUtilities = composerDockUtilities({ canBrowseCommands: Boolean(onBrowseCommands) });
+  const micState = micControlState({ available: micAvailable, status, isStreaming });
 
   const sendAnimatedStyle = useAnimatedStyle(() => ({
     minWidth: sendWidth.value,
@@ -82,6 +106,48 @@ export const ChatComposer = memo(function ChatComposer({
     }
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     onSend();
+  };
+
+  // The live hold, if any: the draft fold that owns the words, and whether the
+  // finger has already come up. A release that lands while the phone is still
+  // answering the microphone prompt must still end the session it started.
+  const micHoldRef = useRef<{ hold: SpokenDraftHold; released: boolean } | null>(null);
+
+  // The mic's two edges. Press-in starts a hold against the text the field
+  // already held; press-out ends recognition and leaves what was said in the
+  // draft, for review. The words land through the composer's own change
+  // handler — the only writer on this path — and neither edge sends.
+  const handleMicPressIn = () => {
+    void haptics.light();
+    const hold = spokenDraftHold(draft, onChangeText);
+    const entry = { hold, released: false };
+    micHoldRef.current = entry;
+
+    void startSpeechRecognition({}, (transcript) => hold.onTranscript(transcript)).then((started) => {
+      if (!started) {
+        // Nothing is listening: a phone that refused, or a recognizer that
+        // would not start, puts the text the hold began with back rather than
+        // leaving half a draft nobody asked for.
+        hold.onCancelled();
+        if (micHoldRef.current === entry) micHoldRef.current = null;
+        return;
+      }
+      if (entry.released) {
+        // The finger came up while the phone was still answering: end the
+        // session that just started, rather than leave a microphone listening
+        // with nothing holding it.
+        void stopSpeechRecognition();
+      }
+    });
+  };
+
+  const handleMicPressOut = () => {
+    void haptics.light();
+    const entry = micHoldRef.current;
+    micHoldRef.current = null;
+    if (!entry) return;
+    entry.released = true;
+    void stopSpeechRecognition();
   };
 
   const isActionDisabled = !canSend || (!isStreaming && !draft.trim());
@@ -328,6 +394,28 @@ export const ChatComposer = memo(function ChatComposer({
             accessibilityLabel="Message input"
             style={styles.input}
           />
+          {micState.kind !== 'hidden' ? (
+            // Drawn from the one fold and nothing else: dimmed with the
+            // module's own reason line while the gateway is away, live while
+            // it is connected. A build with no recognizer draws no mic at all.
+            <PressableScale
+              style={[
+                styles.micButton,
+                { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+                micState.kind === 'disabled' && styles.micDisabled,
+              ]}
+              disabled={micState.kind !== 'live'}
+              onPressIn={handleMicPressIn}
+              onPressOut={handleMicPressOut}
+              accessibilityRole="button"
+              accessibilityLabel={micState.kind === 'disabled' ? micState.reason : 'Hold to talk'}>
+              <Icon
+                name={{ ios: 'mic.fill', android: 'mic', web: 'mic' }}
+                size={16}
+                color={micState.kind === 'live' ? 'accent' : 'textTertiary'}
+              />
+            </PressableScale>
+          ) : null}
           <Animated.View style={sendAnimatedStyle}>
             <PressableScale
               style={[
@@ -365,6 +453,15 @@ export const ChatComposer = memo(function ChatComposer({
             </PressableScale>
           </Animated.View>
         </Card>
+
+        {micState.kind === 'disabled' ? (
+          // The mic says why it cannot be held, in the module's own words:
+          // a dimmed control on its own is silence, and silence about a
+          // microphone reads as a broken one.
+          <Text variant="micro" color="tertiary" style={styles.micReason}>
+            {micState.reason}
+          </Text>
+        ) : null}
       </View>
     </ComposerKeyboardLift>
   );
@@ -492,5 +589,22 @@ const styles = StyleSheet.create({
   },
   sendDisabled: {
     opacity: 0.5,
+  },
+  // The mic sits beside send inside the composer card. A 44pt-wide, 48pt-tall
+  // square: the touch floor, without wearing the accent-filled send chrome —
+  // a hold is a secondary action, and only its glyph is lit while live.
+  micButton: {
+    width: 44,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  micDisabled: {
+    opacity: 0.5,
+  },
+  micReason: {
+    paddingHorizontal: Spacing.four,
   },
 });
