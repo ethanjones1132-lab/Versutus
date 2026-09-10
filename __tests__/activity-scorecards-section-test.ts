@@ -355,3 +355,42 @@ describe('the weekly operator report is opted into here, off by default', () => 
     expect(close).toBeGreaterThan(footer);
   });
 });
+
+describe('the operator’s own answer outranks a read already in flight', () => {
+  test('the read captures the token as it starts, before the await', () => {
+    const src = section();
+    const refresh = src.indexOf('const refreshWeeklyReport = useCallback(');
+    const capture = src.indexOf('const token = attemptTokenRef.current;');
+    const read = src.indexOf('readWeeklyReportOptIn()');
+    const guard = src.indexOf('if (!live || token !== attemptTokenRef.current) return;');
+
+    expect(src).toContain('const attemptTokenRef = useRef(0);');
+    expect(capture).toBeGreaterThan(refresh);
+    // Captured BEFORE the read is taken, so the token names the moment it
+    // started rather than the moment its answer landed — which is the whole
+    // point: a read that outlives the attempt is the one to drop.
+    expect(capture).toBeLessThan(read);
+    expect(guard).toBeGreaterThan(read);
+  });
+
+  test('the attempt is the only writer that bumps it, and its answer stays unguarded', () => {
+    const src = section();
+    const handler = src.indexOf('const handleWeeklyReport = (next: boolean) => {');
+    const bump = src.indexOf('attemptTokenRef.current += 1;');
+    const tap = src.indexOf('setWeeklyReport(next);');
+    const attempt = src.indexOf('setWeeklyReportOptIn(next).then((state) => {');
+    const attemptBody = src.slice(attempt, src.indexOf('});', attempt));
+
+    // Bumped as the attempt starts, before it awaits anything on the native
+    // bridge, so a read captured earlier is stale by the time it lands.
+    expect(bump).toBeGreaterThan(handler);
+    expect(bump).toBeLessThan(tap);
+    // Exactly one bump, and it is the attempt's: a read that bumped it would
+    // silence the very returns to this surface it exists to catch.
+    expect(src.match(/attemptTokenRef\.current \+= 1;/g)).toHaveLength(1);
+    // The attempt needs no token of its own — the operator's own tap is the
+    // newest word, so its paint is the unguarded one.
+    expect(src.match(/!== attemptTokenRef\.current/g)).toHaveLength(1);
+    expect(attemptBody).not.toContain('attemptTokenRef');
+  });
+});

@@ -29,9 +29,11 @@
 // surface, not once at mount: a tab screen keeps its children alive for the
 // life of the app, so a revocation the app lived through is only ever caught
 // on the way back in — and both ways in, focus and foreground, are the repo's
-// own (cron-section.tsx, index.tsx).
+// own (cron-section.tsx, index.tsx). A read never outranks the operator's own
+// answer, either: an attempt bumps the token the read captured before its
+// await, so a read that started before the tap paints nothing.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { AppState, StyleSheet, Switch, View } from 'react-native';
 
@@ -81,6 +83,18 @@ export function ScorecardsSection({
   // The refusal the last attempt met, or null. Only an attempt can set it, so
   // a device nobody ever asked never shows one.
   const [weeklyReportRefusal, setWeeklyReportRefusal] = useState<WeeklyReportRefusal | null>(null);
+  /**
+   * The operator's own answer outranks a read already in flight.
+   *
+   * Both writers of the one switch state paint from a promise, and whichever
+   * lands last is what the operator sees — so a read captured before the tap
+   * would resolve with the device as it was THEN and paint the pre-tap state
+   * over the answer the attempt just gave. Every attempt bumps this token, and
+   * a read captures it before its await: a read whose token is no longer
+   * current paints nothing. Only the attempt bumps it, so a plain return to
+   * this surface is never silenced by an old attempt.
+   */
+  const attemptTokenRef = useRef(0);
 
   // Paint both halves from one read of the device's state — the switch through
   // `weeklyReportOptInHolds`, the line under it through `weeklyReportRefusedBy`.
@@ -91,8 +105,9 @@ export function ScorecardsSection({
   // switch quietly reading on.
   const refreshWeeklyReport = useCallback(() => {
     let live = true;
+    const token = attemptTokenRef.current;
     void readWeeklyReportOptIn().then((state) => {
-      if (!live) return;
+      if (!live || token !== attemptTokenRef.current) return;
       setWeeklyReport(weeklyReportOptInHolds(state));
       setWeeklyReportRefusal(weeklyReportRefusedBy(state));
     });
@@ -121,8 +136,13 @@ export function ScorecardsSection({
    * control snaps back instead of promising a notice that is not there — and
    * the refusal it met is named below it rather than left looking like a
    * report nobody asked for.
+   *
+   * The token is bumped first, before the attempt awaits anything, so a read
+   * already in flight is stale when it lands and cannot paint over this
+   * answer. The attempt's own paint needs no guard: it is the newest word.
    */
   const handleWeeklyReport = (next: boolean) => {
+    attemptTokenRef.current += 1;
     setWeeklyReport(next);
     setWeeklyReportRefusal(null);
     void setWeeklyReportOptIn(next).then((state) => {
