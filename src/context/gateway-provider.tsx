@@ -110,6 +110,7 @@ import { routineJobsFromList } from '@/lib/gateway/routines';
 import {
   loadActivityRuns,
   loadOfflineQueue,
+  resurfaceOfflineQueue,
   saveActivityRuns,
   saveOfflineQueue,
   type OfflineQueueDestination,
@@ -887,8 +888,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // Re-surface durable offline outbox items after history reload.
-      const pending = offlineQueueRef.current.filter((item) => item.gatewayId === gateway.id);
+      // Re-surface durable offline outbox items after history reload. Only the
+      // rows that belong on the thread just painted: a row that names a Bot
+      // Chat was typed for that Bot Chat, not for whichever one is on screen.
+      const pending = resurfaceOfflineQueue(offlineQueueRef.current, {
+        gatewayId: gateway.id,
+        botId: selectedBotIdRef.current,
+      });
       for (const item of pending) {
         if (!merged.some((m) => m.id === item.id)) {
           merged.push({

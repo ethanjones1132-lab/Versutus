@@ -104,6 +104,27 @@ export async function saveOfflineQueue(items: OfflineQueueItem[]): Promise<void>
   await keyValueStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(items));
 }
 
+/** The thread a history reload painted: its gateway, and the Bot Chat it shows. */
+export type OfflineQueueScope = Pick<OfflineQueueItem, 'gatewayId' | 'botId'>;
+
+/**
+ * The queued rows that belong on the thread a reload just painted. A row that
+ * names no Bot Chat — a composer line, and every legacy row — shows wherever
+ * the operator is, exactly as it always has. A row that names one shows only in
+ * that Bot Chat: the text was parked for one conversation, and a reload that
+ * opened another must not push it under that thread's transcript.
+ */
+export function resurfaceOfflineQueue(
+  items: OfflineQueueItem[],
+  scope: OfflineQueueScope,
+): OfflineQueueItem[] {
+  return items.filter(
+    (item) =>
+      item.gatewayId === scope.gatewayId &&
+      (item.botId === undefined || item.botId === scope.botId),
+  );
+}
+
 /**
  * Runs interrupted mid-flight are re-marked on load — the app process is
  * gone, so local drivers and approval resolvers cannot resume them. A run
