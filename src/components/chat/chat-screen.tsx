@@ -37,6 +37,12 @@ import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDividerCached } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
+// The phone-side local notice a routine's schedule maps to; every confirmed
+// mutation below keeps it in step (fire-and-forget, best-effort).
+import {
+  cancelRoutineNotification,
+  syncRoutineNotification,
+} from '@/lib/notifications/routine-sync';
 import { resolvePullRefreshAction } from '@/lib/gateway/messages';
 import { openSessionById } from '@/lib/gateway/session-open-by-id';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
@@ -784,11 +790,15 @@ export function ChatScreen() {
     async (input: { title: string; prompt: string; schedule: string }) => {
       if (!botSurfaceId) return;
       const target = botSurfaceId;
-      await botJobs.create({
+      const created = await botJobs.create({
         name: routineName(target, input.title),
         prompt: input.prompt,
         schedule: input.schedule,
       });
+      // The create landed: schedule the phone-side local notice from the
+      // record the gateway returned, fire-and-forget so a locked scheduler
+      // never reads as a refused create.
+      if (created?.id) void syncRoutineNotification({ ...created, schedule: input.schedule });
       // Create already landed; a failed re-list must not look like
       // the Gate refused the job (that would keep the draft of a
       // routine that exists). Last-good stays; staleness is named.
@@ -804,8 +814,17 @@ export function ChatScreen() {
   const handleRoutineTogglePause = useCallback(
     async (jobId: string, paused: boolean) => {
       await botJobs.pause(jobId, paused);
+      // A pause retires the held notice up front (the sync below schedules
+      // nothing for a paused job); a resume rebuilds it from the re-read.
+      // Fire-and-forget: never read as a refused pause/resume.
+      if (paused) void cancelRoutineNotification(jobId);
       await botJobs
         .list()
+        .then((jobs) => {
+          if (paused) return;
+          const job = routineJobsFromList(jobs).find((candidate) => candidate.id === jobId);
+          if (job) void syncRoutineNotification(job);
+        })
         .then((jobs) =>
           foldRoutineRead(botSurfaceId ?? '', { ok: true, jobs: routineJobsFromList(jobs) }),
         )

@@ -16,6 +16,12 @@ import {
   type CronJob,
   type CronRun,
 } from '@/lib/gateway/cron';
+// The phone-side scheduled notice a cron string maps to; a confirmed
+// pause/resume or remove keeps it in step (fire-and-forget, best-effort).
+import {
+  cancelRoutineNotification,
+  syncRoutineNotification,
+} from '@/lib/notifications/routine-sync';
 
 export type CronJobSheetProps = {
   job: CronJob | null;
@@ -113,6 +119,20 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved, onChanged }: 
     try {
       await botJobs.pause(jobId, !paused);
       setPausedOverride(!paused);
+      // The host took the pause/resume: retire the held notice on a pause
+      // (the sync would schedule nothing anyway) and rebuild it on a resume
+      // from the record the host reports. Fire-and-forget — a locked
+      // scheduler must never read as a refused control call.
+      if (!paused) {
+        void syncRoutineNotification({
+          id: jobId,
+          name: job?.name ?? undefined,
+          schedule: job?.schedule ?? undefined,
+          nextRunAt: job?.nextRunAt ?? undefined,
+        });
+      } else {
+        void cancelRoutineNotification(jobId);
+      }
       onChanged?.();
     } catch (caught) {
       setControlError(describeCronJobControlError(caught));
@@ -136,6 +156,9 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved, onChanged }: 
     try {
       await botJobs.remove(target);
       setRemoveTarget(null);
+      // Stop the phone-side notice too: the job no longer exists on the
+      // gateway, so its schedule must not outlive it. Fire-and-forget.
+      void cancelRoutineNotification(target);
       // Tell the parent so its cron list can re-read; the parent owns the
       // sheet mount and is the only thing that can drop the row without
       // a remount.

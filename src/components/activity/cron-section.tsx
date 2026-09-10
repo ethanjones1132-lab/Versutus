@@ -16,6 +16,7 @@ import {
 } from '@/lib/gateway/cron';
 import { canCreateGatewayJob, gatewayJobInput } from '@/lib/gateway/cron-create';
 import { applyRoutineCreate, DEFAULT_ROUTINE_SCHEDULE } from '@/lib/gateway/routines';
+import { syncRoutineNotification } from '@/lib/notifications/routine-sync';
 
 import type { TextColor } from '@/components/ui/types';
 
@@ -93,11 +94,22 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
     setCreating(true);
     setCreateError(undefined);
     void Promise.resolve(botJobs.create(gatewayJobInput(submitted)))
-      .then(() => {
+      .then((created) => {
         const next = applyRoutineCreate(submitted, { ok: true });
         setTitle(next.draft.title);
         setPrompt(next.draft.prompt);
         setSchedule(next.draft.schedule);
+        // The create landed: schedule the phone-side notice under the id the
+        // gateway returned (fall back to the name when no id comes back).
+        // Fire-and-forget — a locked scheduler never reads as a refused job.
+        const jobId = created?.id;
+        if (jobId) {
+          void syncRoutineNotification({
+            id: jobId,
+            name: created?.name,
+            schedule: submitted.schedule,
+          });
+        }
         void load();
       })
       .catch((cause: unknown) => {
