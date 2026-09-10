@@ -64,6 +64,21 @@
         }
       ],
       [
+        "expo-widgets",
+        {
+          "bundleIdentifier": "com.versutus.app.widgets",
+          "groupIdentifier": "group.com.versutus.app",
+          "widgets": [
+            {
+              "name": "VersutusStatus",
+              "displayName": "Status",
+              "description": "What Versutus last knew: its connection, the runs in flight and the newest result, stamped with when it wrote them.",
+              "supportedFamilies": ["systemSmall", "systemMedium"]
+            }
+          ]
+        }
+      ],
+      [
         "expo-share-intent",
         {
           "disableIOS": true,
