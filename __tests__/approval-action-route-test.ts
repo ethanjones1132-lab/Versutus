@@ -132,7 +132,11 @@ describe('NotificationRouter approval actions', () => {
 
   test('the deep-link router keeps its add / gateway/add handling', () => {
     const src = between(layout(), 'function GatewayDeepLinkRouter', 'export default function RootLayout');
-    expect(src).toContain("path !== 'add' && path !== 'gateway/add'");
+    // Both spellings are `deepLinkTarget`'s own cases now (that suite reads
+    // `add` and `gateway/add`); the router still hands the link's path and
+    // query to the fold and pushes that target's params to the same sheet.
+    expect(src).toContain('deepLinkTarget(parsed.path, parsed.queryParams ?? {})');
     expect(src).toContain("pathname: '/gateway/add'");
+    expect(src).toContain('params: target.params');
   });
 });

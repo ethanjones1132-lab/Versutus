@@ -22,6 +22,7 @@ import {
   type SendChatInputOutcome,
 } from '@/context/gateway-provider';
 import type { ChatSurface } from '@/lib/gateway/bots';
+import { deepLinkTarget } from '@/lib/gateway/deep-link';
 import type { ConnectionStatus } from '@/lib/gateway/types';
 import { installStreamingFetch } from '@/lib/net/streaming-fetch';
 import {
@@ -329,7 +330,7 @@ function NotificationRouter() {
 function GatewayDeepLinkRouter() {
   const router = useRouter();
   const url = Linking.useURL();
-  const { isBootstrapped } = useGateway();
+  const { isBootstrapped, openBot, requestSurface, status } = useGateway();
   const handledRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -338,20 +339,35 @@ function GatewayDeepLinkRouter() {
     // race the boot overlay and lose to the first-run redirect.
     if (!isBootstrapped || !url || handledRef.current === url) return;
     const parsed = Linking.parse(url);
-    const path = (parsed.path ?? '').replace(/^\/+/, '');
-    if (path !== 'add' && path !== 'gateway/add') return;
+    const target = deepLinkTarget(parsed.path, parsed.queryParams ?? {});
+    if (!target) return;
 
+    if (target.kind === 'add') {
+      handledRef.current = url;
+      router.push({ pathname: '/gateway/add', params: target.params });
+      return;
+    }
+
+    // A Bot Chat link opens the way a roster tap opens one: the Chat tab is
+    // brought up and the screen is asked for that Bot's surface, while
+    // `openBot` resolves the Bot's canonical Bot Chat (ADR 0012) — the
+    // provider reloads the transcript, but the surface on screen is the
+    // screen's own state, so it has to be told. The pair reports no outcome,
+    // so an open that fails asks for the roster instead: the operator reads
+    // the Bot list rather than a header naming a thread that never opened.
+    //
+    // The open is a gateway read, so it waits for the connection. A link that
+    // lands while the connection is still coming up is NOT marked handled, so
+    // it is answered once the gateway is there; a link that lands with no
+    // gateway at all opens nothing, which leaves the boot overlay's first-run
+    // redirect to decide where the operator lands.
+    if (status !== 'connected') return;
     handledRef.current = url;
-    const query = parsed.queryParams ?? {};
-    const first = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value);
-    const params = Object.fromEntries(
-      Object.entries(query)
-        .map(([key, value]) => [key, first(value)] as const)
-        .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0),
-    );
-
-    router.push({ pathname: '/gateway/add', params });
-  }, [router, url, isBootstrapped]);
+    router.navigate('/chat');
+    void openBot(target.botId)
+      .then(() => requestSurface({ kind: 'bot', botId: target.botId }))
+      .catch(() => requestSurface({ kind: 'roster' }));
+  }, [router, url, isBootstrapped, status, openBot, requestSurface]);
 
   return null;
 }
