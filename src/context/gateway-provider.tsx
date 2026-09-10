@@ -899,6 +899,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   /** Consecutive failed auto-retries without an intervening success — drives the cool-down ladder. */
   const autoRetryFailureStreakRef = useRef(0);
   const scheduleAutoRetryRef = useRef<(delayMs?: number) => void>(() => undefined);
+  /**
+   * What the app does once the active profile is gone — look for another
+   * gateway while auto-connect is on and profiles remain, or settle on idle.
+   * It is the choice `deleteGateway` makes over the roster it is left with, and
+   * the shared retire teardown makes it too. Held in a ref because the choice
+   * needs `runAutoConnect`, which is declared below that teardown — the same
+   * hand-off `scheduleAutoRetryRef` uses. The roster it is handed is the one
+   * the caller is about to install, so a retired profile is never searched for.
+   */
+  const resumeAfterRetiredTeardownRef = useRef<(remaining: readonly GatewayProfile[]) => void>(
+    () => undefined,
+  );
   const commandStartTimeRef = useRef<number>(0);
   const abortControllerRef = useRef<AbortController | null>(null);
   const offlineQueueRef = useRef<OfflineQueueItem[]>([]);
@@ -1118,14 +1130,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * — and, the sync having cleared that profile's stores first, writes
    * transcript and label entries back under an id no profile owns.
    *
-   * This is the delete path's own teardown without its search for another
-   * gateway: a delete is an operator action on the roster they are looking at,
-   * while a retire is roster maintenance they did not trigger, so it leaves
-   * them on the roster to pick rather than moving them to a gateway they did
-   * not ask for.
+   * This is the delete path's own teardown, end to end: the session goes down,
+   * and then the same choice a delete makes about the roster it is left with —
+   * look for another gateway while auto-connect is on and profiles remain, or
+   * settle on idle. That choice needs `runAutoConnect`, which is declared below
+   * this callback, so it arrives through the ref the way `scheduleAutoRetryRef`
+   * does; `remaining` is the roster the caller is about to install.
    */
   const teardownRetiredActiveGateway = useCallback(
-    (removedIds: readonly string[]) => {
+    (removedIds: readonly string[], remaining: readonly GatewayProfile[]) => {
       if (!retirementTookActiveGateway(removedIds, activeGatewayRef.current)) return;
       clientGenerationRef.current += 1;
       if (autoRetryTimerRef.current) {
@@ -1144,10 +1157,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLiveCapabilities(null);
       applyStatus('disconnected');
       setMessages([]);
-      applyConnectionPhase('idle');
       void saveActiveGatewayId(null);
+      resumeAfterRetiredTeardownRef.current(remaining);
     },
-    [applyStatus, applyConnectionPhase],
+    [applyStatus],
   );
 
   const attachClient = useCallback(
@@ -1478,7 +1491,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           // A superseded chain must not touch a newer connection, so the
           // session teardown and the roster move share one generation check.
           if (!isCurrent()) return;
-          teardownRetiredActiveGateway(retirement.removedIds);
+          teardownRetiredActiveGateway(retirement.removedIds, retirement.gateways);
           setGateways(retirement.gateways);
         })
         .catch(() => undefined);
@@ -2944,6 +2957,30 @@ const response = await executeGatewaySlashCommand(trimmed, {
     scheduleAutoRetryRef.current = scheduleAutoRetry;
   }, [scheduleAutoRetry]);
 
+  /**
+   * The choice a teardown makes about the roster it leaves behind, assigned
+   * where `runAutoConnect` finally exists. A delete makes it over the list
+   * `removeGateway` handed back; the shared retire teardown makes it over the
+   * roster the sync is about to install.
+   */
+  const resumeAfterRetiredTeardown = useCallback(
+    (remaining: readonly GatewayProfile[]) => {
+      const appSettings = settingsRef.current;
+      if (appSettings.autoConnect && remaining.length > 0) {
+        applyConnectionPhase('searching');
+        setProbeMessage('Searching for another gateway…');
+        void runAutoConnect(appSettings, [...remaining], null);
+      } else {
+        applyConnectionPhase('idle');
+      }
+    },
+    [runAutoConnect, applyConnectionPhase],
+  );
+
+  useEffect(() => {
+    resumeAfterRetiredTeardownRef.current = resumeAfterRetiredTeardown;
+  }, [resumeAfterRetiredTeardown]);
+
   useEffect(() => {
     const gatewayId = activeGateway?.id;
     if (!gatewayId) return;
@@ -3110,7 +3147,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
             // by its id leave together, before the roster changes — and a
             // session still up on a retired profile comes down with it.
             await clearRetiredGatewayStores(retirement.removedIds);
-            teardownRetiredActiveGateway(retirement.removedIds);
+            teardownRetiredActiveGateway(retirement.removedIds, retirement.gateways);
             setGateways(retirement.gateways);
           }
         }

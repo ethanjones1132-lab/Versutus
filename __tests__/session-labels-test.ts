@@ -462,6 +462,77 @@ describe('the child-profile sync path', () => {
     expect(src).toContain('if (ids.length === 0) return;');
   });
 
+  test('the retired profile leaves the app looking for another gateway', () => {
+    const src = readSource('src', 'context', 'gateway-provider.tsx');
+    const start = src.indexOf('const teardownRetiredActiveGateway = useCallback(');
+    const end = src.indexOf('const attachClient = useCallback(');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const teardown = src.slice(start, end);
+
+    // The teardown ends in the delete path's own choice about the roster it
+    // is left with, instead of settling on idle and leaving the operator to
+    // reconnect by hand. A delete's teardown makes that choice; a retire is
+    // the same teardown, so it makes it too.
+    const handOff = teardown.indexOf('resumeAfterRetiredTeardownRef.current(remaining);');
+    expect(handOff).toBeGreaterThan(-1);
+
+    // A retire that took nothing the app is connected to hands nothing over:
+    // the rule's early return stands above the hand-off.
+    const rule = teardown.indexOf(
+      'if (!retirementTookActiveGateway(removedIds, activeGatewayRef.current)) return;',
+    );
+    expect(rule).toBeGreaterThan(-1);
+    expect(handOff).toBeGreaterThan(rule);
+
+    // The choice is not spelled here: `runAutoConnect` is declared below this
+    // callback, so it arrives through the ref.
+    expect(teardown).not.toContain('runAutoConnect(');
+    expect(teardown).not.toContain("applyConnectionPhase('searching')");
+  });
+
+  test('the choice is handed over by a ref, because runAutoConnect is declared below the teardown', () => {
+    const src = readSource('src', 'context', 'gateway-provider.tsx');
+    const declared = src.indexOf('const resumeAfterRetiredTeardownRef = useRef<');
+    const teardown = src.indexOf('const teardownRetiredActiveGateway = useCallback(');
+    const runAutoConnect = src.indexOf('const runAutoConnect = useCallback(');
+    const assigned = src.indexOf('resumeAfterRetiredTeardownRef.current = resumeAfterRetiredTeardown;');
+
+    expect(declared).toBeGreaterThan(-1);
+    expect(assigned).toBeGreaterThan(-1);
+    // Declared above the callback that reads it, so the ref is bound the first
+    // time a retire can run...
+    expect(declared).toBeLessThan(teardown);
+    // ...and assigned once the callback it needs is in scope — the same
+    // hand-off `scheduleAutoRetryRef` uses, and exactly one writer.
+    expect(runAutoConnect).toBeGreaterThan(-1);
+    expect(assigned).toBeGreaterThan(runAutoConnect);
+    expect(src.match(/resumeAfterRetiredTeardownRef\.current = /g)).toHaveLength(1);
+  });
+
+  test('the ref is handed the delete path’s rule, and the delete path keeps its own', () => {
+    const src = readSource('src', 'context', 'gateway-provider.tsx');
+    // The rule the retire asks: auto-connect on, and a profile left to search
+    // for. `settingsRef` is what the file's other auto-connect choices read
+    // (`scheduleAutoRetry`), so a stale render value cannot gate this.
+    expect(src).toContain('const appSettings = settingsRef.current;');
+    expect(src).toContain('if (appSettings.autoConnect && remaining.length > 0) {');
+    expect(src).toContain('void runAutoConnect(appSettings, [...remaining], null);');
+    // The delete path's own branch — the reference implementation this
+    // mirrors, pinned beside it so the two cannot drift apart in silence.
+    expect(src).toContain('if (settings.autoConnect && next.length > 0) {');
+    expect(src).toContain('void runAutoConnect(settings, next, null);');
+    // The promise the operator reads is the same one at both doors, pinned by
+    // count so an edit to one path cannot leave the other saying something
+    // else — a search the app is not running, or one it is.
+    expect(src.match(/setProbeMessage\('Searching for another gateway…'\)/g)).toHaveLength(2);
+    // Neither path promises a search the operator will not get: a delete with
+    // auto-connect off still lands on idle, and a connect already in flight is
+    // still never doubled up.
+    expect(src).toContain("applyConnectionPhase('idle');");
+    expect(src).toContain('if (autoConnectInFlightRef.current) return;');
+  });
+
   test('both call sites clear before the roster drops the profile', () => {
     const src = readSource('src', 'context', 'gateway-provider.tsx');
     const firstClear = src.indexOf('await clearRetiredGatewayStores(retirement.removedIds);');
@@ -484,7 +555,9 @@ describe('the child-profile sync path', () => {
     // against what it dropped, and both sync call sites now apply that same
     // rule, through one shared teardown rather than two copies.
     expect(src.match(/const teardownRetiredActiveGateway = useCallback\(/g)).toHaveLength(1);
-    expect(src.match(/teardownRetiredActiveGateway\(retirement\.removedIds\)/g)).toHaveLength(2);
+    // Both call sites hand over the roster the retire leaves behind as well as
+    // the ids it took: the choice the teardown makes needs both.
+    expect(src.match(/teardownRetiredActiveGateway\(retirement\.removedIds, retirement\.gateways\)/g)).toHaveLength(2);
     // The rule is asked about the LIVE active gateway, not a captured render
     // value — the same ref the provider's other request helpers read.
     expect(src).toContain('retirementTookActiveGateway(removedIds, activeGatewayRef.current)');
@@ -492,14 +565,16 @@ describe('the child-profile sync path', () => {
     // Stores away, then the session, then the roster — the delete path's own
     // order, at both call sites.
     const firstClear = src.indexOf('await clearRetiredGatewayStores(retirement.removedIds);');
-    const firstTeardown = src.indexOf('teardownRetiredActiveGateway(retirement.removedIds);');
+    const firstTeardown = src.indexOf(
+      'teardownRetiredActiveGateway(retirement.removedIds, retirement.gateways);',
+    );
     const firstSet = src.indexOf('setGateways(retirement.gateways);');
     const secondClear = src.indexOf(
       'await clearRetiredGatewayStores(retirement.removedIds);',
       firstClear + 1,
     );
     const secondTeardown = src.indexOf(
-      'teardownRetiredActiveGateway(retirement.removedIds);',
+      'teardownRetiredActiveGateway(retirement.removedIds, retirement.gateways);',
       firstTeardown + 1,
     );
     const secondSet = src.indexOf('setGateways(retirement.gateways);', firstSet + 1);
