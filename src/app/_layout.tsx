@@ -17,6 +17,7 @@ import { TlsFingerprintGuard } from '@/components/gateway/tls-fingerprint-guard'
 import { VersutusDarkTheme } from '@/constants/navigation-theme';
 import { GatewayProvider, useGateway } from '@/context/gateway-provider';
 import { installStreamingFetch } from '@/lib/net/streaming-fetch';
+import { approvalDecisionFor, isApprovalActionFor } from '@/lib/notifications/approval-action';
 import { registerNotificationCategories } from '@/lib/notifications/categories';
 import {
   isLaunchReplay,
@@ -33,7 +34,7 @@ installStreamingFetch(expoFetch as unknown as typeof globalThis.fetch);
 
 function NotificationRouter() {
   const router = useRouter();
-  const { isBootstrapped } = useGateway();
+  const { isBootstrapped, pendingRunApproval, resolveRunApproval } = useGateway();
   // The launch tap is read once, and its route is held until bootstrap has
   // mounted the Stack: navigating any earlier loses to the boot overlay's
   // first-run redirect (the wait GatewayDeepLinkRouter already does). A tap
@@ -43,6 +44,20 @@ function NotificationRouter() {
   // The launch tap's identifier while its replay window is open, so the same
   // tap arriving at the live listener cannot route a second time.
   const launchTapRef = useRef<LaunchTap | null>(null);
+  // The approval pending right now, for the Approve / Deny buttons: only a run
+  // this app initiated can be approved (CONTEXT.md), and the listener below is
+  // registered once, so it reads this ref instead of closing over an approval
+  // that has already been decided.
+  const approvalRef = useRef<{
+    runId: string;
+    resolve: (approved: boolean) => void;
+  } | null>(null);
+
+  useEffect(() => {
+    approvalRef.current = pendingRunApproval
+      ? { runId: pendingRunApproval.runId, resolve: resolveRunApproval }
+      : null;
+  }, [pendingRunApproval, resolveRunApproval]);
 
   // The Approve / Deny buttons only exist once the category is registered, and
   // a notice may not reference a category the device has never seen — so this
@@ -66,6 +81,22 @@ function NotificationRouter() {
         // The tap that launched the app, delivered a second time: one tap,
         // one route.
         launchTapRef.current = null;
+        return;
+      }
+      // An Approve / Deny button decides the run from the banner: the action
+      // identifier is the discriminator, and the payload must name the
+      // approval pending right now. A decision that lands leaves the tap
+      // path — the operator decided, so nothing else happens; a decision that
+      // cannot be applied falls through to the destination below, exactly as
+      // any other tap on this notice does.
+      const decision = approvalDecisionFor(response.actionIdentifier);
+      const pendingApproval = approvalRef.current;
+      if (
+        decision &&
+        pendingApproval &&
+        isApprovalActionFor(response.notification.request.content.data, pendingApproval.runId)
+      ) {
+        pendingApproval.resolve(decision === 'approve');
         return;
       }
       const destination = destinationFor(response.notification.request.content.data);
