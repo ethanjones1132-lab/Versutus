@@ -91,8 +91,30 @@ describe('a card carries the run duration it can back', () => {
     // trustworthy span reads as its counts rather than as a 0:00 run, a card
     // whose rows met no approval gate says nothing about approvals, one whose
     // Bot has no routines says nothing about them either, and one the spend
-    // read holds no row for says nothing about spend.
-    expect(src).toContain("subtitle={[fates, timed, approvals, routines, spend].filter(Boolean).join(' · ')}");
+    // read holds no row for says nothing about spend. The rate sits beside the
+    // counts it was taken off.
+    expect(src).toContain("subtitle={[fates, success, timed, approvals, routines, spend].filter(Boolean).join(' · ')}");
+  });
+});
+
+describe('a card states the success rate of the runs that reached a verdict', () => {
+  test('the rate is the module’s, taken off the counts the card already folded', () => {
+    const src = section();
+
+    expect(src).toContain('scorecardSuccessCopy(scorecardSuccessRate(card.fates));');
+    // The card's own counts decide it, never a second fold of the rows — so
+    // the rate and the counts beside it cannot disagree.
+    expect(src).not.toContain('scorecardSuccessRate(rows)');
+  });
+
+  test('the rate is decided after the counts it divides, before the line is composed', () => {
+    const src = section();
+    const fates = src.indexOf('const fates = scorecardFateCopy(card.fates);');
+    const success = src.indexOf('const success = scorecardSuccessCopy(');
+    const subtitle = src.indexOf('subtitle={');
+
+    expect(success).toBeGreaterThan(fates);
+    expect(subtitle).toBeGreaterThan(success);
   });
 });
 

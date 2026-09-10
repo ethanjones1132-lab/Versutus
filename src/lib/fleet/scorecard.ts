@@ -6,7 +6,12 @@
 //
 // Honesty rules this fold enforces, each one a way a count could lie:
 // - A cancelled run is not a failure. The operator stopped it, so it gets its
-//   own count rather than inflating a failure rate it never earned.
+//   own count rather than inflating a failure rate it never earned — and the
+//   same rule keeps it out of the success rate's denominator, where it would
+//   depress a share it did not earn either. An `unresolved` run is out of that
+//   denominator too: the fate never reached this device, so it is neither a
+//   success nor a failure, and a card with nothing decided states no rate at
+//   all rather than a percentage nothing backs.
 // - A run that never reached a terminal state counts where it is, in flight,
 //   never as one of the settled fates.
 // - A row naming no Bot is not dropped and never guessed into a card: all of
@@ -265,6 +270,47 @@ export function scorecardFateCopy(fates: ScorecardFates): string {
   return FATE_COPY.filter(([fate]) => fates[fate] > 0)
     .map(([fate, word]) => `${fates[fate]} ${word}`)
     .join(' · ');
+}
+
+/**
+ * The share of a card's runs that reached a verdict and succeeded (D3's Build
+ * 1, `FUTURE-ITEMS.md:803-804`: "success rate (`complete` / terminal statuses").
+ *
+ * The verdicts are the two this device can back: `complete` over the decided
+ * pair, `complete + failed`. A `cancelled` run is the operator's own stop — the
+ * spec's "a cancelled run is not a failure" — and an `unresolved` run is a fate
+ * this device never learned (`runs.ts:25-30`), so neither is a failure and
+ * neither may depress a share it did not earn. The same discipline
+ * `scorecardApprovalCopy` applies to the requests nobody answered; both counts
+ * stay visible in the fates line, this rate only divides two of them. Runs
+ * still in flight reached no verdict at all.
+ *
+ * `null` when nothing reached a verdict — a card of stopped runs, of runs whose
+ * fate never came back, or of runs still going has no rate to state, and `0`
+ * there would read as a Bot that never once succeeded.
+ */
+export function scorecardSuccessRate(fates: ScorecardFates): number | null {
+  const { complete, failed } = fates;
+  if (!Number.isFinite(complete) || !Number.isFinite(failed)) return null;
+  if (complete + failed <= 0) return null;
+  return complete / (complete + failed);
+}
+
+/**
+ * A card's one rate line, e.g. `75% success` — or nothing at all.
+ *
+ * The share is rounded to whole percent, never to a certainty: a card with a
+ * failure in it never reads `100%`, and a card with a success in it never reads
+ * `0%`, because either would claim a track record those runs did not earn. The
+ * counts are the fates line's, printed once, so this part restates none of them
+ * and a card with nothing decided says nothing rather than `0%`.
+ */
+export function scorecardSuccessCopy(rate: number | null): string {
+  if (rate === null || !Number.isFinite(rate)) return '';
+  const pct = Math.round(rate * 100);
+  if (pct >= 100 && rate < 1) return '99% success';
+  if (pct <= 0 && rate > 0) return '1% success';
+  return `${pct}% success`;
 }
 
 /**

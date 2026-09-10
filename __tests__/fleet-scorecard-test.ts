@@ -27,6 +27,8 @@ import {
   scorecardRoutineCopy,
   scorecardRoutineHealth,
   scorecardSpendCopy,
+  scorecardSuccessCopy,
+  scorecardSuccessRate,
   scorecardWindowCopy,
   watchedRunSpanMs,
   withSpend,
@@ -364,6 +366,125 @@ describe('scorecardFateCopy', () => {
 
   test('nothing at all prints nothing, never a zero', () => {
     expect(scorecardFateCopy(fates({}))).toBe('');
+  });
+});
+
+describe('scorecardSuccessRate', () => {
+  const fates = (over: Partial<ScorecardFates>): ScorecardFates => ({
+    complete: 0,
+    failed: 0,
+    cancelled: 0,
+    unresolved: 0,
+    inFlight: 0,
+    ...over,
+  });
+
+  test('is the share of the runs that reached a verdict', () => {
+    expect(scorecardSuccessRate(fates({ complete: 3, failed: 1 }))).toBe(0.75);
+  });
+
+  test('a cancelled run is not a failure and never depresses the rate', () => {
+    // The operator stopped those runs (D3:803-804). They stay on the card's
+    // counts and are not a verdict this rate may read as one.
+    const rate = scorecardSuccessRate(fates({ complete: 1, failed: 1, cancelled: 5 }));
+
+    expect(rate).toBe(0.5);
+  });
+
+  test('a run whose fate this device never learned is not a verdict either', () => {
+    const rate = scorecardSuccessRate(fates({ complete: 1, failed: 1, unresolved: 3 }));
+
+    // An `unresolved` finish is when this client stopped polling (runs.ts:25-30),
+    // so it can neither count as a success nor be held against the Bot.
+    expect(rate).toBe(0.5);
+  });
+
+  test('a run still in flight reached no verdict', () => {
+    expect(scorecardSuccessRate(fates({ complete: 2, inFlight: 4 }))).toBe(1);
+  });
+
+  test('a card of nothing but cancelled runs has no rate, never 0%', () => {
+    expect(scorecardSuccessRate(fates({ cancelled: 3, unresolved: 2 }))).toBeNull();
+    expect(scorecardSuccessRate(fates({ inFlight: 1 }))).toBeNull();
+    expect(scorecardSuccessRate(fates({}))).toBeNull();
+  });
+
+  test('a card the fold produced is the card the rate is taken off', () => {
+    const cards = buildScorecards([
+      run({ id: 'a', botId: 'atlas', status: 'complete' }),
+      run({ id: 'b', botId: 'atlas', status: 'failed' }),
+      run({ id: 'c', botId: 'atlas', status: 'complete' }),
+      run({ id: 'd', botId: 'bramble', status: 'cancelled' }),
+    ]);
+
+    expect(scorecardSuccessRate(cardFor(cards, 'atlas').fates)).toBeCloseTo(2 / 3);
+    // The Bot whose runs were all stopped by hand states no rate at all.
+    expect(scorecardSuccessRate(cardFor(cards, 'bramble').fates)).toBeNull();
+  });
+
+  test('a count this read cannot trust is no rate', () => {
+    // Half a verdict is not a rate: `0%` off a numerator nothing could read
+    // would claim a Bot that never succeeded.
+    expect(scorecardSuccessRate(fates({ complete: Number.NaN, failed: 1 }))).toBeNull();
+    expect(scorecardSuccessRate(fates({ complete: 1, failed: Number.NaN }))).toBeNull();
+  });
+});
+
+describe('scorecardSuccessCopy', () => {
+  const fates = (over: Partial<ScorecardFates>): ScorecardFates => ({
+    complete: 0,
+    failed: 0,
+    cancelled: 0,
+    unresolved: 0,
+    inFlight: 0,
+    ...over,
+  });
+
+  test('states the share the runs earned', () => {
+    expect(scorecardSuccessCopy(scorecardSuccessRate(fates({ complete: 3, failed: 1 })))).toBe(
+      '75% success',
+    );
+  });
+
+  test('a card of nothing but failures states 0%, never nothing', () => {
+    // A true zero is honest where a rate over rows that decided nothing is not.
+    expect(scorecardSuccessCopy(scorecardSuccessRate(fates({ failed: 4 })))).toBe('0% success');
+  });
+
+  test('a share that is not certain never rounds up to a perfect card', () => {
+    // 199 of 200 rounds to `100%`, which would claim a Bot that never failed.
+    expect(scorecardSuccessCopy(scorecardSuccessRate(fates({ complete: 199, failed: 1 })))).toBe(
+      '99% success',
+    );
+  });
+
+  test('a share with a success in it never rounds down to none', () => {
+    // 1 of 1000 rounds to `0%`, which would claim a Bot that never succeeded.
+    expect(scorecardSuccessCopy(scorecardSuccessRate(fates({ complete: 1, failed: 999 })))).toBe(
+      '1% success',
+    );
+  });
+
+  test('a card with nothing decided prints nothing, never 0%', () => {
+    expect(scorecardSuccessCopy(scorecardSuccessRate(fates({ cancelled: 2 })))).toBe('');
+    expect(scorecardSuccessCopy(null)).toBe('');
+    expect(scorecardSuccessCopy(Number.NaN)).toBe('');
+  });
+
+  test('the counts stay the fates line’s, so the rate restates none of them', () => {
+    const card = fates({ complete: 3, failed: 1 });
+    const copy = scorecardSuccessCopy(scorecardSuccessRate(card));
+
+    // A numerator and a denominator on the same card would say the counts
+    // twice — and `1 of 4` would read as four runs the card never failed.
+    expect(copy).not.toMatch(/complete|failed|of |\/|\d+ runs?/i);
+    expect(scorecardFateCopy(card)).toBe('3 complete · 1 failed');
+  });
+
+  test('claims no statistic this module did not compute', () => {
+    const copy = scorecardSuccessCopy(scorecardSuccessRate(fates({ complete: 3, failed: 1 })));
+
+    expect(copy).not.toMatch(/average|typical|rate|gateway|total|reliability/i);
   });
 });
 

@@ -16,6 +16,12 @@
 // A card whose rows carry no span this device watched end keeps its counts and
 // says no duration, rather than a number it cannot back.
 //
+// The line also carries the share those fates earned, from the card's own
+// counts: `complete` over the runs that reached a verdict, so a cancelled run
+// (the operator's own stop) and an unresolved one (a fate this device never
+// learned) never depress a rate they did not earn, and a card with nothing
+// decided says no rate rather than a percentage nothing backs.
+//
 // The line carries the approval pressure those same rows recorded too, and by
 // the same rule: what the operator decided is read off the rows that decided
 // it, a request still blocked on them is named, and a card whose rows met no
@@ -93,6 +99,8 @@ import {
   scorecardRoutineCopy,
   scorecardRoutineHealth,
   scorecardSpendCopy,
+  scorecardSuccessCopy,
+  scorecardSuccessRate,
   scorecardWindowCopy,
   withSpend,
   SCORECARD_FOOTER_COPY,
@@ -229,9 +237,10 @@ export function ScorecardsSection({
             // backend picker's announced state, and
             // `list-row-selected-state-test.ts` keeps that pass scoped to it.)
             const showing = filter ? card.botId === filter.botId : false;
-            // The card's line: the counts it folded, and — when its own runs
-            // can back them — the median span they ended on and the approval
-            // pressure they recorded. The rows come through the fold's own
+            // The card's line: the counts it folded, the share of them that
+            // succeeded, and — when its own runs can back them — the median
+            // span they ended on and the approval pressure they recorded. The
+            // rows come through the fold's own
             // attribution rule, once, so one card's line can never borrow
             // another card's runs; and each part is dropped when it is empty,
             // so a card whose rows carry no span this device watched end, or
@@ -243,6 +252,7 @@ export function ScorecardsSection({
             // for says nothing about spend rather than a zero.
             const rows = filterRunsByBot(runs, { botId: card.botId });
             const fates = scorecardFateCopy(card.fates);
+            const success = scorecardSuccessCopy(scorecardSuccessRate(card.fates));
             const timed = scorecardDurationCopy(medianRunMs(rows));
             const approvals = scorecardApprovalCopy(scorecardApprovals(rows));
             const routines = scorecardRoutineCopy(routineHealth.get(card.botId));
@@ -251,7 +261,7 @@ export function ScorecardsSection({
               <ListRow
                 key={card.botId ?? 'unattributed'}
                 title={scorecardBotLabel(card.botId)}
-                subtitle={[fates, timed, approvals, routines, spend].filter(Boolean).join(' · ')}
+                subtitle={[fates, success, timed, approvals, routines, spend].filter(Boolean).join(' · ')}
                 onPress={() => onSelect({ botId: card.botId })}
                 trailing={showing ? <Badge label="Showing" tone="accent" /> : undefined}
                 accessibilityHint="Shows this Bot's runs in the list above"
