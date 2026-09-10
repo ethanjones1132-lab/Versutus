@@ -173,6 +173,8 @@ import {
   loadTranscripts,
   updateTranscript,
 } from '@/lib/gateway/transcript';
+import { glanceableSnapshot } from '@/lib/widget/snapshot';
+import { writeWidgetSnapshot } from '@/lib/widget/widget-device';
 export type ConnectionPhase =
   | 'idle'
   | 'booting'
@@ -3194,6 +3196,48 @@ const response = await executeGatewaySlashCommand(trimmed, {
       return client.cronTranscript(runId, limit);
     },
   }), []);
+
+  /**
+   * The widget's routine half. A snapshot is folded from facts this client
+   * already holds, and the write below is no place to make a gateway call, so
+   * the routine health the Activity tab reads is read here instead — once per
+   * connected transition, through the same `cron` seam that tab uses. A read
+   * that named nothing is not the same fact as a gateway with no routines, so
+   * only a landed list replaces the last good one, and a disconnect keeps it:
+   * an empty list would drop the widget's result line for a reason nobody
+   * said. The snapshot's own `writtenAt` is what says how old the list is.
+   */
+  const [routineJobs, setRoutineJobs] = useState<import('@/lib/gateway/cron').CronJob[]>([]);
+
+  useEffect(() => {
+    if (status !== 'connected' || !cron.available) return;
+    let live = true;
+    void cron
+      .list()
+      .then((jobs) => {
+        if (live) setRoutineJobs(jobs);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [cron, status]);
+
+  /**
+   * Item 4a's fold, handed to item 4b's seam. The snapshot is composed here
+   * from the facts above and written once per change to one of them: a start, an
+   * approval wait, a decision, a settle and the disconnect settle each move
+   * `activityRuns`, `routineJobs` or `status`, and each is the write's own
+   * trigger — there is no poller of ours, and nothing here reads back. The
+   * approval count is not a fourth input because item 4a folds it from the run
+   * rows, which this effect already watches. A device with no widget target
+   * writes nothing at all.
+   */
+  useEffect(() => {
+    void writeWidgetSnapshot(
+      glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs }),
+    );
+  }, [activityRuns, routineJobs, status]);
 
   const botGroups = useMemo(() => ({
     list: async () => {

@@ -11,7 +11,11 @@ import { Platform } from 'react-native';
 import { formatClockTime } from '@/lib/format';
 import type { ConnectionStatus } from '@/lib/gateway/types';
 import type { GlanceableSnapshot } from '@/lib/widget/snapshot';
-import { loadWidgetTarget, type WidgetTarget } from '@/lib/widget/widget-device';
+import {
+  loadWidgetTarget,
+  writeWidgetSnapshot,
+  type WidgetTarget,
+} from '@/lib/widget/widget-device';
 import { glanceableWidgetLines, WIDGET_NAME } from '@/lib/widget/widget-target';
 
 declare const __dirname: string;
@@ -168,6 +172,109 @@ describe('loadWidgetTarget', () => {
     await expect(loadWidgetTarget(load)).resolves.toBeNull();
     // Asked nothing: the module that would throw is never reached.
     expect(load).not.toHaveBeenCalled();
+  });
+});
+
+describe('writeWidgetSnapshot', () => {
+  const target = (updateSnapshot: jest.Mock): WidgetTarget =>
+    ({ default: { updateSnapshot } }) as unknown as WidgetTarget;
+
+  test('hands the snapshot to the widget the seam loaded, once', async () => {
+    const updateSnapshot = jest.fn();
+    const snap = snapshot({ runsInFlight: 2, approvalsPending: 1 });
+
+    await writeWidgetSnapshot(snap, async () => target(updateSnapshot));
+
+    expect(updateSnapshot).toHaveBeenCalledTimes(1);
+    expect(updateSnapshot).toHaveBeenCalledWith(snap);
+  });
+
+  test('a build that cannot load the widget writes nothing rather than rejecting', async () => {
+    // The same load `loadWidgetTarget` answers null for: a client built before
+    // this dependency landed must not fail a run's settle over a widget.
+    const load = jest.fn(async () => {
+      throw new Error('Cannot find native module ExpoWidgets');
+    });
+
+    await expect(writeWidgetSnapshot(snapshot(), load)).resolves.toBeUndefined();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  test('a platform with no widget target writes nothing, without importing anything', async () => {
+    const updateSnapshot = jest.fn();
+    const load = jest.fn(async () => target(updateSnapshot));
+    jest.replaceProperty(Platform, 'OS', 'android');
+
+    await expect(writeWidgetSnapshot(snapshot(), load)).resolves.toBeUndefined();
+
+    expect(load).not.toHaveBeenCalled();
+    expect(updateSnapshot).not.toHaveBeenCalled();
+  });
+
+  test("a widget that refuses the write is not the app's own failure", async () => {
+    const updateSnapshot = jest.fn(() => {
+      throw new Error('ExpoWidgets is not available');
+    });
+
+    await expect(writeWidgetSnapshot(snapshot(), async () => target(updateSnapshot))).resolves
+      .toBeUndefined();
+    expect(updateSnapshot).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The write point (item 4c) is one effect in the provider, and the provider is
+// not a component any test here renders — so it is pinned as source, the way
+// every other provider suite in `__tests__/` pins it.
+describe('the provider writes the snapshot as run state changes', () => {
+  const provider = () => readSource('src', 'context', 'gateway-provider.tsx');
+  const writeEffect = (): string =>
+    provider().match(
+      /useEffect\(\(\) => \{\n    void writeWidgetSnapshot\([\s\S]*?\n  \}, \[[^\]]*\]\);/,
+    )?.[0] ?? '';
+
+  test('the snapshot is item 4a fold, composed from the facts the provider holds', () => {
+    expect(provider()).toContain("import { glanceableSnapshot } from '@/lib/widget/snapshot';");
+    expect(writeEffect()).toContain(
+      'glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs })',
+    );
+  });
+
+  test('the write is driven by those facts, not by a poller of its own', () => {
+    const effect = writeEffect();
+    // The dependency list IS the driver: every fact the snapshot carries, and
+    // nothing in the effect that ticks on its own.
+    expect(effect).toContain('}, [activityRuns, routineJobs, status]);');
+    expect(effect).not.toMatch(/setInterval|setTimeout/);
+  });
+
+  test('the seam is the only place the widget is touched', () => {
+    const src = provider();
+    // Not the component module and not the package: `widget-device.ts` is the
+    // one file allowed to name either, and it names them lazily.
+    expect(src).toContain("import { writeWidgetSnapshot } from '@/lib/widget/widget-device';");
+    expect(src).not.toMatch(/from '@\/components\/widget\//);
+    expect(src).not.toMatch(/from 'expo-widgets'/);
+    expect(src).not.toMatch(/updateSnapshot/);
+  });
+
+  test('the routine half is read through the same cron seam the Activity tab uses', () => {
+    const src = provider();
+    const read = src.match(
+      /useEffect\(\(\) => \{\n    if \(status !== 'connected' \|\| !cron\.available\) return;[\s\S]*?\n  \}, \[cron, status\]\);/,
+    )?.[0];
+    expect(read).toBeDefined();
+    expect(read).toContain('.list()');
+    // A failed read is not an empty one: only a landed list may replace it.
+    expect(read).toContain('if (live) setRoutineJobs(jobs);');
+  });
+
+  test('the run lifecycle it rides on still persists, and the tab still reads it', () => {
+    const patch = provider().match(
+      /const patchActivityRuns = useCallback\([\s\S]*?\n  \}, \[\]\);/,
+    )?.[0];
+    expect(patch).toContain('void saveActivityRuns(next);');
+    // The tab's own read of the same state, unchanged.
+    expect(readSource('src', 'app', '(tabs)', 'activity.tsx')).toContain('runs={activityRuns}');
   });
 });
 

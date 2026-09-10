@@ -20,6 +20,8 @@
 
 import { Platform } from 'react-native';
 
+import type { GlanceableSnapshot } from '@/lib/widget/snapshot';
+
 /**
  * The widget this build registers, read off the component's own export the way
  * `SpeechEngine` is read off the package's.
@@ -42,5 +44,36 @@ export async function loadWidgetTarget(
     return await load();
   } catch {
     return null;
+  }
+}
+
+/**
+ * Hand the widget its next snapshot, or nothing.
+ *
+ * The seam's second half, and the only place the app writes the widget:
+ * `updateSnapshot` is the instance `createWidget` returned
+ * (`expo-widgets/build/Widgets.js:28-29`, one timeline entry stamped
+ * `Date.now()`), and the component module's default export IS that instance, so
+ * a caller reaches it exactly the way it reaches the module — through the same
+ * lazy load. A device whose build carries no widget target therefore writes
+ * nothing at all, and the caller cannot tell it apart from a write that landed,
+ * which is the point: the app's own run lifecycle is not news the widget gets
+ * to block.
+ *
+ * A refusing write is swallowed for the same reason a load that throws is
+ * answered null: the widget holds the last snapshot it was handed and says when
+ * that was (`writtenAt`), and one operator's missing native side must not fail
+ * a run's settle. Nothing here reads anything back, so there is no failure the
+ * caller could act on.
+ */
+export async function writeWidgetSnapshot(
+  snapshot: GlanceableSnapshot,
+  load: () => Promise<WidgetTarget> = () => import('@/components/widget/glanceable-widget'),
+): Promise<void> {
+  const target = await loadWidgetTarget(load);
+  try {
+    target?.default.updateSnapshot(snapshot);
+  } catch {
+    // The widget keeps the snapshot it already holds.
   }
 }
