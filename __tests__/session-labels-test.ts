@@ -448,6 +448,36 @@ describe('the profile-delete path', () => {
   });
 });
 
+describe('the child-profile sync path', () => {
+  // A child profile retired by a manifest sync is a real, connectable gateway,
+  // so its labels outlive it the same way a deleted profile's would. Both sync
+  // call sites hand what they retired to the one helper, which clears the same
+  // two stores the delete path clears.
+  test('a retired child profile drops its labels where it drops its transcript', () => {
+    const src = readSource('src', 'context', 'gateway-provider.tsx');
+    expect(src.match(/clearRetiredGatewayStores\(retirement\.removedIds\)/g)).toHaveLength(2);
+    expect(src).toContain('clearTranscriptsForGateway(id)');
+    expect(src).toContain('clearSessionLabelsForGateway(id)');
+    // A sync that retired nothing is not a store call at all.
+    expect(src).toContain('if (ids.length === 0) return;');
+  });
+
+  test('both call sites clear before the roster drops the profile', () => {
+    const src = readSource('src', 'context', 'gateway-provider.tsx');
+    const firstClear = src.indexOf('await clearRetiredGatewayStores(retirement.removedIds);');
+    const firstSet = src.indexOf('setGateways(retirement.gateways);');
+    const secondClear = src.indexOf(
+      'await clearRetiredGatewayStores(retirement.removedIds);',
+      firstClear + 1,
+    );
+    const secondSet = src.indexOf('setGateways(retirement.gateways);', firstSet + 1);
+    expect(firstClear).toBeGreaterThan(-1);
+    expect(firstSet).toBeGreaterThan(firstClear);
+    expect(secondClear).toBeGreaterThan(-1);
+    expect(secondSet).toBeGreaterThan(secondClear);
+  });
+});
+
 describe('a label never leaves the device', () => {
   const source = () => readSource('src', 'lib', 'gateway', 'session-labels.ts');
 

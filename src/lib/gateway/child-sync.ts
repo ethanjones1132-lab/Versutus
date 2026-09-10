@@ -30,12 +30,23 @@ export function reconcileChildProfiles(
   return { toUpsert: [], toRemove };
 }
 
+/**
+ * A retire reports itself. `removedIds` are real, connectable gateway ids —
+ * the device stores keyed by them (`versutus:transcript:<id>:*` and the
+ * session-label blob) outlive the profile otherwise, the same way a deleted
+ * profile's would, so the caller retires those stores beside the profile.
+ */
+export type ChildProfileSync = {
+  gateways: GatewayProfile[];
+  removedIds: string[];
+};
+
 export async function syncChildProfiles(
   parent: GatewayProfile,
   providers: GatewayManifestProvider[],
-): Promise<GatewayProfile[]> {
+): Promise<ChildProfileSync> {
   const current = await loadGateways();
   const { toRemove } = reconcileChildProfiles(parent, providers, current);
-  if (toRemove.length === 0) return current;
-  return removeGatewayIds(toRemove);
+  if (toRemove.length === 0) return { gateways: current, removedIds: [] };
+  return { gateways: await removeGatewayIds(toRemove), removedIds: toRemove };
 }

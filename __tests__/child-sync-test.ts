@@ -158,11 +158,43 @@ describe('syncChildProfiles', () => {
     await flushMicrotasks();
 
     releaseFirst();
-    const next = await Promise.all([pinWrite, retirement]).then(([, retired]) => retired);
+    const { gateways: next, removedIds } = await Promise.all([pinWrite, retirement]).then(
+      ([, retired]) => retired,
+    );
 
     expect(next.find((item) => item.id === PARENT.id)?.model).toBe('grok-4');
     expect(stored().find((item) => item.id === PARENT.id)?.model).toBe('grok-4');
     expect(stored().map((item) => item.id).sort()).toEqual(['gw-parent', 'hermes-local']);
     expect(next.map((item) => item.id).sort()).toEqual(['gw-parent', 'hermes-local']);
+    // The retire reports what it took, so the caller can retire the device
+    // stores keyed by that id beside the profile.
+    expect(removedIds).toEqual(['gw-parent::claude']);
+  });
+
+  test('the retire reports the ids it removed beside the list that survived', async () => {
+    const { gateways, removedIds } = await syncChildProfiles(PARENT, [provider()]);
+    expect(removedIds).toEqual(['gw-parent::claude']);
+    expect(gateways.map((item) => item.id).sort()).toEqual(['gw-parent', 'hermes-local']);
+    expect(stored().map((item) => item.id).sort()).toEqual(['gw-parent', 'hermes-local']);
+  });
+
+  test('a sync that retires nothing names no id and writes nothing', async () => {
+    backing.set(GATEWAYS_KEY, JSON.stringify([PARENT, hermes]));
+    const { gateways, removedIds } = await syncChildProfiles(PARENT, [provider()]);
+    expect(removedIds).toEqual([]);
+    expect(gateways.map((item) => item.id).sort()).toEqual(['gw-parent', 'hermes-local']);
+    expect(mockSet).not.toHaveBeenCalled();
+  });
+
+  test("another parent's child is not reported as removed", async () => {
+    const otherChild: GatewayProfile = { ...child, id: 'gw-other::claude', parentId: 'gw-other' };
+    backing.set(GATEWAYS_KEY, JSON.stringify([PARENT, otherChild, hermes]));
+    const { gateways, removedIds } = await syncChildProfiles(PARENT, [provider()]);
+    expect(removedIds).toEqual([]);
+    expect(gateways.map((item) => item.id).sort()).toEqual([
+      'gw-other::claude',
+      'gw-parent',
+      'hermes-local',
+    ]);
   });
 });

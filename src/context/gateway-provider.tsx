@@ -650,6 +650,20 @@ function isGatewayAuthFailure(error: unknown): boolean {
   return /(?:401|403|invalid api key|unauthorized|authentication required)/i.test(message);
 }
 
+/**
+ * Retire the device stores keyed by a gateway id. A child profile retired by a
+ * manifest sync (`syncChildProfiles` at both of its call sites) is a real,
+ * connectable gateway — its transcript and session labels are keyed by that id
+ * and would outlive the profile forever, exactly as a deleted profile's would.
+ * These are the same two stores the delete path clears (`deleteGateway`), and a
+ * sync that retired nothing is not a store call at all.
+ */
+async function clearRetiredGatewayStores(ids: readonly string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await Promise.all(ids.map((id) => clearTranscriptsForGateway(id)));
+  await Promise.all(ids.map((id) => clearSessionLabelsForGateway(id)));
+}
+
 export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [gateways, setGateways] = useState<GatewayProfile[]>([]);
   const [activeGateway, setActiveGateway] = useState<GatewayProfile | null>(null);
@@ -1409,13 +1423,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // well-known document, and syncing children from a child is wrong.
       void fetchGatewayManifest(manifestUrlForGateway(gateway, parentUrl))
         .then((manifest) => {
-          if (!manifest || !isCurrent()) return;
+          if (!manifest || !isCurrent()) return undefined;
           setActiveManifest(manifest);
           if (gateway.parentId) return undefined;
           return syncChildProfiles(gateway, manifestProviders(manifest));
         })
-        .then((next) => {
-          if (next && isCurrent()) setGateways(next);
+        .then(async (retirement) => {
+          if (!retirement) return;
+          // Cleared before the roster drops the profile: a retired child
+          // profile is a real, connectable gateway, so its transcript and
+          // session labels leave the device with it.
+          await clearRetiredGatewayStores(retirement.removedIds);
+          if (isCurrent()) setGateways(retirement.gateways);
         })
         .catch(() => undefined);
     },
@@ -3040,8 +3059,13 @@ const response = await executeGatewaySlashCommand(trimmed, {
       if (manifest) {
         setActiveManifest(manifest);
         if (!activeGateway.parentId) {
-          const next = await syncChildProfiles(activeGateway, manifestProviders(manifest));
-          if (next) setGateways(next);
+          const retirement = await syncChildProfiles(activeGateway, manifestProviders(manifest));
+          if (retirement) {
+            // Same rule as the connect path: the profile and the stores keyed
+            // by its id leave together, before the roster changes.
+            await clearRetiredGatewayStores(retirement.removedIds);
+            setGateways(retirement.gateways);
+          }
         }
       }
       setCapabilityCheckedAt(Date.now());
