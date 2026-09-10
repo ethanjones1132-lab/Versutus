@@ -35,9 +35,10 @@ function NotificationRouter() {
   const { isBootstrapped } = useGateway();
   // The launch tap is read once, and its route is held until bootstrap has
   // mounted the Stack: navigating any earlier loses to the boot overlay's
-  // first-run redirect (the wait GatewayDeepLinkRouter already does).
+  // first-run redirect (the wait GatewayDeepLinkRouter already does). A tap
+  // delivered to the live listener during that same window is held here too.
   const launchReadRef = useRef(false);
-  const pendingLaunchRef = useRef<'/chat' | '/activity' | null>(null);
+  const pendingTapRef = useRef<'/chat' | '/activity' | null>(null);
   // The launch tap's identifier while its replay window is open, so the same
   // tap arriving at the live listener cannot route a second time.
   const launchTapRef = useRef<LaunchTap | null>(null);
@@ -59,7 +60,16 @@ function NotificationRouter() {
         launchTapRef.current = null;
         return;
       }
-      router.navigate(destinationFor(response.notification.request.content.data));
+      const destination = destinationFor(response.notification.request.content.data);
+      if (!isBootstrapped) {
+        // Boot overlay: the Stack is not mounted yet, so navigating now
+        // loses to the first-run redirect. Hold the destination in the same
+        // slot the launch tap uses; the run below routes it once the Stack
+        // is up.
+        pendingTapRef.current = destination;
+        return;
+      }
+      router.navigate(destination);
     });
 
     // A tap that LAUNCHED the app is not replayed to a listener registered
@@ -75,13 +85,16 @@ function NotificationRouter() {
           identifier: launch.notification.request.identifier,
           at: Date.now(),
         };
-        pendingLaunchRef.current = destinationFor(launch.notification.request.content.data);
+        pendingTapRef.current = destinationFor(launch.notification.request.content.data);
       }
     }
 
-    if (isBootstrapped && pendingLaunchRef.current) {
-      const destination = pendingLaunchRef.current;
-      pendingLaunchRef.current = null;
+    // The one place a held tap is routed, whichever path held it: bootstrap
+    // has mounted the Stack, so the destination now survives the boot
+    // overlay's first-run redirect.
+    if (isBootstrapped && pendingTapRef.current) {
+      const destination = pendingTapRef.current;
+      pendingTapRef.current = null;
       router.navigate(destination);
     }
 

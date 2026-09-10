@@ -144,7 +144,7 @@ describe('NotificationRouter launch routing', () => {
   test('holds the launch tap until bootstrap has mounted the Stack', () => {
     const src = between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
     expect(src).toContain('isBootstrapped');
-    expect(src).toContain('pendingLaunchRef');
+    expect(src).toContain('pendingTapRef');
   });
 
   test('reads the launch tap once, not on every effect run', () => {
@@ -161,6 +161,28 @@ describe('NotificationRouter launch routing', () => {
     const src = between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
     expect(src).toContain('addNotificationResponseReceivedListener');
     expect(src).toContain('response.notification.request.content.data');
+  });
+
+  test('a tap that arrives before bootstrap is held, not navigated', () => {
+    const src = between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
+    const listener = between(
+      src,
+      'addNotificationResponseReceivedListener',
+      'return () => subscription.remove()',
+    );
+    // The listener navigates only behind the bootstrap guard; before the
+    // Stack is mounted the destination is held in the same slot the launch
+    // tap uses, so the boot overlay's first-run redirect cannot swallow it.
+    const hold = listener.indexOf('if (!isBootstrapped)');
+    const navigate = listener.indexOf('router.navigate(destination)');
+    expect(hold).toBeGreaterThan(-1);
+    expect(navigate).toBeGreaterThan(hold);
+    expect(listener).toContain('pendingTapRef.current = destination');
+  });
+
+  test('a held tap is routed once, when bootstrap completes', () => {
+    const src = between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
+    expect(src).toContain('if (isBootstrapped && pendingTapRef.current)');
   });
 
   test('the deep-link router keeps its add / gateway/add handling', () => {
