@@ -1,8 +1,8 @@
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { Link } from 'expo-router';
-import { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 
 import { DeviceIdRow } from '@/components/device-id-row';
 import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
@@ -10,10 +10,43 @@ import { TransportSecurityCard } from '@/components/gateway/transport-security-c
 import { Badge, Card, Icon, Screen, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { useTokens } from '@/hooks/use-tokens';
+import {
+  APP_LOCK_LABEL,
+  APP_LOCK_SUMMARY,
+  appLockUnavailableCopy,
+  saveAppLock,
+  type AppLockUnavailableReason,
+} from '@/lib/settings/app-lock';
+import { deviceAppLockState } from '@/lib/settings/app-lock-device';
 
 export default function GatewaySettingsScreen() {
   const { activeGateway, settings, deviceId } = useGateway();
+  const tokens = useTokens();
   const [copied, setCopied] = useState<'id' | null>(null);
+  const [appLock, setAppLock] = useState(false);
+  const [appLockReason, setAppLockReason] = useState<AppLockUnavailableReason | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    // The stored flag is read against what THIS device can answer, so a lock
+    // whose enrollment was removed shows the reason line rather than a switch
+    // that claims the lock is holding.
+    void (async () => {
+      const state = await deviceAppLockState();
+      if (cancelled) return;
+      setAppLock(state.enabled);
+      setAppLockReason(state.reason);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleAppLock = useCallback((next: boolean) => {
+    setAppLock(next);
+    void saveAppLock(next);
+  }, []);
 
   const copyText = useCallback(async (text: string) => {
     await Clipboard.setStringAsync(text);
@@ -98,6 +131,34 @@ export default function GatewaySettingsScreen() {
               </Text>
             </Pressable>
           </Link>
+        </Card>
+
+        <Card variant="surface" padding={Spacing.three} style={styles.card}>
+          <View style={styles.sectionHeading}>
+            <View style={styles.sectionTitle}>
+              <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+                Privacy
+              </Text>
+              <Text variant="headline">{APP_LOCK_LABEL}</Text>
+            </View>
+          </View>
+          <Text color="secondary">{APP_LOCK_SUMMARY}</Text>
+          {appLockReason ? (
+            // A device that cannot ask for a fingerprint or Face ID gets the
+            // module's own line, never a switch that could not finish.
+            <Text variant="caption" color="tertiary">
+              {appLockUnavailableCopy(appLockReason)}
+            </Text>
+          ) : (
+            <Switch
+              value={appLock}
+              onValueChange={handleAppLock}
+              trackColor={{ true: tokens.accent, false: tokens.border }}
+              thumbColor={tokens.textPrimary}
+              accessibilityLabel={APP_LOCK_LABEL}
+              accessibilityState={{ checked: appLock }}
+            />
+          )}
         </Card>
 
         {activeGateway ? (

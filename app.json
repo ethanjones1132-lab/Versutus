@@ -8,7 +8,10 @@
     "scheme": "versutus",
     "userInterfaceStyle": "dark",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Versutus asks for Face ID to unlock the app when the app lock is on."
+      }
     },
     "android": {
       "package": "com.versutus.app",

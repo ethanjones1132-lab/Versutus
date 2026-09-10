@@ -11,6 +11,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AppBootstrap } from '@/components/app-bootstrap';
+import { AppLockGate } from '@/components/app-lock-gate';
 import { ConnectedToast } from '@/components/connected-toast';
 import { FontProvider } from '@/components/font-provider';
 import { TlsFingerprintGuard } from '@/components/gateway/tls-fingerprint-guard';
@@ -371,65 +372,67 @@ export default function RootLayout() {
           <AppBootstrap>
             <View style={styles.root}>
               <AnimatedSplashOverlay />
-              <Stack
-                screenOptions={{
-                  headerShown: false,
-                  contentStyle: { backgroundColor: VersutusDarkTheme.colors.background },
-                }}>
-                <Stack.Screen name="(tabs)" />
-                <Stack.Screen name="onboarding" options={{ headerShown: false }} />
-                <Stack.Screen
-                  name="gateway/add"
-                  options={{
-                    presentation: 'modal',
-                    headerShown: true,
-                    title: 'Add Gateway',
-                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                    headerTintColor: VersutusDarkTheme.colors.text,
-                  }}
-                />
-                <Stack.Screen
-                  name="gateway/settings"
-                  options={{
-                    presentation: 'modal',
-                    headerShown: true,
-                    title: 'Settings',
-                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                    headerTintColor: VersutusDarkTheme.colors.text,
-                  }}
-                />
-                <Stack.Screen
-                  name="gateway/spend"
-                  options={{
-                    presentation: 'modal',
-                    headerShown: true,
-                    title: 'Spend',
-                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                    headerTintColor: VersutusDarkTheme.colors.text,
-                  }}
-                />
-                <Stack.Screen
-                  name="gateway/setup"
-                  options={{
-                    presentation: 'modal',
-                    headerShown: true,
-                    title: 'Gate setup',
-                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                    headerTintColor: VersutusDarkTheme.colors.text,
-                  }}
-                />
-                <Stack.Screen
-                  name="gateway/capabilities"
-                  options={{
-                    presentation: 'modal',
-                    headerShown: true,
-                    title: 'Capabilities',
-                    headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                    headerTintColor: VersutusDarkTheme.colors.text,
-                  }}
-                />
-                {__DEV__ ? <Stack.Screen name="dev" options={{ headerShown: false }} /> : null}
-              </Stack>
+              <AppLockGate>
+                <Stack
+                  screenOptions={{
+                    headerShown: false,
+                    contentStyle: { backgroundColor: VersutusDarkTheme.colors.background },
+                  }}>
+                  <Stack.Screen name="(tabs)" />
+                  <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+                  <Stack.Screen
+                    name="gateway/add"
+                    options={{
+                      presentation: 'modal',
+                      headerShown: true,
+                      title: 'Add Gateway',
+                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                      headerTintColor: VersutusDarkTheme.colors.text,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="gateway/settings"
+                    options={{
+                      presentation: 'modal',
+                      headerShown: true,
+                      title: 'Settings',
+                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                      headerTintColor: VersutusDarkTheme.colors.text,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="gateway/spend"
+                    options={{
+                      presentation: 'modal',
+                      headerShown: true,
+                      title: 'Spend',
+                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                      headerTintColor: VersutusDarkTheme.colors.text,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="gateway/setup"
+                    options={{
+                      presentation: 'modal',
+                      headerShown: true,
+                      title: 'Gate setup',
+                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                      headerTintColor: VersutusDarkTheme.colors.text,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="gateway/capabilities"
+                    options={{
+                      presentation: 'modal',
+                      headerShown: true,
+                      title: 'Capabilities',
+                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                      headerTintColor: VersutusDarkTheme.colors.text,
+                    }}
+                  />
+                  {__DEV__ ? <Stack.Screen name="dev" options={{ headerShown: false }} /> : null}
+                </Stack>
+              </AppLockGate>
               <ConnectedToast />
               <TlsFingerprintGuard />
             </View>
