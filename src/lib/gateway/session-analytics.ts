@@ -45,7 +45,14 @@ export type WeekBucket = { startMs: number; tokens: number; costUsd: number };
 
 export type RelativeMeter = { value: number; peak: number; ratio: number };
 
-function toEpochMs(timestamp: number): number {
+/**
+ * Epoch milliseconds for a timestamp a read carried. A read reports seconds or
+ * milliseconds and this is the app's one rule for telling them apart — the
+ * same threshold `formatRelativeTime` (`src/lib/format.ts:22`) already applies
+ * — so a fold that reads `last_active` cannot disagree with the formatter that
+ * prints it.
+ */
+export function toEpochMs(timestamp: number): number {
   return timestamp > 1_000_000_000_000 ? timestamp : timestamp * 1000;
 }
 

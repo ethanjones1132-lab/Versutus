@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { SpendPerBotSection } from '@/components/gateway/spend-per-bot-section';
+import { SpendSessionTable } from '@/components/gateway/spend-session-table';
 import { Card, Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
@@ -20,6 +21,7 @@ import {
   SPEND_UNREAD_COPY,
   spendBasisCopy,
   spendCostBasis,
+  spendSessionRows,
   type BotSpendReport,
 } from '@/lib/gateway/spend-report';
 
@@ -43,8 +45,11 @@ import {
  * section is offered only when the connected client can scope a catalogue by
  * Bot, so a gateway that could only refuse is never asked.
  *
- * The 7-day chart, the per-session table and the entry points are their own
- * slices of P5.
+ * The per-session table is the total's own read again, sorted by cost
+ * (`spendSessionRows`) — the same rows, once, in the read the screen already
+ * made.
+ *
+ * The 7-day chart and the entry points are their own slices of P5.
  */
 export default function GatewaySpendScreen() {
   const { gatewayRequest, status, listBots, readBotSessions, canReadBotSessions } = useGateway();
@@ -96,6 +101,9 @@ export default function GatewaySpendScreen() {
 
   const spend = useMemo(() => totalUsage(state.sessions), [state.sessions]);
   const basis = useMemo(() => spendCostBasis(state.sessions), [state.sessions]);
+  // The table is the same read, sorted once — not a second aggregation and not
+  // a second fetch.
+  const sessionRows = useMemo(() => spendSessionRows(state.sessions), [state.sessions]);
 
   return (
     <Screen>
@@ -136,6 +144,8 @@ export default function GatewaySpendScreen() {
         )}
 
         {botReport ? <SpendPerBotSection report={botReport} /> : null}
+
+        <SpendSessionTable rows={sessionRows} />
       </ScrollView>
     </Screen>
   );

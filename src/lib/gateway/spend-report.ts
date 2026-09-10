@@ -1,15 +1,16 @@
-import { formatCost, formatTokenCount } from '@/lib/format';
+import { formatCost, formatRelativeTime, formatTokenCount } from '@/lib/format';
 import {
   SESSION_SPEND_LIST_LIMIT,
   sessionSpendReadFromUnknown,
   sessionUsage,
+  toEpochMs,
   totalUsage,
   type SessionSpendRead,
   type SessionUsageInput,
 } from '@/lib/gateway/session-analytics';
 
 /**
- * P5's per-Bot breakdown, as rows.
+ * P5's per-Bot breakdown and per-session table, as rows.
  *
  * A Hermes session belongs to exactly one Bot (CONTEXT.md), and the roster
  * already knows every one of them — but no single read the app makes answers
@@ -94,14 +95,25 @@ export function spendBasisCopy(basis: SpendCostBasis): string {
 }
 
 /**
+ * The amount line every row in this module prints: the tokens this read
+ * carried, then the cost with the basis it is claimed on. One expression means
+ * a session row and a Bot row can never word the same fact differently — and a
+ * read with no cost fields says why it shows no cost, rather than leaving the
+ * operator to guess that nothing was spent.
+ */
+function spendAmountCopy(tokens: number, costUsd: number | null, basis: SpendCostBasis | null): string {
+  const amount = `${formatTokenCount(tokens)} tokens`;
+  if (costUsd == null) return `${amount} · no cost fields in this read`;
+  return `${amount} · ${formatCost(costUsd)} (${basis})`;
+}
+
+/**
  * One Bot's row line. The failure is named; a costed row prints its basis
  * beside the number, so no row can be read as a bill it is not.
  */
 export function botSpendRowCopy(row: BotSpendRow): string {
   if (row.failed) return SPEND_UNREAD_COPY;
-  const tokens = `${formatTokenCount(row.tokens ?? 0)} tokens`;
-  if (row.costUsd == null) return `${tokens} · no cost fields in this read`;
-  return `${tokens} · ${formatCost(row.costUsd)} (${row.basis})`;
+  return spendAmountCopy(row.tokens ?? 0, row.costUsd, row.basis);
 }
 
 /**
@@ -220,10 +232,88 @@ export function botSpendRows(reads: BotSpendRead[]): BotSpendRow[] {
       failed: false,
     };
   });
-  return rows.sort((left, right) => {
-    if (left.costUsd == null && right.costUsd == null) return 0;
-    if (left.costUsd == null) return 1;
-    if (right.costUsd == null) return -1;
-    return right.costUsd - left.costUsd;
+  return rows.sort(byCostDesc);
+}
+
+/**
+ * The ordering both spend folds share: biggest cost first, and a row whose
+ * cost could not be read below every costed one, because "unknown" is not
+ * "cheap". `Array.prototype.sort` is stable, so equal costs keep the read's
+ * own order instead of reshuffling on every render.
+ */
+function byCostDesc(left: { costUsd: number | null }, right: { costUsd: number | null }): number {
+  if (left.costUsd == null && right.costUsd == null) return 0;
+  if (left.costUsd == null) return 1;
+  if (right.costUsd == null) return -1;
+  return right.costUsd - left.costUsd;
+}
+
+/**
+ * The per-session table's rows: the same `SessionUsageInput` rows the gateway
+ * total folded (`totalUsage`, one read), one line each, biggest cost first.
+ *
+ * A session is named by its id — CONTEXT.md identifies a session by its
+ * sessionId — and a read that carried no id reads as `Untitled`, the word the
+ * session selector already prints (`sessionListTitle`), never an anonymous
+ * row. `key` exists because two unnamed rows are still two rows: the label can
+ * repeat, the key cannot.
+ *
+ * `lastActiveMs` is the read's `last_active` normalised by the analytics
+ * module's own `toEpochMs`, or `null` when the row carried no timestamp, which
+ * is not the same fact as an old one — a missing timestamp prints no recency
+ * at all rather than "just now".
+ */
+export type SpendSessionRow = {
+  /** List identity: the session id, or its place in the read when it had none. */
+  key: string;
+  /** The session id, or `Untitled` — a row is never anonymous. */
+  label: string;
+  tokens: number;
+  costUsd: number | null;
+  basis: SpendCostBasis;
+  lastActiveMs: number | null;
+};
+
+export function spendSessionRows(sessions: SessionUsageInput[]): SpendSessionRow[] {
+  const rows = sessions.map((session, index): SpendSessionRow => {
+    const id = session.id?.trim();
+    const usage = sessionUsage(session);
+    return {
+      key: id || `unnamed-${index + 1}`,
+      label: id || 'Untitled',
+      tokens: usage.tokens,
+      costUsd: usage.costUsd,
+      basis: spendCostBasis([session]),
+      lastActiveMs:
+        typeof session.last_active === 'number' && Number.isFinite(session.last_active)
+          ? toEpochMs(session.last_active)
+          : null,
+    };
   });
+  return rows.sort(byCostDesc);
+}
+
+/**
+ * One session's line: its amount, then how long ago it ran. No number travels
+ * without its basis, and a read with no timestamp prints no recency rather
+ * than a fabricated one.
+ */
+export function spendSessionRowCopy(row: SpendSessionRow): string {
+  const amount = spendAmountCopy(row.tokens, row.costUsd, row.basis);
+  return row.lastActiveMs == null ? amount : `${amount} · ${formatRelativeTime(row.lastActiveMs)}`;
+}
+
+/**
+ * What the table lists, and how much of the catalogue that is.
+ *
+ * The list endpoint takes a `limit` but no cursor (`spendWindowCopy`'s note),
+ * so a full read has sessions missing off the end and says so instead of
+ * reading as the whole catalogue; a partial read is everything this device
+ * could see, and claims no bound it did not hit.
+ */
+export function spendSessionCapCopy(sessionCount: number): string {
+  if (Number.isFinite(sessionCount) && sessionCount >= SESSION_SPEND_LIST_LIMIT) {
+    return `Newest ${SESSION_SPEND_LIST_LIMIT} sessions — older sessions are past the list's cap`;
+  }
+  return `${sessionCount} sessions in this read`;
 }
