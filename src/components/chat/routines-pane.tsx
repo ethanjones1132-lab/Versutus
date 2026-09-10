@@ -5,6 +5,7 @@ import { CronJobSheet } from '@/components/activity/cron-job-sheet';
 import { CronRunSheet } from '@/components/activity/cron-run-sheet';
 import { Button, ListRow, Skeleton, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
+import { ROUTINE_TEMPLATES, applyRoutineTemplate } from '@/lib/gateway/routine-templates';
 import {
   ROUTINES_PANE_MAX_HEIGHT,
   applyRoutineCreate,
@@ -63,6 +64,21 @@ function RoutinesPaneImpl({
   const state: RoutinesState = { jobs, loaded, failed };
   const listCopy = routinesListCopy(state);
   const openJob = openJobId ? jobs.find((job) => job.id === openJobId) ?? null : null;
+
+  /**
+   * A tapped pack prefills the form and does nothing else: it writes all
+   * three draft fields through the pack's own fold, so Add stays the one
+   * thing that creates. A key that resolves to no pack leaves the draft
+   * alone, and a tap during an in-flight add is dropped rather than letting
+   * that add's own result land over the pack the operator just picked.
+   */
+  const applyTemplate = (key: string) => {
+    if (busy) return;
+    const next = applyRoutineTemplate({ title, prompt, schedule }, key);
+    setTitle(next.title);
+    setPrompt(next.prompt);
+    setSchedule(next.schedule);
+  };
 
   const submitCreate = () => {
     const submitted = {
@@ -158,6 +174,17 @@ function RoutinesPaneImpl({
               />
             );
           })}
+          <Text variant="micro" color="secondary">
+            Templates
+          </Text>
+          {ROUTINE_TEMPLATES.map((template) => (
+            <ListRow
+              key={template.key}
+              title={template.label}
+              subtitle={template.description}
+              onPress={() => applyTemplate(template.key)}
+            />
+          ))}
           <Text variant="micro" color="secondary">
             New routine
           </Text>
