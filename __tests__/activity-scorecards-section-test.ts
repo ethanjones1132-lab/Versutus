@@ -672,6 +672,63 @@ describe('the weekly operator report is opted into here, off by default', () => 
   });
 });
 
+describe('a card’s spend is stated beside the bound it was read at', () => {
+  test('the cap line is P5’s own copy at the real limit, not re-authored here', () => {
+    const src = section();
+
+    // The per-Bot reads stopped at their own cap, and the Spend screen names it
+    // under its rows with `botSpendCapCopy`. One bound, one wording: this
+    // surface prints the module's string at the module's constant, so the two
+    // surfaces cannot describe one read two ways and no number here is retyped.
+    expect(src).toContain("from '@/lib/gateway/session-analytics'");
+    expect(src).toContain('botSpendCapCopy(SESSION_SPEND_LIST_LIMIT)');
+    expect(src.match(/botSpendCapCopy\(/g)).toHaveLength(1);
+    expect(src).not.toContain('newest 200 sessions');
+  });
+
+  test('the cap line renders once, outside the card branch', () => {
+    const src = section();
+    const cap = src.indexOf('{botSpendCapCopy(SESSION_SPEND_LIST_LIMIT)}');
+    const branch = src.indexOf('{hasCards');
+
+    // Outside the branch because the bound is the READ's, not one card's: a
+    // capped read understates every card under it.
+    expect(cap).toBeGreaterThanOrEqual(0);
+    expect(cap).toBeLessThan(branch);
+    // And the card's own line is untouched — still exactly `botSpendRowCopy`'s
+    // words through `scorecardSpendCopy`, with no cap written onto a card.
+    expect(src).toContain('scorecardSpendCopy(card.spend)');
+  });
+
+  test('a read that left every card without spend shows nothing', () => {
+    const src = section();
+    const guard = src.indexOf('{cardsCarrySpend ? (');
+    const cap = src.indexOf('{botSpendCapCopy(SESSION_SPEND_LIST_LIMIT)}');
+
+    // One predicate decides it, and it is the fold's own over the merged cards:
+    // a device whose read priced no Bot it has runs for never names a cap it
+    // did not hit, and this surface decides that nowhere itself.
+    expect(src).toContain('const cardsCarrySpend = scorecardsCarrySpend(cards);');
+    expect(guard).toBeGreaterThanOrEqual(0);
+    expect(cap).toBeGreaterThan(guard);
+    expect(src).not.toContain('cards.some(');
+    expect(src).not.toContain('spendRows.some(');
+  });
+
+  test('the run window is still the run read’s, and the cap did not replace it', () => {
+    const src = section();
+    const window = src.indexOf('{scorecardWindowCopy(runs.length)}');
+    const cap = src.indexOf('{botSpendCapCopy(SESSION_SPEND_LIST_LIMIT)}');
+
+    // Two bounds, two reads: the window line stays the runs this device holds,
+    // the cap line names the spend read's own limit, and the cap sits under the
+    // window rather than standing in for it.
+    expect(window).toBeGreaterThanOrEqual(0);
+    expect(window).toBeLessThan(cap);
+    expect(src.match(/scorecardWindowCopy\(/g)).toHaveLength(1);
+  });
+});
+
 describe('the operator’s own answer outranks a read already in flight', () => {
   test('the read captures the token as it starts, before the await', () => {
     const src = section();

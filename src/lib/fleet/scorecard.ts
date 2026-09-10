@@ -498,6 +498,19 @@ export function withSpend(
 }
 
 /**
+ * Whether any card carries a spend row at all, so a surface knows to state the
+ * spend read's bound once for the list. That read is per Bot and capped, so
+ * each card's number is a read of the newest sessions rather than its Bot's
+ * whole history — but a list whose cards all show nothing has no number for a
+ * cap to qualify, and the surface must say nothing rather than a bound it never
+ * hit. The cards are the merged list, so the question is asked of them: a read
+ * that priced only Bots with no runs here carries no spend on any card.
+ */
+export function scorecardsCarrySpend(cards: readonly BotScorecard[]): boolean {
+  return cards.some((card) => card.spend !== undefined);
+}
+
+/**
  * A card's spend, in the words the Spend screen already prints — or nothing at
  * all. `botSpendRowCopy` is the row's one wording, reused rather than
  * re-authored, so a card and P5's per-Bot section cannot describe one read two

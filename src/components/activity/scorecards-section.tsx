@@ -52,6 +52,16 @@
 // spend rather than a zero nobody read, and a Bot with spend but no runs here
 // gets no card at all — the cards stay the runs this device saw.
 //
+// That read is capped per Bot, so each number is a read of the newest sessions
+// rather than its Bot's whole history, and the bound is stated once for the
+// cards: P5's own `botSpendCapCopy` at the same `SESSION_SPEND_LIST_LIMIT` the
+// reads stopped at, reused rather than re-authored, so this surface and the
+// Spend screen cannot describe one read two ways. It sits beside the run
+// window above and outside the card decision, because a capped read understates
+// every card under it — and it renders only when a card actually carries a
+// spend row (`scorecardsCarrySpend`), so a read that priced no Bot this device
+// can show says nothing rather than a cap it never hit.
+//
 // That empty-device rule is about the CARDS, never about this section: the
 // weekly report is opted into from here (D3 Build 5), so a device that has run
 // nothing — exactly the device the report exists to bring back — still gets
@@ -96,7 +106,8 @@ import { Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { CronJob } from '@/lib/gateway/cron';
 import type { ActivityRun } from '@/lib/gateway/runs';
-import type { BotSpendRow } from '@/lib/gateway/spend-report';
+import { SESSION_SPEND_LIST_LIMIT } from '@/lib/gateway/session-analytics';
+import { botSpendCapCopy, type BotSpendRow } from '@/lib/gateway/spend-report';
 import {
   readWeeklyReportOptIn,
   setWeeklyReportOptIn,
@@ -124,6 +135,7 @@ import {
   scorecardFateCopy,
   scorecardRoutineCopy,
   scorecardRoutineHealth,
+  scorecardsCarrySpend,
   scorecardSpendCopy,
   scorecardSuccessCopy,
   scorecardSuccessRate,
@@ -246,6 +258,14 @@ export function ScorecardsSection({
   // before a first run lands.
   const hasCards = cards.length > 0;
 
+  // The spend read's own bound, stated once for the cards — and only when a
+  // card actually carries a spend row. A capped read understates every card
+  // under it, so hiding this line would leave the numbers looking like whole
+  // histories; a read that priced no Bot this device can show would leave the
+  // cap describing nothing, so the fold's own question is asked here and the
+  // answer itself decides. Nothing is decided on this surface.
+  const cardsCarrySpend = scorecardsCarrySpend(cards);
+
   return (
     <Card padding={Spacing.three} style={styles.card}>
       <Text variant="title">Scorecards</Text>
@@ -256,6 +276,18 @@ export function ScorecardsSection({
       <Text variant="caption" color="secondary">
         {scorecardWindowCopy(runs.length)}
       </Text>
+
+      {/* The spend read's own bound, beside the window above and for the same
+          reason: the per-Bot reads stopped at their own cap, so a Bot with a
+          longer history than it has its number understated by exactly the
+          sessions that were never returned. The words and the limit are P5's
+          own — the Spend screen prints this same string — so the two surfaces
+          cannot drift, and it renders only when a card carries a spend row. */}
+      {cardsCarrySpend ? (
+        <Text variant="caption" color="secondary">
+          {botSpendCapCopy(SESSION_SPEND_LIST_LIMIT)}
+        </Text>
+      ) : null}
 
       {hasCards
         ? cards.map((card) => {

@@ -30,6 +30,7 @@ import {
   scorecardFateCopy,
   scorecardRoutineCopy,
   scorecardRoutineHealth,
+  scorecardsCarrySpend,
   scorecardSpendCopy,
   scorecardSuccessCopy,
   scorecardSuccessRate,
@@ -847,6 +848,57 @@ describe('withSpend', () => {
     expect(merged).not.toBe(original);
     expect(original.every((card) => card.spend === undefined)).toBe(true);
     expect(merged.map((card) => card.botId)).toEqual(original.map((card) => card.botId));
+  });
+});
+
+describe('scorecardsCarrySpend', () => {
+  /** One Bot's spend, as P5's `readBotSpend` folds it — costed until a case says otherwise. */
+  const spendRow = (over: Partial<BotSpendRow> = {}): BotSpendRow => ({
+    botId: 'atlas',
+    label: 'Atlas',
+    basis: 'actual',
+    tokens: 12_345,
+    costUsd: 0.42,
+    failed: false,
+    ...over,
+  });
+
+  /** Two cards, so the answer can be shown not to come from the first one alone. */
+  const cards = (): BotScorecard[] =>
+    buildScorecards([
+      run({ id: 'a', botId: 'atlas', status: 'complete' }),
+      run({ id: 'b', botId: 'bramble', status: 'failed' }),
+    ]);
+
+  test('one card carrying a spend row is enough to state the read’s bound', () => {
+    const merged = withSpend(cards(), [spendRow({ botId: 'bramble' })]);
+
+    // The last card, not the first: the predicate is over the whole list.
+    expect(scorecardsCarrySpend(merged)).toBe(true);
+  });
+
+  test('a read that left every card without spend has nothing to caption', () => {
+    // The same list the section hands it — merged cards — so a read whose rows
+    // all belong to Bots this device has no runs for captions nothing: there is
+    // no number on screen for a cap to qualify.
+    expect(scorecardsCarrySpend(withSpend(cards(), [spendRow({ botId: 'echo' })]))).toBe(false);
+    expect(scorecardsCarrySpend(withSpend(cards(), []))).toBe(false);
+  });
+
+  test('no cards at all is no spend to caption', () => {
+    expect(scorecardsCarrySpend([])).toBe(false);
+    expect(scorecardsCarrySpend(buildScorecards([]))).toBe(false);
+  });
+
+  test('an unread spend is still a spend the cap applies to', () => {
+    // A failed read is a row the card carries (`withSpend`'s own rule), and the
+    // cap bounds the read whether or not it returned a number — so a card
+    // showing `SPEND_UNREAD_COPY` still gets the bound stated beside it.
+    const merged = withSpend(cards(), [
+      spendRow({ botId: 'atlas', failed: true, basis: null, tokens: null, costUsd: null }),
+    ]);
+
+    expect(scorecardsCarrySpend(merged)).toBe(true);
   });
 });
 
