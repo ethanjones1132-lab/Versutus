@@ -66,3 +66,33 @@ describe('the Bot chrome voice picker', () => {
     expect(chrome).not.toContain('voice-preferences');
   });
 });
+
+describe('the Bot chrome refinement rows', () => {
+  test('the ladder, the labels and the normal are the fold’s, and the surface authors no number of its own', () => {
+    const chrome = readSource('src', 'components', 'chat', 'bot-chrome.tsx');
+
+    // Every step comes off the rows the pure fold answered
+    // (`src/lib/voice/bot-voices.ts`), so which steps exist, what they are
+    // called and which one this Bot stands at are that module's rules.
+    expect(chrome).toMatch(/voiceRefinements\?\.map\(\(row\) => \(/);
+    expect(chrome).toMatch(/row\.steps\.map\(\(step\) => \(/);
+    expect(chrome).toMatch(/label=\{step\.label\}/);
+    expect(chrome).toMatch(/selected=\{step\.selected\}/);
+    // A tap hands the fold's own field and value back — the surface has no
+    // ladder step and no normal to write.
+    expect(chrome).toMatch(/onPress=\{\(\) => onVoiceRefine\?\.\(row\.field, step\.value\)\}/);
+    // The range is the module's own line, and no number is authored here at
+    // all: a step this surface spelled would be a value the fold does not hold.
+    expect(chrome).toMatch(/\{BOT_VOICE_RANGE_COPY\}/);
+    expect(chrome).not.toMatch(/\d/);
+  });
+
+  test('a Bot with no voice chosen is offered no refinement rather than a control that cannot finish', () => {
+    const chrome = readSource('src', 'components', 'chat', 'bot-chrome.tsx');
+
+    // The store's entry is a voice with its refinements, so there is nothing to
+    // tune until one is chosen — and the fold answers no rows until then.
+    expect(chrome).toMatch(/const showRefine = !!voiceRefinements\?\.length && !!onVoiceRefine;/);
+    expect(chrome).toMatch(/\{showRefine \? \(/);
+  });
+});

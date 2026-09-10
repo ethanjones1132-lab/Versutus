@@ -11,12 +11,37 @@
 // own default first, the one already stored marked, and NO options at all for
 // a device the platform named no voice for. What is stored is the shipped
 // store's (`voice-preferences.ts`); nothing here writes.
+//
+// The tuning half is here too: `botVoiceRefinementRows` is the ladder the rate
+// and pitch rows offer, with the step this Bot stands at marked and a field
+// with nothing stored reading as the platform's own normal, and
+// `botVoiceRefinementPatch` is what a tap writes — the normal as an ABSENT
+// field rather than a stored one, and a value off the ladder refused rather
+// than clamped to a neighbour.
 
 import {
   BOT_VOICE_DEFAULT_LABEL,
+  BOT_VOICE_NORMAL,
+  BOT_VOICE_RANGE_COPY,
+  BOT_VOICE_REFINEMENT_STEPS,
   botVoiceOptions,
+  botVoiceRefinementPatch,
+  botVoiceRefinementRows,
   botVoiceRows,
+  type BotVoiceRefinementField,
 } from '@/lib/voice/bot-voices';
+import { applyBotVoice } from '@/lib/voice/voice-preferences';
+
+// The refinement patch is folded by the STORE's own merge, so the store is
+// reachable from this suite; its key-value seam is not read by a pure fold and
+// is mocked out the way the store's own suite mocks it.
+jest.mock('@/lib/storage/key-value', () => ({
+  keyValueStorage: {
+    getItem: jest.fn(),
+    setItem: jest.fn(),
+    removeItem: jest.fn(),
+  },
+}));
 
 declare const __dirname: string;
 
@@ -176,5 +201,137 @@ describe('the options the picker offers', () => {
     expect(source).not.toMatch(/^import /m);
     expect(source).not.toContain('expo-speech');
     expect(source).not.toContain('fetch(');
+  });
+});
+
+describe('the steps a refinement row offers', () => {
+  const stored = (extra: Record<string, unknown> = {}) => ({ voiceIdentifier: 'voice.one', ...extra });
+
+  test('a Bot stored with no voice has nothing to refine', () => {
+    // The store's entry IS a voice with its refinements, so a Bot on the
+    // platform's own default is offered no row at all rather than a control
+    // that could not be written anywhere.
+    expect(botVoiceRefinementRows(undefined)).toEqual([]);
+    expect(botVoiceRefinementRows({ rate: 1.5, pitch: 0.5 })).toEqual([]);
+    expect(botVoiceRefinementRows({ voiceIdentifier: '' })).toEqual([]);
+    expect(botVoiceRefinementRows({ voiceIdentifier: '   ' })).toEqual([]);
+    expect(botVoiceRefinementRows({ voiceIdentifier: 42 })).toEqual([]);
+    expect(botVoiceRefinementRows(null)).toEqual([]);
+    expect(botVoiceRefinementRows('voice.one')).toEqual([]);
+  });
+
+  test('both rows offer this module’s own ladder, in its own order', () => {
+    const rows = botVoiceRefinementRows(stored());
+
+    expect(rows.map((row) => row.field)).toEqual(['rate', 'pitch']);
+    expect(rows.map((row) => row.label)).toEqual(['Rate', 'Pitch']);
+    expect(rows.map((row) => row.steps.map((step) => step.value))).toEqual([
+      [...BOT_VOICE_REFINEMENT_STEPS],
+      [...BOT_VOICE_REFINEMENT_STEPS],
+    ]);
+    // A step reads as its own value, so the surface has no number to spell.
+    expect(rows[0].steps.map((step) => step.label)).toEqual(['0.5x', '1x', '1.5x', '2x']);
+  });
+
+  test('a field with nothing stored reads as the platform’s own normal', () => {
+    const rows = botVoiceRefinementRows(stored());
+
+    // What stands when no rate and no pitch is stored IS the platform's
+    // normal, so that step is the one marked — and only it.
+    for (const row of rows) {
+      expect(row.steps.filter((step) => step.selected).map((step) => step.value)).toEqual([
+        BOT_VOICE_NORMAL,
+      ]);
+    }
+  });
+
+  test('the stored refinement is the step this Bot stands at, the two read apart', () => {
+    const rows = botVoiceRefinementRows(stored({ rate: 1.5, pitch: 0.5 }));
+
+    expect(rows[0].steps.find((step) => step.selected)?.value).toBe(1.5);
+    expect(rows[1].steps.find((step) => step.selected)?.value).toBe(0.5);
+    expect(rows[0].steps.filter((step) => step.selected)).toHaveLength(1);
+    expect(rows[1].steps.filter((step) => step.selected)).toHaveLength(1);
+  });
+
+  test('a stored value this ladder does not hold leaves every step unselected', () => {
+    const rows = botVoiceRefinementRows(stored({ rate: 1.25 }));
+
+    // No step may claim a rate it is not — not even the normal, which is not
+    // what this device would hand the platform.
+    expect(rows[0].steps.some((step) => step.selected)).toBe(false);
+    // The field with nothing stored is untouched by its neighbour's junk.
+    expect(rows[1].steps.find((step) => step.selected)?.value).toBe(BOT_VOICE_NORMAL);
+  });
+
+  test('a refinement that is not a finite number reads as nothing stored', () => {
+    const rows = botVoiceRefinementRows(stored({ rate: '1.5', pitch: Number.NaN }));
+
+    expect(rows[0].steps.find((step) => step.selected)?.value).toBe(BOT_VOICE_NORMAL);
+    expect(rows[1].steps.find((step) => step.selected)?.value).toBe(BOT_VOICE_NORMAL);
+  });
+
+  test('the copy under the rows states the range the ladder offers', () => {
+    // The platform documents no bound for either field — only that one is
+    // normal — so this ladder IS the range, and the line says so rather than
+    // leaving the ends to be found by dragging into them.
+    const [low, ...rest] = BOT_VOICE_REFINEMENT_STEPS;
+    const high = rest[rest.length - 1];
+
+    expect(BOT_VOICE_RANGE_COPY).toContain(`${low}x`);
+    expect(BOT_VOICE_RANGE_COPY).toContain(`${high}x`);
+    expect(BOT_VOICE_RANGE_COPY).toContain(`${BOT_VOICE_NORMAL}x`);
+  });
+});
+
+describe('the patch a refinement tap writes', () => {
+  const key = 'voice:gw-1:bot-1';
+  const storedEntry = { voiceIdentifier: 'voice.one', rate: 1.5, pitch: 0.5 };
+
+  /** The entry after one refinement, or a failure if the fold refused a step it offers. */
+  function entryAfter(field: BotVoiceRefinementField, value: number) {
+    const patch = botVoiceRefinementPatch(field, value);
+    if (!patch) throw new Error(`the fold refused ${field} ${value}`);
+    return applyBotVoice({ [key]: storedEntry }, key, patch)[key];
+  }
+
+  test('the ladder’s own normal is the unset state: the field is dropped, not stored at one', () => {
+    expect(botVoiceRefinementPatch('rate', BOT_VOICE_NORMAL)).toStrictEqual({ rate: undefined });
+    expect(botVoiceRefinementPatch('pitch', BOT_VOICE_NORMAL)).toStrictEqual({ pitch: undefined });
+
+    // Folded onto the entry it drops exactly that field, so the platform's own
+    // normal stands — and the voice and the other refinement are kept.
+    expect(entryAfter('rate', BOT_VOICE_NORMAL)).toStrictEqual({
+      voiceIdentifier: 'voice.one',
+      pitch: 0.5,
+    });
+    expect(entryAfter('pitch', BOT_VOICE_NORMAL)).toStrictEqual({
+      voiceIdentifier: 'voice.one',
+      rate: 1.5,
+    });
+  });
+
+  test('a step is written as the value it carries', () => {
+    expect(botVoiceRefinementPatch('rate', 0.5)).toStrictEqual({ rate: 0.5 });
+    expect(botVoiceRefinementPatch('pitch', 2)).toStrictEqual({ pitch: 2 });
+
+    expect(entryAfter('rate', 2)).toStrictEqual({
+      voiceIdentifier: 'voice.one',
+      rate: 2,
+      pitch: 0.5,
+    });
+    expect(entryAfter('pitch', 0.5)).toStrictEqual({
+      voiceIdentifier: 'voice.one',
+      rate: 1.5,
+      pitch: 0.5,
+    });
+  });
+
+  test('a value this ladder does not hold is refused rather than clamped to a neighbour', () => {
+    expect(botVoiceRefinementPatch('rate', 5)).toBeUndefined();
+    expect(botVoiceRefinementPatch('rate', 0)).toBeUndefined();
+    expect(botVoiceRefinementPatch('rate', 1.25)).toBeUndefined();
+    expect(botVoiceRefinementPatch('pitch', Number.NaN)).toBeUndefined();
+    expect(botVoiceRefinementPatch('pitch', Number.POSITIVE_INFINITY)).toBeUndefined();
   });
 });

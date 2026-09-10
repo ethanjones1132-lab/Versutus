@@ -63,11 +63,9 @@ describe('chat-screen speaker wiring', () => {
     // A reply already read is not read again: the memory is the message id, so
     // a re-render during a reply cannot speak it twice.
     expect(screen).toMatch(/if \(memory\.id === transcriptTail\?\.id\) return;/);
-    // It is read in this Bot's own voice where one is stored, and left to the
-    // platform's own defaults where none is.
-    expect(screen).toMatch(
-      /void speakReply\(action\.text, botVoiceId \? \{ voiceIdentifier: botVoiceId \} : \{\}\);/,
-    );
+    // It is read in the voice this Bot is stored with, refinements and all,
+    // and left to the platform's own defaults where nothing is stored.
+    expect(screen).toMatch(/void speakReply\(action\.text, botVoice \?\? \{\}\);/);
   });
 
   test('a new turn silences the queue, and a silent conversation is never asked', () => {
@@ -96,7 +94,12 @@ describe('chat-screen Bot voice wiring', () => {
     const screen = readSource('components/chat/chat-screen.tsx');
     // Keyed gateway + Bot by the store's own key, read by the store's own read.
     expect(screen).toMatch(/botVoicePreferenceKey\(activeGateway\.id, botSurfaceId\)/);
-    expect(screen).toMatch(/readBotVoice\(stored, botVoiceKey\)\?\.voiceIdentifier/);
+    // The WHOLE stored voice is kept rather than its identifier alone: the rate
+    // and pitch beside it are what the reply is read with and what the
+    // refinement rows mark as this Bot's own.
+    expect(screen).toMatch(
+      /setBotVoice\(botVoiceKey \? readBotVoice\(stored, botVoiceKey\) : undefined\)/,
+    );
     // A pick is written through the store's fold; the default row clears the
     // entry rather than storing a voice nothing could be spoken with.
     expect(screen).toMatch(/applyBotVoice\(stored, key, \{ voiceIdentifier: identifier \}\)/);
@@ -104,6 +107,25 @@ describe('chat-screen Bot voice wiring', () => {
     // Must still: a conversation's own toggle is a separate key space, folded by
     // its own rule, so a Bot's voice can never move it.
     expect(screen).toMatch(/applySpeakerOn\(stored, key, next\)/);
+  });
+
+  test('the refinement rows are the fold’s, and what is stored is what is read', () => {
+    const screen = readSource('components/chat/chat-screen.tsx');
+    // The steps, their labels and which one this Bot stands at are the pure
+    // fold's answer, taken off the voice the store holds.
+    expect(screen).toMatch(/botVoiceRefinementRows\(botVoice\)/);
+    // Handed the chrome only where there is a Bot to key a voice to, and the
+    // fold answers no rows until this Bot is stored with one.
+    expect(screen).toMatch(/voiceRefinements=\{botVoiceKey \? botVoiceRefinements : undefined\}/);
+    expect(screen).toMatch(/onVoiceRefine=\{botVoiceKey \? handleBotVoiceRefine : undefined\}/);
+    // A tap writes the module's own patch through the shipped store's fold —
+    // and a step the ladder does not hold is refused rather than written.
+    expect(screen).toMatch(/const patch = botVoiceRefinementPatch\(field, value\);/);
+    expect(screen).toMatch(/if \(!patch\) return;/);
+    expect(screen).toMatch(/applyBotVoice\(stored, key, patch\)/);
+    // What the control shows is the store's own read of what was written, not
+    // what was tapped: a refused write cannot leave a step lying.
+    expect(screen).toMatch(/setBotVoice\(readBotVoice\(written, key\)\)/);
   });
 
   test('a voice the operator installs mid-session is offered on the way back in', () => {
