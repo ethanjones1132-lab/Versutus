@@ -2,7 +2,9 @@ import { StyleSheet, View } from 'react-native';
 
 import { Card, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
+import { SESSION_SPEND_LIST_LIMIT } from '@/lib/gateway/session-analytics';
 import {
+  botSpendCapCopy,
   botSpendRowCopy,
   botSpendSectionBasis,
   SPEND_PER_BOT_DEGRADED_COPY,
@@ -19,6 +21,13 @@ import {
  * comes from `spendBasisCopy` only when every row agrees on one basis. A
  * roster that mixes an actual charge with an estimate gets no header and lets
  * each row's own basis speak; that is the one fact a header may not blur.
+ *
+ * Each row's number was read over its own scoped catalogue, and every one of
+ * those reads stopped at `SESSION_SPEND_LIST_LIMIT`. `botSpendCapCopy` names
+ * that bound once under the rows, so a Bot with a longer history than the cap
+ * cannot have its number read as its whole history — and because the read is
+ * per row, the section keeps that line even where the basis header is
+ * withdrawn.
  *
  * Three states stay distinct, because they are three different facts:
  *   - `degraded` — the gateway cannot be asked per Bot at all: the line that
@@ -59,6 +68,9 @@ export function SpendPerBotSection({ report }: { report: BotSpendReport }) {
           </Text>
         </View>
       ))}
+      <Text variant="micro" color="tertiary">
+        {botSpendCapCopy(SESSION_SPEND_LIST_LIMIT)}
+      </Text>
     </Card>
   );
 }

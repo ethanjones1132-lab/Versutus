@@ -117,6 +117,25 @@ export function botSpendRowCopy(row: BotSpendRow): string {
 }
 
 /**
+ * What the per-Bot rows were read over, and the cap each one stopped at.
+ *
+ * Every row is folded from its own scoped catalogue read, and `readBotSpend`
+ * asks each roster Bot at `SESSION_SPEND_LIST_LIMIT` — the same 200-row cap
+ * the gateway total is read at. The list endpoint takes a `limit` but no
+ * cursor, so a Bot with a longer history than the cap has its number
+ * understated by exactly the sessions that were never returned, and the
+ * section has to say so.
+ *
+ * The sentence is about the READ, not about any one Bot's count: the fold
+ * keeps one read per Bot and no per-row count to compare a cap against, so
+ * unlike `spendSessionCapCopy` — which captions a single read and can name
+ * its own size — this one states the bound every row was read at.
+ */
+export function botSpendCapCopy(limit: number): string {
+  return `Each Bot is read over its newest ${limit} sessions — a longer history is past the cap, so its number is understated`;
+}
+
+/**
  * Why a per-Bot section is missing at all. A gateway that cannot be asked per
  * Bot is a different fact from a roster with no Bots — that one renders no
  * section, this one says so under a total it could still read.

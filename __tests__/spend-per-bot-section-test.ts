@@ -2,6 +2,7 @@ import { hasBotSessionScoping } from '@/lib/gateway/bots';
 import { ManifestClient } from '@/lib/gateway/manifest-client';
 import { SESSION_SPEND_LIST_LIMIT, type SessionUsageInput } from '@/lib/gateway/session-analytics';
 import {
+  botSpendCapCopy,
   botSpendRowCopy,
   botSpendSectionBasis,
   readBotSpend,
@@ -158,6 +159,65 @@ describe('the four states the section is asked to render', () => {
     // The surviving actual row still earns the header — a failed read does not
     // turn the whole section into an unlabelled one.
     expect(botSpendSectionBasis(report.rows)).toBe('actual');
+  });
+});
+
+describe('the per-Bot rows name the cap every one of them was read at', () => {
+  test('the caption names the list cap the scoped reads stopped at', () => {
+    expect(SESSION_SPEND_LIST_LIMIT).toBe(200);
+    expect(botSpendCapCopy(SESSION_SPEND_LIST_LIMIT)).toContain('newest 200 sessions');
+  });
+
+  test('the caption carries the cap it was handed, so it cannot go stale', () => {
+    expect(botSpendCapCopy(50)).toContain('newest 50 sessions');
+    expect(botSpendCapCopy(50)).not.toContain('200');
+  });
+
+  test('the cap is the only number the caption prints — never a result count', () => {
+    for (const limit of [1, 200, 500]) {
+      const copy = botSpendCapCopy(limit);
+      expect(copy.match(/\d+/g)).toEqual([String(limit)]);
+      expect(copy).not.toMatch(/7 days|last 7/i);
+    }
+  });
+
+  test('the section renders the caption exactly once, under the rows', () => {
+    const src = section();
+    const rows = src.indexOf('{botSpendRowCopy(row)}');
+    const cap = src.indexOf('botSpendCapCopy(');
+    expect(src.match(/botSpendCapCopy\(/g)).toHaveLength(1);
+    expect(rows).toBeGreaterThanOrEqual(0);
+    expect(cap).toBeGreaterThan(rows);
+  });
+
+  test('the degraded line reads no rows, so it names no cap', () => {
+    const src = section();
+    const degraded = src.indexOf('if (report.degraded)');
+    const empty = src.indexOf('if (report.rows.length === 0) return null;');
+    expect(degraded).toBeGreaterThanOrEqual(0);
+    expect(empty).toBeGreaterThan(degraded);
+    expect(src.slice(degraded, empty)).not.toContain('botSpendCapCopy');
+  });
+
+  test('the cap is not in place of the basis header', () => {
+    const src = section();
+    const header = src.indexOf('{spendBasisCopy(shared)}');
+    const cap = src.indexOf('botSpendCapCopy(');
+    expect(header).toBeGreaterThanOrEqual(0);
+    expect(cap).toBeGreaterThan(header);
+  });
+
+  test('the row line keeps the tokens, the cost and the basis it printed before', () => {
+    const copy = botSpendRowCopy(row({}));
+    expect(copy).toContain('tokens');
+    expect(copy).toContain('$0.90');
+    expect(copy).toContain('(actual)');
+  });
+
+  test('a failed Bot still reads as the shipped unread copy, with no number', () => {
+    const failed = botSpendRowCopy(row({ failed: true, basis: null, tokens: null, costUsd: null }));
+    expect(failed).toBe(SPEND_UNREAD_COPY);
+    expect(failed).not.toMatch(/[0-9$]/);
   });
 });
 
