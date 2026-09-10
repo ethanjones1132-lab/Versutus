@@ -21,7 +21,7 @@ import { springSnappy } from '@/lib/motion/presets';
 import { micControlState } from '@/lib/voice/mic-state';
 import {
   speechRecognitionAvailable,
-  speechRecognitionPermissionGranted,
+  speechRecognitionPermissionAskable,
   startSpeechRecognition,
   stopSpeechRecognition,
 } from '@/lib/voice/speech-recognition';
@@ -75,19 +75,19 @@ export const ChatComposer = memo(function ChatComposer({
 }: ChatComposerProps) {
   const tokens = useTokens();
   const [focused, setFocused] = useState(false);
-  const [micDevice, setMicDevice] = useState({ available: false, permissionGranted: false });
+  const [micDevice, setMicDevice] = useState({ available: false, permissionAskable: false });
   const sendWidth = useSharedValue(56);
 
   // What this phone can do about voice is a device answer the composer cannot
-  // know until it asks: whether this build carries a recognizer, and whether
-  // the phone has granted the microphone and speech recognition. Read once,
-  // together, so the control is never drawn from half an answer — before
-  // either lands there is no mic at all.
+  // know until it asks: whether this build carries a recognizer, and whether a
+  // hold can be offered on the phone at all (granted, or the platform will
+  // still put its own dialog up). Read once, together, so the control is never
+  // drawn from half an answer — before either lands there is no mic at all.
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([speechRecognitionAvailable(), speechRecognitionPermissionGranted()]).then(
-      ([available, permissionGranted]) => {
-        if (!cancelled) setMicDevice({ available, permissionGranted });
+    void Promise.all([speechRecognitionAvailable(), speechRecognitionPermissionAskable()]).then(
+      ([available, permissionAskable]) => {
+        if (!cancelled) setMicDevice({ available, permissionAskable });
       },
     );
     return () => {
@@ -101,7 +101,7 @@ export const ChatComposer = memo(function ChatComposer({
     available: micDevice.available,
     status,
     isStreaming,
-    permissionGranted: micDevice.permissionGranted,
+    permissionAskable: micDevice.permissionAskable,
   });
 
   const sendAnimatedStyle = useAnimatedStyle(() => ({
@@ -142,11 +142,12 @@ export const ChatComposer = memo(function ChatComposer({
         if (micHoldRef.current === entry) micHoldRef.current = null;
         // A refused hold is a line rather than a quiet no-op — and only the
         // platform's own record is allowed to name the reason. The phone's
-        // answer says whether it has granted, so a microphone the operator
-        // never allowed is drawn refused from here on, while a recognizer that
-        // merely would not start claims nothing about the microphone.
-        void speechRecognitionPermissionGranted().then((granted) => {
-          if (!granted) setMicDevice((device) => ({ ...device, permissionGranted: false }));
+        // answer says whether a hold can be offered at all, so a microphone the
+        // platform will not re-ask is drawn refused from here on, while a
+        // recognizer that merely would not start claims nothing about the
+        // microphone.
+        void speechRecognitionPermissionAskable().then((askable) => {
+          if (!askable) setMicDevice((device) => ({ ...device, permissionAskable: false }));
         });
         return;
       }

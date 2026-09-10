@@ -63,23 +63,23 @@ describe('Chat composer mic control', () => {
   test('the phone own permission is read beside its availability, and both go to the one fold', () => {
     const src = readComposerSource();
 
-    // What the phone holds is a device answer the composer cannot know until it
-    // asks, read the way availability is — and handed to the same fold, so the
-    // surface still decides nothing about the control.
-    expect(src).toMatch(/speechRecognitionPermissionGranted\(\)/);
-    expect(src).toMatch(/permissionGranted/);
+    // What the phone can do about a hold is a device answer the composer cannot
+    // know until it asks, read the way availability is — and handed to the same
+    // fold, so the surface still decides nothing about the control.
+    expect(src).toMatch(/speechRecognitionPermissionAskable\(\)/);
+    expect(src).toMatch(/permissionAskable/);
     // The refusal line is the module's own too, never a literal here.
     expect(src).not.toMatch(/MIC_PERMISSION_REFUSED_COPY/);
     expect(src).not.toMatch(/turn it on in Settings/);
   });
 
-  test('a hold the seam refused asks the phone again, so the refusal is a line and not silence', () => {
+  test('a hold the seam refused re-reads the phone own answer, so the refusal is a line and not silence', () => {
     const handlers = readMicHandlers(readComposerSource());
 
     // The refused edge re-reads the platform's own record rather than assuming
-    // a reason: the line appears when the phone itself has not granted, and a
-    // recognizer that merely would not start claims nothing.
-    expect(handlers).toMatch(/speechRecognitionPermissionGranted\(\)/);
+    // a reason: the line appears when the phone itself cannot be asked again,
+    // and a recognizer that merely would not start claims nothing.
+    expect(handlers).toMatch(/speechRecognitionPermissionAskable\(\)/);
   });
 
   test('the mic is drawn beside send, inside the composer card', () => {

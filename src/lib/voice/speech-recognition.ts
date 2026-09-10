@@ -52,15 +52,23 @@ function releaseSession(): void {
   subscriptions.forEach((subscription) => subscription.remove());
 }
 
+/** What the platform's permission call answers, read off the one seam type. */
+type PermissionAnswer = Awaited<ReturnType<SpeechRecognizer['getPermissionsAsync']>>;
+
 /**
- * The permission this phone holds right now, read from the platform's own
- * status and reduced to its own convenience boolean. A question that cannot be
- * answered — a recognizer with no permission module, a platform that throws —
- * is NOT granted, so no hold is ever offered on a guess.
+ * Whether a hold can be offered on this phone, read from the platform's own
+ * response. Two ways to be askable: the phone has already granted the two, or
+ * the platform will still put its own dialog up — `canAskAgain`, whose own doc
+ * says a phone that cannot be asked again has to be sent to the Settings app.
+ * A phone whose refusal the platform will not re-ask is the only one a hold
+ * cannot be offered on, and a question that cannot be answered — a recognizer
+ * with no permission module, a platform that throws — is not askable either, so
+ * no hold is ever offered on a guess.
  */
-async function readPermissionGranted(recognizer: SpeechRecognizer): Promise<boolean> {
+async function readPermissionAskable(recognizer: SpeechRecognizer): Promise<boolean> {
   try {
-    return (await recognizer.getPermissionsAsync()).granted;
+    const answer: PermissionAnswer = await recognizer.getPermissionsAsync();
+    return answer.granted || answer.canAskAgain;
   } catch {
     return false;
   }
@@ -76,15 +84,18 @@ async function askPermission(recognizer: SpeechRecognizer): Promise<boolean> {
 }
 
 /**
- * Whether the phone has already granted the microphone and speech recognition.
- * The platform's own record is the answer, so undetermined and denied are both
- * not-granted, and neither is a build that cannot answer the question at all.
+ * Whether a hold can be offered on this phone. The platform's own answer is the
+ * record: a granted phone is askable, and so is a phone the platform will still
+ * ask — a fresh install whose operator has never been asked, or a denial the
+ * platform lets us re-ask. Only a refusal it will not re-ask (and a build that
+ * cannot answer the question at all) is not askable, so the control is drawn
+ * refused exactly where a hold would have nothing to start.
  */
-export async function speechRecognitionPermissionGranted(): Promise<boolean> {
+export async function speechRecognitionPermissionAskable(): Promise<boolean> {
   const recognizer = await loadSpeechRecognitionModule();
   if (!recognizer) return false;
 
-  return readPermissionGranted(recognizer);
+  return readPermissionAskable(recognizer);
 }
 
 /**

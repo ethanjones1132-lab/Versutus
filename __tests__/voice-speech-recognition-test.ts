@@ -36,7 +36,7 @@ import {
   cancelSpeechRecognition,
   requestSpeechRecognitionPermission,
   speechRecognitionAvailable,
-  speechRecognitionPermissionGranted,
+  speechRecognitionPermissionAskable,
   startSpeechRecognition,
   stopSpeechRecognition,
 } from '@/lib/voice/speech-recognition';
@@ -45,13 +45,16 @@ type SpeechEvent = { isFinal: boolean; results: { transcript: string; confidence
 
 /**
  * What the platform answers when it is asked about the microphone and speech
- * recognition, reduced to the one field the seam reads.
+ * recognition, reduced to the two fields the seam reads: whether it is granted,
+ * and whether the platform will still put its own dialog up. Never asked and
+ * declined-but-still-askable both read not granted with `canAskAgain` true;
+ * a refusal the platform will not re-ask reads not granted with it false.
  */
-const permission = (granted: boolean) => ({
+const permission = (granted: boolean, canAskAgain = !granted) => ({
   status: granted ? 'granted' : 'denied',
   granted,
   expires: 'never' as const,
-  canAskAgain: !granted,
+  canAskAgain,
 });
 
 /**
@@ -124,13 +127,13 @@ describe('a client with no native module', () => {
     await expect(cancelSpeechRecognition()).resolves.toBeUndefined();
   });
 
-  test('the permission answers are no and no, and no dialog is raised', async () => {
+  test('the askable answers are no and no, and no dialog is raised', async () => {
     mockLoad.mockResolvedValue(null);
 
-    // A client with no native module has no dialog to put up: the read is not
-    // granted and the ask is not granted, so the operator is never sent a
+    // A client with no native module has no dialog to put up: no hold can be
+    // offered on it and the ask is not granted, so the operator is never sent a
     // system prompt by a build that could not use the answer.
-    await expect(speechRecognitionPermissionGranted()).resolves.toBe(false);
+    await expect(speechRecognitionPermissionAskable()).resolves.toBe(false);
     await expect(requestSpeechRecognitionPermission()).resolves.toBe(false);
   });
 });
@@ -153,27 +156,40 @@ describe('the availability answer', () => {
   });
 });
 
-describe('the permission answer', () => {
-  test('a recognizer that already holds the permission is granted', async () => {
+describe('the askable answer', () => {
+  test('a phone that already granted it can be offered a hold', async () => {
     mockLoad.mockResolvedValue(fakeRecognizer());
 
-    await expect(speechRecognitionPermissionGranted()).resolves.toBe(true);
+    await expect(speechRecognitionPermissionAskable()).resolves.toBe(true);
   });
 
-  test('a device that has not granted it is not granted', async () => {
+  test('a phone that has not granted it but the platform will still ask can be offered a hold', async () => {
     const recognizer = fakeRecognizer();
-    recognizer.getPermissionsAsync.mockResolvedValue(permission(false));
+    recognizer.getPermissionsAsync.mockResolvedValue(permission(false, true));
     mockLoad.mockResolvedValue(recognizer);
 
-    await expect(speechRecognitionPermissionGranted()).resolves.toBe(false);
+    // Never asked and declined-but-still-askable answer the same way: the
+    // platform's own dialog is still available, so the first hold may raise it
+    // rather than the control being drawn refused with nothing to press.
+    await expect(speechRecognitionPermissionAskable()).resolves.toBe(true);
   });
 
-  test('a status the platform cannot answer is not granted rather than a guess', async () => {
+  test('a refusal the platform will not re-ask can hold no session at all', async () => {
+    const recognizer = fakeRecognizer();
+    recognizer.getPermissionsAsync.mockResolvedValue(permission(false, false));
+    mockLoad.mockResolvedValue(recognizer);
+
+    // `canAskAgain` false is the platform's own "direct them to Settings", and
+    // the one phone a hold cannot be offered on.
+    await expect(speechRecognitionPermissionAskable()).resolves.toBe(false);
+  });
+
+  test('a status the platform cannot answer is not askable rather than a guess', async () => {
     const recognizer = fakeRecognizer();
     recognizer.getPermissionsAsync.mockRejectedValue(new Error('no permission module'));
     mockLoad.mockResolvedValue(recognizer);
 
-    await expect(speechRecognitionPermissionGranted()).resolves.toBe(false);
+    await expect(speechRecognitionPermissionAskable()).resolves.toBe(false);
   });
 
   test('asking puts the platform dialog up and answers what the operator chose', async () => {
