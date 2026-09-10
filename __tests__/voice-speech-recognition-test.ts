@@ -4,9 +4,10 @@
 // native side (no dev build yet) would die at boot on a static import; the
 // seam's whole job is to answer honestly there instead — no mic, never a
 // throw. What is pinned here is the platform conversation (the availability
-// answer, start / stop / cancel, and the partial transcript) and the config
-// plugin entry that declares the two permissions iOS reads. The composer's
-// own control is a later slice; this seam drives no surface.
+// answer, the runtime permission read and ask, start / stop / cancel, and the
+// partial transcript) and the config plugin entry that declares the two
+// permissions iOS reads. The composer's own control is a later slice; this
+// seam drives no surface.
 
 declare const __dirname: string;
 
@@ -33,7 +34,9 @@ jest.mock('@/lib/voice/speech-recognition-native', () => ({
 
 import {
   cancelSpeechRecognition,
+  requestSpeechRecognitionPermission,
   speechRecognitionAvailable,
+  speechRecognitionPermissionGranted,
   startSpeechRecognition,
   stopSpeechRecognition,
 } from '@/lib/voice/speech-recognition';
@@ -41,16 +44,31 @@ import {
 type SpeechEvent = { isFinal: boolean; results: { transcript: string; confidence: number }[] };
 
 /**
+ * What the platform answers when it is asked about the microphone and speech
+ * recognition, reduced to the one field the seam reads.
+ */
+const permission = (granted: boolean) => ({
+  status: granted ? 'granted' : 'denied',
+  granted,
+  expires: 'never' as const,
+  canAskAgain: !granted,
+});
+
+/**
  * A recognizer standing in for the native one: it records what the seam asked
  * it to do, and `emit` plays back what the platform would have reported. The
  * subscriptions it hands out are removable, because whether the seam retires
- * them is half of what these cases are about.
+ * them is half of what these cases are about. It holds the permission by
+ * default — a device that has already said yes — so the shipped cases keep
+ * testing the conversation they were written for.
  */
 function fakeRecognizer() {
   const listeners = new Map<string, Set<(event: unknown) => void>>();
 
   return {
     isRecognitionAvailable: jest.fn(() => true),
+    getPermissionsAsync: jest.fn(async () => permission(true)),
+    requestPermissionsAsync: jest.fn(async () => permission(true)),
     start: jest.fn(),
     stop: jest.fn(),
     abort: jest.fn(),
@@ -105,6 +123,16 @@ describe('a client with no native module', () => {
     await expect(stopSpeechRecognition()).resolves.toBeUndefined();
     await expect(cancelSpeechRecognition()).resolves.toBeUndefined();
   });
+
+  test('the permission answers are no and no, and no dialog is raised', async () => {
+    mockLoad.mockResolvedValue(null);
+
+    // A client with no native module has no dialog to put up: the read is not
+    // granted and the ask is not granted, so the operator is never sent a
+    // system prompt by a build that could not use the answer.
+    await expect(speechRecognitionPermissionGranted()).resolves.toBe(false);
+    await expect(requestSpeechRecognitionPermission()).resolves.toBe(false);
+  });
 });
 
 describe('the availability answer', () => {
@@ -122,6 +150,49 @@ describe('the availability answer', () => {
     mockLoad.mockResolvedValue(recognizer);
 
     await expect(speechRecognitionAvailable()).resolves.toBe(false);
+  });
+});
+
+describe('the permission answer', () => {
+  test('a recognizer that already holds the permission is granted', async () => {
+    mockLoad.mockResolvedValue(fakeRecognizer());
+
+    await expect(speechRecognitionPermissionGranted()).resolves.toBe(true);
+  });
+
+  test('a device that has not granted it is not granted', async () => {
+    const recognizer = fakeRecognizer();
+    recognizer.getPermissionsAsync.mockResolvedValue(permission(false));
+    mockLoad.mockResolvedValue(recognizer);
+
+    await expect(speechRecognitionPermissionGranted()).resolves.toBe(false);
+  });
+
+  test('a status the platform cannot answer is not granted rather than a guess', async () => {
+    const recognizer = fakeRecognizer();
+    recognizer.getPermissionsAsync.mockRejectedValue(new Error('no permission module'));
+    mockLoad.mockResolvedValue(recognizer);
+
+    await expect(speechRecognitionPermissionGranted()).resolves.toBe(false);
+  });
+
+  test('asking puts the platform dialog up and answers what the operator chose', async () => {
+    const recognizer = fakeRecognizer();
+    mockLoad.mockResolvedValue(recognizer);
+
+    await expect(requestSpeechRecognitionPermission()).resolves.toBe(true);
+    expect(recognizer.requestPermissionsAsync).toHaveBeenCalledTimes(1);
+
+    recognizer.requestPermissionsAsync.mockResolvedValue(permission(false));
+    await expect(requestSpeechRecognitionPermission()).resolves.toBe(false);
+  });
+
+  test('an ask the platform throws on answers false rather than throwing', async () => {
+    const recognizer = fakeRecognizer();
+    recognizer.requestPermissionsAsync.mockRejectedValue(new Error('no activity to ask'));
+    mockLoad.mockResolvedValue(recognizer);
+
+    await expect(requestSpeechRecognitionPermission()).resolves.toBe(false);
   });
 });
 
@@ -188,6 +259,33 @@ describe('a held mic', () => {
     expect(recognizer.openListeners()).toBe(3); // result, end, error — one hold's worth
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  test('a hold asks the phone before it starts, so the dialog is the first thing the operator sees', async () => {
+    const recognizer = fakeRecognizer();
+    mockLoad.mockResolvedValue(recognizer);
+
+    await expect(startSpeechRecognition({}, jest.fn())).resolves.toBe(true);
+
+    // The config plugin only declares the two permissions; nothing grants them
+    // from the manifest. The hold is where the operator is actually asked.
+    expect(recognizer.requestPermissionsAsync).toHaveBeenCalledTimes(1);
+    expect(recognizer.start).toHaveBeenCalledWith({ interimResults: true });
+  });
+
+  test('a hold on a device that has not granted the permission starts no session', async () => {
+    const recognizer = fakeRecognizer();
+    recognizer.requestPermissionsAsync.mockResolvedValue(permission(false));
+    mockLoad.mockResolvedValue(recognizer);
+    const onTranscript = jest.fn();
+
+    await expect(startSpeechRecognition({}, onTranscript)).resolves.toBe(false);
+
+    // Nothing is listening and nothing started: a refused permission is not a
+    // microphone that runs and then quietly hears nothing.
+    expect(recognizer.start).not.toHaveBeenCalled();
+    expect(recognizer.openListeners()).toBe(0);
+    expect(onTranscript).not.toHaveBeenCalled();
   });
 });
 
