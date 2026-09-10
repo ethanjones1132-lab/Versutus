@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
+import { SpendChart } from '@/components/gateway/spend-chart';
 import { SpendPerBotSection } from '@/components/gateway/spend-per-bot-section';
 import { SpendSessionTable } from '@/components/gateway/spend-session-table';
 import { Card, Screen, Text } from '@/components/ui';
@@ -14,6 +15,7 @@ import {
   sessionSpendReadFromUnknown,
   spendTotalBoundCopy,
   totalUsage,
+  weekBuckets,
   type SessionSpendState,
 } from '@/lib/gateway/session-analytics';
 import {
@@ -49,6 +51,12 @@ import {
  * (`spendSessionRows`) — the same rows, once, in the read the screen already
  * made.
  *
+ * The 7-day chart is that same read a third time, folded by `weekBuckets` into
+ * one bucket per local day and placed by `spendChartBars`, which is what each
+ * render path paints. The fold is computed once, here — the chart aggregates
+ * nothing of its own, and the `now` it buckets against is captured on mount,
+ * the way the thread glance captures it.
+ *
  * Both bound lines on this screen — the total's bound line and the table's
  * cap — are decided by `state.rowCount`, the rows the read held, so a capped
  * read names its cap even when a row it could not parse was dropped. The
@@ -56,12 +64,13 @@ import {
  * whole catalogue read, whose age is unbounded, so the "Last 7 days" line
  * (`spendWindowCopy`) belongs to the 7-day chart and not here.
  *
- * The 7-day chart and the entry points are their own slices of P5.
+ * The entry points are their own slice of P5.
  */
 export default function GatewaySpendScreen() {
   const { gatewayRequest, status, listBots, readBotSessions, canReadBotSessions } = useGateway();
   const [state, setState] = useState<SessionSpendState>(EMPTY_SESSION_SPEND);
   const [botReport, setBotReport] = useState<BotSpendReport | null>(null);
+  const [now] = useState(() => Date.now());
 
   useEffect(() => {
     if (status !== 'connected') return;
@@ -111,6 +120,9 @@ export default function GatewaySpendScreen() {
   // The table is the same read, sorted once — not a second aggregation and not
   // a second fetch.
   const sessionRows = useMemo(() => spendSessionRows(state.sessions), [state.sessions]);
+  // And the chart is that read's own week: seven local days, folded once here
+  // and only placed by the render path.
+  const buckets = useMemo(() => weekBuckets(state.sessions, now), [state.sessions, now]);
 
   return (
     <Screen>
@@ -149,6 +161,8 @@ export default function GatewaySpendScreen() {
             {status === 'connected' ? 'Reading spend…' : 'Connect a gateway to read its spend.'}
           </Text>
         )}
+
+        {state.loaded ? <SpendChart buckets={buckets} rowCount={state.rowCount} /> : null}
 
         {botReport ? <SpendPerBotSection report={botReport} /> : null}
 
