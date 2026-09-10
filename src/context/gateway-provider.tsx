@@ -127,11 +127,14 @@ import { syncChildProfiles } from '@/lib/gateway/child-sync';
 import { checkTlsFingerprintTofu } from '@/lib/gateway/security';
 import {
   dismissGatewayDown,
+  dismissRunProgress,
   notifyApprovalRequired,
   notifyGatewayDown,
   notifyRunComplete,
+  notifyRunProgress,
 } from '@/lib/notifications/local';
 import { pendingRunFocus, type RunFocus } from '@/lib/notifications/run-focus';
+import { runProgressNotice } from '@/lib/notifications/run-progress';
 import { rearmRoutineNotifications } from '@/lib/notifications/routine-sync';
 import type {
   ChatMessage,
@@ -800,6 +803,35 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const activityRunsRef = useRef<ActivityRun[]>([]);
   useEffect(() => {
     activityRunsRef.current = activityRuns;
+  }, [activityRuns]);
+  /** The runs this process is holding a progress notice for. */
+  const runProgressNoticeIdsRef = useRef<Set<string>>(new Set());
+  /**
+   * §7's write point for a run's ongoing notice: one notice per run in flight,
+   * folded from the row this device already holds and kept in step by
+   * re-posting that run's own identifier. The dependency list IS the driver — a
+   * start, an approval wait, a decision, an event, a stop and the disconnect
+   * settle each move `activityRuns` — and nothing here ticks on its own. The
+   * ending is not this effect's to say: that stays `notifyRunComplete`'s.
+   */
+  useEffect(() => {
+    const held = runProgressNoticeIdsRef.current;
+    const next = new Set<string>();
+    for (const run of activityRuns) {
+      const notice = runProgressNotice(run);
+      if (notice.verb === 'update') {
+        next.add(notice.identifier);
+        void notifyRunProgress(notice);
+      } else if (held.has(notice.identifier)) {
+        void dismissRunProgress(notice.identifier);
+      }
+    }
+    // A run this process holds a notice for and no longer lists is retired too,
+    // so nothing is left in the tray for a run nobody is following.
+    for (const identifier of held) {
+      if (!next.has(identifier)) void dismissRunProgress(identifier);
+    }
+    runProgressNoticeIdsRef.current = next;
   }, [activityRuns]);
   const runApprovalResolverRef = useRef<((approved: boolean, feedback?: string) => void) | null>(null);
   const runAbortControllerRef = useRef<AbortController | null>(null);

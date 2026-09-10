@@ -4,7 +4,7 @@
 // relay; nothing here claims otherwise.
 
 import * as Notifications from 'expo-notifications';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import {
   approvalDecisionCopy,
@@ -19,6 +19,7 @@ import {
   isDownNoticeFor,
 } from './gateway-down-notice';
 import { APPROVAL_CATEGORY_ID, APPROVAL_NOTICE_DATA_KIND } from './categories';
+import type { RunProgressNotice } from './run-progress';
 import { RUN_NOTICE_DATA_KIND } from './tap-route';
 
 let permissionGranted = false;
@@ -46,17 +47,31 @@ function isForegrounded(): boolean {
   return AppState.currentState === 'active';
 }
 
+/**
+ * The one gate every notice goes through: an app in the foreground draws
+ * nothing unless it was asked to, and nothing is drawn without permission.
+ *
+ * `androidNotice` is §7's own shape and nothing else's — a notice posted under
+ * a run's identifier, on a run's channel. On Android the identifier IS the
+ * notification's tag (ExpoPresentationDelegate.kt:108-112), so re-posting one
+ * replaces what is already in the tray instead of stacking a second notice; a
+ * channel-carrying trigger is that platform's immediate trigger on the channel
+ * it names (ChannelAwareTriggerInput, notifications.md:1908). Every other
+ * notice passes no `androidNotice` and keeps the request shape it always had.
+ */
 async function present(
   title: string,
   body: string,
   allowForeground = false,
   data?: Record<string, unknown>,
   categoryIdentifier?: string,
+  androidNotice?: { identifier: string; channelId: string },
 ): Promise<string | null> {
   if (isForegrounded() && !allowForeground) return null;
   if (!(await ensurePermission())) return null;
   try {
     return await Notifications.scheduleNotificationAsync({
+      ...(androidNotice ? { identifier: androidNotice.identifier } : {}),
       content: {
         title,
         body,
@@ -64,7 +79,7 @@ async function present(
         ...(data ? { data } : {}),
         ...(categoryIdentifier ? { categoryIdentifier } : {}),
       },
-      trigger: null,
+      trigger: androidNotice ? { channelId: androidNotice.channelId } : null,
     });
   } catch {
     // best-effort: notification must never break the app flow
@@ -204,6 +219,81 @@ export async function dismissGatewayDown(gatewayKey: string): Promise<void> {
           Notifications.dismissNotificationAsync(notification.request.identifier),
         ),
     );
+  } catch {
+    // best-effort: a stale tray entry is cosmetic, never fatal
+  }
+}
+
+/**
+ * The Android channel every run-progress notice is posted on. §7 asks for a
+ * dedicated low-importance one so a long run's running commentary never beeps
+ * or peeks: Android decides both from the channel, not from the request.
+ */
+export const RUN_PROGRESS_CHANNEL_ID = 'run-progress';
+
+/** Whether this process has already asked the phone for the channel above. */
+let runProgressChannelReady = false;
+
+/**
+ * Create the low-importance channel, once per process.
+ *
+ * After creation the platform lets a channel be re-named and re-described but
+ * never re-ranked, so asking again per notice would buy a native round trip and
+ * nothing else. A refusal is not remembered as done: the notice below is worth
+ * posting whether or not this landed, and the next one retries.
+ */
+async function ensureRunProgressChannel(): Promise<void> {
+  if (runProgressChannelReady) return;
+  try {
+    await Notifications.setNotificationChannelAsync(RUN_PROGRESS_CHANNEL_ID, {
+      name: 'Run progress',
+      importance: Notifications.AndroidImportance.LOW,
+    });
+    runProgressChannelReady = true;
+  } catch {
+    // best-effort: a notice posted without its channel is still a notice
+  }
+}
+
+/**
+ * Post one run's progress notice (§7's ongoing notice, item 7a's copy).
+ *
+ * The identifier is the run's own, so every update for that run REPLACES the
+ * notice already in the tray rather than adding another, and one string retires
+ * exactly that notice when the run settles. The payload is the fold's, so a tap
+ * routes to the run the notice was about.
+ *
+ * Android's alone: iOS has no equivalent in this slice (its Live Activity is a
+ * later item) and the web build has no tray at all, so neither is posted to nor
+ * channel-created for. Whether a notice is drawn at all is still the shipped
+ * gate's call — `present` refuses while the app is foregrounded, where the
+ * operator already has the run card in front of them.
+ *
+ * A `retire` never reaches here: that arm is `dismissRunProgress`'s, because a
+ * run's ending is `notifyRunComplete`'s to say, not this notice's.
+ */
+export async function notifyRunProgress(
+  notice: Extract<RunProgressNotice, { verb: 'update' }>,
+): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  // Before the notice: the trigger below names this channel, and a post that
+  // overtook its channel would land on the app's default one.
+  await ensureRunProgressChannel();
+  await present(notice.title, notice.body, undefined, notice.data, undefined, {
+    identifier: notice.identifier,
+    channelId: RUN_PROGRESS_CHANNEL_ID,
+  });
+}
+
+/**
+ * Retire one run's progress notice, under the identifier its updates were
+ * posted with. Best-effort, like every other dismissal here: what settles a run
+ * is the run settling, never the tray.
+ */
+export async function dismissRunProgress(identifier: string): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    await Notifications.dismissNotificationAsync(identifier);
   } catch {
     // best-effort: a stale tray entry is cosmetic, never fatal
   }
