@@ -1075,7 +1075,10 @@ async function runSessionSpendCommand(
     const read = sessionSpendReadFromUnknown(result);
     if (!read.ok) return textResult('Sessions could not be read.', commandName);
     const copy = sessionSpendCopy(totalUsage(read.sessions));
-    if (read.sessions.length >= SESSION_SPEND_LIST_LIMIT) {
+    // The bound reads the rows the payload held, not the rows that parsed: a
+    // capped read that carried an unparseable row still hit the cap, and
+    // `sessions.length` would name no bound at all over it.
+    if (read.rowCount >= SESSION_SPEND_LIST_LIMIT) {
       return textResult(`${copy}\nNewest ${SESSION_SPEND_LIST_LIMIT} sessions.`, commandName);
     }
     return textResult(copy, commandName);

@@ -31,6 +31,12 @@ export type ChatOverflowSheetProps = {
   onStartRun?: () => void;
   runsSupported?: boolean;
   sessions?: SessionUsageInput[];
+  /**
+   * Rows the read behind `sessions` held, parsed or not — the count the
+   * sparkline's window line is captioned from. Required so no surface can
+   * render the caption from the rows that happened to parse.
+   */
+  rowCount: number;
   /** Present on a Bot's own chat — opens the edit sheet for that agent. */
   onEditAgent?: () => void;
 };
@@ -48,6 +54,7 @@ export function ChatOverflowSheet({
   onStartRun,
   runsSupported = false,
   sessions = [],
+  rowCount,
   onEditAgent,
 }: ChatOverflowSheetProps) {
   // Disconnect arms a danger confirmation first — same pattern as session
@@ -64,6 +71,7 @@ export function ChatOverflowSheet({
         <SessionAnalytics
           session={spendSession}
           sessions={sessions}
+          rowCount={rowCount}
           messageCount={session?.messageCount}
         />
       ) : spendCopy ? (

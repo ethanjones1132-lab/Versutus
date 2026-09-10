@@ -20,10 +20,18 @@ const SPARK_H = 36;
 export function SessionAnalytics({
   session,
   sessions,
+  rowCount,
   messageCount,
 }: {
   session: SessionUsageInput;
   sessions: SessionUsageInput[];
+  /**
+   * Rows the read that produced `sessions` held (`SessionSpendRead.rowCount`),
+   * not `sessions.length`: a row with nothing to parse is dropped from the
+   * fold, so the caption must read the count the read was made at or a capped
+   * window that carried one such row would claim no bound.
+   */
+  rowCount: number;
   messageCount?: number;
 }) {
   const tokens = useTokens();
@@ -76,7 +84,7 @@ export function SessionAnalytics({
           )}
         </Svg>
         <Text variant="micro" color="tertiary">
-          {spendWindowCopy(sessions.length)}
+          {spendWindowCopy(rowCount)}
         </Text>
       </View>
       {typeof messageCount === 'number' ? (

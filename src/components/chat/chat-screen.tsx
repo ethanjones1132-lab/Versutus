@@ -1691,6 +1691,11 @@ export function ChatScreen() {
             ? spendState.sessions
             : []
         }
+        rowCount={
+          spendState.surfaceKey === spendSurfaceKey && spendState.loaded
+            ? spendState.rowCount
+            : 0
+        }
         onReloadHistory={() => void reloadHistory()}
         onNewSession={() => handleThreadConfigSwitch(overflowNewSessionHop())}
         onDisconnect={disconnectGateway}
