@@ -17,6 +17,7 @@ import {
   isDownNoticeFor,
 } from './gateway-down-notice';
 import { APPROVAL_CATEGORY_ID, APPROVAL_NOTICE_DATA_KIND } from './categories';
+import { RUN_NOTICE_DATA_KIND } from './tap-route';
 
 let permissionGranted = false;
 
@@ -91,8 +92,22 @@ export async function notifyApprovalRequired(
   );
 }
 
-export async function notifyRunComplete(title: string, body: string): Promise<void> {
-  await present(title, body);
+/**
+ * Post the notice that a run this app drove has settled. The payload names the
+ * run, so a tap knows which one the notice was about rather than only that
+ * something finished — the same `kind`/id shape a tap routes on (routeForTap)
+ * and the same shape true push must supply later (Solution A5).
+ *
+ * The copy still says only what settled ("Run complete", "Run finished"), and
+ * the id is the run's own: a payload that names no run is refused by the tap
+ * router rather than guessed at.
+ */
+export async function notifyRunComplete(
+  title: string,
+  body: string,
+  runId: string,
+): Promise<void> {
+  await present(title, body, undefined, { kind: RUN_NOTICE_DATA_KIND, runId });
 }
 
 /**

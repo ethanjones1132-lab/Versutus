@@ -1108,6 +1108,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
                       void notifyRunComplete(
                         run.status === 'complete' ? 'Run complete' : 'Run finished',
                         run.summary ?? run.status,
+                        run.id,
                       );
                     }
                   }
@@ -2150,6 +2151,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
                 ? 'Run unconfirmed'
                 : 'Run finished',
             summary || outcome.status,
+            trackedId.current,
           );
         }
         return outcome;
