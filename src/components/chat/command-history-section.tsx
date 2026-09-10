@@ -1,3 +1,4 @@
+import * as Clipboard from 'expo-clipboard';
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
@@ -11,13 +12,16 @@ import {
   commandHistoryVisible,
   commandHistoryWindowCopy,
 } from '@/lib/gateway/command-history';
+import { commandTranscriptMarkdown } from '@/lib/gateway/transcript-export';
+import { haptics } from '@/lib/haptics';
 
 /**
  * The command transcript for this gateway + session: every slash execution
  * the provider already records and rehydrates. Display only — the entries
  * are held in memory, so this section reads them with no new fetch and no
  * new store. Collapsed by default; an empty store reads as "none yet",
- * never a blank block.
+ * never a blank block. The one way out of the app is the copy action, which
+ * hands the held entries to the Markdown composer and nothing else.
  */
 export function CommandHistorySection() {
   const { commandTranscripts } = useGateway();
@@ -29,6 +33,11 @@ export function CommandHistorySection() {
     subtitle: entry.summary,
   }));
   const windowCopy = commandHistoryWindowCopy(commandTranscripts.length);
+
+  const copyMarkdown = async () => {
+    await Clipboard.setStringAsync(commandTranscriptMarkdown(commandTranscripts));
+    await haptics.success();
+  };
 
   return (
     <View style={styles.block}>
@@ -56,6 +65,12 @@ export function CommandHistorySection() {
                 {windowCopy}
               </Text>
             ) : null}
+            <Button
+              label="Copy Markdown"
+              variant="ghost"
+              size="sm"
+              onPress={() => void copyMarkdown()}
+            />
           </>
         )
       ) : null}

@@ -97,12 +97,35 @@ test('the section is collapsed by default and display-only', () => {
   expect(src).toContain('useState(false)');
   expect(src).toContain('Command history');
   expect(src).toContain('commandHistoryEmptyCopy');
-  // Rows carry no press handler — the history is read-only (the collapsed
-  // toggle above them is the only pressable).
+  // Rows carry no press handler — the history rows stay read-only, and the
+  // section's own controls (the toggle, the copy action) sit outside them.
   expect(src).toContain('<ListRow key={row.id} title={row.title}');
   const rows = src.match(/<ListRow[^>]*>/g) ?? [];
   expect(rows.length).toBeGreaterThan(0);
   for (const row of rows) expect(row).not.toContain('onPress');
+});
+
+test('the section has one export path, and it is the Markdown composer', () => {
+  const src = section();
+  // Exactly one call site, and it hands the composer the entries the section
+  // holds — not a slice the section cut for itself.
+  expect(src.match(/commandTranscriptMarkdown\(/g) ?? []).toHaveLength(1);
+  expect(src).toContain('commandTranscriptMarkdown(commandTranscripts)');
+  expect(src).toContain('Clipboard.setStringAsync');
+  expect(src).toContain('label="Copy Markdown"');
+  // No second way out: no direct serialization, no store re-read, no gateway.
+  expect(src).not.toContain('JSON.stringify');
+  expect(src).not.toContain('loadTranscripts(');
+  expect(src).not.toContain('gatewayRequest(');
+  // The control sits under the rows it copies, inside the open-and-non-empty
+  // branch — an empty history offers nothing to copy.
+  const rowsIdx = src.indexOf('<ListRow');
+  const buttonIdx = src.indexOf('label="Copy Markdown"');
+  const emptyIdx = src.indexOf('commandHistoryEmptyCopy()');
+  expect(buttonIdx).toBeGreaterThan(rowsIdx);
+  expect(buttonIdx).toBeGreaterThan(emptyIdx);
+  // The default is redaction: the section never asks the composer for raw.
+  expect(src).not.toContain('includeRaw');
 });
 
 test('the history block lives in the chat overflow sheet', () => {
