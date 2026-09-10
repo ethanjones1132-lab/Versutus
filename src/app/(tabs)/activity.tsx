@@ -1,4 +1,5 @@
 import * as Haptics from 'expo-haptics';
+import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -21,6 +22,7 @@ import { filterRunsByBot, type ScorecardFilter } from '@/lib/fleet/scorecard';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { tabContentPaddingBottom } from '@/lib/motion/tab-insets';
+import type { CronJob } from '@/lib/gateway/cron';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
 type ActivityItem =
@@ -46,6 +48,7 @@ export default function ActivityScreen() {
     loadRunEvents,
     requestedRunFocus,
     clearRequestedRunFocus,
+    cron,
   } = useGateway();
 
   const [runPrompt, setRunPrompt] = useState('');
@@ -55,6 +58,12 @@ export default function ActivityScreen() {
   // (CronSection loads once per connection); bumping this signal reaches
   // the section's re-list without remounting the tab.
   const [cronReloadSignal, setCronReloadSignal] = useState(0);
+  // The gateway's own job list, so a card can carry its Bot's routine health.
+  // A gateway that cannot report cron, or a read that fails, leaves it empty
+  // and every card with no routine line rather than a claim about work nothing
+  // read — and this read never adds a card: the cards stay the runs this
+  // device holds.
+  const [routineJobs, setRoutineJobs] = useState<CronJob[]>([]);
   // A tapped "View transcript" on a finished run card opens the sheet keyed on
   // the run id; null closes. The sheet keys itself on the id, so a different
   // run arrives as a fresh component with empty state.
@@ -138,6 +147,34 @@ export default function ActivityScreen() {
     if (elapsed < 400) await new Promise((resolve) => setTimeout(resolve, 400 - elapsed));
     setRefreshing(false);
   };
+
+  // The gateway's own jobs, read for the scorecards' routine line. CronSection
+  // reads the roster for its own list; this read exists because a card carries
+  // a Bot's routine health beside its runs, and both hang off the same two
+  // edges — a return to the tab (focus) and a pull-to-refresh, which bumps the
+  // same signal that re-lists the cron section.
+  const loadRoutineJobs = useCallback(() => {
+    let live = true;
+    const read =
+      status === 'connected' && cron.available
+        ? cron.list().catch(() => [] as CronJob[])
+        : Promise.resolve<CronJob[]>([]);
+    void read.then((jobs) => {
+      if (live) setRoutineJobs(jobs);
+    });
+    return () => {
+      live = false;
+    };
+  }, [cron, status]);
+
+  useFocusEffect(loadRoutineJobs);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void loadRoutineJobs();
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [loadRoutineJobs, cronReloadSignal]);
 
   // One windowed list carries both run sections so a gateway with a long run
   // history lays out only the few cards on screen, not hundreds at once.
@@ -243,9 +280,10 @@ export default function ActivityScreen() {
   const listFooter = (
     <View style={styles.footer}>
       {/* Per-Bot track records, folded from the same persisted runs the list
-          above renders. A tapped card filters that list; it folds the whole
-          read, so the cards stay whole while the list narrows. */}
-      <ScorecardsSection runs={activityRuns} filter={scorecardFilter} onSelect={setScorecardFilter} />
+          above renders, with the gateway's own routine health beside them. A
+          tapped card filters that list; it folds the whole read, so the cards
+          stay whole while the list narrows. */}
+      <ScorecardsSection runs={activityRuns} jobs={routineJobs} filter={scorecardFilter} onSelect={setScorecardFilter} />
 
       {/* Scheduled work sits with live runs: Activity is the one place that
           answers "what is this gateway doing". Renders nothing on a gateway

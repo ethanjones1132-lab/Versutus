@@ -24,12 +24,20 @@ import {
   scorecardDurationCopy,
   scorecardFate,
   scorecardFateCopy,
+  scorecardRoutineCopy,
+  scorecardRoutineHealth,
   scorecardWindowCopy,
   watchedRunSpanMs,
   SCORECARD_FOOTER_COPY,
 } from '@/lib/fleet/scorecard';
-import type { BotScorecard, ScorecardApprovals, ScorecardFates } from '@/lib/fleet/scorecard';
+import type {
+  BotScorecard,
+  ScorecardApprovals,
+  ScorecardFates,
+  ScorecardRoutineHealth,
+} from '@/lib/fleet/scorecard';
 import { ACTIVITY_RUNS_PERSIST_CAP, normalizeRestoredRuns } from '@/lib/gateway/session-persistence';
+import type { CronJob } from '@/lib/gateway/cron';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
 declare const __dirname: string;
@@ -481,6 +489,143 @@ describe('scorecardApprovalCopy', () => {
     const copy = scorecardApprovalCopy(approvals({ asked: 3, granted: 2, denied: 1 }));
 
     expect(copy).not.toMatch(/average|rate|gateway|total|%/i);
+  });
+});
+
+describe('scorecardRoutineHealth', () => {
+  /** One scheduled job; its Bot comes from the `[bot:<name>]` convention. */
+  const job = (over: Partial<CronJob> = {}): CronJob => ({ id: 'job-1', title: 'Sweep', ...over });
+
+  test('a Bot’s routines are grouped under the Bot its name carries', () => {
+    const groups = scorecardRoutineHealth([
+      job({ id: 'a', name: '[bot:scout] Sweep' }),
+      job({ id: 'b', name: '[bot:scout] Digest' }),
+      job({ id: 'c', name: '[bot:echo] Inbox', lastStatus: 'ok' }),
+    ]);
+
+    expect(groups.get('scout')?.routines).toBe(2);
+    expect(groups.get('echo')?.routines).toBe(1);
+  });
+
+  test('a failure streak outranks an ok job', () => {
+    const groups = scorecardRoutineHealth([
+      job({ id: 'a', name: '[bot:scout] Sweep', lastStatus: 'ok' }),
+      job({ id: 'b', name: '[bot:scout] Digest', failureStreak: 2, lastError: 'boom' }),
+    ]);
+
+    expect(groups.get('scout')?.verdict.tone).toBe('error');
+    expect(groups.get('scout')?.verdict.label).toBe('Failing — 2 in a row');
+    // The count is the routines it covered, not the one that failed.
+    expect(groups.get('scout')?.routines).toBe(2);
+  });
+
+  test('a paused routine reads off rather than failing', () => {
+    const groups = scorecardRoutineHealth([
+      job({ name: '[bot:scout] Sweep', paused: true, failureStreak: 3, lastError: 'boom' }),
+    ]);
+
+    // `describeCronHealth`'s own rule: a paused job is off on purpose, and
+    // calling it failing would send the operator hunting a bug that is not there.
+    expect(groups.get('scout')?.verdict.tone).toBe('off');
+    expect(groups.get('scout')?.verdict.label).toBe('Paused');
+  });
+
+  test('a routine with no streak reads as ok', () => {
+    const groups = scorecardRoutineHealth([job({ name: '[bot:scout] Sweep', lastStatus: 'ok' })]);
+
+    expect(groups.get('scout')?.verdict.tone).toBe('ok');
+  });
+
+  test('a cooldown outranks an ok routine', () => {
+    const groups = scorecardRoutineHealth([
+      job({ id: 'a', name: '[bot:scout] Sweep', lastStatus: 'ok' }),
+      job({ id: 'b', name: '[bot:scout] Digest', cooldownReason: 'the host is throttling itself' }),
+    ]);
+
+    expect(groups.get('scout')?.verdict.tone).toBe('warn');
+    expect(groups.get('scout')?.verdict.detail).toBe('the host is throttling itself');
+  });
+
+  test('a routine the host says nothing about outranks a healthy one', () => {
+    const groups = scorecardRoutineHealth([
+      job({ id: 'a', name: '[bot:scout] Sweep', lastStatus: 'ok' }),
+      job({ id: 'b', name: '[bot:scout] Digest' }),
+    ]);
+
+    // Absent data reads as UNKNOWN, never as a reassuring claim (cron.ts:7-10).
+    expect(groups.get('scout')?.verdict.tone).toBe('unknown');
+    expect(groups.get('scout')?.verdict.label).toBe('Not run yet');
+  });
+
+  test('a paused routine is not worse than one that is failing', () => {
+    const groups = scorecardRoutineHealth([
+      job({ id: 'a', name: '[bot:scout] Sweep', paused: true }),
+      job({ id: 'b', name: '[bot:scout] Digest', failureStreak: 1, lastError: 'boom' }),
+    ]);
+
+    expect(groups.get('scout')?.verdict.tone).toBe('error');
+  });
+
+  test('a job whose name carries no Bot is attributed to nobody', () => {
+    const groups = scorecardRoutineHealth([
+      job({ id: 'a', name: 'Overnight mail summary' }),
+      job({ id: 'b' }),
+      job({ id: 'c', name: null }),
+    ]);
+
+    // The gateway-level jobs share the unattributed bucket rather than being
+    // guessed into some Bot's card — the same rule a run row with no `botId` gets.
+    expect(groups.get(null)?.routines).toBe(3);
+    expect(groups.get('scout')).toBeUndefined();
+  });
+
+  test('the empty read groups nothing', () => {
+    const groups = scorecardRoutineHealth([]);
+
+    expect(groups.size).toBe(0);
+    expect(groups.get('scout')).toBeUndefined();
+  });
+});
+
+describe('scorecardRoutineCopy', () => {
+  const health = (over: Partial<ScorecardRoutineHealth> = {}): ScorecardRoutineHealth => ({
+    routines: 1,
+    verdict: { tone: 'ok', label: 'ok' },
+    ...over,
+  });
+
+  test('states the health fold’s own verdict and how many routines it covered', () => {
+    expect(scorecardRoutineCopy(health({ routines: 2 }))).toBe('2 routines · ok');
+  });
+
+  test('one routine is one routine', () => {
+    expect(scorecardRoutineCopy(health({ verdict: { tone: 'off', label: 'Paused' } }))).toBe(
+      '1 routine · Paused',
+    );
+  });
+
+  test('a failing routine carries the verdict the health fold wrote', () => {
+    const copy = scorecardRoutineCopy(
+      health({ routines: 3, verdict: { tone: 'error', label: 'Failing — 2 in a row' } }),
+    );
+
+    expect(copy).toBe('3 routines · Failing — 2 in a row');
+    // The words are `describeCronHealth`'s, so the routine surfaces and the card
+    // cannot describe one host state two ways.
+    expect(copy).not.toContain('backend');
+  });
+
+  test('a card with no routines says nothing, never 0 routines', () => {
+    expect(scorecardRoutineCopy(undefined)).toBe('');
+    expect(scorecardRoutineCopy(health({ routines: 0 }))).toBe('');
+  });
+
+  test('the run-derived part of a card never absorbs this number', () => {
+    const copy = scorecardRoutineCopy(health({ routines: 2 }));
+
+    // The count says what it counts: a bare number here would read as runs.
+    expect(copy).toMatch(/^2 routines · /);
+    expect(copy).not.toMatch(/complete|approval|median|%/i);
   });
 });
 

@@ -23,6 +23,13 @@
 // from the composition when it is empty, so a card never prints a placeholder
 // for a fact it does not hold.
 //
+// The line also carries the gateway's own verdict on this Bot's routines, when
+// the job list names any: the jobs are grouped by the `[bot:<name>]` naming
+// convention in the fold and each card looks its own bucket up, so a card can
+// never borrow another Bot's routines. That number is gateway-side, so it keeps
+// its own words — "N routines · <verdict>" — rather than being folded into the
+// run-derived counts, and a Bot with no routines says nothing about them.
+//
 // That empty-device rule is about the CARDS, never about this section: the
 // weekly report is opted into from here (D3 Build 5), so a device that has run
 // nothing — exactly the device the report exists to bring back — still gets
@@ -53,6 +60,7 @@ import { AppState, StyleSheet, Switch, View } from 'react-native';
 import { Badge, Button, Card, Divider, ListRow, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
+import type { CronJob } from '@/lib/gateway/cron';
 import type { ActivityRun } from '@/lib/gateway/runs';
 import {
   readWeeklyReportOptIn,
@@ -75,6 +83,8 @@ import {
   scorecardBotLabel,
   scorecardDurationCopy,
   scorecardFateCopy,
+  scorecardRoutineCopy,
+  scorecardRoutineHealth,
   scorecardWindowCopy,
   SCORECARD_FOOTER_COPY,
   type ScorecardFilter,
@@ -82,11 +92,14 @@ import {
 
 export function ScorecardsSection({
   runs,
+  jobs,
   filter,
   onSelect,
 }: {
   /** The runs this device persisted — the whole read, never the filtered view. */
   runs: readonly ActivityRun[];
+  /** The gateway's own scheduled jobs, for the routine health a card can carry. */
+  jobs: readonly CronJob[];
   /** The bucket the tab is filtered to, or null for no filter. */
   filter: ScorecardFilter;
   onSelect: (filter: ScorecardFilter) => void;
@@ -94,6 +107,11 @@ export function ScorecardsSection({
   const tokens = useTokens();
   // Fold the list the tab was handed, exactly as the tab's own filter does.
   const cards = useMemo(() => buildScorecards(runs), [runs]);
+  // Fold the gateway's job list once, by the naming rule the jobs were filed
+  // under: a card looks its own bucket up rather than filtering the list here,
+  // so one card's line can never carry another Bot's routines. The count is
+  // gateway-side and never a run count.
+  const routineHealth = useMemo(() => scorecardRoutineHealth(jobs), [jobs]);
 
   // Off until the stored flag says otherwise: D3's weekly report is opt-in and
   // a device that never asked holds no flag at all.
@@ -200,16 +218,19 @@ export function ScorecardsSection({
             // another card's runs; and each part is dropped when it is empty,
             // so a card whose rows carry no span this device watched end, or
             // that met no approval gate, says its counts rather than a
-            // duration or an approval it cannot back.
+            // duration or an approval it cannot back. The routine verdict is
+            // the gateway's own and keeps its own words, looked up by this
+            // card's bucket.
             const rows = filterRunsByBot(runs, { botId: card.botId });
             const fates = scorecardFateCopy(card.fates);
             const timed = scorecardDurationCopy(medianRunMs(rows));
             const approvals = scorecardApprovalCopy(scorecardApprovals(rows));
+            const routines = scorecardRoutineCopy(routineHealth.get(card.botId));
             return (
               <ListRow
                 key={card.botId ?? 'unattributed'}
                 title={scorecardBotLabel(card.botId)}
-                subtitle={[fates, timed, approvals].filter(Boolean).join(' · ')}
+                subtitle={[fates, timed, approvals, routines].filter(Boolean).join(' · ')}
                 onPress={() => onSelect({ botId: card.botId })}
                 trailing={showing ? <Badge label="Showing" tone="accent" /> : undefined}
                 accessibilityHint="Shows this Bot's runs in the list above"

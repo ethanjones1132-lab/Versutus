@@ -23,6 +23,11 @@
 //   rather than one that is really time-to-app-close or time-to-give-up. The
 //   rule is `watchedRunSpanMs`, shared with the run card that prints a single
 //   run's span, so the two surfaces cannot drift.
+// - A routine verdict is the gateway's own, read through `describeCronHealth`
+//   and never re-worded here: a job whose name carries no Bot is attributed to
+//   nobody rather than guessed into a card, and the count and the verdict stay
+//   their own part of a card's line — so a gateway-side number can never be
+//   read as one of the run-derived counts.
 //
 // These cards are observations of runs this device saw — a run started from
 // the desktop or the TUI never reaches this list at all. The surface owes that
@@ -34,6 +39,8 @@
 // on the list it describes.
 
 import { formatDuration } from '@/lib/format';
+import { describeCronHealth, type CronHealth, type CronJob } from '@/lib/gateway/cron';
+import { parseRoutineName } from '@/lib/gateway/routines';
 import { ACTIVITY_RUNS_PERSIST_CAP } from '@/lib/gateway/session-persistence';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
@@ -77,6 +84,19 @@ export type ScorecardApprovals = {
   denied: number;
   /** Asked and never answered — the run is still blocked on the operator. */
   pending: number;
+};
+
+/**
+ * One Bot's routines, summarized (D3's Build 1, `FUTURE-ITEMS.md:806-807`:
+ * "routine reliability from cron health"). This is gateway-side work, not a run
+ * this device recorded, so it is kept its own part of a card's line: the count
+ * below is routines the host reports, never a count of runs.
+ */
+export type ScorecardRoutineHealth = {
+  /** How many of this Bot's routines the read held. */
+  routines: number;
+  /** The worst verdict among them — `describeCronHealth`'s own words. */
+  verdict: CronHealth;
 };
 
 /**
@@ -304,6 +324,66 @@ export function scorecardApprovalCopy(approvals: ScorecardApprovals): string {
 export function scorecardDurationCopy(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms) || ms <= 0) return '';
   return `Median run ${formatDuration(ms)}`;
+}
+
+/**
+ * Worst-first, and this is the cron module's own discipline rather than a new
+ * one: a failure is what the operator has to act on, a cooldown is the host
+ * stopping the next run, a verdict the host cannot give outranks a healthy one
+ * because this repo reads absent data as UNKNOWN rather than as a reassuring
+ * claim (`cron.ts:7-10`), and last comes a routine that is off on purpose —
+ * which `describeCronHealth` refuses to call unhealthy.
+ */
+const ROUTINE_TONE_RANK: readonly CronHealth['tone'][] = ['error', 'warn', 'unknown', 'ok', 'off'];
+
+/**
+ * The gateway's own job list, grouped by the Bot each job's name carries
+ * (`[bot:<name>]` — the convention `routineName` writes and `parseRoutineName`
+ * reads), with every group summarized by its worst verdict.
+ *
+ * A job whose name carries no Bot is attributed to nobody: it shares the
+ * unattributed bucket rather than being guessed into some Bot's card, the same
+ * rule `buildScorecards` applies to a run row with no `botId`. A Bot the read
+ * holds no jobs for gets no entry at all, so a surface says nothing about its
+ * routines rather than `0 routines` — which would read as a Bot whose routines
+ * are all quiet.
+ */
+export function scorecardRoutineHealth(
+  jobs: readonly CronJob[],
+): Map<string | null, ScorecardRoutineHealth> {
+  const groups = new Map<string | null, ScorecardRoutineHealth>();
+
+  for (const job of jobs) {
+    const botId = scorecardBotId(parseRoutineName(job.name ?? '').botId);
+    const verdict = describeCronHealth(job);
+    const group = groups.get(botId);
+    if (!group) {
+      groups.set(botId, { routines: 1, verdict });
+      continue;
+    }
+    group.routines += 1;
+    // Ties keep the verdict already held, so one read folds to one answer.
+    if (ROUTINE_TONE_RANK.indexOf(verdict.tone) < ROUTINE_TONE_RANK.indexOf(group.verdict.tone)) {
+      group.verdict = verdict;
+    }
+  }
+
+  return groups;
+}
+
+/**
+ * A card's one routine line — the gateway's verdict on this Bot's routines
+ * beside how many it covered, e.g. `2 routines · ok` — or nothing at all when
+ * the read attributed no routine to this card.
+ *
+ * The count names what it counts: a bare `2 · ok` would read as two of the
+ * card's runs, and the verdict is in `describeCronHealth`'s own words so the
+ * card and the Routine surfaces cannot describe one host state two ways. A Bot
+ * with no routines prints nothing rather than `0 routines`.
+ */
+export function scorecardRoutineCopy(health: ScorecardRoutineHealth | undefined): string {
+  if (!health || health.routines <= 0) return '';
+  return `${health.routines} routine${health.routines === 1 ? '' : 's'} · ${health.verdict.label}`;
 }
 
 /**

@@ -88,9 +88,35 @@ describe('a card carries the run duration it can back', () => {
     expect(timed).toBeGreaterThan(fates);
     expect(subtitle).toBeGreaterThan(timed);
     // An empty part is appended to nothing: a card whose rows carry no
-    // trustworthy span reads as its counts rather than as a 0:00 run, and a
-    // card whose rows met no approval gate says nothing about approvals.
-    expect(src).toContain("subtitle={[fates, timed, approvals].filter(Boolean).join(' · ')}");
+    // trustworthy span reads as its counts rather than as a 0:00 run, a card
+    // whose rows met no approval gate says nothing about approvals, and one
+    // whose Bot has no routines says nothing about them either.
+    expect(src).toContain("subtitle={[fates, timed, approvals, routines].filter(Boolean).join(' · ')}");
+  });
+});
+
+describe('a card carries its Bot’s routine health from the gateway’s cron list', () => {
+  test('the routine line is the module’s, folded once and looked up by the card’s own bucket', () => {
+    const src = section();
+
+    expect(src).toContain('scorecardRoutineHealth(jobs)');
+    expect(src).toContain('routineHealth.get(card.botId)');
+    expect(src).toContain('scorecardRoutineCopy(');
+    // The section still names no Bot of its own: the grouping rule is the
+    // fold's, and the lookup is one key per card the runs already produced.
+    expect(src).not.toContain('listBots');
+    expect(src).not.toContain('useGateway');
+    expect(src).not.toContain('runs.filter(');
+  });
+
+  test('the routine line is decided after the counts and before the line is composed', () => {
+    const src = section();
+    const fates = src.indexOf('const fates = scorecardFateCopy(card.fates);');
+    const routines = src.indexOf('const routines = scorecardRoutineCopy(');
+    const subtitle = src.indexOf('subtitle={');
+
+    expect(routines).toBeGreaterThan(fates);
+    expect(subtitle).toBeGreaterThan(routines);
   });
 });
 
@@ -267,6 +293,25 @@ describe('the section sits in the Activity footer, above the scheduled work', ()
     expect(footer).toBeGreaterThanOrEqual(0);
     expect(cards).toBeGreaterThan(footer);
     expect(cron).toBeGreaterThan(cards);
+  });
+});
+
+describe('the tab reads the gateway’s jobs, so a card can carry its Bot’s routine health', () => {
+  test('the section is handed the jobs beside the runs it already folded', () => {
+    const src = tab();
+
+    expect(src).toContain('<ScorecardsSection runs={activityRuns} jobs={routineJobs}');
+  });
+
+  test('the read is the gateway’s own job list, and a gateway that cannot answer claims nothing', () => {
+    const src = tab();
+
+    expect(src).toContain('cron.list()');
+    expect(src).toContain('cron.available');
+    // The same two edges CronSection hangs its own re-list off, so a routine
+    // that fails while Activity is backgrounded is caught on the way back in.
+    expect(src).toContain('useFocusEffect(loadRoutineJobs)');
+    expect(src).toContain('cronReloadSignal');
   });
 });
 
