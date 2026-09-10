@@ -78,8 +78,48 @@ describe('the session selector reads the label store', () => {
 });
 
 describe('the chat screen hands the selector the gateway its labels are keyed by', () => {
+  const screen = () => readSource('src', 'components', 'chat', 'chat-screen.tsx');
+
   test('ThreadConfigSheet is given the active gateway id', () => {
-    const src = readSource('src', 'components', 'chat', 'chat-screen.tsx');
+    const src = screen();
     expect(src).toContain('gatewayId={activeGateway.id}');
+  });
+
+  // The title rule names TWO surfaces — `sessionListTitle`'s own doc says it is
+  // "What the selector and header print for a session" — so the header is the
+  // rule's second caller rather than a surface with a rule of its own. These
+  // pins hold the header to the fold the row prints.
+  test('the header label is folded through the operator-name rule', () => {
+    const src = screen();
+    expect(src).toContain("from '@/lib/gateway/session-labels'");
+    expect(src).toMatch(/sessionLabelTitle\(\s*currentSession\?\.title,/);
+    // The bare gateway-title rule no longer reaches the header, so the two
+    // surfaces cannot disagree about one thread.
+    expect(src).not.toContain('sessionListTitle');
+  });
+
+  test('the header looks the name up under the active gateway, as the sheet does', () => {
+    const src = screen();
+    expect(src).toContain('sessionLabelKey(activeGateway.id, currentSessionId)');
+    expect(src).toMatch(/const sessionLabel = currentSessionId[\s\S]{0,240}?sessionLabels\[/);
+  });
+
+  test('the screen reads the label blob on the way back from the sheet', () => {
+    const src = screen();
+    // One read site, hanging off the sheet's own visibility flag, writing one
+    // state: the name is never fetched and never re-derived from a send.
+    expect(src.match(/loadSessionLabels\(\)/g)).toHaveLength(1);
+    const gateAt = src.indexOf('if (sessionSelector.visible) return;');
+    expect(gateAt).toBeGreaterThan(-1);
+    expect(src.indexOf('loadSessionLabels()')).toBeGreaterThan(gateAt);
+    expect(src).toContain('}, [sessionSelector.visible]);');
+  });
+
+  test("the selector's own call site is unchanged", () => {
+    const src = sheet();
+    expect(src).toContain('sessionLabelTitle(item.title, label)');
+    // Still the sheet's own blob read: the header reads the same store, it
+    // never writes it.
+    expect(src.match(/loadSessionLabels\(\)/g)).toHaveLength(1);
   });
 });

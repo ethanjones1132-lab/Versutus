@@ -20,6 +20,7 @@ import {
   sessionLabelTitle,
   type SessionLabel,
 } from '@/lib/gateway/session-labels';
+import { sessionListTitle } from '@/lib/gateway/session-list';
 
 jest.mock('@/lib/storage/key-value', () => ({
   keyValueStorage: {
@@ -218,6 +219,14 @@ describe('sessionLabelTitle', () => {
 
   test('a stored rename is printed trimmed', () => {
     expect(sessionLabelTitle('Session 4', { label: '  Crew chat  ' })).toBe('Crew chat');
+  });
+
+  test('with no label the fold is exactly the shipped gateway-title rule', () => {
+    // What the chat header falls back to when the store holds nothing for the
+    // thread — the shipped rule, not a second wording of it.
+    expect(sessionLabelTitle('Session 4', undefined)).toBe(sessionListTitle('Session 4'));
+    expect(sessionLabelTitle(undefined, undefined)).toBe(sessionListTitle(undefined));
+    expect(sessionLabelTitle('   ', undefined)).toBe(sessionListTitle('   '));
   });
 });
 

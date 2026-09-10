@@ -116,7 +116,12 @@ import {
 } from '@/lib/gateway/composer-draft';
 import { effectiveModel } from '@/lib/gateway/model-selection';
 import { insertMention, mentionPicksAtCaret } from '@/lib/gateway/mentions';
-import { sessionListTitle } from '@/lib/gateway/session-list';
+import {
+  loadSessionLabels,
+  sessionLabelKey,
+  sessionLabelTitle,
+  type SessionLabel,
+} from '@/lib/gateway/session-labels';
 import {
   overflowNewSessionHop,
   resolveThreadConfigMode,
@@ -440,6 +445,23 @@ export function ChatScreen() {
       cancelled = true;
     };
   }, [draftThread]);
+  // The name the header prints for this thread is the operator's own when they
+  // gave one — the same rule the selector row prints (the store's fold, so the
+  // `Untitled` fallback stays one rule in the repo). The blob is re-read when
+  // the thread-config sheet closes, because the sheet is where a rename is
+  // typed: without that the header would keep the name it mounted with. The
+  // read is this device's own store — the header asks the gateway nothing.
+  const [sessionLabels, setSessionLabels] = useState<Record<string, SessionLabel>>({});
+  useEffect(() => {
+    if (sessionSelector.visible) return;
+    let cancelled = false;
+    void loadSessionLabels().then((stored) => {
+      if (!cancelled) setSessionLabels(stored);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionSelector.visible]);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<TranscriptItem>>(null);
@@ -617,7 +639,15 @@ export function ChatScreen() {
     [modelCatalog],
   );
 
-  const sessionLabel = currentSessionId ? sessionListTitle(currentSession?.title) : undefined;
+  // The header's name for the thread, through the store's own fold: the
+  // operator's name when the store holds one for this gateway + session, and
+  // the shipped gateway-title rule when it does not.
+  const sessionLabel = currentSessionId
+    ? sessionLabelTitle(
+        currentSession?.title,
+        activeGateway ? sessionLabels[sessionLabelKey(activeGateway.id, currentSessionId)] : undefined,
+      )
+    : undefined;
   // A Bot with no explicit pick answers on the model its Hermes profile
   // carries, so name that rather than falling back to a generic label — and
   // never to configurable chat's model, which is not what this thread runs on.
