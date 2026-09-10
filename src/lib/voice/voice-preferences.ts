@@ -6,15 +6,19 @@
 // so both are THIS device's, held in key-value storage the way a session's pin
 // and name are.
 //
-// Both live in one blob in two key spaces, told apart by the key's own prefix:
-// a conversation's key is the composer-draft key under `speaker:`, a Bot's is
+// They live in one blob in key spaces told apart by the key's own prefix: a
+// conversation's key is the composer-draft key under `speaker:`, a Bot's is
 // its gateway and id under `voice:`. So a voice can never be read as a toggle,
-// whatever ids a gateway hands back.
+// whatever ids a gateway hands back. The one-time silent-mode hint B2 asks to
+// surface honestly (`:441-442`) keeps its acknowledgement in the same blob
+// under its own prefix — a fact about the DEVICE rather than about a thread,
+// so unlike the two above it is one entry rather than one per conversation.
 //
 // The fold rules are the honesty rules: a toggle is OFF unless the stored value
 // is exactly `true`, an entry that does not name a voice reads as no voice
-// configured rather than a guessed identifier, and persistence is best-effort —
-// a refused write must never break the header the toggle is drawn in.
+// configured rather than a guessed identifier, only a platform that HAS the
+// caveat is ever owed the hint, and persistence is best-effort — a refused
+// write must never break the header the toggle is drawn in.
 
 import { composerDraftKey, type ComposerDraftThread } from '@/lib/gateway/composer-draft';
 import { keyValueStorage } from '@/lib/storage/key-value';
@@ -23,11 +27,20 @@ import { keyValueStorage } from '@/lib/storage/key-value';
 export const VOICE_PREFERENCES_STORAGE_KEY = 'versutus:voice-preferences';
 
 /**
- * The two key-space prefixes, written once so neither space can drift into the
- * other: a conversation's toggle and a Bot's voice share one blob.
+ * The key-space prefixes, written once so no space can drift into another: a
+ * conversation's toggle, a Bot's voice, and this device's one-time
+ * silent-mode acknowledgement share one blob.
  */
 const SPEAKER_KEY_PREFIX = 'speaker:';
 const VOICE_KEY_PREFIX = 'voice:';
+const SILENT_HINT_KEY_PREFIX = 'silent-hint:';
+
+/**
+ * The one key the silent-mode acknowledgement is stored under. The caveat is a
+ * fact about this DEVICE — whether it has been told that a silenced iPhone
+ * makes no sound — so it is stored once rather than per conversation.
+ */
+const SILENT_HINT_ACKNOWLEDGED_KEY = `${SILENT_HINT_KEY_PREFIX}acknowledged`;
 
 /**
  * The operator's voice for one Bot. The identifier is the voice itself, named
@@ -45,9 +58,11 @@ export type BotVoice = {
 export type BotVoicePatch = Partial<BotVoice>;
 
 /**
- * The stored blob: one flat record over two key spaces. A conversation's entry
- * is the literal `true` — the speaker is on — and a Bot's is its voice.
- * Anything else a blob might hold is dropped on read rather than guessed at.
+ * The stored blob: one flat record over three key spaces. A conversation's
+ * entry is the literal `true` — the speaker is on — a Bot's is its voice, and
+ * this device's own acknowledgement of the silent-mode hint is the literal
+ * `true` too, under its own prefix. Anything else a blob might hold is dropped
+ * on read rather than guessed at.
  */
 export type VoicePreferences = Record<string, true | BotVoice>;
 
@@ -150,11 +165,49 @@ export function applyBotVoice(
 }
 
 /**
+ * The one line the silent-mode hint says. B2 asks for this caveat to be
+ * surfaced honestly in the UI (`FUTURE-ITEMS.md:441-442`): a silenced iPhone
+ * makes no sound, so a reply handed to the platform is inaudible rather than
+ * refused. It is a hint and not an error, so it states what the device does
+ * and claims nothing about what the operator heard — nothing on this side can
+ * know that, and this module is storage only.
+ */
+export const SILENT_MODE_HINT_COPY =
+  'Spoken replies make no sound while this iPhone is in silent mode.';
+
+/**
+ * Whether this device is still owed the one-time silent-mode hint: the platform
+ * has to HAVE the caveat at all — the silent switch is iOS's own, so every
+ * other platform this client runs on answers `false` and never stores anything
+ * — and this device must not have been told already. A value under the key that
+ * is not the literal `true` reads as not told, the same rule as a toggle, so a
+ * truncated write can only repeat the hint rather than swallow it.
+ */
+export function shouldShowSilentModeHint(
+  preferences: VoicePreferences,
+  platform: string,
+): boolean {
+  return platform === 'ios' && preferences[SILENT_HINT_ACKNOWLEDGED_KEY] !== true;
+}
+
+/**
+ * Record that this device has now been told. The hint is one-time, so the entry
+ * is the literal `true` under one key, the same shape a conversation's toggle
+ * has — and like a toggle it is one write, folded onto whatever the blob held,
+ * so acknowledging it can never drop a voice or a flag beside it.
+ */
+export function acknowledgeSilentModeHint(preferences: VoicePreferences): VoicePreferences {
+  if (preferences[SILENT_HINT_ACKNOWLEDGED_KEY] === true) return preferences;
+  return { ...preferences, [SILENT_HINT_ACKNOWLEDGED_KEY]: true };
+}
+
+/**
  * Read a stored blob. A blob that is not a record reads as nothing stored at
  * all, and each entry is read against the space its own key names — so a
  * toggle-shaped value under a Bot's key, a voice-shaped value under a
- * conversation's, and a key from neither space are all dropped rather than
- * guessed at.
+ * conversation's, and a key from no space at all are all dropped rather than
+ * guessed at. The device's own silent-mode acknowledgement is the literal
+ * `true` under its prefix, the same rule a toggle is read by.
  */
 export function voicePreferencesFromUnknown(value: unknown): VoicePreferences {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -166,6 +219,7 @@ export function voicePreferencesFromUnknown(value: unknown): VoicePreferences {
       continue;
     }
     if (key.startsWith(SPEAKER_KEY_PREFIX) && entry === true) preferences[key] = true;
+    if (key.startsWith(SILENT_HINT_KEY_PREFIX) && entry === true) preferences[key] = true;
   }
   return preferences;
 }

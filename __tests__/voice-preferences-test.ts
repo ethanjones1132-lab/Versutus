@@ -1,18 +1,22 @@
 // Solution B2's voice preferences (`FUTURE-ITEMS.md:431-440`): the speaker is
 // an opt-in of ONE conversation — "when on, each completed assistant message
 // is spoken" — and each Bot keeps its own voice. Both are this device's, so
-// both live in one key-value blob, in two key spaces told apart by their key
+// both live in one key-value blob, in key spaces told apart by their key
 // prefix: a conversation's toggle and a Bot's voice can never be read as each
-// other, whatever an operator's ids look like.
+// other, whatever an operator's ids look like. The one-time silent-mode hint
+// B2 asks for (`:441-442`) has its own space in the same blob: a fact about
+// THIS DEVICE rather than about a thread, kept beside the two.
 //
 // The honesty rules this suite pins: a toggle is OFF unless the stored value
 // is exactly `true`, an entry that does not name a voice reads as no voice
-// configured rather than a guessed identifier, and persistence is best-effort
-// so a refused write never breaks the header the toggle is drawn in.
+// configured rather than a guessed identifier, only iOS is ever owed the
+// silent-mode hint, and persistence is best-effort so a refused write never
+// breaks the header the toggle is drawn in.
 
 import { keyValueStorage } from '@/lib/storage/key-value';
 import { composerDraftKey, type ComposerDraftThread } from '@/lib/gateway/composer-draft';
 import {
+  acknowledgeSilentModeHint,
   applyBotVoice,
   applySpeakerOn,
   botVoicePreferenceKey,
@@ -21,6 +25,7 @@ import {
   readBotVoice,
   readSpeakerOn,
   saveVoicePreferences,
+  shouldShowSilentModeHint,
   speakerPreferenceKey,
   voicePreferencesFromUnknown,
   VOICE_PREFERENCES_STORAGE_KEY,
@@ -285,6 +290,70 @@ describe("a Bot's own voice", () => {
   });
 });
 
+describe('the one-time silent-mode hint', () => {
+  const ACK = 'silent-hint:acknowledged';
+
+  test('only iOS can be owed the hint at all — no other platform has the switch', () => {
+    // B2 (`FUTURE-ITEMS.md:441-442`): the caveat is `expo-speech` producing no
+    // sound on a physical device in SILENT MODE, and the silent switch is
+    // iOS's own — so every other platform this client runs on is owed nothing,
+    // whatever the store holds and whoever reads it.
+    expect(shouldShowSilentModeHint({}, 'ios')).toBe(true);
+    for (const platform of ['android', 'web', 'iOS', 'macos', '']) {
+      expect(shouldShowSilentModeHint({}, platform)).toBe(false);
+      expect(shouldShowSilentModeHint({ [ACK]: true }, platform)).toBe(false);
+    }
+  });
+
+  test('telling this device stores exactly `true` under its own key', () => {
+    // One entry for the device, not one per thread: the caveat is about the
+    // phone, so two conversations cannot owe two hints.
+    expect(acknowledgeSilentModeHint({})).toEqual({ [ACK]: true });
+  });
+
+  test('a device that has been told is never owed it again', () => {
+    const told = acknowledgeSilentModeHint({});
+    expect(shouldShowSilentModeHint(told, 'ios')).toBe(false);
+    expect(acknowledgeSilentModeHint(told)).toBe(told);
+  });
+
+  test('a junk value under the key reads as not told', () => {
+    // The same rule as a toggle: only the literal `true` is the fact, so a
+    // truncated write or a hand-edited blob can only ever repeat the hint,
+    // never swallow it.
+    for (const value of ['true', 1, 0, false, {}, [], null, undefined]) {
+      expect(
+        shouldShowSilentModeHint({ [ACK]: value } as unknown as VoicePreferences, 'ios'),
+      ).toBe(true);
+    }
+    expect(shouldShowSilentModeHint({ [ACK]: true }, 'ios')).toBe(false);
+  });
+
+  test('telling this device leaves a conversation’s toggle and a Bot’s voice alone', () => {
+    const preferences: VoicePreferences = {
+      [speakerPreferenceKey(BOT_CHAT)]: true,
+      [VOICE_KEY]: CHOSEN_VOICE,
+    };
+    expect(acknowledgeSilentModeHint(preferences)).toEqual({ ...preferences, [ACK]: true });
+  });
+
+  test('the device key is in neither of the two spaces above', () => {
+    const preferences = acknowledgeSilentModeHint({});
+    expect(readSpeakerOn(preferences, speakerPreferenceKey(BOT_CHAT))).toBe(false);
+    expect(readBotVoice(preferences, VOICE_KEY)).toBeUndefined();
+    expect(ACK.startsWith('speaker:')).toBe(false);
+    expect(ACK.startsWith('voice:')).toBe(false);
+    expect(speakerPreferenceKey(BOT_CHAT)).not.toBe(ACK);
+    expect(botVoicePreferenceKey(GATE, 'researcher')).not.toBe(ACK);
+  });
+
+  test('it does not mutate the map it was given', () => {
+    const before: VoicePreferences = {};
+    acknowledgeSilentModeHint(before);
+    expect(before).toEqual({});
+  });
+});
+
 describe('clearVoicePreference', () => {
   test('drops either space', () => {
     const both: VoicePreferences = {
@@ -364,6 +433,22 @@ describe('voicePreferencesFromUnknown', () => {
       voicePreferencesFromUnknown({ [VOICE_KEY]: { voiceIdentifier: 'voice.evan', rate: 'fast' } }),
     ).toEqual({ [VOICE_KEY]: { voiceIdentifier: 'voice.evan' } });
   });
+
+  test("the device's silent-mode acknowledgement is read back as its own space", () => {
+    expect(voicePreferencesFromUnknown({ 'silent-hint:acknowledged': true })).toEqual({
+      'silent-hint:acknowledged': true,
+    });
+  });
+
+  test('a silent-hint entry that is not exactly true is dropped', () => {
+    expect(voicePreferencesFromUnknown({ 'silent-hint:acknowledged': 'yes' })).toEqual({});
+    expect(voicePreferencesFromUnknown({ 'silent-hint:acknowledged': 1 })).toEqual({});
+    expect(voicePreferencesFromUnknown({ 'silent-hint:acknowledged': {} })).toEqual({});
+    // A near-miss key is in no space at all: the prefix ends in a colon, so a
+    // key that merely starts with the same word is dropped rather than read.
+    expect(voicePreferencesFromUnknown({ 'silent-hint': true })).toEqual({});
+    expect(voicePreferencesFromUnknown({ 'silent-mode-hint': true })).toEqual({});
+  });
 });
 
 describe('loadVoicePreferences / saveVoicePreferences', () => {
@@ -388,6 +473,17 @@ describe('loadVoicePreferences / saveVoicePreferences', () => {
     const preferences = applyBotVoice(applySpeakerOn({}, KEY, true), VOICE_KEY, CHOSEN_VOICE);
     await saveVoicePreferences(preferences);
     await expect(loadVoicePreferences()).resolves.toEqual(preferences);
+  });
+
+  test('the silent-mode acknowledgement outlives the app that showed the hint', async () => {
+    // The hint is one-time across launches, not one-time per screen: the
+    // acknowledgement rides the same blob, so it is read back off disk and the
+    // device is no longer owed anything — with the conversation's own flag
+    // beside it exactly as it was written.
+    await saveVoicePreferences(applySpeakerOn(acknowledgeSilentModeHint({}), KEY, true));
+    const stored = await loadVoicePreferences();
+    expect(shouldShowSilentModeHint(stored, 'ios')).toBe(false);
+    expect(readSpeakerOn(stored, KEY)).toBe(true);
   });
 
   test('a missing blob loads as empty, not as a failure', async () => {

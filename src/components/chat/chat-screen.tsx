@@ -132,6 +132,7 @@ import { botVoiceOptions } from '@/lib/voice/bot-voices';
 import { speakerAction } from '@/lib/voice/speech-reply';
 import { availableVoices, speakReply, speechAvailable, stopSpeech } from '@/lib/voice/speech';
 import {
+  acknowledgeSilentModeHint,
   applyBotVoice,
   applySpeakerOn,
   botVoicePreferenceKey,
@@ -140,6 +141,8 @@ import {
   readBotVoice,
   readSpeakerOn,
   saveVoicePreferences,
+  shouldShowSilentModeHint,
+  SILENT_MODE_HINT_COPY,
   speakerPreferenceKey,
 } from '@/lib/voice/voice-preferences';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
@@ -487,10 +490,22 @@ export function ChatScreen() {
   const speakerKey = draftThread ? speakerPreferenceKey(draftThread) : undefined;
   const [speakerOn, setSpeakerOn] = useState(false);
   const [speechReady, setSpeechReady] = useState(false);
+  // The one-time silent-mode hint B2 asks for (`FUTURE-ITEMS.md:441-442`):
+  // whether this device is still owed it, and whether the line is drawn. Both
+  // come off the store's own rule, which is handed the platform — the screen
+  // authors no platform test of its own, so a device that is not iOS is never
+  // owed a hint at all.
+  const [silentHintOwed, setSilentHintOwed] = useState(false);
+  const [silentHintShown, setSilentHintShown] = useState(false);
   useEffect(() => {
     let cancelled = false;
     void loadVoicePreferences().then((stored) => {
-      if (!cancelled) setSpeakerOn(speakerKey ? readSpeakerOn(stored, speakerKey) : false);
+      if (cancelled) return;
+      setSpeakerOn(speakerKey ? readSpeakerOn(stored, speakerKey) : false);
+      setSilentHintOwed(shouldShowSilentModeHint(stored, Platform.OS));
+      // The line belongs to the edge that drew it: a conversation the screen
+      // opens or returns to starts without one.
+      setSilentHintShown(false);
     });
     void speechAvailable().then((available) => {
       if (!cancelled) setSpeechReady(available);
@@ -504,13 +519,28 @@ export function ChatScreen() {
     if (!key) return;
     const next = !speakerOn;
     // A toggle-off is one of the two ways a reply is silenced (B2), and it
-    // silences it while the flag it belongs to is still on.
-    if (!next) void stopSpeech();
+    // silences it while the flag it belongs to is still on. The one-time hint
+    // goes with the speaker it came with: it is a hint, not an error.
+    if (!next) {
+      void stopSpeech();
+      setSilentHintShown(false);
+    }
     setSpeakerOn(next);
+    // The hint is drawn on the edge the speaker comes on, and the
+    // acknowledgement rides the SAME write as the flag — so it is cleared as
+    // it is shown, and this device is never told twice.
+    const showHint = next && silentHintOwed;
+    if (showHint) {
+      setSilentHintShown(true);
+      setSilentHintOwed(false);
+    }
     // The blob is read back and folded before it is written, so this one
     // conversation's flag moves without dropping a Bot's voice beside it.
-    void loadVoicePreferences().then((stored) => saveVoicePreferences(applySpeakerOn(stored, key, next)));
-  }, [speakerKey, speakerOn]);
+    void loadVoicePreferences().then((stored) => {
+      const written = applySpeakerOn(stored, key, next);
+      return saveVoicePreferences(showHint ? acknowledgeSilentModeHint(written) : written);
+    });
+  }, [speakerKey, speakerOn, silentHintOwed]);
 
   // A Bot's own voice (B2) is the same device store's, keyed by the gateway and
   // the Bot so one name on two gateways is two voices. The rows are this
@@ -1383,6 +1413,15 @@ export function ChatScreen() {
         }
       />
 
+      {silentHintShown ? (
+        // The one-time silent-mode hint (B2): drawn under the header that
+        // carries the speaker control, and only on the edge the speaker came
+        // on — the store has already been told, so it is never owed again.
+        <Text variant="micro" color="secondary" style={styles.silentHint}>
+          {SILENT_MODE_HINT_COPY}
+        </Text>
+      ) : null}
+
       <NewAgentSheet
         key={editingBot ? `edit-${editingBot.id}` : 'create'}
         visible={newAgentVisible}
@@ -1983,6 +2022,11 @@ const styles = StyleSheet.create({
   },
   pairingBanner: {
     gap: Spacing.two,
+  },
+  // The one-time silent-mode hint sits under the header card, aligned with it.
+  silentHint: {
+    paddingHorizontal: Spacing.three,
+    paddingBottom: Spacing.two,
   },
   listWrap: {
     flex: 1,

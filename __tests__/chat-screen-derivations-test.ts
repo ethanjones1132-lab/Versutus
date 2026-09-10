@@ -49,8 +49,10 @@ describe('chat-screen speaker wiring', () => {
     expect(screen).toMatch(
       /onSpeakerPress=\{\s*threadSurface && speakerKey && speechReady \? handleSpeakerPress : undefined,?\s*\}/,
     );
-    // A toggle-off silences the queue on its way out.
-    expect(screen).toMatch(/if \(!next\) void stopSpeech\(\);/);
+    // A toggle-off silences the queue on its way out. The call now sits in the
+    // block that takes the one-time hint down with it, so the pin names the
+    // call rather than the whole line — the claim is the same one.
+    expect(screen).toMatch(/if \(!next\) \{\s*void stopSpeech\(\);/);
   });
 
   test('a completed reply is read once, through the transcript rule', () => {
@@ -102,5 +104,49 @@ describe('chat-screen Bot voice wiring', () => {
     // Must still: a conversation's own toggle is a separate key space, folded by
     // its own rule, so a Bot's voice can never move it.
     expect(screen).toMatch(/applySpeakerOn\(stored, key, next\)/);
+  });
+});
+
+describe('chat-screen silent-mode hint wiring', () => {
+  test('whether this device can be told at all is the store’s rule, on the platform’s own answer', () => {
+    const screen = readSource('components/chat/chat-screen.tsx');
+    // B2's iOS caveat (`FUTURE-ITEMS.md:441-442`) is decided by the store's
+    // pure fold, handed the platform's own answer — so a device that is not
+    // iOS is never owed a hint at all, and the screen authors no platform test
+    // of its own that could disagree with it.
+    expect(screen).toMatch(/shouldShowSilentModeHint\(stored, Platform\.OS\)/);
+    expect(screen).not.toMatch(/Platform\.OS === 'ios'/);
+    // The line says the module's own words: the surface ships no copy of its
+    // own about what can or cannot be heard.
+    expect(screen).toMatch(/\{SILENT_MODE_HINT_COPY\}/);
+    expect(screen).not.toMatch(/silent mode/i);
+  });
+
+  test('the hint is drawn on the toggle-on edge and acknowledged as it is shown', () => {
+    const screen = readSource('components/chat/chat-screen.tsx');
+    // The hint is owed on the turn-on edge only, and the acknowledgement rides
+    // the SAME write as the flag, so the hint is drawn once and the store says
+    // this device has been told.
+    expect(screen).toMatch(/const showHint = next && silentHintOwed;/);
+    expect(screen).toMatch(
+      /if \(showHint\) \{\s*setSilentHintShown\(true\);\s*setSilentHintOwed\(false\);\s*\}/,
+    );
+    expect(screen).toMatch(
+      /saveVoicePreferences\(showHint \? acknowledgeSilentModeHint\(written\) : written\)/,
+    );
+    // Drawn from the state the edge set, never from a second platform test.
+    expect(screen).toMatch(/\{silentHintShown \? \(/);
+  });
+
+  test('must still: the flag’s own write is unchanged, and the hint leaves with the speaker', () => {
+    const screen = readSource('components/chat/chat-screen.tsx');
+    // The conversation's flag is still folded by its own rule off the re-read
+    // blob, and still read by the store's own read.
+    expect(screen).toMatch(/const written = applySpeakerOn\(stored, key, next\);/);
+    expect(screen).toMatch(/readSpeakerOn\(stored, speakerKey\)/);
+    // A hint is not an error: the line goes when the speaker it came with goes.
+    expect(screen).toMatch(
+      /if \(!next\) \{\s*void stopSpeech\(\);\s*setSilentHintShown\(false\);\s*\}/,
+    );
   });
 });
