@@ -259,6 +259,33 @@ export function hasBotManagement(client?: object | null): boolean {
 }
 
 /**
+ * What the per-Bot spend read looks for on a client surface: a manifest
+ * client's own word (`canManageSessions`) about whether its document
+ * advertises a sessions endpoint, and the scoped catalogue call itself —
+ * `listBotSessionCatalogue`, which names the Bot in the query instead of
+ * reading the app's stored Bot scope.
+ */
+export type BotSessionScopingSurface = {
+  canManageSessions?: unknown;
+  listBotSessionCatalogue?: unknown;
+};
+
+/**
+ * Can this gateway read one Bot's own session catalogue? Decided BEFORE any
+ * request: a plain Hermes HTTP adapter omits the scoped call entirely, and a
+ * manifest client whose document declares no sessions route says so through
+ * `canManageSessions`. Either way P5's per-Bot section degrades to the gateway
+ * total alone instead of provoking a refusal per Bot — the same shape as
+ * `hasBotManagement`, and for the same reason: hide what cannot finish.
+ */
+export function hasBotSessionScoping(client?: object | null): boolean {
+  if (!client) return false;
+  const surface = client as BotSessionScopingSurface;
+  if (surface.canManageSessions === false) return false;
+  return typeof surface.listBotSessionCatalogue === 'function';
+}
+
+/**
  * One Bot's standing instructions, read on demand when a Bot is opened. Kept
  * off PublicBot and off the roster payload: the roster is re-read constantly
  * and a soul can be long.

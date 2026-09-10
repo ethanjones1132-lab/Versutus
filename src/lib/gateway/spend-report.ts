@@ -105,6 +105,35 @@ export function botSpendRowCopy(row: BotSpendRow): string {
 }
 
 /**
+ * Why a per-Bot section is missing at all. A gateway that cannot be asked per
+ * Bot is a different fact from a roster with no Bots — that one renders no
+ * section, this one says so under a total it could still read.
+ */
+export const SPEND_PER_BOT_DEGRADED_COPY = 'This gateway cannot split spend by Bot.';
+
+/**
+ * The basis every row agrees on, or `null` when they do not.
+ *
+ * The section keeps one header line, and a header is only honest when it is
+ * true of every row under it — so a roster mixing an actual charge with an
+ * estimate gets no header at all and lets each row's own basis speak.
+ *
+ * A failed row carries `null`, which is unknown rather than `none`: it is
+ * skipped, never counted, so an all-failed roster writes no header. `none`
+ * itself counts — "this gateway reported no cost fields" is a basis a whole
+ * roster can share.
+ */
+export function botSpendSectionBasis(rows: BotSpendRow[]): SpendCostBasis | null {
+  let shared: SpendCostBasis | null = null;
+  for (const row of rows) {
+    if (row.failed || row.basis == null) continue;
+    if (shared == null) shared = row.basis;
+    else if (shared !== row.basis) return null;
+  }
+  return shared;
+}
+
+/**
  * The roster entry this module needs: an id, and the Gate's name for it when
  * one was reported. `PublicBot` satisfies it without the fold depending on
  * every field a roster row carries.

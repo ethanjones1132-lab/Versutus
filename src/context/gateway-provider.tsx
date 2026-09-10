@@ -51,6 +51,7 @@ import {
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import {
   hasBotManagement as probeBotManagement,
+  hasBotSessionScoping as probeBotSessionScoping,
   loadBotChat,
   type ChatSurface,
   type PublicBot,
@@ -232,6 +233,19 @@ type GatewayContextValue = {
   selectBackend: (backendId: string | undefined) => void;
   selectedBotId: string | undefined;
   listBots: () => Promise<PublicBot[]>;
+  /**
+   * Whether this gateway can be asked for one Bot's own session catalogue.
+   * P5's per-Bot spend section gates on it, so a gateway that could only
+   * refuse the scoped read is never asked for one.
+   */
+  canReadBotSessions: boolean;
+  /**
+   * One Bot's own catalogue, with the Bot named in the query rather than taken
+   * from the app's stored Bot scope — the per-Bot spend read. The capability
+   * gate is `canReadBotSessions`; a client without the scoped read makes this
+   * throw rather than answer.
+   */
+  readBotSessions: (botId: string, limit: number) => Promise<unknown>;
   createBot: (input: {
     name: string;
     soul?: string;
@@ -639,6 +653,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // affordances instead of refusing after the operator fills the sheet.
   const [hasBotManagement, setHasBotManagement] = useState(false);
   const [hasGroupRooms, setHasGroupRooms] = useState(false);
+  /**
+   * Whether this gateway can be asked for one Bot's own session catalogue —
+   * P5's per-Bot spend section gates on it, so the phone never pays for a read
+   * that could only be refused.
+   */
+  const [canReadBotSessions, setCanReadBotSessions] = useState(false);
   const [pairingDetails, setPairingDetails] = useState<PairingDetails | null>(null);
   const [liveCapabilities, setLiveCapabilities] = useState<GatewayCapabilities | null>(null);
   const [activeManifest, setActiveManifest] = useState<GatewayManifest | null>(null);
@@ -1166,6 +1186,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // presence — both known before any call is made.
       setHasBotManagement(probeBotManagement(client));
       setHasGroupRooms(probeGroupRooms(client));
+      setCanReadBotSessions(probeBotSessionScoping(client));
       applyConnectionPhase('connecting');
       // connect() rejects only on auth rejection; unreachable gateways are left
       // in 'reconnecting' with backoff running.
@@ -1876,6 +1897,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       clientRef.current = null;
       setHasBotManagement(false);
       setHasGroupRooms(false);
+      setCanReadBotSessions(false);
       setActiveGateway(null);
       setActiveHello(null);
       setActiveManifest(null);
@@ -1911,6 +1933,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     applyStatus('disconnected');
     setHasBotManagement(false);
     setHasGroupRooms(false);
+    setCanReadBotSessions(false);
     setMessages([]);
     setIsSending(false);
     applyConnectionPhase('idle');
@@ -3018,6 +3041,20 @@ const response = await executeGatewaySlashCommand(trimmed, {
     return client.listBots();
   }, []);
 
+  /**
+   * One Bot's catalogue for the per-Bot spend read. The caller gates on
+   * `canReadBotSessions` first, so the throw below is the belt to that
+   * braces — a call that slips past the gate fails as a named refusal
+   * instead of silently reading the wrong scope.
+   */
+  const readBotSessions = useCallback(async (botId: string, limit: number): Promise<unknown> => {
+    const client = clientRef.current;
+    if (!client?.listBotSessionCatalogue) {
+      throw new Error('This gateway cannot scope a session read by Bot.');
+    }
+    return client.listBotSessionCatalogue(botId, limit);
+  }, []);
+
   const botJobs = useMemo(() => ({
     list: async () => {
       const client = clientRef.current;
@@ -3335,6 +3372,8 @@ const response = await executeGatewaySlashCommand(trimmed, {
       selectBackend,
       selectedBotId,
       listBots,
+      canReadBotSessions,
+      readBotSessions,
       createBot,
       updateBot,
       hasBotManagement,
@@ -3407,7 +3446,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       lastError, clearLastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
+      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
       setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,
