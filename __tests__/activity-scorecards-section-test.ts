@@ -65,14 +65,56 @@ describe('the section paints the shipped fold, and aggregates nothing itself', (
   });
 });
 
-describe('the section stays out of the way when this device holds no runs', () => {
-  test('no cards is no section, never a placeholder', () => {
-    expect(section()).toContain('if (cards.length === 0) return null;');
+describe('the section stays mounted when this device holds no runs', () => {
+  test('no cards is no card, never a section that vanishes', () => {
+    const src = section();
+    const read = src.indexOf('const hasCards = cards.length > 0;');
+
+    // The empty-device rule is about the CARDS. The section itself stays: the
+    // weekly opt-in is reached from here (D3 Build 5), and a device that has
+    // run nothing is exactly the device the report exists to bring back.
+    expect(read).toBeGreaterThanOrEqual(0);
+    expect(src).not.toContain('if (cards.length === 0) return null;');
   });
 
-  test('the guard runs before any card is rendered', () => {
+  test('the cards are all the empty read hides, and the opt-in renders past that branch', () => {
     const src = section();
-    const guard = src.indexOf('if (cards.length === 0) return null;');
+    const branch = src.indexOf('{hasCards');
+    const branchEnd = src.indexOf(': null}', branch);
+    const cards = src.indexOf('cards.map(');
+    const optIn = src.indexOf('{WEEKLY_REPORT_OPT_IN_LABEL}');
+
+    expect(branch).toBeGreaterThanOrEqual(0);
+    // An empty card would read as a Bot that fails at nothing, so the branch a
+    // device with no runs takes renders nothing at all.
+    expect(branchEnd).toBeGreaterThan(branch);
+    expect(cards).toBeGreaterThan(branch);
+    // The one control a device with no runs still needs renders after that
+    // branch has closed, so it cannot be hidden along with the cards.
+    expect(optIn).toBeGreaterThan(branchEnd);
+  });
+
+  test('the window line names the empty read too, so it sits outside the card branch', () => {
+    const src = section();
+    const window = src.indexOf('{scorecardWindowCopy(runs.length)}');
+    const branch = src.indexOf('{hasCards');
+
+    expect(window).toBeGreaterThanOrEqual(0);
+    expect(window).toBeLessThan(branch);
+  });
+
+  test('the only card in the file is inside the fold, so an empty read names no Bot', () => {
+    const src = section();
+    const row = src.indexOf('<ListRow');
+    const cards = src.indexOf('cards.map(');
+
+    expect(src.match(/<ListRow/g)).toHaveLength(1);
+    expect(row).toBeGreaterThan(cards);
+  });
+
+  test('the guard on the cards is decided before any card is rendered', () => {
+    const src = section();
+    const guard = src.indexOf('const hasCards = cards.length > 0;');
     const cards = src.indexOf('cards.map(');
 
     expect(guard).toBeGreaterThanOrEqual(0);
