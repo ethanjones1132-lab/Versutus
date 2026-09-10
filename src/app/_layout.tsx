@@ -17,6 +17,7 @@ import { TlsFingerprintGuard } from '@/components/gateway/tls-fingerprint-guard'
 import { VersutusDarkTheme } from '@/constants/navigation-theme';
 import { GatewayProvider, useGateway } from '@/context/gateway-provider';
 import { installStreamingFetch } from '@/lib/net/streaming-fetch';
+import { registerNotificationCategories } from '@/lib/notifications/categories';
 import {
   isLaunchReplay,
   readLaunchResponse,
@@ -42,6 +43,13 @@ function NotificationRouter() {
   // The launch tap's identifier while its replay window is open, so the same
   // tap arriving at the live listener cannot route a second time.
   const launchTapRef = useRef<LaunchTap | null>(null);
+
+  // The Approve / Deny buttons only exist once the category is registered, and
+  // a notice may not reference a category the device has never seen — so this
+  // runs at mount, ahead of any notice the provider can post.
+  useEffect(() => {
+    void registerNotificationCategories();
+  }, []);
 
   useEffect(() => {
     // Route on the payload's kind: a routine notice opens Chat (its roster
