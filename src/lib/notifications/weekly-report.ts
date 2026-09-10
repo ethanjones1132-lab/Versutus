@@ -23,6 +23,8 @@ import {
   WEEKLY_REPORT_OPT_IN_ON,
   weeklyReportNoticeData,
   weeklyReportTrigger,
+  type WeeklyReportOptInState,
+  type WeeklyReportRefusal,
 } from './weekly-report-schedule';
 
 /**
@@ -87,8 +89,29 @@ async function ensurePermission(): Promise<boolean> {
 }
 
 /**
+ * The state the stored flag says this device holds, as the opt-in vocabulary
+ * names it. `loadWeeklyReportOptIn` never rejects.
+ */
+async function storedOptInState(): Promise<WeeklyReportOptInState> {
+  return (await loadWeeklyReportOptIn()) ? { state: 'on' } : { state: 'off' };
+}
+
+/**
+ * The state after an attempt that placed no new notice: ON when a notice the
+ * operator already had is still waiting, and otherwise the refusal the
+ * attempt met. Answering the held state rather than the reason keeps a
+ * working reminder from being traded for a complaint about its replacement.
+ */
+async function stateAfterDecline(reason: WeeklyReportRefusal): Promise<WeeklyReportOptInState> {
+  const held = await storedOptInState();
+  return held.state === 'on' ? held : { state: 'refused', reason };
+}
+
+/**
  * Apply the opt-in: schedule or retire the one weekly notice, and answer with
- * the state now in force.
+ * the state now in force — and, when the device refused to hold one, the
+ * reason it refused, so a surface can say why rather than leave a declined
+ * attempt looking like a report nobody ever asked for.
  *
  * OFF retires the held notice and clears the flag — the operator asked for
  * silence, so a notice that outlived its own opt-out would be the lie this
@@ -101,7 +124,7 @@ async function ensurePermission(): Promise<boolean> {
  * scheduled notice that never landed must not read as "on" in the toggle, so
  * the answer is the state this device actually holds.
  */
-export async function setWeeklyReportOptIn(enabled: boolean): Promise<boolean> {
+export async function setWeeklyReportOptIn(enabled: boolean): Promise<WeeklyReportOptInState> {
   if (!enabled) {
     await cancelHeldNotice();
     try {
@@ -109,10 +132,10 @@ export async function setWeeklyReportOptIn(enabled: boolean): Promise<boolean> {
     } catch {
       // best-effort: the notice is already retired, which is the operator's ask
     }
-    return false;
+    return { state: 'off' };
   }
 
-  if (!(await ensurePermission())) return loadWeeklyReportOptIn();
+  if (!(await ensurePermission())) return stateAfterDecline('permission');
 
   const held = await knownNoticeId();
   let identifier: string | null;
@@ -128,12 +151,12 @@ export async function setWeeklyReportOptIn(enabled: boolean): Promise<boolean> {
     });
   } catch {
     // best-effort: notification must never break the app flow
-    return loadWeeklyReportOptIn();
+    return stateAfterDecline('schedule');
   }
 
   // No identifier means no notice — keep no mapping and no flag behind it, so
   // the surface cannot promise a report nothing will announce.
-  if (!identifier) return loadWeeklyReportOptIn();
+  if (!identifier) return stateAfterDecline('schedule');
 
   try {
     await keyValueStorage.setItem(WEEKLY_REPORT_NOTICE_KEY, identifier);
@@ -151,8 +174,11 @@ export async function setWeeklyReportOptIn(enabled: boolean): Promise<boolean> {
 
   try {
     await keyValueStorage.setItem(WEEKLY_REPORT_OPT_IN_KEY, WEEKLY_REPORT_OPT_IN_ON);
-    return true;
+    return { state: 'on' };
   } catch {
-    return loadWeeklyReportOptIn();
+    // The notice landed but the flag is not stored, so the state this device
+    // holds is the flag's — and the schedule itself did land, so there is no
+    // refusal to name here.
+    return storedOptInState();
   }
 }

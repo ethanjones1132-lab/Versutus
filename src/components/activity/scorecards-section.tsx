@@ -21,7 +21,9 @@
 //
 // The weekly operator report is opted into from here (D3 Build 5) — one local
 // notice, off by default. The switch paints the device's stored flag and
-// nothing else, so it can never show "on" for a notice the phone does not hold.
+// nothing else, so it can never show "on" for a notice the phone does not hold;
+// and an opt-in the phone declined says so, in the module's own words, so a
+// device that refused the notice does not read like one nobody ever asked.
 
 import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Switch, View } from 'react-native';
@@ -37,6 +39,10 @@ import {
 import {
   WEEKLY_REPORT_OPT_IN_LABEL,
   WEEKLY_REPORT_OPT_IN_SUMMARY,
+  weeklyReportOptInHolds,
+  weeklyReportRefusedBy,
+  weeklyReportRefusalCopy,
+  type WeeklyReportRefusal,
 } from '@/lib/notifications/weekly-report-schedule';
 import {
   buildScorecards,
@@ -65,6 +71,9 @@ export function ScorecardsSection({
   // Off until the stored flag says otherwise: D3's weekly report is opt-in and
   // a device that never asked holds no flag at all.
   const [weeklyReport, setWeeklyReport] = useState(false);
+  // The refusal the last attempt met, or null. Only an attempt can set it, so
+  // a device nobody ever asked never shows one.
+  const [weeklyReportRefusal, setWeeklyReportRefusal] = useState<WeeklyReportRefusal | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -81,11 +90,17 @@ export function ScorecardsSection({
   /**
    * The switch answers the finger, then the device has the last word: a
    * declined permission or a failed schedule leaves no opt-in behind, so the
-   * control snaps back instead of promising a notice that is not there.
+   * control snaps back instead of promising a notice that is not there — and
+   * the refusal it met is named below it rather than left looking like a
+   * report nobody asked for.
    */
   const handleWeeklyReport = (next: boolean) => {
     setWeeklyReport(next);
-    void setWeeklyReportOptIn(next).then((inForce) => setWeeklyReport(inForce));
+    setWeeklyReportRefusal(null);
+    void setWeeklyReportOptIn(next).then((state) => {
+      setWeeklyReport(weeklyReportOptInHolds(state));
+      setWeeklyReportRefusal(weeklyReportRefusedBy(state));
+    });
   };
 
   // No runs on this device is no card — a placeholder would read as every Bot
@@ -156,6 +171,16 @@ export function ScorecardsSection({
           accessibilityState={{ checked: weeklyReport }}
         />
       </View>
+
+      {/* A device that refused the notice says why, in the module's own
+          words: an off switch alone cannot tell it from a device nobody ever
+          asked. It clears with every attempt, so it never outlives the try
+          that met it. */}
+      {weeklyReportRefusal ? (
+        <Text variant="caption" color="accentWarm">
+          {weeklyReportRefusalCopy(weeklyReportRefusal)}
+        </Text>
+      ) : null}
 
       <Text variant="micro" color="tertiary">
         {SCORECARD_FOOTER_COPY}

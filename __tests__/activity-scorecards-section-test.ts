@@ -264,7 +264,31 @@ describe('the weekly operator report is opted into here, off by default', () => 
     expect(src).toContain('loadWeeklyReportOptIn()');
     // The state this device holds after the attempt is what the switch paints,
     // so it can never show "on" for a notice that is not scheduled.
-    expect(src).toContain('setWeeklyReportOptIn(next).then((inForce) => setWeeklyReport(inForce))');
+    expect(src).toContain('setWeeklyReportOptIn(next).then((state) => {');
+    expect(src).toContain('setWeeklyReport(weeklyReportOptInHolds(state));');
+    expect(src).toContain('setWeeklyReportRefusal(weeklyReportRefusedBy(state));');
+  });
+
+  test('a refused opt-in says why, in the module copy, under the switch', () => {
+    const src = section();
+
+    // The line is decided from the refusal the attempt answered with — never
+    // from "the switch is off", which a device that never asked also is.
+    expect(src).toContain('useState<WeeklyReportRefusal | null>(null)');
+    expect(src).toContain('{weeklyReportRefusal ? (');
+    expect(src).toContain('{weeklyReportRefusalCopy(weeklyReportRefusal)}');
+    // Cleared with every attempt, so a stale refusal cannot outlive the try
+    // that met it.
+    expect(src).toContain('setWeeklyReportRefusal(null);');
+    // The words are the module's, never this file's.
+    expect(src).not.toContain('Notifications are off for Versutus');
+    expect(src).not.toContain('could not be scheduled just now');
+
+    const optIn = src.indexOf('{WEEKLY_REPORT_OPT_IN_LABEL}');
+    const refusal = src.indexOf('{weeklyReportRefusalCopy(');
+    const footer = src.indexOf('{SCORECARD_FOOTER_COPY}');
+    expect(refusal).toBeGreaterThan(optIn);
+    expect(footer).toBeGreaterThan(refusal);
   });
 
   test('the surface asks for the notice and schedules nothing itself', () => {

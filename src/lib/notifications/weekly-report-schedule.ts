@@ -94,3 +94,55 @@ export const WEEKLY_REPORT_OPT_IN_SUMMARY =
 export function isWeeklyReportEnabled(stored: string | null): boolean {
   return stored === WEEKLY_REPORT_OPT_IN_ON;
 }
+
+/**
+ * Why an opt-in that asked for its notice holds none. Both are the device's
+ * own refusal rather than the operator's: the phone declined notifications,
+ * or the schedule could not be placed. They are named apart because only the
+ * first is something the operator can go and change.
+ */
+export type WeeklyReportRefusal = 'permission' | 'schedule';
+
+/**
+ * What this device holds after the opt-in switch was asked to change, and —
+ * when it was asked for a notice and holds none — why. A refusal is a state
+ * of its own rather than a bare "off", so a surface can tell an operator
+ * whose phone said no from one who never turned the report on.
+ */
+export type WeeklyReportOptInState =
+  | { state: 'on' }
+  | { state: 'off' }
+  | { state: 'refused'; reason: WeeklyReportRefusal };
+
+/** Whether this state means the device holds the notice it asked for. */
+export function weeklyReportOptInHolds(state: WeeklyReportOptInState): boolean {
+  return state.state === 'on';
+}
+
+/** The refusal this state names, or null when the attempt met none. */
+export function weeklyReportRefusedBy(state: WeeklyReportOptInState): WeeklyReportRefusal | null {
+  return state.state === 'refused' ? state.reason : null;
+}
+
+/**
+ * The line a declined notification permission shows. It names the one thing
+ * the operator can act on and counts nothing, like every other string about
+ * this report.
+ */
+export const WEEKLY_REPORT_PERMISSION_REFUSAL_COPY =
+  'Notifications are off for Versutus, so the weekly report cannot be scheduled — turn them on in Settings.';
+
+/**
+ * The line a schedule that could not be placed shows. Deliberately silent
+ * about Settings: notifications were granted here, so sending the operator
+ * there would send them after nothing.
+ */
+export const WEEKLY_REPORT_SCHEDULE_REFUSAL_COPY =
+  'The report could not be scheduled just now — try the switch again.';
+
+/** The one line a refusal shows — its own reason's words, and nothing else. */
+export function weeklyReportRefusalCopy(reason: WeeklyReportRefusal): string {
+  return reason === 'permission'
+    ? WEEKLY_REPORT_PERMISSION_REFUSAL_COPY
+    : WEEKLY_REPORT_SCHEDULE_REFUSAL_COPY;
+}

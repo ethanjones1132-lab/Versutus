@@ -12,6 +12,9 @@
 
 import {
   isWeeklyReportEnabled,
+  weeklyReportOptInHolds,
+  weeklyReportRefusedBy,
+  weeklyReportRefusalCopy,
   weeklyReportTrigger,
   WEEKLY_REPORT_NOTICE_BODY,
   WEEKLY_REPORT_NOTICE_DATA_KIND,
@@ -113,6 +116,41 @@ describe('the notice the opt-in promises', () => {
   });
 });
 
+describe('a refused opt-in says why', () => {
+  test('only a held notice reads as on, so a refusal always snaps the switch back', () => {
+    expect(weeklyReportOptInHolds({ state: 'on' })).toBe(true);
+    expect(weeklyReportOptInHolds({ state: 'off' })).toBe(false);
+    expect(weeklyReportOptInHolds({ state: 'refused', reason: 'permission' })).toBe(false);
+    expect(weeklyReportOptInHolds({ state: 'refused', reason: 'schedule' })).toBe(false);
+  });
+
+  test('a refusal carries its reason; nothing else names one', () => {
+    expect(weeklyReportRefusedBy({ state: 'refused', reason: 'permission' })).toBe('permission');
+    expect(weeklyReportRefusedBy({ state: 'refused', reason: 'schedule' })).toBe('schedule');
+    expect(weeklyReportRefusedBy({ state: 'on' })).toBeNull();
+    expect(weeklyReportRefusedBy({ state: 'off' })).toBeNull();
+  });
+
+  test('a declined permission names where to turn notifications back on, claims no push', () => {
+    const copy = weeklyReportRefusalCopy('permission');
+
+    expect(copy).toMatch(/notifications are off/i);
+    expect(copy).toMatch(/settings/i);
+    expect(copy).not.toMatch(/push/i);
+    expect(copy).not.toMatch(/\d/);
+  });
+
+  test('a schedule that could not be placed never blames the permission', () => {
+    const copy = weeklyReportRefusalCopy('schedule');
+
+    // Notifications were granted and the schedule still did not land, so this
+    // line must not send the operator to Settings over nothing.
+    expect(copy).not.toMatch(/settings/i);
+    expect(copy).not.toMatch(/notifications are off/i);
+    expect(copy).not.toBe(weeklyReportRefusalCopy('permission'));
+  });
+});
+
 describe('opting in schedules exactly one weekly notice', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -132,7 +170,7 @@ describe('opting in schedules exactly one weekly notice', () => {
   });
 
   test('opting in schedules one weekly notice and stores its identifier', async () => {
-    await expect(setWeeklyReportOptIn(true)).resolves.toBe(true);
+    await expect(setWeeklyReportOptIn(true)).resolves.toEqual({ state: 'on' });
 
     expect(mockSchedule).toHaveBeenCalledTimes(1);
     const request = mockSchedule.mock.calls[0][0];
@@ -176,7 +214,7 @@ describe('opting in schedules exactly one weekly notice', () => {
   test('opting out cancels the identifier it held and clears the flag', async () => {
     await setWeeklyReportOptIn(true);
 
-    await expect(setWeeklyReportOptIn(false)).resolves.toBe(false);
+    await expect(setWeeklyReportOptIn(false)).resolves.toEqual({ state: 'off' });
 
     expect(mockCancel).toHaveBeenCalledWith('notif-1');
     await expect(heldId()).resolves.toBeNull();
@@ -185,17 +223,20 @@ describe('opting in schedules exactly one weekly notice', () => {
   });
 
   test('opting out on a device that never opted in schedules nothing', async () => {
-    await expect(setWeeklyReportOptIn(false)).resolves.toBe(false);
+    await expect(setWeeklyReportOptIn(false)).resolves.toEqual({ state: 'off' });
 
     expect(mockSchedule).not.toHaveBeenCalled();
     expect(mockCancel).not.toHaveBeenCalled();
     await expect(heldId()).resolves.toBeNull();
   });
 
-  test('a denied permission holds no opt-in it cannot honour', async () => {
+  test('a denied permission names the refusal it met, and holds no opt-in it cannot honour', async () => {
     (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: false });
 
-    await expect(setWeeklyReportOptIn(true)).resolves.toBe(false);
+    await expect(setWeeklyReportOptIn(true)).resolves.toEqual({
+      state: 'refused',
+      reason: 'permission',
+    });
 
     expect(mockSchedule).not.toHaveBeenCalled();
     await expect(heldId()).resolves.toBeNull();
@@ -203,10 +244,28 @@ describe('opting in schedules exactly one weekly notice', () => {
     await expect(storedOptIn()).resolves.toBeNull();
   });
 
-  test('a schedule that throws holds no opt-in either, and never rejects', async () => {
+  test('a declined opt-in is distinguishable from a device that never asked', async () => {
+    // The untouched read: no notice, and no refusal to name either.
+    await expect(loadWeeklyReportOptIn()).resolves.toBe(false);
+    (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: false });
+
+    const refused = await setWeeklyReportOptIn(true);
+
+    // The operator asked and the phone said no — a different answer from the
+    // one a device that never asked gives, which is the whole point of the line.
+    expect(refused).toEqual({ state: 'refused', reason: 'permission' });
+    expect(weeklyReportOptInHolds(refused)).toBe(false);
+    expect(weeklyReportRefusedBy(refused)).toBe('permission');
+    expect(refused).not.toEqual({ state: 'off' });
+  });
+
+  test('a schedule that throws names its own refusal, and never rejects', async () => {
     mockSchedule.mockRejectedValue(new Error('scheduler unavailable'));
 
-    await expect(setWeeklyReportOptIn(true)).resolves.toBe(false);
+    await expect(setWeeklyReportOptIn(true)).resolves.toEqual({
+      state: 'refused',
+      reason: 'schedule',
+    });
     await expect(heldId()).resolves.toBeNull();
     await expect(storedOptIn()).resolves.toBeNull();
   });
@@ -214,7 +273,10 @@ describe('opting in schedules exactly one weekly notice', () => {
   test('a schedule that returns no identifier stores none behind a phantom id', async () => {
     mockSchedule.mockResolvedValue(null);
 
-    await expect(setWeeklyReportOptIn(true)).resolves.toBe(false);
+    await expect(setWeeklyReportOptIn(true)).resolves.toEqual({
+      state: 'refused',
+      reason: 'schedule',
+    });
     await expect(heldId()).resolves.toBeNull();
     await expect(storedOptIn()).resolves.toBeNull();
   });
@@ -224,9 +286,10 @@ describe('opting in schedules exactly one weekly notice', () => {
     expect(mockCancel).not.toHaveBeenCalled();
 
     // The operator's reminder is already waiting; a declined re-opt-in must
-    // not trade it for nothing.
+    // not trade it for nothing — so the state is the held one, and there is
+    // no refusal to explain.
     mockSchedule.mockRejectedValue(new Error('scheduler unavailable'));
-    await expect(setWeeklyReportOptIn(true)).resolves.toBe(true);
+    await expect(setWeeklyReportOptIn(true)).resolves.toEqual({ state: 'on' });
 
     expect(mockCancel).not.toHaveBeenCalled();
     await expect(heldId()).resolves.toBe('notif-1');
