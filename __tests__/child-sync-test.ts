@@ -1,4 +1,8 @@
-import { reconcileChildProfiles, syncChildProfiles } from '@/lib/gateway/child-sync';
+import {
+  reconcileChildProfiles,
+  retirementTookActiveGateway,
+  syncChildProfiles,
+} from '@/lib/gateway/child-sync';
 import { upsertGateway } from '@/lib/gateway/storage';
 import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
 import type { GatewayManifestProvider } from '@/lib/portal/manifest';
@@ -196,5 +200,42 @@ describe('syncChildProfiles', () => {
       'gw-parent',
       'hermes-local',
     ]);
+  });
+});
+
+describe('retirementTookActiveGateway', () => {
+  // A retire runs on every manifest read, so it can take the profile the app
+  // is connected to. The rule mirrors the delete path's own reconciliation:
+  // the active profile is gone when its own id was retired, or when the parent
+  // it hangs off was.
+  test('the connected profile itself was retired', () => {
+    expect(retirementTookActiveGateway(['gw-parent::claude'], { id: 'gw-parent::claude' })).toBe(true);
+  });
+
+  test('a retired sibling leaves the connected profile alone', () => {
+    expect(
+      retirementTookActiveGateway(['gw-parent::claude'], {
+        id: 'gw-parent::grok',
+        parentId: 'gw-parent',
+      }),
+    ).toBe(false);
+  });
+
+  test('the connected profile hangs off a retired parent', () => {
+    expect(
+      retirementTookActiveGateway(['gw-parent'], { id: 'gw-parent::claude', parentId: 'gw-parent' }),
+    ).toBe(true);
+  });
+
+  test('nothing is active, so nothing is taken', () => {
+    expect(retirementTookActiveGateway(['gw-parent::claude'], null)).toBe(false);
+  });
+
+  test('a sync that retired nothing takes nobody', () => {
+    expect(retirementTookActiveGateway([], { id: 'gw-parent', parentId: undefined })).toBe(false);
+  });
+
+  test('a profile with no parent is not taken by an unrelated id', () => {
+    expect(retirementTookActiveGateway(['gw-other'], { id: 'hermes-local' })).toBe(false);
   });
 });

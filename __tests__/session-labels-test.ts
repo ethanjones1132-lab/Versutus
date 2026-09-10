@@ -476,6 +476,38 @@ describe('the child-profile sync path', () => {
     expect(secondClear).toBeGreaterThan(-1);
     expect(secondSet).toBeGreaterThan(secondClear);
   });
+
+  test('both call sites take the session down with the profile it is running on', () => {
+    const src = readSource('src', 'context', 'gateway-provider.tsx');
+    // The retire runs on every manifest read, so it can take the profile the
+    // app is connected to: the delete path reconciles the active connection
+    // against what it dropped, and both sync call sites now apply that same
+    // rule, through one shared teardown rather than two copies.
+    expect(src.match(/const teardownRetiredActiveGateway = useCallback\(/g)).toHaveLength(1);
+    expect(src.match(/teardownRetiredActiveGateway\(retirement\.removedIds\)/g)).toHaveLength(2);
+    // The rule is asked about the LIVE active gateway, not a captured render
+    // value — the same ref the provider's other request helpers read.
+    expect(src).toContain('retirementTookActiveGateway(removedIds, activeGatewayRef.current)');
+
+    // Stores away, then the session, then the roster — the delete path's own
+    // order, at both call sites.
+    const firstClear = src.indexOf('await clearRetiredGatewayStores(retirement.removedIds);');
+    const firstTeardown = src.indexOf('teardownRetiredActiveGateway(retirement.removedIds);');
+    const firstSet = src.indexOf('setGateways(retirement.gateways);');
+    const secondClear = src.indexOf(
+      'await clearRetiredGatewayStores(retirement.removedIds);',
+      firstClear + 1,
+    );
+    const secondTeardown = src.indexOf(
+      'teardownRetiredActiveGateway(retirement.removedIds);',
+      firstTeardown + 1,
+    );
+    const secondSet = src.indexOf('setGateways(retirement.gateways);', firstSet + 1);
+    expect(firstTeardown).toBeGreaterThan(firstClear);
+    expect(firstSet).toBeGreaterThan(firstTeardown);
+    expect(secondTeardown).toBeGreaterThan(secondClear);
+    expect(secondSet).toBeGreaterThan(secondTeardown);
+  });
 });
 
 describe('a label never leaves the device', () => {

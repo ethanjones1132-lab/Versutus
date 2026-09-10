@@ -50,3 +50,21 @@ export async function syncChildProfiles(
   if (toRemove.length === 0) return { gateways: current, removedIds: [] };
   return { gateways: await removeGatewayIds(toRemove), removedIds: toRemove };
 }
+
+/**
+ * A retire can take the profile the app is connected to: a legacy
+ * `parentId::providerId` profile is a real, connectable gateway, and the sync
+ * runs on every manifest read. The delete path reconciles its active
+ * connection against what it dropped (`deleteGateway`); a caller replacing the
+ * roster asks this the same way before it does — the active profile is gone
+ * when its own id was retired, or when the parent it hangs off was (the delete
+ * path's cascade removes children too).
+ */
+export function retirementTookActiveGateway(
+  removedIds: readonly string[],
+  active: Pick<GatewayProfile, 'id' | 'parentId'> | null,
+): boolean {
+  if (!active) return false;
+  if (removedIds.includes(active.id)) return true;
+  return active.parentId !== undefined && removedIds.includes(active.parentId);
+}

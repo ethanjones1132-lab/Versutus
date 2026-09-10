@@ -123,7 +123,7 @@ import {
   type OfflineQueueDestination,
   type OfflineQueueItem,
 } from '@/lib/gateway/session-persistence';
-import { syncChildProfiles } from '@/lib/gateway/child-sync';
+import { retirementTookActiveGateway, syncChildProfiles } from '@/lib/gateway/child-sync';
 import { checkTlsFingerprintTofu } from '@/lib/gateway/security';
 import {
   dismissGatewayDown,
@@ -1109,6 +1109,47 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  /**
+   * A manifest sync retires provider child profiles on every read, and one of
+   * them can be the profile the app is connected to. The delete path already
+   * reconciles its active connection against what it dropped; a sync that
+   * replaces the roster applies the same rule here, before the roster moves,
+   * or the live session keeps running on a gateway the roster no longer holds
+   * — and, the sync having cleared that profile's stores first, writes
+   * transcript and label entries back under an id no profile owns.
+   *
+   * This is the delete path's own teardown without its search for another
+   * gateway: a delete is an operator action on the roster they are looking at,
+   * while a retire is roster maintenance they did not trigger, so it leaves
+   * them on the roster to pick rather than moving them to a gateway they did
+   * not ask for.
+   */
+  const teardownRetiredActiveGateway = useCallback(
+    (removedIds: readonly string[]) => {
+      if (!retirementTookActiveGateway(removedIds, activeGatewayRef.current)) return;
+      clientGenerationRef.current += 1;
+      if (autoRetryTimerRef.current) {
+        clearTimeout(autoRetryTimerRef.current);
+        autoRetryTimerRef.current = null;
+        setAutoRetry(null);
+      }
+      clientRef.current?.disconnect();
+      clientRef.current = null;
+      setHasBotManagement(false);
+      setHasGroupRooms(false);
+      setCanReadBotSessions(false);
+      setActiveGateway(null);
+      setActiveHello(null);
+      setActiveManifest(null);
+      setLiveCapabilities(null);
+      applyStatus('disconnected');
+      setMessages([]);
+      applyConnectionPhase('idle');
+      void saveActiveGatewayId(null);
+    },
+    [applyStatus, applyConnectionPhase],
+  );
+
   const attachClient = useCallback(
     async (gatewayInput: GatewayProfile) => {
       let gateway = gatewayInput;
@@ -1434,14 +1475,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           // profile is a real, connectable gateway, so its transcript and
           // session labels leave the device with it.
           await clearRetiredGatewayStores(retirement.removedIds);
-          if (isCurrent()) setGateways(retirement.gateways);
+          // A superseded chain must not touch a newer connection, so the
+          // session teardown and the roster move share one generation check.
+          if (!isCurrent()) return;
+          teardownRetiredActiveGateway(retirement.removedIds);
+          setGateways(retirement.gateways);
         })
         .catch(() => undefined);
     },
     // patchActivityRuns is a useCallback with [] deps, so its identity is stable
     // for the provider's lifetime; listing it satisfies exhaustive-deps without
     // changing when this callback is rebuilt.
-    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns],
+    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns, teardownRetiredActiveGateway],
   );
 
   const connectGateway = useCallback(
@@ -3062,8 +3107,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
           const retirement = await syncChildProfiles(activeGateway, manifestProviders(manifest));
           if (retirement) {
             // Same rule as the connect path: the profile and the stores keyed
-            // by its id leave together, before the roster changes.
+            // by its id leave together, before the roster changes — and a
+            // session still up on a retired profile comes down with it.
             await clearRetiredGatewayStores(retirement.removedIds);
+            teardownRetiredActiveGateway(retirement.removedIds);
             setGateways(retirement.gateways);
           }
         }
@@ -3072,7 +3119,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
     } catch {
       // ignore
     }
-  }, [activeGateway, status]);
+  }, [activeGateway, status, teardownRetiredActiveGateway]);
 
   const confirmPendingAction = useCallback(() => {
     if (!pendingConfirmation || !activeGateway) {
