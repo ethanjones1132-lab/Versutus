@@ -58,6 +58,10 @@
 //   `scorecardCardHint` hands that card no hint at all rather than the promise
 //   every other card can keep. The state is said once, by the announcement, and
 //   never a second time as an action.
+// - The same card is drawn without its chevron (`scorecardCardChevron`), for
+//   the same reason said to the eye: the trailing chevron is the kit's visual
+//   for a surface this way, and this card's tap opens none. Every other card
+//   keeps the chevron it already had.
 //
 // These cards are observations of runs this device saw — a run started from
 // the desktop or the TUI never reaches this list at all. The surface owes that
@@ -577,7 +581,10 @@ const SCORECARD_LINE_DROP_ORDER: readonly (keyof ScorecardCardParts)[] = [
  * gutter either side (48) and the card's `Spacing.three` padding (32) is 310pt;
  * the row's chevron (14) and its two `Spacing.three - 4` gaps leave 272pt; the
  * badge — a `micro` label with a dot and `Spacing.two` padding — takes roughly
- * 200pt more, leaving ~200pt. A caption glyph at `Typography.caption.fontSize`
+ * 200pt more, leaving ~200pt. (The card the badge marks is the one card drawn
+ * WITHOUT its chevron — `scorecardCardChevron` — so that narrowest state is a
+ * little wider than this chain counts, which is the direction this budget errs
+ * in.) A caption glyph at `Typography.caption.fontSize`
  * 13 advances about half an em, so ~200pt is about thirty characters — and the
  * budget is 36, deliberately a little over that arithmetic rather than at it.
  * The estimate stacks three guesses (a phone's width, a glyph's advance, the
@@ -740,6 +747,30 @@ export const SCORECARD_CARD_HINT = "Shows this Bot's runs in the list above";
  */
 export function scorecardCardHint(showing: boolean): string | undefined {
   return showing ? undefined : SCORECARD_CARD_HINT;
+}
+
+/**
+ * Whether a card wears `ListRow`'s trailing chevron, decided off the one
+ * `showing` the caller draws the card's badge from.
+ *
+ * The chevron is this kit's visual for "there is a surface this way" — the
+ * affordance a card carries because tapping it walks the list above to that
+ * Bot's runs — so a card the list above is ALREADY filtered to has no step left
+ * for it to draw: its tap hands the tab the bucket the list already carries
+ * (`onPress={() => onSelect({ botId: card.botId })}`,
+ * `src/components/activity/scorecards-section.tsx`), and nothing above it
+ * changes. The operator who can see would be promised exactly what
+ * `scorecardCardHint` above stopped promising the operator who cannot, so that
+ * one card is drawn without it.
+ *
+ * `true` is the answer every other card already wore: `ListRow` draws the
+ * chevron whenever it has a press (`showChevron = chevron ?? !!onPress`,
+ * `src/components/ui/ListRow.tsx:66`), which every card here has — so this fold
+ * never ADDS a chevron, it decides which cards are handed one, and the surface
+ * hands the row one expression rather than a literal of its own.
+ */
+export function scorecardCardChevron(showing: boolean): boolean {
+  return !showing;
 }
 
 /**

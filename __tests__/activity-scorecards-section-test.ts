@@ -196,6 +196,47 @@ describe('a card promises only the tap it can deliver', () => {
     // hint string at all, so the two states cannot be worded apart.
     expect(section()).not.toContain("Shows this Bot's runs in the list above");
   });
+
+  test('the chevron is the module’s too, decided off the same showing the hint and the badge ride', () => {
+    const src = section();
+
+    // The chevron is the kit's visual for "there is a surface this way", so on
+    // this one card it draws a step the tap does not take — the drawn twin of
+    // the missing hint, decided by the module off the same `showing`. One
+    // expression, and this file hands the row no chevron literal of its own.
+    expect(src).toContain('chevron={scorecardCardChevron(showing)}');
+    expect(src.match(/scorecardCardChevron\(/g)).toHaveLength(1);
+    expect(src).not.toContain('chevron={true}');
+    expect(src).not.toContain('chevron={false}');
+    expect(src).not.toContain('showChevron');
+  });
+
+  test('the chevron is decided from the state, after it, inside the one card row', () => {
+    const src = section();
+    const row = src.indexOf('<ListRow');
+    const showing = src.indexOf('const showing = filter ?');
+    const chevron = src.indexOf('chevron={scorecardCardChevron(showing)}');
+
+    expect(showing).toBeGreaterThanOrEqual(0);
+    expect(chevron).toBeGreaterThan(row);
+    expect(chevron).toBeGreaterThan(showing);
+    expect(src.match(/const showing = /g)).toHaveLength(1);
+  });
+
+  test('the badge, the announcement and the hint are exactly what they were beside it', () => {
+    const src = section();
+
+    // The chevron is taken away BESIDE the state's other riders, never at their
+    // cost: the badge stays the visual it is, the announcement still appends
+    // the state, and the hint expression is untouched.
+    expect(src).toContain(
+      'trailing={showing ? <Badge label={SCORECARD_SHOWING_LABEL} tone="accent" /> : undefined}',
+    );
+    expect(src).toContain(
+      'accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId), facts, showing)}',
+    );
+    expect(src).toContain('accessibilityHint={scorecardCardHint(showing)}');
+  });
 });
 
 describe('a card states the success rate of the runs that reached a verdict', () => {

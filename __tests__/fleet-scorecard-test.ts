@@ -22,6 +22,7 @@ import {
   scorecardApprovals,
   scorecardBotLabel,
   scorecardCardAnnouncement,
+  scorecardCardChevron,
   scorecardCardHint,
   scorecardCardLine,
   scorecardDurationCopy,
@@ -1336,5 +1337,36 @@ describe('scorecardCardHint', () => {
     // The state's sentence belongs to the announcement
     // (`scorecardCardAnnouncement`), which already reads it out on this card.
     expect(SCORECARD_CARD_HINT).not.toBe(SCORECARD_SHOWING_COPY);
+  });
+});
+
+describe('scorecardCardChevron', () => {
+  test('a card the list above is not showing keeps the chevron the row already drew', () => {
+    // `ListRow` draws its trailing chevron for a row that has a press
+    // (`showChevron = chevron ?? !!onPress`, `ListRow.tsx:66`), so `true` is the
+    // answer every card had before this fold existed: the fold decides it now,
+    // and the surface hands the row no chevron literal of its own.
+    expect(scorecardCardChevron(false)).toBe(true);
+  });
+
+  test('a card holding the filter wears no chevron, because its tap opens no surface', () => {
+    // The chevron is this kit's visual for "there is a surface this way", and
+    // this card's tap re-applies the filter the list already carries
+    // (`scorecards-section.tsx`'s `onPress`), so the step the chevron draws is a
+    // step the tap does not take — the drawn twin of the hint this state is
+    // handed none of (`scorecardCardHint`), so the operator who can see is told
+    // no more than the operator on a screen reader.
+    expect(scorecardCardChevron(true)).toBe(false);
+  });
+
+  test('one state has one answer, and neither state is left unanswered', () => {
+    // Both states are answered — no card is left chevronless by omission — and
+    // the two folds reading this one state agree about WHICH card it is, so no
+    // card can be drawn as filtered and hinted as not (or the reverse).
+    expect(scorecardCardChevron(false)).not.toBe(scorecardCardChevron(true));
+    expect(scorecardCardChevron(true)).toBe(false);
+    expect(scorecardCardHint(true)).toBeUndefined();
+    expect(scorecardCardChevron(false)).toBe(true);
+    expect(scorecardCardHint(false)).toBe(SCORECARD_CARD_HINT);
   });
 });

@@ -64,12 +64,14 @@
 // module's word in a badge for the eye, and the module's sentence appended to
 // the announcement — a badge is a visual inside a row the row says nothing
 // about, so without the second the filtered card would read like every other.
-// Its HINT rides that same state too, and that is the one thing the state takes
-// away: the hint answers what the tap does next, and on this card the tap
-// re-applies the filter the list already carries, so the module hands it no
-// hint at all instead of promising a list the tap cannot show. The wording of
-// the hint every other card carries is the module's as well, so no state here
-// is worded on this surface.
+// Its HINT and its CHEVRON ride that same state too, and those are the two
+// things the state takes away: both answer what the tap does next, and on this
+// card the tap re-applies the filter the list already carries. So the module
+// hands it no hint at all instead of promising a list the tap cannot show, and
+// no trailing chevron — the kit's visual for "there is a surface this way", on
+// a row with no further surface to open. The wording of the hint every other
+// card carries is the module's as well, so no state here is worded on this
+// surface.
 //
 // The weekly operator report is opted into from here (D3 Build 5) — one local
 // notice, off by default. The switch paints the state this device actually
@@ -115,6 +117,7 @@ import {
   scorecardApprovals,
   scorecardBotLabel,
   scorecardCardAnnouncement,
+  scorecardCardChevron,
   scorecardCardHint,
   scorecardCardLine,
   scorecardDurationCopy,
@@ -259,11 +262,12 @@ export function ScorecardsSection({
             // The card's own state, not ListRow's `selected` — that one is the
             // backend picker's announced state and
             // `list-row-selected-state-test.ts` keeps that pass scoped to it.
-            // One computation, used three times: the badge draws the module's
+            // One computation, used four times: the badge draws the module's
             // word for it, the card's sentence names it too, so an operator who
             // cannot see the badge is not told this card reads like every other
-            // — and the hint is decided from it, which is how this one card ends
-            // up promising no list its tap cannot show.
+            // — and the hint and the chevron are decided from it, which is how
+            // this one card ends up promising no list its tap cannot show, and
+            // drawing no step towards one either.
             const showing = filter ? card.botId === filter.botId : false;
             // The card's line: the counts it folded, the share of them that
             // succeeded, and — when its own runs can back them — the median
@@ -294,7 +298,9 @@ export function ScorecardsSection({
             // card's own state is handed to the announcement on top of them: the
             // badge draws it, and the sentence says it. The hint is the other
             // question — what the tap does next — and the module decides it from
-            // the same `showing`, so the filtered card is handed none at all.
+            // the same `showing`, so the filtered card is handed none at all;
+            // its chevron, the same promise drawn rather than spoken, comes off
+            // that one state too.
             const facts = { fates, success, timed, approvals, routines, spend };
             return (
               <ListRow
@@ -304,6 +310,7 @@ export function ScorecardsSection({
                 accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId), facts, showing)}
                 onPress={() => onSelect({ botId: card.botId })}
                 trailing={showing ? <Badge label={SCORECARD_SHOWING_LABEL} tone="accent" /> : undefined}
+                chevron={scorecardCardChevron(showing)}
                 accessibilityHint={scorecardCardHint(showing)}
                 style={styles.row}
               />
