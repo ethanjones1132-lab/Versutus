@@ -124,8 +124,27 @@ describe('chat-screen Bot voice wiring', () => {
     // the read's — a device the platform named no voice for is handed nothing.
     expect(screen).toMatch(/botVoiceOptions\(deviceVoices, botVoiceId\)/);
     expect(screen).toMatch(/voiceOptions=\{botVoiceKey \? botVoiceChoices : undefined\}/);
-    // Must still: the header toggle's own availability read is unchanged.
-    expect(screen).toMatch(/void speechAvailable\(\)\.then\(\(available\) => \{/);
+  });
+
+  test('a voice gained mid-session brings the header’s toggle with it', () => {
+    const screen = readSource('components/chat/chat-screen.tsx');
+    // Drawing a picker row and offering a toggle tap are two answers to ONE
+    // question — what voices this device has now — so both are painted from the
+    // same refreshed read instead of read apart and left able to disagree.
+    expect(screen).toMatch(/void availableVoices\(\)\.then\(\(voices\) => \{/);
+    expect(screen).toMatch(/setSpeechReady\(speechAvailableFrom\(voices\)\)/);
+    // The answer is the seam's rule asked of that list, and it is asked nowhere
+    // else: a device that gains a voice gains the row and the toggle together.
+    expect(screen).not.toMatch(/void speechAvailable\(\)\.then\(/);
+    // Must still: the gate the header's control hangs on, and the press behind
+    // it, are unchanged.
+    expect(screen).toMatch(
+      /onSpeakerPress=\{\s*threadSurface && speakerKey && speechReady \? handleSpeakerPress : undefined,?\s*\}/,
+    );
+    // Must still: which surfaces draw a Voice section stays the fold's answer,
+    // so a device the platform named no voice for is handed nothing to draw.
+    expect(screen).toMatch(/botVoiceOptions\(deviceVoices, botVoiceId\)/);
+    expect(screen).toMatch(/voiceOptions=\{botVoiceKey \? botVoiceChoices : undefined\}/);
   });
 });
 

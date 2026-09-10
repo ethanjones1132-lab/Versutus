@@ -130,7 +130,7 @@ import {
 } from '@/lib/gateway/thread-config';
 import { botVoiceOptions } from '@/lib/voice/bot-voices';
 import { speakerAction } from '@/lib/voice/speech-reply';
-import { availableVoices, speakReply, speechAvailable, stopSpeech } from '@/lib/voice/speech';
+import { availableVoices, speakReply, speechAvailableFrom, stopSpeech } from '@/lib/voice/speech';
 import {
   acknowledgeSilentModeHint,
   applyBotVoice,
@@ -485,8 +485,10 @@ export function ChatScreen() {
   // The speaker is one conversation's own opt-in (B2), held in this device's
   // store beside a Bot's voice, so the flag is read and written here and the
   // gateway is asked nothing. Whether this device has a voice to read a reply
-  // in is the platform's own answer, read alongside it: the header offers the
-  // control only where a tap can finish.
+  // in is the platform's own answer, and the header offers the control only
+  // where a tap can finish. That answer is the same read the picker's rows come
+  // from (below), so one return paints both and the two surfaces cannot
+  // disagree about what this device has.
   const speakerKey = draftThread ? speakerPreferenceKey(draftThread) : undefined;
   const [speakerOn, setSpeakerOn] = useState(false);
   const [speechReady, setSpeechReady] = useState(false);
@@ -506,9 +508,6 @@ export function ChatScreen() {
       // The line belongs to the edge that drew it: a conversation the screen
       // opens or returns to starts without one.
       setSilentHintShown(false);
-    });
-    void speechAvailable().then((available) => {
-      if (!cancelled) setSpeechReady(available);
     });
     return () => {
       cancelled = true;
@@ -557,13 +556,18 @@ export function ChatScreen() {
   // routes back in are needed: a download is made by LEAVING the app, which
   // backgrounds this screen rather than blurring its route, so the foreground
   // edge is what catches that trip and the tab's own focus is what asks the
-  // device again once the operator is back. What the rows are drawn from is
-  // unchanged — the fold still decides what a usable row is, and a device the
-  // platform names no voice for is still handed nothing to draw.
+  // device again once the operator is back. The header's own availability
+  // answer is this same read asked as the seam's rule, so a device that gains a
+  // voice gains its toggle here too, rather than a Voice section whose pick
+  // nothing could turn on. What the rows are drawn from is unchanged — the fold
+  // still decides what a usable row is, and a device the platform names no
+  // voice for is still handed nothing to draw.
   const refreshDeviceVoices = useCallback(() => {
     let live = true;
     void availableVoices().then((voices) => {
-      if (live) setDeviceVoices(voices);
+      if (!live) return;
+      setDeviceVoices(voices);
+      setSpeechReady(speechAvailableFrom(voices));
     });
     return () => {
       live = false;

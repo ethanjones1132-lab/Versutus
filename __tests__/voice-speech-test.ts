@@ -33,7 +33,13 @@ jest.mock('@/lib/voice/speech-device', () => ({
   loadSpeechEngine: () => mockLoad(),
 }));
 
-import { availableVoices, speakReply, speechAvailable, stopSpeech } from '@/lib/voice/speech';
+import {
+  availableVoices,
+  speakReply,
+  speechAvailable,
+  speechAvailableFrom,
+  stopSpeech,
+} from '@/lib/voice/speech';
 
 /** The options the seam hands the platform for one utterance. */
 type SpeakOptions = {
@@ -142,6 +148,15 @@ describe('the availability answer', () => {
     mockLoad.mockResolvedValue(engine);
 
     await expect(speechAvailable()).resolves.toBe(false);
+  });
+
+  test('the same question asked of a list already in hand is the same answer', () => {
+    // What lets one read paint both surfaces: the rule is the list's length and
+    // it is the seam's, so a caller holding the list the picker's rows were
+    // folded from asks it here rather than writing a test of its own that could
+    // disagree with this one.
+    expect(speechAvailableFrom([])).toBe(false);
+    expect(speechAvailableFrom([voice('voice.one')])).toBe(true);
   });
 });
 

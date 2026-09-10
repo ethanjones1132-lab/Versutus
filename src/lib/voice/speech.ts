@@ -90,13 +90,24 @@ export async function availableVoices(): Promise<unknown[]> {
 }
 
 /**
+ * Whether a list this device's platform named is a voice to read a reply in.
+ * This is the whole rule behind `speechAvailable`, exposed so a caller that
+ * already holds the list — the picker's own refresh, which reads it for its
+ * rows — can ask the seam's question of it instead of writing a second test
+ * that could answer differently about the same device.
+ */
+export function speechAvailableFrom(voices: unknown[]): boolean {
+  return voices.length > 0;
+}
+
+/**
  * Whether this device has a voice to read a reply in. The platform's own list
  * of voices is the question — the same read the picker's rows come from — so a
  * device that names none has nothing to speak with, and a list that cannot be
  * read is the same answer rather than a toggle whose tap could only be silent.
  */
 export async function speechAvailable(): Promise<boolean> {
-  return (await availableVoices()).length > 0;
+  return speechAvailableFrom(await availableVoices());
 }
 
 /**
