@@ -19,6 +19,7 @@ import { GatewayProvider, useGateway } from '@/context/gateway-provider';
 import { installStreamingFetch } from '@/lib/net/streaming-fetch';
 import {
   approvalDecisionFor,
+  approvalRefusalReason,
   decisionCanReachGateway,
   isApprovalActionFor,
 } from '@/lib/notifications/approval-action';
@@ -28,7 +29,7 @@ import {
   readLaunchResponse,
   type LaunchTap,
 } from '@/lib/notifications/launch-response';
-import { notifyApprovalUnreachable } from '@/lib/notifications/local';
+import { notifyApprovalRefused } from '@/lib/notifications/local';
 import { routeForTap } from '@/lib/notifications/tap-route';
 
 // React Native's global fetch cannot stream a response body, so SSE readers
@@ -114,12 +115,19 @@ function NotificationRouter() {
         return;
       }
       if (decision) {
-        // Fail closed. An approval only exists while this app drives the run
-        // (CONTEXT.md) and a decision can only reach the gateway over a live
-        // connection, so a refused action leaves the approval pending, says so
-        // honestly, and lets the destination below bring the operator to the
-        // surface where they can still decide it.
-        void notifyApprovalUnreachable();
+        // Fail closed, and say the true reason. A notice with nothing waiting
+        // behind it is not a gateway problem — a decided notice sits in the
+        // tray until it is cleared, and the payload may name a run this app is
+        // no longer driving — so only a payload naming the run this app IS
+        // driving gets the unreachable copy. Either way the approval stays
+        // pending and the destination below brings the operator to the surface
+        // where they can still decide it.
+        const reason = approvalRefusalReason(
+          statusRef.current,
+          response.notification.request.content.data,
+          pendingApproval?.runId ?? null,
+        );
+        if (reason) void notifyApprovalRefused(reason);
       }
       const destination = destinationFor(response.notification.request.content.data);
       if (!isBootstrapped) {

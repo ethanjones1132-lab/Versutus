@@ -12,7 +12,9 @@
 // approval pending right now, because only runs THIS app initiated can be
 // approved (CONTEXT.md, ADR 0001), and the connection must still be live.
 // Anything else refuses here and keeps the tap's existing Activity destination;
-// the caller posts an honest notice rather than pretending to have decided.
+// the caller posts an honest notice rather than pretending to have decided, and
+// `approvalRefusalReason` / `approvalRefusalCopy` below decide WHICH notice —
+// "nothing is waiting" and "the connection is gone" are different truths.
 
 import type { ConnectionStatus } from '@/lib/gateway/types';
 
@@ -61,4 +63,55 @@ export function isApprovalActionFor(data: unknown, runId: string): boolean {
  */
 export function decisionCanReachGateway(status: ConnectionStatus): boolean {
   return status === 'connected';
+}
+
+/** Why an Approve / Deny action could not be applied — and so what it says. */
+export type ApprovalRefusalReason = 'unreachable' | 'no-longer-waiting';
+
+/**
+ * The reason a decision was refused, or null when nothing is refused: the
+ * payload names the approval this app is driving and the connection can carry
+ * the decision.
+ *
+ * The table is ordered by what is true about the ACTION, not about the radio.
+ * Only a decision that was about a run this app is driving right now can
+ * honestly blame the gateway for not sending it. A notice with nothing waiting
+ * behind it — the run was already decided, in the app or by an earlier tap on
+ * the same notice, and `resolveRunApproval` nulls the pending approval the
+ * instant it is decided — is "no longer waiting" whatever the connection is
+ * doing: there was never a decision to carry, so a gateway claim would be false.
+ */
+export function approvalRefusalReason(
+  status: ConnectionStatus,
+  data: unknown,
+  pendingRunId: string | null,
+): ApprovalRefusalReason | null {
+  if (!isApprovalActionFor(data, pendingRunId ?? '')) return 'no-longer-waiting';
+  return decisionCanReachGateway(status) ? null : 'unreachable';
+}
+
+/** The copy one refusal reason wears; the caller posts it unchanged. */
+export interface ApprovalRefusalCopy {
+  title: string;
+  body: string;
+}
+
+const APPROVAL_REFUSAL_COPY: Record<ApprovalRefusalReason, ApprovalRefusalCopy> = {
+  unreachable: {
+    title: 'Approval not sent',
+    body: "Couldn't reach the gateway — open Versutus to decide",
+  },
+  'no-longer-waiting': {
+    title: 'Approval no longer waiting',
+    body: 'This approval is no longer waiting. Open Versutus to see the run.',
+  },
+};
+
+/**
+ * The copy for a refusal. Both notices point the operator at the app, where the
+ * run's own state is the truth; neither claims a run was decided, that the
+ * gateway ran anything, nor carries a count of anything.
+ */
+export function approvalRefusalCopy(reason: ApprovalRefusalReason): ApprovalRefusalCopy {
+  return APPROVAL_REFUSAL_COPY[reason];
 }

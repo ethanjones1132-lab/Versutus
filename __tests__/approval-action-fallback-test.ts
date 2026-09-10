@@ -1,11 +1,13 @@
 import { AppState } from 'react-native';
 
 import {
+  approvalRefusalCopy,
+  approvalRefusalReason,
   decisionCanReachGateway,
   isApprovalActionFor,
 } from '@/lib/notifications/approval-action';
 import { APPROVAL_NOTICE_DATA_KIND } from '@/lib/notifications/categories';
-import { notifyApprovalUnreachable } from '@/lib/notifications/local';
+import { notifyApprovalRefused } from '@/lib/notifications/local';
 
 jest.mock('expo-notifications', () => ({
   scheduleNotificationAsync: jest.fn(),
@@ -94,7 +96,79 @@ describe('the refusal premise: payloads the guard will not match', () => {
   });
 });
 
-describe('notifyApprovalUnreachable', () => {
+describe('approvalRefusalReason (the refusal table)', () => {
+  const payload = (runId: unknown) => ({
+    kind: APPROVAL_NOTICE_DATA_KIND,
+    runId,
+    gatewayKey: 'gw-a',
+  });
+
+  test('a decision about the run this app is driving over a live connection is no refusal', () => {
+    expect(approvalRefusalReason('connected', payload('run-7'), 'run-7')).toBeNull();
+  });
+
+  test('the same decision over a dead connection cannot be sent, and says so', () => {
+    // The one case that may blame the gateway: a run this app IS driving is
+    // waiting right now, and the decision has nowhere to go.
+    expect(approvalRefusalReason('disconnected', payload('run-7'), 'run-7')).toBe('unreachable');
+    expect(approvalRefusalReason('connecting', payload('run-7'), 'run-7')).toBe('unreachable');
+    expect(approvalRefusalReason('reconnecting', payload('run-7'), 'run-7')).toBe('unreachable');
+    expect(approvalRefusalReason('pairing', payload('run-7'), 'run-7')).toBe('unreachable');
+  });
+
+  test('a notice with nothing waiting behind it blames nothing, connected or not', () => {
+    // The case the table exists for: the run was decided in the app (or by an
+    // earlier tap on the same notice), and `resolveRunApproval` nulls the
+    // pending approval the instant it is decided — so the second tap has
+    // nothing to send. A gateway claim here would be false, whatever the
+    // connection is doing: there was never a decision to carry.
+    expect(approvalRefusalReason('connected', payload('run-7'), null)).toBe('no-longer-waiting');
+    expect(approvalRefusalReason('disconnected', payload('run-7'), null)).toBe('no-longer-waiting');
+  });
+
+  test('a payload naming another run is not the approval pending here', () => {
+    expect(approvalRefusalReason('connected', payload('run-8'), 'run-7')).toBe('no-longer-waiting');
+    expect(approvalRefusalReason('disconnected', payload('run-8'), 'run-7')).toBe('no-longer-waiting');
+  });
+
+  test('a half-shaped or foreign payload is no longer waiting, never a gateway claim', () => {
+    const notThisApproval = [
+      undefined,
+      null,
+      'approval',
+      {},
+      { kind: APPROVAL_NOTICE_DATA_KIND },
+      { kind: APPROVAL_NOTICE_DATA_KIND, runId: '' },
+      { kind: 'run', runId: 'run-7' },
+    ];
+
+    for (const data of notThisApproval) {
+      expect(approvalRefusalReason('connected', data, 'run-7')).toBe('no-longer-waiting');
+      expect(approvalRefusalReason('disconnected', data, 'run-7')).toBe('no-longer-waiting');
+    }
+  });
+});
+
+describe('approvalRefusalCopy (one table, two honest notices)', () => {
+  test('the unreachable copy keeps the fail-closed wording it shipped with', () => {
+    expect(approvalRefusalCopy('unreachable')).toEqual({
+      title: 'Approval not sent',
+      body: "Couldn't reach the gateway — open Versutus to decide",
+    });
+  });
+
+  test('the nothing-pending copy makes no claim about the gateway', () => {
+    const copy = approvalRefusalCopy('no-longer-waiting');
+
+    expect(copy.body).toContain('This approval is no longer waiting');
+    // No gateway claim, no result count, no pretend decision.
+    expect(copy.title).not.toContain('gateway');
+    expect(copy.body).not.toContain('gateway');
+    expect(copy.body).not.toContain('reach');
+  });
+});
+
+describe('notifyApprovalRefused', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     setAppState('background');
@@ -108,8 +182,8 @@ describe('notifyApprovalUnreachable', () => {
     }
   });
 
-  test('the fallback is an immediate notice saying the decision did not reach the gateway', async () => {
-    await notifyApprovalUnreachable();
+  test('the unreachable refusal is an immediate notice saying the decision did not reach the gateway', async () => {
+    await notifyApprovalRefused('unreachable');
 
     expect(mockSchedule).toHaveBeenCalledTimes(1);
     const request = mockSchedule.mock.calls[0][0];
@@ -122,37 +196,64 @@ describe('notifyApprovalUnreachable', () => {
     expect(request.trigger).toBeNull();
   });
 
-  test('the fallback wears no category, so it offers no second set of buttons', async () => {
-    await notifyApprovalUnreachable();
+  test('the nothing-pending refusal is immediate, and says the approval is not waiting', async () => {
+    await notifyApprovalRefused('no-longer-waiting');
 
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
     const request = mockSchedule.mock.calls[0][0];
-    expect(request.content.categoryIdentifier).toBeUndefined();
+    expect(request.content.title).toBe(approvalRefusalCopy('no-longer-waiting').title);
+    expect(request.content.body).toBe(approvalRefusalCopy('no-longer-waiting').body);
+    expect(request.trigger).toBeNull();
+    // No payload: the refusal is not an approval notice, so a tap on it can
+    // never be read back as one (routeForTap).
+    expect(request.content.data).toBeUndefined();
   });
 
-  test('a foregrounded fallback is suppressed, exactly as the other notices are', async () => {
+  test('a refusal wears no category, so it offers no second set of buttons', async () => {
+    await notifyApprovalRefused('unreachable');
+    await notifyApprovalRefused('no-longer-waiting');
+
+    for (const call of mockSchedule.mock.calls) {
+      expect(call[0].content.categoryIdentifier).toBeUndefined();
+    }
+  });
+
+  test('a foregrounded refusal is suppressed, exactly as the other notices are', async () => {
     setAppState('active');
 
-    await notifyApprovalUnreachable();
+    await notifyApprovalRefused('unreachable');
+    await notifyApprovalRefused('no-longer-waiting');
 
     expect(mockSchedule).not.toHaveBeenCalled();
   });
 });
 
 describe('NotificationRouter fail-closed wiring', () => {
-  test('a decision that cannot be applied posts the fallback instead of deciding', () => {
+  test('a decision that cannot be applied posts a refusal instead of deciding', () => {
     const src = listener();
 
-    // Both gates sit ahead of the tap destination: the connection must be live
+    // All three sit ahead of the tap destination: the connection must be live
     // and the payload must name the approval pending right now, so a refused
     // decision neither resolves nor falls through silently.
     const gate = src.indexOf('decisionCanReachGateway(statusRef.current)');
     const guard = src.indexOf('isApprovalActionFor(');
-    const fallback = src.indexOf('notifyApprovalUnreachable()');
+    const refusal = src.indexOf('notifyApprovalRefused(');
     const destination = src.indexOf('const destination = destinationFor(');
     expect(gate).toBeGreaterThan(-1);
     expect(guard).toBeGreaterThan(gate);
-    expect(fallback).toBeGreaterThan(guard);
-    expect(fallback).toBeLessThan(destination);
+    expect(refusal).toBeGreaterThan(guard);
+    expect(refusal).toBeLessThan(destination);
+  });
+
+  test('the refusal copy comes from the table, not from a hard-coded line in the listener', () => {
+    const src = listener();
+
+    // The reason is read from the same three inputs the table takes: the live
+    // status, the response's payload, and the run this app is driving now.
+    expect(src).toContain('approvalRefusalReason(');
+    expect(src).toContain('statusRef.current');
+    expect(src).toContain('pendingApproval?.runId ?? null');
+    expect(src).not.toContain("Couldn't reach the gateway");
   });
 
   test('a refused decision never resolves the pending approval', () => {

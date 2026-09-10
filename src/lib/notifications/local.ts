@@ -7,6 +7,10 @@ import * as Notifications from 'expo-notifications';
 import { AppState } from 'react-native';
 
 import {
+  approvalRefusalCopy,
+  type ApprovalRefusalReason,
+} from './approval-action';
+import {
   GATEWAY_DOWN_TITLE,
   gatewayDownNoticeData,
   isDownNoticeFor,
@@ -92,13 +96,16 @@ export async function notifyRunComplete(title: string, body: string): Promise<vo
 
 /**
  * Post the fail-closed notice for an Approve / Deny action that could not be
- * applied — the connection is gone, or the payload no longer names the approval
- * pending here. The approval stays pending for the operator to decide in the
- * app; nothing in this copy claims the run was decided, and nothing claims the
- * gateway ran anything.
+ * applied. The reason picks the copy: only a decision that could not reach a run
+ * this app is driving may say the gateway was unreachable; a notice with nothing
+ * waiting behind it says that instead, and claims nothing about the gateway. The
+ * approval (if there is one) stays pending for the operator to decide in the
+ * app, and no refusal copy claims the run was decided or that the gateway ran
+ * anything.
  */
-export async function notifyApprovalUnreachable(): Promise<void> {
-  await present('Approval not sent', "Couldn't reach the gateway — open Versutus to decide");
+export async function notifyApprovalRefused(reason: ApprovalRefusalReason): Promise<void> {
+  const copy = approvalRefusalCopy(reason);
+  await present(copy.title, copy.body);
 }
 
 /**
