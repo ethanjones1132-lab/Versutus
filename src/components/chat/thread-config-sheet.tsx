@@ -86,6 +86,7 @@ type ModelItem = {
   auth?: string;
   usage?: string;
   catalogState?: string;
+  backendId?: string;
 };
 
 type PickerSection = ModelSection<ModelItem>;
@@ -150,6 +151,8 @@ export type ThreadConfigSheetProps = {
   onRefreshModels?: () => void;
   /** Set when the last model-catalog read failed. Empty is not "no catalog". */
   modelsError?: string;
+  /** Names the backend the Models list is scoped to; absent when there is nothing to lock against. */
+  backendLabel?: string;
   // Backends section
   backends?: GatewayBackend[];
   selectedBackendId?: string;
@@ -635,6 +638,7 @@ function ModelsSection({
   models = [],
   modelsError,
   currentDefault,
+  backendLabel,
   onSelect,
   onRefresh,
 }: {
@@ -642,6 +646,8 @@ function ModelsSection({
   /** Set when the last catalog read failed. Empty is not "no catalog". */
   modelsError?: string;
   currentDefault?: string;
+  /** Names the backend the list is locked to; absent when there is nothing to lock against. */
+  backendLabel?: string;
   onSelect?: (modelId: string, providerId?: string) => void;
   onRefresh?: () => void;
 }) {
@@ -779,6 +785,13 @@ function ModelsSection({
 
   return (
     <>
+      {backendLabel ? (
+        <Text variant="caption" color="tertiary" style={styles.blurb}>
+          Models served by {backendLabel}. Switch on the Backends tab to see another backend’s
+          models.
+        </Text>
+      ) : null}
+
       {models.length > 1 ? (
         <TextField
           value={query}
@@ -943,6 +956,7 @@ export function ThreadConfigSheet({
   onSelectModel,
   onRefreshModels,
   modelsError,
+  backendLabel,
   backends,
   selectedBackendId,
   onSelectBackend,
@@ -993,6 +1007,7 @@ export function ThreadConfigSheet({
           models={models}
           modelsError={modelsError}
           currentDefault={currentModel}
+          backendLabel={backendLabel}
           onSelect={onSelectModel}
           onRefresh={onRefreshModels}
         />

@@ -1,0 +1,20 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- The five permissions a hands-free call needs: the microphone, the
+       notification that makes the session visible, and the foreground-service
+       types it runs as. No phoneCall type, no boot permission. -->
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+  <application>
+    <!-- Non-exported, started only from the app's own visible Start tap, and
+         removed with the task. B5: no wake word and no automatic start. -->
+    <service
+      android:name=".HandsfreeCallService"
+      android:exported="false"
+      android:foregroundServiceType="microphone|mediaPlayback"
+      android:stopWithTask="true" />
+  </application>
+</manifest>

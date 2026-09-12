@@ -1,0 +1,10 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["HandsfreeVoiceModule"],
+    "appDelegateSubscribers": ["HandsfreeVoiceAppDelegateSubscriber"]
+  },
+  "android": {
+    "modules": ["com.versutus.handsfreevoice.HandsfreeVoiceModule"]
+  }
+}

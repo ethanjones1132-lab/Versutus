@@ -18,6 +18,10 @@ import {
   chatComposerPaletteScrollMaxHeight,
 } from '@/lib/motion/chat-composer-palette';
 import { springSnappy } from '@/lib/motion/presets';
+import {
+  HANDSFREE_MIC_LOCK_COPY,
+  HANDSFREE_START_LABEL,
+} from '@/lib/voice/handsfree-call-copy';
 import { micControlState } from '@/lib/voice/mic-state';
 import {
   speechRecognitionAvailable,
@@ -53,6 +57,17 @@ type ChatComposerProps = {
    * caller: the composer renders the same field with or without a handle.
    */
   inputRef?: Ref<TextFieldHandle>;
+  /**
+   * The hands-free call control, offered beside the mic only where the provider
+   * says Start can succeed. `undefined` hides it.
+   */
+  onStartCall?: () => void;
+  /**
+   * A call is live for this thread: manual send and dictation are held so the
+   * call's own auto-send is the only thing leaving the phone. The draft is not
+   * cleared.
+   */
+  callActive?: boolean;
 };
 
 export const ChatComposer = memo(function ChatComposer({
@@ -72,6 +87,8 @@ export const ChatComposer = memo(function ChatComposer({
   status,
   queuedCount,
   inputRef,
+  onStartCall,
+  callActive = false,
 }: ChatComposerProps) {
   const tokens = useTokens();
   const [focused, setFocused] = useState(false);
@@ -169,9 +186,18 @@ export const ChatComposer = memo(function ChatComposer({
     void stopSpeechRecognition();
   };
 
-  const isActionDisabled = !canSend || (!isStreaming && !draft.trim());
+  // A live call holds manual send and dictation for its thread: speech is the
+  // call's to send, and a typed draft is preserved untouched rather than
+  // cleared.
+  const isActionDisabled = callActive || !canSend || (!isStreaming && !draft.trim());
   // Input stays editable whenever the user can queue or send (including offline).
-  const inputEditable = canSend && !isStreaming;
+  const inputEditable = !callActive && canSend && !isStreaming;
+  const micDisabled = callActive || micState.kind !== 'live';
+  const micLabel = callActive
+    ? HANDSFREE_MIC_LOCK_COPY
+    : micState.kind === 'disabled'
+      ? micState.reason
+      : 'Hold to talk';
 
   const insets = useSafeAreaInsets();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
@@ -413,6 +439,25 @@ export const ChatComposer = memo(function ChatComposer({
             accessibilityLabel="Message input"
             style={styles.input}
           />
+          {onStartCall && !callActive ? (
+            // Beside the mic, never instead of it: a phone-shaped control that
+            // opens the disclosure sheet. The provider offers it only where a
+            // tap can actually start a session.
+            <PressableScale
+              style={[
+                styles.micButton,
+                { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+              ]}
+              onPress={onStartCall}
+              accessibilityRole="button"
+              accessibilityLabel={HANDSFREE_START_LABEL}>
+              <Icon
+                name={{ ios: 'phone.fill', android: 'call', web: 'call' }}
+                size={16}
+                color="accent"
+              />
+            </PressableScale>
+          ) : null}
           {micState.kind !== 'hidden' ? (
             // Drawn from the one fold and nothing else: dimmed with the
             // module's own reason line while the gateway is away, live while
@@ -421,17 +466,17 @@ export const ChatComposer = memo(function ChatComposer({
               style={[
                 styles.micButton,
                 { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
-                micState.kind === 'disabled' && styles.micDisabled,
+                micDisabled && styles.micDisabled,
               ]}
-              disabled={micState.kind !== 'live'}
+              disabled={micDisabled}
               onPressIn={handleMicPressIn}
               onPressOut={handleMicPressOut}
               accessibilityRole="button"
-              accessibilityLabel={micState.kind === 'disabled' ? micState.reason : 'Hold to talk'}>
+              accessibilityLabel={micLabel}>
               <Icon
                 name={{ ios: 'mic.fill', android: 'mic', web: 'mic' }}
                 size={16}
-                color={micState.kind === 'live' ? 'accent' : 'textTertiary'}
+                color={!micDisabled ? 'accent' : 'textTertiary'}
               />
             </PressableScale>
           ) : null}
@@ -473,12 +518,12 @@ export const ChatComposer = memo(function ChatComposer({
           </Animated.View>
         </Card>
 
-        {micState.kind === 'disabled' ? (
+        {micState.kind !== 'hidden' && micDisabled ? (
           // The mic says why it cannot be held, in the module's own words:
           // a dimmed control on its own is silence, and silence about a
-          // microphone reads as a broken one.
+          // microphone reads as a broken one. A live call states its own lock.
           <Text variant="micro" color="tertiary" style={styles.micReason}>
-            {micState.reason}
+            {micLabel}
           </Text>
         ) : null}
       </View>

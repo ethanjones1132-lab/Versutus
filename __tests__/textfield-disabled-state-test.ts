@@ -60,7 +60,9 @@ describe('textfield disabled state', () => {
 
   test('the three editable gates stay byte-identical', () => {
     expect(readComposer()).toContain('editable={inputEditable}');
-    expect(readComposer()).toContain('const inputEditable = canSend && !isStreaming;');
+    // The composer gate picks up the hands-free call lock (a call owns the
+    // microphone and its own auto-send), and nothing else.
+    expect(readComposer()).toContain('const inputEditable = !callActive && canSend && !isStreaming;');
     expect(readApprovalCard()).toContain('editable={!busy}');
     expect(readActivity()).toContain("editable={!starting && status === 'connected'}");
   });

@@ -11,6 +11,13 @@ expo-env.d.ts
 
 # Native
 .kotlin/
+# Local Expo module build output (Gradle/Xcode intermediates) — the top-level
+# /android and /ios trees are already ignored wholesale since expo prebuild
+# regenerates them, but a local module under modules/ is source-controlled and
+# only its own build/ directory is generated.
+modules/*/android/build/
+modules/*/android/.cxx/
+modules/*/ios/build/
 *.orig.*
 *.jks
 *.p8
@@ -51,6 +58,7 @@ gate/.env
 gate/.tokens.json
 gate/.pairing.json
 gate/.device-tokens.json
+gate/.push-tokens.json
 gate/.grok-desktop-device.json
 gate/secrets/
 # The vault names each file after its credential ref, so a mistyped ref puts the

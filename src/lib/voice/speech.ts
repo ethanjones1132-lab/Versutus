@@ -38,6 +38,30 @@ let run = 0;
 /** Whether a reply is being read right now, so the next one queues behind it. */
 let speaking = false;
 
+/**
+ * Whether a hands-free call owns audio. While set, `speakReply` answers `false`
+ * exactly as a build with no engine does, so the transcript's speaker effect
+ * (which only ever fires for a completed message) cannot double-speak a reply
+ * the call module is already reading. The stored speaker toggle is untouched —
+ * it resumes the instant the call ends and clears the flag.
+ */
+let callOwnsAudio = false;
+
+/** Hand audio ownership to a hands-free call. */
+export function beginHandsfreeCall(): void {
+  callOwnsAudio = true;
+}
+
+/** Return audio ownership to the ordinary speaker. */
+export function endHandsfreeCall(): void {
+  callOwnsAudio = false;
+}
+
+/** Whether a hands-free call currently owns audio. */
+export function handsfreeOwnsSpeech(): boolean {
+  return callOwnsAudio;
+}
+
 /** The platform's own options for one chunk: the voice, and how the chunk ends. */
 function speechOptions(voice: ReplyVoice, onEnd: () => void): SpeechOptions {
   const options: SpeechOptions = { onDone: onEnd, onStopped: onEnd, onError: onEnd };
@@ -119,6 +143,7 @@ export async function speechAvailable(): Promise<boolean> {
  * rejection into the screen.
  */
 export async function speakReply(text: string, voice: ReplyVoice = {}): Promise<boolean> {
+  if (callOwnsAudio) return false;
   const engine = await loadSpeechEngine();
   if (!engine) return false;
 

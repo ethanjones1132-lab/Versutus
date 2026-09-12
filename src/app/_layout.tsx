@@ -14,6 +14,7 @@ import { AppBootstrap } from '@/components/app-bootstrap';
 import { AppLockGate } from '@/components/app-lock-gate';
 import { ConnectedToast } from '@/components/connected-toast';
 import { FontProvider } from '@/components/font-provider';
+import { HandsfreeCallBanner } from '@/components/voice/handsfree-call-banner';
 import { TlsFingerprintGuard } from '@/components/gateway/tls-fingerprint-guard';
 import { VersutusDarkTheme } from '@/constants/navigation-theme';
 import {
@@ -21,8 +22,10 @@ import {
   useGateway,
   type SendChatInputOutcome,
 } from '@/context/gateway-provider';
+import { HandsfreeVoiceProvider } from '@/context/handsfree-voice-provider';
 import type { ChatSurface } from '@/lib/gateway/bots';
 import { deepLinkTarget } from '@/lib/gateway/deep-link';
+import { openSessionById, openSessionByIdFailureText } from '@/lib/gateway/session-open-by-id';
 import {
   dismissSharedText,
   listenForSharedText,
@@ -47,9 +50,12 @@ import {
   type LaunchTap,
 } from '@/lib/notifications/launch-response';
 import {
+  ensurePushChannels,
+  installForegroundNotificationHandler,
   notifyApprovalDecided,
   notifyApprovalRefused,
   notifyBotReplyNotSent,
+  notifySessionOpenFailed,
 } from '@/lib/notifications/local';
 import type { RunFocus } from '@/lib/notifications/run-focus';
 import { routeForTap } from '@/lib/notifications/tap-route';
@@ -147,6 +153,7 @@ function NotificationRouter() {
     sendChatInput,
     requestSurface,
     requestRunFocus,
+    gatewayRequest,
   } = useGateway();
   // The launch tap is read once, and its route is held until bootstrap has
   // mounted the Stack: navigating any earlier loses to the boot overlay's
@@ -158,6 +165,12 @@ function NotificationRouter() {
   // is usually tapped from a cold start, and a focus dropped on the way through
   // the bootstrap wait is the mis-landing this router exists to prevent.
   const pendingRunFocusRef = useRef<RunFocus | null>(null);
+  // The session a held reply tap named, applied with the held destination for
+  // the same reason the run focus is: a reply notice is usually tapped from a
+  // cold start, and the exact conversation it is about is the whole point of
+  // the route — an open dropped on the way through the bootstrap wait leaves
+  // the operator on Chat but in the wrong thread.
+  const pendingReplySessionRef = useRef<{ sessionId: string } | null>(null);
   // The launch tap's identifier while its replay window is open, so the same
   // tap arriving at the live listener cannot route a second time.
   const launchTapRef = useRef<LaunchTap | null>(null);
@@ -203,20 +216,43 @@ function NotificationRouter() {
     runFocusRef.current = requestRunFocus;
   }, [requestRunFocus]);
 
+  // The session open a reply tap asks for, mirrored for the same reason the run
+  // focus is: the listener below is registered once, and `gatewayRequest` must
+  // not join its deps. Unlike a run focus — a context setter — this one has to
+  // open the conversation, so it runs the proven open-by-id pairing (the thread
+  // sheet's "Open by id" row): `openSessionById` validates through `session.get`
+  // before switching, which matters because a push-delivered id can be stale by
+  // the time it is tapped. A miss is named, never swallowed.
+  const replySessionRef = useRef<((sessionId: string) => void) | null>(null);
+  useEffect(() => {
+    replySessionRef.current = (sessionId: string) => {
+      void openSessionById(gatewayRequest, sessionId).then((result) => {
+        if (!result.ok) {
+          void notifySessionOpenFailed(openSessionByIdFailureText(sessionId, result.error));
+        }
+      });
+    };
+  }, [gatewayRequest]);
+
   // The Approve / Deny buttons only exist once the category is registered, and
   // a notice may not reference a category the device has never seen — so this
   // runs at mount, ahead of any notice the provider can post.
   useEffect(() => {
     void registerNotificationCategories();
+    void ensurePushChannels();
+    installForegroundNotificationHandler();
   }, []);
 
   useEffect(() => {
-    // Route on the payload's kind: a routine notice opens Chat (its roster
-    // is the Bot list). Runs, approvals and anything unrecognized stay on
-    // Activity, where they are monitored (chat still has the sheet).
+    // Route on the payload's kind: a routine notice and a finished model reply
+    // both open Chat — the roster for a routine, and the exact conversation for
+    // a reply (the session id rides beside the destination, since Chat is one
+    // tab and there is no route to carry it). Runs, approvals and anything
+    // unrecognized stay on Activity, where they are monitored (chat still has
+    // the sheet).
     const destinationFor = (data: unknown): '/chat' | '/activity' => {
       const route = routeForTap(data);
-      return route?.kind === 'routine' ? '/chat' : '/activity';
+      return route?.kind === 'routine' || route?.kind === 'reply' ? '/chat' : '/activity';
     };
 
     // The run a payload named, if it named one. The destination above drops the
@@ -227,6 +263,16 @@ function NotificationRouter() {
     const runFocusFor = (data: unknown): RunFocus | null => {
       const route = routeForTap(data);
       return route?.kind === 'run' ? { runId: route.runId } : null;
+    };
+
+    // The session a reply payload named, if it named one. The destination above
+    // drops the id for the same reason the run focus does — Chat is one tab —
+    // and the session rides beside it instead: the tab opens that exact
+    // conversation once it lands. A notice naming no session asks for no open
+    // at all.
+    const replySessionFor = (data: unknown): { sessionId: string } | null => {
+      const route = routeForTap(data);
+      return route?.kind === 'reply' ? { sessionId: route.sessionId } : null;
     };
 
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -291,19 +337,25 @@ function NotificationRouter() {
       }
       const destination = destinationFor(response.notification.request.content.data);
       const runFocus = runFocusFor(response.notification.request.content.data);
+      const replySession = replySessionFor(response.notification.request.content.data);
       if (!isBootstrapped) {
         // Boot overlay: the Stack is not mounted yet, so navigating now
         // loses to the first-run redirect. Hold the destination in the same
-        // slot the launch tap uses; the run below routes it once the Stack
-        // is up.
+        // slot the launch tap uses; the run and the reply session below route
+        // it once the Stack is up.
         pendingTapRef.current = destination;
         pendingRunFocusRef.current = runFocus;
+        pendingReplySessionRef.current = replySession;
         return;
       }
       router.navigate(destination);
       // The tab may be filtered to a Bot the notice's run does not belong to,
       // so the filter is dropped. The tab applies the request and clears it.
       if (runFocus) runFocusRef.current?.(runFocus);
+      // A reply notice names the conversation it is about, so that exact
+      // session is opened once Chat has landed. The open is validated first,
+      // and a stale id is named instead of switching (replySessionRef).
+      if (replySession) replySessionRef.current?.(replySession.sessionId);
     });
 
     // A tap that LAUNCHED the app is not replayed to a listener registered
@@ -321,6 +373,9 @@ function NotificationRouter() {
         };
         pendingTapRef.current = destinationFor(launch.notification.request.content.data);
         pendingRunFocusRef.current = runFocusFor(launch.notification.request.content.data);
+        pendingReplySessionRef.current = replySessionFor(
+          launch.notification.request.content.data,
+        );
       }
     }
 
@@ -332,8 +387,11 @@ function NotificationRouter() {
       pendingTapRef.current = null;
       const runFocus = pendingRunFocusRef.current;
       pendingRunFocusRef.current = null;
+      const replySession = pendingReplySessionRef.current;
+      pendingReplySessionRef.current = null;
       router.navigate(destination);
       if (runFocus) runFocusRef.current?.(runFocus);
+      if (replySession) replySessionRef.current?.(replySession.sessionId);
     }
 
     return () => subscription.remove();
@@ -503,16 +561,17 @@ export default function RootLayout() {
     // wait, not after it. The native splash still hides on font resolution
     // and AppBootstrap still gates the Stack on isBootstrapped.
     <GatewayProvider>
-      <FontProvider>
-        <ThemeProvider value={VersutusDarkTheme}>
-           <StatusBar style="light" />
-           <NotificationRouter />
-           <GatewayDeepLinkRouter />
-           <SharedTextRouter />
-          <AppBootstrap>
-            <View style={styles.root}>
-              <AnimatedSplashOverlay />
-              <AppLockGate>
+      <HandsfreeVoiceProvider>
+        <FontProvider>
+          <ThemeProvider value={VersutusDarkTheme}>
+             <StatusBar style="light" />
+             <NotificationRouter />
+             <GatewayDeepLinkRouter />
+             <SharedTextRouter />
+            <AppBootstrap>
+              <View style={styles.root}>
+                <AnimatedSplashOverlay />
+                <AppLockGate>
                 <Stack
                   screenOptions={{
                     headerShown: false,
@@ -573,12 +632,14 @@ export default function RootLayout() {
                   {__DEV__ ? <Stack.Screen name="dev" options={{ headerShown: false }} /> : null}
                 </Stack>
               </AppLockGate>
+              <HandsfreeCallBanner />
               <ConnectedToast />
               <TlsFingerprintGuard />
             </View>
           </AppBootstrap>
-        </ThemeProvider>
-      </FontProvider>
+          </ThemeProvider>
+        </FontProvider>
+      </HandsfreeVoiceProvider>
     </GatewayProvider>
   );
 }

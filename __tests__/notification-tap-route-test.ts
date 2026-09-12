@@ -1,4 +1,5 @@
 import {
+  REPLY_NOTICE_DATA_KIND,
   RUN_NOTICE_DATA_KIND,
   routeForTap,
   type TapRoute,
@@ -46,6 +47,42 @@ describe('routeForTap (pure notification tap routing)', () => {
       kind: 'run',
       runId: 'run-7',
     });
+  });
+
+  test('an A5 routine notice routes to its routine by kind', () => {
+    const route: TapRoute | null = routeForTap({ kind: 'routine', jobId: 'job-1', botId: 'scout' });
+    expect(route).toEqual({ kind: 'routine', jobId: 'job-1', botId: 'scout' });
+  });
+
+  test('a half-shaped A5 routine notice is not routed', () => {
+    expect(routeForTap({ kind: 'routine', jobId: 'job-1' })).toBeNull();
+    expect(routeForTap({ kind: 'routine', botId: 'scout' })).toBeNull();
+    expect(routeForTap({ kind: 'routine', jobId: '', botId: 'scout' })).toBeNull();
+  });
+
+  test('the local routine-due spelling still routes', () => {
+    const route: TapRoute | null = routeForTap(routineNoticeData('job-1', 'scout'));
+    expect(route).toEqual({ kind: 'routine', jobId: 'job-1', botId: 'scout' });
+  });
+
+  test('a run notice drops extra bot metadata', () => {
+    expect(
+      routeForTap({ kind: RUN_NOTICE_DATA_KIND, runId: 'run-7', botId: 'scout' }),
+    ).toEqual({ kind: 'run', runId: 'run-7' });
+  });
+
+  test('a reply notice routes to its session and carries its optional bot', () => {
+    const route: TapRoute | null = routeForTap({
+      kind: REPLY_NOTICE_DATA_KIND,
+      sessionId: 'session-7',
+      botId: 'scout',
+    });
+    expect(route).toEqual({ kind: 'reply', sessionId: 'session-7', botId: 'scout' });
+  });
+
+  test('a reply without a session id is not routed', () => {
+    expect(routeForTap({ kind: REPLY_NOTICE_DATA_KIND, botId: 'scout' })).toBeNull();
+    expect(routeForTap({ kind: REPLY_NOTICE_DATA_KIND, sessionId: '' })).toBeNull();
   });
 
   test('a weekly report notice routes on its own kind, and carries no id', () => {
@@ -112,10 +149,13 @@ describe('NotificationRouter', () => {
 
   test('a weekly report tap opens the scorecard surface on Activity, not Chat', () => {
     const src = between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
-    // Only a routine route opens Chat. A weekly report's destination takes no
-    // argument — the Scorecards section reads this device's runs when it opens
-    // — so the weekly route keeps the Activity landing the section is mounted on.
-    expect(src).toContain("route?.kind === 'routine' ? '/chat' : '/activity'");
+    // A routine route and a reply route open Chat; a weekly report does not. A
+    // weekly report's destination takes no argument — the Scorecards section
+    // reads this device's runs when it opens — so the weekly route keeps the
+    // Activity landing the section is mounted on.
+    expect(src).toContain(
+      "route?.kind === 'routine' || route?.kind === 'reply' ? '/chat' : '/activity'",
+    );
   });
 
   test('the launch tap is still read once and retired before it can route twice', () => {
@@ -132,5 +172,95 @@ describe('NotificationRouter', () => {
     expect(src).toContain('deepLinkTarget(parsed.path, parsed.queryParams ?? {})');
     expect(src).toContain("pathname: '/gateway/add'");
     expect(src).toContain('params: target.params');
+  });
+});
+
+describe('a finished model reply opens the conversation it is about', () => {
+  const routerSource = () =>
+    between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
+
+  const listener = () =>
+    between(
+      routerSource(),
+      'addNotificationResponseReceivedListener',
+      'return () => subscription.remove()',
+    );
+
+  test('a reply tap opens Chat, not Activity', () => {
+    const src = routerSource();
+
+    // The reply route exists to land in its conversation, and a conversation
+    // lives on Chat — so a reply joins the routine route as a Chat destination
+    // instead of the Activity fallback that used to swallow it.
+    expect(src).toContain("route?.kind === 'reply'");
+    expect(src).toContain(
+      "route?.kind === 'routine' || route?.kind === 'reply' ? '/chat' : '/activity'",
+    );
+  });
+
+  test('only a reply route becomes a session open', () => {
+    const src = routerSource();
+
+    // The destination drops the id — Chat is one tab — so the session rides
+    // beside it. A routine, a run, a weekly report and an unrecognized payload
+    // all ask for no open at all.
+    expect(src).toContain("route?.kind === 'reply' ? { sessionId: route.sessionId } : null");
+  });
+
+  test('the session open is asked for right after the navigation', () => {
+    const src = listener();
+
+    const navigate = src.indexOf('router.navigate(destination)');
+    const ask = src.indexOf('replySessionRef.current?.(replySession.sessionId)');
+    expect(navigate).toBeGreaterThan(-1);
+    expect(ask).toBeGreaterThan(navigate);
+    expect(src).toContain(
+      'const replySession = replySessionFor(response.notification.request.content.data)',
+    );
+  });
+
+  test('the open is validated by session.get, and a miss is named, never thrown', () => {
+    const src = routerSource();
+
+    // The proven open-by-id pairing: validate through `session.get` before
+    // switching, because a push-delivered id can be stale. A rejected read
+    // surfaces the same failure copy the thread sheet posts, as a local notice
+    // rather than a throw or a silent no-op.
+    expect(src).toContain('openSessionById(gatewayRequest, sessionId)');
+    expect(src).toContain('if (!result.ok)');
+    expect(src).toContain('openSessionByIdFailureText(sessionId, result.error)');
+    expect(src).toContain('void notifySessionOpenFailed(');
+    expect(src).toContain('replySessionRef.current = (sessionId: string) =>');
+  });
+
+  test('a reply tap that launched the app keeps its open across the bootstrap wait', () => {
+    const src = routerSource();
+
+    // Held in the same slot the destination is, for the same reason the run
+    // focus is: a reply notice is usually tapped from a cold start.
+    expect(src).toContain(
+      'pendingReplySessionRef.current = replySessionFor(',
+    );
+    expect(src).toContain('const replySession = pendingReplySessionRef.current');
+    expect(src).toContain('pendingReplySessionRef.current = null');
+    // Both call sites apply it the same way — the launch-replay path behaves
+    // identically to the live listener path.
+    expect((src.match(/if \(replySession\) replySessionRef\.current\?\.\(replySession\.sessionId\);/g) ?? []).length).toBe(2);
+  });
+
+  test('the session open reaches the tab through a ref, so the listener is registered once', () => {
+    const src = routerSource();
+
+    expect(src).toContain('replySessionRef.current = (sessionId: string) =>');
+    const listenerEnd = src.slice(src.indexOf('addNotificationResponseReceivedListener'));
+    expect(listenerEnd).toContain('}, [router, isBootstrapped]);');
+  });
+
+  test('routine and run routing are unchanged', () => {
+    const src = routerSource();
+
+    expect(src).toContain("route?.kind === 'routine'");
+    expect(src).toContain("route?.kind === 'run' ? { runId: route.runId } : null");
+    expect(src).toContain('if (runFocus) runFocusRef.current?.(runFocus);');
   });
 });

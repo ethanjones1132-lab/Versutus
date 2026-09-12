@@ -28,6 +28,9 @@ import { buildCliEnvironment } from './cli-environments/process-environment.mjs'
 import { TokenStore } from './tokens.mjs';
 import { PairingStore } from './pairing.mjs';
 import { DeviceTokenStore } from './device-tokens.mjs';
+import { PushTokenStore } from './push-tokens.mjs';
+import { createPushRpc } from './push-rpc.mjs';
+import { createPushSend } from './push-send.mjs';
 import { verifySignedAccessRequest } from './signature.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
@@ -412,6 +415,7 @@ export async function createGate(config = {}) {
     environmentRegistry: injectedRegistry,
     backendServerFactory,
     terminalSessions: injectedTerminalSessions,
+    pushFetch,
   } = config;
 
   await migrateLegacyProviders({ sourceRoot: root, gateHome });
@@ -532,29 +536,39 @@ export async function createGate(config = {}) {
   // rpcMethods — a method added after that first build would be dispatchable
   // but invisible until the next reload.
   const deviceTokens = new DeviceTokenStore(join(root, '.device-tokens.json'));
+  const pushTokens = new PushTokenStore(join(gateHome, 'push-tokens.json'));
+  const pushSend = createPushSend({ fetchImpl: pushFetch ?? globalThis.fetch });
+  const notificationMethods = createPushRpc({ tokens: pushTokens, send: pushSend.send });
 
   // The Hermes-dialect methods the app's command registry actually sends.
   // Resolution throws rather than writing a response: the RPC dispatcher below
   // owns the reply shape, unlike the REST routes' `resolveBackend`.
-  const gatewayMethods = createGatewayMethods({
-    listDevices: () => deviceTokens.list(),
-    revokeDevice: (deviceId) => deviceTokens.revoke(deviceId),
-    async getBackend(backendId, method) {
-      if (backendId) return backendManager.get(backendId);
-      const entries = await backendManager.list();
-      // Same rule as the REST routes: prefer a backend that can answer, rather
-      // than whichever happens to be attached first.
-      if (method) {
-        for (const entry of entries) {
-          const backend = await backendManager.get(entry.id).catch(() => null);
-          if (backend && typeof backend[method] === 'function') return backend;
+  const gatewayMethods = {
+    ...createGatewayMethods({
+      listDevices: () => deviceTokens.list(),
+      revokeDevice: async (deviceId) => {
+        const revoked = await deviceTokens.revoke(deviceId);
+        if (revoked) await pushTokens.remove(deviceId);
+        return revoked;
+      },
+      async getBackend(backendId, method) {
+        if (backendId) return backendManager.get(backendId);
+        const entries = await backendManager.list();
+        // Same rule as the REST routes: prefer a backend that can answer, rather
+        // than whichever happens to be attached first.
+        if (method) {
+          for (const entry of entries) {
+            const backend = await backendManager.get(entry.id).catch(() => null);
+            if (backend && typeof backend[method] === 'function') return backend;
+          }
         }
-      }
-      const id = entries[0]?.id;
-      if (!id) throw new Error('No chat backend is attached to this Gate');
-      return backendManager.get(id);
-    },
-  });
+        const id = entries[0]?.id;
+        if (!id) throw new Error('No chat backend is attached to this Gate');
+        return backendManager.get(id);
+      },
+    }),
+    ...notificationMethods,
+  };
 
   async function computeState() {
     const { kinds, instances } = await loadCapabilities(root);
@@ -2037,12 +2051,21 @@ export async function createGate(config = {}) {
           return;
         }
         try {
-          const result = await handler(params);
+          // deviceGrant is established once above for every authenticated
+          // request on this route. Existing handlers take one argument and
+          // ignore the second; only notifications.* (push-rpc.mjs) reads it,
+          // via requireDevice(ctx), to bind a registration to the caller's
+          // own paired identity rather than a client-supplied device id.
+          const result = await handler(params, { deviceId: deviceGrant?.deviceId ?? null });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ result }));
         } catch (error) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: { message: error.message, code: 'rpc_error' } }));
+          // requireDevice (push-rpc.mjs) sets .status/.code on a rejected
+          // bootstrap-token call so it reaches the caller as 403
+          // pairing_required rather than a generic 400 - preserve them when
+          // a handler sets them, default to the prior behavior otherwise.
+          res.writeHead(error.status ?? 400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code: error.code ?? 'rpc_error' } }));
         }
         return;
       }

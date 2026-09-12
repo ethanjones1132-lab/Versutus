@@ -56,6 +56,11 @@ import {
   type ChatSurface,
   type PublicBot,
 } from '@/lib/gateway/bots';
+import {
+  decideCallSend,
+  isHandsfreeCallSource,
+  type ChatInputSource,
+} from '@/lib/gateway/chat-input-source';
 import { pendingComposerFocus, type ComposerFocus } from '@/lib/gateway/composer-focus';
 import {
   composeRequestArrival,
@@ -78,7 +83,7 @@ import {
   environmentProbeFailureText,
   probeEnvironmentLifecycle,
 } from '@/lib/gateway/environment-probe';
-import { applyModelOverride, effectiveModel, modelSwitchAnnouncement, resolveSendModel, shouldReleaseSessionForModel, staleModelPin, withSelectedModel } from '@/lib/gateway/model-selection';
+import { applyModelOverride, effectiveModel, modelSwitchAnnouncement, resolveSendModel, scopeModelsToBackend, shouldReleaseSessionForModel, staleModelPin, withSelectedModel } from '@/lib/gateway/model-selection';
 import {
   buildEarlyProbeUrls,
   dropAlreadyWavedCandidates,
@@ -201,6 +206,7 @@ export type SendChatInputOutcome =
   | 'queued'
   | 'sent'
   | 'busy'
+  | 'offline'
   | 'confirmation'
   | 'complete'
   | 'error';
@@ -384,6 +390,12 @@ type GatewayContextValue = {
       /** The Bot Chat a reply was typed for, so a queued reply keeps its destination. */
       botId?: string;
       sessionId?: string;
+      /**
+       * Which surface handed the text over. Omitted means the composer and
+       * keeps today's behavior exactly; `handsfree-call` is the call's
+       * auto-send, governed by `chat-input-source`.
+       */
+      source?: ChatInputSource;
     },
   ) => Promise<SendChatInputOutcome>;
   stopStreaming: () => Promise<void>;
@@ -1407,7 +1419,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (!gateway.model && isCurrent()) {
         try {
           const models = await client.getModels();
-          const first = models.find((model) => model.available !== false)?.id ?? models[0]?.id;
+          const scoped = scopeModelsToBackend(models, selectedBackendIdRef.current ?? gateway.backendId);
+          const first = scoped.find((m) => m.available !== false)?.id ?? scoped[0]?.id ?? models[0]?.id;
           if (first && isCurrent()) {
             const withModel = { ...gateway, model: first };
             setActiveGateway(withModel);
@@ -2163,13 +2176,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [applyStatus, applyConnectionPhase]);
 
   const sendMessage = useCallback(
-    async (text: string, existingMessageId?: string) => {
+    async (text: string, existingMessageId?: string, source?: ChatInputSource) => {
       const trimmed = text.trim();
       const gateway = activeGateway;
       const client = clientRef.current;
       if (!trimmed || !gateway || !client || isSending) return;
 
-      if (existingMessageId) {
+      if (isHandsfreeCallSource(source)) {
+        // A call turn is appended with the id the caller supplied: the ordinary
+        // `messageId` branch only clears `queued` on a message that is already
+        // in state (the offline-flush path), so passing a fresh id there would
+        // send text that never renders. `addUserMessage` already accepts an
+        // explicit id, so the turn appears exactly once and reply correlation
+        // has a real anchor.
+        setMessages((prev) => addUserMessage(prev, trimmed, existingMessageId));
+      } else if (existingMessageId) {
         setMessages((prev) =>
           prev.map((message) =>
             message.id === existingMessageId ? { ...message, queued: false } : message,
@@ -2495,12 +2516,37 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         skills?: Skill[];
         botId?: string;
         sessionId?: string;
+        source?: ChatInputSource;
       },
     ) => {
       const trimmed = text.trim();
       if (!trimmed) return 'empty';
       const fromQueue = options?.fromQueue === true;
+      const source = options?.source;
       const client = clientRef.current;
+
+      if (isHandsfreeCallSource(source)) {
+        // A call send is connected-only and never queued: the recovery layer
+        // owns unsent speech, and a call that cannot reach its gateway answers
+        // `offline` rather than parking words for later automatic delivery.
+        const connected =
+          status === 'connected' &&
+          Boolean(activeGateway) &&
+          Boolean(client) &&
+          (options?.sessionId === undefined ||
+            options.sessionId === (sessionIdRef.current ?? ''));
+        const decision = decideCallSend({
+          source,
+          connected,
+          busy: isSending || isCommandRunning,
+        });
+        if (decision === 'offline') return 'offline';
+        if (decision === 'busy') return 'busy';
+        // A call transcript is plain model text even if recognition produced a
+        // leading slash; auto-sent speech must never dispatch a command.
+        await sendMessage(trimmed, options?.messageId, source);
+        return 'sent';
+      }
 
       // Pre-flight guard: a stale read only declines a retryable action.
       // Converting to statusRef or the connection reducer needs live-device
@@ -2689,6 +2735,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       dynamicCommands,
       gatewayRequest,
       isCommandRunning,
+      isSending,
       runningCommandLabel,
       runAgentCommand,
       runTask,

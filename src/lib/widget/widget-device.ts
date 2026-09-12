@@ -13,10 +13,13 @@
 // into the caller; that is the whole reason this module exists apart from the
 // seam, and it is also why the seam is async.
 //
-// Web and Android are answered before anything is imported: the plugin's
-// Android half is opt-in and this repo's entry does not enable it
-// (expo-widgets/plugin/build/withWidgets.js:11), so no build name but iOS has a
-// widget target for this to hand back.
+// iOS and Android carry a widget target, and every other platform is answered
+// null before anything is imported. The plugin's Android half is opt-in
+// (expo-widgets/plugin/build/withWidgets.js:11) and this repo's entry enables
+// it, so the same seam hands back a target on both platforms; Metro's platform
+// resolution picks `glanceable-widget.android.tsx` where the iOS file would
+// otherwise be bundled. Web has no widget target at all and is answered before
+// the import that could only throw.
 
 import { Platform } from 'react-native';
 
@@ -39,7 +42,7 @@ export type WidgetTarget = typeof import('@/components/widget/glanceable-widget'
 export async function loadWidgetTarget(
   load: () => Promise<WidgetTarget> = () => import('@/components/widget/glanceable-widget'),
 ): Promise<WidgetTarget | null> {
-  if (Platform.OS !== 'ios') return null;
+  if (Platform.OS !== 'ios' && Platform.OS !== 'android') return null;
   try {
     return await load();
   } catch {

@@ -15,6 +15,12 @@ import { WEEKLY_REPORT_NOTICE_DATA_KIND } from './weekly-report-schedule';
 /** data.kind marker a run notice carries, so a tap knows the run. */
 export const RUN_NOTICE_DATA_KIND = 'run';
 
+/** data.kind marker an A5 routine notice carries, so a tap knows its job. */
+export const ROUTINE_PUSH_NOTICE_DATA_KIND = 'routine';
+
+/** data.kind marker a model reply notice carries, so a tap knows its session. */
+export const REPLY_NOTICE_DATA_KIND = 'reply';
+
 /**
  * Where a notification payload asks a tap to go. The ids travel with the
  * route so the screen that opens can name the exact routine or run; they are
@@ -25,6 +31,7 @@ export const RUN_NOTICE_DATA_KIND = 'run';
 export type TapRoute =
   | { kind: 'routine'; jobId: string; botId: string }
   | { kind: 'run'; runId: string }
+  | { kind: 'reply'; sessionId: string; botId?: string }
   | { kind: 'weekly-report' };
 
 /**
@@ -40,7 +47,10 @@ export function routeForTap(data: unknown): TapRoute | null {
   if (!data || typeof data !== 'object') return null;
   const payload = data as Record<string, unknown>;
 
-  if (payload.kind === ROUTINE_NOTICE_DATA_KIND) {
+  if (
+    payload.kind === ROUTINE_NOTICE_DATA_KIND ||
+    payload.kind === ROUTINE_PUSH_NOTICE_DATA_KIND
+  ) {
     const jobId = nonEmptyString(payload.jobId);
     const botId = nonEmptyString(payload.botId);
     if (!jobId || !botId) return null;
@@ -51,6 +61,13 @@ export function routeForTap(data: unknown): TapRoute | null {
     const runId = nonEmptyString(payload.runId);
     if (!runId) return null;
     return { kind: 'run', runId };
+  }
+
+  if (payload.kind === REPLY_NOTICE_DATA_KIND) {
+    const sessionId = nonEmptyString(payload.sessionId);
+    if (!sessionId) return null;
+    const botId = typeof payload.botId === 'string' && payload.botId.length > 0 ? payload.botId : undefined;
+    return { kind: 'reply', sessionId, ...(botId ? { botId } : {}) };
   }
 
   // A weekly report notice is only its kind: the tap opens the scorecard

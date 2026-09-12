@@ -32,17 +32,31 @@ function readSource(...parts: string[]): string {
 }
 
 const COMPONENT_SOURCE_PATH = ['src', 'components', 'widget', 'glanceable-widget.tsx'];
+const ANDROID_COMPONENT_SOURCE_PATH = [
+  'src',
+  'components',
+  'widget',
+  'glanceable-widget.android.tsx',
+];
 const SEAM_SOURCE_PATH = ['src', 'lib', 'widget', 'widget-device.ts'];
 
 type WidgetEntryProps = {
   bundleIdentifier?: string;
   groupIdentifier?: string;
   enablePushNotifications?: unknown;
+  enableAndroid?: boolean;
   widgets: {
     name: string;
     displayName?: string;
     description?: string;
     supportedFamilies?: string[];
+    android?: {
+      minWidth: number;
+      minHeight: number;
+      targetCellWidth: number;
+      targetCellHeight: number;
+      resizeMode: string;
+    };
   }[];
 };
 
@@ -101,6 +115,24 @@ describe('the widget entry in app.json', () => {
     expect(widget.supportedFamilies).toEqual(['systemSmall', 'systemMedium']);
   });
 
+  test('the Android half is switched on, and the cell target is spelled out rather than defaulted', () => {
+    // `enableAndroid` defaults false (expo-widgets/plugin/build/withWidgets.js:11),
+    // so without this flag the plugin generates no receiver and there is nothing
+    // for the seam to hand back on Android. The dimensions are the 4x2 medium
+    // equivalent and are written explicitly so this pin catches a silent change
+    // to the plugin's defaults.
+    const [, props] = widgetEntries()[0];
+    expect(props.enableAndroid).toBe(true);
+    const [widget] = props.widgets;
+    expect(widget.android).toEqual({
+      minWidth: 180,
+      minHeight: 110,
+      targetCellWidth: 4,
+      targetCellHeight: 2,
+      resizeMode: 'horizontal',
+    });
+  });
+
   test('the share entry is still the last thing in the list', () => {
     // The entry was inserted ahead of it rather than appended, so the pins the
     // share-intent suite already holds stay true without being edited
@@ -151,6 +183,40 @@ describe('the widget component', () => {
   });
 });
 
+// The Android sibling is pinned the way the iOS component is: the file is
+// typechecked and bundled only inside the widget target, so its shape and its
+// import discipline are read off the source.
+describe('the Android widget component', () => {
+  const source = (): string => readSource(...ANDROID_COMPONENT_SOURCE_PATH);
+
+  test('is marked with the directive the extension looks for, and registers the shared name', () => {
+    expect(source()).toContain("'widget';");
+    expect(source()).toContain('createWidget(WIDGET_NAME,');
+    // A literal name here would be a second one to keep in step with the plugin.
+    expect(source()).not.toMatch(/createWidget\(\s*'/);
+  });
+
+  test('draws the same pure fold the iOS sibling draws, in the Android UI package', () => {
+    expect(source()).toContain('glanceableWidgetLines');
+    expect(source()).toContain('@expo/ui/jetpack-compose');
+  });
+
+  test('imports nothing the widget bundle stubs out, and never the iOS-only package', () => {
+    const src = source();
+    expect(src).not.toMatch(/react-native/);
+    expect(src).not.toMatch(/@expo\/ui\/swift-ui/);
+  });
+
+  test('leaves colour to the system rather than naming one of its own', () => {
+    // A hex or a `foregroundStyle(` here would paint over the operator's
+    // wallpaper instead of taking the Glance theme's foreground; the stamp is
+    // de-emphasized by size alone.
+    const src = source();
+    expect(src).not.toMatch(/foregroundStyle\(/);
+    expect(src).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+  });
+});
+
 describe('loadWidgetTarget', () => {
   const target = { default: { name: WIDGET_NAME } } as unknown as WidgetTarget;
 
@@ -168,10 +234,19 @@ describe('loadWidgetTarget', () => {
 
   test('answers null on a platform with no widget target, without importing anything', async () => {
     const load = jest.fn(async () => target);
-    jest.replaceProperty(Platform, 'OS', 'android');
+    jest.replaceProperty(Platform, 'OS', 'web');
     await expect(loadWidgetTarget(load)).resolves.toBeNull();
     // Asked nothing: the module that would throw is never reached.
     expect(load).not.toHaveBeenCalled();
+  });
+
+  test('hands the widget back on Android, the other platform whose target it now is', async () => {
+    // Opening the gate (widget-device.ts: one `Platform.OS` check) is exactly
+    // what this pins: Android is no longer answered before the load.
+    const load = jest.fn(async () => target);
+    jest.replaceProperty(Platform, 'OS', 'android');
+    await expect(loadWidgetTarget(load)).resolves.toBe(target);
+    expect(load).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -203,12 +278,25 @@ describe('writeWidgetSnapshot', () => {
   test('a platform with no widget target writes nothing, without importing anything', async () => {
     const updateSnapshot = jest.fn();
     const load = jest.fn(async () => target(updateSnapshot));
-    jest.replaceProperty(Platform, 'OS', 'android');
+    jest.replaceProperty(Platform, 'OS', 'web');
 
     await expect(writeWidgetSnapshot(snapshot(), load)).resolves.toBeUndefined();
 
     expect(load).not.toHaveBeenCalled();
     expect(updateSnapshot).not.toHaveBeenCalled();
+  });
+
+  test('writes through on Android, the other platform whose target it now is', async () => {
+    const updateSnapshot = jest.fn();
+    const load = jest.fn(async () => target(updateSnapshot));
+    jest.replaceProperty(Platform, 'OS', 'android');
+    const snap = snapshot({ runsInFlight: 1 });
+
+    await writeWidgetSnapshot(snap, load);
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(updateSnapshot).toHaveBeenCalledTimes(1);
+    expect(updateSnapshot).toHaveBeenCalledWith(snap);
   });
 
   test("a widget that refuses the write is not the app's own failure", async () => {

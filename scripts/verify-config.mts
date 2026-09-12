@@ -196,6 +196,116 @@ if (!existsSync(providerPath)) {
 }
 
 // ---------------------------------------------------------------------------
+// 5b. The hands-free call's native configuration is locked and honest.
+//
+//     The call is a user-started microphone/media-playback foreground service,
+//     never a carrier/VoIP call. Three things shipped wrong here would each be
+//     invisible until a device misbehaved: a missing permission (the service
+//     refused to start), a missing `audio` background mode (iOS suspended the
+//     call), and a `phoneCall`/boot/sticky declaration (the app opens a
+//     microphone without a visible Start, which B5 forbids). Each is a build
+//     error rather than a note.
+// ---------------------------------------------------------------------------
+const CALL_PERMISSIONS = [
+  'android.permission.RECORD_AUDIO',
+  'android.permission.POST_NOTIFICATIONS',
+  'android.permission.FOREGROUND_SERVICE',
+  'android.permission.FOREGROUND_SERVICE_MICROPHONE',
+  'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK',
+];
+
+const appJsonPath = join(root, 'app.json');
+const appJsonText = readFileSync(appJsonPath, 'utf8');
+const appJson = JSON.parse(appJsonText) as {
+  expo?: {
+    android?: { permissions?: string[] };
+    ios?: { infoPlist?: { UIBackgroundModes?: string[] } };
+  };
+};
+
+const declaredPermissions = appJson.expo?.android?.permissions ?? [];
+const missingPermissions = CALL_PERMISSIONS.filter((permission) => !declaredPermissions.includes(permission));
+if (missingPermissions.length > 0) {
+  fail('handsfree-permissions', `app.json is missing: ${missingPermissions.join(', ')}`);
+} else {
+  pass('handsfree-permissions', `${CALL_PERMISSIONS.length} call permissions declared in app.json`);
+}
+
+const backgroundModes = appJson.expo?.ios?.infoPlist?.UIBackgroundModes ?? [];
+if (!backgroundModes.includes('audio')) {
+  fail('handsfree-ios-background-audio', 'app.json ios.infoPlist.UIBackgroundModes does not include "audio"');
+} else {
+  pass('handsfree-ios-background-audio', 'ios.infoPlist.UIBackgroundModes includes "audio"');
+}
+
+const serviceManifestPath = join(
+  root,
+  'modules',
+  'handsfree-voice',
+  'android',
+  'src',
+  'main',
+  'AndroidManifest.xml',
+);
+const serviceManifest = existsSync(serviceManifestPath) ? readFileSync(serviceManifestPath, 'utf8') : '';
+const serviceSourcePath = join(
+  root,
+  'modules',
+  'handsfree-voice',
+  'android',
+  'src',
+  'main',
+  'java',
+  'com',
+  'versutus',
+  'handsfreevoice',
+  'HandsfreeCallService.kt',
+);
+const serviceSource = existsSync(serviceSourcePath) ? readFileSync(serviceSourcePath, 'utf8') : '';
+
+const forbidden: string[] = [];
+// Match only an actual attribute/config value naming phoneCall, not the word
+// appearing in prose - the manifest's own compliance comment ("No phoneCall
+// type...") otherwise trips this check on itself.
+if (
+  /foregroundServiceType\s*[:=]\s*["'][^"']*\bphoneCall\b/.test(appJsonText) ||
+  /android:foregroundServiceType\s*=\s*"[^"]*\bphoneCall\b/.test(serviceManifest)
+) {
+  forbidden.push('a phoneCall foreground-service type');
+}
+if (/BOOT_COMPLETED|RECEIVE_BOOT_COMPLETED/.test(serviceManifest)) {
+  forbidden.push('a boot receiver or boot permission');
+}
+if (/android:persistent="true"/.test(serviceManifest)) {
+  forbidden.push('a persistent service declaration');
+}
+if (/START_STICKY|START_REDELIVER_INTENT/.test(serviceSource)) {
+  forbidden.push('a sticky service restart (the service must return START_NOT_STICKY)');
+}
+if (forbidden.length > 0) {
+  fail('handsfree-no-forbidden-declarations', `the call config declares ${forbidden.join('; ')}`);
+} else {
+  pass('handsfree-no-forbidden-declarations', 'no phoneCall, boot or sticky-service declaration');
+}
+
+if (serviceManifest.includes('<service')) {
+  const serviceProblems: string[] = [];
+  if (!/HandsfreeCallService/.test(serviceManifest)) serviceProblems.push('the call service is not declared');
+  if (!/android:exported="false"/.test(serviceManifest)) serviceProblems.push('the call service is not non-exported');
+  if (!/android:foregroundServiceType="microphone\|mediaPlayback"/.test(serviceManifest)) {
+    serviceProblems.push('the call service is not a microphone|mediaPlayback service');
+  }
+  if (!/android:stopWithTask="true"/.test(serviceManifest)) {
+    serviceProblems.push('the call service does not stop with the task');
+  }
+  if (serviceProblems.length > 0) {
+    fail('handsfree-service-attributes', serviceProblems.join('; '));
+  } else {
+    pass('handsfree-service-attributes', 'service is non-exported, microphone|mediaPlayback, stop-with-task');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 6. A worklet may only call functions that are themselves worklets.
 //
 //    `useAnimatedStyle(() => …)` is workletized by the Babel plugin, but a

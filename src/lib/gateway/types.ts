@@ -114,6 +114,8 @@ export type ModelInfo = {
   modelId?: string;
   /** False when the owning provider is not signed in. */
   available?: boolean;
+  /** Owning CLI backend, when the catalog is a Gate's cross-backend /v1/models list. */
+  backendId?: string;
 };
 
 export type ModelsResponse = {

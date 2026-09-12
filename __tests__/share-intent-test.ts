@@ -401,9 +401,9 @@ describe('the Android share entry', () => {
         'expo-speech-recognition',
         {
           microphonePermission:
-            'Versutus uses the microphone to turn what you say into a message draft.',
+            'Versutus uses the microphone to turn what you say into a message draft, and for a hands-free call you start yourself.',
           speechRecognitionPermission:
-            'Versutus uses speech recognition to write down what you say so you can review it before sending.',
+            'Versutus uses speech recognition to write down what you say so you can review it before sending, and to understand a hands-free call you start yourself.',
         },
       ],
     ]);
@@ -412,6 +412,7 @@ describe('the Android share entry', () => {
       infoPlist: {
         NSFaceIDUsageDescription:
           'Versutus asks for Face ID to unlock the app when the app lock is on.',
+        UIBackgroundModes: ['audio'],
       },
     });
   });

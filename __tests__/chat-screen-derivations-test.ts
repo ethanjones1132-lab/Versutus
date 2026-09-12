@@ -31,7 +31,8 @@ describe('chat-screen session and model derivations', () => {
     // The catalog is still mapped, but inside a useMemo keyed by `modelCatalog`.
     expect(screen).toMatch(/const modelRows = useMemo\(/);
     expect(screen).toMatch(/modelCatalog\.map\(/);
-    expect(screen).toMatch(/\[modelCatalog\]/);
+    // The rows are scoped to the selected backend, so the key carries it too.
+    expect(screen).toMatch(/\[modelCatalog, selectedBackendId\]/);
     // The prop reads the memoized array by name.
     expect(screen).toMatch(/models=\{\s*modelRows\s*\}/);
   });

@@ -238,8 +238,11 @@ loop shipped and are in daily use. What remains:
   still gate execution. The phone streams audio to the Gate; the Gate holds
   the provider credential — consistent with credential custody today.
 - Large and paid-provider-dependent. **The 2026-09-11 hands-free voice item
-  below is the cheaper client-side alternative to this** — decide between them
-  before building either.
+  below chose the cheaper client-side alternative** and is implemented in the
+  working tree (pending the device acceptance gate). That work does **not**
+  close B4: its interrupt-by-speaking detector and sentence-level TTS
+  pipelining are client-side approximations, not simultaneous
+  listen-while-speaking or provider-side backchanneling. B4 remains open.
 
 ### B5. Explicitly not in scope
 
@@ -587,3 +590,19 @@ and iOS background-mode configuration. Auto-send contradicts B1's deliberate
 mode is a different contract, but the divergence must be explicit in the design,
 not accidental. B5's wake-word prohibition still stands: a user-initiated call
 session is not always-listening.
+
+**Implementation status (2026-09-12).** The client-side path is built, and the
+decision above is settled in its favor. A local Expo module
+(`modules/handsfree-voice/`) owns the native microphone/audio session and the
+Android `microphone|mediaPlayback` foreground service; a root provider
+(`src/context/handsfree-voice-provider.tsx`) runs a pure turn reducer
+(`src/lib/voice/handsfree-session.ts`) and sends recognized text through the
+existing `sendChatInput` path with a `handsfree-call` source that is
+connected-only, never queueing to the offline outbox. A disclosure sheet, an
+in-call banner, and an ambient indicator ship with it. It is deliberately **not**
+listed as shipped: the mandatory physical-device acceptance gate (three
+complete turns in each of foreground, another app foregrounded, and screen
+locked for ten minutes, on a physical Android 13+ device and a physical current
+iOS device) has not been run, and iOS cannot be built on the Windows checkout
+used here. Auto-send is scoped to an explicitly-started call; the composer path
+still never sends. B4 is **not** closed by this work — see above.

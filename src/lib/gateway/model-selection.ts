@@ -24,6 +24,24 @@ export function filterModels<T extends ModelSearchable>(models: T[], query: stri
 }
 
 /**
+ * Narrow a catalog to the backend currently routing chat.
+ *
+ * A Gate's /v1/models flattens every backend's models into one list tagged
+ * with backendId; offering them all lets a model tap silently switch backend.
+ * Rows with no backendId (direct Hermes /api/model/options, the non-backend
+ * branch of the Gate handler) belong to no backend and always stay visible.
+ * With no backend selected there is nothing to scope to — return the catalog
+ * unchanged, same reference, so memoised pickers do not re-render.
+ */
+export function scopeModelsToBackend<T extends { backendId?: string }>(
+  models: T[],
+  selectedBackendId: string | undefined,
+): T[] {
+  if (!selectedBackendId) return models;
+  return models.filter((m) => !m.backendId || m.backendId === selectedBackendId);
+}
+
+/**
  * Whether two model ids name the same model under different qualification.
  *
  * The picker stores `providerId/modelId` (and Hermes `/api/model/options`

@@ -120,6 +120,16 @@ function storageKey(thread: ComposerDraftThread): string {
   return `composer-draft:${composerDraftKey(thread)}`;
 }
 
+/**
+ * The key a call's unsent speech is recovered under. It is the same key-space
+ * as the composer draft — the thread the call was started in — under a prefix
+ * of its own, so `handsfree-recovery.ts` and the typed draft can never be
+ * confused for one another while both stay keyed by the shipped thread rule.
+ */
+export function recoveryStorageKey(thread: ComposerDraftThread): string {
+  return `handsfree-recovery:${composerDraftKey(thread)}`;
+}
+
 export async function loadComposerDraft(thread: ComposerDraftThread): Promise<string> {
   try {
     const raw = await keyValueStorage.getItem(storageKey(thread));

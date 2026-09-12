@@ -9,6 +9,7 @@ import { ApprovalSheet } from '@/components/chat/approval-sheet';
 import { BotChrome } from '@/components/chat/bot-chrome';
 import { BotDetailSheet } from '@/components/chat/bot-detail-sheet';
 import { ChatComposer } from '@/components/chat/chat-composer';
+import { HandsfreeCallSheet } from '@/components/chat/handsfree-call-sheet';
 import { ChatRoster } from '@/components/chat/chat-roster';
 import { CreateGroupSheet } from '@/components/chat/create-group-sheet';
 import { GroupRoomActionSheet } from '@/components/chat/group-room-action-sheet';
@@ -32,6 +33,7 @@ import { Button, Card, EmptyState, ErrorCard, Icon, PressableScale, Screen, Skel
 import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { entering } from '@/lib/motion/presets';
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
+import { useHandsfreeVoice } from '@/context/handsfree-voice-provider';
 import { describeGatewayError, errorBannerButton, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
@@ -116,7 +118,7 @@ import {
   spokenDraftText,
 } from '@/lib/gateway/composer-draft';
 import { composeRequestApplies, composeRequestHoldCopy } from '@/lib/gateway/compose-request';
-import { effectiveModel } from '@/lib/gateway/model-selection';
+import { effectiveModel, scopeModelsToBackend } from '@/lib/gateway/model-selection';
 import { insertMention, mentionPicksAtCaret } from '@/lib/gateway/mentions';
 import {
   loadSessionLabels,
@@ -350,6 +352,18 @@ export function ChatScreen() {
   // The transcript and its send state come from the chat-surface context so
   // a streamed frame re-renders this screen alone, not every mounted tab.
   const { messages, isSending, isCommandRunning } = useChatSurface();
+
+  // The hands-free call is orchestrated above navigation. This screen only
+  // builds the target from state it alone holds and hands it to `start`.
+  const handsfree = useHandsfreeVoice();
+  const {
+    active: handsfreeActive,
+    canStart: canStartHandsfree,
+    end: endHandsfree,
+  } = handsfree;
+  const [callSheetVisible, setCallSheetVisible] = useState(false);
+  const [callBusy, setCallBusy] = useState(false);
+  const [callError, setCallError] = useState<string | undefined>();
 
   // Keyed by gateway + surface + session so leaving a thread and coming
   // back restores that thread's unsent text, never another Bot's.
@@ -898,19 +912,23 @@ export function ChatScreen() {
   // streamed frames that churn the rest of this screen reuse the same rows.
   const modelRows = useMemo(
     () =>
-      modelCatalog.map((model: Record<string, unknown>) => ({
-        id: String(model.id || model.model || model.name || ''),
-        provider: model.provider as string | undefined,
-        providerId: (model.providerId ?? model.provider) as string | undefined,
-        modelId: (model.modelId as string | undefined) ?? undefined,
-        catalogState: (model.catalogSource ?? model.catalogState) as string | undefined,
-        available: model.available !== false,
-        context: (model.context ?? model.contextLength) as number | undefined,
-        price: (model.cost ?? model.price) as number | undefined,
-        auth: (model.authStatus ?? model.auth) as string | undefined,
-        usage: model.usage as string | undefined,
-      })),
-    [modelCatalog],
+      scopeModelsToBackend(
+        modelCatalog.map((model: Record<string, unknown>) => ({
+          id: String(model.id || model.model || model.name || ''),
+          provider: model.provider as string | undefined,
+          providerId: (model.providerId ?? model.provider) as string | undefined,
+          modelId: (model.modelId as string | undefined) ?? undefined,
+          catalogState: (model.catalogSource ?? model.catalogState) as string | undefined,
+          available: model.available !== false,
+          context: (model.context ?? model.contextLength) as number | undefined,
+          price: (model.cost ?? model.price) as number | undefined,
+          auth: (model.authStatus ?? model.auth) as string | undefined,
+          usage: model.usage as string | undefined,
+          backendId: model.backendId as string | undefined,
+        })),
+        selectedBackendId,
+      ),
+    [modelCatalog, selectedBackendId],
   );
 
   // The header's name for the thread, through the store's own fold: the
@@ -996,6 +1014,66 @@ export function ChatScreen() {
     await sendChatInput(text, { skills: skillsState.skills });
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
   }, [draft, sendChatInput, setDraft, skillsState.skills]);
+
+  // The call target is built here, not derived by the provider: this screen is
+  // the one place that holds the current surface, the draft thread and the
+  // per-Bot voice, none of which is readable from context.
+  const callTargetLabel = useMemo(() => {
+    if (surface.kind === 'bot') {
+      return (
+        rosterRows.find(
+          (row): row is Extract<RosterRow, { kind: 'bot' }> =>
+            row.kind === 'bot' && row.bot.id === surface.botId,
+        )?.bot.displayName ??
+        selectedBotId ??
+        'Bot'
+      );
+    }
+    return sessionLabel ?? 'Versutus chat';
+  }, [rosterRows, selectedBotId, sessionLabel, surface]);
+
+  const openCallSheet = useCallback(() => {
+    setCallError(undefined);
+    setCallSheetVisible(true);
+  }, []);
+  const handleCancelCall = useCallback(() => {
+    setCallSheetVisible(false);
+    setCallError(undefined);
+  }, []);
+  const handleStartCall = useCallback(async () => {
+    if (!activeGateway || !draftThread) return;
+    if (surface.kind !== 'configurable' && surface.kind !== 'bot') return;
+    setCallBusy(true);
+    setCallError(undefined);
+    const result = await handsfree.start({
+      gatewayId: activeGateway.id,
+      sessionId: draftThread.sessionId,
+      surfaceKind: surface.kind,
+      botId: surface.kind === 'bot' ? surface.botId : undefined,
+      label: callTargetLabel,
+      voice: botVoice ?? {},
+    });
+    setCallBusy(false);
+    if (result === 'started') {
+      setCallSheetVisible(false);
+      return;
+    }
+    setCallError(
+      result === 'permission-denied'
+        ? 'Microphone or speech recognition permission was denied. Allow it in Settings and try again.'
+        : result === 'unavailable'
+          ? 'This device cannot start a hands-free call.'
+          : 'A hands-free call cannot start right now. Reconnect the chat and try again.',
+    );
+  }, [activeGateway, botVoice, callTargetLabel, draftThread, handsfree, surface]);
+
+  // A call is bound to the thread it started in. The provider watches the
+  // gateway, session and Bot it captured; this screen covers the remaining move
+  // — leaving a thread surface for the roster or a room.
+  useEffect(() => {
+    if (!handsfreeActive) return;
+    if (surface.kind !== 'configurable' && surface.kind !== 'bot') endHandsfree();
+  }, [endHandsfree, handsfreeActive, surface.kind]);
 
   const handleResumeMessage = useCallback(
     (message: ChatMessage) => {
@@ -2018,6 +2096,9 @@ export function ChatScreen() {
         // Allow send while disconnected so the offline outbox can queue; the
         // provider flushes on reconnect. Block only when no gateway exists.
         canSend={!!activeGateway && !isCommandRunning}
+        // Offered only where the provider says a tap can start a session.
+        onStartCall={canStartHandsfree ? openCallSheet : undefined}
+        callActive={handsfreeActive}
       />
       ) : null}
 
@@ -2045,6 +2126,15 @@ export function ChatScreen() {
         gatewayName={settings.pcName ?? activeGateway.name}
         onApprove={(feedback) => resolveRunApproval(true, feedback)}
         onDeny={(feedback) => resolveRunApproval(false, feedback)}
+      />
+
+      <HandsfreeCallSheet
+        visible={callSheetVisible}
+        label={callTargetLabel}
+        busy={callBusy}
+        error={callError}
+        onCancel={handleCancelCall}
+        onStart={() => void handleStartCall()}
       />
 
       <ChatOverflowSheet
@@ -2130,6 +2220,7 @@ export function ChatScreen() {
         models={modelRows}
         modelsError={modelCatalogError}
         currentModel={activeGateway.model}
+        backendLabel={backends.length > 1 ? activeBackend?.label : undefined}
         modelMode={modelPicker.mode}
         modelAgentId={modelPicker.agentId}
         onSelectModel={selectModel}

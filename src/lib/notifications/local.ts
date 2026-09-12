@@ -170,6 +170,18 @@ export async function notifyBotReplyNotSent(reason: BotReplyNoticeReason): Promi
 }
 
 /**
+ * Post the notice for a reply tap whose session could not be opened. A
+ * push-delivered session id can be stale by the time the notice is tapped —
+ * deleted or expired server-side in the meantime — and the open-by-id read
+ * (session-open-by-id.ts) refuses to switch on a missing id. So the miss is
+ * named rather than swallowed, and the message arrives already whole
+ * (openSessionByIdFailureText names the id it was about).
+ */
+export async function notifySessionOpenFailed(message: string): Promise<void> {
+  await present('Session not opened', message);
+}
+
+/**
  * Post the "gateway unreachable" notice for one gateway and record its
  * identifier under that gateway's key. The gateway key travels in the
  * notification payload as well, so a process restarted while the notice sits
@@ -252,6 +264,75 @@ async function ensureRunProgressChannel(): Promise<void> {
     runProgressChannelReady = true;
   } catch {
     // best-effort: a notice posted without its channel is still a notice
+  }
+}
+
+/**
+ * The Android channels a relayed notice is posted on (Solution A3). An approval
+ * is the one that must reach the operator, so it is HIGH; a completed reply and
+ * a routine result are the ordinary DEFAULT. The ids are the same ones the Gate
+ * names in a payload's `channelId`, so a notice lands where its kind belongs.
+ */
+export const APPROVALS_CHANNEL_ID = 'approvals';
+export const MODEL_REPLIES_CHANNEL_ID = 'model-replies';
+export const ROUTINE_RESULTS_CHANNEL_ID = 'routine-results';
+
+/** Whether this process has already asked the phone for the relay channels. */
+let relayChannelsReady = false;
+
+/**
+ * Create the three relay channels, once per process — the same reasoning as the
+ * run-progress channel: a channel's rank is fixed at creation, so re-asking buys
+ * a native round trip and nothing else, and a refusal is not remembered as done
+ * so the next boot retries.
+ */
+export async function ensurePushChannels(): Promise<void> {
+  if (relayChannelsReady) return;
+  try {
+    await Notifications.setNotificationChannelAsync(APPROVALS_CHANNEL_ID, {
+      name: 'Approvals',
+      importance: Notifications.AndroidImportance.HIGH,
+    });
+    await Notifications.setNotificationChannelAsync(MODEL_REPLIES_CHANNEL_ID, {
+      name: 'Model replies',
+      importance: Notifications.AndroidImportance.DEFAULT,
+    });
+    await Notifications.setNotificationChannelAsync(ROUTINE_RESULTS_CHANNEL_ID, {
+      name: 'Routine results',
+      importance: Notifications.AndroidImportance.DEFAULT,
+    });
+    relayChannelsReady = true;
+  } catch {
+    // best-effort: a notice posted without its channel is still a notice
+  }
+}
+
+/** Whether this process has already installed the foreground display policy. */
+let foregroundHandlerInstalled = false;
+
+/**
+ * Draw nothing while the app is in the foreground: the operator is already
+ * looking at the stream a relayed notice would announce. Background and killed
+ * still present. This is display policy, not a second router — a tap still goes
+ * through the existing response listener.
+ */
+export function installForegroundNotificationHandler(): void {
+  if (foregroundHandlerInstalled) return;
+  try {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => {
+        const active = AppState.currentState === 'active';
+        return {
+          shouldShowBanner: !active,
+          shouldShowList: !active,
+          shouldPlaySound: !active,
+          shouldSetBadge: false,
+        };
+      },
+    });
+    foregroundHandlerInstalled = true;
+  } catch {
+    // best-effort: a platform without the handler still presents what it can
   }
 }
 

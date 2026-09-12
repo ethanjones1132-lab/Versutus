@@ -10,11 +10,19 @@
     "ios": {
       "icon": "./assets/expo.icon",
       "infoPlist": {
-        "NSFaceIDUsageDescription": "Versutus asks for Face ID to unlock the app when the app lock is on."
+        "NSFaceIDUsageDescription": "Versutus asks for Face ID to unlock the app when the app lock is on.",
+        "UIBackgroundModes": ["audio"]
       }
     },
     "android": {
       "package": "com.versutus.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#08080A",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -59,8 +67,8 @@
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "Versutus uses the microphone to turn what you say into a message draft.",
-          "speechRecognitionPermission": "Versutus uses speech recognition to write down what you say so you can review it before sending."
+          "microphonePermission": "Versutus uses the microphone to turn what you say into a message draft, and for a hands-free call you start yourself.",
+          "speechRecognitionPermission": "Versutus uses speech recognition to write down what you say so you can review it before sending, and to understand a hands-free call you start yourself."
         }
       ],
       [
@@ -68,12 +76,20 @@
         {
           "bundleIdentifier": "com.versutus.app.widgets",
           "groupIdentifier": "group.com.versutus.app",
+          "enableAndroid": true,
           "widgets": [
             {
               "name": "VersutusStatus",
               "displayName": "Status",
               "description": "What Versutus last knew: its connection, the runs in flight and the newest result, stamped with when it wrote them.",
-              "supportedFamilies": ["systemSmall", "systemMedium"]
+              "supportedFamilies": ["systemSmall", "systemMedium"],
+              "android": {
+                "minWidth": 180,
+                "minHeight": 110,
+                "targetCellWidth": 4,
+                "targetCellHeight": 2,
+                "resizeMode": "horizontal"
+              }
             }
           ]
         }

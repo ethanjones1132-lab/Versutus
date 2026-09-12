@@ -60,6 +60,46 @@ Deferred on purpose, and tracked: New Agent creation, routines, `@mention` hando
 - **Tools** — Shell when the gateway advertises a terminal; otherwise RPC / Agent.
 - **Discovery** — LAN beacons, Tailscale candidates, saved profiles, manual add, `versutus://add` deep links.
 - **Identity** — SecureStore-backed profiles, tokens, device identity; Gate pairing for custom and OpenClaw access grants.
+- **Voice** — hold-to-talk dictation into the composer (never auto-sends), optional per-Bot spoken replies, and a separate opt-in hands-free call. See [Voice](#voice).
+
+---
+
+## Voice
+
+Two voice paths ship, and they are deliberately separate.
+
+**Push-to-talk (B1–B3).** Hold the mic in the composer, speak, release. The
+transcript lands in the composer for review and **never sends by itself**.
+With the speaker on, each completed assistant message is read aloud with the
+Bot's own voice.
+
+**Hands-free call (opt-in).** A separate phone control, beside the mic, starts a
+user-started call: the app endpoints speech, sends each finished utterance
+automatically, speaks the completed reply, and keeps listening for the next turn
+while the app is backgrounded or the screen is locked. Nothing listens before an
+explicit **Start call** tap — there is no wake word and no always-listening mode.
+Android shows an ongoing notification with an **End call** action for the whole
+session; iOS shows the system microphone indicator only while the session is
+live.
+
+The call is one-directional at a time, and is described that way on purpose. It
+adds two client-side approximations rather than the simultaneous
+listen-while-speaking audio a provider-backed realtime session would take:
+**interrupt-by-speaking**, a short on-device voice-onset detector that stops
+playback when you start talking, and **progressive sentence speech**, which
+speaks each completed sentence while later ones are still streaming. It streams
+no audio to any server and offers no verbal backchanneling. Recognition runs on
+the device or the platform's own speech service; only the recognized **text**
+and the ordinary text reply cross the already-paired connection. No backend is
+named or privileged — every connected text-chat surface can start a call, and
+tool calls still pass through the existing approval machinery.
+
+Auto-send is scoped to an explicitly-started call only; the push-to-talk path
+still never sends. A system interruption, a disconnect, process death, or an End
+stops the microphone and playback. Any recognized text that was not accepted by
+the send path is restored to the composer for review — never queued for later
+automatic delivery. Turning the ordinary speaker toggle off still produces no
+playback, and a call never changes that stored preference.
 
 ---
 

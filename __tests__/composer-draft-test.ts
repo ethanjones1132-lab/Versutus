@@ -5,6 +5,7 @@ import {
   composerDraftThread,
   loadComposerDraft,
   readComposerDraft,
+  recoveryStorageKey,
   saveComposerDraft,
   spokenDraftHold,
   spokenDraftText,
@@ -575,6 +576,24 @@ describe('the shared-text handoff reaches a room the way it reaches a Bot Chat',
     // as it reaches a Bot Chat's composer.
     expect(call).toContain('inputRef={composerInputRef}');
     expect((screen.match(/inputRef=\{composerInputRef\}/g) ?? []).length).toBe(2);
+  });
+});
+
+describe('the recovery key-space', () => {
+  test('is the draft key under a prefix of its own, so the two never meet', () => {
+    const thread = bot('researcher');
+    expect(recoveryStorageKey(thread)).toBe(`handsfree-recovery:${composerDraftKey(thread)}`);
+    expect(recoveryStorageKey(thread)).not.toBe(`composer-draft:${composerDraftKey(thread)}`);
+  });
+
+  test('a call transcript has its own writer and never invokes the B1 hold callbacks', () => {
+    // The recovery path joins with the hold's RULE (`spokenDraftText`) but does
+    // not go through `spokenDraftHold`: a hold composes onto a typed draft and
+    // never sends, while a call's words leave as a message.
+    const source = readSource('src', 'lib', 'voice', 'handsfree-recovery.ts');
+    expect(source).toContain('spokenDraftText');
+    expect(source).not.toContain('spokenDraftHold');
+    expect(source).not.toMatch(/\bonSend\b/);
   });
 });
 

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import {
   overflowNewSessionHop,
   resolveThreadConfigMode,
@@ -157,5 +160,22 @@ describe('mode/offered-modes agreement', () => {
       'sessions',
       'models',
     ]);
+  });
+});
+
+// This repo has jest-expo but no component renderer (see
+// markdown-font-cap-test.ts), so the Models-section lock caption is pinned
+// against the source the sheet renders. The list itself is scoped by
+// chat-screen's `modelRows`; the caption is what names the backend it is
+// scoped to, so the scope is visible rather than silent.
+describe('Models section lock caption', () => {
+  const source = readFileSync(
+    join(__dirname, '..', 'src', 'components', 'chat', 'thread-config-sheet.tsx'),
+    'utf8',
+  );
+
+  test('renders the caption naming the backend label and the Backends tab', () => {
+    expect(source).toContain('Models served by {backendLabel}');
+    expect(source).toContain('Switch on the Backends tab to see another backend’s');
   });
 });

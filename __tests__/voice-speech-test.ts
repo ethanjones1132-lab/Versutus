@@ -35,6 +35,9 @@ jest.mock('@/lib/voice/speech-device', () => ({
 
 import {
   availableVoices,
+  beginHandsfreeCall,
+  endHandsfreeCall,
+  handsfreeOwnsSpeech,
   speakReply,
   speechAvailable,
   speechAvailableFrom,
@@ -340,6 +343,34 @@ describe('silencing the queue', () => {
 
     await expect(stopSpeech()).resolves.toBeUndefined();
     expect(engine.stop).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a hands-free call owning audio', () => {
+  afterEach(() => {
+    // The ownership flag is module-level on purpose; a case must not leak it.
+    endHandsfreeCall();
+  });
+
+  test('speakReply answers false while a call owns audio, speaking nothing', async () => {
+    const engine = fakeEngine();
+    mockLoad.mockResolvedValue(engine);
+
+    beginHandsfreeCall();
+    expect(handsfreeOwnsSpeech()).toBe(true);
+    await expect(speakReply('A reply the call is already reading.')).resolves.toBe(false);
+    expect(engine.speak).not.toHaveBeenCalled();
+  });
+
+  test('the ordinary speaker resumes the instant the call releases audio', async () => {
+    const engine = fakeEngine();
+    mockLoad.mockResolvedValue(engine);
+
+    beginHandsfreeCall();
+    endHandsfreeCall();
+    expect(handsfreeOwnsSpeech()).toBe(false);
+    await expect(speakReply('Hello.')).resolves.toBe(true);
+    expect(engine.spoken).toEqual(['Hello.']);
   });
 });
 
