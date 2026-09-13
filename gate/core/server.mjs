@@ -32,6 +32,8 @@ import { PushTokenStore } from './push-tokens.mjs';
 import { createPushRpc } from './push-rpc.mjs';
 import { createPushSend } from './push-send.mjs';
 import { createVoiceRpc } from './voice/voice-rpc.mjs';
+import { attachVoiceMediaSocket } from './voice/media-socket.mjs';
+import { ScriptedEngine } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest } from './signature.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
@@ -2098,6 +2100,17 @@ export async function createGate(config = {}) {
     }
   });
 
+  // One media WebSocket per voice call, over the same HTTP server. M2 wires the
+  // scripted engine; M5 swaps in the local engine behind the same interface. A
+  // session only exists once `voice.session.start` grants one, so a Gate with
+  // no ready engine never reaches this socket.
+  const voiceMedia = attachVoiceMediaSocket({
+    server,
+    deviceTokens,
+    registry: voiceRpc.registry,
+    createEngine: () => new ScriptedEngine(),
+  });
+
   // Start listening immediately
   const gateObj = {
     token,
@@ -2124,6 +2137,7 @@ export async function createGate(config = {}) {
         try { stream.end(); } catch { /* already gone */ }
       }
       return new Promise((resolve, reject) => {
+        voiceMedia.close();
         server.close((err) => {
           if (err) reject(err);
           else resolve();
