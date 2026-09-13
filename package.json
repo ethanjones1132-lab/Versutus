@@ -77,6 +77,7 @@
     "test": "jest --runInBand && npm run test:gate",
     "test:coverage": "jest --runInBand --coverage",
     "test:gate": "cd gate && node --test \"__tests__/*.test.mjs\" \"../scripts/__tests__/*.test.mjs\"",
+    "test:voice-worker": "node gate/voice-worker/run-tests.mjs",
     "smoke:gateway-commands": "tsx ./scripts/smoke-gateway-commands.mts",
     "smoke:portal": "tsx ./scripts/smoke-portal.mts",
     "smoke:live": "tsx ./scripts/smoke-live-gateway.mts",
