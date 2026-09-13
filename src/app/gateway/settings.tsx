@@ -19,13 +19,36 @@ import {
   type AppLockUnavailableReason,
 } from '@/lib/settings/app-lock';
 import { deviceAppLockState } from '@/lib/settings/app-lock-device';
+import { loadAppSettings, saveAppSettings } from '@/lib/settings/app-settings';
+import type { VoiceEngineCapabilities, VoiceEnginePreference } from '@/lib/voice/voice-engine-choice';
+import {
+  GROK_DISABLED_REASON,
+  GROK_ROW_LABEL,
+  VOICE_ENGINE_ROWS,
+  voiceEngineReadinessCopy,
+} from '@/lib/voice/voice-engine-copy';
+
+/** The readiness sentence for one Settings row. */
+function voiceReadiness(
+  id: VoiceEnginePreference,
+  capabilities: VoiceEngineCapabilities | null,
+): string {
+  if (id === 'phone') return 'Always available on this phone.';
+  if (id === 'auto') return 'Follows whichever engine below is ready.';
+  if (!capabilities) return 'Checking this PC…';
+  if (!capabilities.enabled) return 'Gate voice is turned off on this PC.';
+  const status = capabilities.engines[id];
+  return voiceEngineReadinessCopy(status?.state ?? 'unavailable', status?.reason);
+}
 
 export default function GatewaySettingsScreen() {
-  const { activeGateway, settings, deviceId } = useGateway();
+  const { activeGateway, settings, deviceId, gatewayRequest } = useGateway();
   const tokens = useTokens();
   const [copied, setCopied] = useState<'id' | null>(null);
   const [appLock, setAppLock] = useState(false);
   const [appLockReason, setAppLockReason] = useState<AppLockUnavailableReason | null>(null);
+  const [voiceEngine, setVoiceEngine] = useState<VoiceEnginePreference>(settings.voiceEngine);
+  const [voiceCapabilities, setVoiceCapabilities] = useState<VoiceEngineCapabilities | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,6 +69,30 @@ export default function GatewaySettingsScreen() {
   const handleAppLock = useCallback((next: boolean) => {
     setAppLock(next);
     void saveAppLock(next);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const stored = await loadAppSettings();
+      if (!cancelled) setVoiceEngine(stored.voiceEngine);
+      try {
+        const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', {});
+        if (!cancelled) setVoiceCapabilities(read);
+      } catch {
+        // Offline or a Gate that predates voice: the rows still name the
+        // stored choice and why nothing on the PC can be checked.
+        if (!cancelled) setVoiceCapabilities(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [gatewayRequest]);
+
+  const handleVoiceEngine = useCallback((next: VoiceEnginePreference) => {
+    setVoiceEngine(next);
+    void saveAppSettings({ voiceEngine: next });
   }, []);
 
   const copyText = useCallback(async (text: string) => {
@@ -161,6 +208,56 @@ export default function GatewaySettingsScreen() {
           )}
         </Card>
 
+        <Card variant="surface" padding={Spacing.three} style={styles.card}>
+          <View style={styles.sectionHeading}>
+            <View style={styles.sectionTitle}>
+              <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+                Voice
+              </Text>
+              <Text variant="headline">Power hands-free with</Text>
+            </View>
+          </View>
+          <Text color="secondary">
+            Where a call&apos;s audio goes, and which machine runs the speech models.
+          </Text>
+          {VOICE_ENGINE_ROWS.map((row) => {
+            const selected = voiceEngine === row.id;
+            return (
+              <Pressable
+                key={row.id}
+                accessibilityRole="radio"
+                accessibilityState={{ selected }}
+                accessibilityLabel={`${row.label}. ${row.summary}`}
+                onPress={() => handleVoiceEngine(row.id)}
+                style={[styles.voiceRow, selected ? { borderColor: tokens.accent } : null]}>
+                <View style={styles.sectionTitle}>
+                  <Text variant="caption" color={selected ? 'accent' : 'primary'}>
+                    {row.label}
+                  </Text>
+                  <Text variant="micro" color="tertiary">
+                    {row.summary}
+                  </Text>
+                  <Text variant="micro" color="tertiary">
+                    {voiceReadiness(row.id, voiceCapabilities)}
+                  </Text>
+                </View>
+                {selected ? <Badge label="Using" tone="success" dot={false} /> : null}
+              </Pressable>
+            );
+          })}
+          <View style={[styles.voiceRow, styles.voiceRowDisabled]}>
+            <View style={styles.sectionTitle}>
+              <Text variant="caption" color="tertiary">
+                {GROK_ROW_LABEL}
+              </Text>
+              <Text variant="micro" color="tertiary">
+                {GROK_DISABLED_REASON}
+              </Text>
+            </View>
+            <Badge label="Disabled" tone="warning" dot={false} />
+          </View>
+        </Card>
+
         {activeGateway ? (
           <>
             <TransportSecurityCard url={activeGateway.url} tlsFingerprint={activeGateway.tlsFingerprint} />
@@ -203,6 +300,19 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: Radius.lg,
     gap: Spacing.two,
+  },
+  voiceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+    padding: Spacing.two,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'transparent',
+  },
+  voiceRowDisabled: {
+    opacity: 0.6,
   },
   sectionHeading: {
     flexDirection: 'row',
