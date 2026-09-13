@@ -150,4 +150,20 @@ describe('hands-free native contract', () => {
     expect(start).toMatch(/val required = arrayOf\(Manifest\.permission\.RECORD_AUDIO\)/);
     expect(start).not.toMatch(/required[^\n]*POST_NOTIFICATIONS/);
   });
+
+  it('retires the silent notification channel for a visible one', () => {
+    expect(service).toContain('private const val CHANNEL_ID = "handsfree-call-v2"');
+    expect(service).toContain('deleteNotificationChannel(LEGACY_CHANNEL_ID)');
+    expect(service).toContain('NotificationManager.IMPORTANCE_DEFAULT');
+  });
+
+  it('does not end a call when another sound merely ducks it', () => {
+    expect(service).toMatch(/AudioManager\.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> Unit/);
+  });
+
+  it('classifies recognizer errors through the tested helper and speaks progressively without dropping sentences', () => {
+    expect(service).toContain('HandsfreeRecognizerErrors.classify(');
+    expect(service).toContain('queuedSpeech.addAll(chunks)');
+    expect(service).toMatch(/if \(speaking && nextChunkIndex < queuedSpeech\.size\) playChunk/);
+  });
 });

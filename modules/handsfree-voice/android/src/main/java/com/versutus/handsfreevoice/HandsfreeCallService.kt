@@ -55,6 +55,8 @@ class HandsfreeCallService : Service() {
   private var stopRequested = false
   private val endpoints = HandsfreeEndpointing()
   private var currentPartial: String = ""
+  private var consecutiveRecognizerFailures = 0
+  private var nextChunkIndex = 0
 
   private var tts: TextToSpeech? = null
   private var ttsReady = false
@@ -84,8 +86,11 @@ class HandsfreeCallService : Service() {
   private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
     when (change) {
       AudioManager.AUDIOFOCUS_LOSS,
-      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> handleFocusLoss()
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> handleFocusLoss()
+      // A notification chime or a navigation prompt ducks the call; it is not a
+      // reason to end it. A phone call still ends it (the product contract says
+      // a call never resumes itself after a system call).
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> Unit
     }
   }
 
@@ -186,7 +191,7 @@ class HandsfreeCallService : Service() {
       .setContentText("Listening and speaking through the microphone")
       .setOngoing(true)
       .setSilent(true)
-      .setPriority(NotificationCompat.PRIORITY_LOW)
+      .setPriority(NotificationCompat.PRIORITY_DEFAULT)
       .addAction(0, "End call", endPending)
       .build()
   }
@@ -194,13 +199,14 @@ class HandsfreeCallService : Service() {
   private fun createNotificationChannel() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    // An app cannot raise an existing channel's importance. The LOW channel the
+    // first build created lands in One UI's silent section, so it is retired.
+    manager.deleteNotificationChannel(LEGACY_CHANNEL_ID)
     if (manager.getNotificationChannel(CHANNEL_ID) != null) return
-    val channel = NotificationChannel(
-      CHANNEL_ID,
-      "Hands-free call",
-      NotificationManager.IMPORTANCE_LOW,
-    )
+    val channel = NotificationChannel(CHANNEL_ID, "Hands-free call", NotificationManager.IMPORTANCE_DEFAULT)
     channel.description = "Shown while a hands-free call is active."
+    channel.setSound(null, null)
+    channel.enableVibration(false)
     manager.createNotificationChannel(channel)
   }
 
@@ -261,11 +267,26 @@ class HandsfreeCallService : Service() {
 
   private fun ensureRecognizer(): SpeechRecognizer? {
     recognizer?.let { return it }
-    if (!SpeechRecognizer.isRecognitionAvailable(this)) return null
-    val created = SpeechRecognizer.createSpeechRecognizer(this)
+    val onDevice = PREFER_ON_DEVICE_RECOGNIZER &&
+      Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+      SpeechRecognizer.isOnDeviceRecognitionAvailable(this)
+    val created = when {
+      onDevice -> SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+      SpeechRecognizer.isRecognitionAvailable(this) -> SpeechRecognizer.createSpeechRecognizer(this)
+      else -> null
+    } ?: return null
+    Log.i(TAG, "recognizer bound (onDevice=$onDevice)")
     created.setRecognitionListener(recognitionListener)
     recognizer = created
     return created
+  }
+
+  private fun destroyRecognizer() {
+    try {
+      recognizer?.destroy()
+    } catch (_: Exception) {
+    }
+    recognizer = null
   }
 
   private fun startListeningInternal() {
@@ -347,31 +368,28 @@ class HandsfreeCallService : Service() {
         stopRequested = false
         return
       }
-      when (error) {
-        SpeechRecognizer.ERROR_NO_MATCH,
-        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> {
+      val action = HandsfreeRecognizerErrors.classify(error, consecutiveRecognizerFailures)
+      Log.i(TAG, "recognizer error $error -> $action (failures=$consecutiveRecognizerFailures)")
+      when (action) {
+        HandsfreeRecognizerErrors.Action.RESTART -> {
           emit("noSpeech", mapOf("reason" to "silence"))
           restartIfActive()
         }
-        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> {
-          mainHandler.postDelayed({ restartIfActive() }, BUSY_RETRY_MS)
+        HandsfreeRecognizerErrors.Action.RETRY_LATER -> {
+          consecutiveRecognizerFailures += 1
+          // A recognizer that lost its network is rebuilt rather than reused.
+          if (error != SpeechRecognizer.ERROR_RECOGNIZER_BUSY) destroyRecognizer()
+          mainHandler.postDelayed({ restartIfActive() }, BUSY_RETRY_MS * consecutiveRecognizerFailures)
         }
-        SpeechRecognizer.ERROR_CLIENT -> {
-          // A client-side cancel from an OS transition: restart if the session
-          // is still ours, otherwise the terminal path already handled it.
-          restartIfActive()
-        }
-        else -> {
-          emit(
-            "fatalError",
-            mapOf("reason" to "recognition-failed", "message" to error.toString()),
-          )
+        HandsfreeRecognizerErrors.Action.FATAL -> {
+          emit("fatalError", mapOf("reason" to "recognition-failed", "message" to "recognizer-error-$error"))
           end("recognition-failed")
         }
       }
     }
 
     override fun onResults(results: android.os.Bundle?) {
+      consecutiveRecognizerFailures = 0
       listening = false
       cancelTick()
       if (stopRequested) {
@@ -391,6 +409,7 @@ class HandsfreeCallService : Service() {
     }
 
     override fun onPartialResults(partialResults: android.os.Bundle?) {
+      consecutiveRecognizerFailures = 0
       val text = bestResult(partialResults).trim()
       if (text.isEmpty() || text == currentPartial) return
       currentPartial = text
@@ -464,8 +483,23 @@ class HandsfreeCallService : Service() {
   private fun ensureTts(): TextToSpeech {
     tts?.let { return it }
     val created = TextToSpeech(this) { status ->
-      ttsReady = status == TextToSpeech.SUCCESS
-      if (ttsReady) configureTts()
+      mainHandler.post {
+        ttsReady = status == TextToSpeech.SUCCESS
+        if (!ttsReady) {
+          if (speaking) {
+            speaking = false
+            stopBargeIn()
+            emit("fatalError", mapOf("reason" to "speech-failed", "message" to "tts-init-$status"))
+            end("speech-failed")
+          }
+          return@post
+        }
+        configureTts()
+        val engine = tts ?: return@post
+        // Sentences queued while a cold engine was still binding play now,
+        // instead of failing against an unbound engine.
+        if (speaking && nextChunkIndex < queuedSpeech.size) playChunk(engine, speechGeneration, nextChunkIndex)
+      }
     }
     created.setOnUtteranceProgressListener(utteranceListener)
     tts = created
@@ -493,17 +527,26 @@ class HandsfreeCallService : Service() {
     pendingRate = rate
     pendingPitch = pitch
     val engine = ensureTts()
-    if (ttsReady) configureTts()
+    if (speaking) {
+      // Progressive speech: later sentences of the same reply join the queue
+      // rather than starting a new generation that abandons the earlier ones.
+      queuedSpeech.addAll(chunks)
+      return
+    }
     speechGeneration += 1
-    val generation = speechGeneration
     speaking = true
     queuedSpeech = chunks.toMutableList()
-    playChunk(engine, generation, 0)
+    nextChunkIndex = 0
     startBargeIn()
+    if (ttsReady) {
+      configureTts()
+      playChunk(engine, speechGeneration, 0)
+    }
   }
 
   private fun playChunk(engine: TextToSpeech, generation: Long, index: Int) {
     if (generation != speechGeneration) return
+    nextChunkIndex = index
     if (index >= queuedSpeech.size) {
       speaking = false
       stopBargeIn()
@@ -779,7 +822,10 @@ class HandsfreeCallService : Service() {
     const val ACTION_START = "com.versutus.handsfreevoice.action.START"
     const val ACTION_END = "com.versutus.handsfreevoice.action.END"
     const val EXTRA_TITLE = "com.versutus.handsfreevoice.extra.TITLE"
-    private const val CHANNEL_ID = "handsfree-call"
+    private const val CHANNEL_ID = "handsfree-call-v2"
+    private const val LEGACY_CHANNEL_ID = "handsfree-call"
+    /** Flip after the device matrix if Samsung's default recognizer misbehaves. */
+    private const val PREFER_ON_DEVICE_RECOGNIZER = false
     private const val NOTIFICATION_ID = 8401
     private const val TICK_MS = 200L
     private const val BUSY_RETRY_MS = 400L
