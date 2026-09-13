@@ -753,8 +753,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [pairingDetails, setPairingDetails] = useState<PairingDetails | null>(null);
   const [liveCapabilities, setLiveCapabilities] = useState<GatewayCapabilities | null>(null);
   const [activeManifest, setActiveManifest] = useState<GatewayManifest | null>(null);
-  const [settings, setSettings] = useState<AppSettings>({ autoConnect: true, onboardingComplete: false });
-  const settingsRef = useRef<AppSettings>({ autoConnect: true, onboardingComplete: false });
+  const [settings, setSettings] = useState<AppSettings>({ autoConnect: true, onboardingComplete: false, voiceEngine: 'auto' });
+  const settingsRef = useRef<AppSettings>({ autoConnect: true, onboardingComplete: false, voiceEngine: 'auto' });
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
