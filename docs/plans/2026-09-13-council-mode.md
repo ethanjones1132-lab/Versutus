@@ -26,3 +26,45 @@ pure, tested logic:
 
 - **PENDING-DEVICE:** one prompt sent to three Bots renders three answers side by side, with
   a failed Bot named in its own column.
+
+---
+
+# Slice 2 — the view and the send (2026-09-13)
+
+The fan-out is shipped (`8201217`). This slice draws the columns and wires a send over the
+existing surface. The app has no per-Bot "ask and await text" call, so the send reuses the
+one that does return text: the Gate group round (`botGroups.send`), which fans out per Bot
+server-side. `runCouncil` stays the ordering and failure-isolation layer, fed from that
+round's replies.
+
+## Task D7v.1 — the transient-room send (pure copy + wiring)
+
+Files: `src/lib/gateway/council.ts` (additive), `src/app/council.tsx`,
+`src/components/chat/council-compare-view.tsx`, `__tests__/council-view-test.ts`.
+
+1. Failing source-pin test: the route selects up to three roster Bots with `councilTargets`,
+   creates one transient room for the selected members (`councilRoomName`), sends the prompt
+   once, feeds the round's replies through `runCouncil` (a missing Bot is a failed column),
+   deletes the room in a `finally`, and renders `CouncilCompareView`; the view draws one
+   column per target with `councilSummaryCopy`, names a failed column's error, and adds no
+   fetch of its own.
+2. Run; fails (files/module additions missing).
+3. Implement `councilRoomName` and `councilDisabledCopy` in `council.ts`, the compare view,
+   and the route.
+4. Run; green. `npm run verify` EXIT=0, commit.
+
+## Task D7v.2 — the entry and the Stack registration
+
+Files: `src/app/_layout.tsx`, `src/components/gateway/gateway-home-dashboard.tsx`,
+`__tests__/council-view-test.ts`.
+
+1. Failing source-pin test: the Stack registers `council` as a full-screen destination and
+   Home's hero opens `/council`.
+2. Run; fails.
+3. Register the screen and add the button.
+4. Run; green. `npm run verify` EXIT=0, commit.
+
+## Slice 2 acceptance
+
+- **PENDING-DEVICE:** one prompt sent to three Bots renders three answers side by side, with
+  a failed Bot named in its own column.
