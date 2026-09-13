@@ -45,6 +45,9 @@ class VoicePipeline:
         # is a barge-in rather than a new turn (§4.6 step 5).
         self._synth_speaking = False
         self._speech_gen = None
+        # A pause the turn judge was not sure about. Held rather than sent, so
+        # it can be re-judged / forced / merged with resumed speech (§4.6 step 3).
+        self._pending = None
 
     def open(self, params):
         self._session = (params or {}).get("voiceSessionId")
@@ -53,6 +56,7 @@ class VoicePipeline:
         self._last_partial = 0
         self._synth_speaking = False
         self._speech_gen = None
+        self._pending = None
         self._buffer.clear()
         self._vad.reset()
         return {"ok": True}
@@ -60,11 +64,18 @@ class VoicePipeline:
     def pushAudio(self, params):
         chunk = (params or {}).get("chunk") or {}
         try:
-            pcm, _rate, _channels = decode_chunk(chunk)
+            pcm, rate, _channels = decode_chunk(chunk)
         except Exception as error:  # noqa: BLE001 - a bad chunk is answered, not fatal
             return {"ok": False, "error": str(error)}
         if self._muted:
             return {"ok": True}
+
+        # Time is the audio that keeps arriving: the phone sends frames whether
+        # or not it is speaking, so a held utterance's silence is measured from
+        # the decoded chunk durations (§4.6 step 3).
+        chunk_ms = len(pcm) / (2 * rate) * 1000.0 if rate else 0.0
+        if self._pending is not None and not self._speaking:
+            self._pending["silence_ms"] += chunk_ms
 
         events = self._vad.stream(pcm)
         if events or self._speaking:
@@ -78,22 +89,52 @@ class VoicePipeline:
                     if self._speech_gen is not None:
                         self._synth.cancel(self._speech_gen)
                     self._synth_speaking = False
+                # Speech resuming after a held pause is the same utterance: the
+                # held audio joins what follows rather than being sent or lost.
+                held = self._pending["pcm"] if self._pending is not None else b""
+                self._pending = None
                 self._speaking = True
                 self._last_partial = 0
-                self._buffer = bytearray(pcm)
+                self._buffer = bytearray(held) + pcm
             elif event.kind == "speech_end":
                 self._speaking = False
                 if self._buffer:
-                    pcm = bytes(self._buffer)
-                    text = self._transcriber.final(pcm)
-                    if text:
-                        # A confident Smart Turn verdict is an early end: the
-                        # Gate may start the Bot turn before the final arrives.
-                        if self._turn is not None and self._turn.confident(pcm):
+                    utterance = bytes(self._buffer)
+                    self._buffer.clear()
+                    self._last_partial = 0
+                    if self._turn is None:
+                        # No Smart Turn installed: a pause ends the turn.
+                        self._finalize(utterance)
+                    elif self._turn.confident(utterance):
+                        # A confident verdict at the first pause is an early
+                        # end: the Gate may start the Bot turn before the final.
+                        text = self._transcriber.final(utterance)
+                        if text:
                             self._emit("voice.earlyEnd", {"text": text})
-                        self._emit("voice.final", {"text": text})
-                self._buffer.clear()
-                self._last_partial = 0
+                            self._emit("voice.final", {"text": text})
+                    else:
+                        # An unsure verdict is a thinking pause. Hold it and
+                        # re-judge at 600 ms of silence, forcing at 1.6 s.
+                        self._pending = {
+                            "pcm": utterance,
+                            "silence_ms": self._vad.silence_ms,
+                            "next_judge_ms": self._turn.rejudge_ms,
+                        }
+
+        if self._pending is not None and not self._speaking:
+            pending = self._pending
+            if pending["silence_ms"] >= pending["next_judge_ms"]:
+                if self._turn.decide(pending["pcm"], pending["silence_ms"]) == "complete":
+                    held = pending["pcm"]
+                    self._pending = None
+                    self._finalize(held)
+                else:
+                    # Re-judge a window later, but never past the force point —
+                    # decide() forces completion once silence passes it.
+                    pending["next_judge_ms"] = min(
+                        pending["silence_ms"] + self._turn.rejudge_ms,
+                        self._turn.force_ms,
+                    )
 
         if self._speaking:
             window_bytes = int(INPUT_SAMPLE_RATE * _PARTIAL_WINDOW_MS / 1000) * 2
@@ -103,6 +144,11 @@ class VoicePipeline:
                 if text:
                     self._emit("voice.partial", {"text": text})
         return {"ok": True}
+
+    def _finalize(self, pcm):
+        text = self._transcriber.final(pcm)
+        if text:
+            self._emit("voice.final", {"text": text})
 
     def speak(self, params):
         params = params or {}
@@ -137,6 +183,7 @@ class VoicePipeline:
 
     def close(self, params):
         self._buffer.clear()
+        self._pending = None
         self._session = None
         return {"ok": True}
 

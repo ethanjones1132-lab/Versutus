@@ -130,3 +130,96 @@ def test_an_unsure_turn_judge_does_not_mark_an_early_end():
     pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
     pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
     assert "voice.earlyEnd" not in [method for method, _params in events]
+
+
+# §4.6 step 3: an incomplete verdict is a thinking pause, not a turn. The
+# worker holds the audio and re-judges at 600 ms of silence, forcing at 1.6 s.
+def _unsure_pipeline(events, is_complete):
+    return VoicePipeline(
+        vad=VadSegmenter(is_speech=_energy),
+        transcriber=PartialTranscriber(lambda pcm, beam_size: "hello there"),
+        turn_judge=TurnJudge(is_complete=is_complete),
+        synthesizer=SpeechSynthesizer(lambda text: [text.encode("ascii")]),
+        emit=lambda method, params: events.append((method, params)),
+    )
+
+
+def test_an_unsure_pause_holds_the_turn_instead_of_sending():
+    events = []
+    pipeline = _unsure_pipeline(events, lambda _window: 0.1)
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    # The VAD ends speech after 200 ms, which is the first judgement; it is
+    # unsure, so nothing is sent while the operator is only thinking.
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(300), 16000)})
+    assert "voice.final" not in [method for method, _params in events]
+
+
+def test_a_held_turn_completes_when_the_re_judge_finds_the_pause_over():
+    events = []
+    calls = {"n": 0}
+
+    def scorer(_window):
+        calls["n"] += 1
+        # Unsure at the first pause, confident at the 600 ms re-judge.
+        return 0.1 if calls["n"] == 1 else 0.9
+
+    pipeline = _unsure_pipeline(events, scorer)
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(300), 16000)})
+    assert "voice.final" not in [method for method, _params in events]
+
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+    assert [method for method, _params in events].count("voice.final") == 1
+
+
+def test_an_endless_pause_is_forced_at_1600ms():
+    events = []
+    pipeline = _unsure_pipeline(events, lambda _window: 0.1)
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(300), 16000)})
+    for _ in range(3):
+        pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+    assert "voice.final" not in [method for method, _params in events]
+
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+    assert [method for method, _params in events].count("voice.final") == 1
+
+
+def test_speech_resuming_during_a_hold_keeps_one_utterance_and_sends_nothing():
+    events = []
+    seen = {}
+
+    def transcribe(pcm, beam_size):
+        seen[beam_size] = len(pcm)
+        return "hello there"
+
+    calls = {"n": 0}
+
+    def scorer(_window):
+        calls["n"] += 1
+        # The first pause is a thinking pause; the second end of speech is
+        # confident, so the held prefix and the resumed speech are one final.
+        return 0.1 if calls["n"] == 1 else 0.9
+
+    pipeline = VoicePipeline(
+        vad=VadSegmenter(is_speech=_energy),
+        transcriber=PartialTranscriber(transcribe),
+        turn_judge=TurnJudge(is_complete=scorer),
+        synthesizer=SpeechSynthesizer(lambda text: [text.encode("ascii")]),
+        emit=lambda method, params: events.append((method, params)),
+    )
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(300), 16000)})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(300), 16000)})
+    assert "voice.final" not in [method for method, _params in events]
+
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(300), 16000)})
+    assert [method for method, _params in events].count("voice.final") == 1
+    # The held prefix rode into the final utterance, so a resumed thought is
+    # not truncated to the audio that arrived after the pause.
+    assert seen.get(5, 0) > 30_000
+
