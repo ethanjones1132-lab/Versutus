@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <!-- Exported because the launcher host must deliver APPWIDGET_UPDATE; the
+         receiver only redraws from the app's own private store. -->
+    <receiver
+      android:name="com.versutus.widget.VersutusStatusReceiver"
+      android:exported="true"
+      android:label="@string/versutus_widget_name">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+      </intent-filter>
+      <meta-data
+        android:name="android.appwidget.provider"
+        android:resource="@xml/versutus_status_widget_info" />
+    </receiver>
+  </application>
+</manifest>

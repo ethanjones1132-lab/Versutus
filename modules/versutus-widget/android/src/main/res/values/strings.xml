@@ -1,0 +1,6 @@
+<resources>
+  <string name="versutus_widget_name">Versutus Status</string>
+  <string name="versutus_widget_description">Your gateway connection, runs waiting on you, and the newest result — with when Versutus last knew it.</string>
+  <string name="versutus_widget_preview_status">Connected</string>
+  <string name="versutus_widget_preview_work">1 run waiting on your approval</string>
+</resources>
