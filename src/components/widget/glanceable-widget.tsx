@@ -15,7 +15,7 @@
 // dying at boot.
 
 import { Text, VStack } from '@expo/ui/swift-ui';
-import { font, foregroundStyle, lineLimit } from '@expo/ui/swift-ui/modifiers';
+import { font, foregroundStyle, lineLimit, widgetURL } from '@expo/ui/swift-ui/modifiers';
 import { createWidget, type WidgetEnvironment } from 'expo-widgets';
 
 import type { GlanceableSnapshot } from '@/lib/widget/snapshot';
@@ -39,7 +39,7 @@ const GlanceableWidget = (props: GlanceableSnapshot, environment: WidgetEnvironm
   const hasRoomForResult = environment.widgetFamily !== 'systemSmall';
 
   return (
-    <VStack alignment="leading" spacing={4}>
+    <VStack alignment="leading" spacing={4} modifiers={[widgetURL('versutus://chat')]}>
       <Text modifiers={[font({ weight: 'semibold', size: 15 }), lineLimit(1)]}>{lines.status}</Text>
       <Text modifiers={[font({ size: 13 }), lineLimit(1)]}>{lines.work}</Text>
       {lines.result && hasRoomForResult ? (

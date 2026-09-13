@@ -166,6 +166,10 @@ describe('the widget component', () => {
       "import('@/components/widget/glanceable-widget')",
     );
   });
+
+  test('opens the app through the same chat link the Android card uses', () => {
+    expect(source()).toContain("widgetURL('versutus://chat')");
+  });
 });
 
 // Nothing on Android evaluates the expo-widgets component any more: the platform
