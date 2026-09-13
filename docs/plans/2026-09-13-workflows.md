@@ -44,6 +44,23 @@ executor.
 Remove run information from the Activity surface and make it a cron view, after Slice 2, so
 the scorecard's persisted-history source is untouched.
 
+### Slice 3a — hide the run surface (this session)
+
+The Activity tab's first read is now scheduled work: `CronSection` is always on the tab, and
+the run list, the start-a-run card and the post-run scorecards are hidden behind an explicit
+"Show runs" control (default hidden). Nothing is deleted: `ActivityRun` history and its
+`botId` attribution stay persisted, `lib/fleet/scorecard.ts` keeps reading the same history,
+and every run-history component and test stays in the tree. Extraction of the run surface to
+its own `/runs` destination is slice 3b.
+
+1. Failing Jest `__tests__/activity-cron-view-test.ts`: the tab carries `showRuns` default
+   false, the FlatList's data is the run rows only while `showRuns`, the start card is gated
+   on `showRuns && runsSupported`, the scorecards are gated on `showRuns`, `CronSection` is
+   rendered unconditionally, and a "Show runs" / "Hide runs" control flips it.
+2. Run it; it fails (`showRuns` absent).
+3. Implement the gate in `src/app/(tabs)/activity.tsx`.
+4. Run; green. `npm run verify` EXIT=0; commit. Device/manual acceptance is PENDING-DEVICE.
+
 ## Acceptance
 
 - **PENDING-DEVICE:** define a workflow, run it by name from the composer, and see its steps
