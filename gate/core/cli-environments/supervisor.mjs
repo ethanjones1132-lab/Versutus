@@ -119,6 +119,12 @@ export class CliEnvironmentService {
     // When set, every run's events are appended to disk and init() reloads
     // finished history at startup, so discovery + replay survive a restart.
     archiveDir = null,
+    // Observer for push-worthy run transitions (Solution A): called with
+    // `{ trigger: 'approval'|'run', runId, state?, environmentId, ... }`
+    // when an approval card goes up and when a run reaches its verdict.
+    // Fire-and-forget — a throwing or rejecting observer must never break
+    // the run it reports on.
+    onRunEvent = null,
   } = {}) {
     this.store = store;
     this.registry = registry;
@@ -126,6 +132,7 @@ export class CliEnvironmentService {
     this.approvals = approvals;
     this.spawnImpl = spawnImpl;
     this.vault = vault;
+    this.onRunEvent = typeof onRunEvent === 'function' ? onRunEvent : null;
     // How long a run may sit in front of an unanswered approval card before
     // it is ruled denied and its slot freed.
     this.approvalTimeoutMs = approvalTimeoutMs;
@@ -407,6 +414,14 @@ export class CliEnvironmentService {
         summary: APPROVAL_SUMMARY[verdict.type] ?? 'This run needs your approval to continue.',
       },
     });
+    // The phone may be in a pocket: the approval card going up is the
+    // moment a push must go out, while the run still holds its slot.
+    this.emitRunEvent({
+      trigger: 'approval',
+      runId: run.runId,
+      environmentId: run.request.environmentId,
+      operation: run.request.operation,
+    });
 
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -606,6 +621,30 @@ export class CliEnvironmentService {
     run.log.emit({ type, payload });
     const remaining = [...this.runs.values()].filter((item) => item.request.environmentId === run.request.environmentId && !item.done);
     this.environmentState.set(run.request.environmentId, { state: remaining.length ? 'busy' : 'ready' });
+    // A verdict the operator did not watch happen locally still deserves a
+    // tray notice: completed, failed and cancelled all report here.
+    const state = type === 'run.completed' ? 'completed'
+      : type === 'run.failed' ? 'failed'
+      : type === 'run.cancelled' ? 'cancelled' : null;
+    if (state) {
+      this.emitRunEvent({
+        trigger: 'run',
+        runId: run.runId,
+        state,
+        environmentId: run.request.environmentId,
+      });
+    }
+  }
+
+  /** Fire-and-forget report to the push observer; never throws. */
+  emitRunEvent(event) {
+    if (!this.onRunEvent) return;
+    try {
+      const result = this.onRunEvent(event);
+      result?.catch?.(() => {});
+    } catch {
+      // A broken observer must never break the run it reports on.
+    }
   }
 
   async require(id) {

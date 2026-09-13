@@ -122,6 +122,17 @@ describe('push registration', () => {
     await expect(syncPushRegistration(rpcStub())).resolves.toBeUndefined();
   });
 
+  test('a refused register RPC never rejects the connect path', async () => {
+    const rpc = rpcStub();
+    rpc.rpcRequest.mockRejectedValue(new Error('pairing_required'));
+
+    await expect(syncPushRegistration(rpc)).resolves.toBeUndefined();
+    expect(rpc.rpcRequest).toHaveBeenCalledWith(
+      'notifications.register',
+      expect.objectContaining({ expoPushToken: 'ExponentPushToken[new]' }),
+    );
+  });
+
   test('deregisterWithGate calls notifications.deregister', async () => {
     const rpc = rpcStub();
 

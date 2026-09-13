@@ -138,6 +138,7 @@ import {
   notifyRunComplete,
   notifyRunProgress,
 } from '@/lib/notifications/local';
+import { deregisterWithGate, syncPushRegistration } from '@/lib/notifications/push-registration';
 import { syncRunActivities } from '@/lib/notifications/run-activity-device';
 import { pendingRunFocus, type RunFocus } from '@/lib/notifications/run-focus';
 import { runProgressNotice } from '@/lib/notifications/run-progress';
@@ -1315,6 +1316,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             if (decision.scheduleAutoRetry && activeGatewayRef.current && !authFailureRef.current) {
               scheduleAutoRetryRef.current(AUTO_RETRY_BASE_DELAY_MS);
             }
+            // Solution A4: this device's Expo push token belongs to the Gate
+            // once per connection — initial and every reconnect — and the
+            // registration never blocks or breaks the connection itself.
+            if (nextStatus === 'connected' && gateway.kind === 'custom') {
+              void syncPushRegistration(client);
+            }
           },
           onHello: (hello) => {
             if (isCurrent()) setActiveHello(hello as GatewayHelloOk);
@@ -2157,7 +2164,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         autoRetryTimerRef.current = null;
         setAutoRetry(null);
       }
-      clientRef.current?.disconnect();
+      // Solution A4: the Gate forgets this device's token before the session
+      // goes down — a removed profile must not keep receiving its pushes.
+      // Best-effort: a Gate that is already unreachable still gets deleted.
+      const leaving = clientRef.current;
+      if (leaving && activeGateway?.kind === 'custom') {
+        try {
+          await deregisterWithGate(leaving);
+        } catch {
+          // Ignore: the profile is gone either way.
+        }
+      }
+      leaving?.disconnect();
       clientRef.current = null;
       setHasBotManagement(false);
       setHasGroupRooms(false);

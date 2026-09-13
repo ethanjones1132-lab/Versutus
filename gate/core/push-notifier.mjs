@@ -164,16 +164,37 @@ function messageFor(classified, event, row) {
  * The widget's companion: a data-only message the app's background task reads
  * to redraw the card while the app is closed. Sent only to devices that asked
  * for it, and never a tray notice — no title, no body.
+ *
+ * `snapshot` is the Gate's live state (or a function returning it):
+ * `{ connected, work, approvalsPending }`. Absent providers keep the
+ * historical defaults so a notifier constructed without one still reports a
+ * connected, idle Gate with nothing awaiting triage.
  */
-function widgetCompanion(row, event) {
+function resolveSnapshot(snapshot) {
+  try {
+    const value = typeof snapshot === 'function' ? snapshot() : snapshot;
+    return isRecord(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function widgetCompanion(row, event, snapshot) {
   if (row.widgetUpdates !== true) return null;
+  const snap = resolveSnapshot(snapshot);
+  const connected = snap?.connected !== false;
+  const approvalsPending = Number.isInteger(snap?.approvalsPending) && snap.approvalsPending >= 0
+    ? snap.approvalsPending
+    : 0;
+  // The widget sits on the home screen, visible without unlocking the phone:
+  // the newest result rides along only when the device opted into rich bodies.
   const widget = {
     v: 2,
-    status: 'Connected',
-    connected: true,
-    work: 'No runs in flight',
-    ...(nonEmptyString(event?.text) ? { result: truncateText(event.text) } : {}),
-    approvalsPending: 0,
+    status: connected ? 'Connected' : 'Disconnected',
+    connected,
+    work: nonEmptyString(snap?.work) ?? 'No runs in flight',
+    ...(nonEmptyString(event?.text) && row.richBody === true ? { result: truncateText(event.text) } : {}),
+    approvalsPending,
     writtenAt: Date.now(),
   };
   return {
@@ -183,7 +204,22 @@ function widgetCompanion(row, event) {
   };
 }
 
-export function createPushNotifier({ tokens, send }) {
+/**
+ * The Gate's live state for the widget companion: how many environments are
+ * mid-run and how many approval cards await triage. Pure, so the wording is
+ * unit-tested without booting a Gate.
+ */
+export function widgetSnapshot({ connected = true, busyRuns = 0, approvalsPending = 0 } = {}) {
+  const runs = Number.isInteger(busyRuns) && busyRuns > 0 ? busyRuns : 0;
+  const pending = Number.isInteger(approvalsPending) && approvalsPending >= 0 ? approvalsPending : 0;
+  return {
+    connected,
+    work: runs === 0 ? 'No runs in flight' : `${runs} run${runs === 1 ? '' : 's'} in flight`,
+    approvalsPending: pending,
+  };
+}
+
+export function createPushNotifier({ tokens, send, snapshot = null }) {
   if (!tokens || typeof tokens.listEnabled !== 'function' || typeof tokens.removeByToken !== 'function') {
     throw new Error('tokens must provide listEnabled() and removeByToken()');
   }
@@ -211,7 +247,7 @@ export function createPushNotifier({ tokens, send }) {
       const key = `${classified.trigger}:${classified.id}:${event?.state ?? ''}`;
       if (!remember(key)) continue;
       messages.push(messageFor(classified, event, row));
-      const companion = widgetCompanion(row, event);
+      const companion = widgetCompanion(row, event, snapshot);
       if (companion) messages.push(companion);
     }
 

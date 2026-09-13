@@ -7,18 +7,20 @@ import { RpcMethodsSection } from '@/components/gateway/rpc-methods-section';
 import { ToolsetsSection } from '@/components/gateway/toolsets-section';
 import { EnvironmentsSection } from '@/components/gateway/environments-section';
 import { GatewayManagementSection } from '@/components/gateway/gateway-management-section';
+import { NotificationsSection } from '@/components/gateway/notifications-section';
 import { ProvidersSection } from '@/components/gateway/providers-section';
 import { Card, Chip, Screen, SegmentedControl, Text } from '@/components/ui';
 import { useGateway } from '@/context/gateway-provider';
 import { backendChipLabel } from '@/lib/gateway/backend-freshness';
 import { Spacing } from '@/constants/tokens';
 
-type Section = 'providers' | 'environments' | 'capabilities' | 'management';
+type Section = 'providers' | 'environments' | 'capabilities' | 'notifications' | 'management';
 
 const SECTIONS = [
   { key: 'providers' as const, label: 'Providers' },
   { key: 'environments' as const, label: 'CLI' },
   { key: 'capabilities' as const, label: 'Capabilities' },
+  { key: 'notifications' as const, label: 'Notifications' },
   { key: 'management' as const, label: 'Manage' },
 ];
 
@@ -106,6 +108,16 @@ export default function GatewaySetupScreen() {
               Saved gateways, auto-connect, and local discovery.
             </Text>
             <GatewayManagementSection />
+          </>
+        ) : null}
+
+        {section === 'notifications' ? (
+          <>
+            <Text variant="caption">
+              Push notifications from this Gate — runs, approvals, replies and routines, with the app
+              backgrounded or killed.
+            </Text>
+            <NotificationsSection />
           </>
         ) : null}
       </ScrollView>

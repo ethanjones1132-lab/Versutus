@@ -1,8 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createPushNotifier } from '../core/push-notifier.mjs';
-
+import { createPushNotifier, widgetSnapshot } from '../core/push-notifier.mjs';
 function row(overrides = {}) {
   return {
     expoPushToken: 'ExponentPushToken[token-1]',
@@ -95,7 +94,7 @@ test('classifies a cron final response as a routine', async () => {
 
 test('a device opted into widget updates gets a data-only companion message', async () => {
   const tokens = {
-    listEnabled: async () => [row({ widgetUpdates: true })],
+    listEnabled: async () => [row({ widgetUpdates: true, richBody: true })],
     removeByToken: async () => false,
   };
   const sent = [];
@@ -110,6 +109,64 @@ test('a device opted into widget updates gets a data-only companion message', as
   assert.equal(widget.data.widget.v, 2);
   assert.equal(widget.data.widget.result, 'deployed the fix');
   assert.equal(typeof widget.data.widget.writtenAt, 'number');
+});
+
+test('the widget companion reports the Gate snapshot instead of hard-coded idle', async () => {
+  const tokens = {
+    listEnabled: async () => [row({ widgetUpdates: true, richBody: true })],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({
+    tokens,
+    send: async (messages) => { sent.push(...messages); return { ok: true }; },
+    snapshot: () => ({ connected: true, work: '2 runs in flight', approvalsPending: 3 }),
+  });
+
+  await notifier.notify({ trigger: 'run', runId: 'run-1', state: 'completed', text: 'done' });
+
+  const widget = sent.find((message) => message.data?.kind === 'widget');
+  assert.ok(widget, 'a widget companion must be sent');
+  assert.equal(widget.data.widget.status, 'Connected');
+  assert.equal(widget.data.widget.connected, true);
+  assert.equal(widget.data.widget.work, '2 runs in flight');
+  assert.equal(widget.data.widget.approvalsPending, 3);
+});
+
+test('a disconnected Gate reads as disconnected on the widget', async () => {
+  const tokens = {
+    listEnabled: async () => [row({ widgetUpdates: true, richBody: true })],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({
+    tokens,
+    send: async (messages) => { sent.push(...messages); return { ok: true }; },
+    snapshot: { connected: false, work: 'No runs in flight', approvalsPending: 0 },
+  });
+
+  await notifier.notify({ trigger: 'run', runId: 'run-1', state: 'completed', text: 'done' });
+
+  const widget = sent.find((message) => message.data?.kind === 'widget');
+  assert.ok(widget, 'a widget companion must be sent');
+  assert.equal(widget.data.widget.status, 'Disconnected');
+  assert.equal(widget.data.widget.connected, false);
+});
+
+test('the widget withholds the newest result when the device declined rich bodies', async () => {
+  const tokens = {
+    listEnabled: async () => [row({ widgetUpdates: true, richBody: false })],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({ trigger: 'run', runId: 'run-1', state: 'completed', text: 'deployed the fix' });
+
+  const widget = sent.find((message) => message.data?.kind === 'widget');
+  assert.ok(widget, 'a widget companion must be sent');
+  assert.equal('result' in widget.data.widget, false);
+  assert.equal(widget.data.widget.work, 'No runs in flight');
 });
 
 test('no widget payload goes to a device that did not opt in', async () => {
@@ -141,4 +198,23 @@ test('removes a row when Expo reports DeviceNotRegistered', async () => {
 
   assert.equal(result.ok, true);
   assert.deepEqual(removed, ['ExponentPushToken[token-1]']);
+});
+
+test('widgetSnapshot words the Gate state for the home-screen card', () => {
+  assert.deepEqual(widgetSnapshot(), {
+    connected: true,
+    work: 'No runs in flight',
+    approvalsPending: 0,
+  });
+  assert.deepEqual(widgetSnapshot({ busyRuns: 1, approvalsPending: 2 }), {
+    connected: true,
+    work: '1 run in flight',
+    approvalsPending: 2,
+  });
+  assert.deepEqual(widgetSnapshot({ busyRuns: 3, approvalsPending: 0 }), {
+    connected: true,
+    work: '3 runs in flight',
+    approvalsPending: 0,
+  });
+  assert.equal(widgetSnapshot({ connected: false }).connected, false);
 });

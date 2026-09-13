@@ -633,3 +633,51 @@ test('a workspace that vanishes mid-flight fails naming the folder, not ENOENT',
     await cleanup();
   }
 });
+
+test('the push observer hears the approval card and the terminal verdict', async () => {
+  const heard = [];
+  const { service, cleanup } = await makeService({}, {
+    onRunEvent: (event) => { heard.push(event); },
+  });
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'prompt',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: { prompt: 'say hello world back' },
+    });
+    const events = await collectEvents(service, handle.runId, 'approve');
+    assert.equal(events.at(-1).type, 'run.completed');
+    const approval = heard.find((event) => event.trigger === 'approval');
+    assert.ok(approval, 'the approval card going up must report');
+    assert.equal(approval.runId, handle.runId);
+    const verdict = heard.find((event) => event.trigger === 'run');
+    assert.ok(verdict, 'the terminal verdict must report');
+    assert.equal(verdict.runId, handle.runId);
+    assert.equal(verdict.state, 'completed');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('a throwing push observer never breaks the run it reports on', async () => {
+  const { service, cleanup } = await makeService({}, {
+    onRunEvent: () => { throw new Error('observer is down'); },
+  });
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'status',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: {},
+    });
+    const events = await collectEvents(service, handle.runId);
+    assert.equal(events.at(-1).type, 'run.completed');
+  } finally {
+    await cleanup();
+  }
+});

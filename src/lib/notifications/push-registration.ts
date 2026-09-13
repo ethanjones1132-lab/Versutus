@@ -108,5 +108,11 @@ export async function syncPushRegistration(rpc: Rpc): Promise<void> {
   }
   const token = await obtainExpoPushToken();
   if (!token) return;
-  await registerWithGate(rpc, token);
+  // Registration must never break the connect path that calls this: a Gate
+  // that refuses the RPC (unpaired grant, older build) just means no relay.
+  try {
+    await registerWithGate(rpc, token);
+  } catch {
+    // Swallowed by design — the next connect retries.
+  }
 }

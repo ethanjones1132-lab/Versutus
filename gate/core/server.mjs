@@ -32,6 +32,7 @@ import { DeviceTokenStore } from './device-tokens.mjs';
 import { PushTokenStore } from './push-tokens.mjs';
 import { createPushRpc } from './push-rpc.mjs';
 import { createPushSend } from './push-send.mjs';
+import { createPushNotifier, widgetSnapshot } from './push-notifier.mjs';
 import { createVoiceRpc } from './voice/voice-rpc.mjs';
 import { attachVoiceMediaSocket } from './voice/media-socket.mjs';
 import { createVoiceAudit } from './voice/audit.mjs';
@@ -82,9 +83,20 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
   // keeps streaming into a socket nobody is reading.
   res.on('close', () => controller.abort());
 
+  // The reply text so far (capped): returned to the caller for the push
+  // notifier when the turn completes. A stopped or dropped turn returns null
+  // instead — silence, not a "finished" notice for work that never landed.
+  let collected = '';
+  const collectDelta = (delta) => {
+    if (typeof delta !== 'string' || !delta) return;
+    if (collected.length >= 2000) return;
+    collected += delta.slice(0, 2000 - collected.length);
+  };
+
   try {
     const { hasContent, report } = await runBackendTurn(backend, sessionId, { text, model }, {
       signal: controller.signal,
+      onDelta: collectDelta,
       // Raw OpenAI-shaped payloads, relayed verbatim so a frame the runner
       // cannot read is still forwarded rather than dropped.
       onChunk: (data) => {
@@ -115,6 +127,7 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
       res.end();
     }
   }
+  return clientDisconnected || !collected ? null : collected;
 }
 
 /** Backend models are `providerId/modelId`, since a CLI reaches many vendors. */
@@ -396,6 +409,30 @@ export async function createGate(config = {}) {
   const pushTokens = new PushTokenStore(join(gateHome, 'push-tokens.json'));
   const pushSend = createPushSend({ fetchImpl: pushFetch ?? globalThis.fetch });
   const notificationMethods = createPushRpc({ tokens: pushTokens, send: pushSend.send });
+  // Solution A — true push: runs, approvals, replies and routines report
+  // here. The widget companion reads the same live state the manifest does.
+  const pushNotifier = createPushNotifier({
+    tokens: pushTokens,
+    send: pushSend.send,
+    snapshot: () => {
+      const states = [...(environmentService.environmentState?.values?.() ?? [])];
+      const busyRuns = states.filter((entry) => entry?.state === 'busy').length;
+      const pending = environmentService.approvals && typeof environmentService.approvals.list === 'function'
+        ? environmentService.approvals.list().length
+        : 0;
+      return widgetSnapshot({ busyRuns, approvalsPending: pending });
+    },
+  });
+  // Best-effort by design: a push failure must never break the Gate turn,
+  // run or approval it reports on.
+  const notifyPush = (event) => {
+    try {
+      pushNotifier.notify(event)?.catch?.(() => {});
+    } catch {
+      // The notifier already swallows observer faults; this guards sync throws.
+    }
+  };
+  environmentService.onRunEvent = notifyPush;
   // Voice sessions live on the Gate; the media socket (M2 task 2.2) reads the
   // same registry the RPC writes, so a grant and its socket cannot disagree.
   // Capabilities are read from the installed runtime (M5 task 5.2): `local` is
@@ -1908,7 +1945,18 @@ export async function createGate(config = {}) {
               ?? (await backend.createSession({ title: newThreadTitle(), model })).id;
 
             if (body.stream === true) {
-              await streamBackendTurn(backend, sessionId, { text, model }, res);
+              const streamed = await streamBackendTurn(backend, sessionId, { text, model }, res);
+              // A completed turn reports as a Bot reply (a cron routine
+              // session classifies to `routine` inside the notifier); a
+              // stopped or dropped turn stays silent.
+              if (streamed) {
+                notifyPush({
+                  trigger: 'final-response',
+                  sessionId,
+                  ...(botForTurn ? { botId: botForTurn } : {}),
+                  text: streamed,
+                });
+              }
               return;
             }
 
@@ -1932,6 +1980,14 @@ export async function createGate(config = {}) {
               ...modelReport(result?.runtime, model),
               choices: [{ index: 0, message: { role: 'assistant', content: result.text }, finish_reason: 'stop' }],
             }));
+            if (result?.text && result.text.trim()) {
+              notifyPush({
+                trigger: 'final-response',
+                sessionId,
+                ...(botForTurn ? { botId: botForTurn } : {}),
+                text: result.text,
+              });
+            }
           } catch (error) {
             res.writeHead(502, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: { message: error.message, code: 'backend_error' } }));
