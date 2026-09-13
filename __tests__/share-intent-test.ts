@@ -383,9 +383,10 @@ describe('the Android share entry', () => {
     // options, and the iOS half of the config is exactly as shipped, because
     // the iOS extension target is phase 7 (ROADMAP.md:115-117) and the charter
     // forbids one before it. `app-lock-test.ts` pins the face-ID string itself.
-    expect(expo.plugins.slice(0, 8)).toEqual([
+    expect(expo.plugins.slice(0, 9)).toEqual([
       'expo-router',
       './plugins/with-openclaw-discovery.js',
+      './plugins/with-voice-shortcuts.js',
       ['expo-build-properties', { android: { usesCleartextTraffic: true } }],
       [
         'expo-splash-screen',

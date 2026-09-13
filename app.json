@@ -43,6 +43,7 @@
     "plugins": [
       "expo-router",
       "./plugins/with-openclaw-discovery.js",
+      "./plugins/with-voice-shortcuts.js",
       [
         "expo-build-properties",
         {
