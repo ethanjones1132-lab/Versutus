@@ -18,6 +18,8 @@ import { INITIAL_VOICE_SESSION, reduceVoiceSession } from './voice-session.mjs';
 export const VOICE_STREAM_PATH = '/v1/voice/stream';
 export const MAX_MEDIA_FRAME_BYTES = 64 * 1024;
 export const NO_AUDIO_TIMEOUT_MS = 30_000;
+// How long a turn started on an early end survives before it is committed.
+export const SPECULATION_WINDOW_MS = 600;
 
 function rejectUpgrade(socket, status, message) {
   try {
@@ -80,6 +82,9 @@ export function attachVoiceMediaSocket({
       let lastAudioAt = now();
       let call = INITIAL_VOICE_SESSION;
       let turnAbort = null;
+      // A turn started on `earlyEnd` before the worker's `final` arrives. It is
+      // discarded if speech resumes inside the window, and promoted by `final`.
+      let speculative = null;
 
       const sendFrame = (frame) => {
         if (!closed) ws.send(serializeFrame(frame));
@@ -103,9 +108,23 @@ export function attachVoiceMediaSocket({
             engine.setMuted?.(effect.muted);
             break;
           case 'turn.run':
+            if (speculative) {
+              clearTimeout(speculative.timer);
+              if (speculative.text === effect.text) {
+                // `final` promotes the turn the early end already started.
+                speculative.committed = true;
+                break;
+              }
+              speculative.controller.abort();
+              speculative = null;
+            }
             void startTurn(effect.text);
             break;
           case 'turn.cancel':
+            if (speculative) {
+              clearTimeout(speculative.timer);
+              speculative = null;
+            }
             turnAbort?.abort();
             turnAbort = null;
             break;
@@ -121,13 +140,21 @@ export function attachVoiceMediaSocket({
         for (const effect of out.effects) runEffect(effect);
       };
 
-      const startTurn = async (text) => {
+      const startTurn = async (text, { speculative: isSpeculative = false } = {}) => {
         if (typeof runTurn !== 'function') {
           dispatch({ type: 'replyFailed', message: 'No backend is available for this call.' });
           return;
         }
         const controller = new AbortController();
         turnAbort = controller;
+        if (isSpeculative) {
+          const entry = { text, controller, committed: false, timer: null };
+          entry.timer = setTimeout(() => {
+            entry.committed = true;
+          }, SPECULATION_WINDOW_MS);
+          entry.timer.unref?.();
+          speculative = entry;
+        }
         try {
           const result = await runTurn(session, text, {
             signal: controller.signal,
@@ -147,6 +174,10 @@ export function attachVoiceMediaSocket({
           }
         } finally {
           if (turnAbort === controller) turnAbort = null;
+          if (speculative?.controller === controller) {
+            clearTimeout(speculative.timer);
+            speculative = null;
+          }
         }
       };
 
@@ -159,6 +190,10 @@ export function attachVoiceMediaSocket({
         if (closed) return;
         closed = true;
         clearInterval(timer);
+        if (speculative) {
+          clearTimeout(speculative.timer);
+          speculative = null;
+        }
         turnAbort?.abort();
         turnAbort = null;
         dispatch({ type: 'socketClosed' });
@@ -201,7 +236,18 @@ export function attachVoiceMediaSocket({
         dispatch({ type: 'speechAudio', pcm: event.pcm, gen: event.gen }),
       );
       engine.on?.('speechDone', (event) => dispatch({ type: 'speechDone', gen: event.gen }));
-      engine.on?.('userSpeechStart', () => dispatch({ type: 'bargein' }));
+      engine.on?.('earlyEnd', (event) => {
+        if (call.phase !== 'listening' || turnAbort) return;
+        void startTurn(event.text, { speculative: true });
+      });
+      engine.on?.('userSpeechStart', () => {
+        if (speculative && !speculative.committed) {
+          clearTimeout(speculative.timer);
+          speculative.controller.abort();
+          speculative = null;
+        }
+        dispatch({ type: 'bargein' });
+      });
       engine.on?.('error', (event) =>
         dispatch({
           type: 'error',

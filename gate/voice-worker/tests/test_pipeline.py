@@ -6,6 +6,7 @@ from versutus_voice.audio import encode_chunk, float32_to_pcm16
 from versutus_voice.server import VoicePipeline
 from versutus_voice.stt import PartialTranscriber
 from versutus_voice.tts import SpeechSynthesizer
+from versutus_voice.turn import TurnJudge
 from versutus_voice.vad import VadSegmenter
 
 
@@ -96,3 +97,36 @@ def test_a_tone_while_listening_does_not_barge_in():
     pipeline.open({"voiceSessionId": "vs-1"})
     pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
     assert "voice.userSpeechStart" not in [method for method, _params in events]
+
+
+def test_a_confident_turn_judge_marks_an_early_end_before_the_final():
+    events = []
+    pipeline = VoicePipeline(
+        vad=VadSegmenter(is_speech=_energy),
+        transcriber=PartialTranscriber(lambda pcm, beam_size: "hello there"),
+        turn_judge=TurnJudge(is_complete=lambda window: 0.9),
+        synthesizer=SpeechSynthesizer(lambda text: [text.encode("ascii")]),
+        emit=lambda method, params: events.append((method, params)),
+    )
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+
+    methods = [method for method, _params in events]
+    assert methods.index("voice.earlyEnd") < methods.index("voice.final")
+    assert events[methods.index("voice.earlyEnd")][1]["text"] == "hello there"
+
+
+def test_an_unsure_turn_judge_does_not_mark_an_early_end():
+    events = []
+    pipeline = VoicePipeline(
+        vad=VadSegmenter(is_speech=_energy),
+        transcriber=PartialTranscriber(lambda pcm, beam_size: "hello there"),
+        turn_judge=TurnJudge(is_complete=lambda window: 0.1),
+        synthesizer=SpeechSynthesizer(lambda text: [text.encode("ascii")]),
+        emit=lambda method, params: events.append((method, params)),
+    )
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    pipeline.pushAudio({"chunk": encode_chunk(_silence(400), 16000)})
+    assert "voice.earlyEnd" not in [method for method, _params in events]

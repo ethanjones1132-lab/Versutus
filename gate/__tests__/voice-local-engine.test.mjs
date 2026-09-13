@@ -96,6 +96,18 @@ test('a userSpeechStart notification becomes an engine userSpeechStart', async (
   assert.equal(started[0].gen, 3);
 });
 
+test('an earlyEnd notification becomes an engine earlyEnd', async () => {
+  const { engine, children } = harness();
+  await engine.open({ voiceSessionId: 'vs-1' });
+
+  const ends = [];
+  engine.on('earlyEnd', (event) => ends.push(event));
+  notify(children[0], 'voice.earlyEnd', { text: 'hello' });
+
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0].text, 'hello');
+});
+
 test('a dead worker restarts on backoff and re-opens the session', async () => {
   const { engine, children, scheduled } = harness();
   await engine.open({ voiceSessionId: 'vs-1' });

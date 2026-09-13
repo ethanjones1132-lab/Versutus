@@ -209,6 +209,76 @@ test('a userSpeechStart while listening is inert', async () => {
   await media.close();
 });
 
+test('an early end starts the turn before the final promotes it', async () => {
+  let release;
+  const signals = [];
+  const runTurn = (_session, _text, { signal, onDelta }) => {
+    signals.push(signal);
+    return new Promise((resolve) => {
+      release = () => {
+        onDelta('Speculative reply.');
+        resolve({ hasContent: true });
+      };
+    });
+  };
+  const engine = new FakeEngine({ autoDone: false });
+  const media = await startMedia({ runTurn, engine });
+  const { ws, frames } = connect(media.port);
+  await once(ws, 'open');
+  await waitUntil(() => frames.some((frame) => frame.t === 'ready'));
+
+  engine.emit('earlyEnd', { text: 'hello' });
+  await waitUntil(() => signals.length === 1);
+
+  // Stay quiet past the 600 ms abort window, then final promotes the turn.
+  await new Promise((done) => setTimeout(done, 650));
+  engine.emit('final', { text: 'hello' });
+  await waitUntil(() => frames.some((frame) => frame.t === 'final'));
+  assert.equal(signals.length, 1, 'the running turn was promoted, not restarted');
+
+  release();
+  await waitUntil(() => frames.some((frame) => frame.t === 'turn' && frame.state === 'done'));
+  assert.ok(frames.some((frame) => frame.t === 'reply' && frame.delta === 'Speculative reply.'));
+
+  ws.close();
+  await once(ws, 'close');
+  await media.close();
+});
+
+test('a userSpeechStart within the abort window discards the speculative turn', async () => {
+  const signals = [];
+  const runTurn = (_session, _text, { signal }) => {
+    signals.push(signal);
+    return new Promise(() => {});
+  };
+  const engine = new FakeEngine({ autoDone: false });
+  const media = await startMedia({ runTurn, engine });
+  const { ws, frames } = connect(media.port);
+  await once(ws, 'open');
+  await waitUntil(() => frames.some((frame) => frame.t === 'ready'));
+
+  engine.emit('earlyEnd', { text: 'partial' });
+  await waitUntil(() => signals.length === 1);
+
+  engine.emit('userSpeechStart', {});
+  await waitUntil(() => signals[0].aborted === true);
+
+  engine.emit('final', { text: 'the real turn' });
+  await waitUntil(() => signals.length === 2);
+  assert.equal(signals[1].aborted, false, 'the final starts a fresh turn');
+
+  assert.equal(frames.some((frame) => frame.t === 'reply'), false, 'the discarded turn left no reply');
+  assert.equal(
+    frames.some((frame) => frame.t === 'turn' && frame.state === 'done'),
+    false,
+    'the discarded turn left no turn done',
+  );
+
+  ws.close();
+  await once(ws, 'close');
+  await media.close();
+});
+
 test('end from any path converges on exactly one ended frame', async () => {
   const media = await startMedia({ runTurn: async () => ({ hasContent: true }) });
   const { ws, frames } = connect(media.port);

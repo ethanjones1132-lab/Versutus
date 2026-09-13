@@ -84,8 +84,13 @@ class VoicePipeline:
             elif event.kind == "speech_end":
                 self._speaking = False
                 if self._buffer:
-                    text = self._transcriber.final(bytes(self._buffer))
+                    pcm = bytes(self._buffer)
+                    text = self._transcriber.final(pcm)
                     if text:
+                        # A confident Smart Turn verdict is an early end: the
+                        # Gate may start the Bot turn before the final arrives.
+                        if self._turn is not None and self._turn.confident(pcm):
+                            self._emit("voice.earlyEnd", {"text": text})
                         self._emit("voice.final", {"text": text})
                 self._buffer.clear()
                 self._last_partial = 0

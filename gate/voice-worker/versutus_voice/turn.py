@@ -31,6 +31,13 @@ class TurnJudge:
             return pcm
         return pcm[-self.max_bytes :]
 
+    def confident(self, window):
+        """True when the scorer is sure this utterance ended on its own."""
+        try:
+            return float(self.is_complete(self.window(window))) >= self.threshold
+        except Exception:  # noqa: BLE001 - a scorer that cannot answer is not confident
+            return False
+
     def decide(self, window, silence_ms):
         """Return 'waiting', 'complete' or 'incomplete' for the current silence."""
         if silence_ms >= self.force_ms:
