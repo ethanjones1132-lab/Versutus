@@ -29,3 +29,11 @@ run without a device has run and is recorded first.
 
 `FUTURE-ITEMS.md` §4 is left unchanged until every item above passes on a device
 (the brief forbids changing it while only the device steps remain).
+
+## M1 acceptance (appended at M1 end)
+
+- [x] **M1 end build.** `.\gradlew.bat :versutus-widget:testDebugUnitTest :handsfree-voice:testDebugUnitTest assembleRelease` — `BUILD SUCCESSFUL` in 9m 50s, `FINISHED gradle-m1-end EXIT=0`.
+- [ ] 1.1 Brand fallback colours: readable on an Android 11 emulator (below API 31, so `WidgetColors.colors` paints the card). — PENDING-DEVICE
+- [ ] 1.2 A 1x1 status tile fits a 1x1 cell on One UI, showing the dot and the connection word alone. — PENDING-DEVICE
+- [ ] 1.3 A 4x4 large cell shows up to three run rows. — PENDING-DEVICE
+- [ ] 1.4 TalkBack reads the card as one sentence ("Versutus: Connected. … Written Today HH:MM"). — PENDING-DEVICE
