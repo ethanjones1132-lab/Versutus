@@ -44,52 +44,25 @@ class HandsfreeVoiceModule : Module() {
       HandsfreeCallService.current?.end("app-killed")
     }
 
-    AsyncFunction("getAvailability") { promise: Promise ->
+    // What this device can do, read from installed services. Constructing a
+    // TextToSpeech engine here raced a cold Samsung TTS against a 1.5 s timeout
+    // and hid Call; the service creates its engine when it first speaks.
+    AsyncFunction("getAvailability") {
       val context = appContext.reactContext
       if (context == null) {
-        promise.resolve(
-          mapOf(
-            "recognition" to false,
-            "synthesis" to false,
-            "maxSpeechInputLength" to 0,
-          ),
+        mapOf("recognition" to false, "synthesis" to false, "maxSpeechInputLength" to 0)
+      } else {
+        val recognition = SpeechRecognizer.isRecognitionAvailable(context)
+        val ttsEngines = context.packageManager.queryIntentServices(
+          Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE),
+          0,
         )
-        return@AsyncFunction
-      }
-      val recognition = SpeechRecognizer.isRecognitionAvailable(context)
-      val maxLength = TextToSpeech.getMaxSpeechInputLength()
-      val settled = java.util.concurrent.atomic.AtomicBoolean(false)
-      fun settle(synthesis: Boolean) {
-        if (settled.compareAndSet(false, true)) {
-          promise.resolve(
-            mapOf(
-              "recognition" to recognition,
-              "synthesis" to synthesis,
-              "maxSpeechInputLength" to if (synthesis) maxLength else 0,
-            ),
-          )
-        }
-      }
-      try {
-        val engine = TextToSpeech(context) { status ->
-          settle(status == TextToSpeech.SUCCESS)
-        }
-        // A platform that never answers leaves the promise open forever; the
-        // module's own timeout is the honest "no synthesis" rather than a hang.
-        Handler(Looper.getMainLooper()).postDelayed({
-          if (settled.compareAndSet(false, true)) {
-            promise.resolve(
-              mapOf(
-                "recognition" to recognition,
-                "synthesis" to false,
-                "maxSpeechInputLength" to 0,
-              ),
-            )
-          }
-          engine.shutdown()
-        }, TTS_PROBE_TIMEOUT_MS)
-      } catch (_: Exception) {
-        settle(false)
+        val synthesis = ttsEngines.isNotEmpty()
+        mapOf(
+          "recognition" to recognition,
+          "synthesis" to synthesis,
+          "maxSpeechInputLength" to if (synthesis) TextToSpeech.getMaxSpeechInputLength() else 0,
+        )
       }
     }
 
@@ -166,9 +139,5 @@ class HandsfreeVoiceModule : Module() {
     } catch (_: Exception) {
       promise.resolve("unavailable")
     }
-  }
-
-  companion object {
-    private const val TTS_PROBE_TIMEOUT_MS = 1500L
   }
 }

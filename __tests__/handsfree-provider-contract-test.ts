@@ -269,3 +269,15 @@ describe('the Call control is not hidden by ordinary chat activity', () => {
     expect(provider).toContain('startBlocker: handsfreeStartBlocker(');
   });
 });
+
+describe('the availability probe recovers on its own', () => {
+  const probe = between(provider, '// Read the device\'s call capability', '// A call is bound to the gateway');
+
+  test('re-probes when the app returns to the foreground', () => {
+    expect(probe).toContain("AppState.addEventListener('change'");
+  });
+
+  test('retries a probe that answered no recognition or threw', () => {
+    expect(probe).toContain('HANDSFREE_PROBE_RETRIES');
+  });
+});

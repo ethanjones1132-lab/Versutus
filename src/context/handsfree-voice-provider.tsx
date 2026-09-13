@@ -55,6 +55,10 @@ export const HANDSFREE_REPLY_WATCHDOG_MS = 120_000;
 const HANDSFREE_LISTEN_RETRY_LIMIT = 8;
 const HANDSFREE_LISTEN_RETRY_MS = 150;
 
+/** A probe that finds no recognizer is asked again; Samsung binds its recognition service lazily. */
+const HANDSFREE_PROBE_RETRIES = 3;
+const HANDSFREE_PROBE_RETRY_MS = 500;
+
 /** What one call is for. Built by the caller, never derived from context. */
 export type HandsfreeCallTarget = {
   gatewayId: string;
@@ -453,18 +457,28 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   useEffect(() => {
     if (status !== 'connected') return undefined;
     let cancelled = false;
-    void loadHandsfreeModule().then(async (module) => {
-      if (cancelled) return;
-      if (!module) return;
-      try {
-        const read = await module.getAvailability();
-        if (!cancelled) setAvailability(read);
-      } catch {
-        if (!cancelled) setAvailability(null);
+    const probe = async () => {
+      for (let attempt = 0; attempt < HANDSFREE_PROBE_RETRIES; attempt += 1) {
+        const module = await loadHandsfreeModule();
+        if (cancelled || !module) return;
+        try {
+          const read = await module.getAvailability();
+          if (cancelled) return;
+          setAvailability(read);
+          if (read.recognition) return;
+        } catch {
+          if (!cancelled) setAvailability(null);
+        }
+        await new Promise((resolve) => setTimeout(resolve, HANDSFREE_PROBE_RETRY_MS));
       }
+    };
+    void probe();
+    const subscription = AppState.addEventListener('change', (next) => {
+      if (next === 'active') void probe();
     });
     return () => {
       cancelled = true;
+      subscription.remove();
     };
   }, [status]);
 

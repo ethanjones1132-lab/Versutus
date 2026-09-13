@@ -128,4 +128,12 @@ describe('hands-free native contract', () => {
     expect(swift).toMatch(/AsyncFunction\("startSession"\)\s*\{\s*\(options: \[String: Any\?\], promise: Promise\) in/);
     expect(swift).not.toMatch(/AsyncFunction\("startSession"\)\s*\{\s*\(title: String/);
   });
+
+  it('answers availability from installed services, without constructing a TTS engine', () => {
+    const availability = kotlin.slice(kotlin.indexOf('AsyncFunction("getAvailability")'), kotlin.indexOf('AsyncFunction("startSession")'));
+    expect(availability).toContain('TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE');
+    expect(availability).toContain('SpeechRecognizer.isRecognitionAvailable(');
+    expect(availability).not.toContain('TextToSpeech(context)');
+    expect(availability).not.toContain('postDelayed');
+  });
 });
