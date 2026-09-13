@@ -1,6 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
+import { BotApprovalPolicyRow } from '@/components/chat/bot-approval-policy';
 import { BotMemoryPane } from '@/components/chat/bot-memory-pane';
 import { BaseSheet, Button, Divider, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
@@ -113,6 +114,9 @@ export function BotDetailSheet({
             <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
           ) : null}
         </View>
+
+        {/* D1: the per-Bot auto-approve opt-in (read-only classes only). */}
+        <BotApprovalPolicyRow botId={bot.id} />
 
         {/* P2: the Bot's memory, read on demand from the Gate host. */}
         <BotMemoryPane botId={bot.id} />

@@ -91,6 +91,20 @@ describe('Activity mounts the inbox', () => {
   });
 });
 
+describe('the Bot detail sheet carries the opt-in', () => {
+  it('mounts the policy row', () => {
+    const sheet = readSource(['src', 'components', 'chat', 'bot-detail-sheet.tsx']);
+    expect(sheet).toContain("import { BotApprovalPolicyRow } from '@/components/chat/bot-approval-policy'");
+    expect(sheet).toContain('<BotApprovalPolicyRow');
+  });
+
+  it('the toggle only stores a read-only opt-in', () => {
+    const row = readSource(['src', 'components', 'chat', 'bot-approval-policy.tsx']);
+    expect(row).toContain('setApprovalPolicy');
+    expect(row).toContain('approvalPolicyCopy');
+  });
+});
+
 describe('Settings shows the decision history', () => {
   it('reads the audit and renders the rows', () => {
     const settings = readSource(['src', 'app', 'gateway', 'settings.tsx']);

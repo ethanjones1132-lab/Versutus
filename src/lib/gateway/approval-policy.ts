@@ -115,6 +115,13 @@ export function isAutoApprovable(cls: ApprovalClass): boolean {
   return AUTO_APPROVABLE_CLASSES.includes(cls);
 }
 
+/** The per-Bot opt-in's line; the toggle is the only way to turn it on. */
+export function approvalPolicyCopy(enabled: boolean): string {
+  return enabled
+    ? 'Read-only commands run without a card for this Bot. Everything else still asks.'
+    : 'This Bot asks before every command.';
+}
+
 /**
  * Decide one pending approval. Fail closed at every branch: an unfamiliar or
  * dangerous class is never approved, a missing policy asks, and only an

@@ -5,6 +5,7 @@ import {
   approvalAuditFromUnknown,
   approvalAuditSummaryCopy,
   approvalPoliciesFromUnknown,
+  approvalPolicyCopy,
   approvalPolicyDecision,
   approvalPolicyKey,
   normalizeApprovalClass,
@@ -51,6 +52,11 @@ describe('approvalPolicyDecision', () => {
     const policies = setApprovalPolicy({}, gatewayId, botId, true);
     expect(approvalPolicyDecision({ policies, gatewayId, botId, cls: 'read' }).decision).toBe('approve');
     expect(approvalPolicyDecision({ policies, gatewayId, botId: 'other', cls: 'read' }).decision).toBe('ask');
+  });
+
+  it('names what the opt-in does, and what it never covers', () => {
+    expect(approvalPolicyCopy(true)).toMatch(/Read-only/);
+    expect(approvalPolicyCopy(false)).toMatch(/asks before every command/);
   });
 
   it('never auto-approves a destructive class, even when opted in', () => {
