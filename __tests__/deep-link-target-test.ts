@@ -150,6 +150,88 @@ describe('deepLinkTarget (the app link vocabulary)', () => {
     });
   });
 
+  test('a call link carries its Bot, engine and a signed auto-start', () => {
+    expect(deepLinkTarget('call', {})).toEqual({ kind: 'call', engine: 'auto', autoStart: false });
+    for (const engine of ['local', 'codex', 'phone'] as const) {
+      expect(deepLinkTarget('call', { bot: 'scout', engine })).toEqual({
+        kind: 'call',
+        botId: 'scout',
+        engine,
+        autoStart: false,
+      });
+    }
+    // An absent or unknown engine is `auto`, never a guessed engine.
+    expect(deepLinkTarget('call', { engine: 'nope' })).toEqual({
+      kind: 'call',
+      engine: 'auto',
+      autoStart: false,
+    });
+    expect(deepLinkTarget('call', { bot: '  scout  ' })).toEqual({
+      kind: 'call',
+      botId: 'scout',
+      engine: 'auto',
+      autoStart: false,
+    });
+  });
+
+  test('autoStart is true only for a signed link with a timestamp', () => {
+    // Any app or web page can fire a `versutus://` link, so the mere presence
+    // of `autoStart=1` must never be enough to open the microphone.
+    expect(deepLinkTarget('call', { autoStart: '1' })).toEqual({
+      kind: 'call',
+      engine: 'auto',
+      autoStart: false,
+    });
+    expect(deepLinkTarget('call', { autoStart: '1', ts: '1700000000000' })).toEqual({
+      kind: 'call',
+      engine: 'auto',
+      autoStart: false,
+    });
+    expect(deepLinkTarget('call', { autoStart: '1', sig: 'abc' })).toEqual({
+      kind: 'call',
+      engine: 'auto',
+      autoStart: false,
+    });
+    expect(deepLinkTarget('call', { autoStart: '1', ts: 'not-a-number', sig: 'abc' })).toEqual({
+      kind: 'call',
+      engine: 'auto',
+      autoStart: false,
+    });
+
+    expect(deepLinkTarget('call', { autoStart: '1', ts: '1700000000000', sig: 'abc' })).toEqual({
+      kind: 'call',
+      engine: 'auto',
+      autoStart: true,
+      signature: { ts: 1700000000000, sig: 'abc' },
+    });
+    expect(
+      deepLinkTarget('call', {
+        bot: 'scout',
+        engine: 'local',
+        autoStart: '1',
+        ts: '1700000000000',
+        sig: 'abc',
+      }),
+    ).toEqual({
+      kind: 'call',
+      botId: 'scout',
+      engine: 'local',
+      autoStart: true,
+      signature: { ts: 1700000000000, sig: 'abc' },
+    });
+  });
+
+  test('a repeated call param takes its first value, and the spelling is exact', () => {
+    expect(deepLinkTarget('call', { bot: ['scout', 'night'], engine: ['local', 'phone'] })).toEqual({
+      kind: 'call',
+      botId: 'scout',
+      engine: 'local',
+      autoStart: false,
+    });
+    expect(deepLinkTarget('CALL', {})).toBeNull();
+    expect(deepLinkTarget('call/', {})).toBeNull();
+  });
+
   test('every other path is nothing at all', () => {
     expect(deepLinkTarget('settings', { bot: 'scout' })).toBeNull();
     // The vocabulary is case-sensitive and has no trailing-slash spelling:
@@ -329,6 +411,35 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
     expect(refusal).not.toContain("requestSurface({ kind: 'bot'");
   });
 
+  test('a call link opens the Bot Chat and asks for the sheet, never the mic', () => {
+    const src = routerSource();
+    const call = src.slice(
+      src.indexOf("if (target.kind === 'call')"),
+      src.indexOf('// A Bot Chat link opens the way a roster tap opens one'),
+    );
+
+    expect(call.length).toBeGreaterThan(0);
+    const navigate = call.indexOf('router.navigate');
+    const sheet = call.indexOf("call: '1'");
+    expect(navigate).toBeGreaterThan(-1);
+    // The tab is brought up first, then the screen is asked for the sheet.
+    expect(sheet).toBeGreaterThan(navigate);
+    // Any app or web page can fire the link, so the router itself must never
+    // start capture; the sheet's Start (or the native signature check) is the
+    // only path that can.
+    expect(call).not.toContain('handsfree');
+    expect(src).not.toContain('sendChatInput');
+  });
+
+  test('the screen opens the call sheet for a call link', () => {
+    const screen = readSource('src', 'components', 'chat', 'chat-screen.tsx');
+    // The router passes `call=1`; the screen reads it and opens the confirm
+    // sheet, which is where the operator decides to start a call.
+    expect(screen).toContain('useLocalSearchParams');
+    expect(screen).toContain('params.call');
+    expect(screen).toContain('setCallSheetVisible(true)');
+  });
+
   test('every target the fold answers has a branch, and none of them sends', () => {
     const src = routerSource();
 
@@ -336,16 +447,18 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
     // a draft the operator reviews. No branch of this router sends it.
     expect(src).not.toContain('sendChatInput');
 
-    // The fold answers exactly three targets and each has a branch of its own,
-    // in that order: no target can fall through unhandled and ride the union's
-    // Bot id into `openBot` — the guard that stood in for the compose branch
-    // while it was a later slice has nothing left to hold back.
+    // The fold answers four targets and each has a branch of its own, in that
+    // order: no target can fall through unhandled and ride the union's Bot id
+    // into `openBot` — the guard that stood in for the compose branch while it
+    // was a later slice has nothing left to hold back.
     const add = src.indexOf("if (target.kind === 'add')");
     const compose = src.indexOf("if (target.kind === 'compose')");
+    const call = src.indexOf("if (target.kind === 'call')");
     const chat = src.indexOf('// A Bot Chat link opens the way a roster tap opens one');
     expect(add).toBeGreaterThan(-1);
     expect(compose).toBeGreaterThan(add);
-    expect(chat).toBeGreaterThan(compose);
+    expect(call).toBeGreaterThan(compose);
+    expect(chat).toBeGreaterThan(call);
     expect(src).not.toContain("if (target.kind !== 'chat') return;");
   });
 });

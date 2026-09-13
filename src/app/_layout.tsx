@@ -454,6 +454,30 @@ function GatewayDeepLinkRouter() {
       return;
     }
 
+    // A call link (the widget's signed auto-start, a launcher shortcut, or a
+    // hand-written confirm link) opens the Bot Chat and asks the screen for
+    // the call sheet. A link alone never opens the microphone: the sheet's
+    // Start, or the native signature check on a signed link, is what begins
+    // capture (§4.4). With no Bot named the sheet belongs to whatever thread
+    // is already up, which is the screen's call.
+    if (target.kind === 'call') {
+      if (status !== 'connected') return;
+      handledRef.current = url;
+      router.navigate({ pathname: '/chat', params: { call: '1' } });
+      if (!target.botId) return;
+      const botId = target.botId;
+      void openBot(botId)
+        .then((opened) => {
+          if (!opened) {
+            requestSurface({ kind: 'roster' });
+            return;
+          }
+          requestSurface({ kind: 'bot', botId });
+        })
+        .catch(() => requestSurface({ kind: 'roster' }));
+      return;
+    }
+
     // The last target the fold answers is a chat link.
 
     // A Bot Chat link opens the way a roster tap opens one: the Chat tab is

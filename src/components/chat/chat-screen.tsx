@@ -1,5 +1,11 @@
 import * as Clipboard from 'expo-clipboard';
-import { type Href, useFocusEffect, useIsFocused, useRouter } from 'expo-router';
+import {
+  type Href,
+  useFocusEffect,
+  useIsFocused,
+  useLocalSearchParams,
+  useRouter,
+} from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, FlatList, Platform, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -287,6 +293,7 @@ function PairingRequiredBanner({ onShow }: { onShow: () => void }) {
 
 export function ChatScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ call?: string }>();
   const tokens = useTokens();
   const {
     activeGateway,
@@ -828,6 +835,21 @@ export function ChatScreen() {
     setDraft,
     clearRequestedComposeRequest,
   ]);
+
+  // A `versutus://call` link lands here: the router opened the Bot Chat and
+  // passed `call=1`. A link never starts capture on its own — the confirm
+  // sheet is what opens, and the operator's Start is what begins a call. The
+  // param is handled once so a re-render cannot reopen the sheet after the
+  // operator dismisses it.
+  const callEntry = params.call;
+  const callEntryHandledRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!isFocused || callEntry !== '1' || !draftThread) return undefined;
+    if (callEntryHandledRef.current === callEntry) return undefined;
+    callEntryHandledRef.current = callEntry;
+    const timer = setTimeout(() => setCallSheetVisible(true), 0);
+    return () => clearTimeout(timer);
+  }, [isFocused, callEntry, draftThread]);
 
   // Stable header callbacks. The chat header is memoized (chat-header.tsx) so it
   // skips a re-render when only the transcript changes; inline arrow wrappers here
