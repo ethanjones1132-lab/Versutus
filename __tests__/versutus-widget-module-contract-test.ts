@@ -90,3 +90,20 @@ describe('M1: looks native on any wallpaper', () => {
     expect(widget).toContain('.semantics');
   });
 });
+
+describe('M2: actions that respect the app safety rules', () => {
+  const kotlin = (file: string) =>
+    readSource('modules', 'versutus-widget', 'android', 'src', 'main', 'java', 'com', 'versutus', 'widget', file);
+
+  test('nothing in the widget runs a callback that could decide an approval', () => {
+    const widget = kotlin('VersutusStatusWidget.kt');
+    expect(widget).not.toContain('actionRunCallback');
+    expect(widget).not.toContain('sendBroadcast');
+  });
+
+  test('an approval offers a Decide row that only opens the app', () => {
+    const widget = kotlin('VersutusStatusWidget.kt');
+    expect(widget).toContain('Decide in Versutus');
+    expect(widget).toContain('actionStartActivity(openAppIntent(context, "versutus://chat"))');
+  });
+});

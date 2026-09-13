@@ -123,8 +123,9 @@ private fun Lines(payload: WidgetPayload, variant: WidgetVariant) {
       BotRow(bot)
     }
   }
-  if (payload.approvalsPending > 0 && variant != WidgetVariant.SMALL) {
-    Line("Tap to decide in Versutus", secondary = true)
+  if (payload.approvalsPending > 0 && variant != WidgetVariant.SMALL && variant != WidgetVariant.TINY) {
+    Spacer(GlanceModifier.height(3.dp))
+    DecideRow()
   }
   if (variant != WidgetVariant.SMALL && payload.result != null) {
     Spacer(GlanceModifier.height(4.dp))
@@ -156,6 +157,20 @@ private fun BotRow(bot: WidgetBot) {
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Line(bot.label)
+  }
+}
+
+/** The approval call to action: it opens the app's own chat, and decides nothing here (ADR 0001). */
+@Composable
+private fun DecideRow() {
+  val context = LocalContext.current
+  Row(
+    modifier = GlanceModifier
+      .clickable(actionStartActivity(openAppIntent(context, "versutus://chat")))
+      .padding(vertical = 2.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Line("Decide in Versutus", bold = true)
   }
 }
 
