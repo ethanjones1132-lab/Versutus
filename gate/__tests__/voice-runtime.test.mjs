@@ -91,6 +91,7 @@ test('installVoice runs uv and downloads every locked model, and a failure rejec
   );
   assert.equal(calls[0][0], 'venv');
   assert.ok(calls[0].includes('3.12'));
+  assert.ok(calls[0].includes('--allow-existing'), 'a second install must not fail on the existing venv');
   assert.equal(fetchCalls.length, 0, 'no model download may start before the venv is installed');
 });
 
@@ -105,7 +106,7 @@ test('voiceStatus reports not-installed without a venv and ready with one', () =
   mkdirSync(join(paths.venv, 'bin'), { recursive: true });
   mkdirSync(paths.models, { recursive: true });
   writeFileSync(paths.python, '#!/bin/sh');
-  for (const name of ['kokoro-v1.0.onnx', 'voices-v1.0.bin']) {
+  for (const name of ['kokoro-v1.0.onnx', 'voices-v1.0.bin', 'smart-turn-v3.2-cpu.onnx']) {
     writeFileSync(join(paths.models, name), 'model');
   }
   status = voiceStatus({ paths });

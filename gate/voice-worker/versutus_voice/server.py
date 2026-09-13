@@ -294,18 +294,24 @@ class KokoroSynthesizer:
         return [float32_to_pcm16(samples)]
 
 
+SMART_TURN_MODEL = "smart-turn-v3.2-cpu.onnx"
+
+
 def load_smart_turn(models_dir):
     """Return a completeness scorer, or None when Smart Turn is not installed."""
-    candidates = list(Path(models_dir).glob("smart-turn*.onnx"))
-    if not candidates:
-        return None
+    model_path = Path(models_dir) / SMART_TURN_MODEL
+    if not model_path.exists():
+        candidates = sorted(Path(models_dir).glob("smart-turn*.onnx"))
+        if not candidates:
+            return None
+        model_path = candidates[0]
     import numpy as np
     import onnxruntime as ort
 
     from .audio import pcm16_to_float32
     from .turn import TurnJudge
 
-    session = ort.InferenceSession(str(candidates[0]), providers=["CPUExecutionProvider"])
+    session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
 
     def is_complete(window):
         samples = pcm16_to_float32(window).reshape(1, -1).astype(np.float32)

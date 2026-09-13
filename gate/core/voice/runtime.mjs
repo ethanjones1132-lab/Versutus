@@ -95,7 +95,9 @@ export function uvRunner(uvPath = process.env.VERSUTUS_UV || 'uv') {
 export async function installVoice({ paths, cpu = false, runUv, fetch: fetchImpl = globalThis.fetch, log = console.log } = {}) {
   mkdirSync(paths.venv, { recursive: true });
   log(`creating the venv at ${paths.venv}`);
-  await runUv(['venv', '--python', '3.12', paths.venv]);
+  // `--allow-existing` keeps a second install (only new models to fetch) from
+  // failing on the venv the first one created.
+  await runUv(['venv', '--python', '3.12', '--allow-existing', paths.venv]);
   log('installing requirements.lock');
   await runUv(['pip', 'install', '--python', paths.python, '-r', paths.lockFile]);
 
@@ -195,6 +197,19 @@ export function voiceDoctor({ paths, spawnSync = nodeSpawnSync, env = process.en
   }
   const info = JSON.parse(probe.stdout);
   checks.push({ name: 'imports', ok: !info.error, detail: info.error ?? JSON.stringify(info.versions) });
+  try {
+    const lock = readModelsLock(paths);
+    const names = Object.keys(lock.models ?? {});
+    const present = names.filter((name) => existsSync(join(paths.models, name)));
+    const missing = names.filter((name) => !present.includes(name));
+    checks.push({
+      name: 'models',
+      ok: missing.length === 0,
+      detail: present.length ? present.sort().join(', ') : 'none installed',
+    });
+  } catch (error) {
+    checks.push({ name: 'models', ok: false, detail: error.message });
+  }
   checks.push({ name: 'cuda', ok: Boolean(info.vram), detail: info.vram ? `${info.vram.usedMb}/${info.vram.totalMb} MB` : 'no NVIDIA GPU' });
   log(JSON.stringify(checks));
 
