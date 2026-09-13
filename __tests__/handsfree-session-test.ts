@@ -272,17 +272,27 @@ describe('reduceHandsfreeSession — empty and late native events', () => {
     expect(late.effects).toEqual([]);
   });
 
-  test('every event is inert once ended', () => {
-    const ended = reduce(listening(), [{ type: 'end' }, { type: 'stopped' }]).state;
-    expect(ended.phase).toBe('ended');
+  test('a finished call returns to idle, remembers why it ended, and can start again', () => {
+    const over = reduce(listening(), [{ type: 'end' }, { type: 'stopped' }]).state;
+    expect(over.phase).toBe('idle');
+    expect(over.lastEndReason).toBe('user');
+    const again = step(over, { type: 'start' });
+    expect(again.state.phase).toBe('starting');
+    expect(again.state.lastEndReason).toBeUndefined();
+  });
+
+  test('late native events after a call finished change nothing', () => {
+    const over = reduce(listening(), [{ type: 'fatalError', reason: 'recognition-failed' }, { type: 'stopped' }]).state;
+    expect(over.lastEndReason).toBe('recognition-failed');
     for (const event of [
-      { type: 'start' } as const,
       { type: 'partial', text: 'x' } as const,
       { type: 'reply-appeared' } as const,
       { type: 'endRequested' } as const,
+      { type: 'speechFinished' } as const,
+      { type: 'disconnect' } as const,
     ]) {
-      const out = step(ended, event);
-      expect(out.state).toBe(ended);
+      const out = step(over, event);
+      expect(out.state).toBe(over);
       expect(out.effects).toEqual([]);
     }
   });
@@ -419,15 +429,15 @@ describe('reduceHandsfreeSession — failure and termination', () => {
     expect(ending.effects).toEqual([{ kind: 'stop-session' }]);
     // A second End while ending does not run teardown again.
     expect(step(ending.state, { type: 'end' }).effects).toEqual([]);
-    expect(step(ending.state, { type: 'stopped' }).state.phase).toBe('ended');
+    expect(step(ending.state, { type: 'stopped' }).state.phase).toBe('idle');
   });
 
-  test('the notification End reaches ended exactly as the UI End does', () => {
+  test('the notification End finishes the call exactly as the UI End does', () => {
     const viaUi = reduce(listening(), [{ type: 'end' }, { type: 'stopped' }]);
     const viaNotification = reduce(listening(), [{ type: 'endRequested' }, { type: 'stopped' }]);
     expect(viaNotification.state).toEqual(viaUi.state);
-    expect(viaNotification.state.phase).toBe('ended');
-    expect(viaNotification.state.reason).toBe('user');
+    expect(viaNotification.state.phase).toBe('idle');
+    expect(viaNotification.state.lastEndReason).toBe('user');
   });
 
   test('a confirming call that ends cancels the grace timer first', () => {

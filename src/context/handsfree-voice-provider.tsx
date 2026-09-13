@@ -68,6 +68,7 @@ export type HandsfreeVoiceContextValue = {
   partial: string;
   label: string | undefined;
   reason: HandsfreeTerminalReason | undefined;
+  lastEndReason?: HandsfreeTerminalReason;
   /** The latest 0–1 amplitude sample, when the platform supplies one. */
   level: number;
   /** Whether `start` can succeed right now. */
@@ -551,6 +552,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     partial: session.partial,
     label,
     reason: session.reason,
+    lastEndReason: session.lastEndReason,
     level,
     canStart,
     start,

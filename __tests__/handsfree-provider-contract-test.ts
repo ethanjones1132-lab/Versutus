@@ -39,6 +39,7 @@ describe('the call provider sits outside navigation and inside the gateway', () 
       'partial',
       'label',
       'reason',
+      'lastEndReason',
       'level',
       'canStart',
       'start',
