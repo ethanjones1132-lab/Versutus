@@ -2082,7 +2082,7 @@ function formatApprovals(result: unknown): string {
 }
 
 function formatApprovalsPending(result: unknown): string {
-  const pending = readCollection(result, ['pending', 'requests', 'items']);
+  const pending = readCollection(result, ['approvals', 'pending', 'requests', 'items']);
   if (!pending?.length) return 'Pending approvals: none reported';
   const lines = pending.slice(0, 10).map((item) =>
     describeNamedRecord(item, ['approvalId', 'id', 'name', 'title'], ['type', 'decision', 'status', 'state']),

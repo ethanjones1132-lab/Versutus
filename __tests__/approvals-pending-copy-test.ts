@@ -35,6 +35,18 @@ describe('/approvals pending copy', () => {
     expect(result.text).toContain('- r9 (status: pending)');
   });
 
+  test('the Gate approvals.pending shape renders its rows', async () => {
+    const payload = { approvals: [{ approvalId: 'c5d6', type: 'workspace_write', summary: 'writes files' }] };
+    const gatewayRequest = jest.fn().mockResolvedValue(payload);
+    const result = await executeGatewaySlashCommand('/approvals pending', {
+      hello: null,
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+    });
+    expect(result.text).toContain('Pending approvals: 1');
+    expect(result.text).toContain('- c5d6 (type: workspace_write)');
+  });
+
   test('an empty pending list renders an honest empty copy', async () => {
     const payload = { pending: [] };
     const gatewayRequest = jest.fn().mockResolvedValue(payload);
