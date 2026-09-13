@@ -8,7 +8,9 @@ import {
   HANDSFREE_SPEAKING_HINT,
   HANDSFREE_START_LABEL,
   HANDSFREE_UNMUTE_LABEL,
+  handsfreeEndReasonCopy,
   handsfreePhaseLabel,
+  handsfreeStartResultCopy,
 } from '@/lib/voice/handsfree-call-copy';
 
 declare const __dirname: string;
@@ -176,5 +178,26 @@ describe('the call sheet can always be dismissed', () => {
     const handler = screen.slice(at, screen.indexOf('}, [activeGateway, botVoice', at));
     expect(handler).toMatch(/try\s*\{[\s\S]*await handsfree\.start\(/);
     expect(handler).toMatch(/finally\s*\{\s*setCallBusy\(false\);\s*\}/);
+  });
+});
+
+describe('an ended or refused call explains itself', () => {
+  test('the operator ending a call is not reported as a failure', () => {
+    expect(handsfreeEndReasonCopy('user')).toBeNull();
+    expect(handsfreeEndReasonCopy('thread-changed')).toBeNull();
+  });
+
+  test('every failure reason and start result has its own sentence', () => {
+    const reasons = ['disconnect', 'system-interruption', 'app-killed', 'recognition-failed', 'send-failed', 'speech-failed'] as const;
+    const copy = reasons.map(handsfreeEndReasonCopy);
+    expect(copy.every((line) => typeof line === 'string' && line.length > 0)).toBe(true);
+    expect(new Set(copy).size).toBe(reasons.length);
+    expect(new Set([handsfreeStartResultCopy('permission-denied'), handsfreeStartResultCopy('unavailable'), handsfreeStartResultCopy('refused')]).size).toBe(3);
+  });
+
+  test('the chat screen reopens the sheet with the reason when a call ends on its own', () => {
+    expect(screen).toContain('handsfreeEndReasonCopy(handsfreeLastEndReason)');
+    expect(screen).toMatch(/\[handsfreeCallsEnded, handsfreeLastEndReason\]/);
+    expect(screen).toContain('setCallError(handsfreeStartResultCopy(result))');
   });
 });

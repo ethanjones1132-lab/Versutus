@@ -445,4 +445,12 @@ describe('reduceHandsfreeSession — failure and termination', () => {
     const out = step(confirming, { type: 'end' });
     expect(out.effects).toEqual([{ kind: 'cancel-grace' }, { kind: 'stop-session' }]);
   });
+
+  test('every finished call is counted, so the screen can react to two failures in a row', () => {
+    const first = reduce(listening(), [{ type: 'fatalError', reason: 'recognition-failed' }, { type: 'stopped' }]).state;
+    const second = reduce(first, [{ type: 'start' }, { type: 'started' }, { type: 'fatalError', reason: 'recognition-failed' }, { type: 'stopped' }]).state;
+    expect(first.callsEnded).toBe(1);
+    expect(second.callsEnded).toBe(2);
+    expect(step(second, { type: 'start' }).state.callsEnded).toBe(2);
+  });
 });

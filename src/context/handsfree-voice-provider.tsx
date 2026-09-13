@@ -81,6 +81,8 @@ export type HandsfreeVoiceContextValue = {
   label: string | undefined;
   reason: HandsfreeTerminalReason | undefined;
   lastEndReason?: HandsfreeTerminalReason;
+  /** How many calls have finished, so the screen can react to a repeat failure. */
+  callsEnded: number;
   /** The latest 0–1 amplitude sample, when the platform supplies one. */
   level: number;
   /** Whether `start` can succeed right now. */
@@ -605,6 +607,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     label,
     reason: session.reason,
     lastEndReason: session.lastEndReason,
+    callsEnded: session.callsEnded,
     level,
     canStart,
     startBlocker: handsfreeStartBlocker({

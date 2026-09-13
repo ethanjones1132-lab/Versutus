@@ -91,6 +91,8 @@ export type HandsfreeSessionState = {
   reason?: HandsfreeTerminalReason;
   /** Why the previous call ended, kept after it returns to idle so the screen can say so. */
   lastEndReason?: HandsfreeTerminalReason;
+  /** How many calls have finished, so a screen can react to a repeat failure. */
+  callsEnded: number;
   /** The live transcript of the current turn, for the banner. */
   partial: string;
   /** The text accumulated for the pending turn (finals + grace-window speech). */
@@ -103,6 +105,7 @@ export type HandsfreeSessionState = {
 
 export const INITIAL_HANDSFREE_SESSION: HandsfreeSessionState = {
   phase: 'idle',
+  callsEnded: 0,
   partial: '',
   held: '',
   replyPlaying: false,
@@ -178,7 +181,14 @@ export function reduceHandsfreeSession(
   if (phase === 'ended') return stay(state);
   if (phase === 'ending') {
     if (event.type === 'stopped') {
-      return { state: { ...INITIAL_HANDSFREE_SESSION, lastEndReason: state.reason }, effects: [] };
+      return {
+        state: {
+          ...INITIAL_HANDSFREE_SESSION,
+          lastEndReason: state.reason,
+          callsEnded: state.callsEnded + 1,
+        },
+        effects: [],
+      };
     }
     return stay(state);
   }
@@ -201,7 +211,7 @@ export function reduceHandsfreeSession(
         };
       }
       if (event.type === 'start-refused') {
-        return { state: { ...INITIAL_HANDSFREE_SESSION }, effects: [] };
+        return { state: { ...INITIAL_HANDSFREE_SESSION, callsEnded: state.callsEnded }, effects: [] };
       }
       return stay(state);
     }

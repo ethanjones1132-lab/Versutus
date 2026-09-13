@@ -9,7 +9,7 @@
 // Android notification. It must never read as always-listening or as a
 // wake-word feature, which B5 forbids.
 
-import type { HandsfreePhase } from '@/lib/voice/handsfree-session';
+import type { HandsfreePhase, HandsfreeTerminalReason } from '@/lib/voice/handsfree-session';
 
 /** The exact disclosure the sheet shows before the first call, and every one. */
 export const HANDSFREE_DISCLOSURE =
@@ -56,5 +56,38 @@ export function handsfreePhaseLabel(phase: HandsfreePhase): string {
       return 'Ending';
     default:
       return '';
+  }
+}
+
+/** Why a call the operator did not end, ended. Null when they ended it or moved on. */
+export function handsfreeEndReasonCopy(reason: HandsfreeTerminalReason): string | null {
+  switch (reason) {
+    case 'user':
+    case 'thread-changed':
+      return null;
+    case 'disconnect':
+      return 'The call ended because the gateway connection dropped.';
+    case 'system-interruption':
+      return 'The call ended because another app or a phone call took the audio.';
+    case 'app-killed':
+      return 'The call ended when Versutus was closed.';
+    case 'recognition-failed':
+      return 'The call ended because speech recognition stopped working on this phone.';
+    case 'send-failed':
+      return 'The call ended because a turn could not be sent or no reply arrived. What you said is back in the composer.';
+    case 'speech-failed':
+      return 'The call ended because this phone could not speak the reply.';
+  }
+}
+
+/** Why a start did not open a call. */
+export function handsfreeStartResultCopy(result: 'permission-denied' | 'unavailable' | 'refused'): string {
+  switch (result) {
+    case 'permission-denied':
+      return 'Versutus needs the microphone for a call. Allow it in Settings, then start again.';
+    case 'unavailable':
+      return 'This phone would not open a call session. Try again; if it keeps failing, check that a speech recognition service is installed and enabled.';
+    case 'refused':
+      return 'A call cannot start right now. Reconnect the chat and try again.';
   }
 }

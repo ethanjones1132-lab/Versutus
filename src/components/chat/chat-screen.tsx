@@ -138,6 +138,7 @@ import {
   botVoiceRefinementRows,
   type BotVoiceRefinementField,
 } from '@/lib/voice/bot-voices';
+import { handsfreeEndReasonCopy, handsfreeStartResultCopy } from '@/lib/voice/handsfree-call-copy';
 import { handsfreeStartBlockerCopy } from '@/lib/voice/handsfree-start-policy';
 import { speakerAction } from '@/lib/voice/speech-reply';
 import { availableVoices, speakReply, speechAvailableFrom, stopSpeech } from '@/lib/voice/speech';
@@ -1063,19 +1064,27 @@ export function ChatScreen() {
         setCallSheetVisible(false);
         return;
       }
-      setCallError(
-        result === 'permission-denied'
-          ? 'Microphone or speech recognition permission was denied. Allow it in Settings and try again.'
-          : result === 'unavailable'
-            ? 'This device cannot start a hands-free call.'
-            : 'A hands-free call cannot start right now. Reconnect the chat and try again.',
-      );
+      setCallError(handsfreeStartResultCopy(result));
     } catch {
-      setCallError('This device cannot start a hands-free call.');
+      setCallError(handsfreeStartResultCopy('unavailable'));
     } finally {
       setCallBusy(false);
     }
   }, [activeGateway, botVoice, callTargetLabel, draftThread, handsfree, surface]);
+
+  const { callsEnded: handsfreeCallsEnded, lastEndReason: handsfreeLastEndReason } = handsfree;
+  // A call that ended without the operator ending it reopens the sheet with the
+  // reason, so a failure is never a banner that silently disappears. The state
+  // updates run on a microtask so they are not synchronous within the effect.
+  useEffect(() => {
+    if (!handsfreeLastEndReason) return;
+    const copy = handsfreeEndReasonCopy(handsfreeLastEndReason);
+    if (!copy) return;
+    queueMicrotask(() => {
+      setCallError(copy);
+      setCallSheetVisible(true);
+    });
+  }, [handsfreeCallsEnded, handsfreeLastEndReason]);
 
   // A call is bound to the thread it started in. The provider watches the
   // gateway, session and Bot it captured; this screen covers the remaining move
