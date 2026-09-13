@@ -80,6 +80,12 @@ export default function ActivityScreen() {
   // null for no filter. Null is the default and passes the provider's list
   // through untouched, so the tab opens exactly as it did before scorecards.
   const [scorecardFilter, setScorecardFilter] = useState<ScorecardFilter>(null);
+  // Workflows slice 3a: the Activity surface reads as scheduled work, so the
+  // individual run surface (its list, its start card and the post-run
+  // scorecards) is hidden until the operator asks for it. Nothing is removed:
+  // run history and its attribution stay persisted, and /run in chat still
+  // starts a run; this only keeps runs off the tab's default face.
+  const [showRuns, setShowRuns] = useState(false);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
 
@@ -264,6 +270,22 @@ export default function ActivityScreen() {
         />
       </View>
 
+      {/* Workflows slice 3a: the tab's first read is scheduled work. The run
+          surface is one tap away, never gone. */}
+      <Card padding={Spacing.three} style={styles.runsGateCard}>
+        <Text variant="body" color="secondary">
+          {showRuns
+            ? 'Runs are shown on this tab.'
+            : 'Activity is the scheduled-work view. Runs are hidden on this tab.'}
+        </Text>
+        <Button
+          label={showRuns ? 'Hide runs' : 'Show runs'}
+          variant="ghost"
+          size="sm"
+          onPress={() => setShowRuns((value) => !value)}
+        />
+      </Card>
+
       {pendingRunApproval ? (
         <ApprovalDecisionCard
           runId={pendingRunApproval.runId}
@@ -272,7 +294,7 @@ export default function ActivityScreen() {
         />
       ) : null}
 
-      {runsSupported
+      {showRuns && runsSupported
         ? (() => {
             const startCard = (
               <Card padding={Spacing.three} style={styles.startCard}>
@@ -321,8 +343,11 @@ export default function ActivityScreen() {
       {/* Per-Bot track records, folded from the same persisted runs the list
           above renders, with the gateway's own routine health and P5's spend
           beside them. A tapped card filters that list; it folds the whole
-          read, so the cards stay whole while the list narrows. */}
-      <ScorecardsSection runs={activityRuns} jobs={routineJobs} spendRows={spendRows} filter={scorecardFilter} onSelect={setScorecardFilter} />
+          read, so the cards stay whole while the list narrows. Gated with the
+          runs they summarize: Activity's default face is scheduled work. */}
+      {showRuns ? (
+        <ScorecardsSection runs={activityRuns} jobs={routineJobs} spendRows={spendRows} filter={scorecardFilter} onSelect={setScorecardFilter} />
+      ) : null}
 
       {/* Scheduled work sits with live runs: Activity is the one place that
           answers "what is this gateway doing". Renders nothing on a gateway
@@ -342,7 +367,7 @@ export default function ActivityScreen() {
         }}
       />
 
-      {activityRuns.length === 0 && !pendingRunApproval ? (
+      {showRuns && activityRuns.length === 0 && !pendingRunApproval ? (
         <EmptyState
           icon={{ ios: 'bolt', android: 'bolt', web: 'bolt' }}
           title={
@@ -379,7 +404,7 @@ export default function ActivityScreen() {
   return (
     <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: false })} parallaxY={parallaxY}>
       <FlatList
-        data={listData}
+        data={showRuns ? listData : []}
         keyExtractor={(item) => item.id}
         style={styles.list}
         contentContainerStyle={[
@@ -444,6 +469,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   startCard: {
+    gap: Spacing.two,
+  },
+  runsGateCard: {
     gap: Spacing.two,
   },
   sectionTitle: {
