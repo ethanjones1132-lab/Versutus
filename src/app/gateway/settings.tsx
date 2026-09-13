@@ -26,6 +26,7 @@ import {
   GROK_ROW_LABEL,
   VOICE_ENGINE_ROWS,
   voiceEngineReadinessCopy,
+  voiceUsageCopy,
 } from '@/lib/voice/voice-engine-copy';
 
 /** The readiness sentence for one Settings row. */
@@ -289,6 +290,16 @@ export default function GatewaySettingsScreen() {
               </Text>
             </View>
             <Badge label="Disabled" tone="warning" dot={false} />
+          </View>
+          <View style={styles.voiceRow}>
+            <View style={styles.sectionTitle}>
+              <Text variant="caption" color="tertiary">
+                Today
+              </Text>
+              <Text variant="micro" color="tertiary">
+                {voiceUsageCopy(voiceCapabilities?.usedToday, voiceCapabilities?.lastError)}
+              </Text>
+            </View>
           </View>
           {installing ? (
             <View style={styles.voiceRow}>

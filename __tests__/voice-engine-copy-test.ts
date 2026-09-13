@@ -5,6 +5,7 @@ import {
   VOICE_ENGINE_ROWS,
   voiceEngineDisclosure,
   voiceEngineReadinessCopy,
+  voiceUsageCopy,
 } from '@/lib/voice/voice-engine-copy';
 import { HANDSFREE_DISCLOSURE } from '@/lib/voice/handsfree-call-copy';
 
@@ -111,5 +112,16 @@ describe('Settings renders one Voice section from these words', () => {
 
   test('the install row reports progress from the Gate', () => {
     expect(settings).toContain("'voice.install.status'");
+  });
+
+  test("shows today's minutes and the last error", () => {
+    expect(voiceUsageCopy({ localMinutes: 12, codexMinutes: 0 }, null)).toBe(
+      'Today: 12 min on this PC, 0 min on ChatGPT.',
+    );
+    expect(voiceUsageCopy(undefined, null)).toBe('No voice calls today.');
+    expect(voiceUsageCopy({ localMinutes: 0, codexMinutes: 3 }, 'network')).toBe(
+      'Today: 0 min on this PC, 3 min on ChatGPT. Last error: network.',
+    );
+    expect(settings).toContain('voiceUsageCopy');
   });
 });

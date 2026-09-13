@@ -111,6 +111,9 @@ export function attachVoiceMediaSocket({
     let audioTimer = null;
     let lastAudioAt = now();
     let turns = 0;
+    let listeningMs = 0;
+    let speakingMs = 0;
+    let phaseSince = now();
     const buffer = [];
     let bufferedAudioBytes = 0;
 
@@ -209,6 +212,8 @@ export function attachVoiceMediaSocket({
             engine: session.engine,
             fellBackFrom: session.fellBackFrom ?? null,
             turns,
+            secondsListening: Math.round(listeningMs / 1000),
+            secondsSpeaking: Math.round(speakingMs / 1000),
             error: effect.reason ?? null,
           });
           break;
@@ -220,6 +225,13 @@ export function attachVoiceMediaSocket({
 
     const dispatch = (event) => {
       const out = reduceVoiceSession(call, event);
+      const at = now();
+      if (out.state.phase !== call.phase) {
+        const elapsed = at - phaseSince;
+        if (call.phase === 'listening' || call.phase === 'muted') listeningMs += elapsed;
+        else if (call.phase === 'speaking') speakingMs += elapsed;
+        phaseSince = at;
+      }
       call = out.state;
       for (const effect of out.effects) runEffect(effect);
     };

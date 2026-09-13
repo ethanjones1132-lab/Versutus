@@ -127,6 +127,24 @@ test('a malformed voice config falls back to enabled rather than throwing', () =
   assert.equal(status.engines.local.state, 'not-installed');
 });
 
+test("voice usage comes from today's audit lines and never invents minutes", () => {
+  const dir = tempDir();
+  const paths = voicePaths({ VERSUTUS_GATE_HOME: dir }, 'linux');
+  mkdirSync(paths.root, { recursive: true });
+  writeFileSync(
+    join(paths.root, 'audit.jsonl'),
+    `${[
+      JSON.stringify({ ts: '2026-09-13T01:00:00.000Z', engine: 'local', secondsListening: 60, secondsSpeaking: 60, error: null }),
+      JSON.stringify({ ts: '2026-09-13T02:00:00.000Z', engine: 'codex', secondsListening: 30, secondsSpeaking: 30, error: 'network' }),
+      JSON.stringify({ ts: '2026-09-12T02:00:00.000Z', engine: 'local', secondsListening: 600, secondsSpeaking: 600 }),
+    ].join('\n')}\n`,
+  );
+  const status = voiceStatus({ paths, now: () => new Date('2026-09-13T12:00:00.000Z') });
+  assert.equal(status.usedToday.localMinutes, 2);
+  assert.equal(status.usedToday.codexMinutes, 1);
+  assert.equal(status.lastError, 'network');
+});
+
 test('voiceStatus reports not-installed without a venv and ready with one', () => {
   const dir = tempDir();
   const paths = voicePaths({ VERSUTUS_GATE_HOME: dir }, 'linux');

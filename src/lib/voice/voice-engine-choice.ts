@@ -36,6 +36,10 @@ export type VoiceEngineCapabilities = {
     local: VoiceEngineStatus;
     codex: VoiceEngineStatus;
   };
+  /** Today's minutes per Gate engine (§4.9). */
+  usedToday?: { localMinutes?: number; codexMinutes?: number };
+  /** The most recent call error the Gate recorded, or null. */
+  lastError?: string | null;
 };
 
 export type VoiceEngineChoice = {

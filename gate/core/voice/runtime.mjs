@@ -138,9 +138,48 @@ export function readVoiceConfig({ paths } = {}) {
   return config;
 }
 
+/**
+ * Today's voice use, from the audit log: minutes per engine and the most
+ * recent error. It never invents minutes — a missing or unreadable log is zero.
+ */
+export function readVoiceUsage({ paths, now = () => new Date() } = {}) {
+  const empty = { localMinutes: 0, codexMinutes: 0, lastError: null };
+  if (!paths?.root) return empty;
+  let text;
+  try {
+    text = readFileSync(join(paths.root, 'audit.jsonl'), 'utf8');
+  } catch {
+    return empty;
+  }
+  const today = now().toISOString().slice(0, 10);
+  let localSeconds = 0;
+  let codexSeconds = 0;
+  let lastError = null;
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof entry.error === 'string' && entry.error) lastError = entry.error;
+    if (typeof entry.ts !== 'string' || !entry.ts.startsWith(today)) continue;
+    const seconds = (Number(entry.secondsListening) || 0) + (Number(entry.secondsSpeaking) || 0);
+    if (entry.engine === 'local') localSeconds += seconds;
+    else if (entry.engine === 'codex') codexSeconds += seconds;
+  }
+  return {
+    localMinutes: Math.round(localSeconds / 60),
+    codexMinutes: Math.round(codexSeconds / 60),
+    lastError,
+  };
+}
+
 /** What `voice.capabilities` reports for each engine, from the runtime and config. */
-export function voiceStatus({ paths } = {}) {
+export function voiceStatus({ paths, now } = {}) {
   const config = readVoiceConfig({ paths });
+  const usage = readVoiceUsage({ paths, now });
   const off = config.enabled === false;
   const disabledReason = (engine) =>
     off
@@ -164,7 +203,8 @@ export function voiceStatus({ paths } = {}) {
     installed: engines.local.state === 'ready',
     engines,
     limits: { codexMinutesPerDay: 60, maxConcurrentCalls: 1 },
-    usedToday: { localMinutes: 0, codexMinutes: 0 },
+    usedToday: { localMinutes: usage.localMinutes, codexMinutes: usage.codexMinutes },
+    lastError: usage.lastError,
   };
 }
 

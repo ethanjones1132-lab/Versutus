@@ -78,3 +78,16 @@ export function voiceEngineReadinessCopy(state: VoiceEngineRuntimeState, reason?
 export function voiceEngineDisclosure(preference: VoiceEnginePreference): string {
   return VOICE_ENGINE_ROWS.find((row) => row.id === preference)?.disclosure ?? HANDSFREE_DISCLOSURE;
 }
+
+/** The Settings → Voice → Today line: minutes per engine and the last error (§4.9). */
+export function voiceUsageCopy(
+  usedToday: { localMinutes?: number; codexMinutes?: number } | undefined,
+  lastError?: string | null,
+): string {
+  const local = Math.max(0, Math.round(usedToday?.localMinutes ?? 0));
+  const codex = Math.max(0, Math.round(usedToday?.codexMinutes ?? 0));
+  const base = local === 0 && codex === 0
+    ? 'No voice calls today.'
+    : `Today: ${local} min on this PC, ${codex} min on ChatGPT.`;
+  return lastError ? `${base} Last error: ${lastError}.` : base;
+}
