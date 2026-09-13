@@ -1,5 +1,6 @@
 import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/chat-stream-delta';
 import type { PublicBot } from '@/lib/gateway/bots';
+import type { ChatContentPart } from '@/lib/gateway/chat-parts';
 import type { CronJob, CronRun, CronTurn } from '@/lib/gateway/cron';
 import type { BotGroupRoom, GroupReply, GroupTranscriptEntry } from '@/lib/gateway/groups';
 import { HEALTH_CHECK_TIMEOUT_MS } from '@/lib/gateway/client';
@@ -321,7 +322,7 @@ export class ManifestClient implements PortalClient {
   }
 
   async streamChat(
-    messages: { role: string; content: string }[],
+    messages: { role: string; content: string | ChatContentPart[] }[],
     onDelta: (text: string) => void,
     options?: {
       model?: string;

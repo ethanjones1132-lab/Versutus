@@ -1,4 +1,5 @@
 import * as Haptics from 'expo-haptics';
+import { Image } from 'expo-image';
 import { memo, useState } from 'react';
 import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated from 'react-native-reanimated';
@@ -181,6 +182,20 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
             </Text>
           ) : null}
 
+          {isUser && (message.attachments?.length ?? 0) > 0 ? (
+            <View style={styles.attachments}>
+              {message.attachments!.map((attachment) => (
+                <Image
+                  key={attachment.uri}
+                  source={{ uri: attachment.uri }}
+                  style={styles.attachmentImage}
+                  contentFit="cover"
+                  accessibilityLabel={attachment.name ?? 'Attached image'}
+                />
+              ))}
+            </View>
+          ) : null}
+
           {isCommand ? (
             <MarkdownText text={body} compact streaming={!!message.streaming} />
           ) : isUser ? (
@@ -304,6 +319,17 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
 });
 
 const styles = StyleSheet.create({
+  attachments: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.one,
+    marginBottom: Spacing.one,
+  },
+  attachmentImage: {
+    width: 140,
+    height: 140,
+    borderRadius: Radius.md,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'flex-end',

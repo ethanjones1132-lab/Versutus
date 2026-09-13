@@ -2,6 +2,8 @@
 // The Hermes API server exposes an OpenAI-compatible HTTP REST API
 // with Bearer token auth (default port 8642).
 
+import type { ChatAttachment } from '@/lib/gateway/chat-parts';
+
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'pairing';
 
 /**
@@ -116,6 +118,14 @@ export type ModelInfo = {
   available?: boolean;
   /** Owning CLI backend, when the catalog is a Gate's cross-backend /v1/models list. */
   backendId?: string;
+  /**
+   * Capabilities the catalog declares for this model (P1). `image`/`vision`
+   * here (or in `input_modalities`) is the ONLY signal that turns the composer
+   * attach control on; absent means "cannot take an image".
+   */
+  capabilities?: string[];
+  /** OpenAI-style input modalities, when the catalog reports them. */
+  input_modalities?: string[];
 };
 
 export type ModelsResponse = {
@@ -207,6 +217,11 @@ export type ChatMessage = {
   interruptedReason?: string;
   /** Tool calls attached to this message, when the stream exposes them. */
   toolCalls?: ChatToolCall[];
+  /**
+   * Image attachments the user sent with this turn (P1). Persisted so the
+   * transcript can render them and later turns keep the same content parts.
+   */
+  attachments?: ChatAttachment[];
   /** Reasoning/thinking streamed alongside content, when the model exposes it. */
   reasoning?: string;
   command?: {

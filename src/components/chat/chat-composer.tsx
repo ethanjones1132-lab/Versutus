@@ -68,6 +68,16 @@ type ChatComposerProps = {
    * cleared.
    */
   callActive?: boolean;
+  /**
+   * P1: open the image picker. The parent supplies it only when the selected
+   * model declares image input, so no control is drawn that would send an
+   * image a text model rejects.
+   */
+  onAttach?: () => void;
+  /** P1: the images staged for the next send. */
+  attachments?: { uri: string; name?: string }[];
+  /** P1: drop one staged image before sending. */
+  onRemoveAttachment?: (uri: string) => void;
 };
 
 export const ChatComposer = memo(function ChatComposer({
@@ -89,6 +99,9 @@ export const ChatComposer = memo(function ChatComposer({
   inputRef,
   onStartCall,
   callActive = false,
+  onAttach,
+  attachments = [],
+  onRemoveAttachment,
 }: ChatComposerProps) {
   const tokens = useTokens();
   const [focused, setFocused] = useState(false);
@@ -417,12 +430,50 @@ export const ChatComposer = memo(function ChatComposer({
           </View>
         ) : null}
 
+        {attachments.length > 0 ? (
+          <View style={styles.attachmentRow}>
+            {attachments.map((attachment) => (
+              <PressableScale
+                key={attachment.uri}
+                style={[
+                  styles.attachmentChip,
+                  { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={`Remove ${attachment.name ?? 'image'}`}
+                onPress={() => onRemoveAttachment?.(attachment.uri)}>
+                <Icon name={{ ios: 'photo', android: 'image', web: 'image' }} size={12} color="textSecondary" />
+                <Text variant="micro" color="secondary" numberOfLines={1} style={styles.attachmentName}>
+                  {attachment.name ?? 'image'}
+                </Text>
+                <Icon name={{ ios: 'xmark', android: 'close', web: 'close' }} size={11} color="textTertiary" />
+              </PressableScale>
+            ))}
+          </View>
+        ) : null}
+
         <Card
           padding={Spacing.two}
           style={[
             styles.composer,
             { borderColor: focused ? tokens.borderStrong : tokens.glassBorder },
           ]}>
+          {onAttach && !callActive && !isStreaming ? (
+            <PressableScale
+              style={[
+                styles.micButton,
+                { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+              ]}
+              onPress={onAttach}
+              accessibilityRole="button"
+              accessibilityLabel="Attach an image">
+              <Icon
+                name={{ ios: 'paperclip', android: 'attach_file', web: 'attach_file' }}
+                size={16}
+                color="accent"
+              />
+            </PressableScale>
+          ) : null}
           <TextField
             inputRef={inputRef}
             value={draft}
@@ -630,6 +681,26 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     marginHorizontal: Spacing.four,
     borderRadius: Radius.xl,
+  },
+  attachmentRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.one,
+    marginHorizontal: Spacing.four,
+    marginBottom: Spacing.one,
+  },
+  attachmentChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.one,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    maxWidth: 160,
+  },
+  attachmentName: {
+    flexShrink: 1,
   },
   input: {
     flex: 1,

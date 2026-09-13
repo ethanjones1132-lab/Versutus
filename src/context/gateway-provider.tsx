@@ -192,6 +192,7 @@ import {
   recordApprovalDecision,
 } from '@/lib/gateway/approval-policy';
 import { approvalRowsFromUnknown, type ApprovalRow } from '@/lib/gateway/approvals';
+import { buildChatContent, type ChatAttachment } from '@/lib/gateway/chat-parts';
 import { loadWorkflows, saveWorkflows } from '@/lib/gateway/workflows';
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
 import { writeWidgetSnapshot } from '@/lib/widget/widget-device';
@@ -406,6 +407,8 @@ type GatewayContextValue = {
        * auto-send, governed by `chat-input-source`.
        */
       source?: ChatInputSource;
+      /** Image attachments for this turn (P1); connected sends only. */
+      attachments?: ChatAttachment[];
     },
   ) => Promise<SendChatInputOutcome>;
   stopStreaming: () => Promise<void>;
@@ -2201,11 +2204,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [applyStatus, applyConnectionPhase]);
 
   const sendMessage = useCallback(
-    async (text: string, existingMessageId?: string, source?: ChatInputSource) => {
+    async (
+      text: string,
+      existingMessageId?: string,
+      source?: ChatInputSource,
+      attachments?: ChatAttachment[],
+    ) => {
       const trimmed = text.trim();
+      const files = attachments ?? [];
       const gateway = activeGateway;
       const client = clientRef.current;
-      if (!trimmed || !gateway || !client || isSending) return;
+      // An image-only turn is valid: the guard must not require text.
+      if ((!trimmed && files.length === 0) || !gateway || !client || isSending) return;
 
       if (isHandsfreeCallSource(source)) {
         // A call turn is appended with the id the caller supplied: the ordinary
@@ -2222,7 +2232,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           ),
         );
       } else {
-        setMessages((prev) => addUserMessage(prev, trimmed));
+        setMessages((prev) => addUserMessage(prev, trimmed, undefined, files));
       }
       setIsSending(true);
       setLastError(null);
@@ -2250,10 +2260,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           // Latest-committed via the ref mirror at the state declaration,
           // so this callback's identity stays stable across streamed frames.
           ...messagesRef.current
-            .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.command && !m.queued && m.text.trim())
+            .filter(
+              (m) =>
+                (m.role === 'user' || m.role === 'assistant')
+                && !m.command
+                && !m.queued
+                // An image-only user turn has no text but must still travel.
+                && (m.text.trim() || (m.attachments?.length ?? 0) > 0),
+            )
             .slice(-20)
-            .map((m) => ({ role: m.role, content: m.text })),
-          { role: 'user', content: trimmed },
+            .map((m) => ({
+              role: m.role,
+              content: m.attachments?.length ? buildChatContent(m.text, m.attachments) : m.text,
+            })),
+          { role: 'user', content: buildChatContent(trimmed, files) },
         ];
 
         await client.streamChat(
@@ -2635,10 +2655,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         botId?: string;
         sessionId?: string;
         source?: ChatInputSource;
+        attachments?: ChatAttachment[];
       },
     ) => {
       const trimmed = text.trim();
-      if (!trimmed) return 'empty';
+      if (!trimmed && (options?.attachments?.length ?? 0) === 0) return 'empty';
       const fromQueue = options?.fromQueue === true;
       const source = options?.source;
       const client = clientRef.current;
@@ -2675,7 +2696,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (!isSlashCommandInput(trimmed) || shouldPassthroughSkillSlash(trimmed, options?.skills ?? [])) {
-        await sendMessage(trimmed, options?.messageId);
+        await sendMessage(trimmed, options?.messageId, undefined, options?.attachments);
         return 'sent';
       }
 

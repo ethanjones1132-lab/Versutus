@@ -414,6 +414,35 @@ test('chat routed to a backend goes through the CLI, not the provider proxy', as
   }
 });
 
+test('a content-part turn reaches a CLI backend as its text', async () => {
+  const { gate } = await makeGate();
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local',
+        sessionId: 'ses_1',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'ping' },
+              { type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } },
+            ],
+          },
+        ],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    // The CLI backend speaks text only, so the image part does not travel —
+    // the turn must still reach it as the text part, not crash the route.
+    assert.equal(body.choices[0].message.content, 'echo ping');
+  } finally {
+    await gate.close();
+  }
+});
+
 // ─── empty-turn detection ───────────────────────────────────────────
 // Reproduced live 2026-08-16: opencode-local's default model 404s upstream,
 // the turn "completes" with zero content, and the app rendered an empty

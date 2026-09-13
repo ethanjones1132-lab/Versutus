@@ -518,7 +518,7 @@ export class HermesGatewayClient {
    * Stream a chat completion via SSE. Calls onDelta for each text chunk.
    */
   async streamChat(
-    messages: { role: string; content: string }[],
+    messages: { role: string; content: string | import('@/lib/gateway/chat-parts').ChatContentPart[] }[],
     onDelta: (text: string) => void,
     options?: {
       model?: string;

@@ -1,4 +1,5 @@
 import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
 import {
   type Href,
   useFocusEffect,
@@ -125,7 +126,12 @@ import {
   spokenDraftText,
 } from '@/lib/gateway/composer-draft';
 import { composeRequestApplies, composeRequestHoldCopy } from '@/lib/gateway/compose-request';
-import { effectiveModel, scopeModelsToBackend } from '@/lib/gateway/model-selection';
+import { effectiveModel, resolveSendModel, scopeModelsToBackend } from '@/lib/gateway/model-selection';
+import {
+  chatAttachmentsFromPicker,
+  supportsImageInput,
+  type ChatAttachment,
+} from '@/lib/gateway/chat-parts';
 import { insertMention, mentionPicksAtCaret } from '@/lib/gateway/mentions';
 import {
   loadSessionLabels,
@@ -390,6 +396,9 @@ export function ChatScreen() {
   // Keyed by gateway + surface + session so leaving a thread and coming
   // back restores that thread's unsent text, never another Bot's.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // P1: images staged for the next send. Cleared on send, and the attach
+  // control only appears when the selected model declares image input.
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [dismissedPairingKey, setDismissedPairingKey] = useState<string | null>(null);
   const [overflowVisible, setOverflowVisible] = useState(false);
   const [backendPickerVisible, setBackendPickerVisible] = useState(false);
@@ -1072,14 +1081,42 @@ export function ChatScreen() {
     [gatewayRequest],
   );
 
+  // P1: the selected model's catalog entry, so the attach control is offered
+  // only when the model DECLARES image input. Unknown/absent is no attach.
+  const selectedModelInfo = useMemo(() => {
+    const modelId = resolveSendModel(activeGateway, selectedBackendId, selectedBotId)?.model;
+    if (!modelId) return undefined;
+    return modelCatalog.find((model) => model.id === modelId || model.modelId === modelId);
+  }, [activeGateway, selectedBackendId, selectedBotId, modelCatalog]);
+  const canAttach = supportsImageInput(selectedModelInfo);
+
+  const handleAttach = useCallback(async () => {
+    if (!canAttach) return;
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 1,
+      base64: true,
+      allowsMultipleSelection: true,
+    });
+    if (result.canceled) return;
+    setAttachments((current) => [...current, ...chatAttachmentsFromPicker(result.assets, current.length)]);
+  }, [canAttach]);
+  const handleRemoveAttachment = useCallback((uri: string) => {
+    setAttachments((current) => current.filter((attachment) => attachment.uri !== uri));
+  }, []);
+
   const handleSend = useCallback(async () => {
     const text = draft;
-    if (!text.trim()) return;
+    const files = attachments;
+    if (!text.trim() && files.length === 0) return;
     setDraft('');
+    setAttachments([]);
     pinnedRef.current = true;
-    await sendChatInput(text, { skills: skillsState.skills });
+    await sendChatInput(text, { skills: skillsState.skills, attachments: files });
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
-  }, [draft, sendChatInput, setDraft, skillsState.skills]);
+  }, [attachments, draft, sendChatInput, setDraft, skillsState.skills]);
 
   // The call target is built here, not derived by the provider: this screen is
   // the one place that holds the current surface, the draft thread and the
@@ -2212,6 +2249,10 @@ export function ChatScreen() {
         // Offered only where the provider says a tap can start a session.
         onStartCall={canStartHandsfree ? openCallSheet : undefined}
         callActive={handsfreeActive}
+        // P1: offered only when the selected model declares image input.
+        onAttach={canAttach ? handleAttach : undefined}
+        attachments={attachments}
+        onRemoveAttachment={handleRemoveAttachment}
       />
       ) : null}
 
