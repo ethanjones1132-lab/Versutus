@@ -103,6 +103,10 @@ export type HandsfreeVoiceContextValue = {
   callsEnded: number;
   /** The latest 0–1 amplitude sample, when the platform supplies one. */
   level: number;
+  /** The engine a live call is using, once the Gate has answered. */
+  engine?: string;
+  /** Why the call is not on the preferred engine, when the Gate fell back. */
+  engineReason?: string;
   /** Whether `start` can succeed right now. */
   canStart: boolean;
   /** What blocks a start right now, or null. */
@@ -157,6 +161,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const [label, setLabel] = useState<string | undefined>(undefined);
   const [gateBanner, setGateBanner] = useState<GateCallBanner>(INITIAL_GATE_CALL);
   const [gateMode, setGateMode] = useState(false);
+  const [engineInfo, setEngineInfo] = useState<{ engine: string; reason?: string } | null>(null);
 
   const sessionRef = useRef(session);
   const moduleRef = useRef<HandsfreeNativeModule | null>(null);
@@ -334,6 +339,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     gateModeRef.current = false;
     setGateMode(false);
     gateSessionIdRef.current = undefined;
+    setEngineInfo(null);
     const module = moduleRef.current;
     moduleRef.current = null;
     if (wasGate) {
@@ -619,6 +625,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     unsubscribe();
     gateModeRef.current = false;
     setGateMode(false);
+    setEngineInfo(null);
     gateSessionIdRef.current = undefined;
     moduleRef.current = null;
     targetRef.current = null;
@@ -654,9 +661,21 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       subscribeGate(module);
       sessionRef.current = dispatch({ type: 'start' });
 
-      let grant: { voiceSessionId?: string; streamPath?: string } | null = null;
+      let grant: {
+        voiceSessionId?: string;
+        streamPath?: string;
+        engine?: string;
+        fellBackFrom?: string;
+        reason?: string;
+      } | null = null;
       try {
-        grant = await latest.current.gatewayRequest<{ voiceSessionId?: string; streamPath?: string }>(
+        grant = await latest.current.gatewayRequest<{
+          voiceSessionId?: string;
+          streamPath?: string;
+          engine?: string;
+          fellBackFrom?: string;
+          reason?: string;
+        }>(
           'voice.session.start',
           {
             engine: target.voiceEngine ?? 'auto',
@@ -676,6 +695,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         return 'unavailable';
       }
       gateSessionIdRef.current = grant.voiceSessionId;
+      setEngineInfo({ engine: grant.engine ?? 'local', ...(grant.fellBackFrom ? { reason: grant.reason } : {}) });
 
       let started = false;
       try {
@@ -762,6 +782,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         return 'unavailable';
       }
       beginHandsfreeCall();
+      setEngineInfo({ engine: 'phone' });
       dispatch({ type: 'started' });
       return 'started';
     },
@@ -832,6 +853,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     lastEndReason: session.lastEndReason,
     callsEnded: session.callsEnded,
     level,
+    engine: engineInfo?.engine,
+    engineReason: engineInfo?.reason,
     canStart,
     startBlocker: handsfreeStartBlocker({
       status,

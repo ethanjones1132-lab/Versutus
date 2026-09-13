@@ -22,6 +22,7 @@ function between(src: string, startMarker: string, endMarker: string): string {
 const provider = readSource('src', 'context', 'handsfree-voice-provider.tsx');
 const layout = readSource('src', 'app', '_layout.tsx');
 const reply = readSource('src', 'lib', 'voice', 'handsfree-reply.ts');
+const banner = readSource('src', 'components', 'voice', 'handsfree-call-banner.tsx');
 
 describe('the call provider sits outside navigation and inside the gateway', () => {
   test('is mounted between GatewayProvider and FontProvider', () => {
@@ -305,5 +306,20 @@ describe('a Gate-powered call is one transport away from the phone engine', () =
     expect(provider).toContain('appPhaseForGate(gateBanner.phase)');
     expect(provider).toContain('stopGateMedia');
     expect(provider).toContain("gatewayRequest('voice.session.stop'");
+  });
+});
+
+describe('a call names the engine it is using and never hides a fallback', () => {
+  test('the provider carries the engine and the reason the Gate fell back', () => {
+    expect(provider).toContain('engineReason: engineInfo?.reason');
+    expect(provider).toContain('setEngineInfo({ engine: grant.engine');
+    expect(provider).toContain("setEngineInfo({ engine: 'phone' })");
+    expect(provider).toContain('engine?: string;');
+    expect(provider).toContain('engineReason?: string;');
+  });
+
+  test('the banner draws the engine and the fallback reason', () => {
+    expect(banner).toContain('engineReason');
+    expect(banner).toContain('Using {engine}');
   });
 });
