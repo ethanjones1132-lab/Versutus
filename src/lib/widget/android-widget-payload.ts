@@ -13,14 +13,16 @@ export function androidWidgetPayload(snapshot: GlanceableSnapshot): VersutusWidg
   const lines = glanceableWidgetLines(snapshot);
   const runs = (snapshot.runs ?? []).slice(0, 3);
   const bots = (snapshot.bots ?? []).slice(0, 3);
+  const redact = snapshot.redact === true;
   return {
     v: 2,
     status: lines.status,
     connected: snapshot.status === 'connected',
     work: lines.work,
-    ...(lines.result ? { result: lines.result } : {}),
-    ...(runs.length > 0 ? { runs } : {}),
-    ...(bots.length > 0 ? { bots } : {}),
+    ...(!redact && lines.result ? { result: lines.result } : {}),
+    ...(!redact && runs.length > 0 ? { runs } : {}),
+    ...(!redact && bots.length > 0 ? { bots } : {}),
+    ...(redact ? { redact: true } : {}),
     approvalsPending: Math.max(0, Math.trunc(snapshot.approvalsPending)),
     writtenAt: snapshot.writtenAt,
   };

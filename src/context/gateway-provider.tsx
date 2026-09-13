@@ -185,6 +185,7 @@ import {
 import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
 import { writeWidgetSnapshot } from '@/lib/widget/widget-device';
+import { loadWidgetResultHidden, subscribeWidgetPrivacy } from '@/lib/settings/widget-privacy';
 export type ConnectionPhase =
   | 'idle'
   | 'booting'
@@ -3466,6 +3467,28 @@ const response = await executeGatewaySlashCommand(trimmed, {
   }, [listBots, status]);
 
   /**
+   * The widget's privacy preference. Read on mount and again whenever the
+   * Settings switch writes it, so a toggle reaches the widget without waiting
+   * for another run to move.
+   */
+  const [widgetRedact, setWidgetRedact] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    const refresh = () => {
+      void loadWidgetResultHidden().then((hidden) => {
+        if (live) setWidgetRedact(hidden);
+      });
+    };
+    refresh();
+    const unsubscribe = subscribeWidgetPrivacy(refresh);
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, []);
+
+  /**
    * Item 4a's fold, handed to item 4b's seam. The snapshot is composed here
    * from the facts above and written once per change to one of them: a start, an
    * approval wait, a decision, a settle and the disconnect settle each move
@@ -3477,9 +3500,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
    */
   useEffect(() => {
     void writeWidgetSnapshot(
-      glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs, bots: widgetBots }),
+      glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs, bots: widgetBots, redact: widgetRedact }),
     );
-  }, [activityRuns, routineJobs, status, widgetBots]);
+  }, [activityRuns, routineJobs, status, widgetBots, widgetRedact]);
 
   const botGroups = useMemo(() => ({
     list: async () => {

@@ -58,6 +58,8 @@ export type GlanceableSnapshot = {
   runs?: GlanceableRun[];
   /** Up to three recent Bots for the quick-launch rows. Absent when there are none. */
   bots?: GlanceableBot[];
+  /** True when the device asked the widget to keep the result and Bot names off it. */
+  redact?: boolean;
   /** When the snapshot was composed — always present, so staleness is sayable. */
   writtenAt: number;
 };
@@ -69,6 +71,8 @@ export type GlanceableFacts = {
   routines: readonly CronJob[];
   /** The roster, in the order the Gate listed it. */
   bots?: readonly GlanceableFactBot[];
+  /** The device's privacy preference, carried so the one write path sees it. */
+  redact?: boolean;
 };
 
 /**
@@ -176,6 +180,7 @@ export function glanceableSnapshot(
     ...(newestRun ? { lastResult: newestRun.text } : {}),
     ...(runs.length > 0 ? { runs } : {}),
     ...(bots.length > 0 ? { bots } : {}),
+    ...(facts.redact ? { redact: true } : {}),
     writtenAt: now,
   };
 }

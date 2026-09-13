@@ -54,6 +54,15 @@ class WidgetPayloadTest {
     assertEquals(emptyList<WidgetBot>(), parsed.payload.bots)
   }
 
+  @Test fun `a redacted v2 payload parses with nothing private on it`() {
+    val parsed = WidgetPayload.parse(
+      """{"v":2,"status":"Connected","connected":true,"work":"w","approvalsPending":0,"writtenAt":5,"redact":true}""",
+    ) as WidgetPayload.Parsed.Ok
+    assertEquals(true, parsed.payload.redact)
+    assertNull(parsed.payload.result)
+    assertEquals(emptyList<WidgetBot>(), parsed.payload.bots)
+  }
+
   @Test fun `a newer version asks for an app update instead of guessing`() {
     assertEquals(WidgetPayload.Parsed.NeedsUpdate, WidgetPayload.parse("""{"v":3,"anything":true}"""))
   }

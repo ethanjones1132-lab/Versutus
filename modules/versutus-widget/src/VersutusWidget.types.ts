@@ -23,6 +23,8 @@ export type VersutusWidgetPayload = {
   runs?: VersutusWidgetRun[];
   /** Version 2: up to three recent Bots for the quick-launch rows. */
   bots?: VersutusWidgetBot[];
+  /** True when the device asked for the result and Bot names to stay off the card. */
+  redact?: boolean;
   /** How many runs wait on the operator; > 0 shows the approval call to action. */
   approvalsPending: number;
   /** Epoch milliseconds the snapshot was true at. The widget formats the stamp itself. */

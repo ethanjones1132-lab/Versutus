@@ -19,6 +19,7 @@ data class WidgetPayload(
   val writtenAt: Long,
   val runs: List<WidgetRun> = emptyList(),
   val bots: List<WidgetBot> = emptyList(),
+  val redact: Boolean = false,
 ) {
   sealed interface Parsed {
     data class Ok(val payload: WidgetPayload) : Parsed
@@ -47,7 +48,8 @@ data class WidgetPayload(
         val result = o.optString("result", "").takeIf { it.isNotBlank() }
         val runs = if (version >= 2) parseRuns(o.optJSONArray("runs")) else emptyList()
         val bots = if (version >= 2) parseBots(o.optJSONArray("bots")) else emptyList()
-        Parsed.Ok(WidgetPayload(status, o.getBoolean("connected"), work, result, approvals, writtenAt, runs, bots))
+        val redact = o.optBoolean("redact", false)
+        Parsed.Ok(WidgetPayload(status, o.getBoolean("connected"), work, result, approvals, writtenAt, runs, bots, redact))
       } catch (_: Exception) {
         Parsed.Invalid
       }

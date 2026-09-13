@@ -111,13 +111,13 @@ private fun Lines(payload: WidgetPayload, variant: WidgetVariant) {
   }
   Spacer(GlanceModifier.height(4.dp))
   Line(payload.work)
-  if (variant == WidgetVariant.LARGE && payload.runs.isNotEmpty()) {
+  if (!payload.redact && variant == WidgetVariant.LARGE && payload.runs.isNotEmpty()) {
     for (run in payload.runs) {
       Spacer(GlanceModifier.height(3.dp))
       Line("${run.title} — ${run.state}")
     }
   }
-  if (payload.bots.isNotEmpty()) {
+  if (!payload.redact && payload.bots.isNotEmpty()) {
     for (bot in payload.bots) {
       Spacer(GlanceModifier.height(3.dp))
       BotRow(bot)
@@ -127,7 +127,7 @@ private fun Lines(payload: WidgetPayload, variant: WidgetVariant) {
     Spacer(GlanceModifier.height(3.dp))
     DecideRow()
   }
-  if (variant != WidgetVariant.SMALL && payload.result != null) {
+  if (!payload.redact && variant != WidgetVariant.SMALL && payload.result != null) {
     Spacer(GlanceModifier.height(4.dp))
     Line(payload.result, maxLines = if (variant == WidgetVariant.LARGE) 4 else 2)
   }

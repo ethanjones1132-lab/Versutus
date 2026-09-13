@@ -284,7 +284,7 @@ describe('the provider writes the snapshot as run state changes', () => {
   test('the snapshot is item 4a fold, composed from the facts the provider holds', () => {
     expect(provider()).toContain("import { glanceableSnapshot } from '@/lib/widget/snapshot';");
     expect(writeEffect()).toContain(
-      'glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs, bots: widgetBots })',
+      'glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs, bots: widgetBots, redact: widgetRedact })',
     );
   });
 
@@ -292,7 +292,7 @@ describe('the provider writes the snapshot as run state changes', () => {
     const effect = writeEffect();
     // The dependency list IS the driver: every fact the snapshot carries, and
     // nothing in the effect that ticks on its own.
-    expect(effect).toContain('}, [activityRuns, routineJobs, status, widgetBots]);');
+    expect(effect).toContain('}, [activityRuns, routineJobs, status, widgetBots, widgetRedact]);');
     expect(effect).not.toMatch(/setInterval|setTimeout/);
   });
 

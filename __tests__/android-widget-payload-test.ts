@@ -73,4 +73,17 @@ describe('androidWidgetPayload', () => {
   test('a snapshot with no Bots omits them', () => {
     expect(androidWidgetPayload(base)).not.toHaveProperty('bots');
   });
+
+  test('redaction drops the result and the Bot rows, and keeps the counts and stamp', () => {
+    const payload = androidWidgetPayload({
+      ...base,
+      bots: [{ id: 'a', label: 'A' }],
+      redact: true,
+    });
+    expect(payload.redact).toBe(true);
+    expect(payload).not.toHaveProperty('result');
+    expect(payload).not.toHaveProperty('bots');
+    expect(payload.work).toBe('1 run waiting on your approval · 2 runs in flight');
+    expect(payload.writtenAt).toBe(base.writtenAt);
+  });
 });

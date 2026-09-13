@@ -19,6 +19,12 @@ import {
   type AppLockUnavailableReason,
 } from '@/lib/settings/app-lock';
 import { deviceAppLockState } from '@/lib/settings/app-lock-device';
+import {
+  WIDGET_PRIVACY_LABEL,
+  WIDGET_PRIVACY_SUMMARY,
+  loadWidgetResultHidden,
+  saveWidgetResultHidden,
+} from '@/lib/settings/widget-privacy';
 
 export default function GatewaySettingsScreen() {
   const { activeGateway, settings, deviceId } = useGateway();
@@ -26,6 +32,7 @@ export default function GatewaySettingsScreen() {
   const [copied, setCopied] = useState<'id' | null>(null);
   const [appLock, setAppLock] = useState(false);
   const [appLockReason, setAppLockReason] = useState<AppLockUnavailableReason | null>(null);
+  const [hideWidgetResult, setHideWidgetResult] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,9 +50,24 @@ export default function GatewaySettingsScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void loadWidgetResultHidden().then((hidden) => {
+      if (!cancelled) setHideWidgetResult(hidden);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleAppLock = useCallback((next: boolean) => {
     setAppLock(next);
     void saveAppLock(next);
+  }, []);
+
+  const handleWidgetPrivacy = useCallback((next: boolean) => {
+    setHideWidgetResult(next);
+    void saveWidgetResultHidden(next);
   }, []);
 
   const copyText = useCallback(async (text: string) => {
@@ -159,6 +181,23 @@ export default function GatewaySettingsScreen() {
               accessibilityState={{ checked: appLock }}
             />
           )}
+          <View style={styles.sectionHeading}>
+            <View style={styles.sectionTitle}>
+              <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+                Home screen
+              </Text>
+              <Text variant="headline">{WIDGET_PRIVACY_LABEL}</Text>
+            </View>
+          </View>
+          <Text color="secondary">{WIDGET_PRIVACY_SUMMARY}</Text>
+          <Switch
+            value={hideWidgetResult}
+            onValueChange={handleWidgetPrivacy}
+            trackColor={{ true: tokens.accent, false: tokens.border }}
+            thumbColor={tokens.textPrimary}
+            accessibilityLabel={WIDGET_PRIVACY_LABEL}
+            accessibilityState={{ checked: hideWidgetResult }}
+          />
         </Card>
 
         {activeGateway ? (
