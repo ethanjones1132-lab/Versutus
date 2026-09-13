@@ -57,6 +57,8 @@ export type ChatRosterProps = {
   onGroupDetail?: (group: BotGroupRoom) => void;
   /** Present only when the gateway's client can create and edit agents at all. */
   onNewAgent?: () => void;
+  /** Present only when the gateway can host a handoff import (bots endpoint). */
+  onImportAgent?: () => void;
   /** Present only when the gateway can create rooms (bots endpoint + groups advertised). */
   onNewGroup?: () => void;
   /** Whether the client can manage agents at all — drives the honest capability note when "New Agent" is hidden. */
@@ -84,6 +86,7 @@ function ChatRosterImpl({
   onSelectGroup,
   onGroupDetail,
   onNewAgent,
+  onImportAgent,
   onNewGroup,
   canManageAgents = false,
   canHostGroups = false,
@@ -269,6 +272,17 @@ function ChatRosterImpl({
               subtitle="Name, soul, keys, and model pin"
               icon={{ ios: 'plus.circle', android: 'add_circle', web: 'add_circle' }}
               onPress={onNewAgent}
+              style={styles.row}
+            />
+          ) : null}
+          {/* D6's other half: a packet exported from another host, read back
+              here. Offered only where the gateway can create the Bot it names. */}
+          {onImportAgent ? (
+            <ListRow
+              title="Import handoff"
+              subtitle="Create a Bot from an exported packet"
+              icon={{ ios: 'square.and.arrow.down', android: 'download', web: 'download' }}
+              onPress={onImportAgent}
               style={styles.row}
             />
           ) : null}

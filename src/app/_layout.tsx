@@ -671,6 +671,16 @@ export default function RootLayout() {
                       headerTintColor: VersutusDarkTheme.colors.text,
                     }}
                   />
+                  <Stack.Screen
+                    name="gateway/import"
+                    options={{
+                      presentation: 'modal',
+                      headerShown: true,
+                      title: 'Import Bot',
+                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                      headerTintColor: VersutusDarkTheme.colors.text,
+                    }}
+                  />
                   {__DEV__ ? <Stack.Screen name="dev" options={{ headerShown: false }} /> : null}
                 </Stack>
               </AppLockGate>

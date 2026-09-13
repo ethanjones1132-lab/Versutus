@@ -2022,6 +2022,7 @@ export function ChatScreen() {
             setEditingBot(null);
             setNewAgentVisible(true);
           } : undefined}
+          onImportAgent={hasBotManagement ? () => router.push('/gateway/import') : undefined}
           onNewGroup={status === 'connected' && hasGroupRooms ? () => {
             setNewGroupError(undefined);
             setNewGroupVisible(true);
