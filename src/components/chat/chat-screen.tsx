@@ -1045,26 +1045,31 @@ export function ChatScreen() {
     if (surface.kind !== 'configurable' && surface.kind !== 'bot') return;
     setCallBusy(true);
     setCallError(undefined);
-    const result = await handsfree.start({
-      gatewayId: activeGateway.id,
-      sessionId: draftThread.sessionId,
-      surfaceKind: surface.kind,
-      botId: surface.kind === 'bot' ? surface.botId : undefined,
-      label: callTargetLabel,
-      voice: botVoice ?? {},
-    });
-    setCallBusy(false);
-    if (result === 'started') {
-      setCallSheetVisible(false);
-      return;
+    try {
+      const result = await handsfree.start({
+        gatewayId: activeGateway.id,
+        sessionId: draftThread.sessionId,
+        surfaceKind: surface.kind,
+        botId: surface.kind === 'bot' ? surface.botId : undefined,
+        label: callTargetLabel,
+        voice: botVoice ?? {},
+      });
+      if (result === 'started') {
+        setCallSheetVisible(false);
+        return;
+      }
+      setCallError(
+        result === 'permission-denied'
+          ? 'Microphone or speech recognition permission was denied. Allow it in Settings and try again.'
+          : result === 'unavailable'
+            ? 'This device cannot start a hands-free call.'
+            : 'A hands-free call cannot start right now. Reconnect the chat and try again.',
+      );
+    } catch {
+      setCallError('This device cannot start a hands-free call.');
+    } finally {
+      setCallBusy(false);
     }
-    setCallError(
-      result === 'permission-denied'
-        ? 'Microphone or speech recognition permission was denied. Allow it in Settings and try again.'
-        : result === 'unavailable'
-          ? 'This device cannot start a hands-free call.'
-          : 'A hands-free call cannot start right now. Reconnect the chat and try again.',
-    );
   }, [activeGateway, botVoice, callTargetLabel, draftThread, handsfree, surface]);
 
   // A call is bound to the thread it started in. The provider watches the

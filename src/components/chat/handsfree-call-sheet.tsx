@@ -65,7 +65,6 @@ export function HandsfreeCallSheet({
               await haptics.light();
               onCancel();
             }}
-            disabled={busy}
             style={styles.footerButton}
           />
           <Button

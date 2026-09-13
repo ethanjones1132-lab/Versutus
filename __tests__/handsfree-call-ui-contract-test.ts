@@ -164,3 +164,17 @@ describe('the banner', () => {
     expect(HANDSFREE_SPEAKING_HINT).toBe('say something to interrupt');
   });
 });
+
+describe('the call sheet can always be dismissed', () => {
+  test('Cancel is never disabled by a start in flight', () => {
+    const cancel = sheet.slice(sheet.indexOf('label="Cancel"'), sheet.indexOf('label="Start call"'));
+    expect(cancel).not.toContain('disabled={busy}');
+  });
+
+  test('a start that throws still clears busy', () => {
+    const at = screen.indexOf('const handleStartCall = useCallback(');
+    const handler = screen.slice(at, screen.indexOf('}, [activeGateway, botVoice', at));
+    expect(handler).toMatch(/try\s*\{[\s\S]*await handsfree\.start\(/);
+    expect(handler).toMatch(/finally\s*\{\s*setCallBusy\(false\);\s*\}/);
+  });
+});
