@@ -498,6 +498,13 @@ export async function executeGatewaySlashCommand(
   if (commandName === '/model' && (args[0]?.toLowerCase() === 'auth')) {
     return runModelAuthCommand(context);
   }
+  // `/run` executes through `context.runTask` → the Gate's REST run API
+  // (`client.startRun`), never the registry's undispatched `runs.create` RPC.
+  // The snapshot judges that method, which no Gate advertises, so without the
+  // bypass a working run is refused at dispatch before the handler below.
+  if (commandName === '/run') {
+    return runTaskCommand(argText, context);
+  }
 
   const blocked = blockUnsupportedCommand(commandName, args, context.methods);
   if (blocked) return blocked;
@@ -512,10 +519,6 @@ export async function executeGatewaySlashCommand(
 
   if (commandName === '/rpc') {
     return runRawRpc(argText, context);
-  }
-
-  if (commandName === '/run') {
-    return runTaskCommand(argText, context);
   }
 
   if (commandName === '/agent') {

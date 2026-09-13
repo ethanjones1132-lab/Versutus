@@ -390,6 +390,23 @@ describe('locally answered commands bypass the snapshot block', () => {
     expect(result.text).toContain('not available');
   });
 
+  test('/run reaches the run driver even when the snapshot marks runs.create undispatched', async () => {
+    // `/run` executes through the REST run driver (`context.runTask`), not an
+    // RPC. The snapshot judges the registry's `runs.create`, which no Gate
+    // advertises, so without the bypass a working run is refused at dispatch.
+    const runTask = jest.fn().mockResolvedValue({ runId: 'run-1', status: 'succeeded', result: 'done' });
+    const result = await executeGatewaySlashCommand('/run hello there', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      runTask,
+      methods: { 'run-task': BLOCKED_BY_SNAPSHOT },
+    });
+    expect(runTask).toHaveBeenCalledWith('hello there', expect.any(Function));
+    expect(result.text).toContain('Run complete');
+    expect(result.text).not.toContain('not available');
+  });
+
   test('/device answers device.info first and never asks device.list on a direct host', async () => {
     const gatewayRequest = jest.fn().mockResolvedValue({ deviceId: 'phone-1', role: 'owner' });
     const result = await executeGatewaySlashCommand('/device', {
