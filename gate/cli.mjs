@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { mkdir, writeFile, access } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createGate } from './core/server.mjs';
@@ -18,7 +17,7 @@ import { acquireInstanceLock } from './core/service/instance-lock.mjs';
 import { doctor } from './core/service/doctor.mjs';
 import { diagnoseBotGroupStore, diagnoseEnvironmentRecords, probeLocalGate } from './core/service/diagnostics.mjs';
 import { CredentialVault } from './core/credentials/vault.mjs';
-import { installVoice, voiceDoctor, voicePaths, voiceStatus } from './core/voice/runtime.mjs';
+import { installVoice, uvRunner, voiceDoctor, voicePaths, voiceStatus } from './core/voice/runtime.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -508,19 +507,8 @@ async function handleDoctor(args = []) {
 }
 
 /**
- * Run `uv` with inherited stdio, resolving to the exit status.
+ * Install, inspect and report the local PC voice runtime.
  */
-function runUv(uvPath = process.env.VERSUTUS_UV || 'uv') {
-  return (args) => new Promise((resolve, reject) => {
-    const child = spawn(uvPath, args, { stdio: 'inherit' });
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`uv ${args[0]} exited with code ${code}`));
-    });
-  });
-}
-
 async function handleVoice(args = []) {
   const sub = args[0];
   const paths = voicePaths();
@@ -528,7 +516,7 @@ async function handleVoice(args = []) {
     const result = await installVoice({
       paths,
       cpu: args.includes('--cpu'),
-      runUv: runUv(),
+      runUv: uvRunner(),
       fetch: globalThis.fetch,
       log: (message) => console.log(`[voice] ${message}`),
     });

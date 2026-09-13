@@ -29,6 +29,59 @@ test('every voice method requires a paired device', async () => {
     () => methods['voice.session.stop']({ voiceSessionId: 'x' }, { deviceId: null }),
     /paired device/,
   );
+  await assert.rejects(() => methods['voice.install.start']({}, { deviceId: null }), /paired device/);
+  await assert.rejects(() => methods['voice.install.status']({}, { deviceId: null }), /paired device/);
+});
+
+test('the phone can start an install once, and capabilities report it', async () => {
+  let release;
+  const install = {
+    start: () => new Promise((resolve) => { release = resolve; }),
+    status: () => ({ state: 'ready' }),
+  };
+  const { methods } = createVoiceRpc({
+    capabilities: capabilities({ local: 'not-installed' }),
+    install,
+  });
+
+  assert.deepEqual(await methods['voice.install.start']({}, ctx), { state: 'installing' });
+  await assert.rejects(
+    () => methods['voice.install.start']({}, ctx),
+    (error) => error.code === 'install_in_progress' && error.status === 409,
+  );
+  assert.equal((await methods['voice.capabilities']({}, ctx)).engines.local.state, 'installing');
+  assert.equal((await methods['voice.install.status']({}, ctx)).state, 'installing');
+
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal((await methods['voice.install.status']({}, ctx)).state, 'ready');
+  assert.equal((await methods['voice.capabilities']({}, ctx)).engines.local.state, 'not-installed');
+});
+
+test('a failed install is reported instead of a silent ready', async () => {
+  const install = {
+    start: async () => {
+      throw new Error('disk full');
+    },
+    status: () => ({ state: 'ready' }),
+  };
+  const { methods } = createVoiceRpc({
+    capabilities: capabilities({ local: 'not-installed' }),
+    install,
+  });
+  await methods['voice.install.start']({}, ctx);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const status = await methods['voice.install.status']({}, ctx);
+  assert.equal(status.state, 'unavailable');
+  assert.match(status.reason, /disk full/);
+});
+
+test('without an installer the method refuses rather than hanging', async () => {
+  const { methods } = createVoiceRpc({ capabilities: capabilities(), install: null });
+  await assert.rejects(
+    () => methods['voice.install.start']({}, ctx),
+    (error) => error.code === 'install_unavailable' && error.status === 501,
+  );
 });
 
 test('auto prefers local and reports no fallback when it is ready', async () => {

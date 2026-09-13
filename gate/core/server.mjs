@@ -34,7 +34,7 @@ import { createPushSend } from './push-send.mjs';
 import { createVoiceRpc } from './voice/voice-rpc.mjs';
 import { attachVoiceMediaSocket } from './voice/media-socket.mjs';
 import { LocalEngine } from './voice/engines/local-engine.mjs';
-import { voicePaths, voiceStatus } from './voice/runtime.mjs';
+import { voicePaths, voiceStatus, installVoice, uvRunner } from './voice/runtime.mjs';
 import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
 import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest } from './signature.mjs';
@@ -394,7 +394,20 @@ export async function createGate(config = {}) {
   // Capabilities are read from the installed runtime (M5 task 5.2): `local` is
   // `ready` only once the venv and models are on disk, so `auto` cannot pick an
   // engine that is not there.
-  const voiceRpc = createVoiceRpc({ capabilities: () => voiceStatus({ paths: voicePaths() }) });
+  const voiceRpc = createVoiceRpc({
+    capabilities: () => voiceStatus({ paths: voicePaths() }),
+    install: {
+      // The phone starts the same install the CLI runs, over the same runtime.
+      start: () =>
+        installVoice({
+          paths: voicePaths(),
+          runUv: uvRunner(),
+          fetch: globalThis.fetch,
+          log: () => {},
+        }),
+      status: () => voiceStatus({ paths: voicePaths() }).engines.local,
+    },
+  });
 
   // The Hermes-dialect methods the app's command registry actually sends.
   // Resolution throws rather than writing a response: the RPC dispatcher below

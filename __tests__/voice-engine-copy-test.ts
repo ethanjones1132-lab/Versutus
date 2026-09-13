@@ -79,6 +79,10 @@ describe('readiness copy per engine state', () => {
       expect(voiceEngineReadinessCopy(state).length).toBeGreaterThan(0);
     }
   });
+
+  test('the installing state says an install is running', () => {
+    expect(voiceEngineReadinessCopy('installing')).toBe('Installing on the PC…');
+  });
 });
 
 describe('Settings renders one Voice section from these words', () => {
@@ -98,5 +102,14 @@ describe('Settings renders one Voice section from these words', () => {
 
   test('the phone row is always offered, and audio never leaves it by default', () => {
     expect(settings).toContain("if (id === 'phone') return 'Always available on this phone.'");
+  });
+
+  test('a not-installed PC can be installed from the phone', () => {
+    expect(settings).toContain("'voice.install.start'");
+    expect(settings).toContain('Install on this PC');
+  });
+
+  test('the install row reports progress from the Gate', () => {
+    expect(settings).toContain("'voice.install.status'");
   });
 });

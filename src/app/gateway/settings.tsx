@@ -49,6 +49,8 @@ export default function GatewaySettingsScreen() {
   const [appLockReason, setAppLockReason] = useState<AppLockUnavailableReason | null>(null);
   const [voiceEngine, setVoiceEngine] = useState<VoiceEnginePreference>(settings.voiceEngine);
   const [voiceCapabilities, setVoiceCapabilities] = useState<VoiceEngineCapabilities | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [installNote, setInstallNote] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,6 +96,38 @@ export default function GatewaySettingsScreen() {
     setVoiceEngine(next);
     void saveAppSettings({ voiceEngine: next });
   }, []);
+
+  // Install the PC voice models from the phone: start the Gate's install, then
+  // watch its status until it leaves `installing` and refresh capabilities.
+  const handleVoiceInstall = useCallback(async () => {
+    setInstalling(true);
+    setInstallNote('Downloading the PC voice models…');
+    try {
+      await gatewayRequest('voice.install.start', {});
+    } catch {
+      setInstalling(false);
+      setInstallNote('The Gate could not start the install.');
+      return;
+    }
+    for (let attempt = 0; attempt < 900; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      let status: { state?: string; reason?: string } | null = null;
+      try {
+        status = await gatewayRequest<{ state?: string; reason?: string }>('voice.install.status', {});
+      } catch {
+        break;
+      }
+      setInstallNote(status?.reason ?? null);
+      if (status?.state !== 'installing') break;
+    }
+    try {
+      const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', {});
+      setVoiceCapabilities(read);
+    } catch {
+      // keep the last known capabilities
+    }
+    setInstalling(false);
+  }, [gatewayRequest]);
 
   const copyText = useCallback(async (text: string) => {
     await Clipboard.setStringAsync(text);
@@ -256,6 +290,33 @@ export default function GatewaySettingsScreen() {
             </View>
             <Badge label="Disabled" tone="warning" dot={false} />
           </View>
+          {installing ? (
+            <View style={styles.voiceRow}>
+              <View style={styles.sectionTitle}>
+                <Text variant="caption" color="accent">
+                  Installing on this PC…
+                </Text>
+                <Text variant="micro" color="tertiary">
+                  {installNote ?? 'This can take a few minutes.'}
+                </Text>
+              </View>
+            </View>
+          ) : voiceCapabilities?.engines.local?.state === 'not-installed' || installNote ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Install on this PC"
+              onPress={handleVoiceInstall}
+              style={styles.voiceRow}>
+              <View style={styles.sectionTitle}>
+                <Text variant="caption" color="accent">
+                  Install on this PC (≈2 GB download)
+                </Text>
+                <Text variant="micro" color="tertiary">
+                  {installNote ?? 'Downloads the speech models to the Gate PC.'}
+                </Text>
+              </View>
+            </Pressable>
+          ) : null}
         </Card>
 
         {activeGateway ? (

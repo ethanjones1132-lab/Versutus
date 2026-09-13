@@ -7,7 +7,7 @@
 
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs';
-import { spawnSync as nodeSpawnSync } from 'node:child_process';
+import { spawnSync as nodeSpawnSync, spawn as nodeSpawn } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { dirname, join } from 'node:path';
@@ -77,6 +77,18 @@ export async function fetchVerified({ url, sha256, dest, fetchImpl = globalThis.
   mkdirSync(dirname(dest), { recursive: true });
   renameSync(partial, dest);
   return { path: dest, resumed: appending, downloaded: true };
+}
+
+/** Run `uv` with inherited stdio; resolve on exit 0, reject otherwise. */
+export function uvRunner(uvPath = process.env.VERSUTUS_UV || 'uv') {
+  return (args) => new Promise((resolve, reject) => {
+    const child = nodeSpawn(uvPath, args, { stdio: 'inherit' });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`uv ${args[0]} exited with code ${code}`));
+    });
+  });
 }
 
 /** Create the venv, install the lock and download every model. Idempotent. */

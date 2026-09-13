@@ -108,11 +108,62 @@ export function createVoiceRpc({
   capabilities = defaultCapabilities,
   now = () => new Date().toISOString(),
   makeId = randomUUID,
+  install = null,
 } = {}) {
+  // The install the operator started from the phone, if any. It outlives the
+  // request that began it, so `voice.capabilities` and `voice.install.status`
+  // both report it while `install` is running.
+  let installState = { running: false, error: null };
+
+  const decorate = (state) => {
+    if (installState.running) {
+      return {
+        ...state,
+        engines: {
+          ...state.engines,
+          local: { state: 'installing', reason: 'Installing the PC voice models…' },
+        },
+      };
+    }
+    if (installState.error) {
+      return {
+        ...state,
+        engines: {
+          ...state.engines,
+          local: { state: 'unavailable', reason: installState.error },
+        },
+      };
+    }
+    return state;
+  };
+
   const methods = {
     'voice.capabilities': async (_params, ctx) => {
       requireDevice(ctx);
-      return capabilities();
+      return decorate(capabilities());
+    },
+
+    'voice.install.start': async (_params, ctx) => {
+      requireDevice(ctx);
+      if (!install) throw rpcError('This Gate cannot install the voice models.', 501, 'install_unavailable');
+      if (installState.running) throw rpcError('A voice install is already running.', 409, 'install_in_progress');
+      installState = { running: true, error: null };
+      Promise.resolve()
+        .then(() => install.start())
+        .then(() => {
+          installState = { running: false, error: null };
+        })
+        .catch((error) => {
+          installState = { running: false, error: error?.message ?? 'The voice install failed.' };
+        });
+      return { state: 'installing' };
+    },
+
+    'voice.install.status': async (_params, ctx) => {
+      requireDevice(ctx);
+      if (installState.running) return { state: 'installing', reason: 'Installing the PC voice models…' };
+      if (installState.error) return { state: 'unavailable', reason: installState.error };
+      return install?.status?.() ?? { state: 'unavailable', reason: 'The voice models are not installed.' };
     },
 
     'voice.session.start': async (params = {}, ctx) => {
@@ -124,7 +175,7 @@ export function createVoiceRpc({
       if (existing) {
         throw rpcError('This device already has a live voice call', 409, 'call_in_progress');
       }
-      const state = capabilities();
+      const state = decorate(capabilities());
       const choice = chooseEngine(params.engine ?? 'auto', state.engines);
       if (!choice) {
         const reason = params.engine && params.engine !== 'auto'
