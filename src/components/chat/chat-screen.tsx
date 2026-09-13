@@ -138,6 +138,7 @@ import {
   botVoiceRefinementRows,
   type BotVoiceRefinementField,
 } from '@/lib/voice/bot-voices';
+import { handsfreeStartBlockerCopy } from '@/lib/voice/handsfree-start-policy';
 import { speakerAction } from '@/lib/voice/speech-reply';
 import { availableVoices, speakReply, speechAvailableFrom, stopSpeech } from '@/lib/voice/speech';
 import {
@@ -1043,6 +1044,10 @@ export function ChatScreen() {
   const handleStartCall = useCallback(async () => {
     if (!activeGateway || !draftThread) return;
     if (surface.kind !== 'configurable' && surface.kind !== 'bot') return;
+    if (handsfree.startBlocker) {
+      setCallError(handsfreeStartBlockerCopy(handsfree.startBlocker));
+      return;
+    }
     setCallBusy(true);
     setCallError(undefined);
     try {

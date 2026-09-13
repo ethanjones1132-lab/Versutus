@@ -256,3 +256,16 @@ describe('a listen that could not start is retried, then named', () => {
     expect(listen).toContain("dispatch({ type: 'fatalError', reason: 'recognition-failed' })");
   });
 });
+
+describe('the Call control is not hidden by ordinary chat activity', () => {
+  test('canStart no longer depends on a stream, a command or an approval', () => {
+    const canStart = between(provider, 'const canStart =', ';');
+    expect(canStart).not.toContain('isSending');
+    expect(canStart).not.toContain('isCommandRunning');
+    expect(canStart).not.toContain('pendingRunApproval');
+  });
+
+  test('the provider reports what blocks a start instead', () => {
+    expect(provider).toContain('startBlocker: handsfreeStartBlocker(');
+  });
+});

@@ -38,6 +38,10 @@ import {
   type HandsfreeSessionState,
   type HandsfreeTerminalReason,
 } from '@/lib/voice/handsfree-session';
+import {
+  handsfreeStartBlocker,
+  type HandsfreeStartBlocker,
+} from '@/lib/voice/handsfree-start-policy';
 import { beginHandsfreeCall, endHandsfreeCall, stopSpeech } from '@/lib/voice/speech';
 import type { HandsfreeAvailability, HandsfreeStartOutcome } from '../../modules/handsfree-voice';
 
@@ -77,6 +81,8 @@ export type HandsfreeVoiceContextValue = {
   level: number;
   /** Whether `start` can succeed right now. */
   canStart: boolean;
+  /** What blocks a start right now, or null. */
+  startBlocker: HandsfreeStartBlocker | null;
   start: (target: HandsfreeCallTarget) => Promise<HandsfreeStartResult>;
   mute: () => void;
   unmute: () => void;
@@ -568,16 +574,15 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   }, [dispatch]);
 
   const active = session.phase !== 'idle' && session.phase !== 'ended';
+  // Offered whenever a call could run on this device; what blocks it *right now*
+  // is reported separately so the control never flickers with chat activity.
   const canStart =
     session.phase === 'idle' &&
     status === 'connected' &&
     Boolean(activeGateway) &&
     Boolean(availability?.recognition) &&
     Boolean(availability?.synthesis) &&
-    (availability?.maxSpeechInputLength ?? 0) > 0 &&
-    !isSending &&
-    !isCommandRunning &&
-    !pendingRunApproval;
+    (availability?.maxSpeechInputLength ?? 0) > 0;
 
   const value: HandsfreeVoiceContextValue = {
     phase: session.phase,
@@ -588,6 +593,12 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     lastEndReason: session.lastEndReason,
     level,
     canStart,
+    startBlocker: handsfreeStartBlocker({
+      status,
+      isSending,
+      isCommandRunning,
+      pendingApproval: Boolean(pendingRunApproval),
+    }),
     start,
     mute,
     unmute,
