@@ -105,6 +105,38 @@ test('an unavailable explicit engine is answered with fellBackFrom and a reason'
   assert.match(grant.reason, /API key|installed|disabled/i);
 });
 
+test("a Bot's engine preference is what auto means for that Bot", async () => {
+  const botThread = { kind: 'bot', sessionId: 's1', botId: 'b1', voiceEngine: 'codex' };
+
+  // The Bot prefers codex, but codex is not ready: fall back to local and name it.
+  const notReady = createVoiceRpc({
+    capabilities: capabilities({ local: 'ready', codex: 'disabled' }),
+    makeId: () => 'vs-a',
+  });
+  const fell = await notReady.methods['voice.session.start']({ thread: botThread }, ctx);
+  assert.equal(fell.engine, 'local');
+  assert.equal(fell.fellBackFrom, 'codex');
+
+  // When the preference is ready, it is chosen.
+  const ready = createVoiceRpc({
+    capabilities: capabilities({ local: 'ready', codex: 'ready' }),
+    makeId: () => 'vs-b',
+  });
+  const chosen = await ready.methods['voice.session.start']({ thread: botThread }, ctx);
+  assert.equal(chosen.engine, 'codex');
+
+  // An explicit request from the phone still wins over the Bot's preference.
+  const explicit = createVoiceRpc({
+    capabilities: capabilities({ local: 'ready', codex: 'ready' }),
+    makeId: () => 'vs-c',
+  });
+  const request = await explicit.methods['voice.session.start'](
+    { engine: 'local', thread: botThread },
+    ctx,
+  );
+  assert.equal(request.engine, 'local');
+});
+
 test('with no ready engine the Gate refuses and names why', async () => {
   const { methods } = createVoiceRpc({
     capabilities: capabilities({ local: 'not-installed', codex: 'disabled' }),

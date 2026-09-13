@@ -176,7 +176,10 @@ export function createVoiceRpc({
         throw rpcError('This device already has a live voice call', 409, 'call_in_progress');
       }
       const state = decorate(capabilities());
-      const choice = chooseEngine(params.engine ?? 'auto', state.engines);
+      // `auto` means the Bot's own preference when it carries one (§4.9); an
+      // explicit request from the phone still wins.
+      const requested = params.engine ?? params.thread?.voiceEngine ?? 'auto';
+      const choice = chooseEngine(requested, state.engines);
       if (!choice) {
         const reason = params.engine && params.engine !== 'auto'
           ? state.engines[params.engine]?.reason ?? `${params.engine} is not installed.`
