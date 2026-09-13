@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { mkdir, writeFile, access } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createGate } from './core/server.mjs';
@@ -17,6 +18,7 @@ import { acquireInstanceLock } from './core/service/instance-lock.mjs';
 import { doctor } from './core/service/doctor.mjs';
 import { diagnoseBotGroupStore, diagnoseEnvironmentRecords, probeLocalGate } from './core/service/diagnostics.mjs';
 import { CredentialVault } from './core/credentials/vault.mjs';
+import { installVoice, voiceDoctor, voicePaths, voiceStatus } from './core/voice/runtime.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -506,6 +508,50 @@ async function handleDoctor(args = []) {
 }
 
 /**
+ * Run `uv` with inherited stdio, resolving to the exit status.
+ */
+function runUv(uvPath = process.env.VERSUTUS_UV || 'uv') {
+  return (args) => new Promise((resolve, reject) => {
+    const child = spawn(uvPath, args, { stdio: 'inherit' });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`uv ${args[0]} exited with code ${code}`));
+    });
+  });
+}
+
+async function handleVoice(args = []) {
+  const sub = args[0];
+  const paths = voicePaths();
+  if (sub === 'install') {
+    const result = await installVoice({
+      paths,
+      cpu: args.includes('--cpu'),
+      runUv: runUv(),
+      fetch: globalThis.fetch,
+      log: (message) => console.log(`[voice] ${message}`),
+    });
+    console.log(`[voice] installed ${result.models.length} model(s) into ${paths.models}`);
+    return;
+  }
+  if (sub === 'doctor') {
+    const report = voiceDoctor({ paths, log: (message) => console.log(`[voice] ${message}`) });
+    for (const check of report.checks) {
+      console.log(`${check.ok ? 'ok  ' : 'FAIL'} ${check.name}: ${check.detail}`);
+    }
+    if (!report.ok) process.exitCode = 1;
+    return;
+  }
+  if (sub === 'status') {
+    console.log(JSON.stringify(voiceStatus({ paths }), null, 2));
+    return;
+  }
+  console.error('Usage: node gate/cli.mjs voice <install [--cpu]|doctor|status>');
+  process.exit(1);
+}
+
+/**
  * Main CLI entry point
  */
 async function main() {
@@ -558,6 +604,12 @@ async function main() {
     console.log('    disk, credential bindings resolvable in the vault).');
     console.log('    Exit code 1 when a record has a problem.');
     console.log('');
+    console.log('  voice <install [--cpu]|doctor|status>');
+    console.log('    Install and inspect the local PC voice models (M5). install');
+    console.log('    creates the uv venv and downloads the locked models; doctor');
+    console.log('    checks the venv, GPU and models load; status prints the');
+    console.log('    engine capabilities the phone reads.');
+    console.log('');
     console.log('Environment variables:');
     console.log('  GATE_NAME  - Name of the Gate (defaults to "Versutus Gate")');
     console.log('  VERSUTUS_GATE_HOME - Where this Gate keeps its records and state');
@@ -588,6 +640,8 @@ async function main() {
     await handleService(args);
   } else if (command === 'doctor') {
     await handleDoctor(args);
+  } else if (command === 'voice') {
+    await handleVoice(args);
   } else {
     console.error(`Error: unknown command "${command}"`);
     console.error('Run "node gate/cli.mjs help" for usage');
