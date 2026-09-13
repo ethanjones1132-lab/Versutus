@@ -37,6 +37,7 @@ dependencies {
   // 1.0.0 is the version glance-material3:1.2.0 was built against; the app graph
   // resolves the usual highest version.
   implementation 'androidx.compose.material3:material3:1.0.0'
+  implementation 'androidx.work:work-runtime-ktx:2.9.1'
   testImplementation 'junit:junit:4.13.2'
   testImplementation 'org.json:json:20240303'
 }

@@ -20,6 +20,7 @@ class VersutusWidgetModule : Module() {
       val context = appContext.reactContext ?: return@AsyncFunction false
       if (WidgetPayload.parse(json) !is WidgetPayload.Parsed.Ok) return@AsyncFunction false
       WidgetPayloadStore.write(context, json)
+      WidgetRefreshPolicy.enqueue(context)
       scope.launch { VersutusStatusWidget().updateAll(context) }
       true
     }

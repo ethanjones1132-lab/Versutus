@@ -107,3 +107,24 @@ describe('M2: actions that respect the app safety rules', () => {
     expect(widget).toContain('actionStartActivity(openAppIntent(context, "versutus://chat"))');
   });
 });
+
+describe('M3: fresh while the app is closed', () => {
+  const kotlin = (file: string) =>
+    readSource('modules', 'versutus-widget', 'android', 'src', 'main', 'java', 'com', 'versutus', 'widget', file);
+
+  test('a periodic worker redraws every widget with no network constraint', () => {
+    const worker = kotlin('WidgetRefreshWorker.kt');
+    expect(worker).toContain('VersutusStatusWidget().updateAll(');
+    expect(worker).toContain('NetworkType');
+    expect(worker).not.toContain('NetworkType.CONNECTED');
+  });
+
+  test('the module enqueues the refresh with KEEP when a payload is stored', () => {
+    const module = kotlin('VersutusWidgetModule.kt');
+    expect(module).toContain('WidgetRefreshPolicy.enqueue(');
+    const parseAt = module.indexOf('WidgetPayloadStore.write(context, json)');
+    const enqueueAt = module.indexOf('WidgetRefreshPolicy.enqueue(');
+    expect(parseAt).toBeGreaterThan(-1);
+    expect(enqueueAt).toBeGreaterThan(parseAt);
+  });
+});
