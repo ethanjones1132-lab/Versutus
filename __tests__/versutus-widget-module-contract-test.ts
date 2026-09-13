@@ -68,3 +68,18 @@ describe('the Android widget renders and updates honestly', () => {
     expect(module).toContain('VersutusStatusWidget().updateAll(context)');
   });
 });
+
+describe('M1: looks native on any wallpaper', () => {
+  const kotlin = (file: string) =>
+    readSource('modules', 'versutus-widget', 'android', 'src', 'main', 'java', 'com', 'versutus', 'widget', file);
+
+  test('below Android 12 the card falls back to opaque brand colours', () => {
+    const colors = kotlin('WidgetColors.kt');
+    expect(colors).toContain('darkColorScheme(');
+    expect(colors).toContain('Color(0xFF08080A)');
+    expect(colors).toContain('lightColorScheme(');
+    const widget = kotlin('VersutusStatusWidget.kt');
+    expect(widget).toContain('Build.VERSION.SDK_INT >= 31');
+    expect(widget).toContain('WidgetColors.colors');
+  });
+});

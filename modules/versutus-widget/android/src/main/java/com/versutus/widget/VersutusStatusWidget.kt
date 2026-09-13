@@ -3,6 +3,7 @@ package com.versutus.widget
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -41,7 +42,7 @@ class VersutusStatusWidget : GlanceAppWidget() {
   override suspend fun provideGlance(context: Context, id: GlanceId) {
     val parsed = WidgetPayload.parse(WidgetPayloadStore.read(context))
     provideContent {
-      GlanceTheme {
+      GlanceTheme(colors = if (Build.VERSION.SDK_INT >= 31) GlanceTheme.colors else WidgetColors.colors) {
         StatusCard(parsed)
       }
     }

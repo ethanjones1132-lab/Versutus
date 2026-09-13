@@ -32,6 +32,11 @@ android {
 dependencies {
   implementation 'androidx.glance:glance-appwidget:1.2.0'
   implementation 'androidx.glance:glance-material3:1.2.0'
+  // Glance's material3 interop exposes its ColorScheme parameters but only at
+  // runtime, so the scheme builders used below need this on the compile path.
+  // 1.0.0 is the version glance-material3:1.2.0 was built against; the app graph
+  // resolves the usual highest version.
+  implementation 'androidx.compose.material3:material3:1.0.0'
   testImplementation 'junit:junit:4.13.2'
   testImplementation 'org.json:json:20240303'
 }
