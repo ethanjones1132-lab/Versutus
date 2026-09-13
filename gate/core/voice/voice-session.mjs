@@ -75,7 +75,7 @@ export function reduceVoiceSession(state, event) {
   }
 
   if (event.type === 'end') return endCall(state, 'user');
-  if (event.type === 'socketClosed') return endCall(state, 'network');
+  if (event.type === 'socketClosed') return endCall(state, event.reason ?? 'network');
   if (event.type === 'error' && event.fatal) return endCall(state, 'engine-error');
   if (event.type === 'error') {
     return stay(state, [

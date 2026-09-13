@@ -9,6 +9,11 @@
 // effect the reducer names is run here — speak, cancel, mute, run the Bot
 // turn, and send a phone frame. The turn runner is injected so a spoken turn
 // and a typed turn share one implementation (M5 task 5.4).
+//
+// A call outlives its socket: a dropped phone detaches the call for
+// `resumeTimeoutMs` (20 s), buffering outbound speech (up to 5 s); a phone that
+// re-connects with the same `voiceSessionId` re-attaches to the live call, and
+// one that does not ends it with reason `network` (M7 task 7.1).
 
 import { WebSocketServer } from 'ws';
 
@@ -18,6 +23,10 @@ import { INITIAL_VOICE_SESSION, reduceVoiceSession } from './voice-session.mjs';
 export const VOICE_STREAM_PATH = '/v1/voice/stream';
 export const MAX_MEDIA_FRAME_BYTES = 64 * 1024;
 export const NO_AUDIO_TIMEOUT_MS = 30_000;
+export const RESUME_TIMEOUT_MS = 20_000;
+export const AUDIO_BUFFER_MS = 5_000;
+export const OUTPUT_SAMPLE_RATE = 24_000;
+export const OUTPUT_CHANNELS = 1;
 // How long a turn started on an early end survives before it is committed.
 export const SPECULATION_WINDOW_MS = 600;
 
@@ -38,8 +47,11 @@ export function attachVoiceMediaSocket({
   runTurn,
   now = () => Date.now(),
   noAudioTimeoutMs = NO_AUDIO_TIMEOUT_MS,
+  resumeTimeoutMs = RESUME_TIMEOUT_MS,
+  audioBufferMs = AUDIO_BUFFER_MS,
 } = {}) {
   const wss = new WebSocketServer({ noServer: true });
+  const calls = new Map();
 
   server.on('upgrade', async (req, socket, head) => {
     let url;
@@ -76,191 +88,286 @@ export function attachVoiceMediaSocket({
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
-      session.socket = ws;
-      const engine = createEngine(session, ws);
-      let closed = false;
-      let lastAudioAt = now();
-      let call = INITIAL_VOICE_SESSION;
-      let turnAbort = null;
-      // A turn started on `earlyEnd` before the worker's `final` arrives. It is
-      // discarded if speech resumes inside the window, and promoted by `final`.
-      let speculative = null;
+      const existing = calls.get(session.voiceSessionId);
+      if (existing && !existing.ended) {
+        existing.attach(ws, { first: false });
+        return;
+      }
+      const call = createCall(session, ws);
+      calls.set(session.voiceSessionId, call);
+    });
+  });
 
-      const sendFrame = (frame) => {
-        if (!closed) ws.send(serializeFrame(frame));
-      };
+  function createCall(session, firstWs) {
+    const engine = createEngine(session, firstWs);
+    const maxBufferedAudioBytes = (audioBufferMs / 1000) * OUTPUT_SAMPLE_RATE * 2 * OUTPUT_CHANNELS;
+    let ws = null;
+    let ended = false;
+    let call = INITIAL_VOICE_SESSION;
+    let turnAbort = null;
+    let speculative = null;
+    let resumeTimer = null;
+    let audioTimer = null;
+    let lastAudioAt = now();
+    const buffer = [];
+    let bufferedAudioBytes = 0;
 
-      const runEffect = (effect) => {
-        switch (effect.kind) {
-          case 'send':
-            sendFrame(effect.frame);
-            break;
-          case 'sendAudio':
-            if (!closed) ws.send(effect.pcm, { binary: true });
-            break;
-          case 'engine.speak':
-            engine.speak?.(effect.text, { gen: effect.gen, final: effect.final });
-            break;
-          case 'engine.cancelSpeech':
-            engine.cancelSpeech?.(effect.gen);
-            break;
-          case 'engine.setMuted':
-            engine.setMuted?.(effect.muted);
-            break;
-          case 'turn.run':
-            if (speculative) {
-              clearTimeout(speculative.timer);
-              if (speculative.text === effect.text) {
-                // `final` promotes the turn the early end already started.
-                speculative.committed = true;
-                break;
-              }
-              speculative.controller.abort();
-              speculative = null;
+    const api = { attach, end, get ended() { return ended; } };
+
+    const clearResumeTimer = () => {
+      if (resumeTimer) {
+        clearTimeout(resumeTimer);
+        resumeTimer = null;
+      }
+    };
+    const clearAudioTimer = () => {
+      if (audioTimer) {
+        clearInterval(audioTimer);
+        audioTimer = null;
+      }
+    };
+    const startAudioTimer = () => {
+      audioTimer = setInterval(() => {
+        if (ws && now() - lastAudioAt > noAudioTimeoutMs) ws.close(1001, 'idle');
+      }, Math.min(noAudioTimeoutMs, 1000));
+      audioTimer.unref?.();
+    };
+
+    const flush = () => {
+      if (!ws) return;
+      for (const entry of buffer) {
+        if (entry.binary) ws.send(entry.data, { binary: true });
+        else ws.send(entry.data);
+      }
+      buffer.length = 0;
+      bufferedAudioBytes = 0;
+    };
+
+    const sendFrame = (frame) => {
+      if (ended) return;
+      const data = serializeFrame(frame);
+      if (ws) ws.send(data);
+    };
+
+    const sendAudio = (pcm) => {
+      if (ended) return;
+      if (ws) {
+        ws.send(pcm, { binary: true });
+        return;
+      }
+      if (bufferedAudioBytes + pcm.length > maxBufferedAudioBytes) return;
+      buffer.push({ binary: true, data: pcm });
+      bufferedAudioBytes += pcm.length;
+    };
+
+    const runEffect = (effect) => {
+      switch (effect.kind) {
+        case 'send':
+          sendFrame(effect.frame);
+          break;
+        case 'sendAudio':
+          sendAudio(effect.pcm);
+          break;
+        case 'engine.speak':
+          engine.speak?.(effect.text, { gen: effect.gen, final: effect.final });
+          break;
+        case 'engine.cancelSpeech':
+          engine.cancelSpeech?.(effect.gen);
+          break;
+        case 'engine.setMuted':
+          engine.setMuted?.(effect.muted);
+          break;
+        case 'turn.run':
+          if (speculative) {
+            clearTimeout(speculative.timer);
+            if (speculative.text === effect.text) {
+              // `final` promotes the turn the early end already started.
+              speculative.committed = true;
+              break;
             }
-            void startTurn(effect.text);
-            break;
-          case 'turn.cancel':
-            if (speculative) {
-              clearTimeout(speculative.timer);
-              speculative = null;
-            }
-            turnAbort?.abort();
-            turnAbort = null;
-            break;
-          default:
-            // `audit` (M9) and anything newer are inert here.
-            break;
-        }
-      };
-
-      const dispatch = (event) => {
-        const out = reduceVoiceSession(call, event);
-        call = out.state;
-        for (const effect of out.effects) runEffect(effect);
-      };
-
-      const startTurn = async (text, { speculative: isSpeculative = false } = {}) => {
-        if (typeof runTurn !== 'function') {
-          dispatch({ type: 'replyFailed', message: 'No backend is available for this call.' });
-          return;
-        }
-        const controller = new AbortController();
-        turnAbort = controller;
-        if (isSpeculative) {
-          const entry = { text, controller, committed: false, timer: null };
-          entry.timer = setTimeout(() => {
-            entry.committed = true;
-          }, SPECULATION_WINDOW_MS);
-          entry.timer.unref?.();
-          speculative = entry;
-        }
-        try {
-          const result = await runTurn(session, text, {
-            signal: controller.signal,
-            onDelta: (delta) => dispatch({ type: 'replyDelta', text: delta }),
-            onApproval: (approval) =>
-              dispatch({ type: 'approvalRequired', summary: approval?.summary ?? 'Approval needed' }),
-          });
-          if (controller.signal.aborted) return;
-          if (result && result.hasContent === false) {
-            dispatch({ type: 'replyFailed', message: 'The turn produced no reply.' });
-          } else {
-            dispatch({ type: 'replyDone' });
+            speculative.controller.abort();
+            speculative = null;
           }
-        } catch (error) {
-          if (!controller.signal.aborted) {
-            dispatch({ type: 'replyFailed', message: error.message });
-          }
-        } finally {
-          if (turnAbort === controller) turnAbort = null;
-          if (speculative?.controller === controller) {
+          void startTurn(effect.text);
+          break;
+        case 'turn.cancel':
+          if (speculative) {
             clearTimeout(speculative.timer);
             speculative = null;
           }
+          turnAbort?.abort();
+          turnAbort = null;
+          break;
+        default:
+          // `audit` (M9) and anything newer are inert here.
+          break;
+      }
+    };
+
+    const dispatch = (event) => {
+      const out = reduceVoiceSession(call, event);
+      call = out.state;
+      for (const effect of out.effects) runEffect(effect);
+    };
+
+    const startTurn = async (text, { speculative: isSpeculative = false } = {}) => {
+      if (typeof runTurn !== 'function') {
+        dispatch({ type: 'replyFailed', message: 'No backend is available for this call.' });
+        return;
+      }
+      const controller = new AbortController();
+      turnAbort = controller;
+      if (isSpeculative) {
+        const entry = { text, controller, committed: false, timer: null };
+        entry.timer = setTimeout(() => {
+          entry.committed = true;
+        }, SPECULATION_WINDOW_MS);
+        entry.timer.unref?.();
+        speculative = entry;
+      }
+      try {
+        const result = await runTurn(session, text, {
+          signal: controller.signal,
+          onDelta: (delta) => dispatch({ type: 'replyDelta', text: delta }),
+          onApproval: (approval) =>
+            dispatch({ type: 'approvalRequired', summary: approval?.summary ?? 'Approval needed' }),
+        });
+        if (controller.signal.aborted) return;
+        if (result && result.hasContent === false) {
+          dispatch({ type: 'replyFailed', message: 'The turn produced no reply.' });
+        } else {
+          dispatch({ type: 'replyDone' });
         }
-      };
-
-      const timer = setInterval(() => {
-        if (now() - lastAudioAt > noAudioTimeoutMs) ws.close(1001, 'idle');
-      }, Math.min(noAudioTimeoutMs, 1000));
-      timer.unref?.();
-
-      const cleanup = () => {
-        if (closed) return;
-        closed = true;
-        clearInterval(timer);
-        if (speculative) {
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          dispatch({ type: 'replyFailed', message: error.message });
+        }
+      } finally {
+        if (turnAbort === controller) turnAbort = null;
+        if (speculative?.controller === controller) {
           clearTimeout(speculative.timer);
           speculative = null;
         }
-        turnAbort?.abort();
-        turnAbort = null;
-        dispatch({ type: 'socketClosed' });
-        if (session.socket === ws) session.socket = null;
-        Promise.resolve(engine.close?.()).catch(() => undefined);
-      };
+      }
+    };
 
-      ws.on('message', (data, isBinary) => {
-        if (isBinary) {
-          const frame = Buffer.isBuffer(data) ? data : Buffer.from(data);
-          if (frame.length > MAX_MEDIA_FRAME_BYTES) {
-            ws.close(1009, 'frame too large');
-            return;
-          }
-          lastAudioAt = now();
-          engine.pushAudio(frame);
+    const onMessage = (data, isBinary) => {
+      if (isBinary) {
+        const frame = Buffer.isBuffer(data) ? data : Buffer.from(data);
+        if (frame.length > MAX_MEDIA_FRAME_BYTES) {
+          ws?.close(1009, 'frame too large');
           return;
         }
-        try {
-          const control = parsePhoneFrame(data.toString());
-          if (control.t === 'mute') dispatch({ type: control.on ? 'mute' : 'unmute' });
-          else if (control.t === 'skip' || control.t === 'bargein') {
-            dispatch({ type: control.t });
-          } else {
-            dispatch({ type: 'end' });
-          }
-        } catch (error) {
-          sendFrame({ t: 'error', code: 'bad_frame', message: error.message, fatal: false });
+        lastAudioAt = now();
+        engine.pushAudio(frame);
+        return;
+      }
+      try {
+        const control = parsePhoneFrame(data.toString());
+        if (control.t === 'mute') dispatch({ type: control.on ? 'mute' : 'unmute' });
+        else if (control.t === 'skip' || control.t === 'bargein') {
+          dispatch({ type: control.t });
+        } else {
+          dispatch({ type: 'end' });
         }
-      });
+      } catch (error) {
+        sendFrame({ t: 'error', code: 'bad_frame', message: error.message, fatal: false });
+      }
+    };
 
-      ws.on('close', cleanup);
-      ws.on('error', cleanup);
+    function attach(newWs, { first = false } = {}) {
+      if (ended) return;
+      ws = newWs;
+      clearResumeTimer();
+      lastAudioAt = now();
+      startAudioTimer();
 
-      engine.on?.('final', (event) =>
-        dispatch({ type: 'final', text: event.text, turnId: session.voiceSessionId }),
-      );
-      engine.on?.('partial', (event) => dispatch({ type: 'partial', text: event.text }));
-      engine.on?.('speechAudio', (event) =>
-        dispatch({ type: 'speechAudio', pcm: event.pcm, gen: event.gen }),
-      );
-      engine.on?.('speechDone', (event) => dispatch({ type: 'speechDone', gen: event.gen }));
-      engine.on?.('earlyEnd', (event) => {
-        if (call.phase !== 'listening' || turnAbort) return;
-        void startTurn(event.text, { speculative: true });
+      newWs.on('message', onMessage);
+      newWs.on('close', () => {
+        if (ws === newWs) detach();
       });
-      engine.on?.('userSpeechStart', () => {
-        if (speculative && !speculative.committed) {
-          clearTimeout(speculative.timer);
-          speculative.controller.abort();
-          speculative = null;
-        }
-        dispatch({ type: 'bargein' });
+      newWs.on('error', () => {
+        if (ws === newWs) detach();
       });
-      engine.on?.('error', (event) =>
-        dispatch({
-          type: 'error',
-          code: event.code ?? 'engine_error',
-          message: event.message ?? 'error',
-          fatal: Boolean(event.fatal),
-        }),
-      );
 
       sendFrame({ t: 'ready', engine: session.engine });
-      dispatch({ type: 'ready', turnId: session.voiceSessionId });
+      if (first) {
+        dispatch({ type: 'ready', turnId: session.voiceSessionId });
+      } else {
+        sendFrame({ t: 'phase', phase: call.phase === 'opening' ? 'listening' : call.phase });
+        flush();
+      }
+    }
+
+    function detach() {
+      if (ended) return;
+      clearAudioTimer();
+      ws = null;
+      // Hold the call for a re-connect; if none comes, it ends as network.
+      resumeTimer = setTimeout(() => end('network'), resumeTimeoutMs);
+      resumeTimer.unref?.();
+    }
+
+    function end(reason) {
+      if (ended) return;
+      clearResumeTimer();
+      clearAudioTimer();
+      if (speculative) {
+        clearTimeout(speculative.timer);
+        speculative = null;
+      }
+      dispatch({ type: 'socketClosed', reason });
+      ended = true;
+      registry.end(session.voiceSessionId);
+      turnAbort?.abort();
+      turnAbort = null;
+      try {
+        ws?.close(1000, reason);
+      } catch {
+        // the socket is already gone
+      }
+      ws = null;
+      calls.delete(session.voiceSessionId);
+      Promise.resolve(engine.close?.()).catch(() => undefined);
+    }
+
+    engine.on?.('final', (event) =>
+      dispatch({ type: 'final', text: event.text, turnId: session.voiceSessionId }),
+    );
+    engine.on?.('partial', (event) => dispatch({ type: 'partial', text: event.text }));
+    engine.on?.('speechAudio', (event) =>
+      dispatch({ type: 'speechAudio', pcm: event.pcm, gen: event.gen }),
+    );
+    engine.on?.('speechDone', (event) => dispatch({ type: 'speechDone', gen: event.gen }));
+    engine.on?.('earlyEnd', (event) => {
+      if (call.phase !== 'listening' || turnAbort) return;
+      void startTurn(event.text, { speculative: true });
     });
-  });
+    engine.on?.('userSpeechStart', () => {
+      if (speculative && !speculative.committed) {
+        clearTimeout(speculative.timer);
+        speculative.controller.abort();
+        speculative = null;
+      }
+      dispatch({ type: 'bargein' });
+    });
+    engine.on?.('error', (event) =>
+      dispatch({
+        type: 'error',
+        code: event.code ?? 'engine_error',
+        message: event.message ?? 'error',
+        fatal: Boolean(event.fatal),
+      }),
+    );
+
+    api.attach(firstWs, { first: true });
+    return api;
+  }
+
+  /** End every live call with one reason (a Gate restart, M7 task 7.2). */
+  wss.endAll = (reason = 'gate-restart') => {
+    for (const call of [...calls.values()]) call.end(reason);
+  };
 
   return wss;
 }
