@@ -281,3 +281,29 @@ describe('the availability probe recovers on its own', () => {
     expect(probe).toContain('HANDSFREE_PROBE_RETRIES');
   });
 });
+
+describe('a Gate-powered call is one transport away from the phone engine', () => {
+  test('start branches on the transport, not on an engine or backend name', () => {
+    expect(provider).toContain("if (target.transport === 'gate')");
+    expect(provider).toContain('startGateCall');
+    expect(provider).toContain("'voice.session.start'");
+    expect(provider).toContain('startGateMedia');
+    expect(provider).toContain("addListener('gate'");
+    expect(provider).toContain('reduceGateCall');
+    expect(provider).toContain('sendGateControl');
+    expect(provider).toContain('reloadHistory');
+    // Still no backend-name branch anywhere in the provider.
+    expect(provider).not.toMatch(/hermes|opencode|claude-code/i);
+  });
+
+  test('the phone engine effects are inert while the Gate owns the loop', () => {
+    expect(provider).toContain('if (gateModeRef.current) {');
+    expect(provider).toContain("if (effect.kind === 'stop-session') void teardown();");
+  });
+
+  test('the Gate banner is folded from frames and the session is ended once', () => {
+    expect(provider).toContain('appPhaseForGate(gateBanner.phase)');
+    expect(provider).toContain('stopGateMedia');
+    expect(provider).toContain("gatewayRequest('voice.session.stop'");
+  });
+});
