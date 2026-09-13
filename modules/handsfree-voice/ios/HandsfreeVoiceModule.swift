@@ -56,7 +56,8 @@ public class HandsfreeVoiceModule: Module {
       "endRequested",
       "fatalError",
       "bargeIn",
-      "level"
+      "level",
+      "gate"
     )
 
     OnCreate {
@@ -160,6 +161,20 @@ public class HandsfreeVoiceModule: Module {
     AsyncFunction("stopSession") {
       self.audioQueue.async { self.end(reason: "user") }
     }
+
+    // PENDING-MACOS: the Gate media terminal (OkHttp/URLSession WebSocket,
+    // AudioRecord-equivalent capture, jittered playback) has no iOS
+    // implementation yet. The signatures exist so the cross-platform contract
+    // test does not drift; calling them resolves false rather than pretending.
+    AsyncFunction("startGateMedia") { (_: [String: Any?], promise: Promise) in
+      promise.resolve(false)
+    }
+
+    AsyncFunction("sendGateControl") { (_: String) -> Bool in
+      false
+    }
+
+    AsyncFunction("stopGateMedia") {}
   }
 
   // MARK: - Session

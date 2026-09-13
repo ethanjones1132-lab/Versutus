@@ -34,6 +34,7 @@ class HandsfreeVoiceModule : Module() {
       "fatalError",
       "bargeIn",
       "level",
+      "gate",
     )
 
     OnCreate {
@@ -42,6 +43,8 @@ class HandsfreeVoiceModule : Module() {
 
     OnDestroy {
       HandsfreeEventBridge.detach()
+      gateMedia?.stop()
+      gateMedia = null
       HandsfreeCallService.current?.end("app-killed")
     }
 
@@ -135,9 +138,41 @@ class HandsfreeVoiceModule : Module() {
     }
 
     AsyncFunction("stopSession") {
+      gateMedia?.stop()
+      gateMedia = null
       HandsfreeCallService.current?.end("user")
     }
+
+    // ─── Gate media (the phone as the Gate's microphone and speaker) ───────
+    AsyncFunction("startGateMedia") { options: Map<String, Any?>, promise: Promise ->
+      val context = appContext.reactContext
+      val url = (options["url"] as? String)?.trim().orEmpty()
+      val token = (options["token"] as? String).orEmpty()
+      val voiceSessionId = (options["voiceSessionId"] as? String)?.trim().orEmpty()
+      if (context == null || url.isEmpty() || voiceSessionId.isEmpty()) {
+        promise.resolve(false)
+        return@AsyncFunction
+      }
+      gateMedia?.stop()
+      val media = HandsfreeGateMedia { frame ->
+        sendEvent("gate", mapOf("frame" to frame))
+      }
+      gateMedia = media
+      media.start(context, url, token, voiceSessionId)
+      promise.resolve(true)
+    }
+
+    AsyncFunction("sendGateControl") { json: String ->
+      gateMedia?.sendControl(json) ?: false
+    }
+
+    AsyncFunction("stopGateMedia") {
+      gateMedia?.stop()
+      gateMedia = null
+    }
   }
+
+  private var gateMedia: HandsfreeGateMedia? = null
 
   private fun startService(context: Context, title: String, promise: Promise) {
     val settled = AtomicBoolean(false)

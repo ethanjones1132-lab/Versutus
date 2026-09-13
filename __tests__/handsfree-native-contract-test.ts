@@ -30,6 +30,7 @@ const EVENTS = [
   'fatalError',
   'bargeIn',
   'level',
+  'gate',
 ] as const;
 
 const METHODS = [
@@ -42,6 +43,9 @@ const METHODS = [
   'setMuted',
   'playSendEarcon',
   'stopSession',
+  'startGateMedia',
+  'sendGateControl',
+  'stopGateMedia',
 ] as const;
 
 const types = readSource('modules', 'handsfree-voice', 'src', 'HandsfreeVoice.types.ts');
@@ -71,6 +75,18 @@ const service = readSource(
   'HandsfreeCallService.kt',
 );
 const swift = readSource('modules', 'handsfree-voice', 'ios', 'HandsfreeVoiceModule.swift');
+const gateMedia = readSource(
+  'modules',
+  'handsfree-voice',
+  'android',
+  'src',
+  'main',
+  'java',
+  'com',
+  'versutus',
+  'handsfreevoice',
+  'HandsfreeGateMedia.kt',
+);
 
 describe('hands-free native contract', () => {
   it('declares every event in the TypeScript contract', () => {
@@ -165,5 +181,22 @@ describe('hands-free native contract', () => {
     expect(service).toContain('HandsfreeRecognizerErrors.classify(');
     expect(service).toContain('queuedSpeech.addAll(chunks)');
     expect(service).toMatch(/if \(speaking && nextChunkIndex < queuedSpeech\.size\) playChunk/);
+  });
+
+  it('opens the Gate media socket with echo-cancelled 16 kHz capture and a jittered 24 kHz output', () => {
+    expect(gateMedia).toContain('MediaRecorder.AudioSource.VOICE_COMMUNICATION');
+    expect(gateMedia).toContain('CAPTURE_SAMPLE_RATE = 16000');
+    expect(gateMedia).toContain('PLAYBACK_SAMPLE_RATE = 24000');
+    expect(gateMedia).toContain('JITTER_TARGET_MS = 60');
+    expect(gateMedia).toContain('AcousticEchoCanceler.isAvailable()');
+    expect(gateMedia).toContain('NoiseSuppressor.isAvailable()');
+    expect(gateMedia).toContain('client.newWebSocket(');
+    expect(gateMedia).toContain('GateFrameCodec.parse(');
+    expect(gateMedia).toContain('buffer.push(currentGen');
+  });
+
+  it('forwards each Gate frame through the one gate event and stubs iOS as PENDING-MACOS', () => {
+    expect(kotlin).toContain('sendEvent("gate"');
+    expect(swift).toContain('PENDING-MACOS');
   });
 });

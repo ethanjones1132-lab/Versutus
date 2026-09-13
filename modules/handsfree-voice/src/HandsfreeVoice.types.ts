@@ -80,6 +80,22 @@ export type HandsfreeLevelEvent = {
   level: number;
 };
 
+/**
+ * One JSON frame from the Gate media socket, forwarded verbatim. The Gate owns
+ * the call loop, so the phone only reports what it sent rather than acting on
+ * it; the app maps frames to banner state in `src/lib/voice/gate-call.ts`.
+ */
+export type HandsfreeGateEvent = {
+  frame: string;
+};
+
+/** How the Gate media socket should be opened for a Gate-powered call. */
+export type HandsfreeGateMediaOptions = {
+  url: string;
+  token: string;
+  voiceSessionId: string;
+};
+
 export type HandsfreeVoiceModuleEvents = {
   partial: (event: HandsfreePartialEvent) => void;
   final: (event: HandsfreeFinalEvent) => void;
@@ -90,4 +106,5 @@ export type HandsfreeVoiceModuleEvents = {
   fatalError: (event: HandsfreeFatalErrorEvent) => void;
   bargeIn: (event: HandsfreeBargeInEvent) => void;
   level: (event: HandsfreeLevelEvent) => void;
+  gate: (event: HandsfreeGateEvent) => void;
 };

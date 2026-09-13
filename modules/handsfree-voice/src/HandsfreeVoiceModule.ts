@@ -2,6 +2,7 @@ import { NativeModule, requireNativeModule } from 'expo';
 
 import type {
   HandsfreeAvailability,
+  HandsfreeGateMediaOptions,
   HandsfreeSpeakOptions,
   HandsfreeStartOutcome,
   HandsfreeVoiceModuleEvents,
@@ -30,6 +31,15 @@ export declare class HandsfreeVoiceModule extends NativeModule<HandsfreeVoiceMod
   playSendEarcon(): Promise<void>;
   /** End the call and release recognition, TTS, audio focus and the service. */
   stopSession(): Promise<void>;
+  /**
+   * Open the Gate media socket for a Gate-powered call: raw PCM up, PCM and
+   * JSON frames down. Answers false when the context or options are unusable.
+   */
+  startGateMedia(options: HandsfreeGateMediaOptions): Promise<boolean>;
+  /** Send one phone → Gate control frame (`mute` | `skip` | `bargein` | `end`). */
+  sendGateControl(json: string): Promise<boolean>;
+  /** Close the Gate media socket, capture and playback. */
+  stopGateMedia(): Promise<void>;
 }
 
 export default requireNativeModule<HandsfreeVoiceModule>('HandsfreeVoice');
