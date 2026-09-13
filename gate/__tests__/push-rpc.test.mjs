@@ -127,6 +127,19 @@ test('preferences default to disabled for a paired device', async () => {
   }
 });
 
+test('a device can opt into widget updates, and the default is off', async () => {
+  const { pairedToken, gate } = await fixture();
+  try {
+    const before = await (await rpc(gate, pairedToken, 'notifications.preferences.get')).json();
+    assert.equal(before.result.widgetUpdates, false);
+    await rpc(gate, pairedToken, 'notifications.preferences.set', { widgetUpdates: true });
+    const after = await (await rpc(gate, pairedToken, 'notifications.preferences.get')).json();
+    assert.equal(after.result.widgetUpdates, true);
+  } finally {
+    await gate.close();
+  }
+});
+
 test('revoking a paired device also drops its push row', async () => {
   const { pairedToken, gate, gateHome } = await fixture();
   try {

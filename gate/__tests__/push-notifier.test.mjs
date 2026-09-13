@@ -93,6 +93,39 @@ test('classifies a cron final response as a routine', async () => {
   assert.equal(sent[0].channelId, 'routine-results');
 });
 
+test('a device opted into widget updates gets a data-only companion message', async () => {
+  const tokens = {
+    listEnabled: async () => [row({ widgetUpdates: true })],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({ trigger: 'run', runId: 'run-1', state: 'completed', text: 'deployed the fix' });
+
+  const widget = sent.find((message) => message.data?.kind === 'widget');
+  assert.ok(widget, 'a widget companion must be sent');
+  assert.equal(widget.title, undefined);
+  assert.equal(widget.body, undefined);
+  assert.equal(widget.data.widget.v, 2);
+  assert.equal(widget.data.widget.result, 'deployed the fix');
+  assert.equal(typeof widget.data.widget.writtenAt, 'number');
+});
+
+test('no widget payload goes to a device that did not opt in', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({ trigger: 'run', runId: 'run-1', state: 'completed', text: 'done' });
+
+  assert.equal(sent.filter((message) => message.data?.kind === 'widget').length, 0);
+  assert.equal(sent.length, 1);
+});
+
 test('removes a row when Expo reports DeviceNotRegistered', async () => {
   const removed = [];
   const tokens = {

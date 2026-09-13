@@ -2,6 +2,7 @@ const EXPO_PUSH_TOKEN = /^ExponentPushToken\[.+\]$/;
 const DEFAULT_PREFERENCES = Object.freeze({
   enabled: false,
   richBody: false,
+  widgetUpdates: false,
   botIds: [],
   quietHours: null,
 });
@@ -99,6 +100,7 @@ export function createPushRpc({ tokens, send }) {
       const patch = {
         ...(optionalBoolean(params?.enabled, 'enabled') === undefined ? {} : { enabled: params.enabled }),
         ...(optionalBoolean(params?.richBody, 'richBody') === undefined ? {} : { richBody: params.richBody }),
+        ...(optionalBoolean(params?.widgetUpdates, 'widgetUpdates') === undefined ? {} : { widgetUpdates: params.widgetUpdates }),
         ...(validBotIds(params?.botIds) === undefined ? {} : { botIds: validBotIds(params.botIds) }),
         ...(validQuietHours(params?.quietHours) === undefined ? {} : { quietHours: validQuietHours(params.quietHours) }),
       };

@@ -160,6 +160,29 @@ function messageFor(classified, event, row) {
   };
 }
 
+/**
+ * The widget's companion: a data-only message the app's background task reads
+ * to redraw the card while the app is closed. Sent only to devices that asked
+ * for it, and never a tray notice — no title, no body.
+ */
+function widgetCompanion(row, event) {
+  if (row.widgetUpdates !== true) return null;
+  const widget = {
+    v: 2,
+    status: 'Connected',
+    connected: true,
+    work: 'No runs in flight',
+    ...(nonEmptyString(event?.text) ? { result: truncateText(event.text) } : {}),
+    approvalsPending: 0,
+    writtenAt: Date.now(),
+  };
+  return {
+    to: row.expoPushToken,
+    data: { kind: 'widget', widget },
+    priority: 'normal',
+  };
+}
+
 export function createPushNotifier({ tokens, send }) {
   if (!tokens || typeof tokens.listEnabled !== 'function' || typeof tokens.removeByToken !== 'function') {
     throw new Error('tokens must provide listEnabled() and removeByToken()');
@@ -188,6 +211,8 @@ export function createPushNotifier({ tokens, send }) {
       const key = `${classified.trigger}:${classified.id}:${event?.state ?? ''}`;
       if (!remember(key)) continue;
       messages.push(messageFor(classified, event, row));
+      const companion = widgetCompanion(row, event);
+      if (companion) messages.push(companion);
     }
 
     if (messages.length === 0) return { ok: true, sent: 0 };
