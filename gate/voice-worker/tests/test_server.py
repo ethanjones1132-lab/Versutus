@@ -109,3 +109,19 @@ def test_the_local_whisper_dir_is_used_only_when_every_file_is_present(tmp_path)
     (whisper / WHISPER_LOCAL_FILES[-1]).write_bytes(b"x")
     assert whisper_model_dir(tmp_path) == whisper
 
+
+def test_smart_turn_window_pads_the_front_and_keeps_the_end():
+    import numpy as np
+
+    from versutus_voice.server import smart_turn_window
+
+    short = smart_turn_window(np.array([1, 2], dtype=np.float32), sample_rate=1, seconds=4)
+    assert short.tolist() == [0.0, 0.0, 1.0, 2.0]
+
+    long = smart_turn_window(np.array([1, 2, 3, 4, 5], dtype=np.float32), sample_rate=1, seconds=4)
+    assert long.tolist() == [2.0, 3.0, 4.0, 5.0]
+
+    exact = smart_turn_window(np.array([1, 2, 3, 4], dtype=np.float32), sample_rate=1, seconds=4)
+    assert exact.tolist() == [1.0, 2.0, 3.0, 4.0]
+
+

@@ -378,10 +378,33 @@ class KokoroSynthesizer:
 
 
 SMART_TURN_MODEL = "smart-turn-v3.2-cpu.onnx"
+SMART_TURN_SECONDS = 8
+# Whisper's log-mel has n_fft=400 and hop_length=160, so 8 s is 800 frames.
+SMART_TURN_FRAMES = SMART_TURN_SECONDS * 16000 // 160
+
+
+def smart_turn_window(samples, sample_rate=16000, seconds=SMART_TURN_SECONDS):
+    """Pad (at the front) or truncate to the last ``seconds``, per the model card."""
+    import numpy as np
+
+    max_samples = seconds * sample_rate
+    if samples.shape[0] > max_samples:
+        return samples[-max_samples:]
+    if samples.shape[0] < max_samples:
+        return np.pad(samples, (max_samples - samples.shape[0], 0))
+    return samples
 
 
 def load_smart_turn(models_dir):
-    """Return a completeness scorer, or None when Smart Turn is not installed."""
+    """Return a completeness scorer, or None when Smart Turn is not usable.
+
+    The model is a Whisper-Tiny encoder over an 8 s log-mel window
+    (``input_features`` of shape ``[1, 80, 800]``), so raw PCM has to become
+    Whisper features first; faster-whisper ships the same extractor the model
+    was trained with. A model that cannot run is returned as None, not as a
+    scorer that always throws: a throwing judge reads as an endless pause and
+    would force every turn to wait for the 1.6 s completion.
+    """
     model_path = Path(models_dir) / SMART_TURN_MODEL
     if not model_path.exists():
         candidates = sorted(Path(models_dir).glob("smart-turn*.onnx"))
@@ -391,15 +414,26 @@ def load_smart_turn(models_dir):
     import numpy as np
     import onnxruntime as ort
 
+    from faster_whisper.feature_extractor import FeatureExtractor
+
     from .audio import pcm16_to_float32
     from .turn import TurnJudge
 
     session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+    extractor = FeatureExtractor(chunk_length=SMART_TURN_SECONDS)
 
     def is_complete(window):
-        samples = pcm16_to_float32(window).reshape(1, -1).astype(np.float32)
-        outputs = session.run(None, {session.get_inputs()[0].name: samples})
+        audio = smart_turn_window(pcm16_to_float32(window))
+        # faster-whisper keeps Whisper's extra STFT frame (801); the model wants
+        # the canonical 800, with the batch dimension the ONNX graph expects.
+        features = extractor(audio)[:, :SMART_TURN_FRAMES][None].astype(np.float32)
+        outputs = session.run(None, {session.get_inputs()[0].name: features})
         return float(np.asarray(outputs[0]).reshape(-1)[0])
+
+    try:
+        is_complete(b"\x00\x00" * 16000)
+    except Exception:  # noqa: BLE001 - an unusable model is not installed
+        return None
 
     return TurnJudge(is_complete=is_complete)
 
