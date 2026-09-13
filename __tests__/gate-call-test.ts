@@ -127,6 +127,20 @@ describe('a Gate call ends exactly once and never sends for the operator', () =>
     }
   });
 
+  test('a network end keeps the last words as recovery, never a send', () => {
+    const spoken = reduceGateCall(INITIAL_GATE_CALL, {
+      t: 'final',
+      turnId: 't1',
+      text: 'send the invoice',
+    }).state;
+    const ended = reduceGateCall(spoken, { t: 'ended', reason: 'network' });
+    expect(ended.state.phase).toBe('ended');
+    expect(ended.state.endedReason).toBe('network');
+    expect(ended.state.recovery).toBe('send the invoice');
+    expect(ended.effects).toEqual([{ kind: 'ended', reason: 'network' }]);
+    expect(ended.effects.some((effect) => effect.kind === 'send-control')).toBe(false);
+  });
+
   test('recovery text is held, and no frame path ever emits a send', () => {
     let state = INITIAL_GATE_CALL;
     for (const frame of fixture.gateToPhone) {
