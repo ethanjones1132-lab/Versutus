@@ -46,6 +46,7 @@ const METHODS = [
   'startGateMedia',
   'sendGateControl',
   'stopGateMedia',
+  'verifyLaunch',
 ] as const;
 
 const types = readSource('modules', 'handsfree-voice', 'src', 'HandsfreeVoice.types.ts');

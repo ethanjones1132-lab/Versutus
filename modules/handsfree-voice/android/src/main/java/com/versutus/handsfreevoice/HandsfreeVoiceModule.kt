@@ -170,6 +170,18 @@ class HandsfreeVoiceModule : Module() {
       gateMedia?.stop()
       gateMedia = null
     }
+
+    // The signed auto-start of §4.4: only the app's own key can sign a
+    // `versutus://call` link, so an unsigned link never opens the microphone.
+    AsyncFunction("verifyLaunch") { url: String ->
+      val context = appContext.reactContext ?: return@AsyncFunction false
+      val key = try {
+        HandsfreeLaunchKey.loadOrCreateKey(context)
+      } catch (_: Exception) {
+        return@AsyncFunction false
+      }
+      HandsfreeLaunchKey.verifyFromKey(key, url, System.currentTimeMillis())
+    }
   }
 
   private var gateMedia: HandsfreeGateMedia? = null

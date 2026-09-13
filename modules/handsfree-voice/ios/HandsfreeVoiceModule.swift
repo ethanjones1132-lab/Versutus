@@ -175,6 +175,12 @@ public class HandsfreeVoiceModule: Module {
     }
 
     AsyncFunction("stopGateMedia") {}
+
+    // PENDING-MACOS: the widget and its signed auto-start are Android-only, so
+    // an iOS launch link is never signed.
+    AsyncFunction("verifyLaunch") { (_: String) -> Bool in
+      false
+    }
   }
 
   // MARK: - Session

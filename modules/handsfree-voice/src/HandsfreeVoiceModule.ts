@@ -40,6 +40,11 @@ export declare class HandsfreeVoiceModule extends NativeModule<HandsfreeVoiceMod
   sendGateControl(json: string): Promise<boolean>;
   /** Close the Gate media socket, capture and playback. */
   stopGateMedia(): Promise<void>;
+  /**
+   * True when a `versutus://call` link carries this app's own HMAC signature
+   * and a recent timestamp (§4.4). A link alone never opens the microphone.
+   */
+  verifyLaunch(url: string): Promise<boolean>;
 }
 
 export default requireNativeModule<HandsfreeVoiceModule>('HandsfreeVoice');
