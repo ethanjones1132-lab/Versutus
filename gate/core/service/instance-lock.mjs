@@ -1,5 +1,6 @@
 import { rmSync } from 'node:fs';
 import { mkdir, open, readFile, rm } from 'node:fs/promises';
+import { uptime } from 'node:os';
 import { join } from 'node:path';
 
 /** True when a process with this pid exists and we may signal it. */
@@ -19,8 +20,12 @@ function pidIsAlive(pid) {
  * Decide whether an existing lock file is worth honouring. A hard kill never
  * runs the release handler, so a lock naming a dead process — or one whose
  * bytes never finished being written — is debris, not an owner.
+ *
+ * Windows reuses pids after a reboot, so a lock written before the current
+ * boot is stale even when its pid happens to be alive again: compare the
+ * lock's `at` against the boot time, not just the pid.
  */
-async function lockIsStale(lockPath) {
+async function lockIsStale(lockPath, bootTimeMs) {
   let raw;
   try {
     raw = await readFile(lockPath, 'utf8');
@@ -28,20 +33,25 @@ async function lockIsStale(lockPath) {
     // Vanished between the failed create and this read: nothing holds it.
     return true;
   }
+  let parsed;
   try {
-    return !pidIsAlive(JSON.parse(raw).pid);
+    parsed = JSON.parse(raw);
   } catch {
     return true;
   }
+  const writtenAt = Date.parse(parsed?.at);
+  if (Number.isFinite(writtenAt) && Number.isFinite(bootTimeMs) && writtenAt < bootTimeMs) return true;
+  return !pidIsAlive(parsed?.pid);
 }
 
-export async function acquireInstanceLock(gateHome) {
-  await mkdir(gateHome, { recursive: true });
-  const lockPath = join(gateHome, 'gate.lock');
+export async function acquireInstanceLock(dir, { name = 'gate.lock', bootTimeMs } = {}) {
+  if (bootTimeMs === undefined) bootTimeMs = Date.now() - uptime() * 1000;
+  await mkdir(dir, { recursive: true });
+  const lockPath = join(dir, name);
 
   let handle = await tryCreate();
   if (!handle) {
-    if (!(await lockIsStale(lockPath))) {
+    if (!(await lockIsStale(lockPath, bootTimeMs))) {
       throw new Error('Gate instance lock is already held — another Gate is already running');
     }
     await rm(lockPath, { force: true });

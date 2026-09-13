@@ -35,6 +35,15 @@ export function buildInstanceConfigTemplate(configFields) {
   return config;
 }
 
+/** Exit code for a failed `gate start`: 75 when someone else holds the port or
+ *  the instance lock (the supervisor waits 60 s on those instead of
+ *  hot-looping), 1 for every other failure. */
+export function startFailureExitCode(error) {
+  if (error?.code === 'EADDRINUSE') return 75;
+  if (typeof error?.message === 'string' && error.message.startsWith('Gate instance lock')) return 75;
+  return 1;
+}
+
 /** Human text for a failed `gate start`. The two common refusals — someone
  *  already listening on the port, or another Gate's instance lock — name what
  *  to check next instead of surfacing a bare errno string, because they fire

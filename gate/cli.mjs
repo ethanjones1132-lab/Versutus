@@ -1,19 +1,23 @@
 #!/usr/bin/env node
 
 import { mkdir, writeFile, access } from 'node:fs/promises';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createGate } from './core/server.mjs';
 import { PairingStore } from './core/pairing.mjs';
 import { DeviceTokenStore } from './core/device-tokens.mjs';
-import { validateId, buildInstanceConfigTemplate, getKindTemplate, describeStartFailure, resolveStartPort } from './core/cli-helpers.mjs';
+import { validateId, buildInstanceConfigTemplate, getKindTemplate, describeStartFailure, resolveStartPort, startFailureExitCode } from './core/cli-helpers.mjs';
 import { resolveGateHome } from './core/paths.mjs';
 import { ProviderStore } from './core/providers/store.mjs';
 import { migrateLegacyProviders } from './core/providers/migrate-v1.mjs';
 import { CliEnvironmentStore } from './core/cli-environments/store.mjs';
 import { CliAdapterRegistry } from './core/cli-environments/adapter-registry.mjs';
-import { buildTaskDefinition } from './core/service/windows-task.mjs';
+import { TASK_NAME, buildTaskDefinition, writeTaskFile } from './core/service/windows-task.mjs';
 import { acquireInstanceLock } from './core/service/instance-lock.mjs';
+import { RotatingLog } from './core/service/rotating-log.mjs';
+import { Supervisor } from './core/service/supervisor.mjs';
 import { doctor } from './core/service/doctor.mjs';
 import { diagnoseBotGroupStore, diagnoseEnvironmentRecords, probeLocalGate } from './core/service/diagnostics.mjs';
 import { CredentialVault } from './core/credentials/vault.mjs';
@@ -354,15 +358,35 @@ async function handleStart(args = []) {
     lock = await acquireInstanceLock(gateHome);
   } catch (err) {
     console.error(describeStartFailure(err, port));
-    process.exit(1);
+    process.exit(startFailureExitCode(err));
   }
   // 'exit' handlers must finish synchronously: an async release here dies with
   // the process mid-unlink and leaks gate.lock naming a dead pid (reproduced
   // 2026-08-22 — every failed start left debris behind).
   process.on('exit', () => { lock.releaseSync(); });
+  // A supervised child (the Gate service) is spawned with an IPC channel: a
+  // {type:'shutdown'} message or a parent disconnect asks for the same
+  // graceful close SIGINT gets, capped so a hung close cannot wedge the
+  // supervisor's restart.
+  let gate = null;
+  const supervisedShutdown = () => {
+    if (!gate) process.exit(0);
+    const force = setTimeout(() => process.exit(0), 15000);
+    force.unref?.();
+    gate.close().then(
+      () => { clearTimeout(force); process.exit(0); },
+      () => { clearTimeout(force); process.exit(0); },
+    );
+  };
+  if (process.send) {
+    process.on('message', (message) => {
+      if (message?.type === 'shutdown') supervisedShutdown();
+    });
+    process.on('disconnect', supervisedShutdown);
+  }
   try {
     await migrateLegacyProviders({ sourceRoot: __dirname, gateHome });
-    const gate = await createGate({
+    gate = await createGate({
       root: __dirname,
       port,
       name: gateName,
@@ -384,7 +408,7 @@ async function handleStart(args = []) {
     // handler above is then a no-op thanks to the shared released guard.
     await lock.release().catch(() => {});
     console.error(describeStartFailure(err, port));
-    process.exit(1);
+    process.exit(startFailureExitCode(err));
   }
 }
 
@@ -453,27 +477,222 @@ async function handlePair(args) {
 
 async function handleService(args) {
   const sub = args[0];
-  const user = process.env.USERNAME ? `${process.env.USERDOMAIN || 'USER'}\\${process.env.USERNAME}` : process.env.USER;
-  const gateHome = resolveGateHome();
-  const definition = buildTaskDefinition({
-    user,
-    executable: join(__dirname, 'cli.mjs'),
-    gateHome,
-  });
-  if (sub === 'install') {
-    console.log(`Would install Scheduled Task ${definition.name} for ${definition.userId}`);
-    return;
-  }
-  if (sub === 'status') {
-    console.log(doctor({ user, gateHome, listen: 'http://127.0.0.1:8760' }));
-    return;
-  }
-  if (sub === 'start' || sub === 'stop' || sub === 'uninstall') {
-    console.log(`service ${sub}: ${definition.name}`);
-    return;
-  }
-  console.error('Usage: node gate/cli.mjs service <install|start|stop|status|uninstall>');
+  if (sub === 'install') return serviceInstall();
+  if (sub === 'run') return serviceRun();
+  if (sub === 'stop') return serviceStop();
+  if (sub === 'start') return serviceStart();
+  if (sub === 'restart') return serviceRestart();
+  if (sub === 'uninstall') return serviceUninstall();
+  if (sub === 'status') return serviceStatus();
+  console.error('Usage: node gate/cli.mjs service <install|run|stop|start|restart|status|uninstall>');
   process.exit(1);
+}
+
+/**
+ * The checkout the supervised Gate runs from. Gate state (tokens, pairing,
+ * registry) lives in this folder — running from anywhere else orphans the
+ * paired phones.
+ */
+const SERVICE_CODE_ROOT = 'C:\\Projects\\Versutus';
+const GATE_PORT = 8760;
+const GATE_MANIFEST = `http://127.0.0.1:${GATE_PORT}/.well-known/gateway.json`;
+
+function serviceUser() {
+  return process.env.USERNAME ? `${process.env.USERDOMAIN || 'USER'}\\${process.env.USERNAME}` : process.env.USER;
+}
+
+function servicePaths(gateHome = resolveGateHome()) {
+  const dir = join(gateHome, 'service');
+  return {
+    gateHome,
+    dir,
+    xml: join(dir, 'VersutusGate.xml'),
+    state: join(dir, 'supervisor.json'),
+    control: join(dir, 'control.json'),
+  };
+}
+
+function schtasks(taskArgs) {
+  return execFileSync('schtasks', taskArgs, { encoding: 'utf8', windowsHide: true });
+}
+
+function serviceGitHead(codeRoot) {
+  try {
+    return execFileSync('git', ['-C', codeRoot, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8', windowsHide: true }).trim();
+  } catch {
+    return null;
+  }
+}
+
+const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function serviceInstall() {
+  const paths = servicePaths();
+  const definition = buildTaskDefinition({ user: serviceUser(), codeRoot: SERVICE_CODE_ROOT });
+  mkdirSync(paths.dir, { recursive: true });
+  writeTaskFile(definition.xml, paths.xml);
+  schtasks(['/Create', '/TN', TASK_NAME, '/XML', paths.xml, '/F']);
+  schtasks(['/Run', '/TN', TASK_NAME]);
+  console.log(`service installed from ${SERVICE_CODE_ROOT} at ${serviceGitHead(SERVICE_CODE_ROOT)}`);
+}
+
+async function serviceRun() {
+  const paths = servicePaths();
+  mkdirSync(paths.dir, { recursive: true });
+  // One supervisor per machine: a second `service run` (a stale task entry
+  // firing twice, a manual launch) must refuse instead of double-spawning.
+  const lock = await acquireInstanceLock(paths.dir, { name: 'supervisor.lock' });
+  const rlog = new RotatingLog(join(paths.gateHome, 'logs'));
+  const say = (message) => rlog.write('supervisor', `${message}\n`);
+
+  const spawnGate = () => {
+    const child = spawn(
+      process.execPath,
+      [join(SERVICE_CODE_ROOT, 'gate', 'cli.mjs'), 'start'],
+      { cwd: SERVICE_CODE_ROOT, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true },
+    );
+    child.stdout?.on('data', (chunk) => rlog.write('gate', chunk));
+    child.stderr?.on('data', (chunk) => rlog.write('gate', chunk));
+    return child;
+  };
+  const probe = async () => (await probeLocalGate(
+    GATE_MANIFEST,
+    (url) => fetch(url, { signal: AbortSignal.timeout(10000) }),
+  )).reachable;
+  const killTree = (pid) => {
+    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+  };
+
+  let resolveStopped;
+  const stopped = new Promise((resolve) => { resolveStopped = resolve; });
+  const sup = new Supervisor({
+    spawnGate,
+    probe,
+    killTree,
+    writeState: (state) => writeFileSync(paths.state, JSON.stringify(state, null, 2)),
+    log: say,
+    codeRoot: SERVICE_CODE_ROOT,
+    gitHead: serviceGitHead(SERVICE_CODE_ROOT),
+  });
+  say(`supervisor starting (code root ${SERVICE_CODE_ROOT})`);
+  sup.start();
+
+  // `service stop|restart` talks to the supervisor through this file — a
+  // named pipe would die with the very crash the supervisor survives.
+  const poll = setInterval(() => {
+    let action = null;
+    try {
+      action = JSON.parse(readFileSync(paths.control, 'utf8')).action;
+    } catch {
+      return;
+    }
+    rmSync(paths.control, { force: true });
+    if (action === 'stop') {
+      clearInterval(poll);
+      sup.stop().then(() => resolveStopped());
+    } else if (action === 'restart') {
+      sup.requestRestart();
+    }
+  }, 2000);
+
+  process.on('SIGINT', () => {
+    clearInterval(poll);
+    sup.stop().then(() => resolveStopped());
+  });
+  await stopped;
+  rlog.close();
+  await lock.release().catch(() => {});
+}
+
+async function serviceStop() {
+  const paths = servicePaths();
+  // Disable FIRST: otherwise the 5-minute time trigger revives the
+  // supervisor while we are stopping it.
+  schtasks(['/Change', '/TN', TASK_NAME, '/DISABLE']);
+  writeFileSync(paths.control, JSON.stringify({ action: 'stop' }));
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    try {
+      if (JSON.parse(readFileSync(paths.state, 'utf8')).status === 'stopped') break;
+    } catch {
+      // No state yet — keep waiting for the supervisor to get there.
+    }
+    await sleepMs(500);
+  }
+  try {
+    schtasks(['/End', '/TN', TASK_NAME]);
+  } catch {
+    // Already ended is the outcome we wanted anyway.
+  }
+  // Tree-kill leftovers only when the port proves someone is still holding it
+  // — a stale supervisor.json pid may have been recycled by Windows.
+  const stillUp = await probeLocalGate(GATE_MANIFEST);
+  if (stillUp.reachable) {
+    try {
+      const state = JSON.parse(readFileSync(paths.state, 'utf8'));
+      for (const pid of [state.supervisorPid, state.childPid]) {
+        if (!Number.isInteger(pid)) continue;
+        try {
+          execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+        } catch {
+          // Dead already — the port check below is the real verdict.
+        }
+      }
+    } catch {
+      // No state to name a pid; the port check below still applies.
+    }
+  }
+  const closedBy = Date.now() + 20000;
+  while (Date.now() < closedBy) {
+    if (!(await probeLocalGate(GATE_MANIFEST)).reachable) break;
+    await sleepMs(500);
+  }
+  console.log('service stopped');
+}
+
+async function serviceStart() {
+  schtasks(['/Change', '/TN', TASK_NAME, '/ENABLE']);
+  schtasks(['/Run', '/TN', TASK_NAME]);
+  console.log('service started');
+}
+
+async function serviceRestart() {
+  const paths = servicePaths();
+  mkdirSync(paths.dir, { recursive: true });
+  writeFileSync(paths.control, JSON.stringify({ action: 'restart' }));
+  console.log('restart requested');
+}
+
+async function serviceUninstall() {
+  await serviceStop();
+  try {
+    schtasks(['/Delete', '/TN', TASK_NAME, '/F']);
+  } catch (error) {
+    console.error(`task delete failed: ${error.message}`);
+    process.exit(1);
+  }
+  console.log('service uninstalled');
+}
+
+async function serviceStatus() {
+  const paths = servicePaths();
+  let taskInfo = '';
+  try {
+    taskInfo = schtasks(['/Query', '/TN', TASK_NAME, '/V', '/FO', 'LIST']);
+    console.log(taskInfo.trim());
+  } catch (error) {
+    console.log(`task query failed: ${error.message}`);
+  }
+  let state = null;
+  try {
+    state = JSON.parse(readFileSync(paths.state, 'utf8'));
+    console.log(JSON.stringify(state, null, 2));
+  } catch {
+    console.log('no supervisor state');
+  }
+  const probe = await probeLocalGate(GATE_MANIFEST);
+  console.log(`manifest: ${probe.reachable ? 'reachable' : 'UNREACHABLE'} (${probe.detail})`);
+  if (!probe.reachable || state?.status !== 'running') process.exit(1);
 }
 
 async function handleDoctor(args = []) {
@@ -583,8 +802,11 @@ async function main() {
     console.log('    revoke <deviceId>   Revoke a device\'s access token');
     console.log('    list                List pending requests and paired devices');
     console.log('');
-    console.log('  service <install|start|stop|status|uninstall>');
-    console.log('    Manage the per-user Windows Scheduled Task');
+    console.log('  service <install|run|stop|start|restart|status|uninstall>');
+    console.log('    Supervise the Gate as a per-user Windows Scheduled Task');
+    console.log('    (hidden, logon + every-5-minute triggers). install registers');
+    console.log('    and starts it; run is the supervisor the task launches;');
+    console.log('    status exits 1 unless the Gate answers.');
     console.log('');
     console.log('  doctor');
     console.log('    Inspect the Gate machine: local listener and every CLI');

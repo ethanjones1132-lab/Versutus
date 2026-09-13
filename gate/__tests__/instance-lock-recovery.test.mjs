@@ -37,6 +37,22 @@ test('a lock left by a dead process is reclaimed', async () => {
   });
 });
 
+test('a lock from before the current boot is stale even when its pid is alive', async () => {
+  await withHome(async (dir) => {
+    // Windows reuses pids after a reboot: a lock written before boot must not
+    // block the start even though its pid (ours,hence alive) exists again.
+    await writeFile(
+      join(dir, 'gate.lock'),
+      JSON.stringify({ pid: process.pid, at: new Date(Date.now() - 3600_000).toISOString() }),
+      'utf8',
+    );
+    const lock = await acquireInstanceLock(dir, { bootTimeMs: Date.now() });
+    const written = JSON.parse(await readFile(join(dir, 'gate.lock'), 'utf8'));
+    assert.equal(written.pid, process.pid, 'the reclaiming process should own the lock');
+    await lock.release();
+  });
+});
+
 test('a lock held by a live process is still refused', async () => {
   await withHome(async (dir) => {
     const first = await acquireInstanceLock(dir);

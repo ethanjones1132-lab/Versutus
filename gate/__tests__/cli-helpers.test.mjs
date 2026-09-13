@@ -8,6 +8,7 @@ import {
   getKindTemplate,
   describeStartFailure,
   resolveStartPort,
+  startFailureExitCode,
 } from '../core/cli-helpers.mjs';
 
 test('validateId accepts lowercase alphanumeric with hyphens', () => {
@@ -157,4 +158,13 @@ test('resolveStartPort rejects non-integer, out-of-range, and missing values', (
 
 test('resolveStartPort treats an empty env override as unset', () => {
   assert.deepEqual(resolveStartPort([], { VERSUTUS_GATE_PORT: '' }), { port: 8760 });
+});
+
+test('startFailureExitCode is 75 for a held port or lock, 1 otherwise', () => {
+  const addrInUse = new Error('listen EADDRINUSE :::8760');
+  addrInUse.code = 'EADDRINUSE';
+  assert.equal(startFailureExitCode(addrInUse), 75);
+  assert.equal(startFailureExitCode(new Error('Gate instance lock is already held — x')), 75);
+  assert.equal(startFailureExitCode(new Error('LOCALAPPDATA is required')), 1);
+  assert.equal(startFailureExitCode(null), 1);
 });
