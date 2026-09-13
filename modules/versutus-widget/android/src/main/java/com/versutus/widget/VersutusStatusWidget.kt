@@ -1,0 +1,124 @@
+package com.versutus.widget
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.glance.GlanceId
+import androidx.glance.GlanceModifier
+import androidx.glance.GlanceTheme
+import androidx.glance.LocalContext
+import androidx.glance.LocalSize
+import androidx.glance.action.clickable
+import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.SizeMode
+import androidx.glance.appwidget.action.actionStartActivity
+import androidx.glance.appwidget.cornerRadius
+import androidx.glance.appwidget.provideContent
+import androidx.glance.background
+import androidx.glance.layout.Alignment
+import androidx.glance.layout.Box
+import androidx.glance.layout.Column
+import androidx.glance.layout.Row
+import androidx.glance.layout.Spacer
+import androidx.glance.layout.fillMaxSize
+import androidx.glance.layout.height
+import androidx.glance.layout.padding
+import androidx.glance.layout.size
+import androidx.glance.layout.width
+import androidx.glance.text.FontWeight
+import androidx.glance.text.Text
+import androidx.glance.text.TextStyle
+import java.time.ZoneId
+import java.util.Locale
+
+class VersutusStatusWidget : GlanceAppWidget() {
+  override val sizeMode = SizeMode.Responsive(setOf(SMALL, MEDIUM, LARGE))
+
+  override suspend fun provideGlance(context: Context, id: GlanceId) {
+    val parsed = WidgetPayload.parse(WidgetPayloadStore.read(context))
+    provideContent {
+      GlanceTheme {
+        StatusCard(parsed)
+      }
+    }
+  }
+
+  companion object {
+    val SMALL = DpSize(110.dp, 110.dp)
+    val MEDIUM = DpSize(250.dp, 110.dp)
+    val LARGE = DpSize(250.dp, 250.dp)
+  }
+}
+
+@Composable
+private fun StatusCard(parsed: WidgetPayload.Parsed) {
+  val context = LocalContext.current
+  val size = LocalSize.current
+  val variant = WidgetLayout.variantFor(size.width.value, size.height.value)
+  Column(
+    modifier = GlanceModifier
+      .fillMaxSize()
+      .background(GlanceTheme.colors.widgetBackground)
+      .cornerRadius(android.R.dimen.system_app_widget_background_radius)
+      .padding(14.dp)
+      .clickable(actionStartActivity(openAppIntent(context, "versutus://chat"))),
+  ) {
+    when (parsed) {
+      is WidgetPayload.Parsed.Ok -> Lines(parsed.payload, variant)
+      WidgetPayload.Parsed.NeedsUpdate -> Line("Update Versutus to show status", bold = true)
+      WidgetPayload.Parsed.Invalid -> {
+        Line("Versutus", bold = true)
+        Line("Open Versutus to connect")
+      }
+    }
+  }
+}
+
+@Composable
+private fun Lines(payload: WidgetPayload, variant: WidgetVariant) {
+  val stamp = WidgetStamp.line(payload.writtenAt, System.currentTimeMillis(), ZoneId.systemDefault(), Locale.getDefault())
+  Row(verticalAlignment = Alignment.CenterVertically) {
+    Box(
+      modifier = GlanceModifier
+        .size(8.dp)
+        .cornerRadius(4.dp)
+        .background(if (payload.connected) GlanceTheme.colors.primary else GlanceTheme.colors.error),
+    ) {}
+    Spacer(GlanceModifier.width(6.dp))
+    Line(payload.status, bold = true)
+  }
+  Spacer(GlanceModifier.height(4.dp))
+  Line(payload.work)
+  if (payload.approvalsPending > 0 && variant != WidgetVariant.SMALL) {
+    Line("Tap to decide in Versutus", secondary = true)
+  }
+  if (variant != WidgetVariant.SMALL && payload.result != null) {
+    Spacer(GlanceModifier.height(4.dp))
+    Line(payload.result, maxLines = if (variant == WidgetVariant.LARGE) 4 else 2)
+  }
+  Spacer(GlanceModifier.height(6.dp))
+  Line(stamp, secondary = true)
+}
+
+@Composable
+private fun Line(text: String, bold: Boolean = false, secondary: Boolean = false, maxLines: Int = 1) {
+  Text(
+    text = text,
+    maxLines = maxLines,
+    style = TextStyle(
+      color = if (secondary) GlanceTheme.colors.onSurfaceVariant else GlanceTheme.colors.onSurface,
+      fontSize = if (bold) 15.sp else if (secondary) 11.sp else 13.sp,
+      fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+    ),
+  )
+}
+
+/** Every tap goes through the app's own `versutus://` router; nothing is decided here. */
+internal fun openAppIntent(context: Context, uri: String): Intent =
+  Intent(Intent.ACTION_VIEW, Uri.parse(uri))
+    .setPackage(context.packageName)
+    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)

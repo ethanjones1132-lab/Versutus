@@ -45,3 +45,26 @@ describe('the Android widget module', () => {
     expect(gradle).toContain("apply plugin: 'org.jetbrains.kotlin.plugin.compose'");
   });
 });
+
+describe('the Android widget renders and updates honestly', () => {
+  const kotlin = (file: string) =>
+    readSource('modules', 'versutus-widget', 'android', 'src', 'main', 'java', 'com', 'versutus', 'widget', file);
+
+  test('the card paints a themed background with launcher corners and opens the app', () => {
+    const widget = kotlin('VersutusStatusWidget.kt');
+    expect(widget).toContain('.background(GlanceTheme.colors.widgetBackground)');
+    expect(widget).toContain('.cornerRadius(android.R.dimen.system_app_widget_background_radius)');
+    expect(widget).toContain('actionStartActivity(openAppIntent(context, "versutus://chat"))');
+    expect(widget).toContain('SizeMode.Responsive(');
+  });
+
+  test('a payload is validated before it is stored, and every placed widget is redrawn', () => {
+    const module = kotlin('VersutusWidgetModule.kt');
+    expect(module).toContain('Name("VersutusWidget")');
+    const parseAt = module.indexOf('WidgetPayload.parse(json)');
+    const writeAt = module.indexOf('WidgetPayloadStore.write(context, json)');
+    expect(parseAt).toBeGreaterThan(-1);
+    expect(writeAt).toBeGreaterThan(parseAt);
+    expect(module).toContain('VersutusStatusWidget().updateAll(context)');
+  });
+});
