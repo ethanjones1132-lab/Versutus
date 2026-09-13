@@ -8,6 +8,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
@@ -15,6 +17,7 @@ import androidx.glance.LocalContext
 import androidx.glance.LocalSize
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.currentState
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.cornerRadius
@@ -64,6 +67,7 @@ private fun StatusCard(parsed: WidgetPayload.Parsed) {
   val context = LocalContext.current
   val size = LocalSize.current
   val variant = WidgetLayout.variantFor(size.width.value, size.height.value)
+  val pinned = WidgetConfigState.read(currentState<Preferences>()[stringPreferencesKey(WidgetConfigState.BOT_KEY)])
   val description = when (parsed) {
     is WidgetPayload.Parsed.Ok -> {
       val payload = parsed.payload
@@ -83,7 +87,7 @@ private fun StatusCard(parsed: WidgetPayload.Parsed) {
       .clickable(actionStartActivity(openAppIntent(context, "versutus://chat"))),
   ) {
     when (parsed) {
-      is WidgetPayload.Parsed.Ok -> Lines(parsed.payload, variant)
+      is WidgetPayload.Parsed.Ok -> Lines(parsed.payload, variant, pinned)
       WidgetPayload.Parsed.NeedsUpdate -> Line("Update Versutus to show status", bold = true)
       WidgetPayload.Parsed.Invalid -> {
         Line("Versutus", bold = true)
@@ -94,7 +98,7 @@ private fun StatusCard(parsed: WidgetPayload.Parsed) {
 }
 
 @Composable
-private fun Lines(payload: WidgetPayload, variant: WidgetVariant) {
+private fun Lines(payload: WidgetPayload, variant: WidgetVariant, pinned: String?) {
   if (variant == WidgetVariant.TINY) {
     Row(verticalAlignment = Alignment.CenterVertically) {
       Dot(payload.connected)
@@ -117,8 +121,13 @@ private fun Lines(payload: WidgetPayload, variant: WidgetVariant) {
       Line("${run.title} — ${run.state}")
     }
   }
-  if (!payload.redact && payload.bots.isNotEmpty()) {
-    for (bot in payload.bots) {
+  val bots = when {
+    pinned == null -> payload.bots
+    payload.bots.any { it.id == pinned } -> payload.bots.filter { it.id == pinned }
+    else -> listOf(WidgetBot(pinned, pinned))
+  }
+  if (!payload.redact && bots.isNotEmpty()) {
+    for (bot in bots) {
       Spacer(GlanceModifier.height(3.dp))
       BotRow(bot)
     }

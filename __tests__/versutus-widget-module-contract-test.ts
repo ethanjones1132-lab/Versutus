@@ -128,3 +128,29 @@ describe('M3: fresh while the app is closed', () => {
     expect(enqueueAt).toBeGreaterThan(parseAt);
   });
 });
+
+describe('M4: configurable per instance', () => {
+  const kotlin = (file: string) =>
+    readSource('modules', 'versutus-widget', 'android', 'src', 'main', 'java', 'com', 'versutus', 'widget', file);
+
+  test('the provider info offers reconfiguration and an optional configure flow', () => {
+    const info = readSource('modules', 'versutus-widget', 'android', 'src', 'main', 'res', 'xml', 'versutus_status_widget_info.xml');
+    expect(info).toContain('android:widgetFeatures="reconfigurable|configuration_optional"');
+  });
+
+  test('the receiver names the configure activity, and it is declared', () => {
+    const manifest = readSource('modules', 'versutus-widget', 'android', 'src', 'main', 'AndroidManifest.xml');
+    expect(manifest).toContain('android:configure="com.versutus.widget.WidgetConfigureActivity"');
+    expect(manifest).toContain('android:name="com.versutus.widget.WidgetConfigureActivity"');
+    expect(manifest).toContain('android.appwidget.action.APPWIDGET_CONFIGURE');
+  });
+
+  test('the card reads the per-instance pin and the activity stores it as Glance state', () => {
+    const widget = kotlin('VersutusStatusWidget.kt');
+    expect(widget).toContain('currentState<Preferences>()');
+    expect(widget).toContain('WidgetConfigState.BOT_KEY');
+    const activity = kotlin('WidgetConfigureActivity.kt');
+    expect(activity).toContain('updateAppWidgetState');
+    expect(activity).toContain('PreferencesGlanceStateDefinition');
+  });
+});
