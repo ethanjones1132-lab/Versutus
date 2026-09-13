@@ -47,6 +47,10 @@ export const HANDSFREE_GRACE_MS = 600;
 /** How long a sent turn may wait for its reply before the call fails. */
 export const HANDSFREE_REPLY_WATCHDOG_MS = 120_000;
 
+/** How many times a listen that did not start is asked again before the call ends. */
+const HANDSFREE_LISTEN_RETRY_LIMIT = 8;
+const HANDSFREE_LISTEN_RETRY_MS = 150;
+
 /** What one call is for. Built by the caller, never derived from context. */
 export type HandsfreeCallTarget = {
   gatewayId: string;
@@ -357,11 +361,25 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     [armWatchdog, dispatch, resetSpeech],
   );
 
+  // The native service may still be starting when the reducer first asks it to
+  // listen; a `false` is "not yet", not silence to ignore. Only a listen that
+  // never starts ends the call, with a reason the screen can name.
+  const startListeningWithRetry = useCallback(async () => {
+    for (let attempt = 0; attempt < HANDSFREE_LISTEN_RETRY_LIMIT; attempt += 1) {
+      const module = moduleRef.current;
+      const phase = sessionRef.current.phase;
+      if (!module || (phase !== 'listening' && phase !== 'confirming')) return;
+      if (await module.startListening()) return;
+      await new Promise((resolve) => setTimeout(resolve, HANDSFREE_LISTEN_RETRY_MS));
+    }
+    dispatch({ type: 'fatalError', reason: 'recognition-failed' });
+  }, [dispatch]);
+
   const runEffect = (effect: HandsfreeEffect) => {
     const module = moduleRef.current;
     switch (effect.kind) {
       case 'start-listening':
-        void module?.startListening();
+        void startListeningWithRetry();
         return;
       case 'stop-listening':
         void module?.stopListening();
@@ -504,21 +522,36 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       setLabel(target.label);
       endingRef.current = false;
 
-      dispatch({ type: 'start' });
-      const outcome = await module.startSession({ title: target.label });
+      // Listen first: a fatalError or interruption the native side emits while
+      // the session is opening must reach the reducer, not vanish.
+      subscribe(module);
+      // The assignment re-reads the ref so TypeScript does not keep the `idle`
+      // narrowing from the precondition above across the awaited native start.
+      sessionRef.current = dispatch({ type: 'start' });
+      let outcome: HandsfreeStartOutcome;
+      try {
+        outcome = await module.startSession({ title: target.label });
+      } catch {
+        outcome = 'unavailable';
+      }
       if (outcome !== 'started') {
+        unsubscribe();
         moduleRef.current = null;
         targetRef.current = null;
         threadRef.current = undefined;
         dispatch({ type: 'start-refused' });
         return outcome;
       }
-      subscribe(module);
+      if (sessionRef.current.phase !== 'starting') {
+        // A fatal event arrived while the session was opening and has already
+        // torn it down; reporting "started" would contradict the screen.
+        return 'unavailable';
+      }
       beginHandsfreeCall();
       dispatch({ type: 'started' });
       return 'started';
     },
-    [dispatch, subscribe],
+    [dispatch, subscribe, unsubscribe],
   );
 
   const mute = useCallback(() => {

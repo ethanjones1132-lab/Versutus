@@ -63,7 +63,7 @@ describe('the phase-to-native wiring table', () => {
 
   test('every reducer effect has a native destination', () => {
     expect(runEffect).toContain("case 'start-listening':");
-    expect(runEffect).toContain('startListening()');
+    expect(runEffect).toContain('startListeningWithRetry()');
     expect(runEffect).toContain("case 'stop-listening':");
     expect(runEffect).toContain('stopListening()');
     expect(runEffect).toContain("case 'set-muted':");
@@ -224,5 +224,35 @@ describe('start preconditions and captured target', () => {
   test('no backend-name branch and no invented realtime capability', () => {
     expect(provider).not.toMatch(/hermes|opencode|codex|claude-code/i);
     expect(provider).not.toContain('realtime-voice');
+  });
+});
+
+describe('starting a call cannot strand the provider', () => {
+  const start = between(provider, 'const start = useCallback(', 'const mute = useCallback(');
+
+  test('listeners attach before the native session starts, so early events land', () => {
+    const subscribeAt = start.indexOf('subscribe(module)');
+    const startAt = start.indexOf('module.startSession(');
+    expect(subscribeAt).toBeGreaterThan(-1);
+    expect(startAt).toBeGreaterThan(subscribeAt);
+  });
+
+  test('a native start that throws is refused, never left in starting', () => {
+    expect(start).toMatch(/try\s*\{\s*outcome = await module\.startSession\(\{ title: target\.label \}\);\s*\}\s*catch/);
+    expect(start).toContain("dispatch({ type: 'start-refused' })");
+    expect(start).toContain('unsubscribe()');
+  });
+
+  test('a session that a fatal event already ended is not reported as started', () => {
+    expect(start).toContain("sessionRef.current.phase !== 'starting'");
+  });
+});
+
+describe('a listen that could not start is retried, then named', () => {
+  test('the start-listening effect awaits the boolean and fails the call only after retries', () => {
+    const listen = between(provider, 'const startListeningWithRetry = useCallback(', '}, [dispatch]);');
+    expect(listen).toContain('await module.startListening()');
+    expect(listen).toContain('HANDSFREE_LISTEN_RETRY_LIMIT');
+    expect(listen).toContain("dispatch({ type: 'fatalError', reason: 'recognition-failed' })");
   });
 });
