@@ -38,8 +38,17 @@ export type RunTaskOptions = {
   onStarted?: (runId: string) => void;
   /** Called for non-approval events (streamed from the gateway). */
   onEvent?: (event: RunEvent) => void;
-  /** Called when the gateway requests approval; resolves with the user's decision. */
-  onApprovalRequired: (runId: string, prompt: string) => Promise<{ approved: boolean; feedback?: string }>;
+  /**
+   * Called when the gateway requests approval; resolves with the user's
+   * decision. `commandClass` is the risk/action the gateway attached to the
+   * approval event when it sent one — the policy engine's only input, never
+   * the run prompt.
+   */
+  onApprovalRequired: (
+    runId: string,
+    prompt: string,
+    commandClass?: string,
+  ) => Promise<{ approved: boolean; feedback?: string }>;
   /** Delay between status polls after a stream closes without progress. */
   pollDelayMs?: number;
   /** Injectable for tests so no-progress backoff does not cost real time. */
@@ -230,6 +239,10 @@ export async function executeRun(
   const pollDelayMs = options.pollDelayMs ?? DEFAULT_POLL_DELAY_MS;
 
   let approved: boolean | undefined;
+  // The class the gateway attached to its approval event, if it sent one. The
+  // status string alone names no class, so it stays undefined until an event
+  // carries a `risk`/`action`/`class`, and the policy fails closed on it.
+  let commandClass: string | undefined;
   let status = safeStatus(await client.getRunStatus(runId));
   let reachedTerminal = isTerminalRunStatus(status);
 
@@ -240,7 +253,7 @@ export async function executeRun(
     }
 
     if (runNeedsApproval(status)) {
-      const decision = await options.onApprovalRequired(runId, prompt);
+      const decision = await options.onApprovalRequired(runId, prompt, commandClass);
       approved = decision.approved;
       // Deliberately non-fatal: the decision may well have registered even if
       // the response did not come back, so polling continues rather than
@@ -256,8 +269,11 @@ export async function executeRun(
       .streamRunEvents(
         runId,
         (event) => {
-          const eventStatus = String((event.data as Record<string, unknown> | undefined)?.status ?? '');
+          const data = event.data as Record<string, unknown> | undefined;
+          const eventStatus = String(data?.status ?? '');
           if (runNeedsApproval(event.type) || (eventStatus && runNeedsApproval(eventStatus))) {
+            const klass = data?.risk ?? data?.action ?? data?.class;
+            if (typeof klass === 'string' && klass) commandClass = klass;
             return;
           }
           options.onEvent?.(event);

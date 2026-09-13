@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AgentTargets } from '@/components/activity/agent-targets';
 import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
+import { ApprovalInbox } from '@/components/activity/approval-inbox';
 import { CronSection } from '@/components/activity/cron-section';
 import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
 import { Badge, Button, Card, Screen, Text } from '@/components/ui';
@@ -30,6 +31,7 @@ export default function ActivityScreen() {
     status,
     pendingRunApproval,
     resolveRunApproval,
+    refreshPendingApprovals,
     connectGateway,
     refreshCapabilities,
     refreshGateways,
@@ -46,7 +48,7 @@ export default function ActivityScreen() {
   const onRefresh = async () => {
     setRefreshing(true);
     const started = Date.now();
-    await Promise.all([refreshCapabilities(), refreshGateways()]).catch(() => undefined);
+    await Promise.all([refreshCapabilities(), refreshGateways(), refreshPendingApprovals()]).catch(() => undefined);
     setCronReloadSignal((n) => n + 1);
     // Hold the spinner briefly so recovery isn't a disorienting flash.
     const elapsed = Date.now() - started;
@@ -96,6 +98,9 @@ export default function ActivityScreen() {
               onPress={() => router.push('/runs')}
             />
           </Card>
+
+          {/* D1: the Gate's pending approvals, triaged without the run open. */}
+          <ApprovalInbox />
 
           {pendingRunApproval ? (
             <ApprovalDecisionCard

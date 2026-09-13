@@ -185,6 +185,13 @@ import {
 import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
 import { SESSION_SPEND_LIST_LIMIT } from '@/lib/gateway/session-analytics';
 import { botBudget, botSpendFromSessions, checkBotBudget, loadBudgets } from '@/lib/gateway/budgets';
+import {
+  approvalPolicyDecision,
+  loadApprovalPolicies,
+  normalizeApprovalClass,
+  recordApprovalDecision,
+} from '@/lib/gateway/approval-policy';
+import { approvalRowsFromUnknown, type ApprovalRow } from '@/lib/gateway/approvals';
 import { loadWorkflows, saveWorkflows } from '@/lib/gateway/workflows';
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
 import { writeWidgetSnapshot } from '@/lib/widget/widget-device';
@@ -420,6 +427,11 @@ type GatewayContextValue = {
   cancelPendingConfirmation: () => void;
   pendingRunApproval: { runId: string; prompt: string } | null;
   resolveRunApproval: (approved: boolean, feedback?: string) => void;
+  /** D1: the Gate's pending CLI-environment approvals, with their class. */
+  pendingApprovals: ApprovalRow[];
+  refreshPendingApprovals: () => Promise<void>;
+  decideApproval: (approvalId: string, decision: 'approve' | 'deny') => Promise<void>;
+  approvalBusy: string | null;
   tlsFingerprintChange: {
     previousFingerprint: string;
     observedFingerprint: string;
@@ -833,6 +845,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const confirmationBypassRef = useRef(false);
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
   const [pendingRunApproval, setPendingRunApproval] = useState<{ runId: string; prompt: string } | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalRow[]>([]);
+  const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   const [tlsFingerprintChange, setTlsFingerprintChange] = useState<{
     gateway: GatewayProfile;
     previousFingerprint: string;
@@ -2340,6 +2354,55 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setPendingRunApproval(null);
   }, []);
 
+  /**
+   * D1: the Gate's inbox. A rejected or unsupported read is an empty list —
+   * never a stuck spinner — and an approval decided here is written to the
+   * durable audit before the list is re-read.
+   */
+  const refreshPendingApprovals = useCallback(async () => {
+    try {
+      const payload = await gatewayRequest<unknown>('approvals.pending', {});
+      setPendingApprovals(approvalRowsFromUnknown(payload));
+    } catch {
+      setPendingApprovals([]);
+    }
+  }, [gatewayRequest]);
+
+  const decideApproval = useCallback(
+    async (approvalId: string, decision: 'approve' | 'deny') => {
+      setApprovalBusy(approvalId);
+      try {
+        await gatewayRequest(decision === 'approve' ? 'approval.approve' : 'approval.deny', { approvalId });
+        await recordApprovalDecision({
+          approvalId,
+          cls: pendingApprovals.find((row) => row.approvalId === approvalId)?.cls ?? 'unknown',
+          decision,
+          source: 'operator',
+          at: Date.now(),
+        });
+        await refreshPendingApprovals();
+      } finally {
+        setApprovalBusy(null);
+      }
+    },
+    [gatewayRequest, pendingApprovals, refreshPendingApprovals],
+  );
+
+  // The Gate owns the list, so read it whenever a connection is live and drop
+  // it the moment one is not: a stale pending row must never outread the Gate.
+  useEffect(() => {
+    // Deferred: the effect only schedules the read, so the setState inside it
+    // never runs synchronously in the effect body (set-state-in-effect). A
+    // disconnect empties the list; a live connection re-reads it.
+    queueMicrotask(() => {
+      if (status !== 'connected') {
+        setPendingApprovals([]);
+        return;
+      }
+      void refreshPendingApprovals();
+    });
+  }, [status, refreshPendingApprovals]);
+
   const runTask = useCallback(
     async (
       prompt: string,
@@ -2435,7 +2498,26 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               timestamp: event.timestamp,
             });
           },
-          onApprovalRequired: (runId) => {
+          onApprovalRequired: async (runId, _prompt, approvalClass) => {
+            // D1 policy: the class comes from the Gate, never the run prompt.
+            // Only a read-only class for an opted-in Bot is auto-approved;
+            // anything else — including an absent/unknown class — asks.
+            const cls = normalizeApprovalClass(approvalClass);
+            const policyBotId = selectedBotIdRef.current ?? undefined;
+            const gatewayId = activeGatewayRef.current?.id ?? '';
+            const policies = await loadApprovalPolicies();
+            if (approvalPolicyDecision({ policies, gatewayId, botId: policyBotId, cls }).decision === 'approve') {
+              void recordApprovalDecision({
+                approvalId: runId,
+                runId,
+                botId: policyBotId,
+                cls,
+                decision: 'approve',
+                source: 'policy',
+                at: Date.now(),
+              });
+              return { approved: true };
+            }
             patchRun(trackedId.current, { status: 'waiting-approval' });
             setPendingRunApproval({ runId, prompt });
             void notifyApprovalRequired(prompt, runId, activeGatewayRef.current?.id ?? '');
@@ -3924,6 +4006,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       cancelPendingConfirmation,
       pendingRunApproval,
       resolveRunApproval,
+      pendingApprovals,
+      refreshPendingApprovals,
+      decideApproval,
+      approvalBusy,
       tlsFingerprintChange: tlsFingerprintChange
         ? {
             previousFingerprint: tlsFingerprintChange.previousFingerprint,
@@ -3971,6 +4057,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,
+      pendingApprovals, refreshPendingApprovals, decideApproval, approvalBusy,
       approveTlsFingerprintChange,
       rejectTlsFingerprintChange,
       runTask, activityRuns, stopActivityRun, loadRunEvents, modelPicker, openModelPicker, closeModelPicker,
