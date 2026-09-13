@@ -15,6 +15,7 @@ import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
+import { registerWidgetPushTask } from '@/lib/widget/widget-push-task';
 
 /** Where this device's last-known Expo push token is kept. */
 const STORE_KEY = 'versutus:expo-push-token:v1';
@@ -97,6 +98,14 @@ export async function deregisterWithGate(rpc: Rpc): Promise<void> {
 
 /** Obtain the token and register it; a device with no token asks for nothing. */
 export async function syncPushRegistration(rpc: Rpc): Promise<void> {
+  // The background widget task is registered before the token question: a
+  // device that has not granted notification permission still gets data-only
+  // pushes into the widget. A registration that fails keeps the timer refresh.
+  try {
+    await registerWidgetPushTask();
+  } catch {
+    // Ignore: the six-hourly worker still rolls the stamp over.
+  }
   const token = await obtainExpoPushToken();
   if (!token) return;
   await registerWithGate(rpc, token);
