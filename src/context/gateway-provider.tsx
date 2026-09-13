@@ -185,6 +185,7 @@ import {
 import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
 import { SESSION_SPEND_LIST_LIMIT } from '@/lib/gateway/session-analytics';
 import { botBudget, botSpendFromSessions, checkBotBudget, loadBudgets } from '@/lib/gateway/budgets';
+import { loadWorkflows } from '@/lib/gateway/workflows';
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
 import { writeWidgetSnapshot } from '@/lib/widget/widget-device';
 export type ConnectionPhase =
@@ -2650,8 +2651,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // Execute gateway slash command — stream agent-transport output live.
         let streamedText = '';
         const { executeGatewaySlashCommand } = await import('@/lib/gateway/slash-commands');
-const response = await executeGatewaySlashCommand(trimmed, {
+        // `/workflow` reads this device's stored step sequences for the
+        // active gateway; no gateway route carries them.
+        const workflows = activeGateway ? await loadWorkflows(activeGateway.id) : [];
+        const response = await executeGatewaySlashCommand(trimmed, {
           hello: activeHello,
+          workflows,
           currentModel: activeGateway?.model,
           gatewayRequest,
           runAgentCommand,

@@ -588,3 +588,72 @@ describe('/model auth from the providers registry', () => {
     expect(result.text).toContain('none reported');
   });
 });
+
+describe('/workflow runs stored step sequences', () => {
+  const workflows = [
+    {
+      id: 'w1',
+      name: 'Digest',
+      steps: [
+        { id: 's1', prompt: 'Read {{input}}' },
+        { id: 's2', prompt: 'Summarize' },
+      ],
+    },
+  ];
+
+  test('lists stored workflows when given no name', async () => {
+    const result = await executeGatewaySlashCommand('/workflow', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+    });
+    expect(result.text).toContain('Digest: 2 steps');
+  });
+
+  test('runs a named workflow step by step with the input substituted', async () => {
+    const calls: string[] = [];
+    const runTask = jest.fn().mockImplementation(async (prompt: string) => {
+      calls.push(prompt);
+      return { runId: 'r', status: 'succeeded', result: 'ok' };
+    });
+    const result = await executeGatewaySlashCommand('/workflow digest the mail', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      runTask,
+    });
+    expect(calls).toEqual(['Read the mail', 'Summarize']);
+    expect(result.text).toContain('ok');
+  });
+
+  test('a failing step stops the workflow and names it', async () => {
+    const runTask = jest
+      .fn()
+      .mockResolvedValueOnce({ runId: 'r1', status: 'failed', error: 'boom' })
+      .mockResolvedValue({ runId: 'r2', status: 'succeeded', result: 'ok' });
+    const result = await executeGatewaySlashCommand('/workflow Digest', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      runTask,
+    });
+    expect(runTask).toHaveBeenCalledTimes(1);
+    expect(result.text).toContain('Stopped at step s1');
+  });
+
+  test('an unknown name is refused without running anything', async () => {
+    const runTask = jest.fn();
+    const result = await executeGatewaySlashCommand('/workflow nope', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      runTask,
+    });
+    expect(runTask).not.toHaveBeenCalled();
+    expect(result.text).toContain('Unknown workflow: nope');
+  });
+});
