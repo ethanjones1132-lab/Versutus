@@ -51,3 +51,7 @@ Task 2.3 (Start voice call) is DEFERRED — it waits on the voice plan's signed 
 - [ ] 3.1 Next morning the widget's stamp reads "Yesterday" without the app being opened. — PENDING-DEVICE
 - [ ] 3.2 A routine finishing overnight updates the widget with its verdict and the Gate's stamp (data-only push; Doze may delay it). — PENDING-DEVICE
 - [ ] 3.3 No widget payload reaches a device that did not opt into widget updates (covered by the Gate test). — PENDING-DEVICE
+
+## M4 acceptance (appended at M4 end)
+
+- [ ] 4.1 Place two widgets on one screen, pin a different Bot to each (long-press → reconfigure): each shows only its own Bot's row. — PENDING-DEVICE
