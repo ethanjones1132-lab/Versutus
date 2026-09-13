@@ -50,6 +50,8 @@ export type ConstellationNode = {
   live: boolean;
   lastSeenAt?: number;
   badges: ConstellationBadge[];
+  /** On a Bot node, the roster id a tap opens. Gateway nodes carry none. */
+  botId?: string;
 };
 
 export type ConstellationEdge = { from: string; to: string; kind: 'hosts' };
@@ -138,6 +140,7 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
         y: botY,
         live: true,
         badges: botBadges,
+        botId: bot.id,
       });
       edges.push({ from: `gateway:${profile.id}`, to: id, kind: 'hosts' });
     });

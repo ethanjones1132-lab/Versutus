@@ -602,6 +602,15 @@ export default function RootLayout() {
                     contentStyle: { backgroundColor: VersutusDarkTheme.colors.background },
                   }}>
                   <Stack.Screen name="(tabs)" />
+                  <Stack.Screen
+                    name="fleet"
+                    options={{
+                      headerShown: true,
+                      title: 'Fleet',
+                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                      headerTintColor: VersutusDarkTheme.colors.text,
+                    }}
+                  />
                   <Stack.Screen name="onboarding" options={{ headerShown: false }} />
                   <Stack.Screen
                     name="gateway/add"
