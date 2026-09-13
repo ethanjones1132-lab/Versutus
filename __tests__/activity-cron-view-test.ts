@@ -5,46 +5,53 @@ const nodeFs = jest.requireActual('fs') as {
   readFileSync(path: string, encoding: string): string;
 };
 
-function readActivity(): string {
+function readSource(...parts: string[]): string {
   return nodeFs
-    .readFileSync([__dirname, '..', 'src', 'app', '(tabs)', 'activity.tsx'].join(SEP), 'utf8')
+    .readFileSync([__dirname, '..', ...parts].join(SEP), 'utf8')
     .replace(/\r\n/g, '\n');
 }
 
-// Workflows slice 3a: the Activity surface reads as scheduled work. Runs are
-// hidden by default behind an explicit control; the cron section is always
-// there. Nothing is deleted — the run history, its attribution and every
-// run-history component and test stay in the tree.
-describe('Activity hides the run surface behind an explicit control', () => {
-  const src = readActivity();
+const activity = () => readSource('src', 'app', '(tabs)', 'activity.tsx');
+const runs = () => readSource('src', 'app', 'runs.tsx');
+const layout = () => readSource('src', 'app', '_layout.tsx');
 
-  test('runs are hidden by default', () => {
-    expect(src).toContain('const [showRuns, setShowRuns] = useState(false);');
+// Workflows slice 3b: the Activity tab is the scheduled-work view only. The
+// individual run surface was extracted to its own /runs destination, reached
+// from an explicit control on the tab. Nothing is deleted — the run history,
+// its attribution and every run-history test moved with the surface (their
+// assertions now read src/app/runs.tsx).
+describe('Activity is the cron view, and runs live on their own destination', () => {
+  test('the run surface is gone from the Activity tab', () => {
+    const src = activity();
+    expect(src).not.toContain('showRuns');
+    expect(src).not.toContain('<ScorecardsSection');
+    expect(src).not.toContain('activityRuns.length === 0');
+    expect(src).not.toContain("label={starting ? 'Starting…' : 'Run task'}");
   });
 
-  test('the run rows only feed the list while the operator asked for them', () => {
-    expect(src).toContain('data={showRuns ? listData : []}');
-    expect(src).toContain('showRuns && runsSupported');
+  test('scheduled work is always on the tab', () => {
+    expect(activity()).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
   });
 
-  test('the post-run scorecards are gated with the runs they summarize', () => {
-    expect(src).toMatch(/showRuns \? \(\s*<ScorecardsSection/);
+  test('the tab links to the Runs destination', () => {
+    expect(activity()).toContain("router.push('/runs')");
   });
 
-  test('scheduled work is always on the tab, never behind the run gate', () => {
-    expect(src).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
-  });
-
-  test('one control flips it, and it names the state it will move to', () => {
-    expect(src).toContain("label={showRuns ? 'Hide runs' : 'Show runs'}");
-    expect(src).toContain('setShowRuns(');
-  });
-
-  test('the must-still-work surface is untouched: approvals, targets, spend and the empty copy', () => {
+  test('the must-still-work surface is untouched: approvals, targets and spend', () => {
+    const src = activity();
     expect(src).toContain('ApprovalDecisionCard');
     expect(src).toContain('<AgentTargets');
     expect(src).toContain('<SpendEntryRow />');
-    expect(src).toContain('activityRuns.length === 0 && !pendingRunApproval');
+  });
+
+  test('the Runs destination carries the run surface', () => {
+    const src = runs();
+    expect(src).toContain("label={starting ? 'Starting…' : 'Run task'}");
+    expect(src).toContain('<ScorecardsSection');
     expect(src).toContain('<RunCard run={item.run} onStop={stopActivityRun} />');
+  });
+
+  test('the Runs destination is a registered Stack route', () => {
+    expect(layout()).toContain('name="runs"');
   });
 });

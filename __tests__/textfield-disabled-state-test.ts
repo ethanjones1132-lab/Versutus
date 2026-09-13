@@ -25,13 +25,13 @@ function readApprovalCard(): string {
   return readSource(['src', 'components', 'activity', 'approval-decision-card.tsx']);
 }
 
-function readActivity(): string {
-  return readSource(['src', 'app', '(tabs)', 'activity.tsx']);
+function readRuns(): string {
+  return readSource(['src', 'app', 'runs.tsx']);
 }
 
 // The kit TextField forwarded accessibilityLabel to the native field but
 // never accessibilityState, so all three non-editable sites (composer
-// Message input mid-stream, approval Deny reply while exiting, Activity
+// Message input mid-stream, approval Deny reply while exiting, Runs
 // run prompt while starting) were half-announced. The fix derives
 // `disabled: !editable` inside the kit — mirroring how Button
 // auto-announces `{ disabled: !!isDisabled }` — so all three sites are
@@ -64,13 +64,13 @@ describe('textfield disabled state', () => {
     // microphone and its own auto-send), and nothing else.
     expect(readComposer()).toContain('const inputEditable = !callActive && canSend && !isStreaming;');
     expect(readApprovalCard()).toContain('editable={!busy}');
-    expect(readActivity()).toContain("editable={!starting && status === 'connected'}");
+    expect(readRuns()).toContain("editable={!starting && status === 'connected'}");
   });
 
   test('the three field labels stay byte-identical', () => {
     expect(readComposer()).toContain('accessibilityLabel="Message input"');
     expect(readApprovalCard()).toContain('accessibilityLabel="Deny reply"');
-    expect(readActivity()).toContain('accessibilityLabel="Run prompt"');
+    expect(readRuns()).toContain('accessibilityLabel="Run prompt"');
   });
 
   test('the validationState label fallback stays byte-identical in both impls', () => {

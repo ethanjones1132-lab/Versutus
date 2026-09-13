@@ -123,10 +123,10 @@ describe('agentic-run transcript wiring', () => {
     expect(src).toMatch(/This gateway does not expose run events\./);
   });
 
-  test('activity screen wires loadRunEvents into the agentic-run transcript sheet', () => {
+  test('runs screen wires loadRunEvents into the agentic-run transcript sheet', () => {
     // The screen owns the open-state and the loader; the sheet just consumes
     // both. Mirrors how CronRunSheet is keyed on the run id in CronSection.
-    const src = readSource('src', 'app', '(tabs)', 'activity.tsx');
+    const src = readSource('src', 'app', 'runs.tsx');
     expect(src).toMatch(/import \{ AgenticRunSheet \} from '@\/components\/activity\/agentic-run-sheet'/);
     expect(src).toMatch(/loadRunEvents,?/);
     expect(src).toMatch(/const \[openAgenticRunId, setOpenAgenticRunId\] = useState<string \| null>\(null\)/);
@@ -139,7 +139,7 @@ describe('agentic-run transcript wiring', () => {
     // The must-still: a live run still uses the inline preview toggle, and
     // the Stop-run affordance is unchanged. Only the finished card gains the
     // new View transcript handler.
-    const screen = readSource('src', 'app', '(tabs)', 'activity.tsx');
+    const screen = readSource('src', 'app', 'runs.tsx');
     expect(screen).toMatch(
       /case 'finished':\s*return \([\s\S]*?<RunCard\s+run=\{item\.run\}\s+onOpenTranscript=\{setOpenAgenticRunId\}/,
     );

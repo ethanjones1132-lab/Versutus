@@ -10,19 +10,19 @@ function readSource(rel: string[]): string {
 }
 
 function readScreen(): string {
-  return readSource(['src', 'app', '(tabs)', 'activity.tsx']);
+  return readSource(['src', 'app', 'runs.tsx']);
 }
 
 function readButton(): string {
   return readSource(['src', 'components', 'ui', 'Button.tsx']);
 }
 
-// The Start-a-run Button holds a real `starting` boolean that already
-// swaps the label and disables the button while the run is created —
-// but without a `busy` half a screen-reader user heard a flat disabled
-// label while a sighted user saw the in-flight state. The fix is a
-// one-line `busy={starting}` wiring onto the `busy` prop Button spreads
-// defined-only into accessibilityState.
+// The Start-a-run Button lives on the Runs destination (Workflows slice 3b)
+// and holds a real `starting` boolean that already swaps the label and
+// disables the button while the run is created — but without a `busy` half a
+// screen-reader user heard a flat disabled label while a sighted user saw the
+// in-flight state. The fix is a one-line `busy={starting}` wiring onto the
+// `busy` prop Button spreads defined-only into accessibilityState.
 describe('activity start busy state', () => {
   test('the Run-task button passes busy={starting}', () => {
     const src = readScreen();

@@ -15,19 +15,23 @@ function readActivity(): string {
   return readSource(['src', 'app', '(tabs)', 'activity.tsx']);
 }
 
+function readRuns(): string {
+  return readSource(['src', 'app', 'runs.tsx']);
+}
+
 function readEmptyState(): string {
-  const src = readActivity();
+  const src = readRuns();
   const match = src.match(/<EmptyState[\s\S]*?\/>/);
   expect(match).not.toBeNull();
   return match![0];
 }
 
-// The Activity empty state titles "Connect to start runs" and describes
+// The Runs empty state titles "Connect to start runs" and describes
 // reconnect when a gateway profile is selected but the connection is not
 // live, yet it passed neither actionLabel nor onAction. EmptyState already
 // renders a button when both are set, and connectGateway is already in
 // scope (AgentTargets uses it). Offer Reconnect on that variant only.
-describe('activity connect-to-start-runs empty state', () => {
+describe('runs connect-to-start-runs empty state', () => {
   test('the Connect-to-start-runs empty state offers Reconnect wired to connectGateway', () => {
     const empty = readEmptyState();
     expect(empty).toContain("'Connect to start runs'");

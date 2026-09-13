@@ -140,21 +140,22 @@ describe('NotificationRouter', () => {
     expect(src).toContain('routeForTap');
   });
 
-  test('a routine tap opens Chat; runs and unrecognized taps stay on Activity', () => {
+  test('a routine tap opens Chat; an approval or unrecognized tap stays on Activity', () => {
     const src = between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
     expect(src).toContain("route?.kind === 'routine'");
     expect(src).toContain("'/chat'");
     expect(src).toContain("'/activity'");
   });
 
-  test('a weekly report tap opens the scorecard surface on Activity, not Chat', () => {
+  test('a weekly report tap opens the scorecard surface, not Chat', () => {
     const src = between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
     // A routine route and a reply route open Chat; a weekly report does not. A
     // weekly report's destination takes no argument — the Scorecards section
-    // reads this device's runs when it opens — so the weekly route keeps the
-    // Activity landing the section is mounted on.
+    // reads this device's runs when it opens — and Workflows slice 3b moved
+    // that section to the Runs destination, so the weekly route lands there
+    // beside the run notices.
     expect(src).toContain(
-      "route?.kind === 'routine' || route?.kind === 'reply' ? '/chat' : '/activity'",
+      "if (route?.kind === 'run' || route?.kind === 'weekly-report') return '/runs';",
     );
   });
 
@@ -194,7 +195,7 @@ describe('a finished model reply opens the conversation it is about', () => {
     // instead of the Activity fallback that used to swallow it.
     expect(src).toContain("route?.kind === 'reply'");
     expect(src).toContain(
-      "route?.kind === 'routine' || route?.kind === 'reply' ? '/chat' : '/activity'",
+      "if (route?.kind === 'routine' || route?.kind === 'reply') return '/chat';",
     );
   });
 
