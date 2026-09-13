@@ -35,6 +35,12 @@ export type BotDetailSheetProps = {
    * and none over a loaded soul.
    */
   onRetry?: () => void;
+  /**
+   * Export this Bot as a handoff packet and open the share sheet (D6). The
+   * parent supplies it only where a share sheet exists, so no button is drawn
+   * that cannot finish. A packet never carries memory or credentials.
+   */
+  onExport?: () => void;
 };
 
 /**
@@ -44,7 +50,15 @@ export type BotDetailSheetProps = {
  * then act: message the agent, copy the id for host-side commands, or edit
  * what the Gate holds.
  */
-export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit, onRetry }: BotDetailSheetProps) {
+export function BotDetailSheet({
+  bot,
+  soul,
+  onClose,
+  onMessage,
+  onEdit,
+  onRetry,
+  onExport,
+}: BotDetailSheetProps) {
   if (!bot) return null;
   const detail = describeBotDetail(bot);
   const soulState = soul ?? EMPTY_BOT_SOUL;
@@ -157,6 +171,15 @@ export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit, onRetry 
             icon={{ ios: 'pencil', android: 'edit', web: 'edit' }}
             chevron={false}
             onPress={onEdit}
+          />
+        ) : null}
+        {onExport ? (
+          <ListRow
+            title="Export handoff"
+            subtitle="Soul, routines and skills — never memory or credentials"
+            icon={{ ios: 'square.and.arrow.up', android: 'share', web: 'share' }}
+            chevron={false}
+            onPress={onExport}
           />
         ) : null}
       </View>

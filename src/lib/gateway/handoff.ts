@@ -105,6 +105,15 @@ export function botHandoffFromUnknown(value: unknown): BotHandoffPacket | null {
   return raw as unknown as BotHandoffPacket;
 }
 
+/** The file a packet is written under: `versutus-bot-<slug>.json`. */
+export function handoffFileName(packet: BotHandoffPacket): string {
+  const slug = (packet.bot.name ?? packet.bot.id)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return `versutus-bot-${slug || 'agent'}.json`;
+}
+
 /** One line for a share sheet or a preview: what the file holds, and what it does not. */
 export function botHandoffSummaryCopy(packet: BotHandoffPacket): string {
   const name = packet.bot.name ?? packet.bot.id;

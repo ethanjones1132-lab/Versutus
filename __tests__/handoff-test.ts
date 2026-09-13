@@ -5,6 +5,7 @@ import {
   botHandoffFromUnknown,
   botHandoffSummaryCopy,
   buildBotHandoff,
+  handoffFileName,
 } from '@/lib/gateway/handoff';
 
 const NOW = () => '2026-09-13T00:00:00.000Z';
@@ -63,11 +64,45 @@ describe('a Bot handoff packet', () => {
     expect(botHandoffFromUnknown(JSON.parse(JSON.stringify(built)))).toEqual(built);
   });
 
+  test('the file name is a safe slug of the Bot', () => {
+    expect(handoffFileName(buildBotHandoff({ ...SOURCE, now: NOW }))).toBe('versutus-bot-scout.json');
+    expect(
+      handoffFileName(
+        buildBotHandoff({ bot: { id: 'x', name: 'Doctor Strange!!' }, now: NOW }),
+      ),
+    ).toBe('versutus-bot-doctor-strange.json');
+  });
+
   test('the summary names the Bot and the exclusion', () => {
     const copy = botHandoffSummaryCopy(buildBotHandoff({ ...SOURCE, now: NOW }));
     expect(copy).toContain('Scout');
     expect(copy).toMatch(/2 routines/);
     expect(copy).toMatch(/1 skill/);
     expect(copy).toMatch(/memory and credentials/i);
+  });
+});
+
+declare const __dirname: string;
+const SEP = __dirname.includes('\\') ? '\\' : '/';
+const nodeFs = jest.requireActual('fs') as {
+  readFileSync(path: string, encoding: string): string;
+};
+function readSource(...parts: string[]): string {
+  return nodeFs
+    .readFileSync([__dirname, '..', ...parts].join(SEP), 'utf8')
+    .replace(/\r\n/g, '\n');
+}
+
+describe('the export is wired behind a share sheet', () => {
+  test('the Bot detail sheet offers Export only when the parent can share', () => {
+    const sheet = readSource('src', 'components', 'chat', 'bot-detail-sheet.tsx');
+    expect(sheet).toContain('onExport');
+    expect(sheet).toContain('Export handoff');
+
+    const screen = readSource('src', 'components', 'chat', 'chat-screen.tsx');
+    expect(screen).toContain('shareBotHandoff(');
+    expect(screen).toContain(
+      'onExport={detailBot && handoffShareReady ? handleExportBot : undefined}',
+    );
   });
 });

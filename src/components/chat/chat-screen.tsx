@@ -58,6 +58,7 @@ import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { botChromeCombined } from '@/lib/gateway/bot-chrome';
 import { composerFocusApplies } from '@/lib/gateway/composer-focus';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
+import { handoffShareAvailable, shareBotHandoff } from '@/lib/gateway/handoff-share';
 import {
   applyBotSoulRead,
   botSoulReadFromUnknown,
@@ -451,6 +452,18 @@ export function ChatScreen() {
       .then((payload) => fold(botSoulReadFromUnknown(payload)))
       .catch(() => fold({ ok: false }));
   }, [detailBot, status, gatewayRequest]);
+  // D6: whether this device can share an exported Bot handoff. A platform
+  // without a share sheet draws no Export row.
+  const [handoffShareReady, setHandoffShareReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void handoffShareAvailable().then((ready) => {
+      if (!cancelled) setHandoffShareReady(ready);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // Long-press target on the roster: which room's action sheet is open.
   const [detailGroup, setDetailGroup] = useState<BotGroupRoom | null>(null);
   const [routineState, setRoutineState] = useState<RoutinesState & { botId?: string }>({
@@ -459,6 +472,23 @@ export function ChatScreen() {
   const [skillsState, setSkillsState] = useState<SkillsState & { botId?: string }>({
     ...EMPTY_SKILLS,
   });
+  // D6: export the open Bot's handoff packet. Routines and skills travel only
+  // when they were read for this very Bot, so another Bot's never leaks in.
+  const handleExportBot = useCallback(() => {
+    if (!detailBot) return;
+    const bot = detailBot;
+    void shareBotHandoff({
+      bot: {
+        id: bot.id,
+        name: bot.displayName,
+        description: bot.description ?? undefined,
+        soul: soulState.botId === bot.id ? soulState.soul ?? undefined : undefined,
+        modelId: bot.model?.default ?? undefined,
+      },
+      skills: skillsState.botId === bot.id ? skillsState.skills : [],
+      routines: routineState.botId === bot.id ? routineState.jobs : [],
+    });
+  }, [detailBot, soulState, skillsState, routineState]);
   const [toolsetsState, setToolsetsState] = useState<ToolsetsState & { surfaceKey?: string }>({
     ...EMPTY_TOOLSETS,
   });
@@ -1797,6 +1827,7 @@ export function ChatScreen() {
               }
             : undefined
         }
+        onExport={detailBot && handoffShareReady ? handleExportBot : undefined}
       />
 
       <GroupRoomActionSheet
