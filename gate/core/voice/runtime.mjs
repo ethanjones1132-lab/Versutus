@@ -108,6 +108,7 @@ export function voiceStatus({ paths } = {}) {
     },
   };
   return {
+    enabled: true,
     installed: engines.local.state === 'ready',
     engines,
     limits: { codexMinutesPerDay: 60, maxConcurrentCalls: 1 },

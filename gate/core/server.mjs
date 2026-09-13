@@ -33,8 +33,10 @@ import { createPushRpc } from './push-rpc.mjs';
 import { createPushSend } from './push-send.mjs';
 import { createVoiceRpc } from './voice/voice-rpc.mjs';
 import { attachVoiceMediaSocket } from './voice/media-socket.mjs';
+import { LocalEngine } from './voice/engines/local-engine.mjs';
+import { voicePaths, voiceStatus } from './voice/runtime.mjs';
 import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
-import { ScriptedEngine } from './voice/engines/scripted-engine.mjs';
+import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest } from './signature.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
@@ -389,7 +391,10 @@ export async function createGate(config = {}) {
   const notificationMethods = createPushRpc({ tokens: pushTokens, send: pushSend.send });
   // Voice sessions live on the Gate; the media socket (M2 task 2.2) reads the
   // same registry the RPC writes, so a grant and its socket cannot disagree.
-  const voiceRpc = createVoiceRpc({});
+  // Capabilities are read from the installed runtime (M5 task 5.2): `local` is
+  // `ready` only once the venv and models are on disk, so `auto` cannot pick an
+  // engine that is not there.
+  const voiceRpc = createVoiceRpc({ capabilities: () => voiceStatus({ paths: voicePaths() }) });
 
   // The Hermes-dialect methods the app's command registry actually sends.
   // Resolution throws rather than writing a response: the RPC dispatcher below
@@ -1945,15 +1950,18 @@ export async function createGate(config = {}) {
     }
   });
 
-  // One media WebSocket per voice call, over the same HTTP server. M2 wires the
-  // scripted engine; M5 swaps in the local engine behind the same interface. A
-  // session only exists once `voice.session.start` grants one, so a Gate with
-  // no ready engine never reaches this socket.
+  // One media WebSocket per voice call, over the same HTTP server. M5 wires the
+  // local engine for an `engine: 'local'` grant; the scripted engine still
+  // drives tests and the phone smoke test (`VERSUTUS_VOICE_SCRIPTED=1`).
   const voiceMedia = attachVoiceMediaSocket({
     server,
     deviceTokens,
     registry: voiceRpc.registry,
-    createEngine: () => new ScriptedEngine(),
+    createEngine: (session) => (
+      session.engine === 'local' && !scriptedEngineEnabled()
+        ? new LocalEngine({ paths: voicePaths() })
+        : new ScriptedEngine()
+    ),
   });
 
   // Start listening immediately
