@@ -156,9 +156,43 @@ test('voiceStatus reports not-installed without a venv and ready with one', () =
   mkdirSync(join(paths.venv, 'bin'), { recursive: true });
   mkdirSync(paths.models, { recursive: true });
   writeFileSync(paths.python, '#!/bin/sh');
+  // Only the required models: the optional STT weights are deliberately absent,
+  // so this also proves an optional model cannot hold the runtime unready.
   for (const name of ['kokoro-v1.0.onnx', 'voices-v1.0.bin', 'smart-turn-v3.2-cpu.onnx']) {
     writeFileSync(join(paths.models, name), 'model');
   }
   status = voiceStatus({ paths });
   assert.equal(status.engines.local.state, 'ready');
+});
+
+test('install fetches optional weights even though readiness does not need them', async () => {
+  const dir = tempDir();
+  const paths = voicePaths({ VERSUTUS_GATE_HOME: dir }, 'linux');
+  const bytes = Buffer.from('whisper-weights');
+  const lock = {
+    models: {
+      'core.onnx': { url: 'https://example/core', sha256: sha256(Buffer.from('core')) },
+      'whisper/model.bin': {
+        url: 'https://example/whisper',
+        sha256: sha256(bytes),
+        bytes: bytes.length,
+        optional: true,
+      },
+    },
+  };
+
+  const fetched = [];
+  const fetchImpl = async (url) => {
+    fetched.push(url);
+    return {
+      ok: true,
+      status: 200,
+      body: Readable.from([url.endsWith('core') ? Buffer.from('core') : bytes]),
+    };
+  };
+
+  await installVoice({ paths, runUv: async () => {}, fetch: fetchImpl, lock });
+
+  assert.ok(fetched.includes('https://example/whisper'), 'the optional STT weights are fetched');
+  assert.ok(existsSync(join(paths.models, 'whisper', 'model.bin')));
 });

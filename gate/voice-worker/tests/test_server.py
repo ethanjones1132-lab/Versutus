@@ -94,3 +94,18 @@ def test_an_unknown_method_is_an_error():
     server = RpcServer(_pipeline(events))
     server.handle_message(json.dumps({"jsonrpc": "2.0", "id": 6, "method": "voice.nope", "params": {}}))
     assert json.loads(server.written[-1])["error"]["code"] == -32601
+
+
+def test_the_local_whisper_dir_is_used_only_when_every_file_is_present(tmp_path):
+    from versutus_voice.server import WHISPER_LOCAL_FILES, whisper_model_dir
+
+    assert whisper_model_dir(tmp_path) is None
+    whisper = tmp_path / "whisper"
+    whisper.mkdir()
+    for name in WHISPER_LOCAL_FILES[:-1]:
+        (whisper / name).write_bytes(b"x")
+    assert whisper_model_dir(tmp_path) is None
+
+    (whisper / WHISPER_LOCAL_FILES[-1]).write_bytes(b"x")
+    assert whisper_model_dir(tmp_path) == whisper
+

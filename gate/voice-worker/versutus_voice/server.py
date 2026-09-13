@@ -273,9 +273,40 @@ def _register_cuda_dlls():
             os.environ["PATH"] = f"{binary}{os.pathsep}{os.environ.get('PATH', '')}"
 
 
+WHISPER_LOCAL_FILES = (
+    "config.json",
+    "model.bin",
+    "preprocessor_config.json",
+    "tokenizer.json",
+    "vocabulary.json",
+)
+
+
+def whisper_model_dir(models_dir):
+    """The pre-installed local Whisper weights, or None when they are absent.
+
+    `voice install` fetches these files flat under `<models>/whisper/`, so the
+    worker can load them without a HuggingFace call at first use. A partial set
+    is not a model: every file has to be there before the directory is used.
+    """
+    local = Path(models_dir) / "whisper"
+    if all((local / name).exists() for name in WHISPER_LOCAL_FILES):
+        return local
+    return None
+
+
 def load_whisper(models_dir, cpu=False):
     _register_cuda_dlls()
     from faster_whisper import WhisperModel
+
+    local = whisper_model_dir(models_dir)
+    if local is not None:
+        if cpu:
+            return WhisperModel(str(local), device="cpu", compute_type="int8")
+        try:
+            return WhisperModel(str(local), device="cuda", compute_type="int8_float16")
+        except Exception:  # noqa: BLE001 - the documented CPU fallback
+            return WhisperModel(str(local), device="cpu", compute_type="int8")
 
     cache = str(Path(models_dir) / "whisper")
     if cpu:

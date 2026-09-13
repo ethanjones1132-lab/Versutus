@@ -55,6 +55,9 @@ export async function fetchVerified({ url, sha256, dest, fetchImpl = globalThis.
     return { path: dest, resumed: false, downloaded: false };
   }
   const partial = `${dest}.part`;
+  // A model may live in a subdirectory (`whisper/model.bin`); the partial is
+  // written before the final rename, so the directory must exist first.
+  mkdirSync(dirname(dest), { recursive: true });
   const from = existsSync(partial) ? statSync(partial).size : 0;
   const headers = from > 0 ? { Range: `bytes=${from}-` } : {};
   const response = await fetchImpl(url, { headers });
@@ -74,11 +77,9 @@ export async function fetchVerified({ url, sha256, dest, fetchImpl = globalThis.
     error.actual = actual;
     throw error;
   }
-  mkdirSync(dirname(dest), { recursive: true });
   renameSync(partial, dest);
   return { path: dest, resumed: appending, downloaded: true };
 }
-
 /** Run `uv` with inherited stdio; resolve on exit 0, reject otherwise. */
 export function uvRunner(uvPath = process.env.VERSUTUS_UV || 'uv') {
   return (args) => new Promise((resolve, reject) => {
@@ -92,7 +93,7 @@ export function uvRunner(uvPath = process.env.VERSUTUS_UV || 'uv') {
 }
 
 /** Create the venv, install the lock and download every model. Idempotent. */
-export async function installVoice({ paths, cpu = false, runUv, fetch: fetchImpl = globalThis.fetch, log = console.log } = {}) {
+export async function installVoice({ paths, cpu = false, runUv, fetch: fetchImpl = globalThis.fetch, log = console.log, lock } = {}) {
   mkdirSync(paths.venv, { recursive: true });
   log(`creating the venv at ${paths.venv}`);
   // `--allow-existing` keeps a second install (only new models to fetch) from
@@ -102,9 +103,9 @@ export async function installVoice({ paths, cpu = false, runUv, fetch: fetchImpl
   await runUv(['pip', 'install', '--python', paths.python, '-r', paths.lockFile]);
 
   mkdirSync(paths.models, { recursive: true });
-  const lock = readModelsLock(paths);
+  const modelsLock = lock ?? readModelsLock(paths);
   const downloaded = [];
-  for (const [name, entry] of Object.entries(lock.models ?? {})) {
+  for (const [name, entry] of Object.entries(modelsLock.models ?? {})) {
     if (!entry.url) throw new Error(`models.lock.json has no url for ${name}`);
     await fetchVerified({ url: entry.url, sha256: entry.sha256, dest: join(paths.models, name), fetchImpl, log });
     downloaded.push(name);
@@ -221,7 +222,10 @@ function localStatus(paths) {
   } catch {
     return { state: 'unavailable', reason: 'models.lock.json is unreadable.' };
   }
-  const missing = Object.keys(lock.models ?? {}).filter((name) => !existsSync(join(paths.models, name)));
+  const missing = Object.entries(lock.models ?? {})
+    .filter(([, entry]) => !entry?.optional)
+    .map(([name]) => name)
+    .filter((name) => !existsSync(join(paths.models, name)));
   if (missing.length > 0) {
     return { state: 'not-installed', reason: `The PC voice models are missing: ${missing.join(', ')}.` };
   }
@@ -277,12 +281,17 @@ export function voiceDoctor({ paths, spawnSync = nodeSpawnSync, env = process.en
   checks.push({ name: 'imports', ok: !info.error, detail: info.error ?? JSON.stringify(info.versions) });
   try {
     const lock = readModelsLock(paths);
-    const names = Object.keys(lock.models ?? {});
-    const present = names.filter((name) => existsSync(join(paths.models, name)));
-    const missing = names.filter((name) => !present.includes(name));
+    const entries = Object.entries(lock.models ?? {});
+    const present = entries.map(([name]) => name).filter((name) => existsSync(join(paths.models, name)));
+    // An optional model (the pre-built STT weights) does not hold the runtime
+    // unready when absent: the worker falls back to faster-whisper's own first
+    // load, and a 1.6 GB download must not read as a broken install.
+    const missingRequired = entries
+      .filter(([name, entry]) => !entry?.optional && !present.includes(name))
+      .map(([name]) => name);
     checks.push({
       name: 'models',
-      ok: missing.length === 0,
+      ok: missingRequired.length === 0,
       detail: present.length ? present.sort().join(', ') : 'none installed',
     });
   } catch (error) {
