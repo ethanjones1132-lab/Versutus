@@ -20,12 +20,25 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
 import wave
 from datetime import datetime, timezone
 from pathlib import Path
+
+# ctranslate2 eagerly loads cuBLAS/cuDNN on Windows. A throwaway venv that installs
+# the nvidia-*-cu12 wheels keeps them under site-packages/nvidia, which is not on the
+# DLL search path by default. Register it before anything imports ctranslate2.
+if os.name == "nt":
+    _nvidia = Path(sys.prefix) / "Lib" / "site-packages" / "nvidia"
+    if _nvidia.exists():
+        for _sub in _nvidia.iterdir():
+            _bin = _sub / "bin"
+            if _bin.exists():
+                os.add_dll_directory(str(_bin))
+                os.environ["PATH"] = f"{_bin}{os.pathsep}{os.environ.get('PATH', '')}"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUT_DIR = REPO_ROOT / "docs" / "plans" / "voice-spikes"
@@ -112,6 +125,11 @@ def synth_utterances(out_dir: Path) -> list[dict]:
     return clips
 
 
+def p50(values: list[float]) -> float | None:
+    ordered = sorted(values)
+    return ordered[len(ordered) // 2] if ordered else None
+
+
 def load_whisper():
     from faster_whisper import WhisperModel
 
@@ -126,9 +144,9 @@ def load_whisper():
     return model, kind, (time.perf_counter() - started) * 1000
 
 
-def transcribe(model, path: str) -> tuple[float, str]:
+def transcribe(model, path: str, beam_size: int = 1) -> tuple[float, str]:
     started = time.perf_counter()
-    segments, _info = model.transcribe(path, beam_size=1)
+    segments, _info = model.transcribe(path, beam_size=beam_size)
     text = "".join(segment.text for segment in segments).strip()
     return (time.perf_counter() - started) * 1000, text
 
@@ -167,10 +185,22 @@ def load_kokoro(models_dir: Path):
 
 
 def kokoro_first_audio(kokoro) -> dict:
-    started = time.perf_counter()
-    samples, rate = kokoro.create("Versutus voice check.", voice="af_sarah", speed=1.0, lang="en-us")
-    elapsed = (time.perf_counter() - started) * 1000
-    return {"firstAudioMs": elapsed, "sampleRate": int(rate), "seconds": len(samples) / int(rate)}
+    """Five warm sentences, so first-call model loading does not dominate the p50."""
+    sentence = "Versutus voice check."
+    latencies = []
+    rate = 24000
+    seconds = 0.0
+    for _ in range(5):
+        started = time.perf_counter()
+        samples, rate = kokoro.create(sentence, voice="af_sarah", speed=1.0, lang="en-us")
+        latencies.append((time.perf_counter() - started) * 1000)
+        seconds = len(samples) / int(rate)
+    return {
+        "firstAudioMs": latencies[0],
+        "p50Ms": p50(latencies),
+        "sampleRate": int(rate),
+        "seconds": seconds,
+    }
 
 
 def smart_turn_probe(models_dir: Path, clips: list[dict]) -> dict:
@@ -223,17 +253,21 @@ def main() -> int:
     try:
         model, whisper_kind, load_ms = load_whisper()
         results["whisper"] = {"kind": whisper_kind, "loadMs": load_ms}
-        latencies = []
+        partials: list[float] = []
+        finals: list[float] = []
         for clip in clips:
-            latency_ms, hypothesis = transcribe(model, clip["path"])
-            clip["latencyMs"] = latency_ms
+            partial_ms, _partial_text = transcribe(model, clip["path"], beam_size=1)
+            final_ms, hypothesis = transcribe(model, clip["path"], beam_size=5)
+            clip["partialMs"] = partial_ms
+            clip["finalMs"] = final_ms
             clip["hypothesis"] = hypothesis
             clip["wer"] = word_error_rate(clip["reference"], hypothesis)
-            latencies.append(latency_ms)
+            partials.append(partial_ms)
+            finals.append(final_ms)
             results["utterances"].append(clip)
-        latencies.sort()
-        results["whisper"]["p50Ms"] = latencies[len(latencies) // 2] if latencies else None
-        results["whisper"]["maxMs"] = latencies[-1] if latencies else None
+        results["whisper"]["p50PartialMs"] = p50(partials)
+        results["whisper"]["p50FinalMs"] = p50(finals)
+        results["whisper"]["maxFinalMs"] = max(finals) if finals else None
     except Exception as error:  # noqa: BLE001 - a spike records, never crashes
         log("whisper", f"failed: {error}")
         results["whisper"] = {"state": "failed", "error": str(error)}
