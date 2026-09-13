@@ -63,6 +63,41 @@ describe('glanceableSnapshot', () => {
     ]);
   });
 
+  test('recent Bot Chats come first, the roster fills the rest, at most three', () => {
+    const snapshot = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [run({ id: 'r1', botId: 'beta' }), run({ id: 'r2', botId: 'alpha' })],
+        routines: [],
+        bots: [
+          { id: 'alpha', label: 'Alpha' },
+          { id: 'beta', label: 'Beta' },
+          { id: 'gamma', label: 'Gamma' },
+          { id: 'delta', label: 'Delta' },
+        ],
+      },
+      NOW,
+    );
+    expect(snapshot.bots).toEqual([
+      { id: 'beta', label: 'Beta' },
+      { id: 'alpha', label: 'Alpha' },
+      { id: 'gamma', label: 'Gamma' },
+    ]);
+  });
+
+  test('a Bot the roster cannot label is carried as its own id', () => {
+    const snapshot = glanceableSnapshot(
+      { status: 'connected', runs: [run({ botId: 'mystery' })], routines: [], bots: [] },
+      NOW,
+    );
+    expect(snapshot.bots).toEqual([{ id: 'mystery', label: 'mystery' }]);
+  });
+
+  test('a snapshot with no Bots omits them', () => {
+    const snapshot = glanceableSnapshot({ status: 'connected', runs: [], routines: [] }, NOW);
+    expect(snapshot).not.toHaveProperty('bots');
+  });
+
   test('a settled run is never in flight', () => {
     const snapshot = glanceableSnapshot(
       {

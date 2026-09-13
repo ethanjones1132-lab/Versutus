@@ -26,6 +26,7 @@ import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
+import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.size
@@ -116,6 +117,12 @@ private fun Lines(payload: WidgetPayload, variant: WidgetVariant) {
       Line("${run.title} — ${run.state}")
     }
   }
+  if (payload.bots.isNotEmpty()) {
+    for (bot in payload.bots) {
+      Spacer(GlanceModifier.height(3.dp))
+      BotRow(bot)
+    }
+  }
   if (payload.approvalsPending > 0 && variant != WidgetVariant.SMALL) {
     Line("Tap to decide in Versutus", secondary = true)
   }
@@ -135,6 +142,21 @@ private fun Dot(connected: Boolean) {
       .cornerRadius(4.dp)
       .background(if (connected) GlanceTheme.colors.primary else GlanceTheme.colors.error),
   ) {}
+}
+
+/** One Bot quick-launch row; the tap opens that Bot's chat through the app's router. */
+@Composable
+private fun BotRow(bot: WidgetBot) {
+  val context = LocalContext.current
+  Row(
+    modifier = GlanceModifier
+      .fillMaxWidth()
+      .clickable(actionStartActivity(openAppIntent(context, WidgetLinks.botChatUri(bot.id))))
+      .padding(vertical = 2.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Line(bot.label)
+  }
 }
 
 @Composable

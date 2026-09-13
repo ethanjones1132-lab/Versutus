@@ -58,4 +58,19 @@ describe('androidWidgetPayload', () => {
   test('a snapshot with no in-flight runs omits them', () => {
     expect(androidWidgetPayload(base)).not.toHaveProperty('runs');
   });
+
+  test('carries up to three Bots for the quick-launch rows', () => {
+    const bots = [
+      { id: 'a', label: 'A' },
+      { id: 'b', label: 'B' },
+      { id: 'c', label: 'C' },
+      { id: 'd', label: 'D' },
+    ];
+    const payload = androidWidgetPayload({ ...base, bots });
+    expect(payload.bots).toEqual(bots.slice(0, 3));
+  });
+
+  test('a snapshot with no Bots omits them', () => {
+    expect(androidWidgetPayload(base)).not.toHaveProperty('bots');
+  });
 });

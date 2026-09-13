@@ -39,6 +39,12 @@ const IN_FLIGHT_RUN_STATUSES: ReadonlySet<ActivityRun['status']> = new Set([
 /** A run in flight, in the words the operator typed, for the large widget cell. */
 export type GlanceableRun = { title: string; state: string };
 
+/** One Bot as the widget's quick-launch row draws it: id, and the roster's name. */
+export type GlanceableBot = { id: string; label: string };
+
+/** A Bot read from the roster; the label is absent when the Gate did not name it. */
+export type GlanceableFactBot = { id: string; label?: string };
+
 export type GlanceableSnapshot = {
   /** The connection state the app last observed. */
   status: ConnectionStatus;
@@ -50,15 +56,19 @@ export type GlanceableSnapshot = {
   lastResult?: string;
   /** In-flight runs, newest first. Absent when there are none. */
   runs?: GlanceableRun[];
+  /** Up to three recent Bots for the quick-launch rows. Absent when there are none. */
+  bots?: GlanceableBot[];
   /** When the snapshot was composed — always present, so staleness is sayable. */
   writtenAt: number;
 };
 
-/** What the app holds about a read: its connection, its runs, its routines. */
+/** What the app holds about a read: its connection, its runs, its routines, its roster. */
 export type GlanceableFacts = {
   status: ConnectionStatus;
   runs: readonly ActivityRun[];
   routines: readonly CronJob[];
+  /** The roster, in the order the Gate listed it. */
+  bots?: readonly GlanceableFactBot[];
 };
 
 /**
@@ -118,6 +128,25 @@ export function glanceableSnapshot(
   let newestRun: { at: number; text: string } | null = null;
   const runs: GlanceableRun[] = [];
 
+  const labels = new Map<string, string>();
+  for (const bot of facts.bots ?? []) {
+    const id = bot.id.trim();
+    const label = bot.label?.trim();
+    if (id && label) labels.set(id, label);
+  }
+  const bots: GlanceableBot[] = [];
+  const seenBots = new Set<string>();
+  const addBot = (rawId: string | undefined): void => {
+    const id = (rawId ?? '').trim();
+    if (!id || seenBots.has(id) || bots.length >= 3) return;
+    seenBots.add(id);
+    bots.push({ id, label: labels.get(id) ?? id });
+  };
+  // Recent Bot Chats first — the runs the operator just watched — then the
+  // roster, so a Bot with no recent run still has a way in.
+  for (const run of facts.runs) addBot(run.botId);
+  for (const bot of facts.bots ?? []) addBot(bot.id);
+
   for (const run of facts.runs) {
     if (IN_FLIGHT_RUN_STATUSES.has(run.status)) {
       runsInFlight += 1;
@@ -146,6 +175,7 @@ export function glanceableSnapshot(
     approvalsPending,
     ...(newestRun ? { lastResult: newestRun.text } : {}),
     ...(runs.length > 0 ? { runs } : {}),
+    ...(bots.length > 0 ? { bots } : {}),
     writtenAt: now,
   };
 }

@@ -3446,6 +3446,26 @@ const response = await executeGatewaySlashCommand(trimmed, {
   }, [cron, status]);
 
   /**
+   * The widget's Bot half. The roster is read once per connected transition,
+   * like the routine list above, so the quick-launch rows name real Bots; a
+   * failed read keeps the last list rather than emptying the rows.
+   */
+  const [widgetBots, setWidgetBots] = useState<import('@/lib/gateway/bots').PublicBot[]>([]);
+
+  useEffect(() => {
+    if (status !== 'connected') return;
+    let live = true;
+    void listBots()
+      .then((bots) => {
+        if (live) setWidgetBots(bots);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [listBots, status]);
+
+  /**
    * Item 4a's fold, handed to item 4b's seam. The snapshot is composed here
    * from the facts above and written once per change to one of them: a start, an
    * approval wait, a decision, a settle and the disconnect settle each move
@@ -3457,9 +3477,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
    */
   useEffect(() => {
     void writeWidgetSnapshot(
-      glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs }),
+      glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs, bots: widgetBots }),
     );
-  }, [activityRuns, routineJobs, status]);
+  }, [activityRuns, routineJobs, status, widgetBots]);
 
   const botGroups = useMemo(() => ({
     list: async () => {

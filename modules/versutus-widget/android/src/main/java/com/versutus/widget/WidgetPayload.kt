@@ -6,6 +6,9 @@ import org.json.JSONObject
 /** A named in-flight run, for the large cell's list. */
 data class WidgetRun(val title: String, val state: String)
 
+/** One quick-launch Bot: the id to open, and the name to draw. */
+data class WidgetBot(val id: String, val label: String)
+
 /** The v1 and v2 payloads the JS side writes; see VersutusWidget.types.ts. */
 data class WidgetPayload(
   val status: String,
@@ -15,6 +18,7 @@ data class WidgetPayload(
   val approvalsPending: Int,
   val writtenAt: Long,
   val runs: List<WidgetRun> = emptyList(),
+  val bots: List<WidgetBot> = emptyList(),
 ) {
   sealed interface Parsed {
     data class Ok(val payload: WidgetPayload) : Parsed
@@ -42,7 +46,8 @@ data class WidgetPayload(
         }
         val result = o.optString("result", "").takeIf { it.isNotBlank() }
         val runs = if (version >= 2) parseRuns(o.optJSONArray("runs")) else emptyList()
-        Parsed.Ok(WidgetPayload(status, o.getBoolean("connected"), work, result, approvals, writtenAt, runs))
+        val bots = if (version >= 2) parseBots(o.optJSONArray("bots")) else emptyList()
+        Parsed.Ok(WidgetPayload(status, o.getBoolean("connected"), work, result, approvals, writtenAt, runs, bots))
       } catch (_: Exception) {
         Parsed.Invalid
       }
@@ -61,6 +66,21 @@ data class WidgetPayload(
         runs.add(WidgetRun(title, state))
       }
       return runs
+    }
+
+    /** Up to three named Bots; a row with no id or label is skipped. */
+    private fun parseBots(array: JSONArray?): List<WidgetBot> {
+      if (array == null) return emptyList()
+      val bots = ArrayList<WidgetBot>(3)
+      for (i in 0 until array.length()) {
+        if (bots.size == 3) break
+        val item = array.optJSONObject(i) ?: continue
+        val id = item.optString("id", "").trim()
+        val label = item.optString("label", "").trim()
+        if (id.isBlank() || label.isBlank()) continue
+        bots.add(WidgetBot(id, label))
+      }
+      return bots
     }
   }
 }

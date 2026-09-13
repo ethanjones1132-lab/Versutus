@@ -284,7 +284,7 @@ describe('the provider writes the snapshot as run state changes', () => {
   test('the snapshot is item 4a fold, composed from the facts the provider holds', () => {
     expect(provider()).toContain("import { glanceableSnapshot } from '@/lib/widget/snapshot';");
     expect(writeEffect()).toContain(
-      'glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs })',
+      'glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs, bots: widgetBots })',
     );
   });
 
@@ -292,7 +292,7 @@ describe('the provider writes the snapshot as run state changes', () => {
     const effect = writeEffect();
     // The dependency list IS the driver: every fact the snapshot carries, and
     // nothing in the effect that ticks on its own.
-    expect(effect).toContain('}, [activityRuns, routineJobs, status]);');
+    expect(effect).toContain('}, [activityRuns, routineJobs, status, widgetBots]);');
     expect(effect).not.toMatch(/setInterval|setTimeout/);
   });
 
@@ -315,6 +315,16 @@ describe('the provider writes the snapshot as run state changes', () => {
     expect(read).toContain('.list()');
     // A failed read is not an empty one: only a landed list may replace it.
     expect(read).toContain('if (live) setRoutineJobs(jobs);');
+  });
+
+  test('the Bot rows come from the roster read once per connect, like the routines', () => {
+    const read = provider().match(
+      /useEffect\(\(\) => \{\n    if \(status !== 'connected'\) return;[\s\S]*?\n  \}, \[listBots, status\]\);/,
+    )?.[0];
+    expect(read).toBeDefined();
+    expect(read).toContain('.then((bots) =>');
+    expect(read).toContain('if (live) setWidgetBots(bots);');
+    expect(read).toContain('.catch(() => undefined);');
   });
 
   test('the run lifecycle it rides on still persists, and the tab still reads it', () => {

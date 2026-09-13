@@ -33,6 +33,27 @@ class WidgetPayloadTest {
     assertEquals(emptyList<WidgetRun>(), parsed.payload.runs)
   }
 
+  @Test fun `a v2 payload carries its bots`() {
+    val parsed = WidgetPayload.parse(
+      """{"v":2,"status":"Connected","connected":true,"work":"w","approvalsPending":0,"writtenAt":5,"bots":[{"id":"alpha","label":"Alpha"}]}""",
+    ) as WidgetPayload.Parsed.Ok
+    assertEquals(listOf(WidgetBot("alpha", "Alpha")), parsed.payload.bots)
+  }
+
+  @Test fun `blank bot rows are skipped and the list is capped at three`() {
+    val parsed = WidgetPayload.parse(
+      """{"v":2,"status":"C","connected":true,"work":"w","approvalsPending":0,"writtenAt":5,"bots":[{"id":"","label":"x"},{"id":"a","label":"A"},{"id":"b","label":"B"},{"id":"c","label":"C"},{"id":"d","label":"D"}]}""",
+    ) as WidgetPayload.Parsed.Ok
+    assertEquals(listOf(WidgetBot("a", "A"), WidgetBot("b", "B"), WidgetBot("c", "C")), parsed.payload.bots)
+  }
+
+  @Test fun `a v1 payload carries no bots`() {
+    val parsed = WidgetPayload.parse(
+      """{"v":1,"status":"C","connected":true,"work":"w","approvalsPending":0,"writtenAt":5}""",
+    ) as WidgetPayload.Parsed.Ok
+    assertEquals(emptyList<WidgetBot>(), parsed.payload.bots)
+  }
+
   @Test fun `a newer version asks for an app update instead of guessing`() {
     assertEquals(WidgetPayload.Parsed.NeedsUpdate, WidgetPayload.parse("""{"v":3,"anything":true}"""))
   }
