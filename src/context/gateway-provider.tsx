@@ -183,6 +183,8 @@ import {
   updateTranscript,
 } from '@/lib/gateway/transcript';
 import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
+import { SESSION_SPEND_LIST_LIMIT } from '@/lib/gateway/session-analytics';
+import { botBudget, botSpendFromSessions, checkBotBudget, loadBudgets } from '@/lib/gateway/budgets';
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
 import { writeWidgetSnapshot } from '@/lib/widget/widget-device';
 export type ConnectionPhase =
@@ -729,6 +731,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // Bot switch would re-run the effects that depend on their identity.
   const selectedBackendIdRef = useRef<string | undefined>(undefined);
   const selectedBotIdRef = useRef<string | undefined>(undefined);
+  // D5's pre-run budget guard reads the per-Bot sessions capability and read
+  // through refs: both are defined below `runTask`, and a dependency array
+  // would evaluate them before initialization.
+  const canReadBotSessionsRef = useRef(false);
+  const readBotSessionsRef = useRef<((botId: string, limit: number) => Promise<unknown>) | null>(null);
   // Id already probed for this activation. Cleared when backends disappear
   // so a reconnect re-probes the same backend once, not on every render.
   const lastProbedBackendRef = useRef<string | undefined>(undefined);
@@ -750,6 +757,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * that could only be refused.
    */
   const [canReadBotSessions, setCanReadBotSessions] = useState(false);
+  useEffect(() => {
+    canReadBotSessionsRef.current = canReadBotSessions;
+  }, [canReadBotSessions]);
   const [pairingDetails, setPairingDetails] = useState<PairingDetails | null>(null);
   const [liveCapabilities, setLiveCapabilities] = useState<GatewayCapabilities | null>(null);
   const [activeManifest, setActiveManifest] = useState<GatewayManifest | null>(null);
@@ -2352,6 +2362,31 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         throw new Error('This gateway does not support agentic runs (the Hermes run API is required).');
       }
       const runCapable = client as unknown as RunCapableClient;
+
+      // D5's hard stop: a Bot over its per-Bot cap does not start a run. The
+      // cap is this device's (key-value storage) and the spend is the read the
+      // Spend surface already folds; a failed read is unknown, not over. A
+      // refused start throws before the provisional Activity entry is written,
+      // so a stopped run leaves no ghost.
+      const budgetBotId = selectedBotIdRef.current;
+      const readSessions = readBotSessionsRef.current;
+      if (budgetBotId && canReadBotSessionsRef.current && readSessions) {
+        const budgets = await loadBudgets();
+        if (botBudget(budgets, gateway.id, budgetBotId) !== undefined) {
+          const verdict = await checkBotBudget({
+            budgets,
+            gatewayId: gateway.id,
+            botId: budgetBotId,
+            readSpend: async () =>
+              botSpendFromSessions(
+                budgetBotId,
+                await readSessions(budgetBotId, SESSION_SPEND_LIST_LIMIT),
+              ),
+          });
+          if (!verdict.allowed) throw new Error(verdict.reason);
+        }
+      }
+
       const abortController = new AbortController();
       runAbortControllerRef.current?.abort();
       runAbortControllerRef.current = abortController;
@@ -3338,6 +3373,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
     }
     return client.listBotSessionCatalogue(botId, limit);
   }, []);
+  useEffect(() => {
+    readBotSessionsRef.current = readBotSessions;
+  }, [readBotSessions]);
 
   const botJobs = useMemo(() => ({
     list: async () => {
