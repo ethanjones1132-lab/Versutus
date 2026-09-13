@@ -45,3 +45,9 @@ run without a device has run and is recorded first.
 - [ ] 2.4 Toggling "Hide result text on the widget" in Settings changes the widget within seconds: result and Bot names drop, counts and stamp stay. — PENDING-DEVICE
 
 Task 2.3 (Start voice call) is DEFERRED — it waits on the voice plan's signed launch key.
+
+## M3 acceptance (appended at M3 end)
+
+- [ ] 3.1 Next morning the widget's stamp reads "Yesterday" without the app being opened. — PENDING-DEVICE
+- [ ] 3.2 A routine finishing overnight updates the widget with its verdict and the Gate's stamp (data-only push; Doze may delay it). — PENDING-DEVICE
+- [ ] 3.3 No widget payload reaches a device that did not opt into widget updates (covered by the Gate test). — PENDING-DEVICE
