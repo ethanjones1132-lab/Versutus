@@ -63,6 +63,14 @@ numpy==2.5.3
     #   kokoro-onnx
     #   onnxruntime
     #   soundfile
+nvidia-cublas-cu12==12.9.2.10
+    # via
+    #   -r gate/voice-worker/requirements.in
+    #   nvidia-cudnn-cu12
+nvidia-cuda-nvrtc-cu12==12.9.86
+    # via nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.26.0.51
+    # via -r gate/voice-worker/requirements.in
 onnxruntime==1.30.0
     # via
     #   -r gate/voice-worker/requirements.in

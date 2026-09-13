@@ -295,6 +295,14 @@ def whisper_model_dir(models_dir):
     return None
 
 
+def _log_whisper_device(device, error):
+    """A silent CUDA→CPU fallback reads as slow voice, so name the device."""
+    if error is None:
+        print(f"[versutus-voice] whisper loaded on {device}", file=sys.stderr)
+    else:
+        print(f"[versutus-voice] whisper CUDA load failed ({error}); falling back to CPU", file=sys.stderr)
+
+
 def load_whisper(models_dir, cpu=False):
     _register_cuda_dlls()
     from faster_whisper import WhisperModel
@@ -302,21 +310,31 @@ def load_whisper(models_dir, cpu=False):
     local = whisper_model_dir(models_dir)
     if local is not None:
         if cpu:
-            return WhisperModel(str(local), device="cpu", compute_type="int8")
+            model = WhisperModel(str(local), device="cpu", compute_type="int8")
+            _log_whisper_device("cpu", None)
+            return model
         try:
-            return WhisperModel(str(local), device="cuda", compute_type="int8_float16")
-        except Exception:  # noqa: BLE001 - the documented CPU fallback
+            model = WhisperModel(str(local), device="cuda", compute_type="int8_float16")
+        except Exception as error:  # noqa: BLE001 - the documented CPU fallback
+            _log_whisper_device("cpu", error)
             return WhisperModel(str(local), device="cpu", compute_type="int8")
+        _log_whisper_device("cuda", None)
+        return model
 
     cache = str(Path(models_dir) / "whisper")
     if cpu:
-        return WhisperModel("small.en", device="cpu", compute_type="int8", download_root=cache)
+        model = WhisperModel("small.en", device="cpu", compute_type="int8", download_root=cache)
+        _log_whisper_device("cpu", None)
+        return model
     try:
-        return WhisperModel(
+        model = WhisperModel(
             "large-v3-turbo", device="cuda", compute_type="int8_float16", download_root=cache
         )
-    except Exception:  # noqa: BLE001 - the documented CPU fallback
+    except Exception as error:  # noqa: BLE001 - the documented CPU fallback
+        _log_whisper_device("cpu", error)
         return WhisperModel("small.en", device="cpu", compute_type="int8", download_root=cache)
+    _log_whisper_device("cuda", None)
+    return model
 
 
 class SileroScorer:

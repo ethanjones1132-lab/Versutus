@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 
-import { fetchVerified, installVoice, voicePaths, voiceStatus } from '../core/voice/runtime.mjs';
+import { fetchVerified, installVoice, voiceDoctor, voicePaths, voiceStatus } from '../core/voice/runtime.mjs';
 
 function sha256(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
@@ -195,4 +195,55 @@ test('install fetches optional weights even though readiness does not need them'
 
   assert.ok(fetched.includes('https://example/whisper'), 'the optional STT weights are fetched');
   assert.ok(existsSync(join(paths.models, 'whisper', 'model.bin')));
+});
+
+function doctorPaths() {
+  const dir = tempDir();
+  const paths = voicePaths({ VERSUTUS_GATE_HOME: dir }, 'linux');
+  mkdirSync(join(paths.venv, 'bin'), { recursive: true });
+  mkdirSync(paths.models, { recursive: true });
+  writeFileSync(paths.python, '#!/bin/sh');
+  for (const name of ['kokoro-v1.0.onnx', 'voices-v1.0.bin', 'smart-turn-v3.2-cpu.onnx']) {
+    writeFileSync(join(paths.models, name), 'model');
+  }
+  return paths;
+}
+
+function doctorSpawn({ whisperCuda = { ok: true }, vram = { usedMb: 100, totalMb: 8000 } } = {}) {
+  return () => ({
+    status: 0,
+    stdout: JSON.stringify({
+      versions: { faster_whisper: '1.2.1', kokoro_onnx: '0.6.1', onnxruntime: '1.30.0' },
+      vram,
+      whisperCuda,
+      error: null,
+    }),
+  });
+}
+
+test('voiceDoctor is ok when Whisper loads on CUDA', () => {
+  const report = voiceDoctor({ paths: doctorPaths(), spawnSync: doctorSpawn(), log: () => {} });
+  const whisper = report.checks.find((check) => check.name === 'whisper');
+  assert.equal(whisper.ok, true);
+  assert.equal(report.ok, true);
+});
+
+test('voiceDoctor fails naming whisper when the CUDA load fails', () => {
+  const report = voiceDoctor({
+    paths: doctorPaths(),
+    spawnSync: doctorSpawn({ whisperCuda: { ok: false, error: 'Library cublas64_12.dll is not found' } }),
+    log: () => {},
+  });
+  const whisper = report.checks.find((check) => check.name === 'whisper');
+  assert.equal(whisper.ok, false);
+  assert.match(whisper.detail, /cublas64_12/);
+  assert.match(whisper.detail, /voice install/);
+  assert.equal(report.ok, false);
+});
+
+test('voiceDoctor fails closed when the probe times out', () => {
+  const timeout = new Error('spawnSync timed out');
+  timeout.code = 'ETIMEDOUT';
+  const report = voiceDoctor({ paths: doctorPaths(), spawnSync: () => ({ error: timeout }), log: () => {} });
+  assert.equal(report.ok, false);
 });

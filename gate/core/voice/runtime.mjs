@@ -233,8 +233,8 @@ function localStatus(paths) {
 }
 
 const DOCTOR_PROBE = String.raw`
-import json, shutil, subprocess, sys
-result = {"versions": {}, "vram": None, "error": None}
+import json, os, shutil, subprocess, sys
+result = {"versions": {}, "vram": None, "whisperCuda": None, "error": None}
 try:
     import faster_whisper, kokoro_onnx, onnxruntime
     result["versions"] = {
@@ -253,6 +253,19 @@ try:
     result["vram"] = {"usedMb": used, "totalMb": total}
 except Exception:
     result["vram"] = None
+try:
+    from faster_whisper import WhisperModel
+    names = ("config.json", "model.bin", "preprocessor_config.json", "tokenizer.json", "vocabulary.json")
+    whisper_dir = os.path.join(os.environ.get("VERSUTUS_VOICE_MODELS", ""), "whisper")
+    missing = [name for name in names if not os.path.exists(os.path.join(whisper_dir, name))]
+    if missing:
+        result["whisperCuda"] = {"ok": False, "error": "missing: " + ", ".join(missing)}
+    else:
+        model = WhisperModel(whisper_dir, device="cuda", compute_type="int8_float16")
+        del model
+        result["whisperCuda"] = {"ok": True}
+except Exception as error:
+    result["whisperCuda"] = {"ok": False, "error": str(error)[:300]}
 print(json.dumps(result))
 `;
 
@@ -272,7 +285,12 @@ export function voiceDoctor({ paths, spawnSync = nodeSpawnSync, env = process.en
     cwd: paths.worker,
     encoding: 'utf8',
     env: { ...env, VERSUTUS_VOICE_MODELS: paths.models },
+    timeout: 180000,
   });
+  if (probe.error) {
+    checks.push({ name: 'imports', ok: false, detail: `probe failed: ${probe.error.message}` });
+    return { ok: false, checks };
+  }
   if (probe.status !== 0) {
     checks.push({ name: 'imports', ok: false, detail: (probe.stderr || 'probe failed').trim() });
     return { ok: false, checks };
@@ -298,6 +316,13 @@ export function voiceDoctor({ paths, spawnSync = nodeSpawnSync, env = process.en
     checks.push({ name: 'models', ok: false, detail: error.message });
   }
   checks.push({ name: 'cuda', ok: Boolean(info.vram), detail: info.vram ? `${info.vram.usedMb}/${info.vram.totalMb} MB` : 'no NVIDIA GPU' });
+  if (info.whisperCuda == null) {
+    checks.push({ name: 'whisper', ok: false, detail: 'the CUDA load probe did not run' });
+  } else if (info.whisperCuda.ok) {
+    checks.push({ name: 'whisper', ok: true, detail: 'whisper loads on CUDA (int8_float16)' });
+  } else {
+    checks.push({ name: 'whisper', ok: false, detail: `CUDA load failed: ${info.whisperCuda.error ?? 'unknown error'}; run voice install` });
+  }
   log(JSON.stringify(checks));
 
   const status = voiceStatus({ paths });
