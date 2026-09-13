@@ -2037,6 +2037,8 @@ export async function createGate(config = {}) {
         try { stream.end(); } catch { /* already gone */ }
       }
       return new Promise((resolve, reject) => {
+        // A restart is a clean, named end for every live call, not a drop.
+        voiceMedia.endAll?.('gate-restart');
         voiceMedia.close();
         server.close((err) => {
           if (err) reject(err);
