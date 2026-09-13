@@ -1,4 +1,4 @@
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { BaseSheet, Button, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
@@ -14,12 +14,19 @@ import { haptics } from '@/lib/haptics';
  * is live, the call survives backgrounding, and it can be ended from Android's
  * notification. Nothing here starts a call by itself; `Start call` is the one
  * tap that does, and Cancel starts nothing.
+ *
+ * When an engine is chosen, the sheet names it and shows that engine's own
+ * disclosure, so consent matches where the audio actually goes. `Change` is a
+ * one-tap change for this call only.
  */
 export function HandsfreeCallSheet({
   visible,
   label,
   busy,
   error,
+  engineLabel,
+  disclosure,
+  onChangeEngine,
   onCancel,
   onStart,
 }: {
@@ -27,6 +34,9 @@ export function HandsfreeCallSheet({
   label?: string;
   busy?: boolean;
   error?: string;
+  engineLabel?: string;
+  disclosure?: string;
+  onChangeEngine?: () => void;
   onCancel: () => void;
   onStart: () => void;
 }) {
@@ -47,8 +57,23 @@ export function HandsfreeCallSheet({
           {label ? `Start a hands-free call with ${label}?` : `Start a ${HANDSFREE_BANNER_TITLE}?`}
         </Text>
 
+        {engineLabel ? (
+          <View style={styles.engineLine}>
+            <Text variant="caption" color="secondary">
+              Using: {engineLabel}
+            </Text>
+            {onChangeEngine ? (
+              <Pressable accessibilityRole="button" onPress={onChangeEngine}>
+                <Text variant="link" color="accent">
+                  Change
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
+
         <Text color="secondary" style={styles.disclosure}>
-          {HANDSFREE_DISCLOSURE}
+          {disclosure ?? HANDSFREE_DISCLOSURE}
         </Text>
 
         {error ? (
@@ -91,6 +116,13 @@ const styles = StyleSheet.create({
   disclosure: {
     marginTop: Spacing.two,
     lineHeight: 20,
+  },
+  engineLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+    marginTop: Spacing.two,
   },
   error: {
     marginTop: Spacing.two,

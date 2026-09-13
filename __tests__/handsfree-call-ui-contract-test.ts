@@ -201,3 +201,22 @@ describe('an ended or refused call explains itself', () => {
     expect(screen).toContain('setCallError(handsfreeStartResultCopy(result))');
   });
 });
+
+describe('the sheet names the engine before consent', () => {
+  test('shows "Using:" with a one-tap Change', () => {
+    expect(sheet).toContain('Using: {engineLabel}');
+    expect(sheet).toContain('onChangeEngine');
+    expect(sheet).toContain('Change');
+  });
+
+  test('shows the chosen engine’s own disclosure over the default', () => {
+    expect(sheet).toContain('disclosure ?? HANDSFREE_DISCLOSURE');
+  });
+
+  test('the screen chooses from the stored preference and the Gate readiness', () => {
+    expect(screen).toContain('chooseVoiceEngine(');
+    expect(screen).toContain("gatewayRequest<VoiceEngineCapabilities>('voice.capabilities'");
+    expect(screen).toContain('voiceEngineDisclosure(callEngine.engine)');
+    expect(screen).toContain("transport: callEngine && callEngine.engine !== 'phone' ? 'gate' : 'phone'");
+  });
+});

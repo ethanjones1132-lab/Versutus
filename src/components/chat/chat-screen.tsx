@@ -140,6 +140,13 @@ import {
 } from '@/lib/voice/bot-voices';
 import { handsfreeEndReasonCopy, handsfreeStartResultCopy } from '@/lib/voice/handsfree-call-copy';
 import { handsfreeStartBlockerCopy } from '@/lib/voice/handsfree-start-policy';
+import { loadAppSettings } from '@/lib/settings/app-settings';
+import {
+  chooseVoiceEngine,
+  type VoiceEngineCapabilities,
+  type VoiceEnginePreference,
+} from '@/lib/voice/voice-engine-choice';
+import { VOICE_ENGINE_ROWS, voiceEngineDisclosure } from '@/lib/voice/voice-engine-copy';
 import { speakerAction } from '@/lib/voice/speech-reply';
 import { availableVoices, speakReply, speechAvailableFrom, stopSpeech } from '@/lib/voice/speech';
 import {
@@ -161,6 +168,9 @@ import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { chatTranscriptContentPaddingBottom } from '@/lib/motion/chat-transcript-insets';
 import { chatJumpBottom } from '@/lib/motion/chat-jump-inset';
+
+/** The order the sheet's one-tap Change walks. */
+const CALL_ENGINE_ORDER: VoiceEnginePreference[] = ['auto', 'local', 'codex', 'phone'];
 
 const PIN_THRESHOLD_PX = 96;
 const JUMP_PILL_THRESHOLD_PX = 260;
@@ -366,6 +376,8 @@ export function ChatScreen() {
   const [callSheetVisible, setCallSheetVisible] = useState(false);
   const [callBusy, setCallBusy] = useState(false);
   const [callError, setCallError] = useState<string | undefined>();
+  const [callPreference, setCallPreference] = useState<VoiceEnginePreference>('auto');
+  const [callCapabilities, setCallCapabilities] = useState<VoiceEngineCapabilities | null>(null);
 
   // Keyed by gateway + surface + session so leaving a thread and coming
   // back restores that thread's unsent text, never another Bot's.
@@ -1037,7 +1049,33 @@ export function ChatScreen() {
   const openCallSheet = useCallback(() => {
     setCallError(undefined);
     setCallSheetVisible(true);
+    // The engine is chosen from the stored preference and the Gate's live
+    // readiness, so the sheet can name where the audio will go before consent.
+    void (async () => {
+      const stored = await loadAppSettings();
+      setCallPreference(stored.voiceEngine);
+      try {
+        setCallCapabilities(await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', {}));
+      } catch {
+        // A Gate that predates voice leaves the phone engine as the only choice.
+        setCallCapabilities(null);
+      }
+    })();
+  }, [gatewayRequest]);
+  const handleChangeEngine = useCallback(() => {
+    setCallPreference((current) => {
+      const index = CALL_ENGINE_ORDER.indexOf(current);
+      return CALL_ENGINE_ORDER[(index + 1) % CALL_ENGINE_ORDER.length];
+    });
   }, []);
+  const callEngine = useMemo(
+    () => (callCapabilities ? chooseVoiceEngine(callPreference, callCapabilities) : null),
+    [callCapabilities, callPreference],
+  );
+  const callEngineLabel = useMemo(() => {
+    if (!callEngine) return undefined;
+    return VOICE_ENGINE_ROWS.find((row) => row.id === callEngine.engine)?.label ?? callEngine.engine;
+  }, [callEngine]);
   const handleCancelCall = useCallback(() => {
     setCallSheetVisible(false);
     setCallError(undefined);
@@ -1059,6 +1097,8 @@ export function ChatScreen() {
         botId: surface.kind === 'bot' ? surface.botId : undefined,
         label: callTargetLabel,
         voice: botVoice ?? {},
+        transport: callEngine && callEngine.engine !== 'phone' ? 'gate' : 'phone',
+        voiceEngine: callPreference,
       });
       if (result === 'started') {
         setCallSheetVisible(false);
@@ -1070,7 +1110,7 @@ export function ChatScreen() {
     } finally {
       setCallBusy(false);
     }
-  }, [activeGateway, botVoice, callTargetLabel, draftThread, handsfree, surface]);
+  }, [activeGateway, botVoice, callEngine, callPreference, callTargetLabel, draftThread, handsfree, surface]);
 
   const { callsEnded: handsfreeCallsEnded, lastEndReason: handsfreeLastEndReason } = handsfree;
   // A call that ended without the operator ending it reopens the sheet with the
@@ -2152,6 +2192,9 @@ export function ChatScreen() {
         label={callTargetLabel}
         busy={callBusy}
         error={callError}
+        engineLabel={callEngineLabel}
+        disclosure={callEngine ? voiceEngineDisclosure(callEngine.engine) : undefined}
+        onChangeEngine={callEngine ? handleChangeEngine : undefined}
         onCancel={handleCancelCall}
         onStart={() => void handleStartCall()}
       />
