@@ -151,3 +151,99 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
     empty: false,
   };
 }
+
+// ─── Render geometry (slice 2) ────────────────────────────────────────────
+// The Skia layer and the plain fallback draw ONE layout, so the map is the
+// same picture on either path and neither works out the graph a second time.
+// The model owns the truth classes; this owns only the scale.
+
+export const CONSTELLATION_NODE_RADIUS = 9;
+
+export type ConstellationLayoutNode = ConstellationNode & { x: number; y: number };
+
+export type ConstellationLayoutEdge = {
+  id: string;
+  from: string;
+  to: string;
+  kind: 'hosts';
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+};
+
+export type ConstellationLayout = {
+  size: number;
+  nodes: ConstellationLayoutNode[];
+  edges: ConstellationLayoutEdge[];
+  empty: boolean;
+};
+
+/** Fit the fixed model into a square of `size`, preserving its shape. */
+export function constellationLayout(model: ConstellationModel, size: number): ConstellationLayout {
+  const safeSize = Number.isFinite(size) && size > 0 ? size : 0;
+  const scale = safeSize / CONSTELLATION_WIDTH;
+  const nodes: ConstellationLayoutNode[] = model.nodes.map((node) => ({
+    ...node,
+    x: node.x * scale,
+    y: node.y * scale,
+  }));
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const edges: ConstellationLayoutEdge[] = [];
+  for (const edge of model.edges) {
+    const from = byId.get(edge.from);
+    const to = byId.get(edge.to);
+    if (!from || !to) continue;
+    edges.push({
+      id: `${edge.from}->${edge.to}`,
+      from: edge.from,
+      to: edge.to,
+      kind: edge.kind,
+      x1: from.x,
+      y1: from.y,
+      x2: to.x,
+      y2: to.y,
+    });
+  }
+  return { size: safeSize, nodes, edges, empty: model.empty };
+}
+
+/**
+ * How long ago a saved gateway was last probed, as the map's one date. A
+ * stamp in the future is "just now" — a clock skew must not read as a
+ * negative age.
+ */
+export function relativeLastSeenCopy(at: number, now: number): string {
+  const deltaMs = Math.max(0, now - at);
+  const minutes = Math.floor(deltaMs / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+/**
+ * What a screen reader announces for one node. The truth class leads: a live
+ * gateway is `live`, a saved one is `last seen` (or `offline` when it was
+ * never probed) — a down gateway can never be voiced as live.
+ */
+export function constellationNodeAccessibilityLabel(node: ConstellationNode): string {
+  const parts: string[] = [node.label];
+  if (node.kind === 'gateway') {
+    parts.push(node.live ? 'live' : node.lastSeenAt !== undefined ? 'last seen' : 'offline');
+  }
+  for (const badge of node.badges) {
+    const label = badge.label.toLowerCase();
+    if (!parts.some((part) => part.toLowerCase() === label)) parts.push(label);
+  }
+  return parts.join(', ');
+}
+
+/** The empty fleet still says something dignified. */
+export function constellationEmptyCopy(): { title: string; description: string } {
+  return {
+    title: 'No gateways yet',
+    description: 'Add a gateway and its Bots will appear on the map.',
+  };
+}
