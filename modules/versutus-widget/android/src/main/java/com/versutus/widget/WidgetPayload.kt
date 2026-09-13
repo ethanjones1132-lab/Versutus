@@ -1,8 +1,12 @@
 package com.versutus.widget
 
+import org.json.JSONArray
 import org.json.JSONObject
 
-/** The v1 payload the JS side writes; see VersutusWidget.types.ts. */
+/** A named in-flight run, for the large cell's list. */
+data class WidgetRun(val title: String, val state: String)
+
+/** The v1 and v2 payloads the JS side writes; see VersutusWidget.types.ts. */
 data class WidgetPayload(
   val status: String,
   val connected: Boolean,
@@ -10,6 +14,7 @@ data class WidgetPayload(
   val result: String?,
   val approvalsPending: Int,
   val writtenAt: Long,
+  val runs: List<WidgetRun> = emptyList(),
 ) {
   sealed interface Parsed {
     data class Ok(val payload: WidgetPayload) : Parsed
@@ -22,8 +27,9 @@ data class WidgetPayload(
       if (json.isNullOrBlank()) return Parsed.Invalid
       return try {
         val o = JSONObject(json)
-        when (o.optInt("v", -1)) {
-          1 -> Unit
+        val version = o.optInt("v", -1)
+        when (version) {
+          1, 2 -> Unit
           -1 -> return Parsed.Invalid
           else -> return Parsed.NeedsUpdate
         }
@@ -35,10 +41,26 @@ data class WidgetPayload(
           return Parsed.Invalid
         }
         val result = o.optString("result", "").takeIf { it.isNotBlank() }
-        Parsed.Ok(WidgetPayload(status, o.getBoolean("connected"), work, result, approvals, writtenAt))
+        val runs = if (version >= 2) parseRuns(o.optJSONArray("runs")) else emptyList()
+        Parsed.Ok(WidgetPayload(status, o.getBoolean("connected"), work, result, approvals, writtenAt, runs))
       } catch (_: Exception) {
         Parsed.Invalid
       }
+    }
+
+    /** Up to three named runs; a nameless row is skipped rather than drawn blank. */
+    private fun parseRuns(array: JSONArray?): List<WidgetRun> {
+      if (array == null) return emptyList()
+      val runs = ArrayList<WidgetRun>(3)
+      for (i in 0 until array.length()) {
+        if (runs.size == 3) break
+        val item = array.optJSONObject(i) ?: continue
+        val title = item.optString("title", "").trim()
+        val state = item.optString("state", "").trim()
+        if (title.isBlank() || state.isBlank()) continue
+        runs.add(WidgetRun(title, state))
+      }
+      return runs
     }
   }
 }

@@ -11,12 +11,14 @@ import { glanceableWidgetLines } from '@/lib/widget/widget-target';
 
 export function androidWidgetPayload(snapshot: GlanceableSnapshot): VersutusWidgetPayload {
   const lines = glanceableWidgetLines(snapshot);
+  const runs = (snapshot.runs ?? []).slice(0, 3);
   return {
-    v: 1,
+    v: 2,
     status: lines.status,
     connected: snapshot.status === 'connected',
     work: lines.work,
     ...(lines.result ? { result: lines.result } : {}),
+    ...(runs.length > 0 ? { runs } : {}),
     approvalsPending: Math.max(0, Math.trunc(snapshot.approvalsPending)),
     writtenAt: snapshot.writtenAt,
   };

@@ -98,6 +98,12 @@ private fun Lines(payload: WidgetPayload, variant: WidgetVariant) {
   }
   Spacer(GlanceModifier.height(4.dp))
   Line(payload.work)
+  if (variant == WidgetVariant.LARGE && payload.runs.isNotEmpty()) {
+    for (run in payload.runs) {
+      Spacer(GlanceModifier.height(3.dp))
+      Line("${run.title} — ${run.state}")
+    }
+  }
   if (payload.approvalsPending > 0 && variant != WidgetVariant.SMALL) {
     Line("Tap to decide in Versutus", secondary = true)
   }

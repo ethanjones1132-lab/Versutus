@@ -36,6 +36,9 @@ const IN_FLIGHT_RUN_STATUSES: ReadonlySet<ActivityRun['status']> = new Set([
  * when all of that was true. Nothing here is fetched — it is what the app
  * already knew at `writtenAt`.
  */
+/** A run in flight, in the words the operator typed, for the large widget cell. */
+export type GlanceableRun = { title: string; state: string };
+
 export type GlanceableSnapshot = {
   /** The connection state the app last observed. */
   status: ConnectionStatus;
@@ -45,6 +48,8 @@ export type GlanceableSnapshot = {
   approvalsPending: number;
   /** The newest judged outcome, run or routine, in its own words. */
   lastResult?: string;
+  /** In-flight runs, newest first. Absent when there are none. */
+  runs?: GlanceableRun[];
   /** When the snapshot was composed — always present, so staleness is sayable. */
   writtenAt: number;
 };
@@ -67,6 +72,17 @@ function runResult(run: ActivityRun): string | null {
   if (summary) return summary;
   const preview = run.events[run.events.length - 1]?.preview?.trim();
   return preview ? preview : null;
+}
+
+const UNTITLED = 'Untitled run';
+
+function runTitle(run: ActivityRun): string {
+  const firstLine = run.prompt.split(/\r?\n/, 1)[0]?.trim();
+  return firstLine ? firstLine : UNTITLED;
+}
+
+function runState(run: ActivityRun): string {
+  return run.status === 'waiting-approval' ? 'Waiting for approval' : 'Running';
 }
 
 /**
@@ -100,11 +116,13 @@ export function glanceableSnapshot(
   let runsInFlight = 0;
   let approvalsPending = 0;
   let newestRun: { at: number; text: string } | null = null;
+  const runs: GlanceableRun[] = [];
 
   for (const run of facts.runs) {
     if (IN_FLIGHT_RUN_STATUSES.has(run.status)) {
       runsInFlight += 1;
       if (run.status === 'waiting-approval') approvalsPending += 1;
+      runs.push({ title: runTitle(run), state: runState(run) });
       continue;
     }
     // Nothing to report from a run the gateway never judged: `unresolved` is
@@ -127,6 +145,7 @@ export function glanceableSnapshot(
     runsInFlight,
     approvalsPending,
     ...(newestRun ? { lastResult: newestRun.text } : {}),
+    ...(runs.length > 0 ? { runs } : {}),
     writtenAt: now,
   };
 }

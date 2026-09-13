@@ -12,7 +12,7 @@ const base: GlanceableSnapshot = {
 describe('androidWidgetPayload', () => {
   test('carries the same words the iOS widget draws, plus what the native card needs', () => {
     expect(androidWidgetPayload(base)).toEqual({
-      v: 1,
+      v: 2,
       status: 'Connected',
       connected: true,
       work: '1 run waiting on your approval · 2 runs in flight',
@@ -35,5 +35,27 @@ describe('androidWidgetPayload', () => {
 
   test('survives the JSON round trip the native module parses', () => {
     expect(JSON.parse(JSON.stringify(androidWidgetPayload(base)))).toEqual(androidWidgetPayload(base));
+  });
+
+  test('carries up to three in-flight runs for the large cell', () => {
+    const payload = androidWidgetPayload({
+      ...base,
+      runs: [
+        { title: 'a', state: 'Running' },
+        { title: 'b', state: 'Running' },
+        { title: 'c', state: 'Running' },
+        { title: 'd', state: 'Running' },
+      ],
+    });
+    expect(payload.v).toBe(2);
+    expect(payload.runs).toEqual([
+      { title: 'a', state: 'Running' },
+      { title: 'b', state: 'Running' },
+      { title: 'c', state: 'Running' },
+    ]);
+  });
+
+  test('a snapshot with no in-flight runs omits them', () => {
+    expect(androidWidgetPayload(base)).not.toHaveProperty('runs');
   });
 });

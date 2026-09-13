@@ -45,6 +45,24 @@ describe('glanceableSnapshot', () => {
     expect(snapshot.approvalsPending).toBe(1);
   });
 
+  test('in-flight runs are folded newest first, with their own words', () => {
+    const snapshot = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [
+          run({ id: 'new', prompt: 'deploy the fix', status: 'waiting-approval', finishedAt: undefined, summary: undefined }),
+          run({ id: 'old', prompt: 'index the repo\nand more', status: 'running', finishedAt: undefined, summary: undefined }),
+        ],
+        routines: [],
+      },
+      NOW,
+    );
+    expect(snapshot.runs).toEqual([
+      { title: 'deploy the fix', state: 'Waiting for approval' },
+      { title: 'index the repo', state: 'Running' },
+    ]);
+  });
+
   test('a settled run is never in flight', () => {
     const snapshot = glanceableSnapshot(
       {
