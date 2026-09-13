@@ -21,6 +21,7 @@ import { CliEnvironmentStore } from './cli-environments/store.mjs';
 import { CliAdapterRegistry } from './cli-environments/adapter-registry.mjs';
 import { CliEnvironmentService } from './cli-environments/supervisor.mjs';
 import { createEnvironmentRpc, sanitizeEnvironment } from './cli-environments/rpc.mjs';
+import { createApprovalRpc } from './approvals/rpc.mjs';
 import { createBackendManager } from './cli-environments/backend-manager.mjs';
 import { createBotGroupStore, transcriptEntriesForSend } from './cli-environments/bot-groups.mjs';
 import { createBackendRunStreams } from './cli-environments/backend-run-streams.mjs';
@@ -336,6 +337,11 @@ export async function createGate(config = {}) {
     onChanged: () => reload(),
   });
 
+  // D1: the pending-approval list the CLI environment supervisor already holds,
+  // over RPC, so a paired phone can triage an approval it did not open the run
+  // for. The class and summary are the supervisor's own; the inbox adds none.
+  const approvalRpc = createApprovalRpc({ approvals: environmentService.approvals });
+
   // Environments that expose a native server become chat backends: they own
   // their own sessions, models and tools, and the Gate proxies to them rather
   // than reimplementing any of it.
@@ -439,6 +445,7 @@ export async function createGate(config = {}) {
     }),
     ...notificationMethods,
     ...voiceRpc.methods,
+    ...approvalRpc.methods,
   };
 
   // Resolve the backend that answers a spoken turn the same way a typed turn
