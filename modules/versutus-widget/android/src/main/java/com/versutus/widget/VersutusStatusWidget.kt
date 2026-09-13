@@ -30,6 +30,8 @@ import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.size
 import androidx.glance.layout.width
+import androidx.glance.semantics.contentDescription
+import androidx.glance.semantics.semantics
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
@@ -61,11 +63,21 @@ private fun StatusCard(parsed: WidgetPayload.Parsed) {
   val context = LocalContext.current
   val size = LocalSize.current
   val variant = WidgetLayout.variantFor(size.width.value, size.height.value)
+  val description = when (parsed) {
+    is WidgetPayload.Parsed.Ok -> {
+      val payload = parsed.payload
+      val stamp = WidgetStamp.line(payload.writtenAt, System.currentTimeMillis(), ZoneId.systemDefault(), Locale.getDefault())
+      "Versutus: ${payload.status}. ${payload.work}. $stamp"
+    }
+    WidgetPayload.Parsed.NeedsUpdate -> "Versutus: update the app to show status"
+    WidgetPayload.Parsed.Invalid -> "Versutus: open the app to connect"
+  }
   Column(
     modifier = GlanceModifier
       .fillMaxSize()
       .background(GlanceTheme.colors.widgetBackground)
       .cornerRadius(android.R.dimen.system_app_widget_background_radius)
+      .semantics { contentDescription = description }
       .padding(14.dp)
       .clickable(actionStartActivity(openAppIntent(context, "versutus://chat"))),
   ) {

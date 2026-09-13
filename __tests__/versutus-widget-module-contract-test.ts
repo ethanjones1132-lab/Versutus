@@ -82,4 +82,11 @@ describe('M1: looks native on any wallpaper', () => {
     expect(widget).toContain('Build.VERSION.SDK_INT >= 31');
     expect(widget).toContain('WidgetColors.colors');
   });
+
+  test('the card reads as one sentence to TalkBack', () => {
+    const widget = kotlin('VersutusStatusWidget.kt');
+    expect(widget).toContain('contentDescription');
+    expect(widget).toContain('"Versutus: ');
+    expect(widget).toContain('.semantics');
+  });
 });
