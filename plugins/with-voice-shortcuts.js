@@ -1,4 +1,9 @@
-const { withAndroidManifest, withDangerousMod } = require('@expo/config-plugins');
+const {
+  AndroidConfig,
+  withAndroidManifest,
+  withDangerousMod,
+  withStringsXml,
+} = require('@expo/config-plugins');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -12,6 +17,12 @@ const SHORTCUT_SHORT_LABEL = 'Voice call';
 const SHORTCUT_LONG_LABEL = 'Start a Versutus voice call';
 const SHORTCUT_URL = 'versutus://call';
 
+// aapt links a shortcut label only as a string resource reference. A literal
+// label passes every JS test and then fails :app:processReleaseResources
+// ("incompatible with attribute shortcutShortLabel (attr) reference").
+const SHORT_LABEL_RESOURCE = 'voice_call_shortcut_short_label';
+const LONG_LABEL_RESOURCE = 'voice_call_shortcut_long_label';
+
 function buildShortcutsXml() {
   return [
     '<?xml version="1.0" encoding="utf-8"?>',
@@ -20,8 +31,8 @@ function buildShortcutsXml() {
     `    android:shortcutId="${SHORTCUT_ID}"`,
     '    android:enabled="true"',
     '    android:icon="@mipmap/ic_launcher"',
-    `    android:shortcutShortLabel="${SHORTCUT_SHORT_LABEL}"`,
-    `    android:shortcutLongLabel="${SHORTCUT_LONG_LABEL}">`,
+    `    android:shortcutShortLabel="@string/${SHORT_LABEL_RESOURCE}"`,
+    `    android:shortcutLongLabel="@string/${LONG_LABEL_RESOURCE}">`,
     '    <intent',
     '      android:action="android.intent.action.VIEW"',
     `      android:data="${SHORTCUT_URL}"`,
@@ -32,6 +43,17 @@ function buildShortcutsXml() {
     '</shortcuts>',
     '',
   ].join('\n');
+}
+
+/** Adds (or replaces) the two label strings in strings.xml; a second pass adds nothing. */
+function withShortcutLabelStrings(stringsXml) {
+  return AndroidConfig.Strings.setStringItem(
+    [
+      AndroidConfig.Resources.buildResourceItem({ name: SHORT_LABEL_RESOURCE, value: SHORTCUT_SHORT_LABEL }),
+      AndroidConfig.Resources.buildResourceItem({ name: LONG_LABEL_RESOURCE, value: SHORTCUT_LONG_LABEL }),
+    ],
+    stringsXml,
+  );
 }
 
 function withVoiceShortcuts(config) {
@@ -51,6 +73,11 @@ function withVoiceShortcuts(config) {
         });
       }
     }
+    return config;
+  });
+
+  config = withStringsXml(config, (config) => {
+    config.modResults = withShortcutLabelStrings(config.modResults);
     return config;
   });
 
@@ -76,3 +103,4 @@ function withVoiceShortcuts(config) {
 
 module.exports = withVoiceShortcuts;
 module.exports.buildShortcutsXml = buildShortcutsXml;
+module.exports.withShortcutLabelStrings = withShortcutLabelStrings;
