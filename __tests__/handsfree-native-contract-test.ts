@@ -136,4 +136,18 @@ describe('hands-free native contract', () => {
     expect(availability).not.toContain('TextToSpeech(context)');
     expect(availability).not.toContain('postDelayed');
   });
+
+  it('resolves startSession only when the service reports its foreground start, with a timeout', () => {
+    expect(kotlin).toContain('HandsfreeCallService.pendingStartCallback =');
+    expect(kotlin).toContain('START_TIMEOUT_MS');
+    expect(kotlin).not.toMatch(/startForegroundService\(context, intent\)\s*\n\s*promise\.resolve\("started"\)/);
+    expect(service).toMatch(/try\s*\{\s*startForegroundWithNotification\(title\)/);
+    expect(service).toContain('deliverStart("unavailable")');
+  });
+
+  it('requires the microphone permission only; notifications are asked, not required', () => {
+    const start = kotlin.slice(kotlin.indexOf('AsyncFunction("startSession")'), kotlin.indexOf('AsyncFunction("startListening")'));
+    expect(start).toMatch(/val required = arrayOf\(Manifest\.permission\.RECORD_AUDIO\)/);
+    expect(start).not.toMatch(/required[^\n]*POST_NOTIFICATIONS/);
+  });
 });

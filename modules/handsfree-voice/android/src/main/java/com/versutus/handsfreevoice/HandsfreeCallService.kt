@@ -27,6 +27,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -127,15 +128,34 @@ class HandsfreeCallService : Service() {
 
   // ── Session start ────────────────────────────────────────────────────────
 
-  /** Opens the session. Answers false if one is already running. */
+  /** Opens the session and reports the outcome to the pending start. */
   fun startSession(title: String): Boolean {
-    if (!state.start()) return false
-    if (!foregroundStarted) {
+    if (!state.start()) {
+      deliverStart(if (state.isActive) "started" else "unavailable")
+      return false
+    }
+    try {
       startForegroundWithNotification(title)
       foregroundStarted = true
+    } catch (error: Exception) {
+      // Android 14+ refuses a microphone service the app is not eligible for
+      // (ForegroundServiceStartNotAllowedException / SecurityException). An
+      // uncaught throw here would kill the process; it is reported instead.
+      Log.w(TAG, "foreground start refused", error)
+      state.requestEnd("start-refused")
+      deliverStart("unavailable")
+      stopSelf()
+      return false
     }
     requestAudioFocus()
+    deliverStart("started")
     return true
+  }
+
+  private fun deliverStart(outcome: String) {
+    val callback = pendingStartCallback
+    pendingStartCallback = null
+    callback?.invoke(outcome)
   }
 
   private fun startForegroundWithNotification(title: String) {
@@ -771,6 +791,12 @@ class HandsfreeCallService : Service() {
     private const val FLOOR_ADAPT = 0.02
     private const val ONSET_FACTOR = 3.0
     private const val MIN_FLOOR = 0.01
+
+    private const val TAG = "HandsfreeCallService"
+
+    /** Set by the module just before it starts the service; answered exactly once. */
+    @Volatile
+    var pendingStartCallback: ((String) -> Unit)? = null
 
     @Volatile
     var current: HandsfreeCallService? = null

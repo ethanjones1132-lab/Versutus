@@ -13,6 +13,7 @@ import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * The thin JS boundary over [HandsfreeCallService]. It owns no audio itself:
@@ -73,26 +74,35 @@ class HandsfreeVoiceModule : Module() {
         return@AsyncFunction
       }
       val context = appContext.reactContext
-      if (context == null) {
+      val permissions = appContext.permissions
+      if (context == null || permissions == null) {
         promise.resolve("unavailable")
         return@AsyncFunction
       }
-      val needed = mutableListOf(Manifest.permission.RECORD_AUDIO)
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        needed.add(Manifest.permission.POST_NOTIFICATIONS)
+      // Only the microphone is required. The notification permission is
+      // optional on Android: it is not needed to run a foreground service, and
+      // without it the call still shows in Task Manager, so refusing it must
+      // not refuse the call.
+      val required = arrayOf(Manifest.permission.RECORD_AUDIO)
+      val asked = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        required +
+          Manifest.permission.POST_NOTIFICATIONS
+      } else {
+        required
       }
-      val permissions = appContext.permissions
-      if (permissions == null || permissions.hasGrantedPermissions(*needed.toTypedArray())) {
+      if (permissions.hasGrantedPermissions(*required)) {
         startService(context, title, promise)
       } else {
         permissions.askForPermissions({ result ->
-          val granted = needed.all { result[it]?.status == PermissionsStatus.GRANTED }
-          if (!granted) {
+          val micGranted = result[Manifest.permission.RECORD_AUDIO]?.status == PermissionsStatus.GRANTED
+          if (!micGranted) {
             promise.resolve("permission-denied")
           } else {
-            startService(context, title, promise)
+            // Let the activity resume from the permission dialog before the
+            // while-in-use microphone service is created.
+            Handler(Looper.getMainLooper()).postDelayed({ startService(context, title, promise) }, RESUME_SETTLE_MS)
           }
-        }, *needed.toTypedArray())
+        }, *asked)
       }
     }
 
@@ -130,14 +140,33 @@ class HandsfreeVoiceModule : Module() {
   }
 
   private fun startService(context: Context, title: String, promise: Promise) {
+    val settled = AtomicBoolean(false)
+    fun settle(outcome: String) {
+      if (settled.compareAndSet(false, true)) promise.resolve(outcome)
+    }
+    HandsfreeCallService.pendingStartCallback = { outcome -> settle(outcome) }
+    Handler(Looper.getMainLooper()).postDelayed({
+      if (!settled.get()) {
+        HandsfreeCallService.pendingStartCallback = null
+        // A service that comes up after JS has been told "unavailable" would
+        // hold the microphone with nobody driving it; stop it.
+        context.stopService(Intent(context, HandsfreeCallService::class.java))
+        settle("unavailable")
+      }
+    }, START_TIMEOUT_MS)
     try {
       val intent = Intent(context, HandsfreeCallService::class.java)
         .setAction(HandsfreeCallService.ACTION_START)
         .putExtra(HandsfreeCallService.EXTRA_TITLE, title)
       ContextCompat.startForegroundService(context, intent)
-      promise.resolve("started")
     } catch (_: Exception) {
-      promise.resolve("unavailable")
+      HandsfreeCallService.pendingStartCallback = null
+      settle("unavailable")
     }
+  }
+
+  companion object {
+    private const val START_TIMEOUT_MS = 4000L
+    private const val RESUME_SETTLE_MS = 250L
   }
 }
