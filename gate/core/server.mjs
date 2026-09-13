@@ -33,6 +33,7 @@ import { createPushRpc } from './push-rpc.mjs';
 import { createPushSend } from './push-send.mjs';
 import { createVoiceRpc } from './voice/voice-rpc.mjs';
 import { attachVoiceMediaSocket } from './voice/media-socket.mjs';
+import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
 import { ScriptedEngine } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest } from './signature.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
@@ -53,66 +54,11 @@ function lastUserText(messages = []) {
 }
 
 /**
- * Relay a native-environment turn as OpenAI-shaped SSE.
- *
- * Subscribing before sending matters: the CLI starts emitting as soon as the
- * turn is accepted, and a late subscriber loses the opening deltas. Tool events
- * are relayed as `tool_calls` deltas so the client can show what the agent is
- * doing — the thing a bare provider proxy can never report.
+ * Relay a native-environment turn as OpenAI-shaped SSE, through the one turn
+ * runner typed and spoken turns share. The runner reports deltas, tool calls
+ * and the model that ran; this writer only shapes them onto the wire and adds
+ * the empty-turn guarantee.
  */
-/**
- * Relay an OpenAI-shaped SSE stream to the client.
- *
- * Payloads pass through unchanged -- Hermes and the Gate write the same chunk
- * shape, so translating would only add a place to get it wrong. Frames are
- * still split and inspected for two reasons: `[DONE]` is held back so the
- * caller writes exactly one terminator, and deltas are counted so the
- * empty-turn guarantee below survives on this path too. Inspecting is not
- * rewriting; an unparseable frame is forwarded as-is.
- *
- * @returns whether anything the user could see came through.
- */
-async function relayOpenAiStream(upstream, res, isDisconnected) {
-  const reader = upstream.body?.getReader?.();
-  if (!reader) return false;
-
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let sawContent = false;
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (isDisconnected()) {
-      await reader.cancel().catch(() => undefined);
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-    let index;
-    while ((index = buffer.indexOf('\n\n')) !== -1) {
-      const frame = buffer.slice(0, index);
-      buffer = buffer.slice(index + 2);
-
-      const data = frame
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice('data:'.length).trim())
-        .join('\n');
-      if (!data || data === '[DONE]') continue;
-
-      try {
-        const delta = JSON.parse(data)?.choices?.[0]?.delta;
-        if (delta?.content || delta?.tool_calls?.length) sawContent = true;
-      } catch {
-        // Opaque frame: relay it rather than dropping what we cannot read.
-      }
-      res.write(`data: ${data}\n\n`);
-    }
-  }
-  return sawContent;
-}
-
 async function streamBackendTurn(backend, sessionId, { text, model }, res) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -132,95 +78,17 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
   // keeps streaming into a socket nobody is reading.
   res.on('close', () => controller.abort());
 
-  // Token-by-token, when the backend can do it. Hermes sends and streams in one
-  // POST, which does not fit the subscribe-then-send shape below, so it is
-  // handled as its own path rather than bent into that one.
-  if (typeof backend.sendMessageStreaming === 'function') {
-    let upstream = null;
-    try {
-      upstream = await backend.sendMessageStreaming(sessionId, { text, model }, controller.signal);
-    } catch {
-      // Nothing has been written yet, so the whole-turn path below can still
-      // serve this turn. A streaming endpoint that is missing or refuses must
-      // not cost the user their reply -- it should cost them only the tokens
-      // arriving one at a time.
-      upstream = null;
-      if (clientDisconnected) {
-        res.end();
-        return;
-      }
-    }
-
-    if (upstream) {
-      try {
-        const sawContent = await relayOpenAiStream(upstream, res, () => clientDisconnected);
-        if (!clientDisconnected && !sawContent) {
-          res.write(`data: ${JSON.stringify({
-            error: { message: 'The backend completed the turn with no assistant content.', code: 'empty_turn' },
-          })}\n\n`);
-        }
-      } catch (error) {
-        if (!clientDisconnected) {
-          res.write(`data: ${JSON.stringify({ error: { message: error.message, code: 'backend_error' } })}\n\n`);
-        }
-      } finally {
-        if (!clientDisconnected) {
-          res.write('data: [DONE]\n\n');
-          res.end();
-        }
-      }
-      return;
-    }
-  }
-
-  let toolIndex = 0;
-  const seenTools = new Map();
-  // A tool call is real turn activity with no closing text of its own — only
-  // a turn where *neither* text nor a tool ever happened counts as empty.
-  let sawContent = false;
-
-  const streaming = backend
-    .streamEvents(
-      sessionId,
-      (event) => {
-        if (event.type === 'message.delta' && event.payload.text) {
-          sawContent = true;
-          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: event.payload.text } }] })}\n\n`);
-          return;
-        }
-        if (event.type === 'tool.started' && event.payload.name) {
-          if (seenTools.has(event.payload.callId)) return;
-          sawContent = true;
-          const index = toolIndex++;
-          seenTools.set(event.payload.callId, index);
-          res.write(`data: ${JSON.stringify({
-            choices: [{ delta: { tool_calls: [{ index, function: { name: event.payload.name } }] } }],
-          })}\n\n`);
-        }
-      },
-      controller.signal,
-    )
-    .catch(() => undefined);
-
   try {
-    const result = await backend.sendMessage(sessionId, { text, model });
-    const hasContent = sawContent
-      || Boolean(result?.text && result.text.trim())
-      || Boolean(result?.message?.tool_calls?.length);
-
-    // A backend whose `streamEvents` is a no-op (Hermes' is, and it is not the
-    // only one) finishes the turn with real text that never reached the wire:
-    // every delta came from the subscription, and there was no subscription.
-    // The turn then renders as an empty bubble that the empty-turn guard below
-    // deliberately does not flag, because the content *does* exist. Send it as
-    // one delta rather than dropping it -- and only when nothing streamed, so
-    // a backend that does emit events is not echoed twice.
-    if (!clientDisconnected && !sawContent && result?.text && result.text.trim()) {
-      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: result.text } }] })}\n\n`);
-    }
+    const { hasContent, report } = await runBackendTurn(backend, sessionId, { text, model }, {
+      signal: controller.signal,
+      // Raw OpenAI-shaped payloads, relayed verbatim so a frame the runner
+      // cannot read is still forwarded rather than dropped.
+      onChunk: (data) => {
+        if (!clientDisconnected) res.write(`data: ${data}\n\n`);
+      },
+    });
 
     // Same truth the non-streaming path reports: which model actually ran.
-    const report = modelReport(result?.runtime, model);
     if (!clientDisconnected && report.model) {
       res.write(`data: ${JSON.stringify({ ...report, choices: [] })}\n\n`);
     }
@@ -238,8 +106,6 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
       res.write(`data: ${JSON.stringify({ error: { message: error.message, code: 'backend_error' } })}\n\n`);
     }
   } finally {
-    controller.abort();
-    await streaming;
     if (!clientDisconnected) {
       res.write('data: [DONE]\n\n');
       res.end();
@@ -267,27 +133,6 @@ function parseQualifiedModel(model) {
   const separator = String(model).indexOf('/');
   if (separator === -1) return { modelId: String(model) };
   return { providerId: String(model).slice(0, separator), modelId: String(model).slice(separator + 1) };
-}
-
-/**
- * The model that actually answered, alongside the one the caller asked for.
- *
- * Backends are allowed to substitute — Hermes does it silently through
- * `fallback_providers`, so a session with history can answer as an entirely
- * different model — and they report it in a runtime block. Reporting only the
- * request would keep repeating the operator's own choice back at them, which
- * is exactly how a swap stayed invisible from the phone. Absent runtime means
- * the backend cannot tell us: say what was asked and nothing more, rather than
- * inventing a confirmation.
- */
-function modelReport(runtime, requested) {
-  const ran = runtime?.model ?? requested?.modelId;
-  const asked = runtime?.requested?.model ?? requested?.modelId;
-  const report = {};
-  if (ran) report.model = ran;
-  if (asked) report.requested_model = asked;
-  if (runtime?.provider) report.provider = runtime.provider;
-  return report;
 }
 
 async function proxyChat(root, provider, requestBody, res) {

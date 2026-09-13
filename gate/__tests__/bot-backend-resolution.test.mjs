@@ -290,6 +290,33 @@ test('a Bot turn reaches that Bot\'s environment even with no backendId named', 
   }
 });
 
+test('a streamed Bot turn runs through the same turn runner as typed chat', async () => {
+  // The spoken call loop will resolve its Bot backend exactly as the chat
+  // route does and hand it to the turn runner. Pin that the streamed route
+  // reaches that Bot, streams its reply and terminates exactly once.
+  const { gate, calls } = await makeGate();
+  try {
+    const response = await fetch(`${base(gate)}/v1/chat/completions`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({
+        bot: 'default',
+        sessionId: 'bot_1',
+        messages: [{ role: 'user', content: 'ping' }],
+        stream: true,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /"content":"ok"/);
+    assert.equal(text.match(/data: \[DONE\]/g)?.length, 1, 'exactly one terminator');
+    assert.doesNotMatch(text, /empty_turn/);
+    assert.ok(calls.includes('sendMessage:default'), `never reached the Bot: ${calls.join(', ')}`);
+  } finally {
+    await gate.close();
+  }
+});
+
 test('a turn naming neither a backend nor a Bot still uses the provider path', async () => {
   // The provider proxy is the right home for an unscoped turn; this guards
   // the fix from swallowing it.
