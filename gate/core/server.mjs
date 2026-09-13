@@ -31,6 +31,7 @@ import { DeviceTokenStore } from './device-tokens.mjs';
 import { PushTokenStore } from './push-tokens.mjs';
 import { createPushRpc } from './push-rpc.mjs';
 import { createPushSend } from './push-send.mjs';
+import { createVoiceRpc } from './voice/voice-rpc.mjs';
 import { verifySignedAccessRequest } from './signature.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
@@ -539,6 +540,9 @@ export async function createGate(config = {}) {
   const pushTokens = new PushTokenStore(join(gateHome, 'push-tokens.json'));
   const pushSend = createPushSend({ fetchImpl: pushFetch ?? globalThis.fetch });
   const notificationMethods = createPushRpc({ tokens: pushTokens, send: pushSend.send });
+  // Voice sessions live on the Gate; the media socket (M2 task 2.2) reads the
+  // same registry the RPC writes, so a grant and its socket cannot disagree.
+  const voiceRpc = createVoiceRpc({});
 
   // The Hermes-dialect methods the app's command registry actually sends.
   // Resolution throws rather than writing a response: the RPC dispatcher below
@@ -568,6 +572,7 @@ export async function createGate(config = {}) {
       },
     }),
     ...notificationMethods,
+    ...voiceRpc.methods,
   };
 
   async function computeState() {
