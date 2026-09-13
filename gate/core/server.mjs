@@ -427,6 +427,35 @@ export async function createGate(config = {}) {
     ...voiceRpc.methods,
   };
 
+  // Resolve the backend that answers a spoken turn the same way a typed turn
+  // does: a named Bot owns its environment, an explicit backendId wins, and no
+  // Bot means the first attached backend. Returns null instead of writing an
+  // HTTP response, because a voice turn has none.
+  async function resolveVoiceBackend(thread = {}) {
+    const { botId, backendId } = thread;
+    if (botId && !backendId) {
+      for (const entry of await backendManager.list()) {
+        const candidate = await backendManager.get(entry.id).catch(() => null);
+        if (candidate && typeof candidate.forBot === 'function') {
+          try {
+            return await candidate.forBot(botId);
+          } catch {
+            // try the next environment that can own the Bot
+          }
+        }
+      }
+    }
+    const id = backendId ?? (await backendManager.list())[0]?.id;
+    if (!id) return null;
+    try {
+      const backend = await backendManager.get(id);
+      if (botId && typeof backend?.forBot === 'function') return await backend.forBot(botId);
+      return backend;
+    } catch {
+      return null;
+    }
+  }
+
   async function computeState() {
     const { kinds, instances } = await loadCapabilities(root);
     const providers = instances
@@ -1962,6 +1991,11 @@ export async function createGate(config = {}) {
         ? new LocalEngine({ paths: voicePaths() })
         : new ScriptedEngine()
     ),
+    runTurn: async (session, text, handlers) => {
+      const backend = await resolveVoiceBackend(session.thread);
+      if (!backend) throw new Error('No chat backend could answer this call.');
+      return runBackendTurn(backend, session.thread?.sessionId, { text }, handlers);
+    },
   });
 
   // Start listening immediately

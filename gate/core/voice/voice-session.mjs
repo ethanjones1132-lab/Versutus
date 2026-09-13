@@ -91,7 +91,10 @@ export function reduceVoiceSession(state, event) {
   switch (event.type) {
     case 'ready':
       if (state.phase !== 'opening') return stay(state);
-      return stay({ ...state, phase: 'listening' }, [phaseEffect('listening')]);
+      return stay(
+        { ...state, phase: 'listening', turnId: event.turnId ?? state.turnId },
+        [phaseEffect('listening')],
+      );
 
     case 'partial':
       if (state.phase !== 'listening') return stay(state);
@@ -100,7 +103,9 @@ export function reduceVoiceSession(state, event) {
     case 'final':
     case 'handoff': {
       if (state.phase !== 'listening') return stay(state);
-      return stay({ ...state, phase: 'thinking', reply: '', spoken: '' }, [
+      const turnId = event.turnId ?? state.turnId;
+      return stay({ ...state, phase: 'thinking', turnId, reply: '', spoken: '' }, [
+        frameSend({ t: 'final', turnId, text: event.text }),
         phaseEffect('thinking'),
         { kind: 'turn.run', text: event.text },
       ]);
@@ -153,6 +158,7 @@ export function reduceVoiceSession(state, event) {
       } else {
         next = { ...state, reply: state.reply + event.text };
       }
+      effects.push(frameSend({ t: 'reply', turnId: next.turnId, delta: event.text }));
       next = speakCompleted(next, effects);
       return stay(next, effects);
     }
@@ -168,9 +174,11 @@ export function reduceVoiceSession(state, event) {
         ]);
       }
       const remaining = state.reply.slice(state.spoken.length);
-      if (!remaining.trim()) return stay(state);
+      const doneFrame = frameSend({ t: 'turn', turnId: state.turnId, state: 'done' });
+      if (!remaining.trim()) return stay(state, [doneFrame]);
       return stay({ ...state, spoken: state.reply }, [
         { kind: 'engine.speak', text: remaining, gen: state.gen, final: true },
+        doneFrame,
       ]);
     }
 
@@ -192,7 +200,10 @@ export function reduceVoiceSession(state, event) {
     case 'speechDone': {
       if (state.phase !== 'speaking') return stay(state);
       if (event.gen !== undefined && event.gen !== state.gen) return stay(state);
-      return stay({ ...state, phase: 'listening', reply: '', spoken: '' }, [phaseEffect('listening')]);
+      return stay({ ...state, phase: 'listening', reply: '', spoken: '' }, [
+        frameSend({ t: 'speech', gen: state.gen, state: 'end' }),
+        phaseEffect('listening'),
+      ]);
     }
 
     case 'speechAudio':
