@@ -279,6 +279,37 @@ test('a userSpeechStart within the abort window discards the speculative turn', 
   await media.close();
 });
 
+test('each complete sentence is spoken while the reply is still arriving', async () => {
+  let release;
+  const runTurn = (_session, _text, { onDelta }) => {
+    onDelta('First one. ');
+    onDelta('Second one.');
+    return new Promise((resolve) => {
+      release = () => resolve({ hasContent: true });
+    });
+  };
+  const engine = new FakeEngine({ autoDone: false });
+  const media = await startMedia({ runTurn, engine });
+  const { ws, frames } = connect(media.port);
+  await once(ws, 'open');
+  await waitUntil(() => frames.some((frame) => frame.t === 'ready'));
+
+  ws.send(Buffer.from([0, 0]));
+  await waitUntil(() => engine.spoken.length === 2);
+  assert.deepEqual(media.engine.spoken.map((entry) => entry.text), ['First one. ', 'Second one.']);
+  assert.equal(
+    frames.some((frame) => frame.t === 'turn' && frame.state === 'done'),
+    false,
+    'the sentences were spoken before the turn resolved',
+  );
+
+  release();
+  await waitUntil(() => frames.some((frame) => frame.t === 'turn' && frame.state === 'done'));
+  ws.close();
+  await once(ws, 'close');
+  await media.close();
+});
+
 test('end from any path converges on exactly one ended frame', async () => {
   const media = await startMedia({ runTurn: async () => ({ hasContent: true }) });
   const { ws, frames } = connect(media.port);
