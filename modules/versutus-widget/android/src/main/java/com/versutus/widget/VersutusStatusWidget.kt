@@ -37,7 +37,7 @@ import java.time.ZoneId
 import java.util.Locale
 
 class VersutusStatusWidget : GlanceAppWidget() {
-  override val sizeMode = SizeMode.Responsive(setOf(SMALL, MEDIUM, LARGE))
+  override val sizeMode = SizeMode.Responsive(setOf(TINY, SMALL, MEDIUM, LARGE))
 
   override suspend fun provideGlance(context: Context, id: GlanceId) {
     val parsed = WidgetPayload.parse(WidgetPayloadStore.read(context))
@@ -49,6 +49,7 @@ class VersutusStatusWidget : GlanceAppWidget() {
   }
 
   companion object {
+    val TINY = DpSize(57.dp, 57.dp)
     val SMALL = DpSize(110.dp, 110.dp)
     val MEDIUM = DpSize(250.dp, 110.dp)
     val LARGE = DpSize(250.dp, 250.dp)
@@ -81,14 +82,17 @@ private fun StatusCard(parsed: WidgetPayload.Parsed) {
 
 @Composable
 private fun Lines(payload: WidgetPayload, variant: WidgetVariant) {
+  if (variant == WidgetVariant.TINY) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+      Dot(payload.connected)
+      Spacer(GlanceModifier.width(6.dp))
+      Line(payload.status, bold = true)
+    }
+    return
+  }
   val stamp = WidgetStamp.line(payload.writtenAt, System.currentTimeMillis(), ZoneId.systemDefault(), Locale.getDefault())
   Row(verticalAlignment = Alignment.CenterVertically) {
-    Box(
-      modifier = GlanceModifier
-        .size(8.dp)
-        .cornerRadius(4.dp)
-        .background(if (payload.connected) GlanceTheme.colors.primary else GlanceTheme.colors.error),
-    ) {}
+    Dot(payload.connected)
     Spacer(GlanceModifier.width(6.dp))
     Line(payload.status, bold = true)
   }
@@ -103,6 +107,16 @@ private fun Lines(payload: WidgetPayload, variant: WidgetVariant) {
   }
   Spacer(GlanceModifier.height(6.dp))
   Line(stamp, secondary = true)
+}
+
+@Composable
+private fun Dot(connected: Boolean) {
+  Box(
+    modifier = GlanceModifier
+      .size(8.dp)
+      .cornerRadius(4.dp)
+      .background(if (connected) GlanceTheme.colors.primary else GlanceTheme.colors.error),
+  ) {}
 }
 
 @Composable

@@ -4,6 +4,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class WidgetLayoutTest {
+  @Test fun `a 1x1 cell is the tiny layout`() {
+    assertEquals(WidgetVariant.TINY, WidgetLayout.variantFor(57f, 57f))
+  }
+
   @Test fun `a 2x2 square is the small layout`() {
     assertEquals(WidgetVariant.SMALL, WidgetLayout.variantFor(110f, 110f))
   }
