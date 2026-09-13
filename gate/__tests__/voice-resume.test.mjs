@@ -51,7 +51,7 @@ const SESSION = {
   thread: { kind: 'bot', sessionId: 'sess-1', botId: 'scout' },
 };
 
-async function startMedia({ runTurn, engine = new FakeEngine(), resumeTimeoutMs } = {}) {
+async function startMedia({ runTurn, engine = new FakeEngine(), resumeTimeoutMs, audit } = {}) {
   const registry = new VoiceSessionRegistry();
   registry.create(SESSION);
   const deviceTokens = {
@@ -68,6 +68,7 @@ async function startMedia({ runTurn, engine = new FakeEngine(), resumeTimeoutMs 
     createEngine: () => engine,
     runTurn,
     resumeTimeoutMs,
+    audit,
   });
   server.listen(0);
   await once(server, 'listening');
@@ -144,6 +145,33 @@ test('a dropped socket re-attaches and keeps the call, flushing buffered speech'
   release?.();
   second.ws.close();
   await once(second.ws, 'close');
+  await media.close();
+});
+
+test('a call that ends leaves one audit summary for the sink', async () => {
+  const engine = new FakeEngine();
+  const recorded = [];
+  const media = await startMedia({
+    runTurn: async (_session, _text, { onDelta }) => {
+      onDelta('Hi.');
+      return { hasContent: true };
+    },
+    engine,
+    audit: (summary) => recorded.push(summary),
+  });
+  const { ws, frames } = connect(media.port);
+  await once(ws, 'open');
+  await waitUntil(() => frames.some((frame) => frame.t === 'ready'));
+
+  ws.send(Buffer.from([0, 0]));
+  await waitUntil(() => frames.some((frame) => frame.t === 'turn' && frame.state === 'done'));
+
+  media.endAll('gate-restart');
+  await waitUntil(() => recorded.length === 1);
+  assert.equal(recorded[0].engine, 'local');
+  assert.equal(recorded[0].deviceId, 'dev-1');
+  assert.equal(recorded[0].turns, 1);
+  assert.equal(recorded[0].error, 'gate-restart');
   await media.close();
 });
 

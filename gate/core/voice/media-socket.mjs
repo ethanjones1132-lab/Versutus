@@ -45,6 +45,7 @@ export function attachVoiceMediaSocket({
   registry,
   createEngine,
   runTurn,
+  audit = null,
   now = () => Date.now(),
   noAudioTimeoutMs = NO_AUDIO_TIMEOUT_MS,
   resumeTimeoutMs = RESUME_TIMEOUT_MS,
@@ -109,6 +110,7 @@ export function attachVoiceMediaSocket({
     let resumeTimer = null;
     let audioTimer = null;
     let lastAudioAt = now();
+    let turns = 0;
     const buffer = [];
     let bufferedAudioBytes = 0;
 
@@ -188,6 +190,7 @@ export function attachVoiceMediaSocket({
             speculative.controller.abort();
             speculative = null;
           }
+          turns += 1;
           void startTurn(effect.text);
           break;
         case 'turn.cancel':
@@ -198,8 +201,19 @@ export function attachVoiceMediaSocket({
           turnAbort?.abort();
           turnAbort = null;
           break;
+        case 'audit':
+          // The reducer names the end; the line carries counts and names only.
+          audit?.({
+            deviceId: session.deviceId,
+            botId: session.thread?.botId ?? null,
+            engine: session.engine,
+            fellBackFrom: session.fellBackFrom ?? null,
+            turns,
+            error: effect.reason ?? null,
+          });
+          break;
         default:
-          // `audit` (M9) and anything newer are inert here.
+          // Anything newer is inert here.
           break;
       }
     };

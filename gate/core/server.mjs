@@ -33,6 +33,7 @@ import { createPushRpc } from './push-rpc.mjs';
 import { createPushSend } from './push-send.mjs';
 import { createVoiceRpc } from './voice/voice-rpc.mjs';
 import { attachVoiceMediaSocket } from './voice/media-socket.mjs';
+import { createVoiceAudit } from './voice/audit.mjs';
 import { LocalEngine } from './voice/engines/local-engine.mjs';
 import { voicePaths, voiceStatus, installVoice, uvRunner } from './voice/runtime.mjs';
 import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
@@ -1995,10 +1996,12 @@ export async function createGate(config = {}) {
   // One media WebSocket per voice call, over the same HTTP server. M5 wires the
   // local engine for an `engine: 'local'` grant; the scripted engine still
   // drives tests and the phone smoke test (`VERSUTUS_VOICE_SCRIPTED=1`).
+  const voiceAudit = createVoiceAudit({ dir: voicePaths().root });
   const voiceMedia = attachVoiceMediaSocket({
     server,
     deviceTokens,
     registry: voiceRpc.registry,
+    audit: (summary) => voiceAudit.record(summary),
     createEngine: (session) => (
       session.engine === 'local' && !scriptedEngineEnabled()
         ? new LocalEngine({ paths: voicePaths() })
