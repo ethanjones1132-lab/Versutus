@@ -1,6 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
+import { BotMemoryPane } from '@/components/chat/bot-memory-pane';
 import { BaseSheet, Button, Divider, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { haptics } from '@/lib/haptics';
@@ -112,6 +113,9 @@ export function BotDetailSheet({
             <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
           ) : null}
         </View>
+
+        {/* P2: the Bot's memory, read on demand from the Gate host. */}
+        <BotMemoryPane botId={bot.id} />
 
         <View style={styles.fact}>
           <Text variant="micro" color="tertiary">

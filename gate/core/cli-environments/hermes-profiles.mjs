@@ -228,6 +228,28 @@ export async function readHermesSoul(hermesHome, id, io = {}) {
   return text.trim() ? text : null;
 }
 
+/** The only files a Bot's memory read may touch, in display order. */
+export const HERMES_MEMORY_FILES = ['MEMORY.md', 'USER.md'];
+
+/**
+ * A Bot's standing memory, read from its `<home>/memories/` directory.
+ *
+ * Only the whitelisted names are ever read — the directory is not enumerated,
+ * so a future file the Gate does not know about cannot leak. A Bot whose
+ * memory files are all missing or blank is `null`, the same distinction the
+ * soul read makes between "nothing recorded" and "the read failed".
+ */
+export async function readHermesMemory(hermesHome, id, io = {}) {
+  const readFile = io.readFile ?? defaultReadFile;
+  const home = id === 'default' ? hermesHome : join(hermesHome, 'profiles', id);
+  const files = [];
+  for (const name of HERMES_MEMORY_FILES) {
+    const text = await readText(join(home, 'memories', name), readFile);
+    if (text.trim()) files.push({ name, text });
+  }
+  return files.length > 0 ? { files } : null;
+}
+
 export async function getHermesBot(hermesHome, id, io = {}) {
   if (!id) return null;
   if (id === 'default') {

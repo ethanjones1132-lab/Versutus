@@ -23,7 +23,14 @@ import { runCli } from '../adapters/shared.mjs';
 import { createBotArgs, ensureDistinctListenKey, validateBotId } from '../hermes-bot-create.mjs';
 import { upsertProfileDescription } from '../hermes-bot-edit.mjs';
 import { removeModelPins } from '../hermes-config-edit.mjs';
-import { getHermesBot, listHermesBots, parseMultiplexEnabled, readHermesSoul, toPublicBot } from '../hermes-profiles.mjs';
+import {
+  getHermesBot,
+  listHermesBots,
+  parseMultiplexEnabled,
+  readHermesMemory,
+  readHermesSoul,
+  toPublicBot,
+} from '../hermes-profiles.mjs';
 
 /** Hermes sessions are already gateway-shaped; fill only what may be absent. */
 export function toGatewaySession(session) {
@@ -485,6 +492,25 @@ export function createHermesBackend({
       const multiplex = await hostMultiplexEnabled();
       const soul = await readHermesSoul(profilesHome, id);
       return { ...toPublicBot(record, defaultKey, multiplex), soul };
+    },
+
+    /**
+     * One Bot's memory, read on demand like its soul. Only the whitelisted
+     * `memories/` files are returned — never the directory, never a path the
+     * client supplies. An unknown Bot is refused by name.
+     */
+    async getBotMemory({ id } = {}) {
+      const refuse = () => {
+        const error = new Error(`unknown bot "${id}"`);
+        error.code = 'unknown_bot';
+        error.status = 404;
+        return error;
+      };
+      if (!profilesHome || !id) throw refuse();
+      const records = await listHermesBots(profilesHome);
+      if (!records.some((entry) => entry.id === id)) throw refuse();
+      const memory = await readHermesMemory(profilesHome, id);
+      return { id, files: memory?.files ?? [] };
     },
 
     async deliverGroupMessage({ name, memberIds, mentionedIds, text } = {}) {

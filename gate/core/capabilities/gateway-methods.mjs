@@ -294,5 +294,10 @@ export function createGatewayMethods({ getBackend, listDevices, revokeDevice }) 
     // re-read constantly and a soul can be long, so it is fetched only when a
     // Bot is opened.
     'bots.get': (params) => via(getBackend, params, 'getBot', (b) => b.getBot({ id: params?.id })),
+
+    // P2: one Bot's memory files, read on demand like its soul. The backend
+    // owns which files are memory; an unknown Bot or a backend without the
+    // read fails honestly instead of returning an empty memory.
+    'bots.memory': (params) => via(getBackend, params, 'getBotMemory', (b) => b.getBotMemory({ id: params?.id })),
   };
 }

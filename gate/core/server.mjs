@@ -1303,6 +1303,25 @@ export async function createGate(config = {}) {
         return;
       }
 
+      const botMemoryMatch = pathname.match(/^\/v1\/bots\/([^/]+)\/memory$/);
+      if (botMemoryMatch && method === 'GET') {
+        // P2: a Bot's memory read, on demand like its soul. The backend owns
+        // which files are memory; the Gate adds no path from the client.
+        const backend = await resolveBackendFor('getBotMemory');
+        if (!backend) return;
+        try {
+          const memory = await backend.getBotMemory({ id: decodeURIComponent(botMemoryMatch[1]) });
+          res.writeHead(200);
+          res.end(JSON.stringify(memory));
+        } catch (error) {
+          const code = error.code ?? 'bot_memory_read_failed';
+          const status = error.status || (code === 'unknown_bot' ? 404 : 502);
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code } }));
+        }
+        return;
+      }
+
       const botEditMatch = pathname.match(/^\/v1\/bots\/([^/]+)$/);
       if (botEditMatch && method === 'GET') {
         // One Bot, fetched only when a Bot is opened. Kept off /v1/bots so the
