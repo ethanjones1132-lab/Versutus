@@ -185,7 +185,7 @@ import {
 import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
 import { SESSION_SPEND_LIST_LIMIT } from '@/lib/gateway/session-analytics';
 import { botBudget, botSpendFromSessions, checkBotBudget, loadBudgets } from '@/lib/gateway/budgets';
-import { loadWorkflows } from '@/lib/gateway/workflows';
+import { loadWorkflows, saveWorkflows } from '@/lib/gateway/workflows';
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
 import { writeWidgetSnapshot } from '@/lib/widget/widget-device';
 export type ConnectionPhase =
@@ -2657,6 +2657,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         const response = await executeGatewaySlashCommand(trimmed, {
           hello: activeHello,
           workflows,
+          onWorkflowsChanged: (next) => {
+            const gateway = activeGatewayRef.current;
+            if (gateway) void saveWorkflows(gateway.id, next);
+          },
           currentModel: activeGateway?.model,
           gatewayRequest,
           runAgentCommand,

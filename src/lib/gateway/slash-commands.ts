@@ -24,7 +24,10 @@ import {
 import { matchSkillSlash, type Skill } from '@/lib/gateway/skills';
 import {
   applyWorkflowInput,
+  createWorkflow,
+  deleteWorkflow,
   findWorkflow,
+  renameWorkflow,
   workflowSummaryCopy,
   type Workflow,
 } from '@/lib/gateway/workflow-model';
@@ -73,6 +76,8 @@ type SlashCommandContext = {
   ) => Promise<RunOutcome>;
   /** This device's stored workflows, for `/workflow`. */
   workflows?: Workflow[];
+  /** Persist a `/workflow` create/rename/delete. Absent means the command refuses. */
+  onWorkflowsChanged?: (next: Workflow[]) => void | Promise<void>;
   /**
    * Per-request model override on the active gateway profile (Hermes / Gate).
    * Used when the gateway has no remote config REST for `/model set`.
@@ -763,6 +768,11 @@ async function runWorkflowCommand(
     );
   }
 
+  // Management sub-commands; anything else is a workflow name to run.
+  if (/^new\s/i.test(trimmed) || /^rename\s/i.test(trimmed) || /^delete\s/i.test(trimmed)) {
+    return runWorkflowManagement(trimmed, workflows, context);
+  }
+
   const [name, ...rest] = trimmed.split(/\s+/);
   const workflow = findWorkflow(workflows, name);
   if (!workflow) {
@@ -798,6 +808,53 @@ async function runWorkflowCommand(
     }
   }
   return textResult(`${workflow.name}:\n${lines.join('\n')}`, '/workflow');
+}
+
+/** `/workflow new|rename|delete` — the management half of the same command. */
+async function runWorkflowManagement(
+  trimmed: string,
+  workflows: Workflow[],
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  if (!context.onWorkflowsChanged) {
+    return textResult('This surface cannot save workflows.', '/workflow');
+  }
+  const commit = async (next: Workflow[], line: string): Promise<SlashCommandResult> => {
+    await context.onWorkflowsChanged?.(next);
+    return textResult(line, '/workflow');
+  };
+
+  if (/^new\s/i.test(trimmed)) {
+    const [head, ...stepParts] = trimmed.replace(/^new\s+/i, '').split('|');
+    const name = head.trim();
+    const steps = stepParts.map((part) => part.trim()).filter(Boolean);
+    if (!name || steps.length === 0) {
+      return textResult('Usage: /workflow new <name> | <step> | <step>', '/workflow');
+    }
+    const next = createWorkflow(workflows, { name, steps });
+    if (next === workflows) {
+      return textResult('A workflow needs a name and at least one step.', '/workflow');
+    }
+    return commit(next, `Saved ${name} (${steps.length} step${steps.length === 1 ? '' : 's'}).`);
+  }
+
+  if (/^rename\s/i.test(trimmed)) {
+    const [head, ...restParts] = trimmed.replace(/^rename\s+/i, '').split('|');
+    const oldName = head.trim();
+    const newName = restParts.join('|').trim();
+    const workflow = findWorkflow(workflows, oldName);
+    if (!workflow) return textResult(`Unknown workflow: ${oldName}`, '/workflow');
+    if (!newName) return textResult('Usage: /workflow rename <old> | <new name>', '/workflow');
+    return commit(
+      renameWorkflow(workflows, workflow.id, newName),
+      `Renamed ${workflow.name} to ${newName}.`,
+    );
+  }
+
+  const name = trimmed.replace(/^delete\s+/i, '').trim();
+  const workflow = findWorkflow(workflows, name);
+  if (!workflow) return textResult(`Unknown workflow: ${name}`, '/workflow');
+  return commit(deleteWorkflow(workflows, workflow.id), `Removed ${workflow.name}.`);
 }
 
 function formatRunEvent(event: { type: string; data?: Record<string, unknown> }): string {

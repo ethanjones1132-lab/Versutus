@@ -657,3 +657,58 @@ describe('/workflow runs stored step sequences', () => {
     expect(result.text).toContain('Unknown workflow: nope');
   });
 });
+
+describe('/workflow management', () => {
+  test('new creates a workflow from pipe-separated steps', async () => {
+    const onWorkflowsChanged = jest.fn();
+    const result = await executeGatewaySlashCommand('/workflow new Digest | read mail | summarize', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows: [],
+      onWorkflowsChanged,
+    });
+    const next = onWorkflowsChanged.mock.calls[0][0];
+    expect(next).toHaveLength(1);
+    expect(next[0].name).toBe('Digest');
+    expect(next[0].steps.map((step: { prompt: string }) => step.prompt)).toEqual([
+      'read mail',
+      'summarize',
+    ]);
+    expect(result.text).toContain('Saved Digest');
+  });
+
+  test('delete and rename fold the stored set', async () => {
+    const workflows = [{ id: 'w1', name: 'Digest', steps: [{ id: 's1', prompt: 'p' }] }];
+    const onWorkflowsChanged = jest.fn();
+    await executeGatewaySlashCommand('/workflow delete Digest', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      onWorkflowsChanged,
+    });
+    expect(onWorkflowsChanged.mock.calls[0][0]).toEqual([]);
+
+    onWorkflowsChanged.mockClear();
+    const renamed = await executeGatewaySlashCommand('/workflow rename Digest | Morning', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      onWorkflowsChanged,
+    });
+    expect(onWorkflowsChanged.mock.calls[0][0][0].name).toBe('Morning');
+    expect(renamed.text).toContain('Morning');
+  });
+
+  test('without a save path the management command refuses', async () => {
+    const result = await executeGatewaySlashCommand('/workflow delete Digest', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows: [],
+    });
+    expect(result.text).toContain('cannot save');
+  });
+});
