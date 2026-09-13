@@ -112,17 +112,55 @@ export async function installVoice({ paths, cpu = false, runUv, fetch: fetchImpl
   return { venv: paths.venv, models: downloaded, cpu };
 }
 
-/** What `voice.capabilities` reports for `local`, deduced from the runtime. */
+/**
+ * The Gate's `voice` config block (§4.9), from `<gateHome>/voice/voice.json`.
+ * A missing or malformed file means everything is enabled; a `false` switch
+ * is the only thing that turns an engine off.
+ */
+export function readVoiceConfig({ paths } = {}) {
+  const config = {
+    enabled: true,
+    engines: { local: { enabled: true }, codex: { enabled: true } },
+  };
+  if (!paths?.root) return config;
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(join(paths.root, 'voice.json'), 'utf8'));
+  } catch {
+    return config;
+  }
+  if (!raw || typeof raw !== 'object') return config;
+  if (typeof raw.enabled === 'boolean') config.enabled = raw.enabled;
+  for (const engine of ['local', 'codex']) {
+    const value = raw.engines?.[engine]?.enabled;
+    if (typeof value === 'boolean') config.engines[engine].enabled = value;
+  }
+  return config;
+}
+
+/** What `voice.capabilities` reports for each engine, from the runtime and config. */
 export function voiceStatus({ paths } = {}) {
+  const config = readVoiceConfig({ paths });
+  const off = config.enabled === false;
+  const disabledReason = (engine) =>
+    off
+      ? 'Voice is turned off on this Gate.'
+      : `The ${engine} voice engine is turned off on this Gate.`;
   const engines = {
-    local: localStatus(paths),
-    codex: {
-      state: 'disabled',
-      reason: 'Codex realtime needs an API key; the ChatGPT login does not provide one.',
-    },
+    local:
+      off || config.engines.local.enabled === false
+        ? { state: 'disabled', reason: disabledReason('local') }
+        : localStatus(paths),
+    codex:
+      off || config.engines.codex.enabled === false
+        ? { state: 'disabled', reason: disabledReason('codex') }
+        : {
+            state: 'disabled',
+            reason: 'Codex realtime needs an API key; the ChatGPT login does not provide one.',
+          },
   };
   return {
-    enabled: true,
+    enabled: !off,
     installed: engines.local.state === 'ready',
     engines,
     limits: { codexMinutesPerDay: 60, maxConcurrentCalls: 1 },

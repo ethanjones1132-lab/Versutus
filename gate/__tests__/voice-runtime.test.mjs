@@ -95,6 +95,38 @@ test('installVoice runs uv and downloads every locked model, and a failure rejec
   assert.equal(fetchCalls.length, 0, 'no model download may start before the venv is installed');
 });
 
+test('a per-engine switch turns only that engine off, and the kill switch turns all off', () => {
+  const dir = tempDir();
+  const paths = voicePaths({ VERSUTUS_GATE_HOME: dir }, 'linux');
+  mkdirSync(paths.root, { recursive: true });
+
+  writeFileSync(
+    join(paths.root, 'voice.json'),
+    JSON.stringify({ engines: { local: { enabled: false } } }),
+  );
+  let status = voiceStatus({ paths });
+  assert.equal(status.enabled, true);
+  assert.equal(status.engines.local.state, 'disabled');
+  assert.match(status.engines.local.reason, /off/i);
+  assert.equal(status.engines.codex.state, 'disabled');
+
+  writeFileSync(join(paths.root, 'voice.json'), JSON.stringify({ enabled: false }));
+  status = voiceStatus({ paths });
+  assert.equal(status.enabled, false);
+  assert.equal(status.engines.local.state, 'disabled');
+  assert.equal(status.engines.codex.state, 'disabled');
+});
+
+test('a malformed voice config falls back to enabled rather than throwing', () => {
+  const dir = tempDir();
+  const paths = voicePaths({ VERSUTUS_GATE_HOME: dir }, 'linux');
+  mkdirSync(paths.root, { recursive: true });
+  writeFileSync(join(paths.root, 'voice.json'), '{ not json');
+  const status = voiceStatus({ paths });
+  assert.equal(status.enabled, true);
+  assert.equal(status.engines.local.state, 'not-installed');
+});
+
 test('voiceStatus reports not-installed without a venv and ready with one', () => {
   const dir = tempDir();
   const paths = voicePaths({ VERSUTUS_GATE_HOME: dir }, 'linux');
