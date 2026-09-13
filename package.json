@@ -29,6 +29,7 @@
     "expo-glass-effect": "~57.0.1",
     "expo-haptics": "~57.0.1",
     "expo-image": "~57.0.2",
+    "expo-image-picker": "~57.0.17",
     "expo-linking": "~57.0.5",
     "expo-local-authentication": "~57.0.2",
     "expo-notifications": "~57.0.10",
@@ -54,7 +55,8 @@
     "react-native-screens": "~4.26.0",
     "react-native-svg": "15.15.4",
     "react-native-web": "~0.21.0",
-    "react-native-worklets": "0.10.1"
+    "react-native-worklets": "0.10.1",
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "@types/jest": "29.5.14",
@@ -79,6 +81,7 @@
     "test": "jest --runInBand && npm run test:gate",
     "test:coverage": "jest --runInBand --coverage",
     "test:gate": "cd gate && node --test \"__tests__/*.test.mjs\" \"../scripts/__tests__/*.test.mjs\"",
+    "test:voice-worker": "node gate/voice-worker/run-tests.mjs",
     "smoke:gateway-commands": "tsx ./scripts/smoke-gateway-commands.mts",
     "smoke:portal": "tsx ./scripts/smoke-portal.mts",
     "smoke:live": "tsx ./scripts/smoke-live-gateway.mts",

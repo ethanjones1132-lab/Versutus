@@ -18,6 +18,16 @@ import { AppState } from 'react-native';
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
 import { composerDraftThread, type ComposerDraftThread } from '@/lib/gateway/composer-draft';
 import { createMessageId } from '@/lib/gateway/messages';
+import {
+  INITIAL_GATE_CALL,
+  appPhaseForGate,
+  gateControlFor,
+  reduceGateCall,
+  serializeGateControl,
+  type GateCallBanner,
+  type GateCallEffect,
+  type HandsfreeCallTransport,
+} from '@/lib/voice/gate-call';
 import { loadHandsfreeModule, type HandsfreeNativeModule } from '@/lib/voice/handsfree-device';
 import {
   handsfreeReplyForTurn,
@@ -38,6 +48,10 @@ import {
   type HandsfreeSessionState,
   type HandsfreeTerminalReason,
 } from '@/lib/voice/handsfree-session';
+import {
+  handsfreeStartBlocker,
+  type HandsfreeStartBlocker,
+} from '@/lib/voice/handsfree-start-policy';
 import { beginHandsfreeCall, endHandsfreeCall, stopSpeech } from '@/lib/voice/speech';
 import type { HandsfreeAvailability, HandsfreeStartOutcome } from '../../modules/handsfree-voice';
 
@@ -47,6 +61,14 @@ export const HANDSFREE_GRACE_MS = 600;
 /** How long a sent turn may wait for its reply before the call fails. */
 export const HANDSFREE_REPLY_WATCHDOG_MS = 120_000;
 
+/** How many times a listen that did not start is asked again before the call ends. */
+const HANDSFREE_LISTEN_RETRY_LIMIT = 8;
+const HANDSFREE_LISTEN_RETRY_MS = 150;
+
+/** A probe that finds no recognizer is asked again; Samsung binds its recognition service lazily. */
+const HANDSFREE_PROBE_RETRIES = 3;
+const HANDSFREE_PROBE_RETRY_MS = 500;
+
 /** What one call is for. Built by the caller, never derived from context. */
 export type HandsfreeCallTarget = {
   gatewayId: string;
@@ -55,6 +77,14 @@ export type HandsfreeCallTarget = {
   botId?: string;
   label: string;
   voice: { voiceIdentifier?: string; rate?: number; pitch?: number };
+  /**
+   * Who drives the loop. `phone` (the default) is the Phase 0 on-device call;
+   * `gate` hands the microphone, speaker and loop to the Gate. The provider
+   * branches on this, never on an engine or backend name.
+   */
+  transport?: HandsfreeCallTransport;
+  /** Passed through to `voice.session.start` untouched when `transport` is gate. */
+  voiceEngine?: string;
 };
 
 /** `refused` is a provider precondition; the rest are the native outcome. */
@@ -68,10 +98,19 @@ export type HandsfreeVoiceContextValue = {
   partial: string;
   label: string | undefined;
   reason: HandsfreeTerminalReason | undefined;
+  lastEndReason?: HandsfreeTerminalReason;
+  /** How many calls have finished, so the screen can react to a repeat failure. */
+  callsEnded: number;
   /** The latest 0–1 amplitude sample, when the platform supplies one. */
   level: number;
+  /** The engine a live call is using, once the Gate has answered. */
+  engine?: string;
+  /** Why the call is not on the preferred engine, when the Gate fell back. */
+  engineReason?: string;
   /** Whether `start` can succeed right now. */
   canStart: boolean;
+  /** What blocks a start right now, or null. */
+  startBlocker: HandsfreeStartBlocker | null;
   start: (target: HandsfreeCallTarget) => Promise<HandsfreeStartResult>;
   mute: () => void;
   unmute: () => void;
@@ -97,6 +136,12 @@ function clampLevel(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+/** The websocket URL for the Gate's media socket, from the gateway's HTTP base. */
+function mediaSocketUrl(baseUrl: string, streamPath: string): string {
+  const wsBase = baseUrl.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:').replace(/\/$/, '');
+  return `${wsBase}${streamPath}`;
+}
+
 export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode }) {
   const {
     activeGateway,
@@ -105,6 +150,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     selectedBotId,
     pendingRunApproval,
     sendChatInput,
+    gatewayRequest,
+    reloadHistory,
   } = useGateway();
   const { messages, isSending, isCommandRunning } = useChatSurface();
 
@@ -112,6 +159,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const [level, setLevel] = useState(0);
   const [availability, setAvailability] = useState<HandsfreeAvailability | null>(null);
   const [label, setLabel] = useState<string | undefined>(undefined);
+  const [gateBanner, setGateBanner] = useState<GateCallBanner>(INITIAL_GATE_CALL);
+  const [gateMode, setGateMode] = useState(false);
+  const [engineInfo, setEngineInfo] = useState<{ engine: string; reason?: string } | null>(null);
 
   const sessionRef = useRef(session);
   const moduleRef = useRef<HandsfreeNativeModule | null>(null);
@@ -128,6 +178,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const endingRef = useRef(false);
   const runEffectRef = useRef<(effect: HandsfreeEffect) => void>(() => undefined);
   const teardownRef = useRef<() => Promise<void>>(async () => undefined);
+  // Whether this call is driven by the Gate, and the session the Gate gave it.
+  const gateModeRef = useRef(false);
+  const gateSessionIdRef = useRef<string | undefined>(undefined);
+  const gateBannerRef = useRef<GateCallBanner>(INITIAL_GATE_CALL);
 
   // Everything a stable callback has to read at call time. Updated after every
   // render, so `start` and the reply watchers always see the current values
@@ -143,6 +197,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     isCommandRunning,
     sendChatInput,
     availability,
+    gatewayRequest,
+    reloadHistory,
+    label,
   });
   useEffect(() => {
     latest.current = {
@@ -156,6 +213,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       isCommandRunning,
       sendChatInput,
       availability,
+      gatewayRequest,
+      reloadHistory,
+      label,
     };
   });
 
@@ -235,6 +295,38 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     [dispatch, unsubscribe],
   );
 
+  // What a folded Gate effect means natively. `ended` is the Gate's terminal
+  // word, so it takes the reducer's one terminal path rather than tearing down
+  // here; a late frame cannot run this twice because the banner is terminal.
+  const runGateEffect = useCallback((effect: GateCallEffect) => {
+    if (effect.kind === 'send-control') {
+      void moduleRef.current?.sendGateControl(serializeGateControl(effect.frame));
+      return;
+    }
+    if (effect.kind === 'reload-history') {
+      void latest.current.reloadHistory();
+      return;
+    }
+    dispatch({ type: 'end' });
+  }, [dispatch]);
+
+  const subscribeGate = useCallback(
+    (module: HandsfreeNativeModule) => {
+      unsubscribe();
+      subscriptionsRef.current = [
+        module.addListener('gate', (event) => {
+          const next = reduceGateCall(gateBannerRef.current, event.frame);
+          gateBannerRef.current = next.state;
+          setGateBanner(next.state);
+          for (const gateEffect of next.effects) runGateEffect(gateEffect);
+        }),
+        // The amplitude sample is banner-only, exactly as on the phone engine.
+        module.addListener('level', (event) => setLevel(clampLevel(event.level))),
+      ];
+    },
+    [runGateEffect, unsubscribe],
+  );
+
   const teardown = useCallback(async () => {
     if (endingRef.current) return;
     if (sessionRef.current.phase === 'idle' || sessionRef.current.phase === 'ended') return;
@@ -242,18 +334,44 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     clearGrace();
     clearWatchdog();
     unsubscribe();
-    endHandsfreeCall();
+    const wasGate = gateModeRef.current;
+    const gateSessionId = gateSessionIdRef.current;
+    gateModeRef.current = false;
+    setGateMode(false);
+    gateSessionIdRef.current = undefined;
+    setEngineInfo(null);
     const module = moduleRef.current;
     moduleRef.current = null;
-    try {
-      await module?.stopSession();
-    } catch {
-      // best-effort: teardown continues so the JS state never stays mid-call
-    }
-    try {
-      await stopSpeech();
-    } catch {
-      // a B2 queue that will not stop is not asked twice
+    if (wasGate) {
+      // The Gate owns capture, playback and the loop; releasing them and
+      // telling it the call is over is the whole teardown.
+      try {
+        await module?.stopGateMedia();
+      } catch {
+        // best-effort: a socket that will not close still stops locally
+      }
+      if (gateSessionId) {
+        try {
+          await latest.current.gatewayRequest('voice.session.stop', {
+            voiceSessionId: gateSessionId,
+            reason: 'user',
+          });
+        } catch {
+          // the session's own idle close ends it if this never lands
+        }
+      }
+    } else {
+      endHandsfreeCall();
+      try {
+        await module?.stopSession();
+      } catch {
+        // best-effort: teardown continues so the JS state never stays mid-call
+      }
+      try {
+        await stopSpeech();
+      } catch {
+        // a B2 queue that will not stop is not asked twice
+      }
     }
     resetSpeech();
     turnIdRef.current = undefined;
@@ -356,11 +474,32 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     [armWatchdog, dispatch, resetSpeech],
   );
 
+  // The native service may still be starting when the reducer first asks it to
+  // listen; a `false` is "not yet", not silence to ignore. Only a listen that
+  // never starts ends the call, with a reason the screen can name.
+  const startListeningWithRetry = useCallback(async () => {
+    for (let attempt = 0; attempt < HANDSFREE_LISTEN_RETRY_LIMIT; attempt += 1) {
+      const module = moduleRef.current;
+      const phase = sessionRef.current.phase;
+      if (!module || (phase !== 'listening' && phase !== 'confirming')) return;
+      if (await module.startListening()) return;
+      await new Promise((resolve) => setTimeout(resolve, HANDSFREE_LISTEN_RETRY_MS));
+    }
+    dispatch({ type: 'fatalError', reason: 'recognition-failed' });
+  }, [dispatch]);
+
   const runEffect = (effect: HandsfreeEffect) => {
+    if (gateModeRef.current) {
+      // The Gate owns the loop: listening, the grace window, speech and sends
+      // are its decisions, not the phone engine's. Only the terminal effect is
+      // the provider's to run, and `runGateEffect` handles the rest.
+      if (effect.kind === 'stop-session') void teardown();
+      return;
+    }
     const module = moduleRef.current;
     switch (effect.kind) {
       case 'start-listening':
-        void module?.startListening();
+        void startListeningWithRetry();
         return;
       case 'stop-listening':
         void module?.stopListening();
@@ -428,18 +567,28 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   useEffect(() => {
     if (status !== 'connected') return undefined;
     let cancelled = false;
-    void loadHandsfreeModule().then(async (module) => {
-      if (cancelled) return;
-      if (!module) return;
-      try {
-        const read = await module.getAvailability();
-        if (!cancelled) setAvailability(read);
-      } catch {
-        if (!cancelled) setAvailability(null);
+    const probe = async () => {
+      for (let attempt = 0; attempt < HANDSFREE_PROBE_RETRIES; attempt += 1) {
+        const module = await loadHandsfreeModule();
+        if (cancelled || !module) return;
+        try {
+          const read = await module.getAvailability();
+          if (cancelled) return;
+          setAvailability(read);
+          if (read.recognition) return;
+        } catch {
+          if (!cancelled) setAvailability(null);
+        }
+        await new Promise((resolve) => setTimeout(resolve, HANDSFREE_PROBE_RETRY_MS));
       }
+    };
+    void probe();
+    const subscription = AppState.addEventListener('change', (next) => {
+      if (next === 'active') void probe();
     });
     return () => {
       cancelled = true;
+      subscription.remove();
     };
   }, [status]);
 
@@ -472,6 +621,106 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     };
   }, []);
 
+  const refuseGateStart = useCallback(() => {
+    unsubscribe();
+    gateModeRef.current = false;
+    setGateMode(false);
+    setEngineInfo(null);
+    gateSessionIdRef.current = undefined;
+    moduleRef.current = null;
+    targetRef.current = null;
+    threadRef.current = undefined;
+    dispatch({ type: 'start-refused' });
+  }, [dispatch, unsubscribe]);
+
+  // A Gate-powered call: the Gate runs `voice.session.start`, the phone opens
+  // the media socket for exactly that session, and every frame from then on is
+  // folded by `reduceGateCall`.
+  const startGateCall = useCallback(
+    async (
+      target: HandsfreeCallTarget,
+      module: HandsfreeNativeModule,
+      read: HandsfreeAvailability,
+    ): Promise<HandsfreeStartResult> => {
+      const gateway = latest.current.activeGateway;
+      if (!gateway?.url) return 'unavailable';
+
+      moduleRef.current = module;
+      availabilityRef.current = read;
+      setAvailability(read);
+      targetRef.current = target;
+      threadRef.current = callDraftThread(target);
+      setLabel(target.label);
+      endingRef.current = false;
+      gateModeRef.current = true;
+      setGateMode(true);
+      gateSessionIdRef.current = undefined;
+      gateBannerRef.current = INITIAL_GATE_CALL;
+      setGateBanner(INITIAL_GATE_CALL);
+
+      subscribeGate(module);
+      sessionRef.current = dispatch({ type: 'start' });
+
+      let grant: {
+        voiceSessionId?: string;
+        streamPath?: string;
+        engine?: string;
+        fellBackFrom?: string;
+        reason?: string;
+      } | null = null;
+      try {
+        grant = await latest.current.gatewayRequest<{
+          voiceSessionId?: string;
+          streamPath?: string;
+          engine?: string;
+          fellBackFrom?: string;
+          reason?: string;
+        }>(
+          'voice.session.start',
+          {
+            engine: target.voiceEngine ?? 'auto',
+            thread: {
+              kind: target.surfaceKind,
+              sessionId: target.sessionId,
+              botId: target.botId,
+            },
+            disclosureAcceptedAt: new Date().toISOString(),
+          },
+        );
+      } catch {
+        grant = null;
+      }
+      if (!grant?.voiceSessionId || !grant?.streamPath) {
+        refuseGateStart();
+        return 'unavailable';
+      }
+      gateSessionIdRef.current = grant.voiceSessionId;
+      setEngineInfo({ engine: grant.engine ?? 'local', ...(grant.fellBackFrom ? { reason: grant.reason } : {}) });
+
+      let started = false;
+      try {
+        started = await module.startGateMedia({
+          url: mediaSocketUrl(gateway.url, grant.streamPath),
+          token: gateway.token ?? '',
+          voiceSessionId: grant.voiceSessionId,
+        });
+      } catch {
+        started = false;
+      }
+      if (!started) {
+        refuseGateStart();
+        return 'unavailable';
+      }
+      if (sessionRef.current.phase !== 'starting') {
+        // A disconnect or thread change already tore this call down.
+        return 'unavailable';
+      }
+      dispatch({ type: 'started' });
+      return 'started';
+    },
+    [dispatch, refuseGateStart, subscribeGate],
+  );
+
   const start = useCallback(
     async (target: HandsfreeCallTarget): Promise<HandsfreeStartResult> => {
       if (sessionRef.current.phase !== 'idle') return 'refused';
@@ -495,6 +744,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         return 'unavailable';
       }
 
+      if (target.transport === 'gate') {
+        return startGateCall(target, module, read);
+      }
+
       moduleRef.current = module;
       availabilityRef.current = read;
       setAvailability(read);
@@ -503,56 +756,112 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       setLabel(target.label);
       endingRef.current = false;
 
-      dispatch({ type: 'start' });
-      const outcome = await module.startSession({ title: target.label });
+      // Listen first: a fatalError or interruption the native side emits while
+      // the session is opening must reach the reducer, not vanish.
+      subscribe(module);
+      // The assignment re-reads the ref so TypeScript does not keep the `idle`
+      // narrowing from the precondition above across the awaited native start.
+      sessionRef.current = dispatch({ type: 'start' });
+      let outcome: HandsfreeStartOutcome;
+      try {
+        outcome = await module.startSession({ title: target.label });
+      } catch {
+        outcome = 'unavailable';
+      }
       if (outcome !== 'started') {
+        unsubscribe();
         moduleRef.current = null;
         targetRef.current = null;
         threadRef.current = undefined;
         dispatch({ type: 'start-refused' });
         return outcome;
       }
-      subscribe(module);
+      if (sessionRef.current.phase !== 'starting') {
+        // A fatal event arrived while the session was opening and has already
+        // torn it down; reporting "started" would contradict the screen.
+        return 'unavailable';
+      }
       beginHandsfreeCall();
+      setEngineInfo({ engine: 'phone' });
       dispatch({ type: 'started' });
       return 'started';
     },
-    [dispatch, subscribe],
+    [dispatch, startGateCall, subscribe, unsubscribe],
   );
 
   const mute = useCallback(() => {
+    if (gateModeRef.current) {
+      void moduleRef.current?.sendGateControl(serializeGateControl(gateControlFor('mute')));
+      const next = { ...gateBannerRef.current, phase: 'muted' as const, muted: true };
+      gateBannerRef.current = next;
+      setGateBanner(next);
+      return;
+    }
     dispatch({ type: 'mute' });
   }, [dispatch]);
   const unmute = useCallback(() => {
+    if (gateModeRef.current) {
+      void moduleRef.current?.sendGateControl(serializeGateControl(gateControlFor('unmute')));
+      const next = { ...gateBannerRef.current, phase: 'listening' as const, muted: false };
+      gateBannerRef.current = next;
+      setGateBanner(next);
+      return;
+    }
     dispatch({ type: 'unmute' });
   }, [dispatch]);
   const skipReply = useCallback(() => {
+    if (gateModeRef.current) {
+      void moduleRef.current?.sendGateControl(serializeGateControl(gateControlFor('skip')));
+      return;
+    }
     dispatch({ type: 'skipReply' });
   }, [dispatch]);
   const end = useCallback(() => {
+    if (gateModeRef.current) {
+      void moduleRef.current?.sendGateControl(serializeGateControl(gateControlFor('end')));
+    }
     dispatch({ type: 'end' });
   }, [dispatch]);
 
+  // While the Gate drives the call, the banner phase and transcript come from
+  // its frames; the phone reducer still owns the call's lifecycle (idle,
+  // starting, ending), so teardown, thread-change and disconnect behave alike.
+  const gateLive =
+    gateMode &&
+    session.phase !== 'idle' &&
+    session.phase !== 'ending' &&
+    session.phase !== 'ended';
   const active = session.phase !== 'idle' && session.phase !== 'ended';
+  const phase = gateLive ? appPhaseForGate(gateBanner.phase) : session.phase;
+  const partial = gateLive ? gateBanner.partial : session.partial;
+  // Offered whenever a call could run on this device; what blocks it *right now*
+  // is reported separately so the control never flickers with chat activity.
   const canStart =
     session.phase === 'idle' &&
     status === 'connected' &&
     Boolean(activeGateway) &&
     Boolean(availability?.recognition) &&
     Boolean(availability?.synthesis) &&
-    (availability?.maxSpeechInputLength ?? 0) > 0 &&
-    !isSending &&
-    !isCommandRunning &&
-    !pendingRunApproval;
+    (availability?.maxSpeechInputLength ?? 0) > 0;
 
   const value: HandsfreeVoiceContextValue = {
-    phase: session.phase,
+    phase,
     active,
-    partial: session.partial,
+    partial,
     label,
     reason: session.reason,
+    lastEndReason: session.lastEndReason,
+    callsEnded: session.callsEnded,
     level,
+    engine: engineInfo?.engine,
+    engineReason: engineInfo?.reason,
     canStart,
+    startBlocker: handsfreeStartBlocker({
+      status,
+      isSending,
+      isCommandRunning,
+      pendingApproval: Boolean(pendingRunApproval),
+    }),
     start,
     mute,
     unmute,

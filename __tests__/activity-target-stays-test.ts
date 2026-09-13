@@ -15,6 +15,10 @@ function readActivity(): string {
   return readSource(['src', 'app', '(tabs)', 'activity.tsx']);
 }
 
+function readRuns(): string {
+  return readSource(['src', 'app', 'runs.tsx']);
+}
+
 function readTargets(): string {
   return readSource(['src', 'components', 'activity', 'agent-targets.tsx']);
 }
@@ -31,9 +35,9 @@ function readSelect(): string {
 }
 
 // AgentTargets on Activity is the gateway-profile switcher. Connecting used
-// to hop to Chat, which left Start-a-run (the reason to switch on this tab)
-// off-screen until the operator navigated back. Stay on Activity after the
-// tap so a run on the newly selected gateway can be started in place.
+// to hop to Chat, which left the tab's own surface off-screen until the
+// operator navigated back. Stay on Activity after the tap; the Runs
+// destination it links to then starts a run on the gateway just selected.
 describe('activity gateway target stays on Activity', () => {
   test('tapping a gateway profile connects it without leaving Activity', () => {
     const select = readSelect();
@@ -57,8 +61,8 @@ describe('activity gateway target stays on Activity', () => {
     expect(src).toContain('status={status}');
   });
 
-  test('Start-a-run still lives on the same Activity screen', () => {
-    const src = readActivity();
+  test('Start-a-run lives on the Runs destination Activity links to', () => {
+    const src = readRuns();
     expect(src).toContain('Start a run');
     expect(src).toContain("label={starting ? 'Starting…' : 'Run task'}");
     expect(src).toContain('onPress={() => void startRun()}');

@@ -89,6 +89,10 @@ export type HandsfreeSessionState = {
   phase: HandsfreePhase;
   /** Set only when the phase is `ending`/`ended`. */
   reason?: HandsfreeTerminalReason;
+  /** Why the previous call ended, kept after it returns to idle so the screen can say so. */
+  lastEndReason?: HandsfreeTerminalReason;
+  /** How many calls have finished, so a screen can react to a repeat failure. */
+  callsEnded: number;
   /** The live transcript of the current turn, for the banner. */
   partial: string;
   /** The text accumulated for the pending turn (finals + grace-window speech). */
@@ -101,6 +105,7 @@ export type HandsfreeSessionState = {
 
 export const INITIAL_HANDSFREE_SESSION: HandsfreeSessionState = {
   phase: 'idle',
+  callsEnded: 0,
   partial: '',
   held: '',
   replyPlaying: false,
@@ -162,12 +167,28 @@ export function reduceHandsfreeSession(
 ): HandsfreeTransition {
   const { phase } = state;
 
-  // A call that is ending or ended consumes everything; End is idempotent and
-  // a late native callback cannot reopen a finished call.
+  // Idle answers only a Start. A late End, fatal error or transcript from a call
+  // that already finished must not open a second teardown.
+  if (phase === 'idle') {
+    if (event.type === 'start') {
+      return { state: { ...state, phase: 'starting', lastEndReason: undefined }, effects: [] };
+    }
+    return stay(state);
+  }
+
+  // `ended` is no longer produced: a stopped call returns to idle. A state held
+  // over from an older build still consumes everything.
   if (phase === 'ended') return stay(state);
   if (phase === 'ending') {
     if (event.type === 'stopped') {
-      return { state: { ...state, phase: 'ended' }, effects: [] };
+      return {
+        state: {
+          ...INITIAL_HANDSFREE_SESSION,
+          lastEndReason: state.reason,
+          callsEnded: state.callsEnded + 1,
+        },
+        effects: [],
+      };
     }
     return stay(state);
   }
@@ -182,13 +203,6 @@ export function reduceHandsfreeSession(
   if (event.type === 'fatalError') return endCall(state, event.reason);
 
   switch (phase) {
-    case 'idle': {
-      if (event.type === 'start') {
-        return { state: { ...state, phase: 'starting' }, effects: [] };
-      }
-      return stay(state);
-    }
-
     case 'starting': {
       if (event.type === 'started') {
         return {
@@ -197,7 +211,7 @@ export function reduceHandsfreeSession(
         };
       }
       if (event.type === 'start-refused') {
-        return { state: { ...INITIAL_HANDSFREE_SESSION }, effects: [] };
+        return { state: { ...INITIAL_HANDSFREE_SESSION, callsEnded: state.callsEnded }, effects: [] };
       }
       return stay(state);
     }

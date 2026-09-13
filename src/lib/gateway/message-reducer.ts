@@ -6,6 +6,7 @@
 //  - streaming / error / abort behavior is unit-testable without React,
 //  - future message state changes have a single place to live.
 
+import type { ChatAttachment } from '@/lib/gateway/chat-parts';
 import { appendBounded } from '@/lib/gateway/messages';
 import type { ChatMessage, ChatToolCall } from '@/lib/gateway/types';
 
@@ -13,13 +14,19 @@ function findStreamingIndex(messages: readonly ChatMessage[], runId: string): nu
   return messages.findIndex((m) => m.id === `run-${runId}`);
 }
 
-/** Append a user turn to the window. */
-export function addUserMessage(messages: readonly ChatMessage[], text: string, id?: string): ChatMessage[] {
+/** Append a user turn to the window, with any image attachments (P1). */
+export function addUserMessage(
+  messages: readonly ChatMessage[],
+  text: string,
+  id?: string,
+  attachments?: ChatAttachment[],
+): ChatMessage[] {
   const message: ChatMessage = {
     id: id ?? `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     role: 'user',
     text,
     timestamp: Date.now(),
+    ...(attachments && attachments.length > 0 ? { attachments: [...attachments] } : {}),
   };
   return appendBounded([...messages], message);
 }

@@ -13,8 +13,8 @@ function readProvider(): string {
   return readSource(['src', 'context', 'gateway-provider.tsx']);
 }
 
-function readActivity(): string {
-  return readSource(['src', 'app', '(tabs)', 'activity.tsx']);
+function readRunsScreen(): string {
+  return readSource(['src', 'app', 'runs.tsx']);
 }
 
 function readRuns(): string {
@@ -63,8 +63,8 @@ describe('activity refused run settles the provisional card', () => {
     expect(src).toContain("if (run.status !== 'unresolved') {");
   });
 
-  test('the Activity prompt still clears after a successful start', () => {
-    const src = readActivity();
+  test('the Runs prompt still clears after a successful start', () => {
+    const src = readRunsScreen();
     expect(src).toContain('await sendChatInput(`/run ${prompt}`);');
     expect(src).toContain("setRunPrompt('');");
   });

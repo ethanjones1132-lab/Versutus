@@ -24,7 +24,7 @@ import { RUN_NOTICE_DATA_KIND } from './tap-route';
 
 /**
  * The statuses a run carries while it is still this device's business — the
- * Activity tab's own live pair (src/app/(tabs)/activity.tsx:107, the same two
+ * Runs destination's own live pair (src/app/runs.tsx, the same two
  * run-card.tsx:66 and `buildGlanceableSnapshot` call live).
  *
  * Deliberately NOT `isTerminalRunStatus`: that regex reads GATEWAY status

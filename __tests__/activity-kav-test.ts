@@ -43,10 +43,10 @@ describe('Activity ComposerKeyboardLift on Android', () => {
   });
 });
 
-describe('activity prompt IME lift wiring', () => {
-  test('activity screen wraps start card with ComposerKeyboardLift and keeps handled taps', () => {
+describe('runs prompt IME lift wiring', () => {
+  test('runs screen wraps start card with ComposerKeyboardLift and keeps handled taps', () => {
     const file = nodeFs.readFileSync(
-      [__dirname, '..', 'src', 'app', '(tabs)', 'activity.tsx'].join(SEP),
+      [__dirname, '..', 'src', 'app', 'runs.tsx'].join(SEP),
       'utf8',
     );
     expect(file).toContain('ComposerKeyboardLift');

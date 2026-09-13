@@ -29,9 +29,30 @@ export class ApprovalService {
       return { decision: 'deny', type, reason: 'unknown approval type' };
     }
     const approvalId = randomBytes(8).toString('hex');
-    const entry = { approvalId, type, request, decision: 'pending' };
+    const entry = { approvalId, type, request, decision: 'pending', createdAt: new Date().toISOString() };
     this.pending.set(approvalId, entry);
     return entry;
+  }
+
+  get(approvalId) {
+    return this.pending.get(approvalId) ?? null;
+  }
+
+  /**
+   * The phone's inbox rows. Deliberately a projection, never the raw request
+   * bag: the request carries whatever the backend sent (paths, prompts) and the
+   * inbox needs only the class and the one-line summary the Gate composed.
+   */
+  list() {
+    return [...this.pending.values()].map((entry) => ({
+      approvalId: entry.approvalId,
+      type: entry.type,
+      runId: entry.request?.runId ?? null,
+      environmentId: entry.request?.environmentId ?? null,
+      operation: entry.request?.operation ?? null,
+      summary: entry.request?.summary ?? null,
+      createdAt: entry.createdAt,
+    }));
   }
 
   /**

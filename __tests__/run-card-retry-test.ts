@@ -65,13 +65,13 @@ describe('run card retry affordance', () => {
   });
 });
 
-describe('activity screen retry wiring', () => {
+describe('runs screen retry wiring', () => {
   test('the finished RunCard renders onRetry that re-runs the same prompt through sendChatInput', () => {
     // The screen already routes Start-a-run through sendChatInput('/run <prompt>')
-    // (activity.tsx:78). Retry must land on the same path so the operator does
+    // (runs.tsx). Retry must land on the same path so the operator does
     // not see a different run lifecycle whether they started a run from the
-    // composer or re-tried a failed one from the activity card.
-    const screen = readSource('src', 'app', '(tabs)', 'activity.tsx');
+    // composer or re-tried a failed one from the runs card.
+    const screen = readSource('src', 'app', 'runs.tsx');
     expect(screen).toMatch(/const retryRun = useCallback\(\s*\n\s*\(run: ActivityRun\) => \{/);
     expect(screen).toMatch(/void sendChatInput\(`\/run \$\{prompt\}`\)/);
 
@@ -87,13 +87,13 @@ describe('activity screen retry wiring', () => {
   });
 
   test('retryRun trims an empty or whitespace-only prompt and never fires sendChatInput', () => {
-    // Defensive guard mirroring the trim guard in startRun (activity.tsx:72)
+    // Defensive guard mirroring the trim guard in startRun (runs.tsx)
     // and in the slash command itself (slash-commands.ts:693). Without it a
     // run row whose prompt was somehow lost (the ActivityRun shape makes
     // prompt: string required but a future test or migration might leave it
     // empty) would send `/run  ` and the gateway would reply with its usage
     // line — visibly noise in chat.
-    const screen = readSource('src', 'app', '(tabs)', 'activity.tsx');
+    const screen = readSource('src', 'app', 'runs.tsx');
     expect(screen).toMatch(
       /const retryRun = useCallback\(\s*\n\s*\(run: ActivityRun\) => \{\s*\n\s*const prompt = run\.prompt\.trim\(\);\s*\n\s*if \(!prompt\) return;\s*\n\s*void sendChatInput\(`\/run \$\{prompt\}`\);\s*\n\s*\},/,
     );
@@ -104,7 +104,7 @@ describe('activity screen retry wiring', () => {
     // alongside would either be inert (the slash path will keep trying) or
     // create a second in-flight run the operator did not ask for. The card
     // prop is optional and the live call site stays untouched.
-    const screen = readSource('src', 'app', '(tabs)', 'activity.tsx');
+    const screen = readSource('src', 'app', 'runs.tsx');
     expect(screen).toMatch(/case 'active':\s*return <RunCard run=\{item\.run\} onStop=\{stopActivityRun\} \/>/);
   });
 });

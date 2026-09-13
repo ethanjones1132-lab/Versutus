@@ -183,6 +183,17 @@ import {
   updateTranscript,
 } from '@/lib/gateway/transcript';
 import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
+import { SESSION_SPEND_LIST_LIMIT } from '@/lib/gateway/session-analytics';
+import { botBudget, botSpendFromSessions, checkBotBudget, loadBudgets } from '@/lib/gateway/budgets';
+import {
+  approvalPolicyDecision,
+  loadApprovalPolicies,
+  normalizeApprovalClass,
+  recordApprovalDecision,
+} from '@/lib/gateway/approval-policy';
+import { approvalRowsFromUnknown, type ApprovalRow } from '@/lib/gateway/approvals';
+import { buildChatContent, type ChatAttachment } from '@/lib/gateway/chat-parts';
+import { loadWorkflows, saveWorkflows } from '@/lib/gateway/workflows';
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
 import { writeWidgetSnapshot } from '@/lib/widget/widget-device';
 import { loadWidgetResultHidden, subscribeWidgetPrivacy } from '@/lib/settings/widget-privacy';
@@ -397,6 +408,8 @@ type GatewayContextValue = {
        * auto-send, governed by `chat-input-source`.
        */
       source?: ChatInputSource;
+      /** Image attachments for this turn (P1); connected sends only. */
+      attachments?: ChatAttachment[];
     },
   ) => Promise<SendChatInputOutcome>;
   stopStreaming: () => Promise<void>;
@@ -418,6 +431,11 @@ type GatewayContextValue = {
   cancelPendingConfirmation: () => void;
   pendingRunApproval: { runId: string; prompt: string } | null;
   resolveRunApproval: (approved: boolean, feedback?: string) => void;
+  /** D1: the Gate's pending CLI-environment approvals, with their class. */
+  pendingApprovals: ApprovalRow[];
+  refreshPendingApprovals: () => Promise<void>;
+  decideApproval: (approvalId: string, decision: 'approve' | 'deny') => Promise<void>;
+  approvalBusy: string | null;
   tlsFingerprintChange: {
     previousFingerprint: string;
     observedFingerprint: string;
@@ -730,6 +748,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // Bot switch would re-run the effects that depend on their identity.
   const selectedBackendIdRef = useRef<string | undefined>(undefined);
   const selectedBotIdRef = useRef<string | undefined>(undefined);
+  // D5's pre-run budget guard reads the per-Bot sessions capability and read
+  // through refs: both are defined below `runTask`, and a dependency array
+  // would evaluate them before initialization.
+  const canReadBotSessionsRef = useRef(false);
+  const readBotSessionsRef = useRef<((botId: string, limit: number) => Promise<unknown>) | null>(null);
   // Id already probed for this activation. Cleared when backends disappear
   // so a reconnect re-probes the same backend once, not on every render.
   const lastProbedBackendRef = useRef<string | undefined>(undefined);
@@ -751,11 +774,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * that could only be refused.
    */
   const [canReadBotSessions, setCanReadBotSessions] = useState(false);
+  useEffect(() => {
+    canReadBotSessionsRef.current = canReadBotSessions;
+  }, [canReadBotSessions]);
   const [pairingDetails, setPairingDetails] = useState<PairingDetails | null>(null);
   const [liveCapabilities, setLiveCapabilities] = useState<GatewayCapabilities | null>(null);
   const [activeManifest, setActiveManifest] = useState<GatewayManifest | null>(null);
-  const [settings, setSettings] = useState<AppSettings>({ autoConnect: true, onboardingComplete: false });
-  const settingsRef = useRef<AppSettings>({ autoConnect: true, onboardingComplete: false });
+  const [settings, setSettings] = useState<AppSettings>({ autoConnect: true, onboardingComplete: false, voiceEngine: 'auto' });
+  const settingsRef = useRef<AppSettings>({ autoConnect: true, onboardingComplete: false, voiceEngine: 'auto' });
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
@@ -823,6 +849,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const confirmationBypassRef = useRef(false);
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
   const [pendingRunApproval, setPendingRunApproval] = useState<{ runId: string; prompt: string } | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalRow[]>([]);
+  const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   const [tlsFingerprintChange, setTlsFingerprintChange] = useState<{
     gateway: GatewayProfile;
     previousFingerprint: string;
@@ -2177,11 +2205,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [applyStatus, applyConnectionPhase]);
 
   const sendMessage = useCallback(
-    async (text: string, existingMessageId?: string, source?: ChatInputSource) => {
+    async (
+      text: string,
+      existingMessageId?: string,
+      source?: ChatInputSource,
+      attachments?: ChatAttachment[],
+    ) => {
       const trimmed = text.trim();
+      const files = attachments ?? [];
       const gateway = activeGateway;
       const client = clientRef.current;
-      if (!trimmed || !gateway || !client || isSending) return;
+      // An image-only turn is valid: the guard must not require text.
+      if ((!trimmed && files.length === 0) || !gateway || !client || isSending) return;
 
       if (isHandsfreeCallSource(source)) {
         // A call turn is appended with the id the caller supplied: the ordinary
@@ -2198,7 +2233,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           ),
         );
       } else {
-        setMessages((prev) => addUserMessage(prev, trimmed));
+        setMessages((prev) => addUserMessage(prev, trimmed, undefined, files));
       }
       setIsSending(true);
       setLastError(null);
@@ -2226,10 +2261,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           // Latest-committed via the ref mirror at the state declaration,
           // so this callback's identity stays stable across streamed frames.
           ...messagesRef.current
-            .filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.command && !m.queued && m.text.trim())
+            .filter(
+              (m) =>
+                (m.role === 'user' || m.role === 'assistant')
+                && !m.command
+                && !m.queued
+                // An image-only user turn has no text but must still travel.
+                && (m.text.trim() || (m.attachments?.length ?? 0) > 0),
+            )
             .slice(-20)
-            .map((m) => ({ role: m.role, content: m.text })),
-          { role: 'user', content: trimmed },
+            .map((m) => ({
+              role: m.role,
+              content: m.attachments?.length ? buildChatContent(m.text, m.attachments) : m.text,
+            })),
+          { role: 'user', content: buildChatContent(trimmed, files) },
         ];
 
         await client.streamChat(
@@ -2330,6 +2375,55 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setPendingRunApproval(null);
   }, []);
 
+  /**
+   * D1: the Gate's inbox. A rejected or unsupported read is an empty list —
+   * never a stuck spinner — and an approval decided here is written to the
+   * durable audit before the list is re-read.
+   */
+  const refreshPendingApprovals = useCallback(async () => {
+    try {
+      const payload = await gatewayRequest<unknown>('approvals.pending', {});
+      setPendingApprovals(approvalRowsFromUnknown(payload));
+    } catch {
+      setPendingApprovals([]);
+    }
+  }, [gatewayRequest]);
+
+  const decideApproval = useCallback(
+    async (approvalId: string, decision: 'approve' | 'deny') => {
+      setApprovalBusy(approvalId);
+      try {
+        await gatewayRequest(decision === 'approve' ? 'approval.approve' : 'approval.deny', { approvalId });
+        await recordApprovalDecision({
+          approvalId,
+          cls: pendingApprovals.find((row) => row.approvalId === approvalId)?.cls ?? 'unknown',
+          decision,
+          source: 'operator',
+          at: Date.now(),
+        });
+        await refreshPendingApprovals();
+      } finally {
+        setApprovalBusy(null);
+      }
+    },
+    [gatewayRequest, pendingApprovals, refreshPendingApprovals],
+  );
+
+  // The Gate owns the list, so read it whenever a connection is live and drop
+  // it the moment one is not: a stale pending row must never outread the Gate.
+  useEffect(() => {
+    // Deferred: the effect only schedules the read, so the setState inside it
+    // never runs synchronously in the effect body (set-state-in-effect). A
+    // disconnect empties the list; a live connection re-reads it.
+    queueMicrotask(() => {
+      if (status !== 'connected') {
+        setPendingApprovals([]);
+        return;
+      }
+      void refreshPendingApprovals();
+    });
+  }, [status, refreshPendingApprovals]);
+
   const runTask = useCallback(
     async (
       prompt: string,
@@ -2353,6 +2447,31 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         throw new Error('This gateway does not support agentic runs (the Hermes run API is required).');
       }
       const runCapable = client as unknown as RunCapableClient;
+
+      // D5's hard stop: a Bot over its per-Bot cap does not start a run. The
+      // cap is this device's (key-value storage) and the spend is the read the
+      // Spend surface already folds; a failed read is unknown, not over. A
+      // refused start throws before the provisional Activity entry is written,
+      // so a stopped run leaves no ghost.
+      const budgetBotId = selectedBotIdRef.current;
+      const readSessions = readBotSessionsRef.current;
+      if (budgetBotId && canReadBotSessionsRef.current && readSessions) {
+        const budgets = await loadBudgets();
+        if (botBudget(budgets, gateway.id, budgetBotId) !== undefined) {
+          const verdict = await checkBotBudget({
+            budgets,
+            gatewayId: gateway.id,
+            botId: budgetBotId,
+            readSpend: async () =>
+              botSpendFromSessions(
+                budgetBotId,
+                await readSessions(budgetBotId, SESSION_SPEND_LIST_LIMIT),
+              ),
+          });
+          if (!verdict.allowed) throw new Error(verdict.reason);
+        }
+      }
+
       const abortController = new AbortController();
       runAbortControllerRef.current?.abort();
       runAbortControllerRef.current = abortController;
@@ -2400,7 +2519,26 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               timestamp: event.timestamp,
             });
           },
-          onApprovalRequired: (runId) => {
+          onApprovalRequired: async (runId, _prompt, approvalClass) => {
+            // D1 policy: the class comes from the Gate, never the run prompt.
+            // Only a read-only class for an opted-in Bot is auto-approved;
+            // anything else — including an absent/unknown class — asks.
+            const cls = normalizeApprovalClass(approvalClass);
+            const policyBotId = selectedBotIdRef.current ?? undefined;
+            const gatewayId = activeGatewayRef.current?.id ?? '';
+            const policies = await loadApprovalPolicies();
+            if (approvalPolicyDecision({ policies, gatewayId, botId: policyBotId, cls }).decision === 'approve') {
+              void recordApprovalDecision({
+                approvalId: runId,
+                runId,
+                botId: policyBotId,
+                cls,
+                decision: 'approve',
+                source: 'policy',
+                at: Date.now(),
+              });
+              return { approved: true };
+            }
             patchRun(trackedId.current, { status: 'waiting-approval' });
             setPendingRunApproval({ runId, prompt });
             void notifyApprovalRequired(prompt, runId, activeGatewayRef.current?.id ?? '');
@@ -2518,10 +2656,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         botId?: string;
         sessionId?: string;
         source?: ChatInputSource;
+        attachments?: ChatAttachment[];
       },
     ) => {
       const trimmed = text.trim();
-      if (!trimmed) return 'empty';
+      if (!trimmed && (options?.attachments?.length ?? 0) === 0) return 'empty';
       const fromQueue = options?.fromQueue === true;
       const source = options?.source;
       const client = clientRef.current;
@@ -2558,7 +2697,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (!isSlashCommandInput(trimmed) || shouldPassthroughSkillSlash(trimmed, options?.skills ?? [])) {
-        await sendMessage(trimmed, options?.messageId);
+        await sendMessage(trimmed, options?.messageId, undefined, options?.attachments);
         return 'sent';
       }
 
@@ -2616,8 +2755,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // Execute gateway slash command — stream agent-transport output live.
         let streamedText = '';
         const { executeGatewaySlashCommand } = await import('@/lib/gateway/slash-commands');
-const response = await executeGatewaySlashCommand(trimmed, {
+        // `/workflow` reads this device's stored step sequences for the
+        // active gateway; no gateway route carries them.
+        const workflows = activeGateway ? await loadWorkflows(activeGateway.id) : [];
+        const response = await executeGatewaySlashCommand(trimmed, {
           hello: activeHello,
+          workflows,
+          onWorkflowsChanged: (next) => {
+            const gateway = activeGatewayRef.current;
+            if (gateway) void saveWorkflows(gateway.id, next);
+          },
           currentModel: activeGateway?.model,
           gatewayRequest,
           runAgentCommand,
@@ -3339,6 +3486,9 @@ const response = await executeGatewaySlashCommand(trimmed, {
     }
     return client.listBotSessionCatalogue(botId, limit);
   }, []);
+  useEffect(() => {
+    readBotSessionsRef.current = readBotSessions;
+  }, [readBotSessions]);
 
   const botJobs = useMemo(() => ({
     list: async () => {
@@ -3920,6 +4070,10 @@ const response = await executeGatewaySlashCommand(trimmed, {
       cancelPendingConfirmation,
       pendingRunApproval,
       resolveRunApproval,
+      pendingApprovals,
+      refreshPendingApprovals,
+      decideApproval,
+      approvalBusy,
       tlsFingerprintChange: tlsFingerprintChange
         ? {
             previousFingerprint: tlsFingerprintChange.previousFingerprint,
@@ -3967,6 +4121,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
       setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,
+      pendingApprovals, refreshPendingApprovals, decideApproval, approvalBusy,
       approveTlsFingerprintChange,
       rejectTlsFingerprintChange,
       runTask, activityRuns, stopActivityRun, loadRunEvents, modelPicker, openModelPicker, closeModelPicker,

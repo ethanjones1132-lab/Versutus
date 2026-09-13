@@ -56,7 +56,8 @@ public class HandsfreeVoiceModule: Module {
       "endRequested",
       "fatalError",
       "bargeIn",
-      "level"
+      "level",
+      "gate"
     )
 
     OnCreate {
@@ -86,7 +87,8 @@ public class HandsfreeVoiceModule: Module {
       ])
     }
 
-    AsyncFunction("startSession") { (title: String, promise: Promise) in
+    AsyncFunction("startSession") { (options: [String: Any?], promise: Promise) in
+      _ = options["title"] as? String
       self.requestAuthorization { granted in
         guard granted else {
           promise.resolve("permission-denied")
@@ -158,6 +160,26 @@ public class HandsfreeVoiceModule: Module {
 
     AsyncFunction("stopSession") {
       self.audioQueue.async { self.end(reason: "user") }
+    }
+
+    // PENDING-MACOS: the Gate media terminal (OkHttp/URLSession WebSocket,
+    // AudioRecord-equivalent capture, jittered playback) has no iOS
+    // implementation yet. The signatures exist so the cross-platform contract
+    // test does not drift; calling them resolves false rather than pretending.
+    AsyncFunction("startGateMedia") { (_: [String: Any?], promise: Promise) in
+      promise.resolve(false)
+    }
+
+    AsyncFunction("sendGateControl") { (_: String) -> Bool in
+      false
+    }
+
+    AsyncFunction("stopGateMedia") {}
+
+    // PENDING-MACOS: the widget and its signed auto-start are Android-only, so
+    // an iOS launch link is never signed.
+    AsyncFunction("verifyLaunch") { (_: String) -> Bool in
+      false
     }
   }
 

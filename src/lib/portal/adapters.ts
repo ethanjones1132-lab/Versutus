@@ -33,7 +33,7 @@ export interface PortalClient {
   healthCheck(timeoutMs?: number): Promise<HealthResponse | null>;
   rpcRequest<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
   streamChat(
-    messages: { role: string; content: string }[],
+    messages: { role: string; content: string | import('@/lib/gateway/chat-parts').ChatContentPart[] }[],
     onDelta: (text: string) => void,
     options?: {
       model?: string;

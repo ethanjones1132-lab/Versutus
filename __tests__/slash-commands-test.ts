@@ -390,6 +390,23 @@ describe('locally answered commands bypass the snapshot block', () => {
     expect(result.text).toContain('not available');
   });
 
+  test('/run reaches the run driver even when the snapshot marks runs.create undispatched', async () => {
+    // `/run` executes through the REST run driver (`context.runTask`), not an
+    // RPC. The snapshot judges the registry's `runs.create`, which no Gate
+    // advertises, so without the bypass a working run is refused at dispatch.
+    const runTask = jest.fn().mockResolvedValue({ runId: 'run-1', status: 'succeeded', result: 'done' });
+    const result = await executeGatewaySlashCommand('/run hello there', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      runTask,
+      methods: { 'run-task': BLOCKED_BY_SNAPSHOT },
+    });
+    expect(runTask).toHaveBeenCalledWith('hello there', expect.any(Function));
+    expect(result.text).toContain('Run complete');
+    expect(result.text).not.toContain('not available');
+  });
+
   test('/device answers device.info first and never asks device.list on a direct host', async () => {
     const gatewayRequest = jest.fn().mockResolvedValue({ deviceId: 'phone-1', role: 'owner' });
     const result = await executeGatewaySlashCommand('/device', {
@@ -569,5 +586,129 @@ describe('/model auth from the providers registry', () => {
       runAgentCommand: jest.fn(),
     });
     expect(result.text).toContain('none reported');
+  });
+});
+
+describe('/workflow runs stored step sequences', () => {
+  const workflows = [
+    {
+      id: 'w1',
+      name: 'Digest',
+      steps: [
+        { id: 's1', prompt: 'Read {{input}}' },
+        { id: 's2', prompt: 'Summarize' },
+      ],
+    },
+  ];
+
+  test('lists stored workflows when given no name', async () => {
+    const result = await executeGatewaySlashCommand('/workflow', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+    });
+    expect(result.text).toContain('Digest: 2 steps');
+  });
+
+  test('runs a named workflow step by step with the input substituted', async () => {
+    const calls: string[] = [];
+    const runTask = jest.fn().mockImplementation(async (prompt: string) => {
+      calls.push(prompt);
+      return { runId: 'r', status: 'succeeded', result: 'ok' };
+    });
+    const result = await executeGatewaySlashCommand('/workflow digest the mail', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      runTask,
+    });
+    expect(calls).toEqual(['Read the mail', 'Summarize']);
+    expect(result.text).toContain('ok');
+  });
+
+  test('a failing step stops the workflow and names it', async () => {
+    const runTask = jest
+      .fn()
+      .mockResolvedValueOnce({ runId: 'r1', status: 'failed', error: 'boom' })
+      .mockResolvedValue({ runId: 'r2', status: 'succeeded', result: 'ok' });
+    const result = await executeGatewaySlashCommand('/workflow Digest', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      runTask,
+    });
+    expect(runTask).toHaveBeenCalledTimes(1);
+    expect(result.text).toContain('Stopped at step s1');
+  });
+
+  test('an unknown name is refused without running anything', async () => {
+    const runTask = jest.fn();
+    const result = await executeGatewaySlashCommand('/workflow nope', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      runTask,
+    });
+    expect(runTask).not.toHaveBeenCalled();
+    expect(result.text).toContain('Unknown workflow: nope');
+  });
+});
+
+describe('/workflow management', () => {
+  test('new creates a workflow from pipe-separated steps', async () => {
+    const onWorkflowsChanged = jest.fn();
+    const result = await executeGatewaySlashCommand('/workflow new Digest | read mail | summarize', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows: [],
+      onWorkflowsChanged,
+    });
+    const next = onWorkflowsChanged.mock.calls[0][0];
+    expect(next).toHaveLength(1);
+    expect(next[0].name).toBe('Digest');
+    expect(next[0].steps.map((step: { prompt: string }) => step.prompt)).toEqual([
+      'read mail',
+      'summarize',
+    ]);
+    expect(result.text).toContain('Saved Digest');
+  });
+
+  test('delete and rename fold the stored set', async () => {
+    const workflows = [{ id: 'w1', name: 'Digest', steps: [{ id: 's1', prompt: 'p' }] }];
+    const onWorkflowsChanged = jest.fn();
+    await executeGatewaySlashCommand('/workflow delete Digest', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      onWorkflowsChanged,
+    });
+    expect(onWorkflowsChanged.mock.calls[0][0]).toEqual([]);
+
+    onWorkflowsChanged.mockClear();
+    const renamed = await executeGatewaySlashCommand('/workflow rename Digest | Morning', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      onWorkflowsChanged,
+    });
+    expect(onWorkflowsChanged.mock.calls[0][0][0].name).toBe('Morning');
+    expect(renamed.text).toContain('Morning');
+  });
+
+  test('without a save path the management command refuses', async () => {
+    const result = await executeGatewaySlashCommand('/workflow delete Digest', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows: [],
+    });
+    expect(result.text).toContain('cannot save');
   });
 });

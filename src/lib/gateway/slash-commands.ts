@@ -22,6 +22,15 @@ import {
   type PairedDevice,
 } from '@/lib/gateway/paired-devices';
 import { matchSkillSlash, type Skill } from '@/lib/gateway/skills';
+import {
+  applyWorkflowInput,
+  createWorkflow,
+  deleteWorkflow,
+  findWorkflow,
+  renameWorkflow,
+  workflowSummaryCopy,
+  type Workflow,
+} from '@/lib/gateway/workflow-model';
 import { providerUiState } from '@/lib/gateway/provider-state';
 import type { ProviderSnapshot } from '@/lib/gateway/provider-types';
 import { toolsetsReadFromUnknown } from '@/lib/gateway/toolsets';
@@ -65,6 +74,10 @@ type SlashCommandContext = {
     prompt: string,
     onEvent?: (event: { type: string; data?: Record<string, unknown>; timestamp?: number }) => void,
   ) => Promise<RunOutcome>;
+  /** This device's stored workflows, for `/workflow`. */
+  workflows?: Workflow[];
+  /** Persist a `/workflow` create/rename/delete. Absent means the command refuses. */
+  onWorkflowsChanged?: (next: Workflow[]) => void | Promise<void>;
   /**
    * Per-request model override on the active gateway profile (Hermes / Gate).
    * Used when the gateway has no remote config REST for `/model set`.
@@ -498,6 +511,18 @@ export async function executeGatewaySlashCommand(
   if (commandName === '/model' && (args[0]?.toLowerCase() === 'auth')) {
     return runModelAuthCommand(context);
   }
+  // `/run` executes through `context.runTask` → the Gate's REST run API
+  // (`client.startRun`), never the registry's undispatched `runs.create` RPC.
+  // The snapshot judges that method, which no Gate advertises, so without the
+  // bypass a working run is refused at dispatch before the handler below.
+  if (commandName === '/run') {
+    return runTaskCommand(argText, context);
+  }
+  // `/workflow` is not a registry command; it lists this device's workflows
+  // and runs one by name through the same `runTask` path.
+  if (commandName === '/workflow') {
+    return runWorkflowCommand(argText, context);
+  }
 
   const blocked = blockUnsupportedCommand(commandName, args, context.methods);
   if (blocked) return blocked;
@@ -512,10 +537,6 @@ export async function executeGatewaySlashCommand(
 
   if (commandName === '/rpc') {
     return runRawRpc(argText, context);
-  }
-
-  if (commandName === '/run') {
-    return runTaskCommand(argText, context);
   }
 
   if (commandName === '/agent') {
@@ -724,6 +745,116 @@ async function runTaskCommand(argText: string, context: SlashCommandContext): Pr
     title: '/run',
     raw: [streamed.join('\n'), body].filter(Boolean).join('\n\n'),
   };
+}
+
+/**
+ * `/workflow` — list this device's workflows, or run one by name. A step's
+ * prompt is the same `runTask` path `/run` uses; a failing step stops the
+ * workflow and names itself.
+ */
+async function runWorkflowCommand(
+  argText: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  const workflows = context.workflows ?? [];
+  const trimmed = argText.trim();
+  if (!trimmed) {
+    if (workflows.length === 0) {
+      return textResult('No workflows yet. Define one with a name and its steps.', '/workflow');
+    }
+    return textResult(
+      ['Workflows:', ...workflows.map((workflow) => `- ${workflowSummaryCopy(workflow)}`)].join('\n'),
+      '/workflow',
+    );
+  }
+
+  // Management sub-commands; anything else is a workflow name to run.
+  if (/^new\s/i.test(trimmed) || /^rename\s/i.test(trimmed) || /^delete\s/i.test(trimmed)) {
+    return runWorkflowManagement(trimmed, workflows, context);
+  }
+
+  const [name, ...rest] = trimmed.split(/\s+/);
+  const workflow = findWorkflow(workflows, name);
+  if (!workflow) {
+    return textResult(`Unknown workflow: ${name}\n\nSend /workflow to list them.`, '/workflow');
+  }
+  if (!context.runTask) {
+    return textResult(
+      'This gateway does not support agentic runs (the Hermes run API is required).',
+      '/workflow',
+    );
+  }
+
+  const input = rest.join(' ');
+  const lines: string[] = [];
+  for (const step of workflow.steps) {
+    const prompt = applyWorkflowInput(step.prompt, input);
+    try {
+      const outcome = await context.runTask(prompt, () => undefined);
+      const summary = outcome.result ?? outcome.error ?? outcome.status ?? 'no result';
+      lines.push(`${step.id}: ${summary}`);
+      const failed =
+        outcome.cancelled ||
+        Boolean(outcome.error) ||
+        /fail/i.test(outcome.status ?? '');
+      if (failed) {
+        lines.push(`Stopped at step ${step.id}.`);
+        break;
+      }
+    } catch (error) {
+      lines.push(`${step.id}: ${error instanceof Error ? error.message : String(error)}`);
+      lines.push(`Stopped at step ${step.id}.`);
+      break;
+    }
+  }
+  return textResult(`${workflow.name}:\n${lines.join('\n')}`, '/workflow');
+}
+
+/** `/workflow new|rename|delete` — the management half of the same command. */
+async function runWorkflowManagement(
+  trimmed: string,
+  workflows: Workflow[],
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  if (!context.onWorkflowsChanged) {
+    return textResult('This surface cannot save workflows.', '/workflow');
+  }
+  const commit = async (next: Workflow[], line: string): Promise<SlashCommandResult> => {
+    await context.onWorkflowsChanged?.(next);
+    return textResult(line, '/workflow');
+  };
+
+  if (/^new\s/i.test(trimmed)) {
+    const [head, ...stepParts] = trimmed.replace(/^new\s+/i, '').split('|');
+    const name = head.trim();
+    const steps = stepParts.map((part) => part.trim()).filter(Boolean);
+    if (!name || steps.length === 0) {
+      return textResult('Usage: /workflow new <name> | <step> | <step>', '/workflow');
+    }
+    const next = createWorkflow(workflows, { name, steps });
+    if (next === workflows) {
+      return textResult('A workflow needs a name and at least one step.', '/workflow');
+    }
+    return commit(next, `Saved ${name} (${steps.length} step${steps.length === 1 ? '' : 's'}).`);
+  }
+
+  if (/^rename\s/i.test(trimmed)) {
+    const [head, ...restParts] = trimmed.replace(/^rename\s+/i, '').split('|');
+    const oldName = head.trim();
+    const newName = restParts.join('|').trim();
+    const workflow = findWorkflow(workflows, oldName);
+    if (!workflow) return textResult(`Unknown workflow: ${oldName}`, '/workflow');
+    if (!newName) return textResult('Usage: /workflow rename <old> | <new name>', '/workflow');
+    return commit(
+      renameWorkflow(workflows, workflow.id, newName),
+      `Renamed ${workflow.name} to ${newName}.`,
+    );
+  }
+
+  const name = trimmed.replace(/^delete\s+/i, '').trim();
+  const workflow = findWorkflow(workflows, name);
+  if (!workflow) return textResult(`Unknown workflow: ${name}`, '/workflow');
+  return commit(deleteWorkflow(workflows, workflow.id), `Removed ${workflow.name}.`);
 }
 
 function formatRunEvent(event: { type: string; data?: Record<string, unknown> }): string {
@@ -1951,7 +2082,7 @@ function formatApprovals(result: unknown): string {
 }
 
 function formatApprovalsPending(result: unknown): string {
-  const pending = readCollection(result, ['pending', 'requests', 'items']);
+  const pending = readCollection(result, ['approvals', 'pending', 'requests', 'items']);
   if (!pending?.length) return 'Pending approvals: none reported';
   const lines = pending.slice(0, 10).map((item) =>
     describeNamedRecord(item, ['approvalId', 'id', 'name', 'title'], ['type', 'decision', 'status', 'state']),

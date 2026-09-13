@@ -8,7 +8,9 @@ import {
   HANDSFREE_SPEAKING_HINT,
   HANDSFREE_START_LABEL,
   HANDSFREE_UNMUTE_LABEL,
+  handsfreeEndReasonCopy,
   handsfreePhaseLabel,
+  handsfreeStartResultCopy,
 } from '@/lib/voice/handsfree-call-copy';
 
 declare const __dirname: string;
@@ -162,5 +164,59 @@ describe('the banner', () => {
     expect(HANDSFREE_AUTOSEND_LABEL).toBe('speech auto-sends');
     expect(HANDSFREE_BANNER_TITLE).toBe('Hands-free call');
     expect(HANDSFREE_SPEAKING_HINT).toBe('say something to interrupt');
+  });
+});
+
+describe('the call sheet can always be dismissed', () => {
+  test('Cancel is never disabled by a start in flight', () => {
+    const cancel = sheet.slice(sheet.indexOf('label="Cancel"'), sheet.indexOf('label="Start call"'));
+    expect(cancel).not.toContain('disabled={busy}');
+  });
+
+  test('a start that throws still clears busy', () => {
+    const at = screen.indexOf('const handleStartCall = useCallback(');
+    const handler = screen.slice(at, screen.indexOf('}, [activeGateway, botVoice', at));
+    expect(handler).toMatch(/try\s*\{[\s\S]*await handsfree\.start\(/);
+    expect(handler).toMatch(/finally\s*\{\s*setCallBusy\(false\);\s*\}/);
+  });
+});
+
+describe('an ended or refused call explains itself', () => {
+  test('the operator ending a call is not reported as a failure', () => {
+    expect(handsfreeEndReasonCopy('user')).toBeNull();
+    expect(handsfreeEndReasonCopy('thread-changed')).toBeNull();
+  });
+
+  test('every failure reason and start result has its own sentence', () => {
+    const reasons = ['disconnect', 'system-interruption', 'app-killed', 'recognition-failed', 'send-failed', 'speech-failed'] as const;
+    const copy = reasons.map(handsfreeEndReasonCopy);
+    expect(copy.every((line) => typeof line === 'string' && line.length > 0)).toBe(true);
+    expect(new Set(copy).size).toBe(reasons.length);
+    expect(new Set([handsfreeStartResultCopy('permission-denied'), handsfreeStartResultCopy('unavailable'), handsfreeStartResultCopy('refused')]).size).toBe(3);
+  });
+
+  test('the chat screen reopens the sheet with the reason when a call ends on its own', () => {
+    expect(screen).toContain('handsfreeEndReasonCopy(handsfreeLastEndReason)');
+    expect(screen).toMatch(/\[handsfreeCallsEnded, handsfreeLastEndReason\]/);
+    expect(screen).toContain('setCallError(handsfreeStartResultCopy(result))');
+  });
+});
+
+describe('the sheet names the engine before consent', () => {
+  test('shows "Using:" with a one-tap Change', () => {
+    expect(sheet).toContain('Using: {engineLabel}');
+    expect(sheet).toContain('onChangeEngine');
+    expect(sheet).toContain('Change');
+  });
+
+  test('shows the chosen engine’s own disclosure over the default', () => {
+    expect(sheet).toContain('disclosure ?? HANDSFREE_DISCLOSURE');
+  });
+
+  test('the screen chooses from the stored preference and the Gate readiness', () => {
+    expect(screen).toContain('chooseVoiceEngine(');
+    expect(screen).toContain("gatewayRequest<VoiceEngineCapabilities>('voice.capabilities'");
+    expect(screen).toContain('voiceEngineDisclosure(callEngine.engine)');
+    expect(screen).toContain("transport: callEngine && callEngine.engine !== 'phone' ? 'gate' : 'phone'");
   });
 });

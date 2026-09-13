@@ -1,4 +1,11 @@
-import { readdir as defaultReaddir, readFile as defaultReadFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import {
+  mkdir as defaultMkdir,
+  readdir as defaultReaddir,
+  readFile as defaultReadFile,
+  rename as defaultRename,
+  writeFile as defaultWriteFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 
 export function parseListenKey(envText) {
@@ -226,6 +233,59 @@ export async function readHermesSoul(hermesHome, id, io = {}) {
   // phone tell both apart from "the read failed".
   const text = await readText(join(home, 'SOUL.md'), readFile);
   return text.trim() ? text : null;
+}
+
+/** The only files a Bot's memory read may touch, in display order. */
+export const HERMES_MEMORY_FILES = ['MEMORY.md', 'USER.md'];
+
+/**
+ * A Bot's standing memory, read from its `<home>/memories/` directory.
+ *
+ * Only the whitelisted names are ever read — the directory is not enumerated,
+ * so a future file the Gate does not know about cannot leak. A Bot whose
+ * memory files are all missing or blank is `null`, the same distinction the
+ * soul read makes between "nothing recorded" and "the read failed".
+ */
+export async function readHermesMemory(hermesHome, id, io = {}) {
+  const readFile = io.readFile ?? defaultReadFile;
+  const home = id === 'default' ? hermesHome : join(hermesHome, 'profiles', id);
+  const files = [];
+  for (const name of HERMES_MEMORY_FILES) {
+    const text = await readText(join(home, 'memories', name), readFile);
+    if (text.trim()) files.push({ name, text });
+  }
+  return files.length > 0 ? { files } : null;
+}
+
+/**
+ * Write one of a Bot's whitelisted memory files. Only `HERMES_MEMORY_FILES`
+ * may be named — a path or any other file is refused by name, so this can
+ * never become a general file-write. Written to a temp sibling and renamed, so
+ * a reader never sees a half-written file.
+ */
+export async function writeHermesMemory(hermesHome, id, name, text, io = {}) {
+  if (!HERMES_MEMORY_FILES.includes(name)) {
+    const error = new Error(`"${name}" is not a memory file`);
+    error.code = 'invalid_memory_file';
+    error.status = 400;
+    throw error;
+  }
+  if (typeof text !== 'string') {
+    const error = new Error('memory text must be a string');
+    error.code = 'invalid_memory_text';
+    error.status = 400;
+    throw error;
+  }
+  const mkdir = io.mkdir ?? defaultMkdir;
+  const writeFile = io.writeFile ?? defaultWriteFile;
+  const rename = io.rename ?? defaultRename;
+  const home = id === 'default' ? hermesHome : join(hermesHome, 'profiles', id);
+  const dir = join(home, 'memories');
+  await mkdir(dir, { recursive: true });
+  const dest = join(dir, name);
+  const tmp = join(dir, `.${name}.tmp-${randomBytes(4).toString('hex')}`);
+  await writeFile(tmp, text, 'utf8');
+  await rename(tmp, dest);
 }
 
 export async function getHermesBot(hermesHome, id, io = {}) {

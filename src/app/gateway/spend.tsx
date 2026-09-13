@@ -8,6 +8,12 @@ import { Card, Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
+  loadBudgets,
+  saveBudgets,
+  setBotBudget,
+  type BotBudgets,
+} from '@/lib/gateway/budgets';
+import {
   EMPTY_SESSION_SPEND,
   SESSION_SPEND_LIST_LIMIT,
   applySessionSpendRead,
@@ -67,10 +73,33 @@ import {
  * The entry points are their own slice of P5.
  */
 export default function GatewaySpendScreen() {
-  const { gatewayRequest, status, listBots, readBotSessions, canReadBotSessions } = useGateway();
+  const { gatewayRequest, status, listBots, readBotSessions, canReadBotSessions, activeGateway } =
+    useGateway();
   const [state, setState] = useState<SessionSpendState>(EMPTY_SESSION_SPEND);
   const [botReport, setBotReport] = useState<BotSpendReport | null>(null);
+  const [budgets, setBudgets] = useState<BotBudgets>({});
   const [now] = useState(() => Date.now());
+
+  // D5's caps are this device's; read them once for the budget rows.
+  useEffect(() => {
+    let cancelled = false;
+    void loadBudgets().then((stored) => {
+      if (!cancelled) setBudgets(stored);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSetBudget = (botId: string, cap: number | undefined) => {
+    const gatewayId = activeGateway?.id;
+    if (!gatewayId) return;
+    setBudgets((previous) => {
+      const next = setBotBudget(previous, gatewayId, botId, cap);
+      void saveBudgets(next);
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (status !== 'connected') return;
@@ -164,7 +193,14 @@ export default function GatewaySpendScreen() {
 
         {state.loaded ? <SpendChart buckets={buckets} rowCount={state.rowCount} /> : null}
 
-        {botReport ? <SpendPerBotSection report={botReport} /> : null}
+        {botReport ? (
+          <SpendPerBotSection
+            report={botReport}
+            gatewayId={activeGateway?.id}
+            budgets={budgets}
+            onSetBudget={activeGateway ? handleSetBudget : undefined}
+          />
+        ) : null}
 
         <SpendSessionTable rows={sessionRows} rowCount={state.rowCount} />
       </ScrollView>

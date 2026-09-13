@@ -8,11 +8,17 @@ function readActivitySource(): string {
   // The file is CRLF on disk; normalize so the lookups below are line-ending
   // independent.
   return nodeFs
+    .readFileSync([__dirname, '..', 'src', 'app', 'runs.tsx'].join(SEP), 'utf8')
+    .replace(/\r\n/g, '\n');
+}
+
+function readCronTabSource(): string {
+  return nodeFs
     .readFileSync([__dirname, '..', 'src', 'app', '(tabs)', 'activity.tsx'].join(SEP), 'utf8')
     .replace(/\r\n/g, '\n');
 }
 
-describe('activity run list windowing', () => {
+describe('runs list windowing', () => {
   const src = readActivitySource();
 
   test('the finished-runs block renders through a windowed FlatList, not a bare map in a ScrollView', () => {
@@ -39,12 +45,14 @@ describe('activity run list windowing', () => {
   });
 
   test('the fixed sections stay outside the scrolling row data as header/footer', () => {
-    // Start card, cron section and agent targets must not become list rows.
+    // The start card and the scorecards must not become list rows.
     expect(src).toContain('ListHeaderComponent=');
     expect(src).toContain('ListFooterComponent=');
-    expect(src).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
     expect(src).toContain('startCard');
-    // The approval decision card renders in the header, not as a data row.
-    expect(src).toContain('ApprovalDecisionCard');
+    // The cron section and the approval card stay on the Activity tab, which
+    // no longer carries the run list this destination extracted.
+    const tab = readCronTabSource();
+    expect(tab).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
+    expect(tab).toContain('ApprovalDecisionCard');
   });
 });

@@ -1,6 +1,8 @@
 import * as Clipboard from 'expo-clipboard';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
+import { BotApprovalPolicyRow } from '@/components/chat/bot-approval-policy';
+import { BotMemoryPane } from '@/components/chat/bot-memory-pane';
 import { BaseSheet, Button, Divider, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { haptics } from '@/lib/haptics';
@@ -35,6 +37,12 @@ export type BotDetailSheetProps = {
    * and none over a loaded soul.
    */
   onRetry?: () => void;
+  /**
+   * Export this Bot as a handoff packet and open the share sheet (D6). The
+   * parent supplies it only where a share sheet exists, so no button is drawn
+   * that cannot finish. A packet never carries memory or credentials.
+   */
+  onExport?: () => void;
 };
 
 /**
@@ -44,7 +52,15 @@ export type BotDetailSheetProps = {
  * then act: message the agent, copy the id for host-side commands, or edit
  * what the Gate holds.
  */
-export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit, onRetry }: BotDetailSheetProps) {
+export function BotDetailSheet({
+  bot,
+  soul,
+  onClose,
+  onMessage,
+  onEdit,
+  onRetry,
+  onExport,
+}: BotDetailSheetProps) {
   if (!bot) return null;
   const detail = describeBotDetail(bot);
   const soulState = soul ?? EMPTY_BOT_SOUL;
@@ -98,6 +114,12 @@ export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit, onRetry 
             <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
           ) : null}
         </View>
+
+        {/* D1: the per-Bot auto-approve opt-in (read-only classes only). */}
+        <BotApprovalPolicyRow botId={bot.id} />
+
+        {/* P2: the Bot's memory, read on demand from the Gate host. */}
+        <BotMemoryPane botId={bot.id} />
 
         <View style={styles.fact}>
           <Text variant="micro" color="tertiary">
@@ -157,6 +179,15 @@ export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit, onRetry 
             icon={{ ios: 'pencil', android: 'edit', web: 'edit' }}
             chevron={false}
             onPress={onEdit}
+          />
+        ) : null}
+        {onExport ? (
+          <ListRow
+            title="Export handoff"
+            subtitle="Soul, routines and skills — never memory or credentials"
+            icon={{ ios: 'square.and.arrow.up', android: 'share', web: 'share' }}
+            chevron={false}
+            onPress={onExport}
           />
         ) : null}
       </View>

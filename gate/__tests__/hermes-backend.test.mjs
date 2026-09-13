@@ -539,6 +539,39 @@ test('getBot returns one Bot with its soul and still never leaks listen keys', a
   assert.equal(JSON.stringify(bot).includes('sk-nope'), false);
 });
 
+test('getBotMemory returns one Bot memory and never a non-whitelisted file', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');
+  await mkdir(join(home, 'profiles', 'researcher', 'memories'), { recursive: true });
+  await writeFile(join(home, 'profiles', 'researcher', 'memories', 'MEMORY.md'), '- cites sources\n');
+  await writeFile(join(home, 'profiles', 'researcher', 'memories', 'SECRET.md'), 'sk-never-return\n');
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    apiKey: 'default-listen',
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    profilesHome: home,
+  });
+
+  const memory = await hermes.getBotMemory({ id: 'researcher' });
+  assert.deepEqual(memory.files, [{ name: 'MEMORY.md', text: '- cites sources\n' }]);
+  assert.equal(JSON.stringify(memory).includes('sk-never-return'), false);
+  await assert.rejects(() => hermes.getBotMemory({ id: 'nobody' }), (error) => error.code === 'unknown_bot');
+
+  await hermes.setBotMemory({ id: 'researcher', name: 'MEMORY.md', text: '- cites primary sources\n' });
+  assert.equal(
+    await readFile(join(home, 'profiles', 'researcher', 'memories', 'MEMORY.md'), 'utf8'),
+    '- cites primary sources\n',
+  );
+  await assert.rejects(
+    () => hermes.setBotMemory({ id: 'researcher', name: 'SECRET.md', text: 'x' }),
+    (error) => error.code === 'invalid_memory_file',
+  );
+  await assert.rejects(
+    () => hermes.setBotMemory({ id: 'nobody', name: 'MEMORY.md', text: 'x' }),
+    (error) => error.code === 'unknown_bot',
+  );
+});
+
 test('getBot on an unknown Bot is refused, not an empty Bot', async () => {
   const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
   await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\n');

@@ -1,0 +1,262 @@
+{
+  "startedAt": "2026-09-13T06:55:46.453863+00:00",
+  "modelsDir": "C:\\Users\\ethan\\AppData\\Local\\Versutus\\Gate\\voice\\models",
+  "fixturesDir": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\fixtures",
+  "fixturesPresent": false,
+  "peakVramMb": 1070,
+  "whisper": {
+    "kind": "large-v3-turbo/cuda/int8_float16",
+    "loadMs": 4631.669200000033,
+    "p50PartialMs": 408.2905000013852,
+    "p50FinalMs": 423.88519999985874,
+    "maxFinalMs": 452.2428000000218
+  },
+  "kokoro": {
+    "firstAudioMs": 656.6222000001289,
+    "p50Ms": 475.7159999990108,
+    "sampleRate": 24000,
+    "seconds": 1.3013333333333332
+  },
+  "smartTurn": {
+    "state": "not-installed",
+    "note": "no smart-turn*.onnx under models dir"
+  },
+  "utterances": [
+    {
+      "index": 0,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-00.wav",
+      "reference": "",
+      "hasPause": true,
+      "durationSec": 1.5,
+      "partialMs": 1626.7339999994874,
+      "finalMs": 424.3979999992007,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 1,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-01.wav",
+      "reference": "",
+      "hasPause": true,
+      "durationSec": 1.7,
+      "partialMs": 407.59389999948326,
+      "finalMs": 420.6670000003214,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 2,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-02.wav",
+      "reference": "",
+      "hasPause": true,
+      "durationSec": 1.9,
+      "partialMs": 449.07120000061695,
+      "finalMs": 448.06269999935466,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 3,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-03.wav",
+      "reference": "",
+      "hasPause": true,
+      "durationSec": 2.1,
+      "partialMs": 461.6170000008424,
+      "finalMs": 452.2428000000218,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 4,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-04.wav",
+      "reference": "",
+      "hasPause": true,
+      "durationSec": 2.3,
+      "partialMs": 406.86209999876155,
+      "finalMs": 450.25079999868467,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 5,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-05.wav",
+      "reference": "",
+      "hasPause": true,
+      "durationSec": 1.5,
+      "partialMs": 421.3543000005302,
+      "finalMs": 418.3857000007265,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 6,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-06.wav",
+      "reference": "",
+      "hasPause": true,
+      "durationSec": 1.7,
+      "partialMs": 405.2259000000049,
+      "finalMs": 431.04700000003504,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 7,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-07.wav",
+      "reference": "",
+      "hasPause": true,
+      "durationSec": 1.9,
+      "partialMs": 443.0057999998098,
+      "finalMs": 446.57200000074226,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 8,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-08.wav",
+      "reference": "",
+      "hasPause": true,
+      "durationSec": 2.1,
+      "partialMs": 624.4475999992574,
+      "finalMs": 448.38069999968866,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 9,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-09.wav",
+      "reference": "",
+      "hasPause": true,
+      "durationSec": 2.3,
+      "partialMs": 405.18490000067686,
+      "finalMs": 450.10030000048573,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 10,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-10.wav",
+      "reference": "",
+      "hasPause": false,
+      "durationSec": 1.5,
+      "partialMs": 423.56329999893205,
+      "finalMs": 420.28639999989537,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 11,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-11.wav",
+      "reference": "",
+      "hasPause": false,
+      "durationSec": 1.7,
+      "partialMs": 406.0144000013679,
+      "finalMs": 423.82720000023255,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 12,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-12.wav",
+      "reference": "",
+      "hasPause": false,
+      "durationSec": 1.9,
+      "partialMs": 412.2341000002052,
+      "finalMs": 417.52769999948214,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 13,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-13.wav",
+      "reference": "",
+      "hasPause": false,
+      "durationSec": 2.1,
+      "partialMs": 405.06830000049376,
+      "finalMs": 420.9049999990384,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 14,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-14.wav",
+      "reference": "",
+      "hasPause": false,
+      "durationSec": 2.3,
+      "partialMs": 405.2589999992051,
+      "finalMs": 418.376999999964,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 15,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-15.wav",
+      "reference": "",
+      "hasPause": false,
+      "durationSec": 1.5,
+      "partialMs": 437.1632000002137,
+      "finalMs": 422.08449999998265,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 16,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-16.wav",
+      "reference": "",
+      "hasPause": false,
+      "durationSec": 1.7,
+      "partialMs": 406.2498000002961,
+      "finalMs": 416.544799998519,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 17,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-17.wav",
+      "reference": "",
+      "hasPause": false,
+      "durationSec": 1.9,
+      "partialMs": 406.53609999935725,
+      "finalMs": 423.88519999985874,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 18,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-18.wav",
+      "reference": "",
+      "hasPause": false,
+      "durationSec": 2.1,
+      "partialMs": 408.2905000013852,
+      "finalMs": 418.92749999897205,
+      "hypothesis": "Thank you.",
+      "wer": null
+    },
+    {
+      "index": 19,
+      "path": "C:\\Users\\ethan\\.codex\\worktrees\\voice\\Versutus\\docs\\plans\\voice-spikes\\s2-audio\\synthetic-19.wav",
+      "reference": "",
+      "hasPause": false,
+      "durationSec": 2.3,
+      "partialMs": 404.7712000010506,
+      "finalMs": 425.359999999273,
+      "hypothesis": "Thank you.",
+      "wer": null
+    }
+  ],
+  "versions": {
+    "faster_whisper": "1.2.1",
+    "kokoro_onnx": "unknown",
+    "onnxruntime": "1.30.0"
+  },
+  "models": {
+    "kokoro-v1.0.onnx": {
+      "sha256": "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5",
+      "bytes": 325532387
+    },
+    "voices-v1.0.bin": {
+      "sha256": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
+      "bytes": 28214398
+    }
+  },
+  "finishedAt": "2026-09-13T06:56:14.257189+00:00"
+}

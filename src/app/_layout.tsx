@@ -160,7 +160,7 @@ function NotificationRouter() {
   // first-run redirect (the wait GatewayDeepLinkRouter already does). A tap
   // delivered to the live listener during that same window is held here too.
   const launchReadRef = useRef(false);
-  const pendingTapRef = useRef<'/chat' | '/activity' | null>(null);
+  const pendingTapRef = useRef<'/chat' | '/runs' | '/activity' | null>(null);
   // The run a held tap named, applied with the held destination. A run notice
   // is usually tapped from a cold start, and a focus dropped on the way through
   // the bootstrap wait is the mis-landing this router exists to prevent.
@@ -247,12 +247,15 @@ function NotificationRouter() {
     // Route on the payload's kind: a routine notice and a finished model reply
     // both open Chat — the roster for a routine, and the exact conversation for
     // a reply (the session id rides beside the destination, since Chat is one
-    // tab and there is no route to carry it). Runs, approvals and anything
-    // unrecognized stay on Activity, where they are monitored (chat still has
-    // the sheet).
-    const destinationFor = (data: unknown): '/chat' | '/activity' => {
+    // tab and there is no route to carry it). A run or a weekly report opens
+    // the Runs destination, where the run history and the scorecards live
+    // (Workflows slice 3b); approvals and anything unrecognized stay on
+    // Activity, where the approval card and the scheduled work are monitored.
+    const destinationFor = (data: unknown): '/chat' | '/runs' | '/activity' => {
       const route = routeForTap(data);
-      return route?.kind === 'routine' || route?.kind === 'reply' ? '/chat' : '/activity';
+      if (route?.kind === 'routine' || route?.kind === 'reply') return '/chat';
+      if (route?.kind === 'run' || route?.kind === 'weekly-report') return '/runs';
+      return '/activity';
     };
 
     // The run a payload named, if it named one. The destination above drops the
@@ -454,6 +457,30 @@ function GatewayDeepLinkRouter() {
       return;
     }
 
+    // A call link (the widget's signed auto-start, a launcher shortcut, or a
+    // hand-written confirm link) opens the Bot Chat and asks the screen for
+    // the call sheet. A link alone never opens the microphone: the sheet's
+    // Start, or the native signature check on a signed link, is what begins
+    // capture (§4.4). With no Bot named the sheet belongs to whatever thread
+    // is already up, which is the screen's call.
+    if (target.kind === 'call') {
+      if (status !== 'connected') return;
+      handledRef.current = url;
+      router.navigate({ pathname: '/chat', params: { call: '1' } });
+      if (!target.botId) return;
+      const botId = target.botId;
+      void openBot(botId)
+        .then((opened) => {
+          if (!opened) {
+            requestSurface({ kind: 'roster' });
+            return;
+          }
+          requestSurface({ kind: 'bot', botId });
+        })
+        .catch(() => requestSurface({ kind: 'roster' }));
+      return;
+    }
+
     // The last target the fold answers is a chat link.
 
     // A Bot Chat link opens the way a roster tap opens one: the Chat tab is
@@ -578,6 +605,33 @@ export default function RootLayout() {
                     contentStyle: { backgroundColor: VersutusDarkTheme.colors.background },
                   }}>
                   <Stack.Screen name="(tabs)" />
+                  <Stack.Screen
+                    name="fleet"
+                    options={{
+                      headerShown: true,
+                      title: 'Fleet',
+                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                      headerTintColor: VersutusDarkTheme.colors.text,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="council"
+                    options={{
+                      headerShown: true,
+                      title: 'Council',
+                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                      headerTintColor: VersutusDarkTheme.colors.text,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="runs"
+                    options={{
+                      headerShown: true,
+                      title: 'Runs',
+                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                      headerTintColor: VersutusDarkTheme.colors.text,
+                    }}
+                  />
                   <Stack.Screen name="onboarding" options={{ headerShown: false }} />
                   <Stack.Screen
                     name="gateway/add"
@@ -625,6 +679,16 @@ export default function RootLayout() {
                       presentation: 'modal',
                       headerShown: true,
                       title: 'Capabilities',
+                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
+                      headerTintColor: VersutusDarkTheme.colors.text,
+                    }}
+                  />
+                  <Stack.Screen
+                    name="gateway/import"
+                    options={{
+                      presentation: 'modal',
+                      headerShown: true,
+                      title: 'Import Bot',
                       headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
                       headerTintColor: VersutusDarkTheme.colors.text,
                     }}

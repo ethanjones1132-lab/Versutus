@@ -331,13 +331,13 @@ describe('the provider writes the snapshot as run state changes', () => {
     expect(read).toContain('.catch(() => undefined);');
   });
 
-  test('the run lifecycle it rides on still persists, and the tab still reads it', () => {
+  test('the run lifecycle it rides on still persists, and the Runs destination still reads it', () => {
     const patch = provider().match(
       /const patchActivityRuns = useCallback\([\s\S]*?\n  \}, \[\]\);/,
     )?.[0];
     expect(patch).toContain('void saveActivityRuns(next);');
-    // The tab's own read of the same state, unchanged.
-    expect(readSource('src', 'app', '(tabs)', 'activity.tsx')).toContain('runs={activityRuns}');
+    // The Runs destination's own read of the same state, unchanged.
+    expect(readSource('src', 'app', 'runs.tsx')).toContain('runs={activityRuns}');
   });
 });
 

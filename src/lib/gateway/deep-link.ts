@@ -20,14 +20,38 @@
 export type DeepLinkQuery = Record<string, undefined | string | string[]>;
 
 /**
+ * The engines a call link may name. The same ids as `AppSettings.voiceEngine`,
+ * the chooser and `voice.session.start` (§4.4).
+ */
+export type DeepLinkCallEngine = 'auto' | 'local' | 'codex' | 'phone';
+
+/**
  * Where a link lands. `add` carries the sheet's own params verbatim; `chat`
  * names the Bot whose Bot Chat opens; `compose` carries a shared text into
- * the composer, addressed to a Bot when the link names one.
+ * the composer, addressed to a Bot when the link names one; `call` opens a
+ * Bot Chat and asks for a call, with `autoStart` true only when the link
+ * carries a valid-looking signature (§4.4).
  */
 export type DeepLinkTarget =
   | { kind: 'add'; params: Record<string, string> }
   | { kind: 'chat'; botId: string }
-  | { kind: 'compose'; text: string; botId?: string };
+  | { kind: 'compose'; text: string; botId?: string }
+  | {
+      kind: 'call';
+      botId?: string;
+      engine: DeepLinkCallEngine;
+      autoStart: boolean;
+      signature?: { ts: number; sig: string };
+    };
+
+const CALL_ENGINES: readonly DeepLinkCallEngine[] = ['auto', 'local', 'codex', 'phone'];
+
+/** An absent or unknown engine is `auto`, never a guessed one. */
+function callEngine(value: string | undefined): DeepLinkCallEngine {
+  return (CALL_ENGINES as readonly string[]).includes(value ?? '')
+    ? (value as DeepLinkCallEngine)
+    : 'auto';
+}
 
 /** The first value of a repeated param, or undefined when the link carries none. */
 function firstValue(value: undefined | string | string[]): string | undefined {
@@ -82,6 +106,27 @@ export function deepLinkTarget(
     if (text === undefined || !text.trim()) return null;
     const botId = (firstValue(query.bot) ?? '').trim();
     return botId ? { kind: 'compose', text, botId } : { kind: 'compose', text };
+  }
+
+  if (normalized === 'call') {
+    // Any app or web page can fire a `versutus://` link, so `autoStart` is
+    // true only when the link also carries a timestamp and a signature; the
+    // native side is what decides whether that signature is real (§4.4).
+    const botId = (firstValue(query.bot) ?? '').trim();
+    const tsRaw = firstValue(query.ts);
+    const sig = firstValue(query.sig);
+    const ts = tsRaw === undefined ? Number.NaN : Number(tsRaw);
+    const signed = firstValue(query.autoStart) === '1'
+      && Number.isFinite(ts)
+      && typeof sig === 'string'
+      && sig.length > 0;
+    return {
+      kind: 'call',
+      ...(botId ? { botId } : {}),
+      engine: callEngine(firstValue(query.engine)),
+      autoStart: signed,
+      ...(signed ? { signature: { ts, sig } } : {}),
+    };
   }
 
   return null;

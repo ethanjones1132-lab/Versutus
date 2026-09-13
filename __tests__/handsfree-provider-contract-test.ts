@@ -22,6 +22,7 @@ function between(src: string, startMarker: string, endMarker: string): string {
 const provider = readSource('src', 'context', 'handsfree-voice-provider.tsx');
 const layout = readSource('src', 'app', '_layout.tsx');
 const reply = readSource('src', 'lib', 'voice', 'handsfree-reply.ts');
+const banner = readSource('src', 'components', 'voice', 'handsfree-call-banner.tsx');
 
 describe('the call provider sits outside navigation and inside the gateway', () => {
   test('is mounted between GatewayProvider and FontProvider', () => {
@@ -39,6 +40,7 @@ describe('the call provider sits outside navigation and inside the gateway', () 
       'partial',
       'label',
       'reason',
+      'lastEndReason',
       'level',
       'canStart',
       'start',
@@ -62,7 +64,7 @@ describe('the phase-to-native wiring table', () => {
 
   test('every reducer effect has a native destination', () => {
     expect(runEffect).toContain("case 'start-listening':");
-    expect(runEffect).toContain('startListening()');
+    expect(runEffect).toContain('startListeningWithRetry()');
     expect(runEffect).toContain("case 'stop-listening':");
     expect(runEffect).toContain('stopListening()');
     expect(runEffect).toContain("case 'set-muted':");
@@ -223,5 +225,101 @@ describe('start preconditions and captured target', () => {
   test('no backend-name branch and no invented realtime capability', () => {
     expect(provider).not.toMatch(/hermes|opencode|codex|claude-code/i);
     expect(provider).not.toContain('realtime-voice');
+  });
+});
+
+describe('starting a call cannot strand the provider', () => {
+  const start = between(provider, 'const start = useCallback(', 'const mute = useCallback(');
+
+  test('listeners attach before the native session starts, so early events land', () => {
+    const subscribeAt = start.indexOf('subscribe(module)');
+    const startAt = start.indexOf('module.startSession(');
+    expect(subscribeAt).toBeGreaterThan(-1);
+    expect(startAt).toBeGreaterThan(subscribeAt);
+  });
+
+  test('a native start that throws is refused, never left in starting', () => {
+    expect(start).toMatch(/try\s*\{\s*outcome = await module\.startSession\(\{ title: target\.label \}\);\s*\}\s*catch/);
+    expect(start).toContain("dispatch({ type: 'start-refused' })");
+    expect(start).toContain('unsubscribe()');
+  });
+
+  test('a session that a fatal event already ended is not reported as started', () => {
+    expect(start).toContain("sessionRef.current.phase !== 'starting'");
+  });
+});
+
+describe('a listen that could not start is retried, then named', () => {
+  test('the start-listening effect awaits the boolean and fails the call only after retries', () => {
+    const listen = between(provider, 'const startListeningWithRetry = useCallback(', '}, [dispatch]);');
+    expect(listen).toContain('await module.startListening()');
+    expect(listen).toContain('HANDSFREE_LISTEN_RETRY_LIMIT');
+    expect(listen).toContain("dispatch({ type: 'fatalError', reason: 'recognition-failed' })");
+  });
+});
+
+describe('the Call control is not hidden by ordinary chat activity', () => {
+  test('canStart no longer depends on a stream, a command or an approval', () => {
+    const canStart = between(provider, 'const canStart =', ';');
+    expect(canStart).not.toContain('isSending');
+    expect(canStart).not.toContain('isCommandRunning');
+    expect(canStart).not.toContain('pendingRunApproval');
+  });
+
+  test('the provider reports what blocks a start instead', () => {
+    expect(provider).toContain('startBlocker: handsfreeStartBlocker(');
+  });
+});
+
+describe('the availability probe recovers on its own', () => {
+  const probe = between(provider, '// Read the device\'s call capability', '// A call is bound to the gateway');
+
+  test('re-probes when the app returns to the foreground', () => {
+    expect(probe).toContain("AppState.addEventListener('change'");
+  });
+
+  test('retries a probe that answered no recognition or threw', () => {
+    expect(probe).toContain('HANDSFREE_PROBE_RETRIES');
+  });
+});
+
+describe('a Gate-powered call is one transport away from the phone engine', () => {
+  test('start branches on the transport, not on an engine or backend name', () => {
+    expect(provider).toContain("if (target.transport === 'gate')");
+    expect(provider).toContain('startGateCall');
+    expect(provider).toContain("'voice.session.start'");
+    expect(provider).toContain('startGateMedia');
+    expect(provider).toContain("addListener('gate'");
+    expect(provider).toContain('reduceGateCall');
+    expect(provider).toContain('sendGateControl');
+    expect(provider).toContain('reloadHistory');
+    // Still no backend-name branch anywhere in the provider.
+    expect(provider).not.toMatch(/hermes|opencode|claude-code/i);
+  });
+
+  test('the phone engine effects are inert while the Gate owns the loop', () => {
+    expect(provider).toContain('if (gateModeRef.current) {');
+    expect(provider).toContain("if (effect.kind === 'stop-session') void teardown();");
+  });
+
+  test('the Gate banner is folded from frames and the session is ended once', () => {
+    expect(provider).toContain('appPhaseForGate(gateBanner.phase)');
+    expect(provider).toContain('stopGateMedia');
+    expect(provider).toContain("gatewayRequest('voice.session.stop'");
+  });
+});
+
+describe('a call names the engine it is using and never hides a fallback', () => {
+  test('the provider carries the engine and the reason the Gate fell back', () => {
+    expect(provider).toContain('engineReason: engineInfo?.reason');
+    expect(provider).toContain('setEngineInfo({ engine: grant.engine');
+    expect(provider).toContain("setEngineInfo({ engine: 'phone' })");
+    expect(provider).toContain('engine?: string;');
+    expect(provider).toContain('engineReason?: string;');
+  });
+
+  test('the banner draws the engine and the fallback reason', () => {
+    expect(banner).toContain('engineReason');
+    expect(banner).toContain('Using {engine}');
   });
 });

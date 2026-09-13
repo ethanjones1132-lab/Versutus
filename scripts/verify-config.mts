@@ -406,6 +406,28 @@ async function checkWorkletCalls() {
 
 await checkWorkletCalls();
 
+// ---------------------------------------------------------------------------
+// 6. The local voice worker's pytest suite must exist and CI must run it with
+//    Python 3.12. The worker tests use fakes only, so CI never downloads a
+//    model.
+// ---------------------------------------------------------------------------
+if (!pkg.scripts?.['test:voice-worker']) {
+  fail('voice-worker-suite', 'package.json has no `test:voice-worker` script');
+} else if (!existsSync(join(root, 'gate', 'voice-worker', 'tests'))) {
+  fail('voice-worker-suite', 'gate/voice-worker/tests is missing');
+} else {
+  pass('voice-worker-suite', 'test:voice-worker runs the worker pytest suite');
+}
+
+const ciForVoice = existsSync(ciPath) ? readFileSync(ciPath, 'utf8') : '';
+if (!/npm run test:voice-worker/.test(ciForVoice)) {
+  fail('voice-worker-in-ci', 'CI never runs `npm run test:voice-worker`');
+} else if (!/python-version:\s*['"]?3\.12/.test(ciForVoice)) {
+  fail('voice-worker-in-ci', 'CI runs the worker suite without Python 3.12');
+} else {
+  pass('voice-worker-in-ci', 'CI runs the worker suite on Python 3.12');
+}
+
 console.log('');
 if (failures.length > 0) {
   console.error(`verify-config: ${failures.length} check(s) failed`);

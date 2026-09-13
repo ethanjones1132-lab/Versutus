@@ -1,0 +1,11 @@
+{
+  "source": "Derived from M1 S2 timings (Whisper final p50 424 ms + Kokoro first sentence p50 476 ms); no live call has been measured on this host.",
+  "status": "PENDING-DEVICE",
+  "tolerance": 0.25,
+  "engines": {
+    "local": {
+      "p50": 900,
+      "p95": 1300
+    }
+  }
+}

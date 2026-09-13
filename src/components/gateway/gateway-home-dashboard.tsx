@@ -300,6 +300,26 @@ export function GatewayHomeDashboard() {
             style={styles.retryAction}
           />
         ) : null}
+        <Button
+          label="Open fleet map"
+          onPress={async () => {
+            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push('/fleet');
+          }}
+          variant="ghost"
+          size="sm"
+          style={styles.fleetAction}
+        />
+        <Button
+          label="Compare Bots"
+          onPress={async () => {
+            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push('/council');
+          }}
+          variant="ghost"
+          size="sm"
+          style={styles.fleetAction}
+        />
       </Card>
 
       {/* Channels stay on the first screen even when healthy — when a declaring
@@ -469,6 +489,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.two,
   },
   retryAction: {
+    alignSelf: 'flex-start',
+  },
+  fleetAction: {
     alignSelf: 'flex-start',
   },
   approvalCard: {

@@ -21,6 +21,7 @@ import { CliEnvironmentStore } from './cli-environments/store.mjs';
 import { CliAdapterRegistry } from './cli-environments/adapter-registry.mjs';
 import { CliEnvironmentService } from './cli-environments/supervisor.mjs';
 import { createEnvironmentRpc, sanitizeEnvironment } from './cli-environments/rpc.mjs';
+import { createApprovalRpc } from './approvals/rpc.mjs';
 import { createBackendManager } from './cli-environments/backend-manager.mjs';
 import { createBotGroupStore, transcriptEntriesForSend } from './cli-environments/bot-groups.mjs';
 import { createBackendRunStreams } from './cli-environments/backend-run-streams.mjs';
@@ -31,6 +32,13 @@ import { DeviceTokenStore } from './device-tokens.mjs';
 import { PushTokenStore } from './push-tokens.mjs';
 import { createPushRpc } from './push-rpc.mjs';
 import { createPushSend } from './push-send.mjs';
+import { createVoiceRpc } from './voice/voice-rpc.mjs';
+import { attachVoiceMediaSocket } from './voice/media-socket.mjs';
+import { createVoiceAudit } from './voice/audit.mjs';
+import { LocalEngine } from './voice/engines/local-engine.mjs';
+import { voicePaths, voiceStatus, installVoice, uvRunner } from './voice/runtime.mjs';
+import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
+import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest } from './signature.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
@@ -50,66 +58,11 @@ function lastUserText(messages = []) {
 }
 
 /**
- * Relay a native-environment turn as OpenAI-shaped SSE.
- *
- * Subscribing before sending matters: the CLI starts emitting as soon as the
- * turn is accepted, and a late subscriber loses the opening deltas. Tool events
- * are relayed as `tool_calls` deltas so the client can show what the agent is
- * doing — the thing a bare provider proxy can never report.
+ * Relay a native-environment turn as OpenAI-shaped SSE, through the one turn
+ * runner typed and spoken turns share. The runner reports deltas, tool calls
+ * and the model that ran; this writer only shapes them onto the wire and adds
+ * the empty-turn guarantee.
  */
-/**
- * Relay an OpenAI-shaped SSE stream to the client.
- *
- * Payloads pass through unchanged -- Hermes and the Gate write the same chunk
- * shape, so translating would only add a place to get it wrong. Frames are
- * still split and inspected for two reasons: `[DONE]` is held back so the
- * caller writes exactly one terminator, and deltas are counted so the
- * empty-turn guarantee below survives on this path too. Inspecting is not
- * rewriting; an unparseable frame is forwarded as-is.
- *
- * @returns whether anything the user could see came through.
- */
-async function relayOpenAiStream(upstream, res, isDisconnected) {
-  const reader = upstream.body?.getReader?.();
-  if (!reader) return false;
-
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let sawContent = false;
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (isDisconnected()) {
-      await reader.cancel().catch(() => undefined);
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-    let index;
-    while ((index = buffer.indexOf('\n\n')) !== -1) {
-      const frame = buffer.slice(0, index);
-      buffer = buffer.slice(index + 2);
-
-      const data = frame
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice('data:'.length).trim())
-        .join('\n');
-      if (!data || data === '[DONE]') continue;
-
-      try {
-        const delta = JSON.parse(data)?.choices?.[0]?.delta;
-        if (delta?.content || delta?.tool_calls?.length) sawContent = true;
-      } catch {
-        // Opaque frame: relay it rather than dropping what we cannot read.
-      }
-      res.write(`data: ${data}\n\n`);
-    }
-  }
-  return sawContent;
-}
-
 async function streamBackendTurn(backend, sessionId, { text, model }, res) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -129,95 +82,17 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
   // keeps streaming into a socket nobody is reading.
   res.on('close', () => controller.abort());
 
-  // Token-by-token, when the backend can do it. Hermes sends and streams in one
-  // POST, which does not fit the subscribe-then-send shape below, so it is
-  // handled as its own path rather than bent into that one.
-  if (typeof backend.sendMessageStreaming === 'function') {
-    let upstream = null;
-    try {
-      upstream = await backend.sendMessageStreaming(sessionId, { text, model }, controller.signal);
-    } catch {
-      // Nothing has been written yet, so the whole-turn path below can still
-      // serve this turn. A streaming endpoint that is missing or refuses must
-      // not cost the user their reply -- it should cost them only the tokens
-      // arriving one at a time.
-      upstream = null;
-      if (clientDisconnected) {
-        res.end();
-        return;
-      }
-    }
-
-    if (upstream) {
-      try {
-        const sawContent = await relayOpenAiStream(upstream, res, () => clientDisconnected);
-        if (!clientDisconnected && !sawContent) {
-          res.write(`data: ${JSON.stringify({
-            error: { message: 'The backend completed the turn with no assistant content.', code: 'empty_turn' },
-          })}\n\n`);
-        }
-      } catch (error) {
-        if (!clientDisconnected) {
-          res.write(`data: ${JSON.stringify({ error: { message: error.message, code: 'backend_error' } })}\n\n`);
-        }
-      } finally {
-        if (!clientDisconnected) {
-          res.write('data: [DONE]\n\n');
-          res.end();
-        }
-      }
-      return;
-    }
-  }
-
-  let toolIndex = 0;
-  const seenTools = new Map();
-  // A tool call is real turn activity with no closing text of its own — only
-  // a turn where *neither* text nor a tool ever happened counts as empty.
-  let sawContent = false;
-
-  const streaming = backend
-    .streamEvents(
-      sessionId,
-      (event) => {
-        if (event.type === 'message.delta' && event.payload.text) {
-          sawContent = true;
-          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: event.payload.text } }] })}\n\n`);
-          return;
-        }
-        if (event.type === 'tool.started' && event.payload.name) {
-          if (seenTools.has(event.payload.callId)) return;
-          sawContent = true;
-          const index = toolIndex++;
-          seenTools.set(event.payload.callId, index);
-          res.write(`data: ${JSON.stringify({
-            choices: [{ delta: { tool_calls: [{ index, function: { name: event.payload.name } }] } }],
-          })}\n\n`);
-        }
-      },
-      controller.signal,
-    )
-    .catch(() => undefined);
-
   try {
-    const result = await backend.sendMessage(sessionId, { text, model });
-    const hasContent = sawContent
-      || Boolean(result?.text && result.text.trim())
-      || Boolean(result?.message?.tool_calls?.length);
-
-    // A backend whose `streamEvents` is a no-op (Hermes' is, and it is not the
-    // only one) finishes the turn with real text that never reached the wire:
-    // every delta came from the subscription, and there was no subscription.
-    // The turn then renders as an empty bubble that the empty-turn guard below
-    // deliberately does not flag, because the content *does* exist. Send it as
-    // one delta rather than dropping it -- and only when nothing streamed, so
-    // a backend that does emit events is not echoed twice.
-    if (!clientDisconnected && !sawContent && result?.text && result.text.trim()) {
-      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: result.text } }] })}\n\n`);
-    }
+    const { hasContent, report } = await runBackendTurn(backend, sessionId, { text, model }, {
+      signal: controller.signal,
+      // Raw OpenAI-shaped payloads, relayed verbatim so a frame the runner
+      // cannot read is still forwarded rather than dropped.
+      onChunk: (data) => {
+        if (!clientDisconnected) res.write(`data: ${data}\n\n`);
+      },
+    });
 
     // Same truth the non-streaming path reports: which model actually ran.
-    const report = modelReport(result?.runtime, model);
     if (!clientDisconnected && report.model) {
       res.write(`data: ${JSON.stringify({ ...report, choices: [] })}\n\n`);
     }
@@ -235,8 +110,6 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
       res.write(`data: ${JSON.stringify({ error: { message: error.message, code: 'backend_error' } })}\n\n`);
     }
   } finally {
-    controller.abort();
-    await streaming;
     if (!clientDisconnected) {
       res.write('data: [DONE]\n\n');
       res.end();
@@ -264,27 +137,6 @@ function parseQualifiedModel(model) {
   const separator = String(model).indexOf('/');
   if (separator === -1) return { modelId: String(model) };
   return { providerId: String(model).slice(0, separator), modelId: String(model).slice(separator + 1) };
-}
-
-/**
- * The model that actually answered, alongside the one the caller asked for.
- *
- * Backends are allowed to substitute — Hermes does it silently through
- * `fallback_providers`, so a session with history can answer as an entirely
- * different model — and they report it in a runtime block. Reporting only the
- * request would keep repeating the operator's own choice back at them, which
- * is exactly how a swap stayed invisible from the phone. Absent runtime means
- * the backend cannot tell us: say what was asked and nothing more, rather than
- * inventing a confirmation.
- */
-function modelReport(runtime, requested) {
-  const ran = runtime?.model ?? requested?.modelId;
-  const asked = runtime?.requested?.model ?? requested?.modelId;
-  const report = {};
-  if (ran) report.model = ran;
-  if (asked) report.requested_model = asked;
-  if (runtime?.provider) report.provider = runtime.provider;
-  return report;
 }
 
 async function proxyChat(root, provider, requestBody, res) {
@@ -485,6 +337,11 @@ export async function createGate(config = {}) {
     onChanged: () => reload(),
   });
 
+  // D1: the pending-approval list the CLI environment supervisor already holds,
+  // over RPC, so a paired phone can triage an approval it did not open the run
+  // for. The class and summary are the supervisor's own; the inbox adds none.
+  const approvalRpc = createApprovalRpc({ approvals: environmentService.approvals });
+
   // Environments that expose a native server become chat backends: they own
   // their own sessions, models and tools, and the Gate proxies to them rather
   // than reimplementing any of it.
@@ -539,6 +396,25 @@ export async function createGate(config = {}) {
   const pushTokens = new PushTokenStore(join(gateHome, 'push-tokens.json'));
   const pushSend = createPushSend({ fetchImpl: pushFetch ?? globalThis.fetch });
   const notificationMethods = createPushRpc({ tokens: pushTokens, send: pushSend.send });
+  // Voice sessions live on the Gate; the media socket (M2 task 2.2) reads the
+  // same registry the RPC writes, so a grant and its socket cannot disagree.
+  // Capabilities are read from the installed runtime (M5 task 5.2): `local` is
+  // `ready` only once the venv and models are on disk, so `auto` cannot pick an
+  // engine that is not there.
+  const voiceRpc = createVoiceRpc({
+    capabilities: () => voiceStatus({ paths: voicePaths() }),
+    install: {
+      // The phone starts the same install the CLI runs, over the same runtime.
+      start: () =>
+        installVoice({
+          paths: voicePaths(),
+          runUv: uvRunner(),
+          fetch: globalThis.fetch,
+          log: () => {},
+        }),
+      status: () => voiceStatus({ paths: voicePaths() }).engines.local,
+    },
+  });
 
   // The Hermes-dialect methods the app's command registry actually sends.
   // Resolution throws rather than writing a response: the RPC dispatcher below
@@ -568,7 +444,38 @@ export async function createGate(config = {}) {
       },
     }),
     ...notificationMethods,
+    ...voiceRpc.methods,
+    ...approvalRpc.methods,
   };
+
+  // Resolve the backend that answers a spoken turn the same way a typed turn
+  // does: a named Bot owns its environment, an explicit backendId wins, and no
+  // Bot means the first attached backend. Returns null instead of writing an
+  // HTTP response, because a voice turn has none.
+  async function resolveVoiceBackend(thread = {}) {
+    const { botId, backendId } = thread;
+    if (botId && !backendId) {
+      for (const entry of await backendManager.list()) {
+        const candidate = await backendManager.get(entry.id).catch(() => null);
+        if (candidate && typeof candidate.forBot === 'function') {
+          try {
+            return await candidate.forBot(botId);
+          } catch {
+            // try the next environment that can own the Bot
+          }
+        }
+      }
+    }
+    const id = backendId ?? (await backendManager.list())[0]?.id;
+    if (!id) return null;
+    try {
+      const backend = await backendManager.get(id);
+      if (botId && typeof backend?.forBot === 'function') return await backend.forBot(botId);
+      return backend;
+    } catch {
+      return null;
+    }
+  }
 
   async function computeState() {
     const { kinds, instances } = await loadCapabilities(root);
@@ -1396,6 +1303,49 @@ export async function createGate(config = {}) {
         return;
       }
 
+      const botMemoryMatch = pathname.match(/^\/v1\/bots\/([^/]+)\/memory$/);
+      if (botMemoryMatch && method === 'GET') {
+        // P2: a Bot's memory read, on demand like its soul. The backend owns
+        // which files are memory; the Gate adds no path from the client.
+        const backend = await resolveBackendFor('getBotMemory');
+        if (!backend) return;
+        try {
+          const memory = await backend.getBotMemory({ id: decodeURIComponent(botMemoryMatch[1]) });
+          res.writeHead(200);
+          res.end(JSON.stringify(memory));
+        } catch (error) {
+          const code = error.code ?? 'bot_memory_read_failed';
+          const status = error.status || (code === 'unknown_bot' ? 404 : 502);
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code } }));
+        }
+        return;
+      }
+
+      const botMemoryWriteMatch = pathname.match(/^\/v1\/bots\/([^/]+)\/memory\/([^/]+)$/);
+      if (botMemoryWriteMatch && method === 'PUT') {
+        // P2: a confirmed memory edit. The backend enforces the whitelist and
+        // an unknown Bot is refused by name.
+        const backend = await resolveBackendFor('setBotMemory');
+        if (!backend) return;
+        const body = (await readJsonBody(req)) ?? {};
+        try {
+          const result = await backend.setBotMemory({
+            id: decodeURIComponent(botMemoryWriteMatch[1]),
+            name: decodeURIComponent(botMemoryWriteMatch[2]),
+            text: typeof body.text === 'string' ? body.text : '',
+          });
+          res.writeHead(200);
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          const code = error.code ?? 'bot_memory_write_failed';
+          const status = error.status || (code === 'unknown_bot' ? 404 : 502);
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code } }));
+        }
+        return;
+      }
+
       const botEditMatch = pathname.match(/^\/v1\/bots\/([^/]+)$/);
       if (botEditMatch && method === 'GET') {
         // One Bot, fetched only when a Bot is opened. Kept off /v1/bots so the
@@ -2093,6 +2043,27 @@ export async function createGate(config = {}) {
     }
   });
 
+  // One media WebSocket per voice call, over the same HTTP server. M5 wires the
+  // local engine for an `engine: 'local'` grant; the scripted engine still
+  // drives tests and the phone smoke test (`VERSUTUS_VOICE_SCRIPTED=1`).
+  const voiceAudit = createVoiceAudit({ dir: voicePaths().root });
+  const voiceMedia = attachVoiceMediaSocket({
+    server,
+    deviceTokens,
+    registry: voiceRpc.registry,
+    audit: (summary) => voiceAudit.record(summary),
+    createEngine: (session) => (
+      session.engine === 'local' && !scriptedEngineEnabled()
+        ? new LocalEngine({ paths: voicePaths() })
+        : new ScriptedEngine()
+    ),
+    runTurn: async (session, text, handlers) => {
+      const backend = await resolveVoiceBackend(session.thread);
+      if (!backend) throw new Error('No chat backend could answer this call.');
+      return runBackendTurn(backend, session.thread?.sessionId, { text }, handlers);
+    },
+  });
+
   // Start listening immediately
   const gateObj = {
     token,
@@ -2119,6 +2090,9 @@ export async function createGate(config = {}) {
         try { stream.end(); } catch { /* already gone */ }
       }
       return new Promise((resolve, reject) => {
+        // A restart is a clean, named end for every live call, not a drop.
+        voiceMedia.endAll?.('gate-restart');
+        voiceMedia.close();
         server.close((err) => {
           if (err) reject(err);
           else resolve();

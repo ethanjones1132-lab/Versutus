@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "phoneToGate": [
+    { "t": "mute", "on": true },
+    { "t": "skip" },
+    { "t": "bargein" },
+    { "t": "end" }
+  ],
+  "gateToPhone": [
+    { "t": "ready", "engine": "local" },
+    { "t": "phase", "phase": "listening" },
+    { "t": "partial", "text": "hello" },
+    { "t": "final", "turnId": "t1", "text": "hello" },
+    { "t": "turn", "turnId": "t1", "state": "sent" },
+    { "t": "reply", "turnId": "t1", "delta": "Hi" },
+    { "t": "speech", "gen": 7, "state": "start" },
+    { "t": "level", "v": 0.42 },
+    { "t": "approval", "turnId": "t1", "summary": "Run ls?" },
+    { "t": "error", "code": "backend_error", "message": "boom", "fatal": false },
+    { "t": "ended", "reason": "user" }
+  ],
+  "malformed": [
+    { "t": "nope" },
+    { "t": "phase", "phase": "dancing" },
+    { "t": "speech", "gen": "7", "state": "start" },
+    { "t": "mute", "on": "yes" },
+    { "t": "ready" },
+    { "t": "level", "v": "loud" },
+    { "t": "turn", "turnId": "t1" },
+    { "t": "ended" }
+  ]
+}

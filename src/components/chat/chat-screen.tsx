@@ -1,5 +1,12 @@
 import * as Clipboard from 'expo-clipboard';
-import { type Href, useFocusEffect, useIsFocused, useRouter } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
+import {
+  type Href,
+  useFocusEffect,
+  useIsFocused,
+  useLocalSearchParams,
+  useRouter,
+} from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, FlatList, Platform, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -52,6 +59,7 @@ import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { botChromeCombined } from '@/lib/gateway/bot-chrome';
 import { composerFocusApplies } from '@/lib/gateway/composer-focus';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
+import { handoffShareAvailable, shareBotHandoff } from '@/lib/gateway/handoff-share';
 import {
   applyBotSoulRead,
   botSoulReadFromUnknown,
@@ -118,7 +126,12 @@ import {
   spokenDraftText,
 } from '@/lib/gateway/composer-draft';
 import { composeRequestApplies, composeRequestHoldCopy } from '@/lib/gateway/compose-request';
-import { effectiveModel, scopeModelsToBackend } from '@/lib/gateway/model-selection';
+import { effectiveModel, resolveSendModel, scopeModelsToBackend } from '@/lib/gateway/model-selection';
+import {
+  chatAttachmentsFromPicker,
+  supportsImageInput,
+  type ChatAttachment,
+} from '@/lib/gateway/chat-parts';
 import { insertMention, mentionPicksAtCaret } from '@/lib/gateway/mentions';
 import {
   loadSessionLabels,
@@ -138,6 +151,15 @@ import {
   botVoiceRefinementRows,
   type BotVoiceRefinementField,
 } from '@/lib/voice/bot-voices';
+import { handsfreeEndReasonCopy, handsfreeStartResultCopy } from '@/lib/voice/handsfree-call-copy';
+import { handsfreeStartBlockerCopy } from '@/lib/voice/handsfree-start-policy';
+import { loadAppSettings } from '@/lib/settings/app-settings';
+import {
+  chooseVoiceEngine,
+  type VoiceEngineCapabilities,
+  type VoiceEnginePreference,
+} from '@/lib/voice/voice-engine-choice';
+import { VOICE_ENGINE_ROWS, voiceEngineDisclosure } from '@/lib/voice/voice-engine-copy';
 import { speakerAction } from '@/lib/voice/speech-reply';
 import { availableVoices, speakReply, speechAvailableFrom, stopSpeech } from '@/lib/voice/speech';
 import {
@@ -159,6 +181,9 @@ import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { chatTranscriptContentPaddingBottom } from '@/lib/motion/chat-transcript-insets';
 import { chatJumpBottom } from '@/lib/motion/chat-jump-inset';
+
+/** The order the sheet's one-tap Change walks. */
+const CALL_ENGINE_ORDER: VoiceEnginePreference[] = ['auto', 'local', 'codex', 'phone'];
 
 const PIN_THRESHOLD_PX = 96;
 const JUMP_PILL_THRESHOLD_PX = 260;
@@ -275,6 +300,7 @@ function PairingRequiredBanner({ onShow }: { onShow: () => void }) {
 
 export function ChatScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ call?: string }>();
   const tokens = useTokens();
   const {
     activeGateway,
@@ -364,10 +390,15 @@ export function ChatScreen() {
   const [callSheetVisible, setCallSheetVisible] = useState(false);
   const [callBusy, setCallBusy] = useState(false);
   const [callError, setCallError] = useState<string | undefined>();
+  const [callPreference, setCallPreference] = useState<VoiceEnginePreference>('auto');
+  const [callCapabilities, setCallCapabilities] = useState<VoiceEngineCapabilities | null>(null);
 
   // Keyed by gateway + surface + session so leaving a thread and coming
   // back restores that thread's unsent text, never another Bot's.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // P1: images staged for the next send. Cleared on send, and the attach
+  // control only appears when the selected model declares image input.
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [dismissedPairingKey, setDismissedPairingKey] = useState<string | null>(null);
   const [overflowVisible, setOverflowVisible] = useState(false);
   const [backendPickerVisible, setBackendPickerVisible] = useState(false);
@@ -430,6 +461,18 @@ export function ChatScreen() {
       .then((payload) => fold(botSoulReadFromUnknown(payload)))
       .catch(() => fold({ ok: false }));
   }, [detailBot, status, gatewayRequest]);
+  // D6: whether this device can share an exported Bot handoff. A platform
+  // without a share sheet draws no Export row.
+  const [handoffShareReady, setHandoffShareReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void handoffShareAvailable().then((ready) => {
+      if (!cancelled) setHandoffShareReady(ready);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // Long-press target on the roster: which room's action sheet is open.
   const [detailGroup, setDetailGroup] = useState<BotGroupRoom | null>(null);
   const [routineState, setRoutineState] = useState<RoutinesState & { botId?: string }>({
@@ -438,6 +481,23 @@ export function ChatScreen() {
   const [skillsState, setSkillsState] = useState<SkillsState & { botId?: string }>({
     ...EMPTY_SKILLS,
   });
+  // D6: export the open Bot's handoff packet. Routines and skills travel only
+  // when they were read for this very Bot, so another Bot's never leaks in.
+  const handleExportBot = useCallback(() => {
+    if (!detailBot) return;
+    const bot = detailBot;
+    void shareBotHandoff({
+      bot: {
+        id: bot.id,
+        name: bot.displayName,
+        description: bot.description ?? undefined,
+        soul: soulState.botId === bot.id ? soulState.soul ?? undefined : undefined,
+        modelId: bot.model?.default ?? undefined,
+      },
+      skills: skillsState.botId === bot.id ? skillsState.skills : [],
+      routines: routineState.botId === bot.id ? routineState.jobs : [],
+    });
+  }, [detailBot, soulState, skillsState, routineState]);
   const [toolsetsState, setToolsetsState] = useState<ToolsetsState & { surfaceKey?: string }>({
     ...EMPTY_TOOLSETS,
   });
@@ -815,6 +875,21 @@ export function ChatScreen() {
     clearRequestedComposeRequest,
   ]);
 
+  // A `versutus://call` link lands here: the router opened the Bot Chat and
+  // passed `call=1`. A link never starts capture on its own — the confirm
+  // sheet is what opens, and the operator's Start is what begins a call. The
+  // param is handled once so a re-render cannot reopen the sheet after the
+  // operator dismisses it.
+  const callEntry = params.call;
+  const callEntryHandledRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!isFocused || callEntry !== '1' || !draftThread) return undefined;
+    if (callEntryHandledRef.current === callEntry) return undefined;
+    callEntryHandledRef.current = callEntry;
+    const timer = setTimeout(() => setCallSheetVisible(true), 0);
+    return () => clearTimeout(timer);
+  }, [isFocused, callEntry, draftThread]);
+
   // Stable header callbacks. The chat header is memoized (chat-header.tsx) so it
   // skips a re-render when only the transcript changes; inline arrow wrappers here
   // would hand it a fresh function identity every frame and defeat that memo. These
@@ -1006,14 +1081,42 @@ export function ChatScreen() {
     [gatewayRequest],
   );
 
+  // P1: the selected model's catalog entry, so the attach control is offered
+  // only when the model DECLARES image input. Unknown/absent is no attach.
+  const selectedModelInfo = useMemo(() => {
+    const modelId = resolveSendModel(activeGateway, selectedBackendId, selectedBotId)?.model;
+    if (!modelId) return undefined;
+    return modelCatalog.find((model) => model.id === modelId || model.modelId === modelId);
+  }, [activeGateway, selectedBackendId, selectedBotId, modelCatalog]);
+  const canAttach = supportsImageInput(selectedModelInfo);
+
+  const handleAttach = useCallback(async () => {
+    if (!canAttach) return;
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 1,
+      base64: true,
+      allowsMultipleSelection: true,
+    });
+    if (result.canceled) return;
+    setAttachments((current) => [...current, ...chatAttachmentsFromPicker(result.assets, current.length)]);
+  }, [canAttach]);
+  const handleRemoveAttachment = useCallback((uri: string) => {
+    setAttachments((current) => current.filter((attachment) => attachment.uri !== uri));
+  }, []);
+
   const handleSend = useCallback(async () => {
     const text = draft;
-    if (!text.trim()) return;
+    const files = attachments;
+    if (!text.trim() && files.length === 0) return;
     setDraft('');
+    setAttachments([]);
     pinnedRef.current = true;
-    await sendChatInput(text, { skills: skillsState.skills });
+    await sendChatInput(text, { skills: skillsState.skills, attachments: files });
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
-  }, [draft, sendChatInput, setDraft, skillsState.skills]);
+  }, [attachments, draft, sendChatInput, setDraft, skillsState.skills]);
 
   // The call target is built here, not derived by the provider: this screen is
   // the one place that holds the current surface, the draft thread and the
@@ -1035,7 +1138,33 @@ export function ChatScreen() {
   const openCallSheet = useCallback(() => {
     setCallError(undefined);
     setCallSheetVisible(true);
+    // The engine is chosen from the stored preference and the Gate's live
+    // readiness, so the sheet can name where the audio will go before consent.
+    void (async () => {
+      const stored = await loadAppSettings();
+      setCallPreference(stored.voiceEngine);
+      try {
+        setCallCapabilities(await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', {}));
+      } catch {
+        // A Gate that predates voice leaves the phone engine as the only choice.
+        setCallCapabilities(null);
+      }
+    })();
+  }, [gatewayRequest]);
+  const handleChangeEngine = useCallback(() => {
+    setCallPreference((current) => {
+      const index = CALL_ENGINE_ORDER.indexOf(current);
+      return CALL_ENGINE_ORDER[(index + 1) % CALL_ENGINE_ORDER.length];
+    });
   }, []);
+  const callEngine = useMemo(
+    () => (callCapabilities ? chooseVoiceEngine(callPreference, callCapabilities) : null),
+    [callCapabilities, callPreference],
+  );
+  const callEngineLabel = useMemo(() => {
+    if (!callEngine) return undefined;
+    return VOICE_ENGINE_ROWS.find((row) => row.id === callEngine.engine)?.label ?? callEngine.engine;
+  }, [callEngine]);
   const handleCancelCall = useCallback(() => {
     setCallSheetVisible(false);
     setCallError(undefined);
@@ -1043,29 +1172,48 @@ export function ChatScreen() {
   const handleStartCall = useCallback(async () => {
     if (!activeGateway || !draftThread) return;
     if (surface.kind !== 'configurable' && surface.kind !== 'bot') return;
-    setCallBusy(true);
-    setCallError(undefined);
-    const result = await handsfree.start({
-      gatewayId: activeGateway.id,
-      sessionId: draftThread.sessionId,
-      surfaceKind: surface.kind,
-      botId: surface.kind === 'bot' ? surface.botId : undefined,
-      label: callTargetLabel,
-      voice: botVoice ?? {},
-    });
-    setCallBusy(false);
-    if (result === 'started') {
-      setCallSheetVisible(false);
+    if (handsfree.startBlocker) {
+      setCallError(handsfreeStartBlockerCopy(handsfree.startBlocker));
       return;
     }
-    setCallError(
-      result === 'permission-denied'
-        ? 'Microphone or speech recognition permission was denied. Allow it in Settings and try again.'
-        : result === 'unavailable'
-          ? 'This device cannot start a hands-free call.'
-          : 'A hands-free call cannot start right now. Reconnect the chat and try again.',
-    );
-  }, [activeGateway, botVoice, callTargetLabel, draftThread, handsfree, surface]);
+    setCallBusy(true);
+    setCallError(undefined);
+    try {
+      const result = await handsfree.start({
+        gatewayId: activeGateway.id,
+        sessionId: draftThread.sessionId,
+        surfaceKind: surface.kind,
+        botId: surface.kind === 'bot' ? surface.botId : undefined,
+        label: callTargetLabel,
+        voice: botVoice ?? {},
+        transport: callEngine && callEngine.engine !== 'phone' ? 'gate' : 'phone',
+        voiceEngine: callPreference,
+      });
+      if (result === 'started') {
+        setCallSheetVisible(false);
+        return;
+      }
+      setCallError(handsfreeStartResultCopy(result));
+    } catch {
+      setCallError(handsfreeStartResultCopy('unavailable'));
+    } finally {
+      setCallBusy(false);
+    }
+  }, [activeGateway, botVoice, callEngine, callPreference, callTargetLabel, draftThread, handsfree, surface]);
+
+  const { callsEnded: handsfreeCallsEnded, lastEndReason: handsfreeLastEndReason } = handsfree;
+  // A call that ended without the operator ending it reopens the sheet with the
+  // reason, so a failure is never a banner that silently disappears. The state
+  // updates run on a microtask so they are not synchronous within the effect.
+  useEffect(() => {
+    if (!handsfreeLastEndReason) return;
+    const copy = handsfreeEndReasonCopy(handsfreeLastEndReason);
+    if (!copy) return;
+    queueMicrotask(() => {
+      setCallError(copy);
+      setCallSheetVisible(true);
+    });
+  }, [handsfreeCallsEnded, handsfreeLastEndReason]);
 
   // A call is bound to the thread it started in. The provider watches the
   // gateway, session and Bot it captured; this screen covers the remaining move
@@ -1716,6 +1864,7 @@ export function ChatScreen() {
               }
             : undefined
         }
+        onExport={detailBot && handoffShareReady ? handleExportBot : undefined}
       />
 
       <GroupRoomActionSheet
@@ -1910,6 +2059,7 @@ export function ChatScreen() {
             setEditingBot(null);
             setNewAgentVisible(true);
           } : undefined}
+          onImportAgent={hasBotManagement ? () => router.push('/gateway/import') : undefined}
           onNewGroup={status === 'connected' && hasGroupRooms ? () => {
             setNewGroupError(undefined);
             setNewGroupVisible(true);
@@ -2099,6 +2249,10 @@ export function ChatScreen() {
         // Offered only where the provider says a tap can start a session.
         onStartCall={canStartHandsfree ? openCallSheet : undefined}
         callActive={handsfreeActive}
+        // P1: offered only when the selected model declares image input.
+        onAttach={canAttach ? handleAttach : undefined}
+        attachments={attachments}
+        onRemoveAttachment={handleRemoveAttachment}
       />
       ) : null}
 
@@ -2133,6 +2287,9 @@ export function ChatScreen() {
         label={callTargetLabel}
         busy={callBusy}
         error={callError}
+        engineLabel={callEngineLabel}
+        disclosure={callEngine ? voiceEngineDisclosure(callEngine.engine) : undefined}
+        onChangeEngine={callEngine ? handleChangeEngine : undefined}
         onCancel={handleCancelCall}
         onStart={() => void handleStartCall()}
       />

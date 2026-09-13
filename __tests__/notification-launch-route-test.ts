@@ -203,10 +203,20 @@ describe('a run notice asks for the run the Activity list must show', () => {
   test('only a run route becomes a run focus', () => {
     const src = routerSource();
 
-    // The destination drops the id — Activity is one tab, so there is no route
+    // The destination drops the id — Runs is one screen, so there is no route
     // to carry it — and the run rides beside it instead. A routine, a weekly
     // report and an unrecognized payload all ask for no focus at all.
     expect(src).toContain("route?.kind === 'run' ? { runId: route.runId } : null");
+  });
+
+  test('a run or weekly-report tap lands on the Runs destination', () => {
+    const src = routerSource();
+
+    // Workflows slice 3b: the run history and the scorecards moved to /runs,
+    // so the notices that open them follow. Approvals (no kind) and anything
+    // unrecognized still fall through to Activity.
+    expect(src).toContain("if (route?.kind === 'run' || route?.kind === 'weekly-report') return '/runs';");
+    expect(src).toContain("return '/activity';");
   });
 
   test('the tap lands, then the tab is asked to drop a filter that could hide the run', () => {

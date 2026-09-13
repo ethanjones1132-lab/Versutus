@@ -384,8 +384,10 @@ export class CliEnvironmentService {
           : 'workspace_write';
     const verdict = await this.approvals.normalize({
       type: risk,
+      runId: run.runId,
       environmentId: run.request.environmentId,
       operation: run.request.operation,
+      summary: APPROVAL_SUMMARY[risk] ?? 'This run needs your approval to continue.',
     });
     if (verdict.decision === 'approve') return true;
     if (verdict.decision === 'deny') {

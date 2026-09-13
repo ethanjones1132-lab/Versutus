@@ -21,6 +21,7 @@ function readSource(...parts: string[]): string {
 
 const section = () => readSource('src', 'components', 'activity', 'scorecards-section.tsx');
 const tab = () => readSource('src', 'app', '(tabs)', 'activity.tsx');
+const runs = () => readSource('src', 'app', 'runs.tsx');
 
 describe('the section paints the shipped fold, and aggregates nothing itself', () => {
   test('every string on it comes from the module that decided it', () => {
@@ -409,20 +410,20 @@ describe('a tapped card filters the runs it counted, with a way back', () => {
   });
 });
 
-describe('the Activity tab owns one filter state over the provider’s runs', () => {
-  test('no filter is the default, so the tab opens exactly as it did before', () => {
-    expect(tab()).toContain('useState<ScorecardFilter>(null)');
+describe('the Runs destination owns one filter state over the provider’s runs', () => {
+  test('no filter is the default, so the destination opens exactly as the tab did before', () => {
+    expect(runs()).toContain('useState<ScorecardFilter>(null)');
   });
 
   test('the visible list is the provider’s list through the shipped pure filter', () => {
-    const src = tab();
+    const src = runs();
 
     expect(src).toContain('filterRunsByBot(activityRuns, scorecardFilter)');
     expect(src).toContain("from '@/lib/fleet/scorecard'");
   });
 
   test('the section folds the provider’s runs, never the filtered view', () => {
-    const src = tab();
+    const src = runs();
 
     // Folding the filtered list would shrink the cards to the very selection
     // they produced, and the operator could never switch cards again.
@@ -432,15 +433,15 @@ describe('the Activity tab owns one filter state over the provider’s runs', ()
 });
 
 describe('a run notice’s tap drops a stale Bot filter', () => {
-  test('the tab consumes the run focus the provider was handed', () => {
-    const src = tab();
+  test('the Runs destination consumes the run focus the provider was handed', () => {
+    const src = runs();
 
     expect(src).toContain('requestedRunFocus');
     expect(src).toContain('clearRequestedRunFocus');
   });
 
   test('applying the request drops the filter, deferred, and retires the request with it', () => {
-    const src = tab();
+    const src = runs();
     const guard = src.indexOf('if (!requestedRunFocus) return undefined;');
     const drop = src.indexOf('setScorecardFilter(null)');
     const clear = src.indexOf('clearRequestedRunFocus()');
@@ -455,58 +456,63 @@ describe('a run notice’s tap drops a stale Bot filter', () => {
   });
 
   test('the named run is not selected — a row this read cannot prove is not shown', () => {
-    const src = tab();
+    const src = runs();
     const guard = src.indexOf('if (!requestedRunFocus) return undefined;');
     const clear = src.indexOf('clearRequestedRunFocus()');
     const body = src.slice(guard, clear);
 
-    // The id on the request makes two taps the same tap; the tab drops the
-    // filter and never narrows the list to a run the read may not hold.
+    // The id on the request makes two taps the same tap; the destination drops
+    // the filter and never narrows the list to a run the read may not hold.
     expect(body).toContain('setScorecardFilter(null)');
     expect(body).not.toContain('runId');
     expect(body).not.toContain('setOpenAgenticRunId');
   });
 
   test('the unfiltered default is untouched', () => {
-    expect(tab()).toContain('useState<ScorecardFilter>(null)');
+    expect(runs()).toContain('useState<ScorecardFilter>(null)');
   });
 });
 
-describe('the section sits in the Activity footer, above the scheduled work', () => {
-  test('footer, then the cards, then CronSection', () => {
-    const src = tab();
+describe('the section sits in the Runs footer, while Activity keeps the scheduled work', () => {
+  test('the Runs footer carries the cards', () => {
+    const src = runs();
     const footer = src.indexOf('const listFooter = (');
     const cards = src.indexOf('<ScorecardsSection');
-    const cron = src.indexOf('<CronSection');
 
     expect(footer).toBeGreaterThanOrEqual(0);
     expect(cards).toBeGreaterThan(footer);
-    expect(cron).toBeGreaterThan(cards);
+  });
+
+  test('Activity carries the scheduled work and never the cards', () => {
+    const src = tab();
+
+    expect(src).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');
+    expect(src).not.toContain('<ScorecardsSection');
   });
 });
 
-describe('the tab reads the gateway’s jobs, so a card can carry its Bot’s routine health', () => {
+describe('the Runs destination reads the gateway’s jobs, so a card can carry its Bot’s routine health', () => {
   test('the section is handed the jobs beside the runs it already folded', () => {
-    const src = tab();
+    const src = runs();
 
     expect(src).toContain('<ScorecardsSection runs={activityRuns} jobs={routineJobs}');
   });
 
   test('the read is the gateway’s own job list, and a gateway that cannot answer claims nothing', () => {
-    const src = tab();
+    const src = runs();
 
     expect(src).toContain('cron.list()');
     expect(src).toContain('cron.available');
     // The same two edges CronSection hangs its own re-list off, so a routine
-    // that fails while Activity is backgrounded is caught on the way back in.
+    // that fails while Runs is backgrounded is caught on the way back in.
     expect(src).toContain('useFocusEffect(loadRoutineJobs)');
-    expect(src).toContain('cronReloadSignal');
+    expect(src).toContain('runsReloadSignal');
   });
 });
 
-describe('the tab reads P5’s per-Bot spend, so a card can carry what its Bot cost', () => {
+describe('the Runs destination reads P5’s per-Bot spend, so a card can carry what its Bot cost', () => {
   test('the section is handed the spend beside the runs and the jobs', () => {
-    const src = tab();
+    const src = runs();
 
     expect(src).toContain(
       '<ScorecardsSection runs={activityRuns} jobs={routineJobs} spendRows={spendRows}',
@@ -514,7 +520,7 @@ describe('the tab reads P5’s per-Bot spend, so a card can carry what its Bot c
   });
 
   test('the read is P5’s own, and a gateway that cannot be asked is never asked', () => {
-    const src = tab();
+    const src = runs();
 
     // The Spend screen's own read, so a card and that screen word one read the
     // same way — and the scoped read joins the source only where the client
@@ -522,11 +528,11 @@ describe('the tab reads P5’s per-Bot spend, so a card can carry what its Bot c
     expect(src).toContain('readBotSpend(');
     expect(src).toContain('canReadBotSessions ? { listBots, readBotSessions } : { listBots }');
     expect(src).toContain('useFocusEffect(loadBotSpend)');
-    expect(src).toContain('cronReloadSignal');
+    expect(src).toContain('runsReloadSignal');
   });
 
   test('a read that fails leaves no rows, so no card claims a spend nobody read', () => {
-    const src = tab();
+    const src = runs();
 
     expect(src).toContain('status === \'connected\'');
     expect(src).toContain('.catch(() => [] as BotSpendRow[])');
@@ -536,7 +542,7 @@ describe('the tab reads P5’s per-Bot spend, so a card can carry what its Bot c
 
 describe('what must keep working', () => {
   test('with no filter the run sections, their order and their labels are unchanged', () => {
-    const src = tab();
+    const src = runs();
 
     expect(src).toContain("items.push({ kind: 'label', id: 'in-flight', text: 'In flight' });");
     expect(src).toContain("items.push({ kind: 'label', id: 'recent', text: 'Recent runs' });");
@@ -544,15 +550,15 @@ describe('what must keep working', () => {
   });
 
   test('every RunCard affordance and the empty state are still the shipped ones', () => {
-    const src = tab();
+    const src = runs();
 
     expect(src).toContain('<RunCard run={item.run} onStop={stopActivityRun} />');
     expect(src).toContain('onOpenTranscript={setOpenAgenticRunId}');
     expect(src).toContain('onRetry={(prompt) => retryRun({ ...item.run, prompt })}');
-    expect(src).toContain('activityRuns.length === 0 && !pendingRunApproval');
+    expect(src).toContain('activityRuns.length === 0');
   });
 
-  test('the footer still carries the scheduled work and the spend entry', () => {
+  test('the Activity footer still carries the scheduled work and the spend entry', () => {
     const src = tab();
 
     expect(src).toContain('<CronSection cronReloadSignal={cronReloadSignal} />');

@@ -13,16 +13,16 @@ function readProvider(): string {
   return readSource(['src', 'context', 'gateway-provider.tsx']);
 }
 
-function readActivity(): string {
-  return readSource(['src', 'app', '(tabs)', 'activity.tsx']);
+function readRuns(): string {
+  return readSource(['src', 'app', 'runs.tsx']);
 }
 
 // `startRun` cleared `runPrompt` after `await sendChatInput('/run …')`
 // unconditionally, but `sendChatInput` catches every slash refusal
 // internally (lastError + a chat "Command failed" bubble) and resolves
-// void — so Activity could not tell refusal from success and the
+// void — so the Runs screen could not tell refusal from success and the
 // operator's draft vanished even though nothing started. `sendChatInput`
-// now reports the command outcome to its caller and Activity clears the
+// now reports the command outcome to its caller and Runs clears the
 // prompt only when the command actually completed.
 describe('activity refused run keeps the typed prompt', () => {
   test('sendChatInput reports the command outcome instead of resolving void', () => {
@@ -32,8 +32,8 @@ describe('activity refused run keeps the typed prompt', () => {
     expect(src).toContain("return 'error';");
   });
 
-  test('the Activity prompt clears only when the command completed', () => {
-    const src = readActivity();
+  test('the Runs prompt clears only when the command completed', () => {
+    const src = readRuns();
     expect(src).toContain('await sendChatInput(`/run ${prompt}`);');
     expect(src).toContain("setRunPrompt('');");
     // The clear is gated on the reported outcome — a refusal keeps the draft.
@@ -63,7 +63,7 @@ describe('activity refused run keeps the typed prompt', () => {
   });
 
   test('the retry-run card path still fires without reading the outcome', () => {
-    const src = readActivity();
+    const src = readRuns();
     expect(src).toMatch(/void sendChatInput\(`\/run \$\{prompt\}`\);/);
   });
 });

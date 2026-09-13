@@ -18,5 +18,10 @@ android {
 }
 
 dependencies {
+  // The version React Native itself resolves, so the Gate media socket does not
+  // drag a second OkHttp into the APK.
+  implementation 'com.squareup.okhttp3:okhttp:4.9.2'
   testImplementation 'junit:junit:4.13.2'
+  // Android provides org.json at runtime; the JVM tests need a real one.
+  testImplementation 'org.json:json:20231013'
 }

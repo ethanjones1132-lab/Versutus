@@ -24,7 +24,7 @@ import {
 } from '@/lib/voice/handsfree-call-copy';
 
 export function HandsfreeCallBanner() {
-  const { active, phase, partial, label, level, mute, unmute, skipReply, end } =
+  const { active, phase, partial, label, level, engine, engineReason, mute, unmute, skipReply, end } =
     useHandsfreeVoice();
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
@@ -58,6 +58,14 @@ export function HandsfreeCallBanner() {
             <Text variant="caption" color="accentWarm" numberOfLines={1}>
               {speakingLine}
             </Text>
+            {engine ? (
+              // A fallback is named, never silent: the banner says which engine
+              // the call is on and, when the Gate fell back, why.
+              <Text variant="micro" color="tertiary" numberOfLines={1}>
+                Using {engine}
+                {engineReason ? ` — ${engineReason}` : ''}
+              </Text>
+            ) : null}
             {partial ? (
               // A live partial changes every few hundred milliseconds; it is
               // for the eye, so it is kept out of the screen reader's way.

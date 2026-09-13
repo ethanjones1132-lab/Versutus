@@ -1,0 +1,8 @@
+# Gate local voice worker — top-level pins (M1 S2 evidence).
+# requirements.lock (the full transitive lock) is captured in M5 Task 5.2.
+faster-whisper==1.2.1
+kokoro-onnx==0.6.1
+onnxruntime==1.30.0
+numpy
+soundfile
+pytest
