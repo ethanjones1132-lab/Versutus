@@ -57,3 +57,13 @@ export function botMemoryCopy(memory: BotMemory): string {
   });
   return `Memory on the Gate host — ${parts.join(', ')}`;
 }
+
+/** Whether a name is one of the memory files an edit may target. */
+export function isBotMemoryFile(name: string): boolean {
+  return isAllowedName(name);
+}
+
+/** The confirmation the pane shows before it writes anything. */
+export function memorySaveConfirmationCopy(name: string): string {
+  return `Save changes to ${name}? The Bot reads this on its next turn.`;
+}

@@ -30,6 +30,7 @@ import {
   readHermesMemory,
   readHermesSoul,
   toPublicBot,
+  writeHermesMemory,
 } from '../hermes-profiles.mjs';
 
 /** Hermes sessions are already gateway-shaped; fill only what may be absent. */
@@ -511,6 +512,24 @@ export function createHermesBackend({
       if (!records.some((entry) => entry.id === id)) throw refuse();
       const memory = await readHermesMemory(profilesHome, id);
       return { id, files: memory?.files ?? [] };
+    },
+
+    /**
+     * Write one memory file, after the phone's confirmation. The whitelist is
+     * enforced in the profile reader; an unknown Bot is refused first.
+     */
+    async setBotMemory({ id, name, text } = {}) {
+      const refuse = () => {
+        const error = new Error(`unknown bot "${id}"`);
+        error.code = 'unknown_bot';
+        error.status = 404;
+        return error;
+      };
+      if (!profilesHome || !id) throw refuse();
+      const records = await listHermesBots(profilesHome);
+      if (!records.some((entry) => entry.id === id)) throw refuse();
+      await writeHermesMemory(profilesHome, id, name, text);
+      return { id, name, bytes: typeof text === 'string' ? text.length : 0 };
     },
 
     async deliverGroupMessage({ name, memberIds, mentionedIds, text } = {}) {

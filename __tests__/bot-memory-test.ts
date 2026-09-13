@@ -1,4 +1,10 @@
-import { botMemoryCopy, botMemoryFromUnknown, memoryFileSearch } from '@/lib/gateway/bot-memory';
+import {
+  botMemoryCopy,
+  botMemoryFromUnknown,
+  isBotMemoryFile,
+  memoryFileSearch,
+  memorySaveConfirmationCopy,
+} from '@/lib/gateway/bot-memory';
 
 declare const __dirname: string;
 
@@ -66,11 +72,32 @@ describe('botMemoryCopy', () => {
   });
 });
 
+describe('memory edits are guarded', () => {
+  it('knows the whitelisted file names', () => {
+    expect(isBotMemoryFile('MEMORY.md')).toBe(true);
+    expect(isBotMemoryFile('USER.md')).toBe(true);
+    expect(isBotMemoryFile('../config.yaml')).toBe(false);
+  });
+
+  it('names the file it will change in the confirmation', () => {
+    expect(memorySaveConfirmationCopy('MEMORY.md')).toContain('MEMORY.md');
+    expect(memorySaveConfirmationCopy('MEMORY.md')).toMatch(/Save changes/);
+  });
+});
+
 describe('the Bot detail sheet mounts the memory pane', () => {
   it('imports and renders BotMemoryPane', () => {
     const sheet = readSource(['src', 'components', 'chat', 'bot-detail-sheet.tsx']);
     expect(sheet).toContain("import { BotMemoryPane } from '@/components/chat/bot-memory-pane'");
     expect(sheet).toContain('<BotMemoryPane');
     expect(sheet).toContain('botId=');
+  });
+
+  it('the pane confirms before it writes', () => {
+    const pane = readSource(['src', 'components', 'chat', 'bot-memory-pane.tsx']);
+    expect(pane).toContain('memorySaveConfirmationCopy');
+    expect(pane).toContain("gatewayRequest('bots.memory.write'");
+    // The write only runs from the confirming state's Confirm save button.
+    expect(pane).toContain('confirming');
   });
 });

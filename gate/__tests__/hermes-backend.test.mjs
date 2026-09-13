@@ -556,6 +556,20 @@ test('getBotMemory returns one Bot memory and never a non-whitelisted file', asy
   assert.deepEqual(memory.files, [{ name: 'MEMORY.md', text: '- cites sources\n' }]);
   assert.equal(JSON.stringify(memory).includes('sk-never-return'), false);
   await assert.rejects(() => hermes.getBotMemory({ id: 'nobody' }), (error) => error.code === 'unknown_bot');
+
+  await hermes.setBotMemory({ id: 'researcher', name: 'MEMORY.md', text: '- cites primary sources\n' });
+  assert.equal(
+    await readFile(join(home, 'profiles', 'researcher', 'memories', 'MEMORY.md'), 'utf8'),
+    '- cites primary sources\n',
+  );
+  await assert.rejects(
+    () => hermes.setBotMemory({ id: 'researcher', name: 'SECRET.md', text: 'x' }),
+    (error) => error.code === 'invalid_memory_file',
+  );
+  await assert.rejects(
+    () => hermes.setBotMemory({ id: 'nobody', name: 'MEMORY.md', text: 'x' }),
+    (error) => error.code === 'unknown_bot',
+  );
 });
 
 test('getBot on an unknown Bot is refused, not an empty Bot', async () => {

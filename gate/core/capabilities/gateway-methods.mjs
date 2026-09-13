@@ -299,5 +299,12 @@ export function createGatewayMethods({ getBackend, listDevices, revokeDevice }) 
     // owns which files are memory; an unknown Bot or a backend without the
     // read fails honestly instead of returning an empty memory.
     'bots.memory': (params) => via(getBackend, params, 'getBotMemory', (b) => b.getBotMemory({ id: params?.id })),
+
+    // P2: write one whitelisted memory file. The phone confirms first; the
+    // backend/reader still refuses any name that is not memory.
+    'bots.memory.write': (params) =>
+      via(getBackend, params, 'setBotMemory', (b) =>
+        b.setBotMemory({ id: params?.id, name: params?.name, text: params?.text }),
+      ),
   };
 }

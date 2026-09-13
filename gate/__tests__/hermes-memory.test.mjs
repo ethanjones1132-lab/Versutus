@@ -1,10 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { HERMES_MEMORY_FILES, readHermesMemory } from '../core/cli-environments/hermes-profiles.mjs';
+import {
+  HERMES_MEMORY_FILES,
+  readHermesMemory,
+  writeHermesMemory,
+} from '../core/cli-environments/hermes-profiles.mjs';
 
 async function profileHome(name, files = {}) {
   const home = await mkdtemp(join(tmpdir(), 'hermes-memory-'));
@@ -43,6 +47,27 @@ test('a Bot with no memory is null, not an empty file list', async () => {
 test('a blank memory file does not count as memory', async () => {
   const home = await profileHome('blank', { 'MEMORY.md': '   \n' });
   assert.equal(await readHermesMemory(home, 'blank'), null);
+});
+
+test('a memory file is written atomically and reads back', async () => {
+  const home = await profileHome('researcher', { 'MEMORY.md': 'old\n' });
+  await writeHermesMemory(home, 'researcher', 'MEMORY.md', 'new memory\n');
+  assert.equal(
+    await readFile(join(home, 'profiles', 'researcher', 'memories', 'MEMORY.md'), 'utf8'),
+    'new memory\n',
+  );
+});
+
+test('a write refuses a non-whitelisted name', async () => {
+  const home = await profileHome('researcher');
+  await assert.rejects(
+    () => writeHermesMemory(home, 'researcher', '..\\config.yaml', 'x'),
+    (error) => error.code === 'invalid_memory_file',
+  );
+  await assert.rejects(
+    () => writeHermesMemory(home, 'researcher', 'SECRET.md', 'x'),
+    (error) => error.code === 'invalid_memory_file',
+  );
 });
 
 test('only the whitelisted files are ever read', async () => {

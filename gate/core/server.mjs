@@ -1322,6 +1322,30 @@ export async function createGate(config = {}) {
         return;
       }
 
+      const botMemoryWriteMatch = pathname.match(/^\/v1\/bots\/([^/]+)\/memory\/([^/]+)$/);
+      if (botMemoryWriteMatch && method === 'PUT') {
+        // P2: a confirmed memory edit. The backend enforces the whitelist and
+        // an unknown Bot is refused by name.
+        const backend = await resolveBackendFor('setBotMemory');
+        if (!backend) return;
+        const body = (await readJsonBody(req)) ?? {};
+        try {
+          const result = await backend.setBotMemory({
+            id: decodeURIComponent(botMemoryWriteMatch[1]),
+            name: decodeURIComponent(botMemoryWriteMatch[2]),
+            text: typeof body.text === 'string' ? body.text : '',
+          });
+          res.writeHead(200);
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          const code = error.code ?? 'bot_memory_write_failed';
+          const status = error.status || (code === 'unknown_bot' ? 404 : 502);
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code } }));
+        }
+        return;
+      }
+
       const botEditMatch = pathname.match(/^\/v1\/bots\/([^/]+)$/);
       if (botEditMatch && method === 'GET') {
         // One Bot, fetched only when a Bot is opened. Kept off /v1/bots so the
