@@ -61,6 +61,7 @@ function taskXml({ user, nodeExe, codeRoot, cli }) {
       <UserId>${escapeXml(user)}</UserId>
     </LogonTrigger>
     <TimeTrigger>
+      <StartBoundary>2025-01-01T00:00:00</StartBoundary>
       <Repetition>
         <Interval>PT5M</Interval>
       </Repetition>

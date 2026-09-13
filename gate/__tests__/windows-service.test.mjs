@@ -37,6 +37,7 @@ test('task XML runs the supervisor headless from the code root', () => {
   assert.match(task.xml, /service run/);
   assert.match(task.xml, /<WorkingDirectory>C:\\Projects\\Versutus<\/WorkingDirectory>/);
   assert.match(task.xml, /<Interval>PT5M<\/Interval>/);
+  assert.match(task.xml, /<StartBoundary>/);
   assert.match(task.xml, /<ExecutionTimeLimit>PT0S<\/ExecutionTimeLimit>/);
   assert.match(task.xml, /<Priority>5<\/Priority>/);
   assert.match(task.xml, /<LogonTrigger>/);
