@@ -90,3 +90,12 @@ describe('Activity mounts the inbox', () => {
     expect(activity).toContain('refreshPendingApprovals');
   });
 });
+
+describe('Settings shows the decision history', () => {
+  it('reads the audit and renders the rows', () => {
+    const settings = readSource(['src', 'app', 'gateway', 'settings.tsx']);
+    expect(settings).toContain('loadApprovalAudit');
+    expect(settings).toContain('approvalAuditCopy');
+    expect(settings).toContain('Decision history');
+  });
+});

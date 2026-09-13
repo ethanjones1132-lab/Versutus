@@ -1,7 +1,9 @@
 import {
   APPROVAL_AUDIT_CAP,
   appendApprovalAudit,
+  approvalAuditCopy,
   approvalAuditFromUnknown,
+  approvalAuditSummaryCopy,
   approvalPoliciesFromUnknown,
   approvalPolicyDecision,
   approvalPolicyKey,
@@ -99,5 +101,18 @@ describe('audit log', () => {
   it('reads junk as an empty log', () => {
     expect(approvalAuditFromUnknown(null)).toEqual([]);
     expect(approvalAuditFromUnknown([{ nope: true }, entry('ok', 1)])).toEqual([entry('ok', 1)]);
+  });
+
+  it('names who decided, what class, and the source', () => {
+    expect(approvalAuditCopy(entry('a', 1))).toBe('Auto-approved · read · policy');
+    expect(
+      approvalAuditCopy({ approvalId: 'b', cls: 'destructive', decision: 'deny', source: 'operator', at: 2 }),
+    ).toBe('Denied · destructive · operator');
+  });
+
+  it('summarizes an empty or live history honestly', () => {
+    expect(approvalAuditSummaryCopy(0)).toMatch(/No approval decisions/);
+    expect(approvalAuditSummaryCopy(1)).toBe('1 decision recorded on this device.');
+    expect(approvalAuditSummaryCopy(3)).toBe('3 decisions recorded on this device.');
   });
 });

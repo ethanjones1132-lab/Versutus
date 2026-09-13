@@ -20,6 +20,12 @@ import {
 } from '@/lib/settings/app-lock';
 import { deviceAppLockState } from '@/lib/settings/app-lock-device';
 import { loadAppSettings, saveAppSettings } from '@/lib/settings/app-settings';
+import {
+  approvalAuditCopy,
+  approvalAuditSummaryCopy,
+  loadApprovalAudit,
+  type ApprovalAuditEntry,
+} from '@/lib/gateway/approval-policy';
 import type { VoiceEngineCapabilities, VoiceEnginePreference } from '@/lib/voice/voice-engine-choice';
 import {
   GROK_DISABLED_REASON,
@@ -52,6 +58,8 @@ export default function GatewaySettingsScreen() {
   const [voiceCapabilities, setVoiceCapabilities] = useState<VoiceEngineCapabilities | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installNote, setInstallNote] = useState<string | null>(null);
+  // D1: this device's durable approval decisions (newest first).
+  const [audit, setAudit] = useState<ApprovalAuditEntry[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -92,6 +100,16 @@ export default function GatewaySettingsScreen() {
       cancelled = true;
     };
   }, [gatewayRequest]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadApprovalAudit().then((entries) => {
+      if (!cancelled) setAudit(entries);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleVoiceEngine = useCallback((next: VoiceEnginePreference) => {
     setVoiceEngine(next);
@@ -328,6 +346,24 @@ export default function GatewaySettingsScreen() {
               </View>
             </Pressable>
           ) : null}
+        </Card>
+
+        <Card variant="surface" padding={Spacing.three} style={styles.card}>
+          <View style={styles.sectionHeading}>
+            <View style={styles.sectionTitle}>
+              <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+                Approvals
+              </Text>
+              <Text variant="headline">Decision history</Text>
+            </View>
+            <Badge label={String(audit.length)} tone={audit.length > 0 ? 'accent' : 'neutral'} dot={false} />
+          </View>
+          <Text color="secondary">{approvalAuditSummaryCopy(audit.length)}</Text>
+          {audit.slice(0, 5).map((record) => (
+            <Text key={`${record.approvalId}-${record.at}`} variant="caption" color="tertiary">
+              {approvalAuditCopy(record)}
+            </Text>
+          ))}
         </Card>
 
         {activeGateway ? (

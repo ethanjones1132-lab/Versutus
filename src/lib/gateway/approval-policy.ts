@@ -191,6 +191,19 @@ export async function loadApprovalAudit(): Promise<ApprovalAuditEntry[]> {
   }
 }
 
+/** One audit row's line: what happened, to which class, decided how. */
+export function approvalAuditCopy(entry: ApprovalAuditEntry): string {
+  const verb =
+    entry.source === 'policy' ? 'Auto-approved' : entry.decision === 'approve' ? 'Approved' : 'Denied';
+  return `${verb} · ${entry.cls} · ${entry.source}`;
+}
+
+/** The history card's empty/live sentence. */
+export function approvalAuditSummaryCopy(count: number): string {
+  if (count === 0) return 'No approval decisions recorded on this device yet.';
+  return `${count} decision${count === 1 ? '' : 's'} recorded on this device.`;
+}
+
 /** Append one decision. Best-effort: an audit write must never block a call. */
 export async function recordApprovalDecision(entry: ApprovalAuditEntry): Promise<void> {
   try {
