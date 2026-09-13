@@ -71,3 +71,27 @@ export function councilSummaryCopy(columns: CouncilColumn[]): string {
   if (answered === total) return total === 2 ? 'Both answered.' : `All ${total} answered.`;
   return `${answered} of ${total} answered.`;
 }
+
+// ─── The view's send (slice 2) ────────────────────────────────────────────
+// The app has no per-Bot "ask and await one answer" call, so the council
+// reuses the one surface that does return text per Bot: the Gate's group
+// round. It is one transient room per comparison, created and deleted around
+// the send; `runCouncil` stays the ordering and failure-isolation layer over
+// the replies that round returned.
+
+export const COUNCIL_ROOM_PREFIX = 'Council · ';
+const COUNCIL_ROOM_NAME_MAX = 50;
+
+/** A short, named label for the transient room a comparison runs in. */
+export function councilRoomName(prompt: string): string {
+  const trimmed = prompt.trim();
+  const label = trimmed
+    ? trimmed.slice(0, COUNCIL_ROOM_NAME_MAX - COUNCIL_ROOM_PREFIX.length)
+    : 'comparison';
+  return `${COUNCIL_ROOM_PREFIX}${label}`;
+}
+
+/** Why the council is off on a gateway with no rooms — a capability, not an error. */
+export function councilDisabledCopy(): string {
+  return 'This gateway does not offer group rooms, so a council cannot compare Bots here.';
+}
