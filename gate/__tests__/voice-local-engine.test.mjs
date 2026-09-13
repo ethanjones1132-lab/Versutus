@@ -121,6 +121,22 @@ test('a dead worker restarts on backoff and re-opens the session', async () => {
   assert.deepEqual(reopened.params, { voiceSessionId: 'vs-1' });
 });
 
+test('a restarted worker still receives the call audio', async () => {
+  const { engine, children, scheduled } = harness();
+  await engine.open({ voiceSessionId: 'vs-1' });
+  const errors = [];
+  engine.on('error', (event) => errors.push(event));
+
+  children[0].emit('exit', 1);
+  scheduled.shift()();
+
+  const frame = Buffer.alloc(640, 3);
+  engine.pushAudio(frame);
+  const pushed = children[1].record.find((message) => message.method === 'voice.pushAudio');
+  assert.equal(pushed?.params.chunk.data, frame.toString('base64'));
+  assert.equal(errors.length, 0, 'a restart is not a fatal error');
+});
+
 test('a worker that cannot stay up ends the call after the restart budget', async () => {
   const { engine, children, scheduled } = harness({ maxRestarts: 1 });
   await engine.open({ voiceSessionId: 'vs-1' });
