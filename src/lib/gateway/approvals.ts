@@ -5,7 +5,7 @@
 // id is dropped, and an unfamiliar `type` reads as `unknown`, which the policy
 // never auto-approves.
 
-import { normalizeApprovalClass, type ApprovalClass } from '@/lib/gateway/approval-policy';
+import { isAutoApprovable, normalizeApprovalClass, type ApprovalClass } from '@/lib/gateway/approval-policy';
 
 export type ApprovalRow = {
   approvalId: string;
@@ -59,4 +59,13 @@ export function approvalInboxCopy(row: ApprovalRow): string {
 
 export function approvalClassLabel(cls: ApprovalClass): string {
   return cls.replace(/_/g, ' ');
+}
+
+/**
+ * The rows a batch Approve may cover. Fail closed: only the class the Gate
+ * already treats as safe (read-only) qualifies, so a batch control can never
+ * sweep a destructive or unknown class through.
+ */
+export function batchApprovableRows(rows: ApprovalRow[]): ApprovalRow[] {
+  return rows.filter((row) => isAutoApprovable(row.cls));
 }

@@ -1,4 +1,9 @@
-import { approvalClassLabel, approvalInboxCopy, approvalRowsFromUnknown } from '@/lib/gateway/approvals';
+import {
+  approvalClassLabel,
+  approvalInboxCopy,
+  approvalRowsFromUnknown,
+  batchApprovableRows,
+} from '@/lib/gateway/approvals';
 
 jest.mock('@/lib/storage/key-value', () => ({
   keyValueStorage: {
@@ -67,6 +72,18 @@ describe('approvalRowsFromUnknown', () => {
   });
 });
 
+describe('batch approval is read-only only', () => {
+  const row = (approvalId: string, cls: Parameters<typeof approvalClassLabel>[0]) => ({ approvalId, cls });
+  it('keeps read-only rows and drops every other class', () => {
+    const rows = [row('a', 'read'), row('b', 'destructive'), row('c', 'unknown'), row('d', 'read')];
+    expect(batchApprovableRows(rows).map((entry) => entry.approvalId)).toEqual(['a', 'd']);
+  });
+
+  it('an all-destructive batch has nothing to approve', () => {
+    expect(batchApprovableRows([row('a', 'credential'), row('b', 'bypass')])).toEqual([]);
+  });
+});
+
 describe('copy', () => {
   it('prefers the summary and falls back to the class sentence', () => {
     expect(approvalInboxCopy({ approvalId: 'a', cls: 'read', summary: 'Overwrite the file?' })).toBe(
@@ -88,6 +105,12 @@ describe('Activity mounts the inbox', () => {
     expect(activity).toContain("import { ApprovalInbox } from '@/components/activity/approval-inbox'");
     expect(activity).toContain('<ApprovalInbox');
     expect(activity).toContain('refreshPendingApprovals');
+  });
+
+  it('the inbox offers a fail-closed batch control', () => {
+    const inbox = readSource(['src', 'components', 'activity', 'approval-inbox.tsx']);
+    expect(inbox).toContain('batchApprovableRows');
+    expect(inbox).toContain('Deny all');
   });
 });
 
