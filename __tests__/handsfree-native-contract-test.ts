@@ -120,4 +120,12 @@ describe('hands-free native contract', () => {
       expect(types).toContain(key);
     }
   });
+
+  it('takes startSession options as a map on both platforms, matching the TS contract', () => {
+    expect(tsModule).toContain('startSession(options: { title: string })');
+    expect(kotlin).toMatch(/AsyncFunction\("startSession"\)\s*\{\s*options: Map<String, Any\?>, promise: Promise ->/);
+    expect(kotlin).not.toMatch(/AsyncFunction\("startSession"\)\s*\{\s*title: String/);
+    expect(swift).toMatch(/AsyncFunction\("startSession"\)\s*\{\s*\(options: \[String: Any\?\], promise: Promise\) in/);
+    expect(swift).not.toMatch(/AsyncFunction\("startSession"\)\s*\{\s*\(title: String/);
+  });
 });

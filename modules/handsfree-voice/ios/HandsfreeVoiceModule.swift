@@ -86,7 +86,8 @@ public class HandsfreeVoiceModule: Module {
       ])
     }
 
-    AsyncFunction("startSession") { (title: String, promise: Promise) in
+    AsyncFunction("startSession") { (options: [String: Any?], promise: Promise) in
+      _ = options["title"] as? String
       self.requestAuthorization { granted in
         guard granted else {
           promise.resolve("permission-denied")

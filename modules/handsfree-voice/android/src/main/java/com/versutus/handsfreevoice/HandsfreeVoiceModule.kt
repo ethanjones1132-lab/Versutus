@@ -93,7 +93,8 @@ class HandsfreeVoiceModule : Module() {
       }
     }
 
-    AsyncFunction("startSession") { title: String, promise: Promise ->
+    AsyncFunction("startSession") { options: Map<String, Any?>, promise: Promise ->
+      val title = (options["title"] as? String)?.trim().orEmpty()
       if (appContext.currentActivity == null) {
         promise.resolve("unavailable")
         return@AsyncFunction
