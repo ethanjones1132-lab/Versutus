@@ -59,3 +59,40 @@ def test_a_cancelled_generation_speaks_nothing():
     pipeline.cancelSpeech({"gen": 5})
     pipeline.speak({"gen": 5, "text": "Not this one.", "final": True})
     assert [method for method, _params in events] == []
+
+
+def test_starting_to_talk_during_speech_barges_in_once_and_stops_the_generation():
+    events = []
+    holder = {}
+
+    def synth(_sentence):
+        yield b"\x01\x02"
+        # The operator starts talking while this generation is being spoken.
+        holder["pipeline"].pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+        yield b"\x03\x04"
+
+    pipeline = VoicePipeline(
+        vad=VadSegmenter(is_speech=_energy),
+        transcriber=PartialTranscriber(lambda pcm, beam_size: "barge in"),
+        turn_judge=None,
+        synthesizer=SpeechSynthesizer(synth),
+        emit=lambda method, params: events.append((method, params)),
+    )
+    holder["pipeline"] = pipeline
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.speak({"gen": 7, "text": "One. Two.", "final": True})
+
+    methods = [method for method, _params in events]
+    assert methods.count("voice.userSpeechStart") == 1
+    audio = [params for method, params in events if method == "voice.speechAudio"]
+    assert len(audio) == 1
+    assert audio[0]["gen"] == 7
+    assert "voice.speechDone" not in methods
+
+
+def test_a_tone_while_listening_does_not_barge_in():
+    events = []
+    pipeline = _pipeline(events)
+    pipeline.open({"voiceSessionId": "vs-1"})
+    pipeline.pushAudio({"chunk": encode_chunk(_tone(500), 16000)})
+    assert "voice.userSpeechStart" not in [method for method, _params in events]

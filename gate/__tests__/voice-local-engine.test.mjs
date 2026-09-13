@@ -84,6 +84,18 @@ test('worker notifications become engine events', async () => {
   assert.deepEqual(speech[0].pcm, pcm);
 });
 
+test('a userSpeechStart notification becomes an engine userSpeechStart', async () => {
+  const { engine, children } = harness();
+  await engine.open({ voiceSessionId: 'vs-1' });
+
+  const started = [];
+  engine.on('userSpeechStart', (event) => started.push(event));
+  notify(children[0], 'voice.userSpeechStart', { gen: 3 });
+
+  assert.equal(started.length, 1);
+  assert.equal(started[0].gen, 3);
+});
+
 test('a dead worker restarts on backoff and re-opens the session', async () => {
   const { engine, children, scheduled } = harness();
   await engine.open({ voiceSessionId: 'vs-1' });

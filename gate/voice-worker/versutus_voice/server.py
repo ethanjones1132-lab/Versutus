@@ -41,12 +41,18 @@ class VoicePipeline:
         self._muted = False
         self._speaking = False
         self._last_partial = 0
+        # The generation currently being synthesized, so VAD speech during it
+        # is a barge-in rather than a new turn (§4.6 step 5).
+        self._synth_speaking = False
+        self._speech_gen = None
 
     def open(self, params):
         self._session = (params or {}).get("voiceSessionId")
         self._muted = False
         self._speaking = False
         self._last_partial = 0
+        self._synth_speaking = False
+        self._speech_gen = None
         self._buffer.clear()
         self._vad.reset()
         return {"ok": True}
@@ -65,6 +71,13 @@ class VoicePipeline:
             self._buffer.extend(pcm)
         for event in events:
             if event.kind == "speech_start":
+                if self._synth_speaking:
+                    # Starting to talk interrupts the PC's speech and returns
+                    # to listening; the generation stops at the next chunk.
+                    self._emit("voice.userSpeechStart", {"gen": self._speech_gen})
+                    if self._speech_gen is not None:
+                        self._synth.cancel(self._speech_gen)
+                    self._synth_speaking = False
                 self._speaking = True
                 self._last_partial = 0
                 self._buffer = bytearray(pcm)
@@ -90,17 +103,27 @@ class VoicePipeline:
         params = params or {}
         gen = int(params.get("gen", 0))
         text = str(params.get("text", ""))
-        for chunk_gen, pcm in self._synth.speak(text, gen):
-            self._emit(
-                "voice.speechAudio",
-                {"gen": chunk_gen, "chunk": encode_chunk(pcm, OUTPUT_SAMPLE_RATE)},
-            )
-        if not self._synth.is_cancelled(gen):
-            self._emit("voice.speechDone", {"gen": gen})
+        self._synth_speaking = True
+        self._speech_gen = gen
+        try:
+            for chunk_gen, pcm in self._synth.speak(text, gen):
+                self._emit(
+                    "voice.speechAudio",
+                    {"gen": chunk_gen, "chunk": encode_chunk(pcm, OUTPUT_SAMPLE_RATE)},
+                )
+            if not self._synth.is_cancelled(gen):
+                self._emit("voice.speechDone", {"gen": gen})
+        finally:
+            self._synth_speaking = False
+            self._speech_gen = None
         return {"ok": True}
 
     def cancelSpeech(self, params):
-        self._synth.cancel(int((params or {}).get("gen", 0)))
+        gen = int((params or {}).get("gen", 0))
+        self._synth.cancel(gen)
+        if self._speech_gen == gen:
+            self._synth_speaking = False
+            self._speech_gen = None
         return {"ok": True}
 
     def setMuted(self, params):

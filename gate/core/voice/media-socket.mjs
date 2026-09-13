@@ -201,6 +201,7 @@ export function attachVoiceMediaSocket({
         dispatch({ type: 'speechAudio', pcm: event.pcm, gen: event.gen }),
       );
       engine.on?.('speechDone', (event) => dispatch({ type: 'speechDone', gen: event.gen }));
+      engine.on?.('userSpeechStart', () => dispatch({ type: 'bargein' }));
       engine.on?.('error', (event) =>
         dispatch({
           type: 'error',
