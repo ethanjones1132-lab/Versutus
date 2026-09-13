@@ -10,6 +10,7 @@ import { Platform } from 'react-native';
 
 import { formatClockTime } from '@/lib/format';
 import type { ConnectionStatus } from '@/lib/gateway/types';
+import { androidWidgetPayload } from '@/lib/widget/android-widget-payload';
 import type { GlanceableSnapshot } from '@/lib/widget/snapshot';
 import {
   loadWidgetTarget,
@@ -32,12 +33,6 @@ function readSource(...parts: string[]): string {
 }
 
 const COMPONENT_SOURCE_PATH = ['src', 'components', 'widget', 'glanceable-widget.tsx'];
-const ANDROID_COMPONENT_SOURCE_PATH = [
-  'src',
-  'components',
-  'widget',
-  'glanceable-widget.android.tsx',
-];
 const SEAM_SOURCE_PATH = ['src', 'lib', 'widget', 'widget-device.ts'];
 
 type WidgetEntryProps = {
@@ -115,22 +110,12 @@ describe('the widget entry in app.json', () => {
     expect(widget.supportedFamilies).toEqual(['systemSmall', 'systemMedium']);
   });
 
-  test('the Android half is switched on, and the cell target is spelled out rather than defaulted', () => {
-    // `enableAndroid` defaults false (expo-widgets/plugin/build/withWidgets.js:11),
-    // so without this flag the plugin generates no receiver and there is nothing
-    // for the seam to hand back on Android. The dimensions are the 4x2 medium
-    // equivalent and are written explicitly so this pin catches a silent change
-    // to the plugin's defaults.
+  test('expo-widgets serves iOS only; Android is drawn by modules/versutus-widget', () => {
     const [, props] = widgetEntries()[0];
-    expect(props.enableAndroid).toBe(true);
-    const [widget] = props.widgets;
-    expect(widget.android).toEqual({
-      minWidth: 180,
-      minHeight: 110,
-      targetCellWidth: 4,
-      targetCellHeight: 2,
-      resizeMode: 'horizontal',
-    });
+    expect(props.enableAndroid).toBe(false);
+    expect(props.widgets[0].android).toBeUndefined();
+    const pkg = JSON.parse(readSource('package.json'));
+    expect(pkg.expo.autolinking.android.exclude).toContain('expo-widgets');
   });
 
   test('the share entry is still the last thing in the list', () => {
@@ -183,37 +168,13 @@ describe('the widget component', () => {
   });
 });
 
-// The Android sibling is pinned the way the iOS component is: the file is
-// typechecked and bundled only inside the widget target, so its shape and its
-// import discipline are read off the source.
+// Nothing on Android evaluates the expo-widgets component any more: the platform
+// draws from `modules/versutus-widget`, so the sibling file is deleted rather
+// than kept alive as a stub.
 describe('the Android widget component', () => {
-  const source = (): string => readSource(...ANDROID_COMPONENT_SOURCE_PATH);
-
-  test('is marked with the directive the extension looks for, and registers the shared name', () => {
-    expect(source()).toContain("'widget';");
-    expect(source()).toContain('createWidget(WIDGET_NAME,');
-    // A literal name here would be a second one to keep in step with the plugin.
-    expect(source()).not.toMatch(/createWidget\(\s*'/);
-  });
-
-  test('draws the same pure fold the iOS sibling draws, in the Android UI package', () => {
-    expect(source()).toContain('glanceableWidgetLines');
-    expect(source()).toContain('@expo/ui/jetpack-compose');
-  });
-
-  test('imports nothing the widget bundle stubs out, and never the iOS-only package', () => {
-    const src = source();
-    expect(src).not.toMatch(/react-native/);
-    expect(src).not.toMatch(/@expo\/ui\/swift-ui/);
-  });
-
-  test('leaves colour to the system rather than naming one of its own', () => {
-    // A hex or a `foregroundStyle(` here would paint over the operator's
-    // wallpaper instead of taking the Glance theme's foreground; the stamp is
-    // de-emphasized by size alone.
-    const src = source();
-    expect(src).not.toMatch(/foregroundStyle\(/);
-    expect(src).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+  test('no expo-widgets component exists for Android, because nothing there could render it', () => {
+    const fs = jest.requireActual('fs') as { existsSync(path: string): boolean };
+    expect(fs.existsSync([__dirname, '..', 'src', 'components', 'widget', 'glanceable-widget.android.tsx'].join(SEP))).toBe(false);
   });
 });
 
@@ -240,13 +201,11 @@ describe('loadWidgetTarget', () => {
     expect(load).not.toHaveBeenCalled();
   });
 
-  test('hands the widget back on Android, the other platform whose target it now is', async () => {
-    // Opening the gate (widget-device.ts: one `Platform.OS` check) is exactly
-    // what this pins: Android is no longer answered before the load.
+  test('answers null on Android without importing the iOS target', async () => {
     const load = jest.fn(async () => target);
     jest.replaceProperty(Platform, 'OS', 'android');
-    await expect(loadWidgetTarget(load)).resolves.toBe(target);
-    expect(load).toHaveBeenCalledTimes(1);
+    await expect(loadWidgetTarget(load)).resolves.toBeNull();
+    expect(load).not.toHaveBeenCalled();
   });
 });
 
@@ -286,17 +245,19 @@ describe('writeWidgetSnapshot', () => {
     expect(updateSnapshot).not.toHaveBeenCalled();
   });
 
-  test('writes through on Android, the other platform whose target it now is', async () => {
+  test('on Android the snapshot goes to the Glance module as its payload, never to expo-widgets', async () => {
     const updateSnapshot = jest.fn();
     const load = jest.fn(async () => target(updateSnapshot));
+    const setPayload = jest.fn(async () => true);
+    const loadAndroid = jest.fn(async () => ({ setPayload, clearPayload: jest.fn() }) as never);
     jest.replaceProperty(Platform, 'OS', 'android');
     const snap = snapshot({ runsInFlight: 1 });
 
-    await writeWidgetSnapshot(snap, load);
+    await writeWidgetSnapshot(snap, load, loadAndroid);
 
-    expect(load).toHaveBeenCalledTimes(1);
-    expect(updateSnapshot).toHaveBeenCalledTimes(1);
-    expect(updateSnapshot).toHaveBeenCalledWith(snap);
+    expect(setPayload).toHaveBeenCalledWith(JSON.stringify(androidWidgetPayload(snap)));
+    expect(load).not.toHaveBeenCalled();
+    expect(updateSnapshot).not.toHaveBeenCalled();
   });
 
   test("a widget that refuses the write is not the app's own failure", async () => {

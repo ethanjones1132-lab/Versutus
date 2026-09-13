@@ -2,6 +2,13 @@
   "name": "versutus",
   "main": "expo-router/entry",
   "version": "1.0.0",
+  "expo": {
+    "autolinking": {
+      "android": {
+        "exclude": ["expo-widgets"]
+      }
+    }
+  },
   "dependencies": {
     "@expo-google-fonts/instrument-sans": "^0.4.2",
     "@expo-google-fonts/jetbrains-mono": "^0.4.1",
