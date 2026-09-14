@@ -135,6 +135,7 @@ import {
   type ActivityRun,
   type RunCapableClient,
 } from '@/lib/gateway/runs';
+import { recordApprovalDecision } from '@/lib/gateway/approval-audit';
 import { routineJobsFromList } from '@/lib/gateway/routines';
 import {
   durableQueueRows,
@@ -2344,10 +2345,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   );
 
   const resolveRunApproval = useCallback((approved: boolean, feedback?: string) => {
+    const pending = pendingRunApproval;
+    if (pending) {
+      // D1's audit record: one append-only row per resolved decision, keyed
+      // per gateway. Fire-and-forget — the decision path never waits on the
+      // audit, and a failed record loses a line of history, never the
+      // decision itself (the run API below is byte-identical).
+      void recordApprovalDecision({
+        gatewayId: activeGatewayRef.current?.id ?? '',
+        runId: pending.runId,
+        prompt: pending.prompt,
+        verdict: approved ? 'approve' : 'deny',
+        decidedAt: Date.now(),
+      });
+    }
     runApprovalResolverRef.current?.(approved, feedback);
     runApprovalResolverRef.current = null;
     setPendingRunApproval(null);
-  }, []);
+  }, [pendingRunApproval]);
 
   /**
    * One Bot's spend as the cap check folds it (D5). The fold is P5's own:
