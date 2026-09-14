@@ -109,3 +109,25 @@ test('removes a row when Expo reports DeviceNotRegistered', async () => {
   assert.equal(result.ok, true);
   assert.deepEqual(removed, ['ExponentPushToken[token-1]']);
 });
+
+test('a result carrying several dead tokens leaves none of them in the store', async () => {
+  const { mkdtemp } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { PushTokenStore } = await import('../core/push-tokens.mjs');
+  const dir = await mkdtemp(join(tmpdir(), 'gate-push-notifier-'));
+  const tokens = new PushTokenStore(join(dir, 'push-tokens.json'));
+  await tokens.upsert('phone-1', { expoPushToken: 'ExponentPushToken[dead-1]', enabled: true });
+  await tokens.upsert('phone-2', { expoPushToken: 'ExponentPushToken[dead-2]', enabled: true });
+  const notifier = createPushNotifier({
+    tokens,
+    send: async () => ({ ok: true, deadTokens: ['ExponentPushToken[dead-1]', 'ExponentPushToken[dead-2]'] }),
+  });
+
+  const result = await notifier.notify({ trigger: 'run', runId: 'run-1' });
+
+  assert.equal(result.ok, true);
+  assert.equal(await tokens.get('phone-1'), null);
+  assert.equal(await tokens.get('phone-2'), null);
+  assert.deepEqual(await tokens.listEnabled(), []);
+});
