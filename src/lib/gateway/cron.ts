@@ -195,3 +195,36 @@ export function sortCronJobs(jobs: CronJob[], now = Date.now()): CronJob[] {
 export function runningCount(jobs: CronJob[]): number {
   return jobs.filter((job) => job.running).length;
 }
+
+/**
+ * The section's own health mix, as one fold of describeCronHealth's verdicts —
+ * "2 failing · 1 cooling down · 3 paused · 2 unreported" — or null when every
+ * job is ok, so a clean header renders exactly as it did before this fold
+ * existed. The still-unknown are NAMED ("unreported"), never dropped or dressed
+ * as healthy: absent data is not a reassuring claim.
+ */
+export function cronListSummaryText(jobs: CronJob[]): string | null {
+  const counts = { failing: 0, coolingDown: 0, deliveryFailed: 0, warned: 0, paused: 0, unreported: 0 };
+  for (const job of jobs) {
+    if (job.running) continue; // running already has the badge; it is not also a health verdict
+    const health = describeCronHealth(job);
+    if (health.tone === 'error') counts.failing += 1;
+    else if (health.tone === 'off') counts.paused += 1;
+    else if (health.tone === 'unknown') counts.unreported += 1;
+    else if (health.tone === 'warn') {
+      // The warn tones are different facts: a cooldown is the host throttling
+      // itself, a delivered-anyway failure is delivery — never one bucket.
+      if (job.cooldownReason) counts.coolingDown += 1;
+      else if (job.lastDeliveryError) counts.deliveryFailed += 1;
+      else counts.warned += 1;
+    }
+  }
+  const parts: string[] = [];
+  if (counts.failing > 0) parts.push(`${counts.failing} failing`);
+  if (counts.coolingDown > 0) parts.push(`${counts.coolingDown} cooling down`);
+  if (counts.deliveryFailed > 0) parts.push(`${counts.deliveryFailed} delivery failed`);
+  if (counts.warned > 0) parts.push(`${counts.warned} warned`);
+  if (counts.paused > 0) parts.push(`${counts.paused} paused`);
+  if (counts.unreported > 0) parts.push(`${counts.unreported} unreported`);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
