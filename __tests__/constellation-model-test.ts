@@ -13,6 +13,8 @@ import {
 import type { GatewayReachability } from '@/lib/gateway/dashboard';
 import type { PublicBot } from '@/lib/gateway/bots';
 import type { GatewayProfile } from '@/lib/gateway/types';
+import type { ActivityRun } from '@/lib/gateway/runs';
+import type { CronJob } from '@/lib/gateway/cron';
 
 function gateway(id: string): GatewayProfile {
   return { id, name: `Gateway ${id}`, url: `http://${id}:8642`, createdAt: 0 };
@@ -312,5 +314,151 @@ describe('foldConstellation — Bots clustered beneath their gateway', () => {
     const model = fold([bot('b1')], { activeGatewayId: null, status: 'disconnected' });
     expect(model.bots).toEqual([]);
     expect(model.edges).toEqual([]);
+  });
+});
+
+describe('foldConstellation — runs, approvals, and routine arcs', () => {
+  const size = { width: 800, height: 600 };
+
+  function botNodeBot(id: string): PublicBot {
+    return { id, displayName: `Bot ${id}`, routable: true };
+  }
+
+  function run(id: string, botId: string | undefined, status: ActivityRun['status']): ActivityRun {
+    return { id, prompt: `run ${id}`, status, startedAt: 0, events: [], botId };
+  }
+
+  function job(name: string, over: Partial<CronJob> = {}): CronJob {
+    return { id: name, name, ...over } as CronJob;
+  }
+
+  function fold(overrides: Partial<Parameters<typeof foldConstellation>[0]> = {}) {
+    return foldConstellation({
+      profiles: [gateway('a'), gateway('b')],
+      reachability: {},
+      activeGatewayId: 'a',
+      status: 'connected',
+      width: size.width,
+      height: size.height,
+      now: 200_000,
+      ...overrides,
+    });
+  }
+
+  test('a running run pulses the Bot its botId names; unattributed runs pulse the gateway', () => {
+    const model = fold({
+      activityRuns: [run('r1', 'b1', 'running'), run('r2', undefined, 'running')],
+      roster: [botNodeBot('b1')],
+    });
+
+    const b1 = model.bots.find((node) => node.botId === 'b1')!;
+    const gatewayA = model.gateways.find((node) => node.gatewayId === 'a')!;
+    expect(b1.activityRuns).toBe(1);
+    // Unattributed runs are never guessed into a Bot: the gateway node takes
+    // the pulse (the scorecardBotId rule — botId runs through huntBotId back
+    // to null).
+    expect(gatewayA.activityRuns).toBe(1);
+    // A saved gateway is nobody's run target.
+    expect(model.gateways.find((node) => node.gatewayId === 'b')?.activityRuns).toBeUndefined();
+  });
+
+  test('only unsettled runs pulse: complete, failed, cancelled, unresolved stay quiet', () => {
+    const model = fold({
+      activityRuns: [
+        run('r1', 'b1', 'complete'),
+        run('r2', 'b1', 'failed'),
+        run('r3', 'b1', 'cancelled'),
+        run('r4', 'b1', 'unresolved'),
+        run('r5', 'b1', 'running'),
+        run('r6', 'b1', 'waiting-approval'),
+      ],
+      roster: [botNodeBot('b1')],
+    });
+    const b1 = model.bots.find((node) => node.botId === 'b1')!;
+    // Exactly the two live statuses count, one each.
+    expect(b1.activityRuns).toBe(2);
+    expect(b1.awaitingApproval).toBe(1);
+  });
+
+  test('a waiting-approval run hangs the badge on the gateway, not a bot', () => {
+    const model = fold({
+      activityRuns: [run('r1', 'b1', 'waiting-approval')],
+      roster: [botNodeBot('b1')],
+      pendingApproval: { runId: 'r1', prompt: 'ok?' },
+    });
+    const gatewayA = model.gateways.find((node) => node.gatewayId === 'a')!;
+    // One badge, on the connected gateway — the one the approval prompt
+    // belongs to — and never on a Bot node.
+    expect(gatewayA.pendingApproval).toEqual({ runId: 'r1', prompt: 'ok?' });
+    expect(model.bots.some((node) => 'pendingApproval' in node)).toBe(false);
+  });
+
+  test('no pending approval leaves every node badge-free', () => {
+    const model = fold({ roster: [botNodeBot('b1')] });
+    for (const node of model.gateways) expect(node.pendingApproval).toBeUndefined();
+  });
+
+  test('each cron job emits an arc to the Bot its name attributes, verdict un-reworded', () => {
+    const model = fold({
+      roster: [botNodeBot('b1'), botNodeBot('b2')],
+      cronJobs: [
+        job('[bot:b1] Morning sweep'),
+        job('[bot:b1] Evening sweep', { failureStreak: 2, lastError: 'boom' }),
+        job('Unattributed chore'),
+      ],
+    });
+
+    const arcs = model.routines;
+    expect(arcs).toHaveLength(3);
+    // Attribution comes from parseRoutineName, the same fold the scorecard runs.
+    expect(arcs.filter((arc) => arc.botId === 'b1')).toHaveLength(2);
+    // The verdict is describeCronHealth's own answer, never reworded.
+    expect(arcs.map((arc) => arc.verdict)).toEqual([
+      { tone: 'unknown', label: 'Not run yet' },
+      { tone: 'error', label: 'Failing — 2 in a row', detail: 'boom' },
+      { tone: 'unknown', label: 'Not run yet' },
+    ]);
+    // The arc targets the clustered Bot node, at the live gateway.
+    for (const arc of arcs.filter((a) => a.botId === 'b1')) {
+      expect(arc.gatewayId).toBe('a');
+      expect(model.bots.some((b) => b.botId === 'b1')).toBe(true);
+    }
+  });
+
+  test('unattributed arcs target nobody, and no live gateway draws no arcs at all', () => {
+    const unattributed = fold({
+      cronJobs: [job('Oddly named')],
+      roster: [botNodeBot('b1')],
+    });
+    // The job still emits — the routine exists — but names no Bot.
+    expect(unattributed.routines).toHaveLength(1);
+    expect(unattributed.routines[0].botId).toBeUndefined();
+    expect(unattributed.routines[0].gatewayId).toBe('a');
+
+    const noLive = fold({
+      cronJobs: [job('[bot:b1] Morning sweep')],
+      activeGatewayId: null,
+      status: 'disconnected',
+    });
+    expect(noLive.routines).toEqual([]);
+  });
+
+  test('a settled run that pulses nothing, and a fold with no overlays at all', () => {
+    // Settled runs answer no pulses and no badges anywhere.
+    const settled = fold({
+      activityRuns: [run('r1', 'b1', 'complete'), run('r2', undefined, 'failed')],
+      roster: [botNodeBot('b1')],
+      cronJobs: [],
+    });
+    for (const node of settled.bots) {
+      expect(node.activityRuns).toBeUndefined();
+      expect(node.awaitingApproval).toBeUndefined();
+    }
+    for (const node of settled.gateways) {
+      expect(node.activityRuns).toBeUndefined();
+    }
+    // Nothing handed in — the prior 18 cases' shape is byte-identical.
+    const bare = fold({ roster: [botNodeBot('b1')] });
+    expect(bare.routines).toEqual([]);
   });
 });
