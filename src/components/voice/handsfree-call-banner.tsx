@@ -15,6 +15,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import {
   HANDSFREE_AUTOSEND_LABEL,
   HANDSFREE_BANNER_TITLE,
+  HANDSFREE_CONFIRMING_HINT,
   HANDSFREE_END_LABEL,
   HANDSFREE_MUTE_LABEL,
   HANDSFREE_SKIP_LABEL,
@@ -34,7 +35,13 @@ export function HandsfreeCallBanner() {
   const phaseLabel = handsfreePhaseLabel(phase);
   const muted = phase === 'muted';
   const speaking = phase === 'speaking';
-  const speakingLine = speaking ? `${phaseLabel} · ${HANDSFREE_SPEAKING_HINT}` : phaseLabel;
+  // The confirming grace window keeps its Listening label but is not silent:
+  // a re-arming hold is finishing a turn it has already heard, not dead.
+  const phaseLine = speaking
+    ? `${phaseLabel} · ${HANDSFREE_SPEAKING_HINT}`
+    : phase === 'confirming'
+      ? `${phaseLabel} · ${HANDSFREE_CONFIRMING_HINT}`
+      : phaseLabel;
 
   return (
     <View
@@ -48,7 +55,7 @@ export function HandsfreeCallBanner() {
           style={styles.body}
           accessibilityRole="summary"
           accessibilityLiveRegion="polite"
-          accessibilityLabel={`${HANDSFREE_BANNER_TITLE} with ${label ?? 'this chat'}, ${speakingLine}`}>
+          accessibilityLabel={`${HANDSFREE_BANNER_TITLE} with ${label ?? 'this chat'}, ${phaseLine}`}>
           <HandsfreeCallIndicator level={level} active={!muted} color={tokens.accent} />
           <View style={styles.text}>
             <Text variant="caption" color="primary" numberOfLines={1}>
@@ -56,7 +63,7 @@ export function HandsfreeCallBanner() {
               {label ? ` · ${label}` : ''}
             </Text>
             <Text variant="caption" color="accentWarm" numberOfLines={1}>
-              {speakingLine}
+              {phaseLine}
             </Text>
             {partial ? (
               // A live partial changes every few hundred milliseconds; it is

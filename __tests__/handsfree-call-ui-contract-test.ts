@@ -1,6 +1,7 @@
 import {
   HANDSFREE_AUTOSEND_LABEL,
   HANDSFREE_BANNER_TITLE,
+  HANDSFREE_CONFIRMING_HINT,
   HANDSFREE_DISCLOSURE,
   HANDSFREE_END_LABEL,
   HANDSFREE_MUTE_LABEL,
@@ -149,8 +150,22 @@ describe('the banner', () => {
 
   test('the Speaking state tells the screen reader it can be interrupted', () => {
     expect(banner).toContain('HANDSFREE_SPEAKING_HINT');
-    expect(banner).toContain('speakingLine');
+    // Both hints ride the one phase line, so a11y and copy move as one.
+    expect(banner).toContain('phaseLine');
     expect(banner).toContain('accessibilityLiveRegion="polite"');
+  });
+
+  test('the grace window says it is finishing, not dead', () => {
+    expect(HANDSFREE_CONFIRMING_HINT).toBe('finishing…');
+  });
+
+  test('the confirming hint renders beside the shipped speaking hint, only for confirming', () => {
+    expect(banner).toContain('HANDSFREE_CONFIRMING_HINT');
+    expect(banner).toContain("phase === 'confirming'");
+    // The hint rides the same phase line the speaking hint does, so a11y and
+    // copy move as one.
+    expect(banner.indexOf('phaseLine')).toBeGreaterThan(-1);
+    expect(banner).toContain('{phaseLine}');
   });
 
   test('pins the accessibility phrases', () => {

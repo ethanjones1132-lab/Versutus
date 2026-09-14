@@ -23,6 +23,9 @@ export const HANDSFREE_BANNER_TITLE = 'Hands-free call';
 export const HANDSFREE_AUTOSEND_LABEL = 'speech auto-sends';
 /** Shown beside `Speaking` so barge-in is discoverable without sight. */
 export const HANDSFREE_SPEAKING_HINT = 'say something to interrupt';
+/** Shown beside `Listening` during the confirming grace window, so a speech
+ * pause with the turn already heard does not read as a dead recognizer. */
+export const HANDSFREE_CONFIRMING_HINT = 'finishing…';
 
 export const HANDSFREE_MUTE_LABEL = 'Mute hands-free call';
 export const HANDSFREE_UNMUTE_LABEL = 'Unmute hands-free call';
