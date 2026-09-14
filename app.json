@@ -81,7 +81,7 @@
             {
               "name": "VersutusStatus",
               "displayName": "Status",
-              "description": "What Versutus last knew: its connection, the runs in flight and the newest result, stamped with when it wrote them.",
+              "description": "What Versutus last knew: its connection, any runs waiting on your approval, failing routines, the runs in flight and overdue routines, stamped with when it wrote them.",
               "supportedFamilies": ["systemSmall", "systemMedium"],
               "android": {
                 "minWidth": 180,

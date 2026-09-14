@@ -115,6 +115,13 @@ describe('the widget entry in app.json', () => {
     expect(widget.displayName).toBe('Status');
     expect(typeof widget.description).toBe('string');
     expect(widget.description).not.toBe('');
+    // The picker's description must name the whole work line the target draws
+    // (approvals, failing routines, runs in flight, overdue routines) — a copy
+    // that omits a segment the widget factually shows under-describes it, the
+    // same lie a stale status word tells for `pairing`.
+    for (const words of ['approval', 'failing routines', 'in flight', 'overdue']) {
+      expect(widget.description).toContain(words);
+    }
     expect(widget.supportedFamilies).toEqual(['systemSmall', 'systemMedium']);
   });
 
