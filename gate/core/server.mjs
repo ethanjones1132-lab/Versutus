@@ -476,6 +476,32 @@ export async function createGate(config = {}) {
     // <gateHome>/runs, and init() (below, before listen) reloads finished
     // runs at startup so Recent runs + replay survive a Gate restart.
     archiveDir: join(gateHome, 'runs'),
+    // Solution A4's other half: the notifier's run/approval arms were
+    // written but unreachable — the only notify call site was the chat
+    // completion. A run starting on an environment settles or asks here,
+    // so this is where those trigger classes are born. Fire-and-forget:
+    // the notifier's dedupe and per-row gates decide what leaves, and a
+    // push failure must never stall the run's own accounting.
+    onRunEvent: (event) => {
+      if (event.type === 'approval.required') {
+        void pushNotifier.notify({
+          trigger: 'approval',
+          runId: event.runId,
+          approvalId: event.payload?.approvalId,
+          text: typeof event.payload?.summary === 'string' ? event.payload.summary : undefined,
+        }).catch(() => {});
+        return;
+      }
+      const settle = /^(run\.(completed|failed|cancelled))$/.test(event.type) ? event.type.slice(4) : null;
+      if (settle) {
+        void pushNotifier.notify({
+          trigger: 'run',
+          runId: event.runId,
+          state: settle,
+          text: typeof event.payload?.message === 'string' ? event.payload.message : undefined,
+        }).catch(() => {});
+      }
+    },
   });
   const environmentRpc = createEnvironmentRpc({
     store: environmentStore,

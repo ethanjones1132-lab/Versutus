@@ -119,6 +119,13 @@ export class CliEnvironmentService {
     // When set, every run's events are appended to disk and init() reloads
     // finished history at startup, so discovery + replay survive a restart.
     archiveDir = null,
+    // Optional observer over EVERY event a run logs (same shape the stream
+    // yields, carrying its runId). The Gate uses this to page the phone: a
+    // run settling or asking for approval notifies the registered devices
+    // through the same push notifier every reply already uses. Slow or
+    // throwing observers must never stall the run — dispatch is the
+    // caller's, fire-and-forget.
+    onRunEvent = null,
   } = {}) {
     this.store = store;
     this.registry = registry;
@@ -265,10 +272,16 @@ export class CliEnvironmentService {
     // Every emitted event is mirrored to the disk archive (fire-and-forget —
     // persistence must never break or stall the live run; the write itself is
     // synchronous so file order always equals emit order), so this run stays
-    // discoverable and replayable after the Gate restarts.
+    // discoverable and replayable after the Gate restarts. The run/approval
+    // push observer rides the same fire-and-forget seam — a throwing or
+    // missing observer must not stall the run either.
+    const observers = [
+      ...(this.archive ? [(event) => this.archive.append(request.environmentId, runId, event)] : []),
+      ...(this.onRunEvent ? [(event) => this.onRunEvent(event)] : []),
+    ];
     const log = createEventLog(runId, {
-      onEmit: this.archive
-        ? (event) => this.archive.append(request.environmentId, runId, event)
+      onEmit: observers.length
+        ? (event) => { for (const observer of observers) observer(event); }
         : undefined,
     });
     if (this.archive) {

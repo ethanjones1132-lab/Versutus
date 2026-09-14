@@ -128,11 +128,10 @@ function messageFor(classified, event, row) {
     };
   }
   if (classified.data.kind === 'run') {
+    const word = state === 'failed' || state === 'error' ? 'hit an error' : state === 'cancelled' ? 'was stopped' : 'finished a run';
     return {
       to: row.expoPushToken,
-      title: state === 'failed' || state === 'error'
-        ? `${bot ?? 'Versutus'} hit an error`
-        : `${bot ?? 'Versutus'} finished a run`,
+      title: `${bot ?? 'Versutus'} ${word}`,
       body,
       data: classified.data,
       channelId: 'model-replies',
