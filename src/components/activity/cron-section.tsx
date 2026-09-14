@@ -9,6 +9,7 @@ import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
   cronJobSummary,
+  cronListSummaryText,
   describeCronHealth,
   runningCount,
   sortCronJobs,
@@ -133,6 +134,17 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
         <Text variant="title">Cron ({jobs.length})</Text>
         {live > 0 ? <Badge label={`${live} running`} tone="accent" /> : null}
       </View>
+
+      {/* The section's own health mix, on the line under the header: null when
+          every job is ok, so a clean list renders exactly as it did before. */}
+      {(() => {
+        const summary = cronListSummaryText(jobs);
+        return summary ? (
+          <Text variant="micro" color="secondary">
+            {summary}
+          </Text>
+        ) : null;
+      })()}
 
       {error ? (
         <ErrorCard
