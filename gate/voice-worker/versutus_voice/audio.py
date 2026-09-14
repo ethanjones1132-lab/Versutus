@@ -14,8 +14,9 @@ import numpy as np
 INPUT_SAMPLE_RATE = 16000
 OUTPUT_SAMPLE_RATE = 24000
 CHANNELS = 1
-# Silero VAD reads 32 ms windows at 16 kHz (§4.6 step 1).
-VAD_WINDOW_SAMPLES = 512
+# Silero v6 reads 32 ms windows of 576 samples at 16 kHz; 512 was the v4 size
+# and fails the ONNX shape check.
+VAD_WINDOW_SAMPLES = 576
 
 
 def pcm16_to_float32(data):

@@ -338,7 +338,14 @@ def load_whisper(models_dir, cpu=False):
 
 
 class SileroScorer:
-    """Wraps the Silero VAD ONNX that ships inside faster-whisper."""
+    """Wraps the Silero VAD ONNX that ships inside faster-whisper.
+
+    The v6 asset is an LSTM model: besides ``input`` it demands recurrent
+    state tensors ``h`` and ``c`` and returns the next state (``hn``/``cn``)
+    beside the speech probabilities. Feeding only ``input`` and ``sr`` raises
+    on every window, and a scorer that never answers should be fatal rather
+    than read as permanent silence.
+    """
 
     def __init__(self):
         import numpy as np
@@ -349,20 +356,24 @@ class SileroScorer:
         asset = Path(faster_whisper.__file__).parent / "assets" / "silero_vad_v6.onnx"
         self.session = ort.InferenceSession(str(asset), providers=["CPUExecutionProvider"])
         self._np = np
-        self._state = np.zeros((2, 1, 128), dtype=np.float32)
         self._names = {item.name for item in self.session.get_inputs()}
+        if not {"input", "h", "c"}.issubset(self._names):
+            raise ValueError(f"unsupported Silero VAD graph; wants inputs {sorted(self._names)}")
+        self._h = np.zeros((1, 1, 128), dtype=np.float32)
+        self._c = np.zeros((1, 1, 128), dtype=np.float32)
+
+    def reset(self):
+        self._h.fill(0)
+        self._c.fill(0)
 
     def __call__(self, window):
         np = self._np
         from .audio import pcm16_to_float32
 
         samples = pcm16_to_float32(window).reshape(1, -1)
-        feed = {"input": samples, "sr": 16000}
-        if "state" in self._names:
-            feed["state"] = self._state
+        feed = {"input": samples, "h": self._h, "c": self._c}
         outputs = self.session.run(None, feed)
-        if len(outputs) > 1:
-            self._state = outputs[1]
+        self._h, self._c = outputs[1], outputs[2]
         return float(np.asarray(outputs[0]).reshape(-1)[0])
 
 
