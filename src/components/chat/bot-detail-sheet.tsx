@@ -6,6 +6,7 @@ import { Spacing } from '@/constants/tokens';
 import { haptics } from '@/lib/haptics';
 import { describeBotDetail } from '@/lib/gateway/bot-detail';
 import {
+  BOT_PACKET_EXCLUDED_COPY,
   botPacketManifest,
   buildBotPacket,
 } from '@/lib/gateway/bot-packet';
@@ -54,6 +55,22 @@ export type BotDetailSheetProps = {
    * with a handler.
    */
   onExportPacket?: () => void;
+  /**
+   * Reads a handoff packet file back against THIS gateway — validate-first
+   * per the spec, answering what would and would not land before anything
+   * applies. Nothing is written by reading: the composition lives in the
+   * parent (it owns this gateway's model catalog), so the sheet stays the
+   * surface. Rendered only with a handler, which the parent arms only for
+   * a connected gateway — a note about what would land needs the gateway
+   * to be there.
+   */
+  onImportPacket?: () => void;
+  /**
+   * The read-back's answer, shown as a fact — what would land, what would
+   * not, and (always next to it) what never travels. Null renders nothing,
+   * so a sheet that has not asked yet shows no answer.
+   */
+  packetReadNote?: string | null;
 };
 
 /**
@@ -63,7 +80,7 @@ export type BotDetailSheetProps = {
  * then act: message the agent, copy the id for host-side commands, or edit
  * what the Gate holds.
  */
-export function BotDetailSheet({ bot, soul, memory, onClose, onMessage, onEdit, onRetry, onExportPacket }: BotDetailSheetProps) {
+export function BotDetailSheet({ bot, soul, memory, onClose, onMessage, onEdit, onRetry, onExportPacket, onImportPacket, packetReadNote }: BotDetailSheetProps) {
   if (!bot) return null;
   const detail = describeBotDetail(bot);
   const soulState = soul ?? EMPTY_BOT_SOUL;
@@ -188,6 +205,25 @@ export function BotDetailSheet({ bot, soul, memory, onClose, onMessage, onEdit, 
             icon={{ ios: 'square.and.arrow.up', android: 'share', web: 'share' }}
             chevron={false}
             onPress={onExportPacket}
+          />
+        ) : null}
+        {packetReadNote ? (
+          <View style={styles.fact}>
+            <Text variant="micro" color="tertiary">
+              PACKET
+            </Text>
+            <Text variant="caption" color="secondary">
+              {packetReadNote}
+            </Text>
+          </View>
+        ) : null}
+        {onImportPacket ? (
+          <ListRow
+            title="Read back a packet"
+            subtitle={`See what a picked packet would land on ${detail.name}. ${BOT_PACKET_EXCLUDED_COPY} Nothing applies.`}
+            icon={{ ios: 'square.and.arrow.down', android: 'download', web: 'download' }}
+            chevron={false}
+            onPress={onImportPacket}
           />
         ) : null}
         {onEdit && detail.editable ? (

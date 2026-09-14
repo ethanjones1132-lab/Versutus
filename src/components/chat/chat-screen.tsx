@@ -66,6 +66,13 @@ import {
   buildBotPacket,
 } from '@/lib/gateway/bot-packet';
 import { shareBotPacketFile } from '@/lib/gateway/bot-packet-share';
+import {
+  BOT_PACKET_IMPORT_REFUSAL_COPY,
+  botPacketVerdictCopy,
+  parseBotPacket,
+  validateBotPacketAgainstGateway,
+} from '@/lib/gateway/bot-packet-import';
+import { BOT_PACKET_PICK_REFUSAL_COPY, pickBotPacketFile } from '@/lib/gateway/bot-packet-pick';
 import { memoryStatusFromUnknown, type MemoryStatusState } from '@/lib/gateway/memory-status';
 import { composerFocusApplies } from '@/lib/gateway/composer-focus';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
@@ -409,6 +416,10 @@ export function ChatScreen() {
   const [editingBot, setEditingBot] = useState<PublicBot | null>(null);
   // Long-press target on the roster: which Bot's detail sheet is open.
   const [detailBot, setDetailBot] = useState<PublicBot | null>(null);
+  // The packet read-back: one note, answered by the validate-first fold in
+  // bot-packet-import.ts. Reading applies nothing — this state never feeds
+  // a write path, it is the honest answer to "what would this packet land"?
+  const [packetReadNote, setPacketReadNote] = useState<string | null>(null);
   // The soul is read only when a Bot is actually opened - it is off the roster
   // payload on purpose (a soul can be long, the roster is re-read constantly).
   const [soulState, setSoulState] = useState<BotSoulState & { botId: string | null }>({
@@ -1796,8 +1807,42 @@ export function ChatScreen() {
       <BotDetailSheet
         bot={detailBot}
         soul={detailBot && soulState.botId === detailBot.id ? soulState : undefined}
+        packetReadNote={packetReadNote}
         memory={memoryRead && detailBot && memoryRead.botId === detailBot.id ? memoryRead.state : undefined}
-        onClose={() => setDetailBot(null)}
+        onClose={() => {
+          setPacketReadNote(null);
+          setDetailBot(null);
+        }}
+        onImportPacket={
+          // The import half of the handoff packet, validate-first per the
+          // spec: pick a file, parse its shape, and fold its model pin
+          // against the catalog THIS gateway already serves. Nothing applies
+          // — the note is the whole outcome. Armed only on a connected
+          // gateway, because a verdict about what would land needs the
+          // gateway to be there.
+          status === 'connected' && detailBot
+            ? () => {
+                void (async () => {
+                  const picked = await pickBotPacketFile();
+                  if (!picked.ok) {
+                    setPacketReadNote(BOT_PACKET_PICK_REFUSAL_COPY[picked.reason]);
+                    return;
+                  }
+                  const parsed = parseBotPacket(picked.text);
+                  if (!parsed.ok) {
+                    setPacketReadNote(BOT_PACKET_IMPORT_REFUSAL_COPY[parsed.reason]);
+                    return;
+                  }
+                  setPacketReadNote(
+                    botPacketVerdictCopy(
+                      parsed.packet,
+                      validateBotPacketAgainstGateway(parsed.packet, modelCatalog),
+                    ),
+                  );
+                })();
+              }
+            : undefined
+        }
         onRetry={handleSoulRetry}
         onExportPacket={
           // The export half of the handoff packet: the sheet composes the
