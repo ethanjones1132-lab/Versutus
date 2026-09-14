@@ -49,6 +49,18 @@ const NO_WORK = 'No runs in flight';
 const NO_STAMP = 'Written at an unreadable time';
 
 /**
+ * How long the badge word for `pairing` is allowed to stand on its own. The
+ * write point fires while the connection-phase UI is mid-approval, and such a
+ * snapshot is frozen the moment the app backgrounds — so past this window the
+ * approval was either long since given or long since failed, and the badge
+ * word de-legitimizes the stamp beside it.
+ */
+const PAIRING_FRESH_MS = 60_000;
+
+/** The honest re-word for a stale pairing verdict: the stamp carries the truth. */
+const STALE_PAIRING_REWORD = 'Approval is waiting';
+
+/**
  * The widget's lines: what the operator reads on the home screen, in the order
  * they read them. Every line is a fact the snapshot carried — nothing here is
  * fetched and nothing is composed that the snapshot did not record.
@@ -66,6 +78,25 @@ export type GlanceableWidgetLines = {
 
 function countRuns(count: number): string {
   return `${count} run${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * The status line. A `pairing` verdict is the only one whose word can outlive
+ * its truth: the write point fires while approval is mid-flight, the widget is
+ * frozen between writes, and an approval long since given or failed must not
+ * keep reading as something to do. Past the freshness window the word is
+ * re-worded around the stamp — the same rule the work line's stamp already
+ * enforces, extended to the one status that lied. An unreadable `now` (the
+ * default argument is ahead of any code path that could hand one in, but the
+ * tests render with a real clock) keeps the badge word, matching the stamp's
+ * own rule that a missing clock says nothing rather than guessing.
+ */
+function statusLine(snapshot: GlanceableSnapshot, now: number): string {
+  const word = STATUS_WORDS[snapshot.status];
+  if (snapshot.status !== 'pairing') return word;
+  if (!Number.isFinite(snapshot.writtenAt) || !Number.isFinite(now)) return word;
+  if (now - snapshot.writtenAt < PAIRING_FRESH_MS) return word;
+  return `${STALE_PAIRING_REWORD} — status as of ${formatDayDivider(snapshot.writtenAt, now)} ${formatClockTime(snapshot.writtenAt)}`;
 }
 
 /**
@@ -105,7 +136,12 @@ export function glanceableWidgetLines(
   }
 
   return {
-    status: STATUS_WORDS[snapshot.status],
+    // The one status whose word can outlive its truth: `pairing` is frozen in a
+    // backgrounded widget, so past the freshness window it is re-worded to say
+    // when it was true. Every other word describes a state the widget's own
+    // stamp already qualifies, and an unreadable stamp re-words to nothing —
+    // the badge word stands, as it does today.
+    status: statusLine(snapshot, now),
     work: work.length > 0 ? work.join(' · ') : NO_WORK,
     // Absent rather than empty: a snapshot with nothing judged yet has no
     // result, and an empty line would read as one.

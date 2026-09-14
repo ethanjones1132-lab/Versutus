@@ -445,7 +445,13 @@ describe('glanceableWidgetLines', () => {
     for (const status of STATUSES) {
       const shipped = new RegExp(`${status}: '([^']+)'`).exec(badge);
       expect(shipped).not.toBeNull();
-      expect(glanceableWidgetLines(snapshot({ status })).status).toBe(shipped?.[1]);
+      // A pairing word is only the badge word while the snapshot is fresh
+      // (statusLine re-words a stale one around the stamp); the badge-table
+      // pin is about the wording itself, so it is taken from a just-written
+      // snapshot — the case the real write point produces while approval is
+      // mid-flight.
+      const fresh = status === 'pairing' ? { writtenAt: Date.now() } : {};
+      expect(glanceableWidgetLines(snapshot({ status, ...fresh })).status).toBe(shipped?.[1]);
     }
   });
 
@@ -484,5 +490,40 @@ describe('glanceableWidgetLines', () => {
     expect(glanceableWidgetLines(snapshot({ writtenAt: Number.NaN }), NOW).written).toBe(
       'Written at an unreadable time',
     );
+  });
+
+  // A pairing snapshot is frozen the moment the app backgrounds, but the
+  // approval was either long since given or long since failed — a stale
+  // "Needs approval" beside a stamp from this morning de-legitimizes the
+  // stamp. The work line's own rule (a frozen snapshot says when it was
+  // written) extends to the status line.
+  describe('a pairing word that is older than the stamp', () => {
+    test('a fresh pairing verdict keeps the badge word', () => {
+      expect(glanceableWidgetLines(snapshot({ status: 'pairing', writtenAt: NOW }), NOW).status).toBe(
+        'Needs approval',
+      );
+      // Just under the window: still the word the operator saw live.
+      expect(
+        glanceableWidgetLines(snapshot({ status: 'pairing', writtenAt: NOW - 59_999 }), NOW).status,
+      ).toBe('Needs approval');
+    });
+
+    test('a stale pairing verdict is re-worded to the stamp, not dropped', () => {
+      expect(
+        glanceableWidgetLines(snapshot({ status: 'pairing', writtenAt: NOW - 60_001 }), NOW).status,
+      ).toBe(`Approval is waiting — status as of Today ${formatClockTime(NOW - 60_001)}`);
+    });
+
+    test('every non-pairing status is worded the same whatever the stamp says', () => {
+      for (const status of STATUSES) {
+        if (status === 'pairing') continue;
+        const fresh = glanceableWidgetLines(snapshot({ status, writtenAt: NOW }), NOW).status;
+        const stale = glanceableWidgetLines(
+          snapshot({ status, writtenAt: NOW - 1000 * 60 * 60 * 26 }),
+          NOW,
+        ).status;
+        expect(stale).toBe(fresh);
+      }
+    });
   });
 });
