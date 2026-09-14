@@ -101,6 +101,13 @@ export function attachVoiceMediaSocket({
 
   function createCall(session, firstWs) {
     const engine = createEngine(session, firstWs);
+    // The engine must be opened before any audio can reach it: for the local
+    // engine `open` spawns the worker and sends `voice.open`. A call created
+    // without it pushed PCM into an engine that never loaded a model, so no
+    // transcription ever came back and every call idled out (M6 regression).
+    void Promise.resolve()
+      .then(() => engine.open?.(session))
+      .catch(() => undefined);
     const maxBufferedAudioBytes = (audioBufferMs / 1000) * OUTPUT_SAMPLE_RATE * 2 * OUTPUT_CHANNELS;
     let ws = null;
     let ended = false;
