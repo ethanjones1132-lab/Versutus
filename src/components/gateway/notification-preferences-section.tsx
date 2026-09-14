@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Switch, View } from 'react-native';
 
-import { Card, Text } from '@/components/ui';
+import { Button, Card, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
+import { haptics } from '@/lib/haptics';
+import {
+  clockTextToMinutes,
+  minutesToClockText,
+  QUIET_HOURS_END_LABEL,
+  QUIET_HOURS_EXEMPT_COPY,
+  QUIET_HOURS_START_LABEL,
+  quietHoursLine,
+  validQuietHoursPair,
+} from '@/lib/notifications/push-quiet-hours';
 import { useTokens } from '@/hooks/use-tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
@@ -31,10 +41,17 @@ export function NotificationPreferencesSection() {
   const [preferences, setPreferences] = useState<PushPreferences | null>(null);
   const [unread, setUnread] = useState(false);
   const [botIds, setBotIds] = useState<string[] | null>(null);
+  // The pane's quiet-hours clock fields, seeded from the Gate's read only.
+  const [quietStartText, setQuietStartText] = useState('');
+  const [quietEndText, setQuietEndText] = useState('');
 
   const gatewayId = activeGateway?.id;
   const advertised =
     status === 'connected' && pushPreferencesAdvertised(capabilitySnapshot.rpcMethods);
+  // The pane's quiet-hours fields hold the clock texts the operator typed;
+  // they are seeded only from the Gate's own read, so a pane opened while the
+  // row is unread never invents a window — then the commit pin decides when
+  // the fields may drive the patch (see the invalid-state memo below).
 
   useEffect(() => {
     let cancelled = false;
@@ -44,6 +61,16 @@ export function NotificationPreferencesSection() {
         if (result.ok) {
           setPreferences(result.preferences);
           setUnread(false);
+          setQuietStartText(
+            result.preferences.quietHours
+              ? minutesToClockText(result.preferences.quietHours.startMinutes)
+              : '',
+          );
+          setQuietEndText(
+            result.preferences.quietHours
+              ? minutesToClockText(result.preferences.quietHours.endMinutes)
+              : '',
+          );
         } else {
           // An unread row paints the unknown state, never a fabricated switch position.
           setPreferences(null);
@@ -130,6 +157,61 @@ export function NotificationPreferencesSection() {
     [gatewayRequest],
   );
 
+  // The quiet-hours commit: both clock fields must parse and land inside the
+  // Gate's bounds before anything is sent, so a half-typed window is a refusal
+  // (the field's invalid state), never a partial patch. The commit path is the
+  // same refused-patch snap the switches hold.
+  const quietStartMinutes = clockTextToMinutes(quietStartText);
+  const quietEndMinutes = clockTextToMinutes(quietEndText);
+  const quietWindowValid = validQuietHoursPair(quietStartMinutes, quietEndMinutes) !== null;
+  const QuietHoursStartFieldState = quietWindowValid
+    ? ('valid' as const)
+    : quietStartText.trim() && quietStartMinutes === null
+      ? ('invalid' as const)
+      : ('default' as const);
+  const QuietHoursEndFieldState = quietWindowValid
+    ? ('valid' as const)
+    : quietEndText.trim() && quietEndMinutes === null
+      ? ('invalid' as const)
+      : ('default' as const);
+  const QuietHoursStartPlaceholder = minutesToClockText(22 * 60);
+  const QuietHoursEndPlaceholder = minutesToClockText(7 * 60);
+  const handleQuietCommit = useCallback(() => {
+    if (!preferences) return;
+    const start = clockTextToMinutes(quietStartText);
+    const end = clockTextToMinutes(quietEndText);
+    const window = validQuietHoursPair(start, end);
+    if (!window) return;
+    void (async () => {
+      const result = await setPushPreferences({ rpcRequest: gatewayRequest }, { quietHours: window });
+      if (result.ok) {
+        setPreferences(result.preferences);
+        setUnread(false);
+      } else {
+        setPreferences(null);
+        setUnread(true);
+      }
+    })();
+  }, [gatewayRequest, preferences, quietEndText, quietStartText]);
+
+  // The clear affordance sends the Gate its own "no window" null — the same
+  // leave-as-is distinction the botIds fold holds, in the other direction.
+  const handleQuietClear = useCallback(() => {
+    if (!preferences) return;
+    setQuietStartText('');
+    setQuietEndText('');
+    void (async () => {
+      const result = await setPushPreferences({ rpcRequest: gatewayRequest }, { quietHours: null });
+      if (result.ok) {
+        setPreferences(result.preferences);
+        setUnread(false);
+      } else {
+        setPreferences(null);
+        setUnread(true);
+      }
+    })();
+  }, [gatewayRequest, preferences]);
+
   // The gate decides before anything renders: a gateway that advertises
   // nothing new paints nothing new, and no stale answer survives it.
   if (!advertised) return null;
@@ -174,6 +256,57 @@ export function NotificationPreferencesSection() {
             accessibilityLabel={PREFERENCES_RICH_BODY_LABEL}
             accessibilityState={{ checked: preferences.richBody }}
           />
+          {preferences.quietHours ? (
+            <Text variant="caption" color="secondary">
+              {quietHoursLine(preferences.quietHours)} {QuietHoursSummary}
+            </Text>
+          ) : (
+            <Text variant="caption" color="secondary">
+              {quietHoursLine(null)} {QuietHoursSummary}
+            </Text>
+          )}
+          <View style={styles.quietRow}>
+            <TextField
+              value={quietStartText}
+              onChangeText={setQuietStartText}
+              placeholder={QuietHoursStartPlaceholder}
+              accessibilityLabel={QUIET_HOURS_START_LABEL}
+              validationState={QuietHoursStartFieldState}
+              style={styles.quietField}
+            />
+            <TextField
+              value={quietEndText}
+              onChangeText={setQuietEndText}
+              placeholder={QuietHoursEndPlaceholder}
+              accessibilityLabel={QUIET_HOURS_END_LABEL}
+              validationState={QuietHoursEndFieldState}
+              style={styles.quietField}
+            />
+          </View>
+          <View style={styles.quietActions}>
+            <Button
+              label="Save quiet hours"
+              size="sm"
+              variant="secondary"
+              onPress={async () => {
+                await haptics.light();
+                handleQuietCommit();
+              }}
+              disabled={!quietWindowValid}
+              style={styles.quietSave}
+            />
+            <Button
+              label="Clear quiet hours"
+              size="sm"
+              variant="ghost"
+              accessibilityHint={QuietHoursClearHint}
+              onPress={async () => {
+                await haptics.light();
+                handleQuietClear();
+              }}
+              style={styles.quietSave}
+            />
+          </View>
           {botIds !== null && botIds.length > 0 ? (
             <View>
               <Text variant="caption" color="secondary">
@@ -213,6 +346,16 @@ const PREFERENCES_RICH_BODY_SUMMARY =
 const PREFERENCES_BOTS_SUMMARY =
   'Push from each Bot. Off means this device hears nothing from that one; with every Bot off, no push names a Bot.';
 
+/** The one clear affordance's a11y label, beside the field labels it clears. */
+export const QuietHoursClearLabel = 'Clear quiet hours';
+
+/** The line the pane states the whole exemption rule in. */
+export const QuietHoursSummary = `${QUIET_HOURS_EXEMPT_COPY} Save both fields to set the window; clear it to stop one.`;
+
+/** The clear affordance's hint, naming the consequence for a focus user. */
+export const QuietHoursClearHint =
+  'Sends the gateway an empty quiet window, so push arrives around the clock again';
+
 function botAllowlistLabel(botId: string): string {
   return `${botId} — Allow push`;
 }
@@ -236,5 +379,19 @@ const styles = StyleSheet.create({
   },
   botName: {
     flexShrink: 1,
+  },
+  quietRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+  quietField: {
+    flex: 1,
+  },
+  quietActions: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+  quietSave: {
+    flex: 1,
   },
 });
