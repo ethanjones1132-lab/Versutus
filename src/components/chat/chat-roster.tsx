@@ -20,6 +20,7 @@ import {
   type BotGroupRoom,
 } from '@/lib/gateway/groups';
 import { rosterBotTap } from '@/lib/gateway/roster-tap';
+import { councilEntryCopy } from '@/lib/gateway/council-view';
 import { TAB_ROSTER_BASE_PADDING, tabContentPaddingBottom } from '@/lib/motion/tab-insets';
 
 export type ChatRosterProps = {
@@ -59,6 +60,12 @@ export type ChatRosterProps = {
   onNewAgent?: () => void;
   /** Present only when the gateway can create rooms (bots endpoint + groups advertised). */
   onNewGroup?: () => void;
+  /**
+   * Present when the roster holds enough askable Bots for a council at all —
+   * the D7 comparison row. Absent on a gateway whose askable roster is
+   * smaller than the floor, so a row that can never send is never offered.
+   */
+  onCouncil?: () => void;
   /** Whether the client can manage agents at all — drives the honest capability note when "New Agent" is hidden. */
   canManageAgents?: boolean;
   /** Whether the gateway can host Gate-owned group rooms right now — drives the note when "New Group Room" is hidden. */
@@ -85,6 +92,7 @@ function ChatRosterImpl({
   onGroupDetail,
   onNewAgent,
   onNewGroup,
+  onCouncil,
   canManageAgents = false,
   canHostGroups = false,
   onRefresh,
@@ -280,6 +288,15 @@ function ChatRosterImpl({
               subtitle="2–6 bots reply in rounds to one message"
               icon={{ ios: 'person.3', android: 'groups', web: 'groups' }}
               onPress={onNewGroup}
+              style={styles.row}
+            />
+          ) : null}
+          {onCouncil ? (
+            <ListRow
+              title={councilEntryCopy().title}
+              subtitle={councilEntryCopy().subtitle}
+              icon={{ ios: 'bubble.left.and.bubble.right', android: 'compare_arrows', web: 'compare_arrows' }}
+              onPress={onCouncil}
               style={styles.row}
             />
           ) : null}

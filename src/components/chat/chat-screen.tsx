@@ -12,6 +12,7 @@ import { ChatComposer } from '@/components/chat/chat-composer';
 import { HandsfreeCallSheet } from '@/components/chat/handsfree-call-sheet';
 import { ChatRoster } from '@/components/chat/chat-roster';
 import { CreateGroupSheet } from '@/components/chat/create-group-sheet';
+import { CouncilSheet, type CouncilColumn } from '@/components/chat/council-sheet';
 import { GroupRoomActionSheet } from '@/components/chat/group-room-action-sheet';
 import { GroupRoomView } from '@/components/chat/group-room-view';
 import { NewAgentSheet } from '@/components/chat/new-agent-sheet';
@@ -52,6 +53,14 @@ import { resolvePullRefreshAction } from '@/lib/gateway/messages';
 import { openSessionById } from '@/lib/gateway/session-open-by-id';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { botChromeCombined } from '@/lib/gateway/bot-chrome';
+import {
+  COUNCIL_LEG_REPLY_TIMEOUT_MS,
+  botResultLine,
+  councilProgressCopy,
+  councilPromptIssue,
+  latestReplyText,
+} from '@/lib/gateway/council-view';
+import { planCouncil, type CouncilReply, type CouncilResultSlot } from '@/lib/gateway/council';
 import {
   botPacketFileName,
   buildBotPacket,
