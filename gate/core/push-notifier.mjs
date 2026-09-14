@@ -144,6 +144,12 @@ function messageFor(classified, event, row) {
       title: 'Approval required',
       body,
       data: classified.data,
+      // The category the app registers at startup (APPROVAL_CATEGORY_ID,
+      // src/lib/notifications/categories.ts) — it supplies the Approve / Deny
+      // buttons in the banner. The payload's kind/runId shape is what the
+      // action handler resolves on, so the buttons ride the same fold a
+      // local approval notice does. Only this arm carries a category.
+      categoryIdentifier: classified.data.kind,
       channelId: 'approvals',
       sound: 'default',
       priority: 'high',

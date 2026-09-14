@@ -93,6 +93,38 @@ test('classifies a cron final response as a routine', async () => {
   assert.equal(sent[0].channelId, 'routine-results');
 });
 
+test('the approval arm carries the category the app registered, so the banner shows buttons', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({ trigger: 'approval', runId: 'run-1' });
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].categoryIdentifier, 'approval');
+});
+
+test('only the approval arm carries a category', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({ trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'done' });
+  await notifier.notify({ trigger: 'run', runId: 'run-2' });
+  await notifier.notify({ trigger: 'final-response', sessionId: 'cron_job2_20260911_090000', botId: 'scout', text: 'done' });
+
+  assert.ok(sent.length >= 3);
+  for (const message of sent) {
+    assert.equal(message.categoryIdentifier, undefined);
+  }
+});
+
 test('removes a row when Expo reports DeviceNotRegistered', async () => {
   const removed = [];
   const tokens = {
