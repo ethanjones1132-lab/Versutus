@@ -5,6 +5,10 @@ import { BaseSheet, Button, Divider, ListRow, Skeleton, Text } from '@/component
 import { Spacing } from '@/constants/tokens';
 import { haptics } from '@/lib/haptics';
 import { describeBotDetail } from '@/lib/gateway/bot-detail';
+import {
+  botPacketManifest,
+  buildBotPacket,
+} from '@/lib/gateway/bot-packet';
 import { botSoulCopy, EMPTY_BOT_SOUL, type BotSoulState, type PublicBot } from '@/lib/gateway/bots';
 
 export type BotDetailSheetProps = {
@@ -35,6 +39,13 @@ export type BotDetailSheetProps = {
    * and none over a loaded soul.
    */
   onRetry?: () => void;
+  /**
+   * Exports this Bot as a handoff packet — the sheet composes the pure
+   * packet fold with the share seam it is given, so the packet code never
+   * touches the platform and the surface stays the offer. Rendered only
+   * with a handler.
+   */
+  onExportPacket?: () => void;
 };
 
 /**
@@ -44,7 +55,7 @@ export type BotDetailSheetProps = {
  * then act: message the agent, copy the id for host-side commands, or edit
  * what the Gate holds.
  */
-export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit, onRetry }: BotDetailSheetProps) {
+export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit, onRetry, onExportPacket }: BotDetailSheetProps) {
   if (!bot) return null;
   const detail = describeBotDetail(bot);
   const soulState = soul ?? EMPTY_BOT_SOUL;
@@ -150,6 +161,15 @@ export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit, onRetry 
           chevron={false}
           onPress={() => void handleCopyId()}
         />
+        {onExportPacket ? (
+          <ListRow
+            title="Export handoff packet"
+            subtitle={botPacketManifest(buildBotPacket(bot, soulState))}
+            icon={{ ios: 'square.and.arrow.up', android: 'share', web: 'share' }}
+            chevron={false}
+            onPress={onExportPacket}
+          />
+        ) : null}
         {onEdit && detail.editable ? (
           <ListRow
             title="Edit agent"

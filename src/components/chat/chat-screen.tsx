@@ -52,6 +52,11 @@ import { resolvePullRefreshAction } from '@/lib/gateway/messages';
 import { openSessionById } from '@/lib/gateway/session-open-by-id';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { botChromeCombined } from '@/lib/gateway/bot-chrome';
+import {
+  botPacketFileName,
+  buildBotPacket,
+} from '@/lib/gateway/bot-packet';
+import { shareBotPacketFile } from '@/lib/gateway/bot-packet-share';
 import { composerFocusApplies } from '@/lib/gateway/composer-focus';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
 import {
@@ -1752,6 +1757,19 @@ export function ChatScreen() {
         soul={detailBot && soulState.botId === detailBot.id ? soulState : undefined}
         onClose={() => setDetailBot(null)}
         onRetry={handleSoulRetry}
+        onExportPacket={
+          // The export half of the handoff packet: the sheet composes the
+          // pure packet fold with this share seam, so the platform modules
+          // never touch the packet's own code (the transcript-share pattern).
+          // Fire-and-forget — a refused share is a silent no-offer on web,
+          // never an error the chat has to surface.
+          detailBot
+            ? () => {
+                const packet = buildBotPacket(detailBot, soulState);
+                void shareBotPacketFile(botPacketFileName(detailBot), JSON.stringify(packet, null, 2));
+              }
+            : undefined
+        }
         onMessage={
           detailBot
             ? () => {
