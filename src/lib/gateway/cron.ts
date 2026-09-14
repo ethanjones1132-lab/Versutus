@@ -130,6 +130,9 @@ export function nextRunLabel(nextRunAt: string, now = Date.now()): string | null
   if (!Number.isFinite(at)) return null;
   const deltaMs = at - now;
   if (deltaMs <= 0) return 'due';
+  // Below the half-minute mark the minute read rounds to 0 — a job the
+  // gateway is about to fire cannot print the contradictory "in 0m".
+  if (Math.round(deltaMs / 60_000) < 1) return 'due';
   const minutes = Math.round(deltaMs / 60_000);
   if (minutes < 60) return `in ${minutes}m`;
   const hours = Math.round(minutes / 60);
