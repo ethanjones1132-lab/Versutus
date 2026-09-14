@@ -15,9 +15,14 @@ export const APPROVAL_AUDIT_ROW_CAP = 50;
 
 export type ApprovalVerdict = 'approve' | 'deny';
 
+/** Who wrote the verdict: the operator's finger, or the Bot's own policy. */
+export type ApprovalDecisionAuthor = 'human' | 'policy';
+
 /**
  * One resolved decision: the run it belongs to, the operator's verdict, and
- * the gateway it was resolved against (the store's own scope).
+ * the gateway it was resolved against (the store's own scope). Rows a
+ * policy pre-decided say so — `decidedBy: 'policy'` — and rows written
+ * before policies existed read as the human they were.
  */
 export type ApprovalAuditEntry = {
   gatewayId: string;
@@ -25,18 +30,22 @@ export type ApprovalAuditEntry = {
   prompt: string;
   verdict: ApprovalVerdict;
   decidedAt: number;
+  /** Absent on rows the operator decided, including every pre-policy row. */
+  decidedBy?: ApprovalDecisionAuthor;
 };
 
 type RawEntry = Record<string, unknown>;
 
 /** The entry as it is held on disk: the audited fields, gateway scope stripped. */
 function auditField(entry: ApprovalAuditEntry): RawEntry {
-  return {
+  const field: RawEntry = {
     runId: entry.runId,
     prompt: entry.prompt,
     verdict: entry.verdict,
     decidedAt: entry.decidedAt,
   };
+  if (entry.decidedBy === 'policy') field.decidedBy = 'policy';
+  return field;
 }
 
 function isAuditEntry(raw: unknown): raw is ApprovalAuditEntry {
@@ -47,7 +56,8 @@ function isAuditEntry(raw: unknown): raw is ApprovalAuditEntry {
     r.runId.length > 0 &&
     typeof r.prompt === 'string' &&
     typeof r.decidedAt === 'number' &&
-    (r.verdict === 'approve' || r.verdict === 'deny')
+    (r.verdict === 'approve' || r.verdict === 'deny') &&
+    (r.decidedBy === undefined || r.decidedBy === 'policy')
   );
 }
 

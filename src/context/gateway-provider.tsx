@@ -116,6 +116,10 @@ import {
   spendCapVerdict,
 } from '@/lib/settings/bot-spend-cap';
 import {
+  approvalPolicyVerdict,
+  loadBotApprovalPolicy,
+} from '@/lib/settings/bot-approval-policy';
+import {
   SESSION_SPEND_LIST_LIMIT,
   sessionSpendReadFromUnknown,
   totalUsage,
@@ -2494,6 +2498,39 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           },
           onApprovalRequired: (runId) => {
             patchRun(trackedId.current, { status: 'waiting-approval' });
+            // D1's policy half: the ONE pre-decision a waiting approval can
+            // get from this Bot's policy. A defer verdict pends exactly as
+            // today (the banner, the notification, the human path); an
+            // auto-approve answers the waiting promise ONCE through the
+            // resolver the human decision drives, so patchRun, the run API,
+            // and the audit row are byte-identical to a finger writing them
+            // — only the decision's author differs, and the audit names it.
+            const policyPrompt = prompt;
+            void (async () => {
+              try {
+                const policyBotId = selectedBotIdRef.current?.trim() || '';
+                const policy = policyBotId ? await loadBotApprovalPolicy(policyBotId) : null;
+                if (approvalPolicyVerdict(policy, policyPrompt).decision !== 'auto-approve') return;
+                // Record first (fire-and-forget, fire-and-forget like the
+                // human path) so a resolver race can never drop a record.
+                void recordApprovalDecision({
+                  gatewayId: activeGatewayRef.current?.id ?? '',
+                  runId,
+                  prompt: policyPrompt,
+                  verdict: 'approve',
+                  decidedAt: Date.now(),
+                  decidedBy: 'policy',
+                });
+                // Only still-pending approvals are answered: if the human
+                // already decided (or the run aborted), the resolver is
+                // gone and the policy does nothing.
+                const resolver = runApprovalResolverRef.current;
+                if (resolver) runApprovalResolverRef.current?.(true, undefined);
+              } catch {
+                // A policy read that fails defers — the banner stays, the
+                // human decides. Fail-closed (ADR 0008).
+              }
+            })();
             setPendingRunApproval({ runId, prompt });
             void notifyApprovalRequired(prompt, runId, activeGatewayRef.current?.id ?? '');
             onApprovalWaiting?.();

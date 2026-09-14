@@ -14,8 +14,12 @@ export const APPROVAL_AUDIT_EMPTY_COPY =
 
 export function approvalAuditRowCopy(row: ApprovalAuditEntry): string {
   const verdictWord = row.verdict === 'approve' ? 'Approved' : 'Denied';
+  // A policy-decided row says the policy wrote it — the audit's honest
+  // author line. Rows the operator decided (and every pre-policy row,
+  // which carries no `decidedBy`) read exactly as they always did.
+  const author = row.decidedBy === 'policy' ? ' by policy' : '';
   const prompt = row.prompt.trim();
-  return prompt ? `${verdictWord} · ${prompt}` : verdictWord;
+  return prompt ? `${verdictWord}${author} · ${prompt}` : `${verdictWord}${author}`;
 }
 
 export function approvalAuditHeadingCopy(summary: {
