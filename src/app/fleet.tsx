@@ -1,5 +1,7 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+
+import { useRouter } from 'expo-router';
 
 import { Screen, Text } from '@/components/ui';
 import {
@@ -12,6 +14,7 @@ import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { constellationConnectOffer } from '@/lib/fleet/connect-offer';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
+import type { PublicBot } from '@/lib/gateway/bots';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
 /**
@@ -33,9 +36,17 @@ import type { GatewayProfile } from '@/lib/gateway/types';
  * the map's own; a mid-handshake node shows its honest label and refuses a
  * re-tap; a failed `connectGateway` surfaces `humanizeGatewayError`'s copy at
  * the sheet, not a toast that vanishes.
+ *
+ * The Bot cluster beneath the live gateway draws the roster the provider
+ * already holds: it is loaded through the provider's own `listBots` once the
+ * gateway is connected (a saved cluster is an absent roster, never a cached
+ * guess), and a tap on a seat is the provider's own `openBot` then `/chat` —
+ * the same landed-open seam the deep-link router rides.
  */
 export default function FleetScreen() {
-  const { gateways, activeGateway, status, connectGateway } = useGateway();
+  const { gateways, activeGateway, status, connectGateway, listBots, openBot } =
+    useGateway();
+  const router = useRouter();
   const reachability = useGatewayReachability({ gateways, activeGateway, status });
   // The `now` the fold dates with is captured on mount, the way the spend
   // screen captures its bucket boundary — re-stamping every render would make
@@ -51,6 +62,10 @@ export default function FleetScreen() {
   const [sheetProfile, setSheetProfile] = useState<GatewayProfile | null>(null);
   const [handshakeTargetId, setHandshakeTargetId] = useState<string | null>(null);
   const [failureCauses, setFailureCauses] = useState<Record<string, string>>({});
+  // The live gateway's roster: the Bot cluster's seats. Loaded only on the
+  // connected edge, from the provider's own `listBots` — never cached, never
+  // guessed for a saved gateway.
+  const [roster, setRoster] = useState<PublicBot[]>([]);
   const onStageLayout = useCallback(
     (width: number, height: number) => {
       setCanvas((previous) =>
@@ -97,6 +112,31 @@ export default function FleetScreen() {
 
   const activeGatewayId = activeGateway?.id ?? null;
   const connected = status === 'connected' && activeGatewayId !== null;
+  // The roster is the connected gateway's own: a change of gateway or a drop
+  // of the connection empties the cluster before a stale roster can draw.
+  useEffect(() => {
+    if (!connected || !listBots || !activeGatewayId) return;
+    let cancelled = false;
+    listBots()
+      .then((bots) => {
+        if (!cancelled) setRoster(bots);
+      })
+      .catch(() => {
+        // The roster is the cluster's garnish, not a fetch the screen
+        // depends on — a refused list answers an empty cluster, honestly.
+        if (!cancelled) setRoster([]);
+      });
+    return () => {
+      cancelled = true;
+      // A drop of the connected edge empties the cluster here, on the path
+      // the state change itself names, never as a bare mid-render reset.
+      setRoster([]);
+    };
+  }, [connected, activeGatewayId, listBots]);
+
+  const navigateToChat = useCallback(() => {
+    router.navigate('/chat');
+  }, [router]);
   // The sheet's decision is the fold's own answer, never a re-derivation.
   const sheetOffer = sheetProfile
     ? constellationConnectOffer({
@@ -131,6 +171,10 @@ export default function FleetScreen() {
             reachability={reachability}
             activeGatewayId={activeGatewayId}
             status={status}
+            roster={roster}
+            connected={connected}
+            openBot={openBot}
+            navigateToChat={navigateToChat}
             onGatewayPress={handleGatewayPress}
           />
         </View>

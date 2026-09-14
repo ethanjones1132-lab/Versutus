@@ -124,4 +124,53 @@ describe('constellation route', () => {
     expect(sheet).toContain('ConstellationConnectOffer');
     expect(screen).toContain("from '@/lib/fleet/connect-offer'");
   });
+
+  it('the Bot cluster draws beneath the live node and taps ride the fold, not a re-derivation', () => {
+    // The fold answers the seats on the connected edge only — the model is
+    // already pinned twenty-cases deep; this pins the screen's wiring.
+    const roster: never[] = [];
+    const model = foldConstellation({
+      profiles: PROFILES,
+      reachability: {},
+      activeGatewayId: 'gw-live',
+      status: 'connected',
+      width: 400,
+      height: 400,
+      now: 0,
+      roster,
+    });
+    expect(model.bots).toEqual([]); // an empty roster answers an empty cluster
+    const withCluster = foldConstellation({
+      profiles: PROFILES,
+      reachability: {},
+      activeGatewayId: 'gw-live',
+      status: 'connected',
+      width: 400,
+      height: 400,
+      now: 0,
+      roster: [
+        { id: 'b1', displayName: 'Scout', routable: true },
+        { id: 'b2', displayName: 'Ledger', routable: false },
+      ] as never,
+    });
+    // Both Bots draw, routable or not — a drawn-but-unroutable Bot has its
+    // own words, so its tap has somewhere honest to answer.
+    expect(withCluster.bots.map((bot) => bot.routable)).toEqual([true, false]);
+    expect(withCluster.edges).toHaveLength(2);
+
+    // The drawer's wiring: seats come from the fold, taps go through
+    // fleetBotTapAction, the provider's own openBot and only a landed open
+    // routes.
+    const drawer = readFileSync(
+      join(__dirname, '..', 'src', 'components', 'fleet', 'fleet-constellation.tsx'),
+      'utf8',
+    );
+    expect(drawer).toContain("from '@/lib/fleet/bot-tap'");
+    expect(drawer).toContain('fleetBotTapAction(');
+    expect(drawer).toContain('if (opened) navigateToChat()');
+    const screen = readFileSync(join(__dirname, '..', 'src', 'app', 'fleet.tsx'), 'utf8');
+    expect(screen).toContain('listBots()');
+    expect(screen).toContain('openBot');
+    expect(screen).toContain("router.navigate('/chat')");
+  });
 });
