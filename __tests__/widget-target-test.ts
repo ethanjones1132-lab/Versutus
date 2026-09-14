@@ -360,13 +360,15 @@ describe('the provider writes the snapshot as run state changes', () => {
   const provider = () => readSource('src', 'context', 'gateway-provider.tsx');
   const writeEffect = (): string =>
     provider().match(
-      /useEffect\(\(\) => \{\n    void writeWidgetSnapshot\([\s\S]*?\n  \}, \[[^\]]*\]\);/,
+      /useEffect\(\(\) => \{\n    const snapshot = glanceableSnapshot\([\s\S]*?\n  \}, \[[^\]]*\]\);/,
     )?.[0] ?? '';
 
   test('the snapshot is item 4a fold, composed from the facts the provider holds', () => {
-    expect(provider()).toContain("import { glanceableSnapshot } from '@/lib/widget/snapshot';");
+    expect(provider()).toContain(
+      "import { glanceableSnapshot, snapshotSignature } from '@/lib/widget/snapshot';",
+    );
     expect(writeEffect()).toContain(
-      'glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs })',
+      'const snapshot = glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs });',
     );
   });
 
@@ -376,6 +378,21 @@ describe('the provider writes the snapshot as run state changes', () => {
     // nothing in the effect that ticks on its own.
     expect(effect).toContain('}, [activityRuns, routineJobs, status]);');
     expect(effect).not.toMatch(/setInterval|setTimeout/);
+  });
+
+  test('an equal snapshot is skipped, so settled runs stop paying for the native write', () => {
+    // The write point re-folds on every driver edge, but an `unresolved` row
+    // patched on a poll cycle folds to the same shape — and the OPT slice
+    // gates the write on the signature, the fold's own facts. The stamp
+    // staying put is what the skipped write is honest about: the widget's
+    // frozen snapshot still says WHEN it was written.
+    expect(provider()).toContain(
+      "import { glanceableSnapshot, snapshotSignature } from '@/lib/widget/snapshot';",
+    );
+    const effect = writeEffect();
+    expect(effect).toContain('const signature = snapshotSignature(snapshot);');
+    expect(effect).toContain('if (signature !== prevWidgetSignatureRef.current) {');
+    expect(effect).toContain('void writeWidgetSnapshot(snapshot);');
   });
 
   test('the seam is the only place the widget is touched', () => {

@@ -57,9 +57,12 @@ describe('the reload seam and the provider edge, as source', () => {
     );
     expect(provider()).toContain("import { widgetReloadReason } from '@/lib/widget/reload-reason';");
     // Reload rides the same effect and the same facts — one dependency list,
-    // still no poller of our own.
+    // still no poller of our own. The write itself is gated on the fold's own
+    // signature: an equal snapshot (a poll-cycle patch to a run row that moved
+    // no fact the widget renders) is skipped, and the equal-snapshot slice
+    // (__tests__/widget-target-test.ts) pins that shape.
     expect(provider()).toMatch(
-      /void writeWidgetSnapshot\(\s*glanceableSnapshot\([\s\S]*?\n  \}, \[activityRuns, routineJobs, status\]\);/,
+      /const snapshot = glanceableSnapshot\(\{ status, runs: activityRuns, routines: routineJobs \}\);\s*\n\s*const signature = snapshotSignature\(snapshot\);[\s\S]*?\n  \}, \[activityRuns, routineJobs, status\]\);/,
     );
     // The flip is what gates the reload, not the write: a result landing with
     // the status unchanged must not reload.

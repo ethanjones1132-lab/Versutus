@@ -51,6 +51,29 @@ export type GlanceableSnapshot = {
   writtenAt: number;
 };
 
+/**
+ * A cheap equality key over the snapshot's FACTS — everything but `writtenAt`.
+ *
+ * The write point (gateway-provider.tsx) re-folds the snapshot on every change
+ * to the facts it watches, but poll cycles and bookkeeping patches routinely
+ * change a run row without moving any fact a widget renders. Composing a
+ * signature here — not in the provider — keeps the definition of "the facts
+ * the widget renders" beside the fold that produces them: if a fact is added
+ * to `GlanceableSnapshot`, its signature belongs here, not in a caller's
+ * private list. `writtenAt` is excluded deliberately: it moves on every fold,
+ * and the snapshot already says WHEN it was written — that stamp staying put
+ * is exactly what a skipped write is honest about.
+ */
+export function snapshotSignature(snapshot: GlanceableSnapshot): string {
+  return JSON.stringify([
+    snapshot.status,
+    snapshot.runsInFlight,
+    snapshot.approvalsPending,
+    snapshot.overdueRoutines,
+    snapshot.lastResult,
+  ]);
+}
+
 /** What the app holds about a read: its connection, its runs, its routines. */
 export type GlanceableFacts = {
   status: ConnectionStatus;

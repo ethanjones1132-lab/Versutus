@@ -1,4 +1,4 @@
-import { glanceableSnapshot } from '@/lib/widget/snapshot';
+import { glanceableSnapshot, snapshotSignature } from '@/lib/widget/snapshot';
 import { glanceableWidgetLines } from '@/lib/widget/widget-target';
 import type { CronJob } from '@/lib/gateway/cron';
 import type { ActivityRun } from '@/lib/gateway/runs';
@@ -212,6 +212,91 @@ describe('glanceableSnapshot', () => {
     const snapshot = glanceableSnapshot({ status: 'connected', runs: [], routines: [] }, NOW - 5_000);
 
     expect(snapshot.writtenAt).toBe(NOW - 5_000);
+  });
+});
+
+describe('snapshotSignature', () => {
+  test('furniture-only drift between two folds carries the same signature', () => {
+    // The write point re-folds on every poll-cycle patch to a run row or a
+    // routine read; only facts the widget renders are news. A different
+    // `writtenAt`, a renamed routine, a patched prompt and extra run events
+    // move none of them.
+    const earlier = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [run({ status: 'unresolved', finishedAt: undefined, summary: undefined })],
+        routines: [job()],
+      },
+      NOW,
+    );
+    const later = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [
+          {
+            ...run({ status: 'unresolved', finishedAt: undefined, summary: undefined }),
+            prompt: 'a renamed prompt the poll patched in',
+            events: [{ type: 'run.completed', preview: 'a preview the poll appended' }],
+          },
+        ],
+        routines: [job({ title: 'a renamed routine' })],
+      },
+      NOW + 40_000,
+    );
+
+    expect(snapshotSignature(later)).toBe(snapshotSignature(earlier));
+  });
+
+  test('each fact the widget renders moves the signature: status, in-flight, approvals, overdue, result', () => {
+    const base = glanceableSnapshot({ status: 'connected', runs: [], routines: [] }, NOW);
+
+    expect(snapshotSignature(base)).not.toBe(
+      snapshotSignature(glanceableSnapshot({ status: 'connecting', runs: [], routines: [] }, NOW)),
+    );
+    expect(snapshotSignature(base)).not.toBe(
+      snapshotSignature(
+        glanceableSnapshot(
+          {
+            status: 'connected',
+            runs: [run({ id: 'live', status: 'running', finishedAt: undefined, summary: undefined })],
+            routines: [],
+          },
+          NOW,
+        ),
+      ),
+    );
+    expect(snapshotSignature(base)).not.toBe(
+      snapshotSignature(
+        glanceableSnapshot(
+          {
+            status: 'connected',
+            runs: [run({ status: 'waiting-approval', finishedAt: undefined, summary: undefined })],
+            routines: [],
+          },
+          NOW,
+        ),
+      ),
+    );
+    expect(snapshotSignature(base)).not.toBe(
+      snapshotSignature(
+        glanceableSnapshot(
+          {
+            status: 'connected',
+            runs: [],
+            routines: [job({ nextRunAt: new Date(NOW - 60_000).toISOString() })],
+          },
+          NOW,
+        ),
+      ),
+    );
+    expect(snapshotSignature(base)).not.toBe(
+      snapshotSignature(
+        glanceableSnapshot(
+          { status: 'connected', runs: [run({ summary: 'wrote 3 files' })], routines: [] },
+          NOW,
+        ),
+      ),
+    );
   });
 });
 

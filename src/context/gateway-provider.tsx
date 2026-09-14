@@ -183,7 +183,7 @@ import {
   updateTranscript,
 } from '@/lib/gateway/transcript';
 import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
-import { glanceableSnapshot } from '@/lib/widget/snapshot';
+import { glanceableSnapshot, snapshotSignature } from '@/lib/widget/snapshot';
 import { reloadWidgetSnapshot, writeWidgetSnapshot } from '@/lib/widget/widget-device';
 import { widgetReloadReason } from '@/lib/widget/reload-reason';
 export type ConnectionPhase =
@@ -3464,10 +3464,22 @@ const response = await executeGatewaySlashCommand(trimmed, {
    * nothing.
    */
   const prevWidgetStatusRef = useRef<ConnectionStatus | null>(null);
+  /**
+   * The signature of the last snapshot actually handed to the widget. A change
+   * to a watched fact is not necessarily news the widget renders — an
+   * `unresolved` run row patched on a poll cycle folds to the same shape — so
+   * the write is gated on the signature: an equal snapshot is skipped, and the
+   * one the widget already holds (with its own `writtenAt` stamp) stays the
+   * truth it says it is.
+   */
+  const prevWidgetSignatureRef = useRef<string | null>(null);
   useEffect(() => {
-    void writeWidgetSnapshot(
-      glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs }),
-    );
+    const snapshot = glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs });
+    const signature = snapshotSignature(snapshot);
+    if (signature !== prevWidgetSignatureRef.current) {
+      void writeWidgetSnapshot(snapshot);
+      prevWidgetSignatureRef.current = signature;
+    }
     if (widgetReloadReason(status, prevWidgetStatusRef.current) === 'snapshot') {
       void reloadWidgetSnapshot();
     }
