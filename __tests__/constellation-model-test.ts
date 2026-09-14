@@ -11,6 +11,7 @@ import {
   CONSTELLATION_RING_RADIUS,
 } from '@/lib/fleet/constellation-model';
 import type { GatewayReachability } from '@/lib/gateway/dashboard';
+import type { PublicBot } from '@/lib/gateway/bots';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
 function gateway(id: string): GatewayProfile {
@@ -213,5 +214,103 @@ describe('foldConstellation', () => {
       expect(broken.gateways).toEqual([]);
       expect(broken.ring.radius).toBe(0);
     }
+  });
+});
+
+describe('foldConstellation — Bots clustered beneath their gateway', () => {
+  const size = { width: 800, height: 600 };
+
+  function bot(id: string, displayName = `Bot ${id}`, routable = true): PublicBot {
+    return { id, displayName, routable };
+  }
+
+  function fold(roster: PublicBot[], overrides: Partial<Parameters<typeof foldConstellation>[0]> = {}) {
+    return foldConstellation({
+      profiles: [gateway('a'), gateway('b')],
+      reachability: {},
+      activeGatewayId: 'a',
+      status: 'connected',
+      width: size.width,
+      height: size.height,
+      now: 200_000,
+      roster,
+      ...overrides,
+    });
+  }
+
+  test('the live gateway gains Bot nodes clustered beneath it, one edge each', () => {
+    const model = fold([bot('b1'), bot('b2'), bot('b3')]);
+
+    expect(model.bots.map((node) => node.botId)).toEqual(['b1', 'b2', 'b3']);
+    expect(model.bots.map((node) => node.botName)).toEqual(['Bot b1', 'Bot b2', 'Bot b3']);
+    // Every Bot belongs to the live gateway and carries its own edge back to
+    // it — the renderer draws the cluster from the model, not re-derived.
+    for (const node of model.bots) {
+      expect(node.gatewayId).toBe('a');
+      expect(node.routable).toBe(true);
+    }
+    expect(model.edges).toEqual(
+      model.bots.map((node) => ({ kind: 'gateway-bot', gatewayId: 'a', botId: node.botId })),
+    );
+    // The live node's own position is untouched by the cluster folding.
+    const live = model.gateways.find((node) => node.gatewayId === 'a');
+    expect(model.bots).not.toContainEqual(live);
+  });
+
+  test('the cluster sits BENEATH the gateway node, deterministically, and never collides', () => {
+    const once = fold([bot('b1'), bot('b2'), bot('b3'), bot('b4')]);
+    const again = fold([bot('b1'), bot('b2'), bot('b3'), bot('b4')]);
+    expect(again.bots).toEqual(once.bots);
+
+    const live = once.gateways.find((node) => node.gatewayId === 'a')!;
+    // All of them below the gateway node's own seat, spread on a small arc
+    // around straight-down — a cluster, not a scatter.
+    for (const node of once.bots) {
+      expect(node.y).toBeGreaterThan(live.y);
+      expect(Math.abs((node.x - live.x) * size.width)).toBeLessThanOrEqual(
+        (0.3 / 2) * size.width,
+      );
+    }
+    // No two Bots share a seat.
+    for (let i = 1; i < once.bots.length; i += 1) {
+      expect([once.bots[i - 1].x, once.bots[i - 1].y]).not.toEqual([once.bots[i].x, once.bots[i].y]);
+    }
+  });
+
+  test('a Bot with routable: false is still drawn, but flagged', () => {
+    const model = fold([bot('b1', 'Bot b1', false), bot('b2')]);
+    const flagged = model.bots.find((node) => node.botId === 'b1');
+    expect(flagged?.routable).toBe(false);
+    expect(model.bots.find((node) => node.botId === 'b2')?.routable).toBe(true);
+  });
+
+  test('the one gateway the roster belongs to is the one whose node gains the Bots', () => {
+    // The roster arg IS the connected gateway's own `listBots` answer, so the
+    // cluster hangs under whichever gateway is live — 'b' here — and never
+    // under a saved node. A saved node's (unknown) roster is never guessed.
+    const model = fold([bot('b1')], { activeGatewayId: 'b', status: 'connected' });
+    expect(model.bots.map((node) => node.botId)).toEqual(['b1']);
+    expect(model.bots[0].gatewayId).toBe('b');
+    expect(model.edges).toEqual([{ kind: 'gateway-bot', gatewayId: 'b', botId: 'b1' }]);
+    // A saved node (gateway 'a') gains no Bot nodes.
+    expect(model.bots.some((node) => node.gatewayId === 'a')).toBe(false);
+
+    // No live gateway at all — nowhere to hang the cluster, nothing drawn.
+    const noLive = fold([bot('b1')], { activeGatewayId: null, status: 'disconnected' });
+    expect(noLive.bots).toEqual([]);
+    expect(noLive.edges).toEqual([]);
+  });
+
+  test('an empty roster leaves the gateway node alone and dignified', () => {
+    const model = fold([]);
+    expect(model.bots).toEqual([]);
+    expect(model.edges).toEqual([]);
+    expect(model.gateways).toHaveLength(2);
+  });
+
+  test('a roster handed in with no live gateway to hang it on draws nothing', () => {
+    const model = fold([bot('b1')], { activeGatewayId: null, status: 'disconnected' });
+    expect(model.bots).toEqual([]);
+    expect(model.edges).toEqual([]);
   });
 });
