@@ -370,15 +370,29 @@ describe('reduceHandsfreeSession — failure and termination', () => {
     expect(step(sending, { type: 'send-offline' }).state.reason).toBe('send-failed');
   });
 
-  test('a reply that fails before speaking ends as send-failed', () => {
+  test('a reply the model retracted before speaking reopens listening, never ends the call', () => {
     const waiting = reduce(listening(), [
       { type: 'final', text: 'hi' },
       { type: 'grace-elapsed' },
       { type: 'reply-appeared' },
     ]).state;
     const out = step(waiting, { type: 'reply-failed' });
-    expect(out.state.phase).toBe('ending');
-    expect(out.state.reason).toBe('send-failed');
+    expect(out.state.phase).toBe('listening');
+    // No speech started to stop, so the shape matches the speaking case minus
+    // stop-speaking; recognizing must reopen for the next turn.
+    expect(out.effects).toEqual([{ kind: 'stop-speaking' }, { kind: 'start-listening' }]);
+  });
+
+  test('a retracted waiting reply can carry on: the next final sends again instead of a dead call', () => {
+    const waiting = reduce(listening(), [
+      { type: 'final', text: 'hi' },
+      { type: 'grace-elapsed' },
+      { type: 'reply-appeared' },
+      { type: 'reply-failed' },
+    ]).state;
+    expect(waiting.phase).toBe('listening');
+    const reconfirmed = step(waiting, { type: 'final', text: 'again' });
+    expect(reconfirmed.state.phase).toBe('confirming');
   });
 
   test('a reply retracted mid-speech stops TTS and reopens listening', () => {
