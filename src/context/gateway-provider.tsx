@@ -100,9 +100,10 @@ import {
   probeHighPriorityCandidates,
 } from '@/lib/gateway/probe';
 import {
+  executeGatewaySlashCommand,
+  isRunSlashLine,
   isSlashCommandInput,
   shouldPassthroughSkillSlash,
-  executeGatewaySlashCommand,
 } from '@/lib/gateway/slash-commands';
 import {
   incrementWorkflowRunCount,
@@ -139,6 +140,7 @@ import { recordApprovalDecision } from '@/lib/gateway/approval-audit';
 import { routineJobsFromList } from '@/lib/gateway/routines';
 import {
   durableQueueRows,
+  isRunQueuedRow,
   loadActivityRuns,
   loadOfflineQueue,
   resurfaceOfflineQueue,
@@ -146,6 +148,7 @@ import {
   saveOfflineQueue,
   type OfflineQueueDestination,
   type OfflineQueueItem,
+  type QueuedRunShape,
 } from '@/lib/gateway/session-persistence';
 import { retirementTookActiveGateway, syncChildProfiles } from '@/lib/gateway/child-sync';
 import { checkTlsFingerprintTofu } from '@/lib/gateway/security';
@@ -2080,12 +2083,28 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * text: without it the flush would hand the operator's words to whichever
    * conversation the client holds when the connection returns. A composer line
    * names none, and a row with no destination flushes exactly as it always did.
+   *
+   * D8: a line that begins a run parks RUN-shaped, so the flush re-sends it
+   * through the run dispatch and the result arrives through the notification
+   * path a live run already settles — "the gateway is asleep" stops being an
+   * error and becomes a deferred start. The shape never comes from the TEXT
+   * at flush time (a chat line that begins `/run` is still chat); it is
+   * decided here, once, at the moment the row is written.
    */
   const queueOfflineInput = useCallback(
     (text: string, destination?: OfflineQueueDestination) => {
       const gatewayId = activeGatewayRef.current?.id ?? '';
       const id = appendLocalMessage('user', text, undefined, true);
-      offlineQueueRef.current.push({ id, text, gatewayId, createdAt: Date.now(), ...destination });
+      const item: OfflineQueueItem = { id, text, gatewayId, createdAt: Date.now(), ...destination };
+      // D8: the run shape rides the row ONLY when the parked words were a
+      // run line — the Bot scope the composer held, so the flush re-runs it
+      // exactly as it would have started live. A plain line (including a
+      // reply that merely begins with `/run` as chat) carries no shape, and
+      // the flag is ABSENT rather than false so no reader can mistake it.
+      if (isRunSlashLine(text)) {
+        item.run = { bot: selectedBotIdRef.current ?? undefined };
+      }
+      offlineQueueRef.current.push(item);
       persistOfflineQueue();
       setLastError(null);
     },
@@ -3768,6 +3787,58 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     }
   }, [activeGateway, reloadHistoryFor]);
 
+  const runTaskRef = useRef(runTask);
+  useEffect(() => {
+    runTaskRef.current = runTask;
+  }, [runTask]);
+
+  /**
+   * Re-send a run-shaped outbox row once the gateway is back (D8 slice 1).
+   * The run rides `runTask` — the same drive `runTaskCommand` uses — so the
+   * run row, the verdict fold, the Activity entry and `notifyRunComplete`'s
+   * settle are the live path's own behavior, never a second pipeline. The
+   * prompt is the row's text verbatim, Bot destination included; a throw
+   * lands in chat exactly as the live path's failures do, and the row has
+   * already left the queue, so a lost send is a lost run — the same honesty
+   * a live `/run` has always had.
+   */
+  const sendRunQueued = useCallback(
+    async (text: string, messageId: string, run?: QueuedRunShape) => {
+      void run;
+      const message = appendLocalMessage('assistant', `Running /run…`, {
+        input: text.trim(),
+        title: '/run',
+        status: 'running',
+        ephemeral: true,
+      });
+      try {
+        if (isSlashCommandInput(text.trim())) {
+          await executeGatewaySlashCommand(text.trim(), {
+            runTask: (prompt, onEvent) => runTaskRef.current(prompt, onEvent),
+            runAgentCommand: (command, opts) => runAgentCommand(command, opts),
+            hello: activeHello,
+            currentModel: activeGatewayRef.current?.model,
+            gatewayRequest,
+          });
+        } else {
+          await runTaskRef.current(text.trim());
+        }
+        updateLocalMessage(message, {
+          text: 'Queued run started.',
+          command: { input: text.trim(), title: '/run', status: 'complete', ephemeral: true },
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        updateLocalMessage(message, {
+          text: `Queued run failed: ${detail}`,
+          command: { input: text.trim(), title: '/run', status: 'error', ephemeral: true },
+        });
+        throw error;
+      }
+    },
+    [activeHello, appendLocalMessage, gatewayRequest, runAgentCommand, updateLocalMessage],
+  );
+
   /**
    * Flush the durable outbox once the connection is back.
    *
@@ -3836,7 +3907,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             // asked to follow — the request the live reply path makes.
             requestSurface({ kind: 'bot', botId: item.botId });
           }
-          await sendChatInput(item.text, { fromQueue: true, messageId: item.id });
+          // A run-shaped row re-sends through the run dispatch, not chat
+          // (D8): the parked line is a RUN, and its result arrives through
+          // notifyRunComplete as a live run's does. `item.run` carries the
+          // destination the composer held — the run dispatch already reads
+          // the app's selected Bot scope, so no re-routing here.
+          if (isRunQueuedRow(item)) {
+            await sendRunQueued(item.text, item.id, item.run);
+          } else {
+            await sendChatInput(item.text, { fromQueue: true, messageId: item.id });
+          }
           // This row has moved: it is off the queue and off the copy on disk,
           // and the write is what says so before the next send begins.
           unsent.delete(item);
@@ -3857,7 +3937,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         flushingOwedRef.current = null;
       }
     })();
-  }, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, sendChatInput, status]);
+  }, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, sendChatInput, sendRunQueued, status]);
 
   const createNewSession = useCallback(async (title?: string) => {
     const client = clientRef.current;

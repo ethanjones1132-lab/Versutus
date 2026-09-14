@@ -243,9 +243,9 @@ describe('the flush opens the Bot Chat a queued reply was for, before it sends',
     expect(src).not.toContain('saveOfflineQueue');
   });
 
-  test('the effect re-runs when the Bot path changes, so the open is the live one', () => {
+  test('the effect re-runs when the Bot path or the run fold changes, so the opens are live', () => {
     expect(provider()).toContain(
-      '}, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, sendChatInput, status]);',
+      '}, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, sendChatInput, sendRunQueued, status]);',
     );
   });
 });
@@ -323,13 +323,18 @@ describe('the send path hands a destination to the queue', () => {
     expect(src).toContain('queueOfflineInput(trimmed, { botId: options?.botId, sessionId: options?.sessionId });');
   });
 
-  test('the row is written with the destination it was handed', () => {
+  test('the row is written with the destination it was handed, plus the run shape only for a run line', () => {
     const src = between(provider(), 'const queueOfflineInput = useCallback', 'const updateLocalMessage');
 
     expect(src).toContain('(text: string, destination?: OfflineQueueDestination)');
     expect(src).toContain(
-      'offlineQueueRef.current.push({ id, text, gatewayId, createdAt: Date.now(), ...destination });',
+      'const item: OfflineQueueItem = { id, text, gatewayId, createdAt: Date.now(), ...destination };',
     );
+    // The D8 shape rides the row only when the parked words were a run line —
+    // decided once here, never re-derived from the text at flush time.
+    expect(src).toContain('if (isRunSlashLine(text)) {');
+    expect(src).toContain('item.run = { bot: selectedBotIdRef.current ?? undefined };');
+    expect(src).toContain('offlineQueueRef.current.push(item);');
   });
 });
 

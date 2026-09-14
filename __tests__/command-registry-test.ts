@@ -1,5 +1,5 @@
 import { GATEWAY_COMMANDS, type GatewayCommand } from '@/lib/gateway/dashboard';
-import { getSlashCommandSuggestions, isSlashCommandInput } from '@/lib/gateway/slash-commands';
+import { getSlashCommandSuggestions, isRunSlashLine, isSlashCommandInput } from '@/lib/gateway/slash-commands';
 
 /**
  * Registry invariants for the slash-command surface.
@@ -109,6 +109,21 @@ describe('isSlashCommandInput', () => {
     ['not /health', false],
   ])('%s → %s', (input, expected) => {
     expect(isSlashCommandInput(input as string)).toBe(expected);
+  });
+});
+
+describe('isRunSlashLine — the run shape is decided from the line at queue time (D8)', () => {
+  test.each([
+    ['/run sweep the garage', true],
+    ['/run', true],
+    ['  /run later', true],
+    ['/running total', false],
+    ['/run:foo', false],
+    ['reply about /run', false],
+    ['', false],
+    ['run the wash', false],
+  ])('%s → %s', (input, expected) => {
+    expect(isRunSlashLine(input as string)).toBe(expected);
   });
 });
 
