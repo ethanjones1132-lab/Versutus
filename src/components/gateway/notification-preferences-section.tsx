@@ -13,10 +13,10 @@ import {
 } from '@/lib/notifications/push-preferences';
 
 /**
- * The master toggle plus the rich-body opt-in (A6 / A8, the first slices of
- * the preferences pane — quiet hours and the per-Bot filters are their own).
- * Shown only when the gateway's manifest advertises the preferences methods:
- * the capability-gated pattern, the same rule `RpcMethodsSection` reads the
+ * The master toggle, the rich-body opt-in and the per-Bot allowlist (A6 / A8,
+ * the preferences pane — quiet hours remains its own slice). Shown only when
+ * the gateway's manifest advertises the preferences methods: the
+ * capability-gated pattern, the same rule `RpcMethodsSection` reads the
  * already-held `rpcMethods` array by.
  *
  * The switch paints the state the Gate answered, never a flag of its own:
@@ -26,10 +26,11 @@ import {
  * did not take the change while the read is retried on the way back.
  */
 export function NotificationPreferencesSection() {
-  const { status, activeGateway, capabilitySnapshot, gatewayRequest } = useGateway();
+  const { status, activeGateway, capabilitySnapshot, gatewayRequest, listBots } = useGateway();
   const tokens = useTokens();
   const [preferences, setPreferences] = useState<PushPreferences | null>(null);
   const [unread, setUnread] = useState(false);
+  const [botIds, setBotIds] = useState<string[] | null>(null);
 
   const gatewayId = activeGateway?.id;
   const advertised =
@@ -59,6 +60,25 @@ export function NotificationPreferencesSection() {
     };
   }, [advertised, gatewayId, gatewayRequest]);
 
+  // The per-Bot rows read the same roster the Bot roster screen holds, one
+  // listBots call per gateway change — no polling, no cache beyond the read.
+  // A roster that cannot be read paints no rows at all (the allowlist stays
+  // invisible beside an unread inventory rather than guessing its shape); an
+  // EMPTY-but-read roster is the host telling the truth: no Bots, no rows.
+  useEffect(() => {
+    let cancelled = false;
+    void listBots()
+      .then((bots) => {
+        if (!cancelled) setBotIds(bots.map((bot) => bot.id));
+      })
+      .catch(() => {
+        if (!cancelled) setBotIds(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gatewayId, listBots]);
+
   const handleToggle = useCallback((field: 'enabled' | 'richBody', next: boolean) => {
     setPreferences((current) => (current ? { ...current, [field]: next } : current));
     void (async () => {
@@ -74,6 +94,41 @@ export function NotificationPreferencesSection() {
       }
     })();
   }, [gatewayRequest]);
+
+  // One toggled Bot moves exactly its own name in the fold: absent fields
+  // (enabled, richBody, quietHours) are never sent, so unchecking every Bot
+  // still goes out as `botIds: []` — "push no Bots", never confused with
+  // "leave the allowlist as is".
+  const handleBotToggle = useCallback(
+    (botId: string, next: boolean) => {
+      setPreferences((current) => {
+        if (!current) return current;
+        const botIds = next
+          ? current.botIds.includes(botId)
+            ? current.botIds
+            : [...current.botIds, botId]
+          : current.botIds.filter((id) => id !== botId);
+        const updated = { ...current, botIds };
+        void (async () => {
+          const result = await setPushPreferences(
+            { rpcRequest: gatewayRequest },
+            { botIds },
+          );
+          // The same refused-patch rule the two switches above hold: snap to
+          // the Gate's answer, or to the unknown state on a failed read-back.
+          if (result.ok) {
+            setPreferences(result.preferences);
+            setUnread(false);
+          } else {
+            setPreferences(null);
+            setUnread(true);
+          }
+        })();
+        return updated;
+      });
+    },
+    [gatewayRequest],
+  );
 
   // The gate decides before anything renders: a gateway that advertises
   // nothing new paints nothing new, and no stale answer survives it.
@@ -119,6 +174,28 @@ export function NotificationPreferencesSection() {
             accessibilityLabel={PREFERENCES_RICH_BODY_LABEL}
             accessibilityState={{ checked: preferences.richBody }}
           />
+          {botIds !== null && botIds.length > 0 ? (
+            <View>
+              <Text variant="caption" color="secondary">
+                {PREFERENCES_BOTS_SUMMARY}
+              </Text>
+              {botIds.map((botId) => (
+                <View key={botId} style={styles.botRow}>
+                  <Text variant="body" style={styles.botName} numberOfLines={1}>
+                    {botId}
+                  </Text>
+                  <Switch
+                    value={preferences.botIds.includes(botId)}
+                    onValueChange={(next) => handleBotToggle(botId, next)}
+                    trackColor={{ true: tokens.accent, false: tokens.border }}
+                    thumbColor={tokens.textPrimary}
+                    accessibilityLabel={botAllowlistLabel(botId)}
+                    accessibilityState={{ checked: preferences.botIds.includes(botId) }}
+                  />
+                </View>
+              ))}
+            </View>
+          ) : null}
         </>
       )}
     </Card>
@@ -133,6 +210,13 @@ const PREFERENCES_RICH_BODY_LABEL = 'Rich message bodies';
 const PREFERENCES_RICH_BODY_SUMMARY =
   'Include what the reply or result said in the notification itself. By default a push names the event only — no prompt text, no result bodies.';
 
+const PREFERENCES_BOTS_SUMMARY =
+  'Push from each Bot. Off means this device hears nothing from that one; with every Bot off, no push names a Bot.';
+
+function botAllowlistLabel(botId: string): string {
+  return `${botId} — Allow push`;
+}
+
 const styles = StyleSheet.create({
   card: {
     gap: Spacing.two,
@@ -143,5 +227,14 @@ const styles = StyleSheet.create({
   eyebrow: {
     textTransform: 'uppercase',
     letterSpacing: 0.6,
+  },
+  botRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  botName: {
+    flexShrink: 1,
   },
 });
