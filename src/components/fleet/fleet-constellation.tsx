@@ -32,6 +32,8 @@ import {
 import { botChipRoutingTag } from '@/lib/gateway/bots';
 import { constellationStatusCopy, lastSeenCopy } from '@/lib/fleet/last-seen-label';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
+import type { ActivityRun } from '@/lib/gateway/runs';
+import type { CronJob } from '@/lib/gateway/cron';
 import type { PublicBot } from '@/lib/gateway/bots';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
@@ -93,6 +95,9 @@ export const ConstellationCanvas = memo(function ConstellationCanvas({
   activeGatewayId,
   status,
   roster,
+  activityRuns = [],
+  pendingApproval,
+  cronJobs = [],
   connected,
   openBot,
   navigateToChat,
@@ -108,6 +113,15 @@ export const ConstellationCanvas = memo(function ConstellationCanvas({
   status: Parameters<typeof foldConstellation>[0]['status'];
   /** The connected gateway's own roster, handed in — the cluster's seats. */
   roster?: PublicBot[];
+  /**
+   * The provider's own live runs and pending approval, handed straight
+   * through to the fold — the pulse and the waiting-approval draw read from
+   * model state the screen already holds, never a fetch of its own.
+   */
+  activityRuns?: ActivityRun[];
+  pendingApproval?: Parameters<typeof foldConstellation>[0]['pendingApproval'];
+  /** The gateway's cron jobs — one routine arc each. Absent means absent. */
+  cronJobs?: CronJob[];
   /** The cluster's gateway is connected — the tap's gate, handed by the screen. */
   connected?: boolean;
   /**
@@ -138,6 +152,9 @@ export const ConstellationCanvas = memo(function ConstellationCanvas({
     activeGatewayId,
     status,
     roster: roster ?? [],
+    activityRuns,
+    pendingApproval,
+    cronJobs,
     width,
     height,
     now,
@@ -213,12 +230,50 @@ export const ConstellationCanvas = memo(function ConstellationCanvas({
                 {lines.lastSeen}
               </Text>
             ) : null}
+            {(node.activityRuns ?? 0) > 0 ? (
+              <Text style={[styles.nodeStatus, { color: Palette.accentWarm }]} numberOfLines={1}>
+                {node.activityRuns} running
+              </Text>
+            ) : null}
+            {node.pendingApproval ? (
+              <Text style={[styles.nodeStatus, styles.alarmLine]} numberOfLines={1}>
+                Approval waiting
+              </Text>
+            ) : null}
             {tappable ? (
               <Text style={[styles.nodeStatus, { color: tone.label }]}>Connect…</Text>
             ) : null}
           </PressableScale>
         );
       })}
+      {liveNode && model.routines.length > 0 ? (
+        <View
+          pointerEvents="none"
+          style={[styles.routineLayer, { left: liveNode.x * width, top: (liveNode.y + 0.16) * height }]}>
+          {model.routines.map((arc, index) => {
+            const health = arc.verdict;
+            // The arc's own color: the verdict's tone, not the gateway's
+            // class — a `warn` routine never reads as healthy, an `error`
+            // one reads as the alarm it is.
+            const tone =
+              health.tone === 'ok'
+                ? styles.routineOk
+                : health.tone === 'error'
+                  ? styles.routineError
+                  : health.tone === 'warn'
+                    ? styles.routineWarn
+                    : styles.routineDim;
+            return (
+              <Text
+                key={`${arc.gatewayId}:${arc.botId ?? 'gateway'}:${index}`}
+                style={[styles.routineArc, tone]}
+                numberOfLines={1}>
+                {arc.botId ? health.label : health.label}
+              </Text>
+            );
+          })}
+        </View>
+      ) : null}
       {model.bots.map((bot) => {
         const waiting = (bot.awaitingApproval ?? 0) > 0;
         const pulsing = (bot.activityRuns ?? 0) > 0;
@@ -364,6 +419,41 @@ const styles = StyleSheet.create({
   nodeStatus: {
     fontSize: 11,
     textAlign: 'center',
+  },
+  alarmLine: {
+    color: Palette.statusDisconnected,
+    fontWeight: '600',
+  },
+  routineLayer: {
+    position: 'absolute',
+    zIndex: 3,
+    alignItems: 'flex-start',
+    gap: 2,
+    maxWidth: 90,
+  },
+  routineArc: {
+    fontSize: 10,
+    borderRadius: Radius.xs,
+    borderWidth: 1,
+    paddingHorizontal: Spacing.one,
+    alignSelf: 'flex-start',
+    backgroundColor: Palette.backgroundElevated,
+  },
+  routineOk: {
+    borderColor: Palette.statusConnectedMuted,
+    color: Palette.textSecondary,
+  },
+  routineWarn: {
+    borderColor: Palette.statusPairing,
+    color: Palette.textPrimary,
+  },
+  routineError: {
+    borderColor: Palette.statusDisconnected,
+    color: Palette.statusDisconnected,
+  },
+  routineDim: {
+    borderColor: Palette.borderSubtle,
+    color: Palette.textTertiary,
   },
 });
 

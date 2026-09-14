@@ -15,6 +15,7 @@ import { constellationConnectOffer } from '@/lib/fleet/connect-offer';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
 import type { PublicBot } from '@/lib/gateway/bots';
+import type { CronJob } from '@/lib/gateway/cron';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
 /**
@@ -42,9 +43,16 @@ import type { GatewayProfile } from '@/lib/gateway/types';
  * gateway is connected (a saved cluster is an absent roster, never a cached
  * guess), and a tap on a seat is the provider's own `openBot` then `/chat` —
  * the same landed-open seam the deep-link router rides.
+ *
+ * The map's two dynamic layers — the live-run pulse and the routine arcs —
+ * ride the same rule: the screen renders the fold with whatever provider
+ * facts it already holds (`activityRuns`, `pendingRunApproval`) and with the
+ * gateway's cron jobs once `cron.list` answers, never gating first paint on
+ * that round-trip. Before it answers the fold's default empty `cronJobs`
+ * maps to an empty routine layer — the arcs arrive, they are not awaited.
  */
 export default function FleetScreen() {
-  const { gateways, activeGateway, status, connectGateway, listBots, openBot } =
+  const { gateways, activeGateway, status, connectGateway, listBots, openBot, activityRuns, pendingRunApproval, cron } =
     useGateway();
   const router = useRouter();
   const reachability = useGatewayReachability({ gateways, activeGateway, status });
@@ -66,6 +74,12 @@ export default function FleetScreen() {
   // connected edge, from the provider's own `listBots` — never cached, never
   // guessed for a saved gateway.
   const [roster, setRoster] = useState<PublicBot[]>([]);
+  // The gateway's cron jobs — the routine arcs' source. Read on the connected
+  // edge only, exactly once per connection like the Activity tab's own read
+  // (a failed read answers empty and the arc layer stays absent, never a
+  // claim about jobs nobody listed), and never a gate on the map's first
+  // paint: nodes draw from provider state immediately, arcs join them.
+  const [cronJobs, setCronJobs] = useState<CronJob[]>([]);
   const onStageLayout = useCallback(
     (width: number, height: number) => {
       setCanvas((previous) =>
@@ -134,6 +148,23 @@ export default function FleetScreen() {
     };
   }, [connected, activeGatewayId, listBots]);
 
+  // The routine arcs' source, same edges as the roster: the connected edge
+  // starts the read, and the cleanup clears the layer on the drop/switch path
+  // before a stale job list can arc onto a gateway it did not come from.
+  useEffect(() => {
+    if (!connected || !activeGatewayId) return;
+    let cancelled = false;
+    const read =
+      cron.available ? cron.list().catch(() => [] as CronJob[]) : Promise.resolve<CronJob[]>([]);
+    void read.then((jobs) => {
+      if (!cancelled) setCronJobs(jobs);
+    });
+    return () => {
+      cancelled = true;
+      setCronJobs([]);
+    };
+  }, [connected, activeGatewayId, cron]);
+
   const navigateToChat = useCallback(() => {
     router.navigate('/chat');
   }, [router]);
@@ -172,6 +203,9 @@ export default function FleetScreen() {
             activeGatewayId={activeGatewayId}
             status={status}
             roster={roster}
+            activityRuns={activityRuns}
+            pendingApproval={pendingRunApproval}
+            cronJobs={cronJobs}
             connected={connected}
             openBot={openBot}
             navigateToChat={navigateToChat}

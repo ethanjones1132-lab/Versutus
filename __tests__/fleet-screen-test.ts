@@ -173,4 +173,97 @@ describe('constellation route', () => {
     expect(screen).toContain('openBot');
     expect(screen).toContain("router.navigate('/chat')");
   });
+
+  // ── The run pulse, the approval flag, and the routine arcs (iter-227) ──
+  //
+  // The fold answers three layers the shipped screen never fed — `activityRuns`,
+  // `pendingApproval`, `cronJobs` all defaulted to empty — so the map drew a
+  // settled-state-only world. These cases pin the screen's wiring of all three.
+  it('the screen hands the provider facts the fold pulses on', () => {
+    const screen = readFileSync(join(__dirname, '..', 'src', 'app', 'fleet.tsx'), 'utf8');
+    const drawer = readFileSync(
+      join(__dirname, '..', 'src', 'components', 'fleet', 'fleet-constellation.tsx'),
+      'utf8',
+    );
+    // The screen reads the three provider facts and threads them down.
+    expect(screen).toContain('activityRuns');
+    expect(screen).toContain('pendingRunApproval');
+    expect(screen).toContain('cron.list()');
+    // The drawer takes all three as props and passes each into the fold.
+    expect(drawer).toContain('activityRuns');
+    expect(drawer).toContain('pendingApproval');
+    expect(drawer).toContain('cronJobs');
+    expect(drawer).toMatch(/foldConstellation\(\{[\s\S]*?activityRuns/);
+    expect(drawer).toMatch(/foldConstellation\(\{[\s\S]*?pendingApproval/);
+    expect(drawer).toMatch(/foldConstellation\(\{[\s\S]*?cronJobs/);
+  });
+
+  it('the routine arc layer draws the cron verdicts the fold emits', () => {
+    const drawer = readFileSync(
+      join(__dirname, '..', 'src', 'components', 'fleet', 'fleet-constellation.tsx'),
+      'utf8',
+    );
+    // The drawer renders model.routines — arcs arrive only when cron.list
+    // answers; before that the fold maps an empty cronJobs array to an empty
+    // routines array, the honest absent layer.
+    expect(drawer).toContain('model.routines');
+    // One arc per job, with the Bot-owned jobs distinct from the gateway's own.
+    const model = foldConstellation({
+      profiles: PROFILES,
+      reachability: {},
+      activeGatewayId: 'gw-live',
+      status: 'connected',
+      width: 400,
+      height: 400,
+      now: 0,
+      cronJobs: [
+        {
+          id: 'j1',
+          title: 'Morning brief [bot:Scout]',
+          name: 'Morning brief [bot:Scout]',
+          lastStatus: 'ok',
+        },
+        {
+          id: 'j2',
+          title: 'Sweep',
+          name: 'Sweep',
+          paused: true,
+        },
+      ] as never,
+      roster: [{ id: 'b1', displayName: 'Scout', routable: true }] as never,
+    });
+    expect(model.routines).toHaveLength(2);
+    expect(model.routines[0].verdict.label).toBe('ok');
+    expect(model.routines[1].verdict.label).toBe('Paused');
+  });
+
+  it('a run pulse and a waiting approval draw on the settled-state map without blocking first paint', () => {
+    // The pulse is pure fold output — nothing about it can gate the map:
+    // nodes render with whatever runs the provider already holds, and cron
+    // arcs join them when the list answers. Pin the two fold shapes the
+    // drawer must render distinctly.
+    const runs = [
+      { id: 'r1', status: 'running', botId: 'b1' },
+      { id: 'r2', status: 'running' },
+      { id: 'r3', status: 'complete', botId: 'b1' },
+    ];
+    const model = foldConstellation({
+      profiles: PROFILES,
+      reachability: {},
+      activeGatewayId: 'gw-live',
+      status: 'connected',
+      width: 400,
+      height: 400,
+      now: 0,
+      roster: [{ id: 'b1', displayName: 'Scout', routable: true }] as never,
+      activityRuns: runs as never,
+      pendingApproval: { runId: 'r4', prompt: 'Deploy the thing' },
+    });
+    // The attributed live run pulses the Bot seat; the unattributed one
+    // pulses the gateway; the settled run pulses nothing.
+    expect(model.bots[0].activityRuns).toBe(1);
+    expect(model.gateways[0].activityRuns).toBe(1);
+    // The pending approval hangs on the connected gateway's node.
+    expect(model.gateways[0].pendingApproval).toEqual({ runId: 'r4', prompt: 'Deploy the thing' });
+  });
 });
