@@ -176,23 +176,35 @@ export function freshnessLabel(lastPolledAt: number | null, now = Date.now()): s
 }
 
 /** Jobs a running one first, then unhealthy, then by next run. */
-export function sortCronJobs(jobs: CronJob[], now = Date.now()): CronJob[] {
-  const rank = (job: CronJob) => {
+export function sortCronJobs(
+  jobs: CronJob[],
+  now = Date.now(),
+  describe: (job: CronJob) => CronHealth = describeCronHealth,
+): CronJob[] {
+  // The rank (and its next-run timestamp) is judged once per row up front:
+  // a comparator that re-derived both sides per comparison charged
+  // O(n log n) health verdicts for n well-known rows. The describer is
+  // injectable so tests can count the judgments; it defaults to the shipped
+  // verdict.
+  const rankOf = (job: CronJob) => {
     if (job.running) return 0;
-    const tone = describeCronHealth(job).tone;
+    const tone = describe(job).tone;
     if (tone === 'error') return 1;
     if (tone === 'warn') return 2;
     if (tone === 'off') return 4;
     return 3;
   };
-  return [...jobs].sort((a, b) => {
-    const byRank = rank(a) - rank(b);
-    if (byRank !== 0) return byRank;
-    const aNext = Date.parse(a.nextRunAt ?? '') || Number.POSITIVE_INFINITY;
-    const bNext = Date.parse(b.nextRunAt ?? '') || Number.POSITIVE_INFINITY;
-    if (aNext !== bNext) return aNext - bNext;
-    return a.title.localeCompare(b.title);
+  const keyed = jobs.map((job) => ({
+    job,
+    rank: rankOf(job),
+    next: Date.parse(job.nextRunAt ?? '') || Number.POSITIVE_INFINITY,
+  }));
+  keyed.sort((a, b) => {
+    if (a.rank !== b.rank) return a.rank - b.rank;
+    if (a.next !== b.next) return a.next - b.next;
+    return a.job.title.localeCompare(b.job.title);
   });
+  return keyed.map((entry) => entry.job);
 }
 
 /**
