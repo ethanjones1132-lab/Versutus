@@ -7,12 +7,15 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { keyValueStorage } from '@/lib/storage/key-value';
 import {
   loadBotSpendCap,
   setBotSpendCap,
   spendCapNoticeCopy,
+  spendCapRefusalCopy,
   spendCapVerdict,
   SPEND_CAP_LIMIT_COPY,
 } from '@/lib/settings/bot-spend-cap';
@@ -110,6 +113,40 @@ describe('spendCapNoticeCopy', () => {
 
   test('the honest-limit copy states client-side enforcement', () => {
     expect(SPEND_CAP_LIMIT_COPY).toContain('this app');
+  });
+});
+
+describe('spendCapRefusalCopy — the copy a run that does NOT start answers', () => {
+  test('a pause copy and a refusal copy are distinct statements', () => {
+    const verdict = { decision: 'pause-and-escalate', reason: 'cap-met', spendUsd: 7.26, capUsd: 5 } as const;
+    expect(spendCapRefusalCopy(verdict)).not.toBe(spendCapNoticeCopy(verdict));
+  });
+
+  test('the refusal says the run was never started, and never claims a decision is being waited for', () => {
+    const refusal = spendCapRefusalCopy({
+      decision: 'pause-and-escalate',
+      reason: 'cap-met',
+      spendUsd: 7.26,
+      capUsd: 5,
+    });
+    expect(refusal).toContain('was not started');
+    expect(refusal).not.toContain('paused');
+    expect(refusal).not.toContain('your decision');
+    expect(refusal).toContain('$7.26');
+    expect(refusal).toContain('$5.00');
+  });
+
+  test('the unreadable-spend refusal keeps the cap figure and the honest reading', () => {
+    const refusal = spendCapRefusalCopy({ decision: 'pause-and-escalate', reason: 'unreadable-spend', capUsd: 5 });
+    expect(refusal).toContain('was not started');
+    expect(refusal).toContain('$5.00');
+    expect(refusal).toContain('could not read');
+  });
+
+  test('the pre-run throw site in the provider answers the refusal copy, not the pause copy', () => {
+    const provider = readFileSync(join(__dirname, '..', 'src', 'context', 'gateway-provider.tsx'), 'utf8');
+    expect(provider).toContain('throw new Error(spendCapRefusalCopy(verdict))');
+    expect(provider).not.toContain('throw new Error(spendCapNoticeCopy(verdict))');
   });
 });
 

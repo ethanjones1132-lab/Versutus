@@ -39,6 +39,22 @@ export function spendCapNoticeCopy(verdict: SpendCapVerdict & { decision: 'pause
   return `Spend cap reached — $${verdict.spendUsd.toFixed(2)} of $${verdict.capUsd.toFixed(2)}. The run was paused for your decision.`;
 }
 
+/**
+ * The refusal-shaped copy: what the pre-run gate answers when it refuses a
+ * START. No run exists yet, so nothing was paused and no decision is
+ * waiting — the copy must say the run did not happen and the cap stands,
+ * keeping the figures and the honest client-side limit. The
+ * pause-and-escalate SHAPE that genuinely escalates a live, mid-flight run
+ * into the approval surface stays its own stop, and keeps the notice copy
+ * above.
+ */
+export function spendCapRefusalCopy(verdict: SpendCapVerdict & { decision: 'pause-and-escalate' }): string {
+  if (verdict.reason === 'unreadable-spend') {
+    return `Spend cap $${verdict.capUsd.toFixed(2)} in force — the run was not started: this device could not read the Bot's spend against it.`;
+  }
+  return `Spend cap reached — $${verdict.spendUsd.toFixed(2)} of $${verdict.capUsd.toFixed(2)}. The run was not started and the cap stands.`;
+}
+
 /** The honest-limit copy the cap's own surface must state (D5's own line). */
 export const SPEND_CAP_LIMIT_COPY =
   'Caps govern runs started from this app — there is no server-side quota.';

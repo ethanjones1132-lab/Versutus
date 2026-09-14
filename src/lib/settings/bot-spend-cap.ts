@@ -10,6 +10,7 @@ import { keyValueStorage } from '@/lib/storage/key-value';
 export {
   SPEND_CAP_LIMIT_COPY,
   spendCapNoticeCopy,
+  spendCapRefusalCopy,
   spendCapVerdict,
   type SpendCapVerdict,
 } from '@/lib/settings/spend-cap-verdict';

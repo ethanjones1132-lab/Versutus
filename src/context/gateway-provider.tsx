@@ -112,7 +112,7 @@ import {
 import { decideBusySlash } from '@/lib/gateway/busy-slash';
 import {
   loadBotSpendCap,
-  spendCapNoticeCopy,
+  spendCapRefusalCopy,
   spendCapVerdict,
 } from '@/lib/settings/bot-spend-cap';
 import {
@@ -2419,7 +2419,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           const spend = await readBotSpendForBot(capBotId).catch(() => null);
           const verdict = spendCapVerdict(cap, spend);
           if (verdict.decision === 'pause-and-escalate') {
-            throw new Error(spendCapNoticeCopy(verdict));
+            throw new Error(spendCapRefusalCopy(verdict));
           }
         }
       }
