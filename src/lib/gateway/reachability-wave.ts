@@ -1,4 +1,5 @@
 import type { GatewayProfile } from '@/lib/gateway/types';
+import type { GatewayReachability } from '@/lib/gateway/dashboard';
 
 /**
  * How many saved-gateway health probes may be in flight at once during one
@@ -8,6 +9,33 @@ import type { GatewayProfile } from '@/lib/gateway/types';
  * ceil(N / cap) rounds without opening N simultaneous sockets on the phone.
  */
 export const PROBE_WAVE_CONCURRENCY = 3;
+
+/**
+ * Mark a whole wave of due gateways `checking` in ONE record-replacing fold,
+ * the way the sequential loop did when it flipped each one just before
+ * probing it (state flips, and each record's own `checkedAt`/`latencyMs`/
+ * `error` ride through unchanged so a stale verdict's stamp and latency are
+ * never rewritten by the mere fact of re-probing). The wave's debounce ledger
+ * is stamped up front for the same reason: one state write covers the whole
+ * wave instead of one per due gateway.
+ */
+export function withWaveChecking(
+  previous: Record<string, GatewayReachability>,
+  due: readonly GatewayProfile[],
+): Record<string, GatewayReachability> {
+  const next = { ...previous };
+  for (const gateway of due) {
+    next[gateway.id] = {
+      gatewayId: gateway.id,
+      url: gateway.url,
+      state: 'checking',
+      checkedAt: previous[gateway.id]?.checkedAt,
+      latencyMs: previous[gateway.id]?.latencyMs,
+      error: previous[gateway.id]?.error,
+    };
+  }
+  return next;
+}
 
 /**
  * Decide which saved gateways a reachability wave owes a probe right now.

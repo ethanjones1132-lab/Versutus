@@ -2,7 +2,9 @@ import {
   PROBE_WAVE_CONCURRENCY,
   planProbeWave,
   runCapped,
+  withWaveChecking,
 } from '@/lib/gateway/reachability-wave';
+import type { GatewayReachability } from '@/lib/gateway/dashboard';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
 function gateway(id: string): GatewayProfile {
@@ -125,6 +127,79 @@ describe('runCapped', () => {
       throw new Error('probe exploded');
     });
     await expect(run).rejects.toThrow('probe exploded');
+  });
+});
+
+describe('withWaveChecking', () => {
+  const previous: Record<string, GatewayReachability> = {
+    settled: {
+      gatewayId: 'settled',
+      url: 'http://settled:8642',
+      state: 'reachable',
+      latencyMs: 42,
+      checkedAt: 5_000,
+    },
+    errored: {
+      gatewayId: 'errored',
+      url: 'http://errored:8642',
+      state: 'unreachable',
+      checkedAt: 3_000,
+      error: 'timed out',
+    },
+  };
+
+  test('every due gateway flips to checking in one fold', () => {
+    const due = [gateway('settled'), gateway('fresh')];
+    const next = withWaveChecking(previous, due);
+    expect(next.settled.state).toBe('checking');
+    expect(next.fresh.state).toBe('checking');
+    expect(next.fresh).toEqual({
+      gatewayId: 'fresh',
+      url: 'http://fresh:8642',
+      state: 'checking',
+      checkedAt: undefined,
+      latencyMs: undefined,
+      error: undefined,
+    });
+  });
+
+  test("each record's own stamp, latency and error ride through unchanged", () => {
+    const next = withWaveChecking(previous, [
+      gateway('settled'),
+      gateway('errored'),
+    ]);
+    expect(next.settled.checkedAt).toBe(5_000);
+    expect(next.settled.latencyMs).toBe(42);
+    expect(next.settled.error).toBeUndefined();
+    expect(next.errored.checkedAt).toBe(3_000);
+    expect(next.errored.error).toBe('timed out');
+  });
+
+  test('a gateway not in the wave is untouched and never invented', () => {
+    const next = withWaveChecking(previous, [gateway('fresh')]);
+    expect(next.settled).toBe(previous.settled);
+    expect(Object.keys(next).sort()).toEqual(['errored', 'fresh', 'settled']);
+  });
+
+  test('an empty due list answers the same records', () => {
+    expect(withWaveChecking(previous, [])).toEqual(previous);
+  });
+});
+
+describe('the reachability wave in the hook', () => {
+  // The optimization is the shape of the hook, not just the fold: the wave
+  // marks every due gateway checking in ONE state write, and the settle
+  // writes stay one-per-settle so early verdicts still paint early.
+  const fs = require('fs');
+  const path = require('path');
+  const hookSource = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'hooks', 'use-gateway-reachability.ts'),
+    'utf8',
+  );
+
+  test('the whole wave is marked checking by one write through the fold', () => {
+    expect(hookSource).toContain('setResults((previous) => withWaveChecking(previous, due))');
+    expect(hookSource).not.toContain("setReachability(gateway, 'checking')");
   });
 });
 

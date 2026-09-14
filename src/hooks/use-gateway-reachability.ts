@@ -5,10 +5,10 @@ import {
   PROBE_WAVE_CONCURRENCY,
   planProbeWave,
   runCapped,
+  withWaveChecking,
 } from '@/lib/gateway/reachability-wave';
 import type {
   GatewayReachability,
-  GatewayReachabilityState,
 } from '@/lib/gateway/dashboard';
 import type { ConnectionStatus, GatewayProfile } from '@/lib/gateway/types';
 
@@ -85,12 +85,16 @@ export function useGatewayReachability({
         ...Object.fromEntries(due.map((gateway) => [gateway.id, now])),
       };
 
+      // One record-replacing write marks the WHOLE wave checking — the
+      // debounce ledger above is stamped up front for the same reason —
+      // so a wave of N due gateways costs one extra render instead of N.
+      setResults((previous) => withWaveChecking(previous, due));
+
       // Probes ride a small concurrency cap instead of one-at-a-time: the
       // sequential wave held every row's verdict hostage to 1.8s x N of
       // lossy hops before it reached the end of the roster.
       await runCapped(due, PROBE_WAVE_CONCURRENCY, async (gateway) => {
         if (cancelled) return;
-        setReachability(gateway, 'checking');
 
         const result = await probeGatewayUrl(gateway.url, PROBE_TIMEOUT_MS);
         if (cancelled) return;
@@ -126,20 +130,6 @@ export function useGatewayReachability({
     return () => {
       cancelled = true;
     };
-
-    function setReachability(gateway: GatewayProfile, state: GatewayReachabilityState) {
-      setResults((previous) => ({
-        ...previous,
-        [gateway.id]: {
-          gatewayId: gateway.id,
-          url: gateway.url,
-          state,
-          checkedAt: previous[gateway.id]?.checkedAt,
-          latencyMs: previous[gateway.id]?.latencyMs,
-          error: previous[gateway.id]?.error,
-        },
-      }));
-    }
   }, [activeGateway?.id, gateways, signature, status]);
 
   return results;
