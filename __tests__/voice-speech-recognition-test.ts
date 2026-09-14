@@ -382,11 +382,12 @@ describe('the config plugin entry', () => {
     );
   });
 
-  test('the seven entries that were already there are untouched', () => {
+  test('the eight entries that were already there are untouched', () => {
     // The must-still of this slice: adding the recognizer may not move,
     // reorder or re-word any plugin the app already shipped.
-    expect(config().expo.plugins.slice(0, 7)).toEqual([
+    expect(config().expo.plugins.slice(0, 8)).toEqual([
       'expo-router',
+      './plugins/with-app-shortcuts.js',
       './plugins/with-openclaw-discovery.js',
       ['expo-build-properties', { android: { usesCleartextTraffic: true } }],
       [

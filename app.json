@@ -42,6 +42,7 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/with-app-shortcuts.js",
       "./plugins/with-openclaw-discovery.js",
       [
         "expo-build-properties",

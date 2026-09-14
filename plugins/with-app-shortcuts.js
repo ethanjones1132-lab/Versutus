@@ -17,7 +17,7 @@
 // The `bot` parameter is runtime data — there is no per-Bot action to install —
 // so one static declaration per platform is the whole shape.
 
-const { withInfoPlist, withAndroidManifest, withDangerousMod } =
+const { withInfoPlist, withAndroidManifest, withStringsXml, withDangerousMod } =
   require('@expo/config-plugins');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -27,6 +27,18 @@ const SCHEME = 'versutus';
 
 const SHORTCUT_TITLE = 'Talk to a Bot';
 const SHORTCUTS_METADATA = 'android.app.shortcuts';
+
+/**
+ * The two strings `shortcuts.xml` points its labels at. A shortcut's label
+ * entries are required string resources — a literal would fail the resource
+ * compile — so the plugin writes them into strings.xml by id and the XML's
+ * `@string/...` references name the same two ids below.
+ */
+const SHORTCUT_STRINGS = {
+  shortcut_talk_to_a_bot_short: 'Talk to a Bot',
+  shortcut_talk_to_a_bot_long: 'Open a Bot Chat',
+};
+const SHORTCUT_STRING_IDS = Object.keys(SHORTCUT_STRINGS);
 
 /**
  * The URL a donated shortcut carries, spelled with the exact parser alphabet:
@@ -73,6 +85,20 @@ function withAppShortcuts(config) {
         },
       ];
     }
+    return config;
+  });
+
+  // The labels `shortcuts.xml` references must exist in strings.xml, or the
+  // Android resource compile fails at build time — so the string resources go
+  // in first, by id (withStringsXml is the SDK-57 android strings mod).
+  config = withStringsXml(config, (config) => {
+    let string = config.modResults.string ?? [];
+    for (const id of SHORTCUT_STRING_IDS) {
+      if (!string.some((entry) => entry?.$?.name === id)) {
+        string = [...string, { _: SHORTCUT_STRINGS[id], $: { name: id } }];
+      }
+    }
+    config.modResults.string = string;
     return config;
   });
 
