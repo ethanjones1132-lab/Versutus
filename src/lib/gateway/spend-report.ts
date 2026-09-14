@@ -199,33 +199,67 @@ export type BotSpendReport = {
 /**
  * One scoped catalogue read per roster Bot, folded into rows.
  *
- * The reads run one at a time: each is the 200-row catalogue and the roster
- * is short, so a screen open is a few GETs, while a burst in parallel from a
- * phone is exactly the load `withGetSessionsRetry`'s backoff exists to
- * absorb.
+ * The reads run `READ_BOT_SPEND_CONCURRENCY` at a time rather than one at a
+ * time: sequential on a 10-Bot roster bound one screen open at N×RTT
+ * (measured ~823 ms at a realistic 80 ms/read), and a full-parallel burst
+ * from a phone is exactly the load `withGetSessionsRetry`'s backoff exists
+ * to absorb — two at once is the honesty-preserving middle.
  *
  * A Bot whose read is refused or unreachable is caught here and kept as a
  * named `{ ok: false }` read — dropping it would read as a Bot that spent
  * nothing. A read that answers with something that is not a session list is
  * the same failure, decided by `sessionSpendReadFromUnknown`.
  */
+/**
+ * How many per-Bot reads `readBotSpend` runs at once.
+ *
+ * On a 10-Bot roster the sequential fold bound one screen open at N×RTT
+ * (measured ~823 ms at a realistic 80 ms per read). Two at once is the
+ * honesty-preserving middle: the wall time drops toward ~N/2×RTT without a
+ * phone firing the full roster in parallel — exactly the load
+ * `withGetSessionsRetry`'s backoff exists to absorb.
+ */
+export const READ_BOT_SPEND_CONCURRENCY = 2;
+
+/**
+ * Run each roster Bot's read through a `READ_BOT_SPEND_CONCURRENCY`-wide
+ * worker pool, preserving roster order in the result regardless of which
+ * read finished first.
+ */
+async function readRosterByConcurrency(
+  roster: BotSpendRosterEntry[],
+  read: (botId: string, limit: number) => Promise<unknown>,
+): Promise<BotSpendRead[]> {
+  const results: BotSpendRead[] = new Array(roster.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < roster.length) {
+      const index = next;
+      next += 1;
+      const bot = roster[index];
+      try {
+        const payload = await read(bot.id, SESSION_SPEND_LIST_LIMIT);
+        results[index] = {
+          botId: bot.id,
+          label: bot.displayName,
+          read: sessionSpendReadFromUnknown(payload),
+        };
+      } catch {
+        results[index] = { botId: bot.id, label: bot.displayName, read: { ok: false } };
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(READ_BOT_SPEND_CONCURRENCY, roster.length) }, () => worker()),
+  );
+  return results;
+}
+
 export async function readBotSpend(source: BotSpendSource): Promise<BotSpendReport> {
   const readBotSessions = source.readBotSessions;
   if (!readBotSessions) return { rows: [], degraded: true };
   const roster = await source.listBots();
-  const reads: BotSpendRead[] = [];
-  for (const bot of roster) {
-    try {
-      const payload = await readBotSessions(bot.id, SESSION_SPEND_LIST_LIMIT);
-      reads.push({
-        botId: bot.id,
-        label: bot.displayName,
-        read: sessionSpendReadFromUnknown(payload),
-      });
-    } catch {
-      reads.push({ botId: bot.id, label: bot.displayName, read: { ok: false } });
-    }
-  }
+  const reads = await readRosterByConcurrency(roster, readBotSessions);
   return { rows: botSpendRows(reads), degraded: false };
 }
 
