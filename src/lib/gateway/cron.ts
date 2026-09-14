@@ -232,6 +232,26 @@ export function groupCronJobsByOwner(
   return groups;
 }
 
+/**
+ * Narrow the scheduled-work list to the jobs whose title carries the query —
+ * a case-insensitive substring, the same rule `filterSessions` runs for the
+ * session selector so "search" means the same thing on both surfaces.
+ *
+ * An empty (or whitespace-only) query answers the SAME array reference, so an
+ * idle field is a byte-identical no-op: the section renders the list it
+ * already held, not a copy of it. A query that matches nothing answers an
+ * empty list — the section says nothing rather than pretending every job
+ * vanished or every job stayed.
+ */
+export function filterCronJobsByTitle(
+  jobs: readonly CronJob[],
+  query: string,
+): CronJob[] {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return jobs as CronJob[];
+  return jobs.filter((job) => job.title.toLowerCase().includes(needle));
+}
+
 /** How many jobs are running right now — the Activity section's live badge. */
 export function runningCount(jobs: CronJob[]): number {
   return jobs.filter((job) => job.running).length;

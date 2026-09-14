@@ -11,6 +11,7 @@ import {
   cronJobSummary,
   cronListSummaryText,
   describeCronHealth,
+  filterCronJobsByTitle,
   groupCronJobsByOwner,
   runningCount,
   sortCronJobs,
@@ -50,6 +51,10 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
   const [schedule, setSchedule] = useState(DEFAULT_ROUTINE_SCHEDULE);
   const [createError, setCreateError] = useState<string | undefined>();
   const [creating, setCreating] = useState(false);
+  // The list can outgrow one screen: a title filter over what the section
+  // already holds, client-side, applied before the owner grouping. No empty
+  // query means no fold ran differently — the idle field is a no-op.
+  const [titleFilter, setTitleFilter] = useState('');
 
   const available = cron.available;
 
@@ -126,7 +131,12 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
 
   if (status !== 'connected' || !available) return null;
 
-  const sorted = sortCronJobs(jobs);
+  // An idle filter field leaves the sorted list byte-identical (the fold answers
+  // the same array for an empty query); a query narrows `sorted` itself, so the
+  // owner grouping and every row below read one narrowed list.
+  const base = sortCronJobs(jobs);
+  const sorted =
+    titleFilter.trim().length > 0 ? filterCronJobsByTitle(base, titleFilter) : base;
   const live = runningCount(jobs);
 
   return (
@@ -178,6 +188,29 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
         const groups = groupCronJobsByOwner(sorted);
         const needsHeadings = [...groups.keys()].filter(Boolean).length > 1;
         const rows: ReactNode[] = [];
+        // The filter field rides the group render so an idle field changes
+        // nothing below: the empty query answers the list the section holds.
+        if (jobs.length > 3) {
+          rows.push(
+            <View key="cron-filter" style={styles.gap}>
+              <TextField
+                value={titleFilter}
+                onChangeText={setTitleFilter}
+                placeholder="Filter by title"
+                accessibilityLabel="Filter scheduled work by title"
+                autoCapitalize="none"
+              />
+              {titleFilter.trim().length > 0 ? (
+                <View style={styles.header}>
+                  <Text variant="micro" color="secondary">
+                    {sorted.length} of {jobs.length} jobs
+                  </Text>
+                  <Button label="Clear" variant="ghost" size="sm" onPress={() => setTitleFilter('')} />
+                </View>
+              ) : null}
+            </View>,
+          );
+        }
         for (const [botId, group] of groups) {
           if (needsHeadings) {
             rows.push(
