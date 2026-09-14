@@ -128,6 +128,11 @@ export function glanceableWidgetLines(
   if (snapshot.approvalsPending > 0) {
     work.push(`${countRuns(snapshot.approvalsPending)} waiting on your approval`);
   }
+  if (snapshot.routineAlerts > 0) {
+    work.push(
+      `${snapshot.routineAlerts} routine${snapshot.routineAlerts === 1 ? '' : 's'} failing`,
+    );
+  }
   if (stillGoing > 0) work.push(`${countRuns(stillGoing)} in flight`);
   if (snapshot.overdueRoutines > 0) {
     work.push(

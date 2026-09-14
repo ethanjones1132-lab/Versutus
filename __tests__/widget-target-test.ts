@@ -69,6 +69,7 @@ function snapshot(overrides: Partial<GlanceableSnapshot> = {}): GlanceableSnapsh
     runsInFlight: 0,
     approvalsPending: 0,
     overdueRoutines: 0,
+    routineAlerts: 0,
     writtenAt: NOW,
     ...overrides,
   };
@@ -467,6 +468,16 @@ describe('glanceableWidgetLines', () => {
 
   test('a snapshot with no work says so rather than saying nothing', () => {
     expect(glanceableWidgetLines(snapshot()).work).toBe('No runs in flight');
+  });
+
+  test('routine alerts are named between the approval segment and the in-flight count', () => {
+    expect(
+      glanceableWidgetLines(snapshot({ runsInFlight: 2, approvalsPending: 1, routineAlerts: 2 }))
+        .work,
+    ).toBe('1 run waiting on your approval · 2 routines failing · 1 run in flight');
+    expect(glanceableWidgetLines(snapshot({ routineAlerts: 1 })).work).toBe('1 routine failing');
+    // Zero drops out entirely — a healthy routine set reads as it did before.
+    expect(glanceableWidgetLines(snapshot({ routineAlerts: 0 })).work).toBe('No runs in flight');
   });
 
   test('the newest outcome is passed through in its own words, and absent when none was judged', () => {

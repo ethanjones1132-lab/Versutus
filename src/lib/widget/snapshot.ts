@@ -45,6 +45,12 @@ export type GlanceableSnapshot = {
   approvalsPending: number;
   /** Routines whose schedule the gateway has already let slip past. */
   overdueRoutines: number;
+  /**
+   * Routines whose own health verdict the fold judged `error` — the same
+   * `describeCronHealth` rows that pick a verdict result, never a second
+   * judgment of them.
+   */
+  routineAlerts: number;
   /** The newest judged outcome, run or routine, in its own words. */
   lastResult?: string;
   /** When the snapshot was composed — always present, so staleness is sayable. */
@@ -70,6 +76,7 @@ export function snapshotSignature(snapshot: GlanceableSnapshot): string {
     snapshot.runsInFlight,
     snapshot.approvalsPending,
     snapshot.overdueRoutines,
+    snapshot.routineAlerts,
     snapshot.lastResult,
   ]);
 }
@@ -139,6 +146,7 @@ export function glanceableSnapshot(
   let runsInFlight = 0;
   let approvalsPending = 0;
   let overdueRoutines = 0;
+  let routineAlerts = 0;
   let newestRun: { at: number; text: string } | null = null;
 
   for (const run of facts.runs) {
@@ -158,6 +166,9 @@ export function glanceableSnapshot(
 
   for (const job of facts.routines) {
     if (routineOverdue(job, now)) overdueRoutines += 1;
+    // The same health verdict the fold reads for the result line — counted,
+    // not re-judged — so a failing routine is news the work line can name.
+    if (describeCronHealth(job).tone === 'error') routineAlerts += 1;
     const verdict = routineVerdict(job);
     if (!verdict) continue;
     if (!newestRun || verdict.at > newestRun.at) newestRun = verdict;
@@ -168,6 +179,7 @@ export function glanceableSnapshot(
     runsInFlight,
     approvalsPending,
     overdueRoutines,
+    routineAlerts,
     ...(newestRun ? { lastResult: newestRun.text } : {}),
     writtenAt: now,
   };

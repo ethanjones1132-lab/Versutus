@@ -203,6 +203,7 @@ describe('glanceableSnapshot', () => {
       runsInFlight: 0,
       approvalsPending: 0,
       overdueRoutines: 0,
+      routineAlerts: 0,
       writtenAt: NOW,
     });
     expect(snapshot.lastResult).toBeUndefined();
@@ -212,6 +213,58 @@ describe('glanceableSnapshot', () => {
     const snapshot = glanceableSnapshot({ status: 'connected', runs: [], routines: [] }, NOW - 5_000);
 
     expect(snapshot.writtenAt).toBe(NOW - 5_000);
+  });
+});
+
+describe('routine alerts in the glanceable snapshot', () => {
+  test('a job the health verdict judges error is counted as an alert', () => {
+    const snapshot = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [],
+        routines: [
+          job({ failureStreak: 3, lastError: 'token expired', lastStatus: 'error' }),
+          job({ id: 'healthy' }),
+        ],
+      },
+      NOW,
+    );
+
+    expect(snapshot.routineAlerts).toBe(1);
+    // The alert count and the verdict line come from the same judgment: the
+    // failing job's verdict is still free to stand as the newest result.
+    expect(snapshot.lastResult).toBe('Failing — 3 in a row');
+  });
+
+  test('a paused routine and a healthy one are not alerts', () => {
+    const snapshot = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [],
+        routines: [job({ id: 'paused', paused: true }), job({ id: 'fine' })],
+      },
+      NOW,
+    );
+
+    expect(snapshot.routineAlerts).toBe(0);
+  });
+
+  test('an alert count never displaces the newest judged verdict or an overdue count', () => {
+    const snapshot = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [run({ finishedAt: NOW - 60_000, summary: 'wrote 3 files' })],
+        routines: [
+          job({ failureStreak: 1, lastError: 'boom', lastStatus: 'error' }),
+          job({ id: 'late', nextRunAt: new Date(NOW - 3_600_000).toISOString() }),
+        ],
+      },
+      NOW,
+    );
+
+    expect(snapshot.lastResult).toBe('wrote 3 files');
+    expect(snapshot.overdueRoutines).toBe(1);
+    expect(snapshot.routineAlerts).toBe(1);
   });
 });
 
@@ -293,6 +346,18 @@ describe('snapshotSignature', () => {
       snapshotSignature(
         glanceableSnapshot(
           { status: 'connected', runs: [run({ summary: 'wrote 3 files' })], routines: [] },
+          NOW,
+        ),
+      ),
+    );
+    expect(snapshotSignature(base)).not.toBe(
+      snapshotSignature(
+        glanceableSnapshot(
+          {
+            status: 'connected',
+            runs: [],
+            routines: [job({ failureStreak: 1, lastError: 'boom', lastStatus: 'error' })],
+          },
           NOW,
         ),
       ),
