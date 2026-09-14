@@ -1,3 +1,16 @@
+declare const __dirname: string;
+
+const SEP = __dirname.includes('\\') ? '\\' : '/';
+const nodeFs = jest.requireActual('fs') as {
+  readFileSync(path: string, encoding: string): string;
+};
+
+function readSource(...parts: string[]): string {
+  return nodeFs
+    .readFileSync([__dirname, '..', ...parts].join(SEP), 'utf8')
+    .replace(/\r\n/g, '\n');
+}
+
 import { keyValueStorage } from '@/lib/storage/key-value';
 import {
   composerDraftKey,
@@ -126,6 +139,30 @@ describe('mergeHandsfreeRecovery', () => {
 
   test('the recovered words are never re-worded', () => {
     expect(mergeHandsfreeRecovery('', 'log the  disk,  twice')).toBe('log the  disk,  twice');
+  });
+});
+
+// The screen's draft hydration is mount-only (first write wins). When the call
+// ends while the SAME screen stays mounted, the promotion's storage write must
+// reach the composer: the screen's hydration effect is required to re-run key
+// on the call's terminal edge (the active→false transition it guards).
+const chatScreen = readSource('src', 'components', 'chat', 'chat-screen.tsx');
+
+describe('the hydration edge on the call terminal path', () => {
+  test('the terminal-edge hydration is the call-edge effect: it watches handsfreeActive and reads the stored draft', () => {
+    // The mount hydration runs on draftThread alone; the call's terminal edge
+    // must be a SECOND read whose dependency list carries the call edge.
+    expect(chatScreen).toMatch(
+      /const handsfreeWasActiveRef = useRef\(false\);/,
+    );
+    const edge = chatScreen.match(
+      /const wasActive = handsfreeWasActiveRef\.current;[\s\S]*?}, \[draftThread, handsfreeActive\]\);/,
+    );
+    expect(edge).not.toBeNull();
+    expect(edge![0]).toMatch(/void loadComposerDraft\(thread\)/);
+    expect(edge![0]).toMatch(/applyComposerDraft\(prev, thread, text\)/);
+    // The edge fires only on active → false: skipped while the call lives.
+    expect(edge![0]).toMatch(/if \(!wasActive \|\| handsfreeActive \|\| !draftThread\) return;/);
   });
 });
 
