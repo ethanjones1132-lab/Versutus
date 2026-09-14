@@ -391,6 +391,12 @@ export type CommandTranscriptEntry = {
   createdAt: number;
   durationMs?: number;
   ephemeral?: boolean;
+  /**
+   * The run this command drove, when it drove one (`/run`). Present on the
+   * record so a command's transcript can be traced to the Activity tab row
+   * the same run produced — undefined for commands that run nothing.
+   */
+  runId?: string;
 };
 
 export type GatewayActionPreview = {

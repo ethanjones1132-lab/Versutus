@@ -2719,6 +2719,7 @@ const response = await executeGatewaySlashCommand(trimmed, {
             raw: response.raw,
             status: 'complete',
             durationMs: duration,
+            runId: response.runId,
           }).then((t) => setTranscripts(t));
         }
         return 'complete';
