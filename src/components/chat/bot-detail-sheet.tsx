@@ -10,6 +10,7 @@ import {
   buildBotPacket,
 } from '@/lib/gateway/bot-packet';
 import { botSoulCopy, EMPTY_BOT_SOUL, type BotSoulState, type PublicBot } from '@/lib/gateway/bots';
+import { memoryStatusCopy, type MemoryStatusState } from '@/lib/gateway/memory-status';
 
 export type BotDetailSheetProps = {
   /** The Bot to describe; null renders nothing (sheet dismissed). */
@@ -20,6 +21,13 @@ export type BotDetailSheetProps = {
    * be read" rather than as "this Bot has none".
    */
   soul?: BotSoulState;
+  /**
+   * This Bot's memory-doctor status, read on demand by the parent (the same
+   * `doctor.memory.status` reply the `/memory` slash line renders). Absent
+   * renders no Memory row at all — no control without a read to show, the
+   * established capability-gated pattern.
+   */
+  memory?: MemoryStatusState;
   onClose: () => void;
   /**
    * Opens this Bot's chat — the parent owns that navigation (same path a
@@ -55,7 +63,7 @@ export type BotDetailSheetProps = {
  * then act: message the agent, copy the id for host-side commands, or edit
  * what the Gate holds.
  */
-export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit, onRetry, onExportPacket }: BotDetailSheetProps) {
+export function BotDetailSheet({ bot, soul, memory, onClose, onMessage, onEdit, onRetry, onExportPacket }: BotDetailSheetProps) {
   if (!bot) return null;
   const detail = describeBotDetail(bot);
   const soulState = soul ?? EMPTY_BOT_SOUL;
@@ -109,6 +117,18 @@ export function BotDetailSheet({ bot, soul, onClose, onMessage, onEdit, onRetry,
             <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
           ) : null}
         </View>
+
+        {memory ? (
+          <View style={styles.fact}>
+            <Text variant="micro" color="tertiary">
+              MEMORY
+            </Text>
+            {/* Read-first: the doctor's own line, never an edit affordance. */}
+            <Text variant="caption" color="secondary">
+              {memoryStatusCopy(memory)}
+            </Text>
+          </View>
+        ) : null}
 
         <View style={styles.fact}>
           <Text variant="micro" color="tertiary">

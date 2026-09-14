@@ -57,6 +57,7 @@ import {
   buildBotPacket,
 } from '@/lib/gateway/bot-packet';
 import { shareBotPacketFile } from '@/lib/gateway/bot-packet-share';
+import { memoryStatusFromUnknown, type MemoryStatusState } from '@/lib/gateway/memory-status';
 import { composerFocusApplies } from '@/lib/gateway/composer-focus';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
 import {
@@ -405,6 +406,37 @@ export function ChatScreen() {
     botId: null,
     ...EMPTY_BOT_SOUL,
   });
+  // The memory doctor read has the same on-demand shape: it is off the
+  // roster payload on purpose and is asked only while a sheet is open.
+  // A capability gate decides whether the read is attempted at all — a
+  // gateway that does not offer the Memory group renders no row, rather
+  // than a row that recites a refused call's failure on every open. The
+  // gate itself is folded in render (no setState in the effect body);
+  // the effect only records answers that arrive.
+  const [memoryRead, setMemoryRead] = useState<{ botId: string; state: MemoryStatusState } | null>(
+    null,
+  );
+  const memoryReadOffered =
+    capabilitySnapshot.groups.find((group) => group.id === 'memory')?.status === 'ready';
+
+  useEffect(() => {
+    if (!memoryReadOffered || status !== 'connected') return;
+    const openId = detailBot?.id;
+    if (!openId) return;
+    let cancelled = false;
+    void gatewayRequest('doctor.memory.status', {})
+      .then((payload) => {
+        if (!cancelled) setMemoryRead({ botId: openId, state: memoryStatusFromUnknown(payload) });
+      })
+      .catch(() => {
+        // A refused call is a failed read — the same honest line the
+        // soul read renders, never healthy-sounding silence.
+        if (!cancelled) setMemoryRead({ botId: openId, state: memoryStatusFromUnknown(undefined) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailBot, memoryReadOffered, status, gatewayRequest]);
 
   useEffect(() => {
     const openId = detailBot?.id ?? null;
@@ -1755,6 +1787,7 @@ export function ChatScreen() {
       <BotDetailSheet
         bot={detailBot}
         soul={detailBot && soulState.botId === detailBot.id ? soulState : undefined}
+        memory={memoryRead && detailBot && memoryRead.botId === detailBot.id ? memoryRead.state : undefined}
         onClose={() => setDetailBot(null)}
         onRetry={handleSoulRetry}
         onExportPacket={
