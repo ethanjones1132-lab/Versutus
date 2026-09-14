@@ -15,12 +15,13 @@ import { constellationModel, type ConstellationNode } from '@/lib/fleet/constell
 const NO_ROSTER: PublicBot[] = [];
 
 /**
- * D2's destination: the fleet as a lens. It reads only what the app already
- * holds — the saved profiles, the connected gateway's live state, the probe
- * wave the dashboard mounts, and the existing `listBots` roster read — and
- * folds them through the pure model. It adds no protocol, no poll and no
- * editing; a tap drives the shipped destination instead (a Bot's chat, a
- * gateway's connect, Activity for an approval).
+ * D2's destination, rebuilt: the fleet as a living star map. It reads only
+ * what the app already holds — the saved profiles, the connected gateway's
+ * live state, the probe wave the dashboard mounts, and the existing `listBots`
+ * roster read — and folds them through the pure model. It adds no protocol,
+ * no poll and no editing; a tap drives the shipped destination instead (a
+ * Bot's chat, a gateway's connect, Activity for an approval). The map's HUD
+ * answers "what should I care about" at a glance, from the model's summary.
  *
  * The two truth classes are the point: one gateway is live, and every saved
  * gateway is dimmed and dated. The view enforces that; this screen only

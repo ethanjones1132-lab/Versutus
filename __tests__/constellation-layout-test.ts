@@ -80,6 +80,45 @@ describe('constellationLayout places the graph the model emitted', () => {
     expect(empty.edges).toEqual([]);
     expect(empty.size).toBe(240);
   });
+
+  test('a wide fleet fits a tall box: no node lands outside width or height', () => {
+    // Ten gateways around the ring, the connected one carrying 9 Bots — the
+    // widest constellation the map can be asked to hold.
+    const model = constellationModel({
+      profiles: Array.from({ length: 10 }, (_, i) => ({ id: `gw-${i}`, name: `GW ${i}` })),
+      connectedGatewayId: 'gw-0',
+      roster: Array.from({ length: 9 }, (_, i) => ({ id: `bot-${i}`, displayName: `B${i}` })),
+    });
+    const box = constellationLayout(model, 320, 520);
+    expect(box.size).toBe(320);
+    expect(box.height).toBe(520);
+    for (const node of box.nodes) {
+      expect(node.x).toBeGreaterThanOrEqual(0);
+      expect(node.x).toBeLessThanOrEqual(320);
+      expect(node.y).toBeGreaterThanOrEqual(0);
+      expect(node.y).toBeLessThanOrEqual(520);
+    }
+    for (const edge of box.edges) {
+      [edge.x1, edge.x2].forEach((x) => {
+        expect(x).toBeGreaterThanOrEqual(0);
+        expect(x).toBeLessThanOrEqual(320);
+      });
+      [edge.y1, edge.y2].forEach((y) => {
+        expect(y).toBeGreaterThanOrEqual(0);
+        expect(y).toBeLessThanOrEqual(520);
+      });
+    }
+  });
+
+  test('a zero-size first measurement answers zeros, never NaN', () => {
+    const model = constellationModel(FLEET);
+    const layout = constellationLayout(model, 0);
+    expect(layout.size).toBe(0);
+    expect(layout.nodes).toEqual([]);
+    expect(layout.edges).toEqual([]);
+    expect(layout.empty).toBe(false);
+    expect(layout.summary).toEqual(model.summary);
+  });
 });
 
 describe('relativeLastSeenCopy dates a down gateway without ever going negative', () => {

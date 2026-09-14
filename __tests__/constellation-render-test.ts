@@ -39,6 +39,30 @@ describe('the constellation is painted from one layout', () => {
     expect(src).not.toContain('constellationModel(');
     expect(src).not.toContain('fleetConstellationInput(');
   });
+
+  test('the view derives its paint geometry from the shared layout, not ad-hoc math', () => {
+    const src = constellationView();
+    expect(src).toContain('constellationLayout(model, box)');
+    expect(src).toContain('useWindowDimensions()');
+    expect(src).not.toContain('DEFAULT_SIZE');
+  });
+
+  test('map and labels share one envelope, so no profile bleeds off the edge', () => {
+    const src = constellationView();
+    // The node press targets are positioned INSIDE the same box the canvas is
+    // handed (box, not a second size), and the map clips to that envelope.
+    expect(src).toContain('styles.mapWrap');
+    expect(src).toContain("width: box, height: box");
+    expect(src).toContain('<ConstellationCanvas model={model} size={box} />');
+    expect(src).toContain('left: node.x - NODE_BOX_WIDTH / 2');
+  });
+
+  test('the HUD reads the model summary, not its own arithmetic', () => {
+    const src = constellationView();
+    expect(src).toContain('constellationSummaryCopy(model.summary)');
+    expect(src).toContain('model.summary.approvals');
+    expect(src).not.toContain("badges.filter((b");
+  });
 });
 
 describe('native paints in Skia, every other path paints plain views', () => {
