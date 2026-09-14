@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 
 import { DeviceIdRow } from '@/components/device-id-row';
+import { NotificationPreferencesSection } from '@/components/gateway/notification-preferences-section';
 import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
 import { TransportSecurityCard } from '@/components/gateway/transport-security-card';
 import { Badge, Card, Icon, Screen, Text } from '@/components/ui';
@@ -164,6 +165,7 @@ export default function GatewaySettingsScreen() {
         {activeGateway ? (
           <>
             <TransportSecurityCard url={activeGateway.url} tlsFingerprint={activeGateway.tlsFingerprint} />
+            <NotificationPreferencesSection />
             <Card variant="inset" padding={Spacing.three} style={styles.card}>
               <View style={styles.sectionHeading}>
                 <View style={styles.sectionTitle}>
