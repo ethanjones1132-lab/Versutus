@@ -546,6 +546,28 @@ export function ChatScreen() {
       cancelled = true;
     };
   }, [draftThread]);
+  // A call's recovery merges surviving speech into the stored draft on every
+  // terminal path (promoteHandsfreeRecovery in the provider's teardown), but
+  // a call is ended from the banner while THIS screen stays mounted — the
+  // hydration above already ran, first-write-wins, so the promoted words
+  // would land in storage and never repaint. Re-read the stored draft once on
+  // the call's terminal edge (active → false) and paint what recovery left.
+  const handsfreeWasActiveRef = useRef(false);
+  useEffect(() => {
+    const wasActive = handsfreeWasActiveRef.current;
+    handsfreeWasActiveRef.current = handsfreeActive;
+    if (!wasActive || handsfreeActive || !draftThread) return;
+    const thread = draftThread;
+    let cancelled = false;
+    void loadComposerDraft(thread).then((text) => {
+      if (cancelled) return;
+      setDrafts((prev) => applyComposerDraft(prev, thread, text));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [draftThread, handsfreeActive]);
+
   // The name the header prints for this thread is the operator's own when they
   // gave one — the same rule the selector row prints (the store's fold, so the
   // `Untitled` fallback stays one rule in the repo). The blob is re-read when
