@@ -201,17 +201,20 @@ describe('a finished model reply opens the conversation it is about', () => {
   test('only a reply route becomes a session open', () => {
     const src = routerSource();
 
-    // The destination drops the id — Chat is one tab — so the session rides
-    // beside it. A routine, a run, a weekly report and an unrecognized payload
+    // The destination drops the ids — Chat is one tab — so the session rides
+    // beside it, and the payload's Bot rides beside the session for the open
+    // to pin. A routine, a run, a weekly report and an unrecognized payload
     // all ask for no open at all.
-    expect(src).toContain("route?.kind === 'reply' ? { sessionId: route.sessionId } : null");
+    expect(src).toContain(
+      "route?.kind === 'reply'\n        ? { sessionId: route.sessionId, ...(route.botId ? { botId: route.botId } : {}) }\n        : null;",
+    );
   });
 
   test('the session open is asked for right after the navigation', () => {
     const src = listener();
 
     const navigate = src.indexOf('router.navigate(destination)');
-    const ask = src.indexOf('replySessionRef.current?.(replySession.sessionId)');
+    const ask = src.indexOf('replySessionRef.current?.(replySession.sessionId, replySession.botId)');
     expect(navigate).toBeGreaterThan(-1);
     expect(ask).toBeGreaterThan(navigate);
     expect(src).toContain(
@@ -230,7 +233,7 @@ describe('a finished model reply opens the conversation it is about', () => {
     expect(src).toContain('if (!result.ok)');
     expect(src).toContain('openSessionByIdFailureText(sessionId, result.error)');
     expect(src).toContain('void notifySessionOpenFailed(');
-    expect(src).toContain('replySessionRef.current = (sessionId: string) =>');
+    expect(src).toContain('replySessionRef.current = (sessionId: string, botId?: string) =>');
   });
 
   test('a reply tap that launched the app keeps its open across the bootstrap wait', () => {
@@ -244,14 +247,15 @@ describe('a finished model reply opens the conversation it is about', () => {
     expect(src).toContain('const replySession = pendingReplySessionRef.current');
     expect(src).toContain('pendingReplySessionRef.current = null');
     // Both call sites apply it the same way — the launch-replay path behaves
-    // identically to the live listener path.
-    expect((src.match(/if \(replySession\) replySessionRef\.current\?\.\(replySession\.sessionId\);/g) ?? []).length).toBe(2);
+    // identically to the live listener path — and both hand the payload's Bot
+    // through beside the session.
+    expect((src.match(/if \(replySession\) replySessionRef\.current\?\.\(replySession\.sessionId, replySession\.botId\);/g) ?? []).length).toBe(2);
   });
 
   test('the session open reaches the tab through a ref, so the listener is registered once', () => {
     const src = routerSource();
 
-    expect(src).toContain('replySessionRef.current = (sessionId: string) =>');
+    expect(src).toContain('replySessionRef.current = (sessionId: string, botId?: string) =>');
     const listenerEnd = src.slice(src.indexOf('addNotificationResponseReceivedListener'));
     expect(listenerEnd).toContain('}, [router, isBootstrapped]);');
   });

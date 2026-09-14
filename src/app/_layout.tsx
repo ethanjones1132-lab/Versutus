@@ -152,6 +152,7 @@ function NotificationRouter() {
     openBot,
     sendChatInput,
     requestSurface,
+    clearBot,
     requestRunFocus,
     gatewayRequest,
   } = useGateway();
@@ -170,7 +171,7 @@ function NotificationRouter() {
   // cold start, and the exact conversation it is about is the whole point of
   // the route — an open dropped on the way through the bootstrap wait leaves
   // the operator on Chat but in the wrong thread.
-  const pendingReplySessionRef = useRef<{ sessionId: string } | null>(null);
+  const pendingReplySessionRef = useRef<{ sessionId: string; botId?: string } | null>(null);
   // The launch tap's identifier while its replay window is open, so the same
   // tap arriving at the live listener cannot route a second time.
   const launchTapRef = useRef<LaunchTap | null>(null);
@@ -223,16 +224,43 @@ function NotificationRouter() {
   // sheet's "Open by id" row): `openSessionById` validates through `session.get`
   // before switching, which matters because a push-delivered id can be stale by
   // the time it is tapped. A miss is named, never swallowed.
-  const replySessionRef = useRef<((sessionId: string) => void) | null>(null);
+  //
+  // The payload's Bot rides with the id, and it is opened against the session
+  // restore rather than before it: `setBotId` pins the client to the Bot, but
+  // a stale (deleted) id is exactly the case the restore read exists for, and
+  // a Bot pinned to no thread belongs to no conversation. So the order is the
+  // thread sheet's — validate the SESSION first, and only a landed open pins
+  // the Bot. A refused Bot open is not an error (openBot answers rather than
+  // throws): clearBot returns the scope to configurable chat, exactly what the
+  // roster's "back out" leaves, and the
+  // open keeps going against the existing thread. Only a landed open asks for
+  // the Bot surface — the same landed-open rule the deep-link chat path
+  // (GatewayDeepLinkRouter) applies, because the header, panes and backends
+  // picker all hang off the screen's own surface state.
+  const replySessionRef = useRef<((sessionId: string, botId?: string) => void) | null>(null);
   useEffect(() => {
-    replySessionRef.current = (sessionId: string) => {
-      void openSessionById(gatewayRequest, sessionId).then((result) => {
+    replySessionRef.current = (sessionId: string, botId?: string) => {
+      void openSessionById(gatewayRequest, sessionId).then(async (result) => {
         if (!result.ok) {
           void notifySessionOpenFailed(openSessionByIdFailureText(sessionId, result.error));
+          return;
+        }
+        if (!botId) return;
+        try {
+          const opened = await openBot(botId);
+          if (opened) {
+            requestSurface({ kind: 'bot', botId });
+            return;
+          }
+          void clearBot();
+          void notifyBotReplyNotSent('bot-chat-unavailable');
+        } catch {
+          void clearBot();
+          void notifyBotReplyNotSent('bot-chat-unavailable');
         }
       });
     };
-  }, [gatewayRequest]);
+  }, [gatewayRequest, openBot, requestSurface, clearBot]);
 
   // The Approve / Deny buttons only exist once the category is registered, and
   // a notice may not reference a category the device has never seen — so this
@@ -268,11 +296,14 @@ function NotificationRouter() {
     // The session a reply payload named, if it named one. The destination above
     // drops the id for the same reason the run focus does — Chat is one tab —
     // and the session rides beside it instead: the tab opens that exact
-    // conversation once it lands. A notice naming no session asks for no open
-    // at all.
-    const replySessionFor = (data: unknown): { sessionId: string } | null => {
+    // conversation once it lands, and the Bot the payload named rides beside
+    // the session so the open can pin it too. A notice naming no session asks
+    // for no open at all.
+    const replySessionFor = (data: unknown): { sessionId: string; botId?: string } | null => {
       const route = routeForTap(data);
-      return route?.kind === 'reply' ? { sessionId: route.sessionId } : null;
+      return route?.kind === 'reply'
+        ? { sessionId: route.sessionId, ...(route.botId ? { botId: route.botId } : {}) }
+        : null;
     };
 
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -355,7 +386,7 @@ function NotificationRouter() {
       // A reply notice names the conversation it is about, so that exact
       // session is opened once Chat has landed. The open is validated first,
       // and a stale id is named instead of switching (replySessionRef).
-      if (replySession) replySessionRef.current?.(replySession.sessionId);
+      if (replySession) replySessionRef.current?.(replySession.sessionId, replySession.botId);
     });
 
     // A tap that LAUNCHED the app is not replayed to a listener registered
@@ -391,7 +422,7 @@ function NotificationRouter() {
       pendingReplySessionRef.current = null;
       router.navigate(destination);
       if (runFocus) runFocusRef.current?.(runFocus);
-      if (replySession) replySessionRef.current?.(replySession.sessionId);
+      if (replySession) replySessionRef.current?.(replySession.sessionId, replySession.botId);
     }
 
     return () => subscription.remove();
