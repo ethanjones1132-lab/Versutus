@@ -95,8 +95,8 @@ class HandsfreeCallService : Service() {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    when (intent?.action) {
-      ACTION_END -> {
+    when {
+      HandsfreeCallNotification.isEndAction(intent?.action) -> {
         // The notification's End is both halves of End: tell JS (while it is
         // alive) so the reducer reaches its terminal phase and the banner is
         // dismissed, then run the service's own teardown.
@@ -162,12 +162,12 @@ class HandsfreeCallService : Service() {
     val suffix = if (title.isBlank()) "" else " with $title"
     return NotificationCompat.Builder(this, CHANNEL_ID)
       .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-      .setContentTitle("Hands-free call$suffix")
-      .setContentText("Listening and speaking through the microphone")
+      .setContentTitle(HandsfreeCallNotification.titleFor(title))
+      .setContentText(HandsfreeCallNotification.TEXT)
       .setOngoing(true)
       .setSilent(true)
       .setPriority(NotificationCompat.PRIORITY_LOW)
-      .addAction(0, "End call", endPending)
+      .addAction(0, HandsfreeCallNotification.END_ACTION_LABEL, endPending)
       .build()
   }
 
