@@ -21,11 +21,23 @@ import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import { filterRunsByBot, type ScorecardFilter } from '@/lib/fleet/scorecard';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
+import { formatRelativeTime } from '@/lib/format';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { tabContentPaddingBottom } from '@/lib/motion/tab-insets';
 import type { CronJob } from '@/lib/gateway/cron';
 import { readBotSpend, type BotSpendRow } from '@/lib/gateway/spend-report';
 import type { ActivityRun } from '@/lib/gateway/runs';
+import {
+  approvalAuditSummary,
+  loadApprovalAudit,
+  type ApprovalAuditEntry,
+} from '@/lib/gateway/approval-audit';
+import {
+  APPROVAL_AUDIT_EMPTY_COPY,
+  APPROVAL_AUDIT_SECTION_TITLE,
+  approvalAuditHeadingCopy,
+  approvalAuditRowCopy,
+} from '@/lib/activity/approval-audit-view';
 
 type ActivityItem =
   | { kind: 'label'; id: string; text: string }
@@ -81,6 +93,11 @@ export default function ActivityScreen() {
   // null for no filter. Null is the default and passes the provider's list
   // through untouched, so the tab opens exactly as it did before scorecards.
   const [scorecardFilter, setScorecardFilter] = useState<ScorecardFilter>(null);
+  // D1's audit read-back: the decisions this device recorded for this gateway
+  // (append lives in the provider's `resolveRunApproval`). Empty until a read
+  // lands — also what a failed read leaves — so the record never claims a
+  // decision nobody read.
+  const [approvalAuditRows, setApprovalAuditRows] = useState<ApprovalAuditEntry[]>([]);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
 
@@ -214,6 +231,27 @@ export default function ActivityScreen() {
 
   useFocusEffect(loadBotSpend);
 
+  // The D1 audit's read, paused like loadBotSpend so a screen left behind on
+  // a previous gateway never shows another gateway's decisions. Re-read on
+  // focus; a record made while the tab is open (the pending card's resolve)
+  // is picked up by the next focus — the record itself never depends on the
+  // screen being open.
+  const auditGatewayId = activeGateway?.id;
+  const loadApprovalAuditRows = useCallback(() => {
+    let live = true;
+    const read = auditGatewayId
+      ? loadApprovalAudit(auditGatewayId).catch(() => [] as ApprovalAuditEntry[])
+      : Promise.resolve<ApprovalAuditEntry[]>([]);
+    void read.then((rows) => {
+      if (live) setApprovalAuditRows(rows);
+    });
+    return () => {
+      live = false;
+    };
+  }, [auditGatewayId]);
+
+  useFocusEffect(loadApprovalAuditRows);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       void loadBotSpend();
@@ -319,6 +357,38 @@ export default function ActivityScreen() {
             return lifted;
           })()
         : null}
+
+      {/* The D1 audit read-back: what was decided, recorded per gateway, with
+          the ADR-0008 fail-closed copy when nothing was recorded. Renders
+          nothing on a gateway-less screen — there is no record to name. */}
+      {activeGateway ? (
+        <Card padding={Spacing.three} style={styles.auditCard}>
+          <View style={styles.auditHeader}>
+            <Text variant="caption" color="accentWarm" style={styles.approvalEyebrow}>
+              {APPROVAL_AUDIT_SECTION_TITLE}
+            </Text>
+            <Text variant="micro" color="tertiary">
+              {approvalAuditHeadingCopy(approvalAuditSummary(approvalAuditRows))}
+            </Text>
+          </View>
+          {approvalAuditRows.length === 0 ? (
+            <Text variant="caption" color="secondary">
+              {APPROVAL_AUDIT_EMPTY_COPY}
+            </Text>
+          ) : (
+            approvalAuditRows.slice(0, 3).map((row) => (
+              <View key={`${row.runId}-${row.decidedAt}`} style={styles.auditRow}>
+                <Text variant="caption" color="secondary" numberOfLines={2}>
+                  {approvalAuditRowCopy(row)}
+                </Text>
+                <Text variant="micro" color="tertiary" numberOfLines={1}>
+                  run {row.runId} · {formatRelativeTime(row.decidedAt)}
+                </Text>
+              </View>
+            ))
+          )}
+        </Card>
+      ) : null}
     </View>
   );
 
@@ -455,5 +525,17 @@ const styles = StyleSheet.create({
   sectionTitle: {
     textTransform: 'uppercase',
     letterSpacing: 0.6,
+  },
+  auditCard: {
+    gap: Spacing.two,
+  },
+  auditHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+  },
+  auditRow: {
+    gap: Spacing.one / 2,
   },
 });
