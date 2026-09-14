@@ -109,6 +109,16 @@ import {
   loadWorkflows,
 } from '@/lib/workflow/workflow-store';
 import { decideBusySlash } from '@/lib/gateway/busy-slash';
+import {
+  loadBotSpendCap,
+  spendCapNoticeCopy,
+  spendCapVerdict,
+} from '@/lib/settings/bot-spend-cap';
+import {
+  SESSION_SPEND_LIST_LIMIT,
+  sessionSpendReadFromUnknown,
+  totalUsage,
+} from '@/lib/gateway/session-analytics';
 import type { Skill } from '@/lib/gateway/skills';
 import { findConfirmableSlash } from '@/lib/gateway/command-match';
 import { GATEWAY_COMMANDS, buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
@@ -2339,6 +2349,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setPendingRunApproval(null);
   }, []);
 
+  /**
+   * One Bot's spend as the cap check folds it (D5). The fold is P5's own:
+   * a scoped catalogue read at the same `SESSION_SPEND_LIST_LIMIT`, folded
+   * by `totalUsage` like every spend row — a read with no cost fields
+   * reports null, not zero, so a token-only gateway is never read as
+   * "under the cap" on the strength of a number it never reported. A
+   * missing scoped read or a failed read is null too: the verdict treats
+   * an unreadable spend as escalation, never as nothing spent.
+   */
+  const readBotSpendForBot = useCallback(async (botId: string): Promise<number | null> => {
+    const client = clientRef.current;
+    if (!client?.listBotSessionCatalogue) return null;
+    const payload = await client.listBotSessionCatalogue(botId, SESSION_SPEND_LIST_LIMIT);
+    const read = sessionSpendReadFromUnknown(payload);
+    if (!read.ok) return null;
+    return totalUsage(read.sessions).costUsd;
+  }, []);
+
   const runTask = useCallback(
     async (
       prompt: string,
@@ -2347,6 +2375,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     ) => {
       const client = clientRef.current;
       const gateway = activeGatewayRef.current;
+      // D5's pre-run spend-cap check (budgets with hard stops): phone-side
+      // enforcement, so it governs runs started from THIS app — the honest
+      // limit, never a server quota. No cap set is the old uncapped path.
+      const capBotId = selectedBotIdRef.current?.trim() || '';
+      if (capBotId) {
+        const cap = await loadBotSpendCap(capBotId);
+        if (cap != null) {
+          const spend = await readBotSpendForBot(capBotId).catch(() => null);
+          const verdict = spendCapVerdict(cap, spend);
+          if (verdict.decision === 'pause-and-escalate') {
+            throw new Error(spendCapNoticeCopy(verdict));
+          }
+        }
+      }
       // Pre-flight guard: a stale read only declines a retryable action.
       // Converting to statusRef or the connection reducer needs live-device
       // verification because it changes when this effect/callback re-runs.

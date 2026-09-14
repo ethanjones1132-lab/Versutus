@@ -27,6 +27,7 @@ import { matchSkillSlash, type Skill } from '@/lib/gateway/skills';
 import { providerUiState } from '@/lib/gateway/provider-state';
 import type { ProviderSnapshot } from '@/lib/gateway/provider-types';
 import { toolsetsReadFromUnknown } from '@/lib/gateway/toolsets';
+import { spendCapNoticeCopy, type SpendCapVerdict } from '@/lib/settings/spend-cap-verdict';
 import type { ChatMessage, GatewayHelloOk, GatewayMethodAvailability } from '@/lib/gateway/types';
 import type { GatewayCapabilityCommand } from '@/lib/portal/manifest';
 import { METHOD_GUIDANCE } from '@/lib/gateway/rpc-routes';
@@ -148,6 +149,13 @@ type SlashCommandContext = {
    * refused write is not a failed run.
    */
   recordWorkflowRun?: (name: string) => Promise<void>;
+  /**
+   * D5's pre-run spend-cap gate (budgets with hard stops). Loaded before
+   * `runTask` is called; an unreadable spend escalates rather than
+   * allowing spend nobody measured. Absent on hosts without the seam —
+   * the old uncapped path, byte-identical.
+   */
+  spendCapCheck?: (botId: string) => Promise<SpendCapVerdict>;
 };
 
 type ConfigSnapshot = {
@@ -794,6 +802,22 @@ async function runTaskCommand(argText: string, context: SlashCommandContext): Pr
   if (!prompt) return textResult('Usage: /run <prompt> — run an agentic task with approval gates', '/run');
   if (!context.runTask) {
     return runRunCapabilityBlock(context);
+  }
+
+  // D5's pre-run gate: the cap check happens BEFORE executeRun, exactly
+  // as the spec's hook line asks. A pause never starts the run — the
+  // verdict is returned as the reply, worded like the escalation-shaped
+  // approval path it rides (a notice, never an auto-decision).
+  if (context.spendCapCheck) {
+    try {
+      const verdict = await context.spendCapCheck('');
+      if (verdict.decision === 'pause-and-escalate') {
+        return textResult(`Run not started — ${spendCapNoticeCopy(verdict)}`, '/run');
+      }
+    } catch {
+      // A gate that cannot answer must not block runs on a device that
+      // set no cap — refusing here would read as a network error turn.
+    }
   }
 
   const streamed: string[] = [];
