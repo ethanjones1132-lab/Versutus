@@ -16,6 +16,7 @@ import {
   totalUsage,
 } from '@/lib/gateway/session-analytics';
 import type { RunOutcome } from '@/lib/gateway/runs';
+import { runSlashStatusWord } from '@/lib/gateway/run-status-verdict';
 import {
   pairedDeviceRowCopy,
   pairedDevicesReadFromUnknown,
@@ -753,7 +754,7 @@ async function runTaskCommand(argText: string, context: SlashCommandContext): Pr
     return textResult('Run cancelled', '/run', `Run ${outcome.runId} was cancelled.`);
   }
 
-  const succeeded = /(complete|succeeded|success|done|finished)/i.test(outcome.status);
+  const succeeded = runSlashStatusWord(outcome) === 'complete';
   const decision = outcome.approved === undefined ? '' : outcome.approved ? '· approved' : '· denied';
   const body = [
     `Run ${outcome.runId.slice(0, 12)}… ${outcome.status} ${decision}`,
@@ -764,7 +765,7 @@ async function runTaskCommand(argText: string, context: SlashCommandContext): Pr
     .join('\n');
   const summary = outcome.result || outcome.error || outcome.status || 'no result';
   return {
-    text: `${succeeded ? 'Run complete' : `Run ${outcome.status}`}: ${summary}`,
+    text: `${succeeded ? 'Run complete' : `Run ${runSlashStatusWord(outcome)}`}: ${summary}`,
     title: '/run',
     raw: [streamed.join('\n'), body].filter(Boolean).join('\n\n'),
   };
