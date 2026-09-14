@@ -27,7 +27,10 @@ import { describeAutoRetry } from '@/lib/connection/retry-ladder';
 import { describeGatewayError, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import type { GatewayProfile } from '@/lib/gateway/types';
 import { describeHomeEmptyState } from '@/lib/home/home-empty-state';
-import { homeHeroPrimaryActions } from '@/lib/home/home-hero-actions';
+import {
+  homeConstellationVisible,
+  homeHeroPrimaryActions,
+} from '@/lib/home/home-hero-actions';
 
 export function GatewayHomeDashboard() {
   const router = useRouter();
@@ -373,12 +376,26 @@ export function GatewayHomeDashboard() {
 
       <View style={styles.sectionHeader}>
         <Text variant="caption">Gateways</Text>
-        <Button
-          label="Add"
-          variant="secondary"
-          onPress={() => router.push('/gateway/add')}
-          style={styles.headerButton}
-        />
+        <View style={styles.headerActions}>
+          {homeConstellationVisible(gateways.length) ? (
+            <Button
+              label="Fleet map"
+              variant="secondary"
+              size="sm"
+              onPress={async () => {
+                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push('/fleet');
+              }}
+              style={styles.headerButton}
+            />
+          ) : null}
+          <Button
+            label="Add"
+            variant="secondary"
+            onPress={() => router.push('/gateway/add')}
+            style={styles.headerButton}
+          />
+        </View>
       </View>
       <CompactGatewayList
         gateways={gateways}
@@ -502,6 +519,11 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.two,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
   },
   onGlassPrimary: {
     color: Palette.textPrimary,

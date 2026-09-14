@@ -610,6 +610,7 @@ export default function RootLayout() {
                   }}>
                   <Stack.Screen name="(tabs)" />
                   <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+                  <Stack.Screen name="fleet" options={{ headerShown: false }} />
                   <Stack.Screen
                     name="gateway/add"
                     options={{
