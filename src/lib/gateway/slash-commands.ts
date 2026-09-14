@@ -39,6 +39,16 @@ const GENERIC_NOT_DISPATCHED = 'not dispatched by this gateway';
 /** The snapshot's reason for every command row while disconnected (dashboard.ts:1136). */
 const CONNECTION_OFFLINE = 'offline';
 
+/** The run a command drove, so the reply can be traced to its Activity row. */
+export type SlashCommandResult = {
+  text: string;
+  title?: string;
+  raw?: string;
+  /** Present only on commands that run one — never guessed elsewhere. */
+  runId?: string;
+};
+
+/** A row the composer strip and the browsable palette both render. */
 export type SlashCommandSuggestion = {
   value: string;
   label: string;
@@ -47,18 +57,12 @@ export type SlashCommandSuggestion = {
   family: string;
   unavailable: boolean;
   verification?: string;
-};
-
-export type SlashCommandResult = {
-  text: string;
-  title?: string;
-  raw?: string;
   /**
-   * The run a command drove, carried so the reply can be traced to the
-   * Activity tab row it produced (the transcript alone was the record).
-   * Present only on commands that run one — never guessed elsewhere.
+   * Which saved workflow a `/workflow` suggestion row completes to. Present
+   * only on the per-workflow rows the store contributes — the plain
+   * `/workflow ` prefix row and every other command leave it undefined.
    */
-  runId?: string;
+  workflowName?: string;
 };
 
 type SlashCommandContext = {
@@ -256,6 +260,20 @@ const LOCAL_SUGGESTIONS: SlashCommandSuggestion[] = [
     family: 'Chat',
     unavailable: false,
   },
+  /**
+   * `/workflow` is not in the gateway registry — it is a device-local
+   * invocation (`/workflow <name>` re-sends a saved prompt through runTask),
+   * so the prefix row lives here with the other local suggestions and the
+   * store's names fold in below it.
+   */
+  {
+    value: '/workflow ',
+    label: '/workflow',
+    description: 'Re-run a saved workflow by name',
+    danger: 'local',
+    family: 'Workflows',
+    unavailable: false,
+  },
 ];
 
 export function isSlashCommandInput(text: string): boolean {
@@ -335,8 +353,21 @@ export function getSlashCommandSuggestions(
    */
   limit: number = 12,
   skills: Skill[] = [],
+  /**
+   * This device's saved workflows — the same phone-side store the executor
+   * reads (context-injected, no RPC). Absent or empty means the plain
+   * `/workflow` prefix row is all the Workflows family shows.
+   */
+  workflows: SavedWorkflow[] = [],
 ): SlashCommandSuggestion[] {
   const needle = input.trimStart().toLowerCase();
+
+  // The Workflow rows earn their place only once `/workflow` itself is on
+  // screen — a name is being completed, not discovered cold. Every other
+  // family keeps its idle-palette behavior untouched.
+  const savedWorkflows = needle.startsWith('/workflow')
+    ? workflows
+    : [];
 
   // Recent commands first — fastest path to what you actually run. A recent
   // that names a registered command carries that entry's danger and the live
@@ -410,9 +441,30 @@ export function getSlashCommandSuggestions(
     }))
     .filter((item) => !builtInSlashes.has(item.value));
 
+  /**
+   * Saved workflows on this device fold in as their own family. Rows appear
+   * only once `/workflow` has been typed at least to its space — a name the
+   * operator is completing — so an idle `/` palette is not a wall of stored
+   * prompts. `value` completes to the full invocation; `workflowName` says
+   * which stored row it is, so a caller can tell the plain prefix row from
+   * one backed by the store. Names the registry, local suggestions, dynamic
+   * contributions or skills already claim are dropped by the same
+   * `builtInSlashes` filter that guards the other folded families.
+   */
+  const workflowSuggestions: SlashCommandSuggestion[] = savedWorkflows.map((workflow) => ({
+    value: `/workflow ${workflow.name}`,
+    label: workflow.name,
+    description: workflow.prompt,
+    danger: 'local' as const,
+    family: 'Workflows',
+    unavailable: false,
+    workflowName: workflow.name,
+  }));
+
   let suggestions = [
     ...recentSuggestions,
     ...localWithMeta,
+    ...workflowSuggestions,
     ...registrySuggestions,
     ...dynamicSuggestions,
     ...skillSuggestions,

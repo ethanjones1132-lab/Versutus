@@ -34,6 +34,7 @@ import { Motion, Radius, Spacing } from '@/constants/tokens';
 import { entering } from '@/lib/motion/presets';
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
 import { useHandsfreeVoice } from '@/context/handsfree-voice-provider';
+import { loadWorkflows, type SavedWorkflow } from '@/lib/workflow/workflow-store';
 import { describeGatewayError, errorBannerButton, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
@@ -525,6 +526,25 @@ export function ChatScreen() {
       cancelled = true;
     };
   }, [sessionSelector.visible]);
+  // This device's saved workflows, so the composer completes `/workflow` to
+  // the names the store holds. The read is the same one the executor makes on
+  // an invocation (phone-side, gateway-scoped) — the gateway is asked nothing.
+  // Re-read on gateway change, on session-selector close (where a workflow may
+  // have been saved or deleted), and on Chat focus — the Activity tab saves
+  // from a settled run, so a tab switch back can carry one.
+  const [savedWorkflows, setSavedWorkflows] = useState<SavedWorkflow[]>([]);
+  const chatFocused = useIsFocused();
+  useEffect(() => {
+    if (!activeGateway || sessionSelector.visible) return;
+    const gatewayId = activeGateway.id;
+    let cancelled = false;
+    void loadWorkflows(gatewayId).then((stored) => {
+      if (!cancelled) setSavedWorkflows(stored);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeGateway, sessionSelector.visible, chatFocused]);
   // The active Bot, named once for every Bot-keyed surface below (its skills,
   // its tools, and the voice its replies are read in).
   const botSurfaceId = surface.kind === 'bot' ? surface.botId : undefined;
@@ -881,9 +901,18 @@ export function ChatScreen() {
             dynamicCommands,
             12,
             skillsState.skills,
+            savedWorkflows,
           )
         : [],
-    [draft, activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands, skillsState.skills],
+    [
+      draft,
+      activeHello,
+      recentCommands,
+      capabilitySnapshot.methods,
+      dynamicCommands,
+      skillsState.skills,
+      savedWorkflows,
+    ],
   );
   // Stable across streamed frames (icons + drafts never change) so the memoized
   // ChatComposer short-circuits when only `messages` changed.
@@ -908,6 +937,7 @@ export function ChatScreen() {
         dynamicCommands,
         Number.POSITIVE_INFINITY,
         skillsState.skills,
+        [],
       ),
     [activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands, skillsState.skills],
   );
