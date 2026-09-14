@@ -10,6 +10,7 @@
 // because that is the one fact that changes what the operator does next.
 
 import { describeRunFailure, type RunFailureView } from '@/lib/gateway/run-failures';
+import { parseRoutineName } from '@/lib/gateway/routines';
 
 /** One scheduled job, curated by the Gate with its raw record attached. */
 export type CronJob = {
@@ -189,6 +190,31 @@ export function sortCronJobs(jobs: CronJob[], now = Date.now()): CronJob[] {
     if (aNext !== bNext) return aNext - bNext;
     return a.title.localeCompare(b.title);
   });
+}
+
+/**
+ * The scheduled-work list, grouped by the Bot that owns each job: a job whose
+ * name carries the `[bot:<name>]` convention (written by `routineName`, read
+ * by `parseRoutineName`) groups under that Bot, and every unowned job shares
+ * one `null`-keyed gateway group rather than being guessed into some Bot —
+ * the same attribution rule `scorecardRoutineHealth` runs, so the Activity
+ * section and the scorecards can never attribute one job to two Bots.
+ *
+ * Group order follows first appearance in the input (a sorted list keeps its
+ * worst-first read), and each group keeps its jobs in that order too.
+ */
+export function groupCronJobsByOwner(
+  jobs: readonly CronJob[],
+): Map<string | null, CronJob[]> {
+  const groups = new Map<string | null, CronJob[]>();
+  for (const job of jobs) {
+    const parsed = parseRoutineName(job.name ?? '');
+    const botId = typeof parsed.botId === 'string' && parsed.botId.length > 0 ? parsed.botId : null;
+    const group = groups.get(botId);
+    if (group) group.push(job);
+    else groups.set(botId, [job]);
+  }
+  return groups;
 }
 
 /** How many jobs are running right now — the Activity section's live badge. */

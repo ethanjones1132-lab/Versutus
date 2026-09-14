@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 
@@ -11,6 +11,7 @@ import {
   cronJobSummary,
   cronListSummaryText,
   describeCronHealth,
+  groupCronJobsByOwner,
   runningCount,
   sortCronJobs,
   type CronJob,
@@ -170,23 +171,41 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
         />
       ) : null}
 
-      {sorted.map((job) => {
-        const health = describeCronHealth(job);
-        return (
-          <ListRow
-            key={job.id}
-            title={job.title || job.id}
-            subtitle={cronJobSummary(job)}
-            onPress={() => setOpenJob(job)}
-            trailing={
-              <Text variant="micro" color={TONE_COLOR[health.tone]}>
-                {job.running ? '●' : health.label}
-              </Text>
-            }
-            style={styles.row}
-          />
-        );
-      })}
+      {(() => {
+        // One owner / all-unowned renders exactly as before; multiple owners
+        // get a micro heading per Bot, unowned under "Gateway" (a job whose
+        // name carries no Bot is attributed to nobody, not guessed).
+        const groups = groupCronJobsByOwner(sorted);
+        const needsHeadings = [...groups.keys()].filter(Boolean).length > 1;
+        const rows: ReactNode[] = [];
+        for (const [botId, group] of groups) {
+          if (needsHeadings) {
+            rows.push(
+              <Text key={`own:${botId ?? 'gateway'}`} variant="micro" color="secondary">
+                {botId ? `Bot ${botId}` : 'Gateway'}
+              </Text>,
+            );
+          }
+          for (const job of group) {
+            const health = describeCronHealth(job);
+            rows.push(
+              <ListRow
+                key={job.id}
+                title={job.title || job.id}
+                subtitle={cronJobSummary(job)}
+                onPress={() => setOpenJob(job)}
+                trailing={
+                  <Text variant="micro" color={TONE_COLOR[health.tone]}>
+                    {job.running ? '●' : health.label}
+                  </Text>
+                }
+                style={styles.row}
+              />,
+            );
+          }
+        }
+        return rows;
+      })()}
 
       <Text variant="micro" color="secondary">
         New scheduled job
