@@ -142,6 +142,7 @@ import { syncRunActivities } from '@/lib/notifications/run-activity-device';
 import { pendingRunFocus, type RunFocus } from '@/lib/notifications/run-focus';
 import { runProgressNotice } from '@/lib/notifications/run-progress';
 import { rearmRoutineNotifications } from '@/lib/notifications/routine-sync';
+import { syncPushRegistration } from '@/lib/notifications/push-registration';
 import type {
   ChatMessage,
   CommandTranscriptEntry,
@@ -3398,6 +3399,27 @@ const response = await executeGatewaySlashCommand(trimmed, {
     // Fire-and-forget: the connection must never wait on a notification read.
     void rearmRoutineNotices();
   }, [rearmRoutineNotices, status]);
+
+  // Register this device's Expo push token with the connected gateway (A2).
+  // The Gate now holds the live half (`notifications.register` on the dispatch
+  // table, gate/core/push-rpc.mjs), so without this the relay stays dark — no
+  // row exists for the paired device. The sync is best-effort and fire-and-
+  // forget exactly like the re-arm above: a token read that fails (no
+  // permission, no token yet, a refused register) never fails or delays the
+  // connection; the next connected transition tries again.
+  const syncPushTokenRegistration = useCallback(async () => {
+    const gatewayId = activeGateway?.id;
+    if (!gatewayId) return;
+    const client = clientRef.current;
+    if (!client?.rpcRequest) return;
+    await syncPushRegistration(client, gatewayId);
+  }, [activeGateway]);
+
+  useEffect(() => {
+    if (status !== 'connected') return;
+    // Fire-and-forget: the connection must never wait on a push token read.
+    void syncPushTokenRegistration();
+  }, [syncPushTokenRegistration, status]);
 
   const cron = useMemo(() => ({
     get available() {

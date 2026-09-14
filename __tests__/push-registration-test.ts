@@ -77,7 +77,7 @@ describe('push registration', () => {
     mockGet.mockResolvedValue('ExponentPushToken[old]');
     const rpc = rpcStub();
 
-    await syncPushRegistration(rpc);
+    await syncPushRegistration(rpc, 'gateway-a');
 
     expect(mockSet).toHaveBeenCalledWith(STORE_KEY, 'ExponentPushToken[new]');
     expect(rpc.rpcRequest).toHaveBeenCalledWith(
@@ -86,14 +86,22 @@ describe('push registration', () => {
     );
   });
 
-  test('an unchanged token is registered without a redundant write', async () => {
-    mockGet.mockResolvedValue('ExponentPushToken[new]');
+  test('an unchanged token is registered without a redundant device write', async () => {
+    mockGet.mockImplementation((key: string) =>
+      Promise.resolve(
+        key === STORE_KEY || key === `versutus:push-registered:gateway-a`
+          ? 'ExponentPushToken[new]'
+          : null,
+      ),
+    );
     const rpc = rpcStub();
 
-    await syncPushRegistration(rpc);
+    await syncPushRegistration(rpc, 'gateway-a');
 
+    // The device token blob is not rewritten; registration is skipped whole —
+    // the scope skip is pinned in push-registration-connect-test.ts.
     expect(mockSet).not.toHaveBeenCalled();
-    expect(rpc.rpcRequest).toHaveBeenCalled();
+    expect(rpc.rpcRequest).not.toHaveBeenCalled();
   });
 
   test('web returns null and never touches Expo or the gate', async () => {
@@ -101,7 +109,7 @@ describe('push registration', () => {
     const rpc = rpcStub();
 
     await expect(obtainExpoPushToken()).resolves.toBeNull();
-    await expect(syncPushRegistration(rpc)).resolves.toBeUndefined();
+    await expect(syncPushRegistration(rpc, 'gateway-a')).resolves.toBeUndefined();
 
     expect(mockToken).not.toHaveBeenCalled();
     expect(rpc.rpcRequest).not.toHaveBeenCalled();
@@ -119,7 +127,7 @@ describe('push registration', () => {
     mockToken.mockRejectedValue(new Error('no native module'));
 
     await expect(obtainExpoPushToken()).resolves.toBeNull();
-    await expect(syncPushRegistration(rpcStub())).resolves.toBeUndefined();
+    await expect(syncPushRegistration(rpcStub(), 'gateway-a')).resolves.toBeUndefined();
   });
 
   test('deregisterWithGate calls notifications.deregister', async () => {

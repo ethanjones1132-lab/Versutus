@@ -16,8 +16,13 @@ import { Platform } from 'react-native';
 
 import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
 
-/** Where this device's last-known Expo push token is kept. */
-const STORE_KEY = 'versutus:expo-push-token:v1';
+/**
+ * Where this device's last-known Expo push token is kept. The token itself is
+ * device-wide (one platform token per install), so it lives in one blob key;
+ * which GATEWAY it was already registered with is tracked per scope beside it
+ * by `loadRegisteredScope` / `markRegisteredScope`.
+ */
+export const STORE_KEY = 'versutus:expo-push-token:v1';
 
 /**
  * The EAS project the token belongs to. `Constants.easConfig` carries it in a
@@ -95,9 +100,54 @@ export async function deregisterWithGate(rpc: Rpc): Promise<void> {
   await rpc.rpcRequest('notifications.deregister');
 }
 
-/** Obtain the token and register it; a device with no token asks for nothing. */
-export async function syncPushRegistration(rpc: Rpc): Promise<void> {
+/**
+ * The `versutus:push-registered:<gatewayId>` key: which gateway this device's
+ * token has already been registered with and at what token value. Registration
+ * is per gateway, not per device — two paired profiles each hold their own
+ * registry row Gate-side, keyed by the grant's deviceId.
+ */
+const registeredScopeKey = (gatewayId: string) => `versutus:push-registered:${gatewayId}`;
+
+/**
+ * The token value this device already registered with the named gateway, or
+ * null when none was recorded (or the record is unreadable — a lost skip
+ * marker only means one honest re-register, never a wrong one).
+ */
+async function loadRegisteredScope(gatewayId: string): Promise<string | null> {
+  try {
+    return await secureKeyValueStorage.getItem(registeredScopeKey(gatewayId));
+  } catch {
+    return null;
+  }
+}
+
+/** Note the token now registered with the named gateway. */
+async function markRegisteredScope(gatewayId: string, token: string): Promise<void> {
+  try {
+    await secureKeyValueStorage.setItem(registeredScopeKey(gatewayId), token);
+  } catch {
+    // A lost record costs one redundant register on the next connect, not a
+    // failure — the Gate's registry is idempotent on upsert.
+  }
+}
+
+/**
+ * Obtain the token and register it with the named gateway; a device with no
+ * token asks for nothing, a token unchanged since the last register for THIS
+ * gateway is skipped (A2's "re-register when the token changes"), and any
+ * failure resolves — the connected edge never hears a rejection over push.
+ */
+export async function syncPushRegistration(rpc: Rpc, gatewayId: string): Promise<void> {
   const token = await obtainExpoPushToken();
   if (!token) return;
-  await registerWithGate(rpc, token);
+  const registered = await loadRegisteredScope(gatewayId);
+  if (registered === token) return;
+  try {
+    await registerWithGate(rpc, token);
+  } catch {
+    // A refused register never reaches the connect path — and nothing is
+    // marked, so the next connected transition honestly tries again.
+    return;
+  }
+  await markRegisteredScope(gatewayId, token);
 }
