@@ -15,6 +15,16 @@ import type { HandsfreePhase } from '@/lib/voice/handsfree-session';
 export const HANDSFREE_DISCLOSURE =
   'Hands-free calls listen only after you start them. Speech is sent automatically when you pause. You can interrupt a reply just by talking. The call continues while Versutus is in the background. End it here or from Android’s notification.';
 
+/**
+ * The one sentence that says where a dead call's words go. Crash recovery is
+ * shipped (`promoteHandsfreeRecovery`): the newest persisted transcript is
+ * joined onto the composer draft when a call dies mid-turn, so the words can
+ * surface in the composer without anyone speaking them again — the operator
+ * is owed that fact up front, in the disclosure, not on launch.
+ */
+export const HANDSFREE_RECOVERY_DISCLOSURE =
+  'If the call is interrupted unexpectedly, what you said can appear in the message box — review it before sending, as always.';
+
 /** The label beside the Call control. */
 export const HANDSFREE_START_LABEL = 'Start hands-free call';
 /** The banner's permanent auto-send reminder. */
