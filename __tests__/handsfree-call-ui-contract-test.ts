@@ -5,6 +5,7 @@ import {
   HANDSFREE_DISCLOSURE,
   HANDSFREE_END_LABEL,
   HANDSFREE_MUTE_LABEL,
+  HANDSFREE_RECOVERY_DISCLOSURE,
   HANDSFREE_SKIP_LABEL,
   HANDSFREE_SPEAKING_HINT,
   HANDSFREE_START_LABEL,
@@ -48,6 +49,19 @@ describe('the disclosure a call must show', () => {
     expect(sheet).toContain('HANDSFREE_DISCLOSURE');
     expect(sheet).toContain('label="Cancel"');
     expect(sheet).toContain('label="Start call"');
+  });
+
+  test('states where a dead call’s words surface — the composer, not silence', () => {
+    // Crash recovery is shipped behavior (promoteHandsfreeRecovery): the
+    // newest persisted transcript is joined onto the composer draft when a
+    // call dies mid-turn. The disclosure is the only place the operator is
+    // told, so it must say it — own constant, so the pin moves in one place.
+    expect(HANDSFREE_RECOVERY_DISCLOSURE).toBe(
+      'If the call is interrupted unexpectedly, what you said can appear in the message box — review it before sending, as always.',
+    );
+    // The sheet draws it from the same copy module, beside the main
+    // disclosure — never a string inlined here.
+    expect(sheet).toContain('HANDSFREE_RECOVERY_DISCLOSURE');
   });
 
   test('never implies always-listening, a wake word, full-duplex or a named competitor', () => {

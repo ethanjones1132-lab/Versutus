@@ -5,6 +5,7 @@ import { Spacing } from '@/constants/tokens';
 import {
   HANDSFREE_BANNER_TITLE,
   HANDSFREE_DISCLOSURE,
+  HANDSFREE_RECOVERY_DISCLOSURE,
 } from '@/lib/voice/handsfree-call-copy';
 import { haptics } from '@/lib/haptics';
 
@@ -74,6 +75,10 @@ export function HandsfreeCallSheet({
 
         <Text color="secondary" style={styles.disclosure}>
           {disclosure ?? HANDSFREE_DISCLOSURE}
+        </Text>
+
+        <Text color="secondary" style={styles.disclosure}>
+          {HANDSFREE_RECOVERY_DISCLOSURE}
         </Text>
 
         {error ? (
