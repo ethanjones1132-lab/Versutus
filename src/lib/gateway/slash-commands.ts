@@ -16,6 +16,7 @@ import {
   totalUsage,
 } from '@/lib/gateway/session-analytics';
 import type { RunOutcome } from '@/lib/gateway/runs';
+import type { SavedWorkflow } from '@/lib/workflow/workflow-store';
 import { runSlashStatusWord } from '@/lib/gateway/run-status-verdict';
 import {
   pairedDeviceRowCopy,
@@ -130,6 +131,19 @@ type SlashCommandContext = {
    * omits the Skills section.
    */
   skills?: Skill[];
+  /**
+   * This device's saved workflows (FUTURE-ITEMS §Phase 5 — client-side, no RPC).
+   * `/workflow <name>` reads the store behind this loader and re-sends the
+   * stored prompt through the SAME `runTask` seam `/run` uses. A refused or
+   * empty read is simply "no such workflow" — never an invented invocation.
+   */
+  workflows?: () => Promise<SavedWorkflow[]>;
+  /**
+   * Bookkeeping after an invoked workflow ran: the store bumps the named
+   * workflow's `runCount`. Fire-and-forget from the executor's view — a
+   * refused write is not a failed run.
+   */
+  recordWorkflowRun?: (name: string) => Promise<void>;
 };
 
 type ConfigSnapshot = {
@@ -528,6 +542,10 @@ export async function executeGatewaySlashCommand(
     return runTaskCommand(argText, context);
   }
 
+  if (commandName === '/workflow') {
+    return runWorkflowCommand(argText, context);
+  }
+
   if (commandName === '/agent') {
     return runAgentSubcommand(args, context);
   }
@@ -755,6 +773,82 @@ async function runTaskCommand(argText: string, context: SlashCommandContext): Pr
     runId: outcome.runId,
     raw: [streamed.join('\n'), body].filter(Boolean).join('\n\n'),
   };
+}
+
+/** `/workflow`'s usage answer, with the store's names when one was misspelled. */
+function workflowUsage(workflows: SavedWorkflow[]): SlashCommandResult {
+  const names = workflows.map((w) => w.name).slice(0, 8);
+  const namesLine = names.length ? `\n\nSaved: ${names.map((n) => `/workflow ${n}`).join(' · ')}` : '\n\nNo saved workflows on this device yet.';
+  return textResult(`Usage: /workflow <name> — re-run a saved workflow's prompt${namesLine}`, '/workflow');
+}
+
+/**
+ * `/workflow <name>` invokes a SAVED workflow: the stored prompt is re-sent
+ * verbatim through the same `runTask` seam `/run` uses, so the run row, the
+ * verdict fold and the runId carry are /run's own behavior. No RPC is made —
+ * the store is phone-side, loaded through the context's `workflows`; a
+ * refused or empty read is "no such workflow", never an invented invocation.
+ * Capability gating mirrors `/run` (absent runTask or a disconnected
+ * snapshot answers the same honest block). A stored prompt carrying a slash
+ * line is the workflow's own words, sent as the run's prompt — matching the
+ * proven /run behavior (argText keeps everything after the command name).
+ */
+async function runWorkflowCommand(argText: string, context: SlashCommandContext): Promise<SlashCommandResult> {
+  const name = argText.trim();
+  if (!name) return workflowUsage([]);
+
+  if (!context.runTask) return { ...runRunCapabilityBlock(context), title: '/workflow' };
+  const runId = commandIdForInput('/run', []);
+  const entry = runId ? context.methods?.[runId] : undefined;
+  if (entry?.available === false && entry.reason === CONNECTION_OFFLINE) {
+    return textResult('The gateway is not connected — reconnect, then run /workflow again.', '/workflow');
+  }
+
+  const workflows = (await context.workflows?.()) ?? [];
+  const needle = name.replace(/\s+/g, ' ').trim().toLowerCase();
+  const workflow = workflows.find((w) => w.name.toLowerCase() === needle);
+  if (!workflow) return workflowUsage(workflows);
+
+  const outcome = await context.runTask(workflow.prompt);
+  await bumpWorkflowRunCount(workflow, context);
+
+  if (outcome.cancelled) {
+    return {
+      ...textResult('Run cancelled', '/workflow', `Run ${outcome.runId} was cancelled.`),
+      runId: outcome.runId,
+    };
+  }
+
+  const succeeded = runSlashStatusWord(outcome) === 'complete';
+  const decision = outcome.approved === undefined ? '' : outcome.approved ? '· approved' : '· denied';
+  const body = [
+    `Run ${outcome.runId.slice(0, 12)}… ${outcome.status} ${decision}`,
+    outcome.error ? `Error: ${outcome.error}` : '',
+    outcome.result ? `Result: ${outcome.result}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const summary = outcome.result || outcome.error || outcome.status || 'no result';
+  return {
+    text: `${succeeded ? 'Run complete' : `Run ${runSlashStatusWord(outcome)}`}: ${summary}`,
+    title: `/workflow ${workflow.name}`,
+    runId: outcome.runId,
+    raw: [body].filter(Boolean).join('\n\n'),
+  };
+}
+
+/**
+ * Best-effort run-count bookkeeping, fire-and-forget from the operator's
+ * point of view — a refused write never fails a run that already finished,
+ * the same rule the save surface keeps.
+ */
+async function bumpWorkflowRunCount(workflow: SavedWorkflow, context: SlashCommandContext): Promise<void> {
+  if (!context.recordWorkflowRun) return;
+  try {
+    await context.recordWorkflowRun(workflow.name);
+  } catch {
+    // best-effort
+  }
 }
 
 function formatRunEvent(event: { type: string; data?: Record<string, unknown> }): string {

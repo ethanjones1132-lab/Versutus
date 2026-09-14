@@ -195,6 +195,27 @@ export async function deleteWorkflow(gatewayId: string, name: string): Promise<b
 }
 
 /**
+ * Bump one saved workflow's `runCount` after an invocation ran (the count is
+ * how many times the workflow was invoked, per its type doc). Matched by
+ * name the way `deleteWorkflow` matches; nothing held is untouched and the
+ * write is best-effort — `false` says the count did not move.
+ */
+export async function incrementWorkflowRunCount(gatewayId: string, name: string): Promise<boolean> {
+  let bumped = false;
+  const next = await foldStore(gatewayId, (workflows) =>
+    workflows.map((workflow) => {
+      if (workflow.name.toLowerCase() === name.toLowerCase() && !bumped) {
+        bumped = true;
+        return { ...workflow, runCount: workflow.runCount + 1 };
+      }
+      return workflow;
+    }),
+  );
+  if (!bumped) return false;
+  return persist(next);
+}
+
+/**
  * The one gateway-scoped read: the newest saved workflow leads. Missing blob
  * key, unreadable blob, or a store that refuses the read all answer `[]` —
  * the same "no labels" / "no labels" answers their sibling stores give.

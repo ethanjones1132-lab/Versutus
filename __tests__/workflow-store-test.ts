@@ -28,6 +28,7 @@ import {
   SAVED_WORKFLOWS_STORAGE_KEY,
   WORKFLOW_STORE_CAP,
   deleteWorkflow,
+  incrementWorkflowRunCount,
   loadWorkflows,
   saveWorkflowFromRun,
 } from '@/lib/workflow/workflow-store';
@@ -210,5 +211,37 @@ describe('deleteWorkflow', () => {
     (AsyncStorage.setItem as jest.Mock).mockClear();
     expect(await deleteWorkflow('gw-1', 'missing')).toBe(false);
     expect(AsyncStorage.setItem).not.toHaveBeenCalled();
+  });
+});
+
+describe('incrementWorkflowRunCount', () => {
+  test('bumps the named workflow only, other rows untouched', async () => {
+    await saveWorkflowFromRun({ run: finishedRun(), name: 'alpha', gatewayId: 'gw-1', now: 1700000001000 });
+    await saveWorkflowFromRun({ run: finishedRun(), name: 'beta', gatewayId: 'gw-1', now: 1700000002000 });
+    expect(await incrementWorkflowRunCount('gw-1', 'ALPHA')).toBe(true);
+    const workflows = await loadWorkflows('gw-1');
+    // newest-saved first ordering holds after the bump
+    expect(workflows.map((w) => w.name)).toEqual(['beta', 'alpha']);
+    expect(workflows.find((w) => w.name === 'alpha')?.runCount).toBe(1);
+    expect(workflows.find((w) => w.name === 'beta')?.runCount).toBe(0);
+  });
+
+  test('repeated invocations accumulate', async () => {
+    await saveWorkflowFromRun({ run: finishedRun(), name: 'alpha', gatewayId: 'gw-1' });
+    await incrementWorkflowRunCount('gw-1', 'alpha');
+    await incrementWorkflowRunCount('gw-1', 'alpha');
+    expect((await loadWorkflows('gw-1'))[0].runCount).toBe(2);
+  });
+
+  test('a name the store does not hold reports false and writes nothing', async () => {
+    (AsyncStorage.setItem as jest.Mock).mockClear();
+    expect(await incrementWorkflowRunCount('gw-1', 'missing')).toBe(false);
+    expect(AsyncStorage.setItem).not.toHaveBeenCalled();
+  });
+
+  test("another gateway's same-named workflow is untouched", async () => {
+    await saveWorkflowFromRun({ run: finishedRun(), name: 'alpha', gatewayId: 'gw-2' });
+    expect(await incrementWorkflowRunCount('gw-1', 'alpha')).toBe(false);
+    expect((await loadWorkflows('gw-2'))[0].runCount).toBe(0);
   });
 });

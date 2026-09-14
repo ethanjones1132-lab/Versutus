@@ -104,6 +104,10 @@ import {
   shouldPassthroughSkillSlash,
   executeGatewaySlashCommand,
 } from '@/lib/gateway/slash-commands';
+import {
+  incrementWorkflowRunCount,
+  loadWorkflows,
+} from '@/lib/workflow/workflow-store';
 import { decideBusySlash } from '@/lib/gateway/busy-slash';
 import type { Skill } from '@/lib/gateway/skills';
 import { findConfirmableSlash } from '@/lib/gateway/command-match';
@@ -2635,6 +2639,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           methods: capabilitySnapshot.methods,
           dynamicCommands,
           messages: messagesRef.current,
+          // The device's own saved workflow store, loaded per invocation —
+          // the store is phone-side, so `/workflow` needs no RPC. The
+          // gateway id scopes the read exactly as the save surface scopes
+          // its write; the id is non-null here (the pre-flight guard above
+          // returned on a missing activeGateway).
+          workflows: () => loadWorkflows(activeGateway?.id ?? ''),
+          recordWorkflowRun: (name) =>
+            incrementWorkflowRunCount(activeGateway?.id ?? '', name).then(() => undefined),
           resetConversation: () => createNewSessionRef.current(),
           restoreSession: (sessionId) => selectSessionRef.current(sessionId),
           createNewSession: (title) => createNewSessionRef.current(title),

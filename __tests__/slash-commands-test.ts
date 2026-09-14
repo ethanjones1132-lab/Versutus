@@ -1,5 +1,96 @@
 import { executeGatewaySlashCommand, getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { METHOD_GUIDANCE, METHOD_TO_ROUTE } from '@/lib/gateway/rpc-routes';
+import type { SavedWorkflow } from '@/lib/workflow/workflow-store';
+
+const savedWorkflow: SavedWorkflow = {
+  id: 'wf-1',
+  name: 'nightly docs',
+  prompt: 'rebuild the docs site',
+  botId: 'bot-7',
+  createdAt: 1700000000000,
+  runCount: 0,
+};
+
+const workflowContext = {
+  hello: null,
+  gatewayRequest: jest.fn(),
+  runAgentCommand: jest.fn(),
+  runTask: jest.fn().mockResolvedValue({ runId: 'run-9', status: 'complete', approved: true, result: 'docs rebuilt' }),
+  workflows: jest.fn().mockResolvedValue([savedWorkflow]),
+};
+
+/** The snapshot id blockUnsupportedCommand resolves for the /run family. */
+const RUN_METHOD_ID = 'run-task';
+
+beforeEach(() => {
+  workflowContext.runTask.mockClear();
+  workflowContext.workflows.mockClear();
+  workflowContext.gatewayRequest.mockClear();
+});
+
+describe('slash /workflow invocation', () => {
+  test('/workflow <name> executes the stored prompt through the runTask seam', async () => {
+    const result = await executeGatewaySlashCommand('/workflow nightly docs', workflowContext);
+    expect(workflowContext.runTask).toHaveBeenCalledWith('rebuild the docs site');
+    expect(result.text).toContain('docs rebuilt');
+    expect(result.runId).toBe('run-9');
+    expect(workflowContext.gatewayRequest).not.toHaveBeenCalled();
+  });
+
+  test('name matching is case-insensitive and tolerates extra spacing', async () => {
+    const result = await executeGatewaySlashCommand('/workflow   NIGHTLY   docs ', workflowContext);
+    expect(workflowContext.runTask).toHaveBeenCalledWith('rebuild the docs site');
+    expect(result.text).toContain('Run complete');
+  });
+
+  test('an unknown name answers usage plus the names the store holds, never guessing', async () => {
+    const result = await executeGatewaySlashCommand('/workflow nope', workflowContext);
+    expect(workflowContext.runTask).not.toHaveBeenCalled();
+    expect(result.text).toContain('Usage: /workflow <name>');
+    expect(result.text).toContain('nightly docs');
+    expect(result.title).toBe('/workflow');
+  });
+
+  test('a bare /workflow answers usage', async () => {
+    const result = await executeGatewaySlashCommand('/workflow', workflowContext);
+    expect(result.text).toContain('Usage: /workflow <name>');
+  });
+
+  test('an empty store adds no names to the unknown-name reply', async () => {
+    const context = { ...workflowContext, workflows: jest.fn().mockResolvedValue([]) };
+    const result = await executeGatewaySlashCommand('/workflow nope', context);
+    expect(result.text).toContain('Usage: /workflow <name>');
+    expect(result.text).not.toContain('nightly docs');
+  });
+
+  test('absent runTask answers the same honest block /run produces', async () => {
+    const context = { ...workflowContext, runTask: undefined };
+    const result = await executeGatewaySlashCommand('/workflow nightly docs', context);
+    expect(result.text).toContain('does not support agentic runs');
+    expect(result.title).toBe('/workflow');
+  });
+
+  test('a disconnected snapshot answers the same honest block /run produces', async () => {
+    const context = {
+      ...workflowContext,
+      methods: { [RUN_METHOD_ID]: { available: false, reason: 'offline' } },
+    };
+    const result = await executeGatewaySlashCommand('/workflow nightly docs', context);
+    expect(result.text).toContain('not connected');
+    expect(result.title).toBe('/workflow');
+  });
+
+  test('/workflow is NOT judged by the capability-snapshot block for an unknown command id', async () => {
+    // No `run`/`workflow` registry entry exists, so blockUnsupportedCommand
+    // resolves no id and must not block the local command.
+    const result = await executeGatewaySlashCommand('/workflow nightly docs', {
+      ...workflowContext,
+      methods: { unrelated: { available: false, reason: 'offline' } },
+    });
+    expect(workflowContext.runTask).toHaveBeenCalled();
+    expect(result.text).toContain('docs rebuilt');
+  });
+});
 
 describe('slash commands', () => {
   test('executes local help without a gateway RPC', async () => {
