@@ -13,6 +13,7 @@ import type { ConnectionStatus } from '@/lib/gateway/types';
 import type { GlanceableSnapshot } from '@/lib/widget/snapshot';
 import {
   loadWidgetTarget,
+  reloadWidgetSnapshot,
   writeWidgetSnapshot,
   type WidgetTarget,
 } from '@/lib/widget/widget-device';
@@ -181,6 +182,17 @@ describe('the widget component', () => {
       "import('@/components/widget/glanceable-widget')",
     );
   });
+
+  test('the seam exposes the reload beside the write, Android-only in question', () => {
+    // The connection-edge slice: `Widget.reload()` re-arms the cadence the
+    // plugin's provider schedules (expo-widgets/build/Widgets.js:12-16), so
+    // the seam offers it through the same lazy load and the same swallow a
+    // write gets — a refusing reload is not the app's failure either.
+    const seam = readSource(...SEAM_SOURCE_PATH);
+    expect(seam).toContain('export async function reloadWidgetSnapshot(');
+    expect(seam).toMatch(/function reloadWidgetSnapshot\([\s\S]*target\?\.default\.reload\(\)/);
+    expect(seam).toMatch(/function reloadWidgetSnapshot\([\s\S]*catch \{/);
+  });
 });
 
 // The Android sibling is pinned the way the iOS component is: the file is
@@ -310,6 +322,36 @@ describe('writeWidgetSnapshot', () => {
   });
 });
 
+describe('reloadWidgetSnapshot', () => {
+  const target = (reload: jest.Mock): WidgetTarget =>
+    ({ default: { reload } }) as unknown as WidgetTarget;
+
+  test('hands the reload to the widget the seam loaded, on the connection edge', async () => {
+    const reload = jest.fn();
+    await reloadWidgetSnapshot(async () => target(reload));
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test('Android reaches the reload — the platform whose cadence the provider schedules', async () => {
+    // The reachability pin: Android is not answered before the load, so the
+    // re-arm the connection edge asks for is the same path the write gets.
+    const reload = jest.fn();
+    const load = jest.fn(async () => target(reload));
+    jest.replaceProperty(Platform, 'OS', 'android');
+    await reloadWidgetSnapshot(load);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test('a build that cannot load the widget reloads nothing rather than rejecting', async () => {
+    const load = jest.fn(async () => {
+      throw new Error('Cannot find native module ExpoWidgets');
+    });
+    await expect(reloadWidgetSnapshot(load)).resolves.toBeUndefined();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+});
+
 // The write point (item 4c) is one effect in the provider, and the provider is
 // not a component any test here renders — so it is pinned as source, the way
 // every other provider suite in `__tests__/` pins it.
@@ -339,7 +381,9 @@ describe('the provider writes the snapshot as run state changes', () => {
     const src = provider();
     // Not the component module and not the package: `widget-device.ts` is the
     // one file allowed to name either, and it names them lazily.
-    expect(src).toContain("import { writeWidgetSnapshot } from '@/lib/widget/widget-device';");
+    expect(src).toContain(
+      "import { reloadWidgetSnapshot, writeWidgetSnapshot } from '@/lib/widget/widget-device';",
+    );
     expect(src).not.toMatch(/from '@\/components\/widget\//);
     expect(src).not.toMatch(/from 'expo-widgets'/);
     expect(src).not.toMatch(/updateSnapshot/);

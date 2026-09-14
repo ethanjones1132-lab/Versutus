@@ -184,7 +184,8 @@ import {
 } from '@/lib/gateway/transcript';
 import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
-import { writeWidgetSnapshot } from '@/lib/widget/widget-device';
+import { reloadWidgetSnapshot, writeWidgetSnapshot } from '@/lib/widget/widget-device';
+import { widgetReloadReason } from '@/lib/widget/reload-reason';
 export type ConnectionPhase =
   | 'idle'
   | 'booting'
@@ -3454,11 +3455,23 @@ const response = await executeGatewaySlashCommand(trimmed, {
    * approval count is not a fourth input because item 4a folds it from the run
    * rows, which this effect already watches. A device with no widget target
    * writes nothing at all.
+   *
+   * The reload rides the same facts: a status flip is a connection edge the
+   * app already knows about, and asking the widget to reload re-arms the
+   * Android cadence its own provider schedules — so a connect the process
+   * could not render while backgrounded is re-armed when this edge lands. A
+   * result landing with the status unchanged is fold-only work and reloads
+   * nothing.
    */
+  const prevWidgetStatusRef = useRef<ConnectionStatus | null>(null);
   useEffect(() => {
     void writeWidgetSnapshot(
       glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs }),
     );
+    if (widgetReloadReason(status, prevWidgetStatusRef.current) === 'snapshot') {
+      void reloadWidgetSnapshot();
+    }
+    prevWidgetStatusRef.current = status;
   }, [activityRuns, routineJobs, status]);
 
   const botGroups = useMemo(() => ({

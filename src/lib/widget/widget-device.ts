@@ -80,3 +80,25 @@ export async function writeWidgetSnapshot(
     // The widget keeps the snapshot it already holds.
   }
 }
+
+/**
+ * Ask the widget to re-arm the cadence its platform schedules on its own.
+ *
+ * On Android the plugin's provider schedules `ACTION_APPWIDGET_UPDATE` alarms
+ * on the widget's own cadence regardless of the app's state, and
+ * `Widget.reload()` (`expo-widgets/build/Widgets.js:12-16`) is what pushes the
+ * next alarm out — so a connect the widget could not render because the
+ * process was backgrounded is re-armed the moment a connection edge lands.
+ * The same swallow applies: a refusal is the widget's, never the app's
+ * failure, and a build with no widget target reloads nothing at all.
+ */
+export async function reloadWidgetSnapshot(
+  load: () => Promise<WidgetTarget> = () => import('@/components/widget/glanceable-widget'),
+): Promise<void> {
+  const target = await loadWidgetTarget(load);
+  try {
+    target?.default.reload();
+  } catch {
+    // The widget keeps the cadence it already holds.
+  }
+}
