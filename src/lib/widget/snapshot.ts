@@ -43,6 +43,8 @@ export type GlanceableSnapshot = {
   runsInFlight: number;
   /** In-flight runs stopped on the operator's decision. */
   approvalsPending: number;
+  /** Routines whose schedule the gateway has already let slip past. */
+  overdueRoutines: number;
   /** The newest judged outcome, run or routine, in its own words. */
   lastResult?: string;
   /** When the snapshot was composed — always present, so staleness is sayable. */
@@ -85,6 +87,20 @@ function routineVerdict(job: CronJob): { at: number; text: string } | null {
 }
 
 /**
+ * A stalled routine, judged by the facts the job itself carries: the gateway
+ * named a next run (`nextRunAt`) and it is past, while the job is neither
+ * running now nor paused on purpose — a paused job is off BY DECISION, so its
+ * missed slot is not a stall. The verdict (`describeCronHealth`) is still the
+ * routine's own outcome line; this counts the schedule slipping, which no run
+ * row ever reports.
+ */
+function routineOverdue(job: CronJob, now: number): boolean {
+  if (job.running || job.paused) return false;
+  const next = job.nextRunAt ? Date.parse(job.nextRunAt) : Number.NaN;
+  return Number.isFinite(next) && next <= now;
+}
+
+/**
  * Fold what the app holds into the widget's snapshot.
  *
  * The approval count is folded from the run rows rather than taken as an
@@ -99,6 +115,7 @@ export function glanceableSnapshot(
 ): GlanceableSnapshot {
   let runsInFlight = 0;
   let approvalsPending = 0;
+  let overdueRoutines = 0;
   let newestRun: { at: number; text: string } | null = null;
 
   for (const run of facts.runs) {
@@ -117,6 +134,7 @@ export function glanceableSnapshot(
   }
 
   for (const job of facts.routines) {
+    if (routineOverdue(job, now)) overdueRoutines += 1;
     const verdict = routineVerdict(job);
     if (!verdict) continue;
     if (!newestRun || verdict.at > newestRun.at) newestRun = verdict;
@@ -126,6 +144,7 @@ export function glanceableSnapshot(
     status: facts.status,
     runsInFlight,
     approvalsPending,
+    overdueRoutines,
     ...(newestRun ? { lastResult: newestRun.text } : {}),
     writtenAt: now,
   };

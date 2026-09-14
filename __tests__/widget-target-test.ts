@@ -68,6 +68,7 @@ function snapshot(overrides: Partial<GlanceableSnapshot> = {}): GlanceableSnapsh
     status: 'connected',
     runsInFlight: 0,
     approvalsPending: 0,
+    overdueRoutines: 0,
     writtenAt: NOW,
     ...overrides,
   };

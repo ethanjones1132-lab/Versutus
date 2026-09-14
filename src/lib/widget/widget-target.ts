@@ -98,6 +98,11 @@ export function glanceableWidgetLines(
     work.push(`${countRuns(snapshot.approvalsPending)} waiting on your approval`);
   }
   if (stillGoing > 0) work.push(`${countRuns(stillGoing)} in flight`);
+  if (snapshot.overdueRoutines > 0) {
+    work.push(
+      `${snapshot.overdueRoutines} routine${snapshot.overdueRoutines === 1 ? '' : 's'} overdue`,
+    );
+  }
 
   return {
     status: STATUS_WORDS[snapshot.status],

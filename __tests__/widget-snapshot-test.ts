@@ -1,4 +1,5 @@
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
+import { glanceableWidgetLines } from '@/lib/widget/widget-target';
 import type { CronJob } from '@/lib/gateway/cron';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
@@ -201,6 +202,7 @@ describe('glanceableSnapshot', () => {
       status: 'connecting',
       runsInFlight: 0,
       approvalsPending: 0,
+      overdueRoutines: 0,
       writtenAt: NOW,
     });
     expect(snapshot.lastResult).toBeUndefined();
@@ -210,5 +212,76 @@ describe('glanceableSnapshot', () => {
     const snapshot = glanceableSnapshot({ status: 'connected', runs: [], routines: [] }, NOW - 5_000);
 
     expect(snapshot.writtenAt).toBe(NOW - 5_000);
+  });
+});
+
+describe('overdue routines in the glanceable snapshot', () => {
+  test('the job whose schedule is past and whose verdict is fresh carries the newest line exactly when nothing newer exists', () => {
+    // The overdue job's own verdict is a valid judged outcome — a stalled
+    // schedule is not "no work" — and an older routine verdict must not
+    // displace a newer run's.
+    const snapshot = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [],
+        routines: [job({ nextRunAt: new Date(NOW - 6 * 3_600_000).toISOString() })],
+      },
+      NOW,
+    );
+
+    expect(snapshot.lastResult).toBe('ok');
+    expect(snapshot.overdueRoutines).toBe(1);
+  });
+
+  test('a schedule still held in the future and a job already running are not overdue', () => {
+    const snapshot = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [],
+        routines: [
+          job({ id: 'ahead', nextRunAt: new Date(NOW + 3_600_000).toISOString() }),
+          job({ id: 'running', nextRunAt: new Date(NOW - 3_600_000).toISOString(), running: true }),
+        ],
+      },
+      NOW,
+    );
+
+    expect(snapshot.overdueRoutines).toBe(0);
+  });
+
+  test('a newer judged run outranks the overdue routine it follows', () => {
+    const snapshot = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [run({ finishedAt: NOW - 60_000, summary: 'wrote 3 files' })],
+        routines: [job({ nextRunAt: new Date(NOW - 6 * 3_600_000).toISOString() })],
+      },
+      NOW,
+    );
+
+    expect(snapshot.lastResult).toBe('wrote 3 files');
+    expect(snapshot.overdueRoutines).toBe(1);
+  });
+});
+
+describe('overdue routines in the widget lines', () => {
+  test('the work line carries the overdue suffix after the runs it counts', () => {
+    expect(
+      glanceableWidgetLines(
+        glanceableSnapshot(
+          {
+            status: 'connected',
+            runs: [run({ id: 'live', status: 'running', finishedAt: undefined, summary: undefined })],
+            routines: [job({ nextRunAt: new Date(NOW - 6 * 3_600_000).toISOString() })],
+          },
+          NOW,
+        ),
+      ).work,
+    ).toBe('1 run in flight · 1 routine overdue');
+    expect(
+      glanceableWidgetLines(
+        glanceableSnapshot({ status: 'connected', runs: [], routines: [] }, NOW),
+      ).work,
+    ).toBe('No runs in flight');
   });
 });
