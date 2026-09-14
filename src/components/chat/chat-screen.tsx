@@ -36,6 +36,7 @@ import { useChatSurface, useGateway } from '@/context/gateway-provider';
 import { useHandsfreeVoice } from '@/context/handsfree-voice-provider';
 import { loadWorkflows, type SavedWorkflow } from '@/lib/workflow/workflow-store';
 import { describeGatewayError, errorBannerButton, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
+import { setBotSpendCap } from '@/lib/settings/bot-spend-cap';
 import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDividerCached } from '@/lib/format';
@@ -341,6 +342,7 @@ export function ChatScreen() {
     botJobs,
     botGroups,
     selectedBotId,
+    canReadBotSessions,
     gatewayRequest,
     requestedSurface,
     clearRequestedSurface,
@@ -1210,6 +1212,15 @@ export function ChatScreen() {
       : surface.kind === 'configurable'
         ? `cfg:${selectedBackendId ?? ''}`
         : undefined;
+  // D5's honest surface: this Bot's spend cap is editable only where the
+  // per-Bot spend read is advertised (the same gate the Spend screen and
+  // Activity use), and the write goes through the store's own
+  // `setBotSpendCap` — the same call the pre-run gate reads back.
+  const spendCapBotId =
+    surface.kind === 'bot' && canReadBotSessions ? surface.botId : undefined;
+  const handleSetSpendCap = useCallback((botId: string, capUsd: number | null) => {
+    void setBotSpendCap(botId, capUsd);
+  }, []);
   const spendRefreshKey = threadSpendRefreshKey({
     surfaceKey: spendSurfaceKey,
     sessionId: currentSessionId,
@@ -2237,6 +2248,8 @@ export function ChatScreen() {
               }
             : undefined
         }
+        spendCapBotId={spendCapBotId}
+        onSetSpendCap={handleSetSpendCap}
       />
 
       <MessageActionsSheet

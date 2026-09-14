@@ -42,3 +42,18 @@ export function spendCapNoticeCopy(verdict: SpendCapVerdict & { decision: 'pause
 /** The honest-limit copy the cap's own surface must state (D5's own line). */
 export const SPEND_CAP_LIMIT_COPY =
   'Caps govern runs started from this app — there is no server-side quota.';
+
+/**
+ * What the cap row's editor hands the store: a typed answer becomes a cap
+ * number, anything that is not a cap becomes `null` — the store's own
+ * clear path, so a blank field clears the cap and garbage stores nothing
+ * rather than becoming a policy nobody wrote. A `$` prefix and interior
+ * commas strip first: they are how a dollar figure is written, not part
+ * of the number it names.
+ */
+export function parseSpendCapInput(text: string): number | null {
+  const digits = text.trim().replace(/^\$/, '').replace(/,/g, '');
+  if (!digits) return null;
+  const value = Number(digits);
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
