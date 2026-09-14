@@ -102,18 +102,25 @@ function runResult(run: ActivityRun): string | null {
 }
 
 /**
- * The gateway's own verdict on a job that has actually been judged, with the
- * run it belongs to. `describeCronHealth` is that vocabulary (cron.ts:82) and
- * is imported rather than re-worded here; a job paused on purpose ('off') and
- * one that never ran ('unknown') are states of the JOB, not the outcome of a
- * run, so neither is a result to report.
+ * The gateway's own judgment of a job, read ONCE per routine and shared
+ * between the alert count and the result line: `isError` is the `error` tone
+ * (counted as an alert), and `judged` carries the outcome line with the run
+ * timestamp it belongs to. `describeCronHealth` is that vocabulary (cron.ts:82)
+ * and is imported rather than re-worded here; a job paused on purpose ('off')
+ * and one that never ran ('unknown') are states of the JOB, not the outcome of
+ * a run, so neither is a result to report — but a job in 'error' tone whose
+ * `lastRunAt` does not parse is still counted as an alert, only unreportable
+ * as a line. `null` is only the 'off'/'unknown' tones: no alert and no line.
  */
-function routineVerdict(job: CronJob): { at: number; text: string } | null {
-  const health = describeCronHealth(job);
+function routineJudgment(
+  job: CronJob,
+  health: ReturnType<typeof describeCronHealth>,
+): { isError: boolean; judged?: { at: number; text: string } } | null {
   if (health.tone === 'off' || health.tone === 'unknown') return null;
+  const isError = health.tone === 'error';
   const at = job.lastRunAt ? Date.parse(job.lastRunAt) : Number.NaN;
-  if (!Number.isFinite(at)) return null;
-  return { at, text: health.label };
+  if (!Number.isFinite(at)) return { isError };
+  return { isError, judged: { at, text: health.label } };
 }
 
 /**
@@ -166,12 +173,14 @@ export function glanceableSnapshot(
 
   for (const job of facts.routines) {
     if (routineOverdue(job, now)) overdueRoutines += 1;
-    // The same health verdict the fold reads for the result line — counted,
-    // not re-judged — so a failing routine is news the work line can name.
-    if (describeCronHealth(job).tone === 'error') routineAlerts += 1;
-    const verdict = routineVerdict(job);
-    if (!verdict) continue;
-    if (!newestRun || verdict.at > newestRun.at) newestRun = verdict;
+    // The health verdict is judged once per routine and shared: the `error`
+    // tone is counted as an alert, and the same verdict — never a second
+    // judgment — is the result line's own words.
+    const judgment = routineJudgment(job, describeCronHealth(job));
+    if (!judgment) continue;
+    if (judgment.isError) routineAlerts += 1;
+    if (!judgment.judged) continue;
+    if (!newestRun || judgment.judged.at > newestRun.at) newestRun = judgment.judged;
   }
 
   return {

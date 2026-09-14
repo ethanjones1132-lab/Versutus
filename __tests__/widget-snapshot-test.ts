@@ -1,5 +1,6 @@
 import { glanceableSnapshot, snapshotSignature } from '@/lib/widget/snapshot';
 import { glanceableWidgetLines } from '@/lib/widget/widget-target';
+import * as cron from '@/lib/gateway/cron';
 import type { CronJob } from '@/lib/gateway/cron';
 import type { ActivityRun } from '@/lib/gateway/runs';
 
@@ -433,5 +434,38 @@ describe('overdue routines in the widget lines', () => {
         glanceableSnapshot({ status: 'connected', runs: [], routines: [] }, NOW),
       ).work,
     ).toBe('No runs in flight');
+  });
+});
+
+describe('the snapshot fold judges each routine once', () => {
+  test('describeCronHealth runs once per routine, shared between the alert count and the result line', () => {
+    // The fold used to parse each job's health twice — once for the alert
+    // count, once inside routineVerdict for the result line. The spy pins the
+    // fold at one judgment per routine per write-point edge.
+    const spy = jest.spyOn(cron, 'describeCronHealth');
+    try {
+      const snapshot = glanceableSnapshot(
+        {
+          status: 'connected',
+          runs: [run({ finishedAt: NOW - 60_000, summary: 'wrote 3 files' })],
+          routines: [
+            job({ id: 'failing', failureStreak: 2, lastError: 'token expired', lastStatus: 'error' }),
+            job({ id: 'fine' }),
+            job({ id: 'late', nextRunAt: new Date(NOW - 60_000).toISOString() }),
+          ],
+        },
+        NOW,
+      );
+
+      expect(spy).toHaveBeenCalledTimes(3);
+      // Sharing the verdict changes no fold output: the failing job is the
+      // alert, the late job is overdue, and the run's own line (newest at an
+      // equal timestamp — a tie keeps the run's) still stands.
+      expect(snapshot.routineAlerts).toBe(1);
+      expect(snapshot.overdueRoutines).toBe(1);
+      expect(snapshot.lastResult).toBe('wrote 3 files');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
