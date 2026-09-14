@@ -101,7 +101,7 @@ test('a confirmed create clears the draft and re-reads the gateway job list', ()
 
 test('the create control sits below the gateway job list', () => {
   const src = section();
-  const listIdx = src.indexOf('sorted.map((job)');
+  const listIdx = src.indexOf('groupCronJobsByOwner(sorted)');
   // lastIndexOf: the empty state above the list also names the
   // "New scheduled job" form; the rendered heading is the last occurrence.
   const createIdx = src.lastIndexOf('New scheduled job');

@@ -27,7 +27,7 @@ test('the empty state names the create form below as the way to file work', () =
   expect(src).toMatch(/File scheduled work with the New scheduled job form below\./);
   // The guidance sits above the list; the form heading sits below it.
   const emptyIdx = src.indexOf('<EmptyState');
-  const listIdx = src.indexOf('sorted.map((job)');
+  const listIdx = src.indexOf('groupCronJobsByOwner(sorted)');
   const createIdx = src.lastIndexOf('New scheduled job');
   expect(emptyIdx).toBeGreaterThan(-1);
   expect(listIdx).toBeGreaterThan(-1);
