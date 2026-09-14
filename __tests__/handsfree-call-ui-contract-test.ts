@@ -27,6 +27,7 @@ function readSource(...parts: string[]): string {
 
 const sheet = readSource('src', 'components', 'chat', 'handsfree-call-sheet.tsx');
 const banner = readSource('src', 'components', 'voice', 'handsfree-call-banner.tsx');
+const provider = readSource('src', 'context', 'handsfree-voice-provider.tsx');
 const composer = readSource('src', 'components', 'chat', 'chat-composer.tsx');
 const screen = readSource('src', 'components', 'chat', 'chat-screen.tsx');
 const layout = readSource('src', 'app', '_layout.tsx');
@@ -64,6 +65,23 @@ describe('the ambient indicator', () => {
     expect(banner).toContain('level={level}');
     // No conditional or send/reply path reads `level`.
     expect(banner).not.toMatch(/if \(.*level/);
+  });
+
+  test('the banner carries no per-sample React write for the level', () => {
+    // The sample arrives at the platform's own rate (~10/s). Holding it in
+    // React state redraws the whole banner tree per sample for a shape that
+    // only answers a number, so the provider holds it in a Reanimated shared
+    // value and the Skia circle reads it on the UI thread instead: the
+    // banner's render count per live call drops to only the phase and
+    // partial changes, and the level itself contributes zero.
+    expect(provider).not.toContain('setLevel');
+    expect(provider).toContain('const level = useSharedValue(0)');
+    expect(provider).toContain('level.value = clampLevel(event.level)');
+    // The native indicator derives its geometry from the shared value in a
+    // worklet, never from render-time JS state.
+    expect(native).toContain('useDerivedValue');
+    expect(native).toContain('level.value');
+    expect(native).not.toContain('const clamped = Math.max(0, Math.min(1, level));');
   });
 
   test('degrades to the same static shape when no level arrives', () => {

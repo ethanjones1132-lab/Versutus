@@ -95,8 +95,10 @@ describe('the phase-to-native wiring table', () => {
     // speechFinished and bargeIn both reopen listening through the reducer.
     expect(provider).toContain("dispatch({ type: 'speechFinished' })");
     expect(provider).toContain("dispatch({ type: 'bargeIn' })");
-    // The amplitude sample is banner-only.
-    expect(provider).toContain('setLevel(clampLevel(event.level))');
+    // The amplitude sample is banner-only, and it is level data: a shared
+    // value the Skia dot reads on the UI thread, never a state write that
+    // would redraw the banner per sample.
+    expect(provider).toContain('level.value = clampLevel(event.level)');
   });
 
   test('a send stops listening first, then sends the accumulated turn', () => {

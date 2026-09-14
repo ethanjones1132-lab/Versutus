@@ -13,6 +13,8 @@
 // different one is the failure this guards against.
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import type { SharedValue } from 'react-native-reanimated';
+import { useSharedValue } from 'react-native-reanimated';
 import { AppState } from 'react-native';
 
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
@@ -69,7 +71,9 @@ export type HandsfreeVoiceContextValue = {
   label: string | undefined;
   reason: HandsfreeTerminalReason | undefined;
   /** The latest 0–1 amplitude sample, when the platform supplies one. */
-  level: number;
+  /** The latest 0–1 amplitude sample, a shared value so the Skia dot reads it
+   * on the UI thread and no React render happens per sample. */
+  level: SharedValue<number>;
   /** Whether `start` can succeed right now. */
   canStart: boolean;
   start: (target: HandsfreeCallTarget) => Promise<HandsfreeStartResult>;
@@ -109,7 +113,12 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const { messages, isSending, isCommandRunning } = useChatSurface();
 
   const [session, setSession] = useState<HandsfreeSessionState>(INITIAL_HANDSFREE_SESSION);
-  const [level, setLevel] = useState(0);
+  // The 0–1 amplitude sample moves at the platform's own rate (~10/s) and is
+  // read only by the banner's Skia dot, so it is level data: it lives in a
+  // shared value the circle reads on the UI thread, not in React state whose
+  // every sample would redraw the banner tree. It stays 0 wherever the
+  // platform supplies no `level`, so the drawn shape is still static there.
+  const level = useSharedValue(0);
   const [availability, setAvailability] = useState<HandsfreeAvailability | null>(null);
   const [label, setLabel] = useState<string | undefined>(undefined);
 
@@ -227,12 +236,16 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         module.addListener('bargeIn', () => {
           dispatch({ type: 'bargeIn' });
         }),
-        // `level` is banner-only: it never reaches the reducer and nothing
-        // depends on it, so a platform that omits it changes nothing.
-        module.addListener('level', (event) => setLevel(clampLevel(event.level))),
+        // The amplitude sample is banner-only, and it is level data: it moves at
+        // the platform's own sample rate (~10/s) for a shape that only answers a
+        // number, so it lives in a Reanimated shared value the Skia circle reads
+        // on the UI thread — no React state write, no per-sample render.
+        module.addListener('level', (event) => {
+          level.value = clampLevel(event.level);
+        }),
       ];
     },
-    [dispatch, unsubscribe],
+    [dispatch, level, unsubscribe],
   );
 
   const teardown = useCallback(async () => {
