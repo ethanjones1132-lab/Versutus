@@ -102,4 +102,26 @@ describe('constellation route', () => {
     expect(homeConstellationVisible(0)).toBe(false);
     expect(homeConstellationVisible(1)).toBe(true);
   });
+
+  it('a saved node offers connect through the fold, and the live node never taps', () => {
+    const drawer = readFileSync(
+      join(__dirname, '..', 'src', 'components', 'fleet', 'fleet-constellation.tsx'),
+      'utf8',
+    );
+    const screen = readFileSync(join(__dirname, '..', 'src', 'app', 'fleet.tsx'), 'utf8');
+    const sheet = readFileSync(
+      join(__dirname, '..', 'src', 'components', 'fleet', 'fleet-connect-sheet.tsx'),
+      'utf8',
+    );
+    // The drawer's tap is the saved class only — the live node is never a
+    // button to itself.
+    expect(drawer).toMatch(/truth === 'saved' && onGatewayPress !== undefined/);
+    // The screen rides the provider's own connectGateway promise, and names
+    // the failure through humanizeGatewayError — not a toast.
+    expect(screen).toContain('connectGateway');
+    expect(screen).toContain('humanizeGatewayError');
+    // The sheet draws its decision from the fold's own answer.
+    expect(sheet).toContain('ConstellationConnectOffer');
+    expect(screen).toContain("from '@/lib/fleet/connect-offer'");
+  });
 });

@@ -15,7 +15,7 @@
 import { memo } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { Card, Text as UiText } from '@/components/ui';
+import { Card, PressableScale, Text as UiText } from '@/components/ui';
 import {
   foldConstellation,
   type ConstellationModel,
@@ -70,6 +70,7 @@ export const ConstellationCanvas = memo(function ConstellationCanvas({
   reachability,
   activeGatewayId,
   status,
+  onGatewayPress,
 }: {
   /** Measured canvas width; `null` until the first onLayout lands. */
   width: number | null;
@@ -79,6 +80,12 @@ export const ConstellationCanvas = memo(function ConstellationCanvas({
   reachability: DrawerReachability;
   activeGatewayId: string | null;
   status: Parameters<typeof foldConstellation>[0]['status'];
+  /**
+   * The connect affordance the two-truth map exists to drive: tapping a node
+   * hands its profile up; the screen decides what the fold's two classes
+   * mean for the tap — the live node is not a button to itself.
+   */
+  onGatewayPress?: (profile: GatewayProfile) => void;
 }) {
   // A canvas that has not answered layout yet answers an empty ring: the map
   // appears on the first measured frame instead of scattering off-canvas.
@@ -103,10 +110,21 @@ export const ConstellationCanvas = memo(function ConstellationCanvas({
       {model.gateways.map((node) => {
         const tone = node.truth === 'live' ? LIVE_TONE : SAVED_TONE;
         const lines = nodeLines(node);
+        // A tappable node is a PressableScale; the live node keeps
+        // pointerEvents="none" — the connected gateway is not a button to
+        // itself, the honesty the two-class map exists to hold.
+        const tappable = node.truth === 'saved' && onGatewayPress !== undefined;
+        const pressedProfile = profiles.find((profile) => profile.id === node.gatewayId);
         return (
-          <View
+          <PressableScale
             key={node.gatewayId}
-            pointerEvents="none"
+            disabled={!tappable}
+            onPress={() => tappable && pressedProfile && onGatewayPress(pressedProfile)}
+            accessibilityRole={tappable ? 'button' : undefined}
+            accessibilityLabel={
+              tappable ? `Connect ${node.gatewayName}` : undefined
+            }
+            pointerEvents={tappable ? 'auto' : 'none'}
             style={[
               styles.node,
               {
@@ -125,7 +143,10 @@ export const ConstellationCanvas = memo(function ConstellationCanvas({
                 {lines.lastSeen}
               </Text>
             ) : null}
-          </View>
+            {tappable ? (
+              <Text style={[styles.nodeStatus, { color: tone.label }]}>Connect…</Text>
+            ) : null}
+          </PressableScale>
         );
       })}
     </View>
