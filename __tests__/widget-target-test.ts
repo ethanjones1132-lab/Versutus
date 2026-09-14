@@ -162,6 +162,21 @@ describe('the widget component', () => {
     expect(source()).not.toMatch(/createWidget\(\s*'/);
   });
 
+  test('the re-worded status and the joined work line each have two lines of room on both views', () => {
+    // `statusLine` re-words a stale `pairing` verdict to "Approval is waiting —
+    // status as of <day> <clock>", which is longer than one line at this size,
+    // and the work line joins up to four segments (approvals, failing routines,
+    // runs in flight, overdue routines), which iter-132 can push past one too.
+    // The whole point of the re-word — the stamp — must not be what gets cut.
+    const src = source();
+    // The status Text carries the semibold font; it is the one whose budget moves.
+    expect(src).toMatch(/font\(\{\s*weight: 'semibold', size: 15 \}\), lineLimit\(2\)/);
+    expect(src).toMatch(/font\(\{ size: 13 \}\), lineLimit\(2\)/);
+    // The result line keeps its own budget: the small-family drop rule, not
+    // the new budget, is what guards it.
+    expect(src).toContain('{lines.result && hasRoomForResult ? (');
+  });
+
   test('takes item 4a snapshot as its props and holds no gateway client', () => {
     const src = source();
     expect(src).toContain('GlanceableSnapshot');
@@ -213,6 +228,18 @@ describe('the Android widget component', () => {
   test('draws the same pure fold the iOS sibling draws, in the Android UI package', () => {
     expect(source()).toContain('glanceableWidgetLines');
     expect(source()).toContain('@expo/ui/jetpack-compose');
+  });
+
+  test('the re-worded status and the joined work line each have two lines of room here too', () => {
+    // The sibling of the iOS case above: `maxLines={1}` elides the re-word's
+    // stamp the same way `lineLimit(1)` does, and the joined work line has the
+    // same four segments. Only the budget moves — the stamp keeps one line.
+    const src = source();
+    expect(src).toMatch(/fontSize: 15, fontWeight: '600' \}\} maxLines=\{2\}/);
+    expect(src).toMatch(/fontSize: 13 \}\} maxLines=\{2\}/);
+    // The stamp stays at one line: it is a single short sentence, and two lines
+    // of room for it would only invite drift.
+    expect(src).toMatch(/fontSize: 11 \}\} maxLines=\{1\}/);
   });
 
   test('imports nothing the widget bundle stubs out, and never the iOS-only package', () => {

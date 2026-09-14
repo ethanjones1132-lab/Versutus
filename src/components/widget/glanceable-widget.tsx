@@ -40,8 +40,12 @@ const GlanceableWidget = (props: GlanceableSnapshot, environment: WidgetEnvironm
 
   return (
     <VStack alignment="leading" spacing={4}>
-      <Text modifiers={[font({ weight: 'semibold', size: 15 }), lineLimit(1)]}>{lines.status}</Text>
-      <Text modifiers={[font({ size: 13 }), lineLimit(1)]}>{lines.work}</Text>
+      {/* The re-word a stale pairing verdict gets ("Approval is waiting — status
+          as of <day> <clock>") and the joined work line both run past one line
+          at this size, so each takes two lines of room — the stamp is the
+          re-word's whole point and may not be what gets cut. */}
+      <Text modifiers={[font({ weight: 'semibold', size: 15 }), lineLimit(2)]}>{lines.status}</Text>
+      <Text modifiers={[font({ size: 13 }), lineLimit(2)]}>{lines.work}</Text>
       {lines.result && hasRoomForResult ? (
         <Text modifiers={[font({ size: 13 }), lineLimit(2)]}>{lines.result}</Text>
       ) : null}

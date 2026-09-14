@@ -40,10 +40,14 @@ const GlanceableWidget = (props: GlanceableSnapshot) => {
 
   return (
     <Column horizontalAlignment="start">
-      <Text style={{ fontSize: 15, fontWeight: '600' }} maxLines={1}>
+      {/* The re-word a stale pairing verdict gets ("Approval is waiting — status
+          as of <day> <clock>") and the joined work line both run past one line
+          at this size, so each takes two lines of room — the stamp is the
+          re-word's whole point and may not be what gets cut. */}
+      <Text style={{ fontSize: 15, fontWeight: '600' }} maxLines={2}>
         {lines.status}
       </Text>
-      <Text style={{ fontSize: 13 }} maxLines={1}>
+      <Text style={{ fontSize: 13 }} maxLines={2}>
         {lines.work}
       </Text>
       {lines.result ? (
