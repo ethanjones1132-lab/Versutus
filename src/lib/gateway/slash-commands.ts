@@ -34,6 +34,9 @@ const UNSUPPORTED_NOTE = 'Not offered by this gateway';
 /** The snapshot's generic reason for a method this gateway does not dispatch (dashboard.ts:1131). */
 const GENERIC_NOT_DISPATCHED = 'not dispatched by this gateway';
 
+/** The snapshot's reason for every command row while disconnected (dashboard.ts:1136). */
+const CONNECTION_OFFLINE = 'offline';
+
 export type SlashCommandSuggestion = {
   value: string;
   label: string;
@@ -500,7 +503,7 @@ export async function executeGatewaySlashCommand(
   }
 
   const blocked = blockUnsupportedCommand(commandName, args, context.methods);
-  if (blocked) return blocked;
+  if (blocked && commandName !== '/run') return blocked;
 
   if (!commandName || commandName === '/help') {
     const sub = args[0]?.toLowerCase();
@@ -689,11 +692,31 @@ function blockedMethodGuidance(id: string, reason: string | undefined): string |
   return method ? METHOD_GUIDANCE[method] : undefined;
 }
 
+/**
+ * `/run`'s judged capability block. The run API is real end to end
+ * (registry `runs.create` → rpc-routes POST /v1/runs → the Gate's own
+ * route), so when the capability snapshot judges the run command offline
+ * (dashboard.ts fills every method row with reason 'offline' while
+ * disconnected) the reachable truth is the connection, never missing run
+ * support. A judgment WITH connectivity — a non-offline entry or none — is
+ * the shot that genuinely names unsupported runs. With no runTask wired the
+ * executor cannot speak for the connection itself, so the snapshot's word
+ * is the only evidence there is.
+ */
+function runRunCapabilityBlock(context: SlashCommandContext): SlashCommandResult {
+  const id = commandIdForInput('/run', []);
+  const entry = id ? context.methods?.[id] : undefined;
+  if (entry?.available === false && entry.reason === CONNECTION_OFFLINE) {
+    return textResult('The gateway is not connected — reconnect, then run /run again.', '/run');
+  }
+  return textResult('This gateway does not support agentic runs (the Hermes run API is required).', '/run');
+}
+
 async function runTaskCommand(argText: string, context: SlashCommandContext): Promise<SlashCommandResult> {
   const prompt = argText.trim();
   if (!prompt) return textResult('Usage: /run <prompt> — run an agentic task with approval gates', '/run');
   if (!context.runTask) {
-    return textResult('This gateway does not support agentic runs (the Hermes run API is required).', '/run');
+    return runRunCapabilityBlock(context);
   }
 
   const streamed: string[] = [];
