@@ -31,6 +31,7 @@ import { DeviceTokenStore } from './device-tokens.mjs';
 import { PushTokenStore } from './push-tokens.mjs';
 import { createPushRpc } from './push-rpc.mjs';
 import { createPushSend } from './push-send.mjs';
+import { createPushNotifier } from './push-notifier.mjs';
 import { verifySignedAccessRequest } from './signature.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
@@ -539,6 +540,15 @@ export async function createGate(config = {}) {
   const pushTokens = new PushTokenStore(join(gateHome, 'push-tokens.json'));
   const pushSend = createPushSend({ fetchImpl: pushFetch ?? globalThis.fetch });
   const notificationMethods = createPushRpc({ tokens: pushTokens, send: pushSend.send });
+  // The notifier is the one seam between a finished turn and a device's tray:
+  // it classifies (cron → routine, otherwise reply), dedupes per transition,
+  // enforces the row's enabled/richBody/allowlist/quietHours and prunes dead
+  // tokens. Emission is fire-and-forget after the response is written — a
+  // notifier throw must never 502 a turn the backend already completed.
+  const pushNotifier = createPushNotifier({ tokens: pushTokens, send: pushSend.send });
+  const emitFinalResponse = ({ sessionId, botId, text }) => {
+    void pushNotifier.notify({ trigger: 'final-response', sessionId, botId, text }).catch(() => {});
+  };
 
   // The Hermes-dialect methods the app's command registry actually sends.
   // Resolution throws rather than writing a response: the RPC dispatcher below
@@ -1982,6 +1992,17 @@ export async function createGate(config = {}) {
               ...modelReport(result?.runtime, model),
               choices: [{ index: 0, message: { role: 'assistant', content: result.text }, finish_reason: 'stop' }],
             }));
+            // The response is on the wire and the turn is genuinely done with
+            // assistant content — this is the moment a phone away from the
+            // screen learns the reply exists. Fire-and-forget: the notifier's
+            // own classification (cron → routine, otherwise reply), dedupe and
+            // per-row gates decide what leaves, and a notifier throw must
+            // never 502 a turn the backend already completed.
+            emitFinalResponse({
+              sessionId,
+              botId: typeof botForTurn === 'string' && botForTurn ? botForTurn : undefined,
+              text: typeof result?.text === 'string' ? result.text : undefined,
+            });
           } catch (error) {
             res.writeHead(502, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: { message: error.message, code: 'backend_error' } }));
