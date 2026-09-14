@@ -301,7 +301,16 @@ export function reduceHandsfreeSession(
         };
       }
       if (event.type === 'reply-appeared') return stay(state);
-      if (event.type === 'reply-failed') return endCall(state, 'send-failed');
+      // A reply that errored while it streamed is the same fact as one
+      // retracted mid-speech: recognition reopens for the next turn instead
+      // of killing the whole call. No speech started, so stop-speaking is a
+      // no-op the module tolerates.
+      if (event.type === 'reply-failed') {
+        return {
+          state: { ...state, phase: 'listening', replyPlaying: false },
+          effects: [{ kind: 'stop-speaking' }, { kind: 'start-listening' }],
+        };
+      }
       return stay(state);
     }
 
