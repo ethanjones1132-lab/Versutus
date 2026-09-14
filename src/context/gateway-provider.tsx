@@ -2883,6 +2883,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             raw: response.raw,
             status: 'complete',
             durationMs: duration,
+            runId: response.runId,
           }).then((t) => setTranscripts(t));
         }
         return 'complete';

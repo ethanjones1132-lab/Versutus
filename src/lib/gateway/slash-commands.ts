@@ -61,6 +61,12 @@ export type SlashCommandResult = {
   text: string;
   title?: string;
   raw?: string;
+  /**
+   * The run a command drove, carried so the reply can be traced to the
+   * Activity tab row it produced (the transcript alone was the record).
+   * Present only on commands that run one — never guessed elsewhere.
+   */
+  runId?: string;
 };
 
 type SlashCommandContext = {
@@ -751,7 +757,7 @@ async function runTaskCommand(argText: string, context: SlashCommandContext): Pr
   });
 
   if (outcome.cancelled) {
-    return textResult('Run cancelled', '/run', `Run ${outcome.runId} was cancelled.`);
+    return { ...textResult('Run cancelled', '/run', `Run ${outcome.runId} was cancelled.`), runId: outcome.runId };
   }
 
   const succeeded = runSlashStatusWord(outcome) === 'complete';
@@ -767,6 +773,7 @@ async function runTaskCommand(argText: string, context: SlashCommandContext): Pr
   return {
     text: `${succeeded ? 'Run complete' : `Run ${runSlashStatusWord(outcome)}`}: ${summary}`,
     title: '/run',
+    runId: outcome.runId,
     raw: [streamed.join('\n'), body].filter(Boolean).join('\n\n'),
   };
 }
