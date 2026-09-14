@@ -2462,6 +2462,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         !client.streamRunEvents ||
         !client.resolveApproval
       ) {
+        // A missing gateway/client or missing run methods is missing run
+        // support; a trimmed method set while the endpoint exists — a
+        // status flip — is a connection the operator can reconnect, never
+        // a run API that stopped existing.
+        if (client && gateway && status !== 'connected') {
+          throw new Error('The gateway is not connected — reconnect, then run /run again.');
+        }
         throw new Error('This gateway does not support agentic runs (the Hermes run API is required).');
       }
       const runCapable = client as unknown as RunCapableClient;
