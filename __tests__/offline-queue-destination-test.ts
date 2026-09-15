@@ -145,7 +145,11 @@ describe('a destination this app cannot read is no destination', () => {
 
 describe('the flush opens the Bot Chat a queued reply was for, before it sends', () => {
   const provider = () => readSource('src', 'context', 'gateway-provider.tsx');
-  const OPEN = 'await openBot(item.botId);';
+  // Reply rows and queued-run rows share one guard: the Bot to open is the
+  // reply's own Bot Chat first, else the Bot a queued run was typed for.
+  const BOT_TO_OPEN = 'const botToOpen = item.botId ?? (isRunQueuedRow(item) ? item.run?.bot : undefined);';
+  const GUARD = 'if (botToOpen) {';
+  const OPEN = 'await openBot(botToOpen);';
   const SEND = 'await sendChatInput(item.text, { fromQueue: true, messageId: item.id });';
 
   /** The flush's loop, from the queue split to the end of the batch. */
@@ -160,11 +164,14 @@ describe('the flush opens the Bot Chat a queued reply was for, before it sends',
     const src = flush();
 
     expect(src).toContain('for (const item of forActive)');
-    const guard = src.indexOf('if (item.botId) {');
+    // A reply row's own Bot Chat wins: `item.botId` is read before any run shape.
+    expect(src).toContain(BOT_TO_OPEN);
+    const decided = src.indexOf(BOT_TO_OPEN);
+    const guard = src.indexOf(GUARD);
     const open = src.indexOf(OPEN);
     const send = src.indexOf(SEND);
 
-    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeGreaterThan(decided);
     expect(open).toBeGreaterThan(guard);
     expect(send).toBeGreaterThan(open);
   });
@@ -172,7 +179,7 @@ describe('the flush opens the Bot Chat a queued reply was for, before it sends',
   test('the screen is asked for that Bot Chat once the open lands, still ahead of the send', () => {
     const src = flush();
     const open = src.indexOf(OPEN);
-    const request = src.indexOf("requestSurface({ kind: 'bot', botId: item.botId });");
+    const request = src.indexOf("requestSurface({ kind: 'bot', botId: botToOpen });");
     const send = src.indexOf(SEND);
 
     expect(request).toBeGreaterThan(open);
@@ -184,8 +191,8 @@ describe('the flush opens the Bot Chat a queued reply was for, before it sends',
 
   test('a row with no destination takes no Bot path at all', () => {
     const src = flush();
-    const guard = src.indexOf('if (item.botId) {');
-    const block = between(src, 'if (item.botId) {', 'await sendChatInput(item.text');
+    const guard = src.indexOf(GUARD);
+    const block = between(src, GUARD, 'await sendChatInput(item.text');
 
     expect(src).toContain('for (const item of forActive)');
     expect(guard).toBeGreaterThan(-1);
@@ -243,9 +250,9 @@ describe('the flush opens the Bot Chat a queued reply was for, before it sends',
     expect(src).not.toContain('saveOfflineQueue');
   });
 
-  test('the effect re-runs when the Bot path changes, so the open is the live one', () => {
+  test('the effect re-runs when the Bot path or the run fold changes, so the opens are live', () => {
     expect(provider()).toContain(
-      '}, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, sendChatInput, status]);',
+      '}, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, sendChatInput, sendRunQueued, status]);',
     );
   });
 });
@@ -293,7 +300,7 @@ describe('a flush that escapes mid-batch keeps the lines it has not sent', () =>
 
   test('a row the Bot-open path already put back is settled once, never pushed twice', () => {
     const src = flush();
-    const open = src.indexOf('await openBot(item.botId);');
+    const open = src.indexOf('await openBot(botToOpen);');
     const body = src.slice(src.indexOf('} catch {', open), src.indexOf(RESCUE));
     const pushed = body.indexOf('offlineQueueRef.current.push(item);');
     const settled = body.indexOf(CLEAR);
@@ -323,13 +330,18 @@ describe('the send path hands a destination to the queue', () => {
     expect(src).toContain('queueOfflineInput(trimmed, { botId: options?.botId, sessionId: options?.sessionId });');
   });
 
-  test('the row is written with the destination it was handed', () => {
+  test('the row is written with the destination it was handed, plus the run shape only for a run line', () => {
     const src = between(provider(), 'const queueOfflineInput = useCallback', 'const updateLocalMessage');
 
     expect(src).toContain('(text: string, destination?: OfflineQueueDestination)');
     expect(src).toContain(
-      'offlineQueueRef.current.push({ id, text, gatewayId, createdAt: Date.now(), ...destination });',
+      'const item: OfflineQueueItem = { id, text, gatewayId, createdAt: Date.now(), ...destination };',
     );
+    // The D8 shape rides the row only when the parked words were a run line —
+    // decided once here, never re-derived from the text at flush time.
+    expect(src).toContain('if (isRunSlashLine(text)) {');
+    expect(src).toContain('item.run = { bot: selectedBotIdRef.current ?? undefined };');
+    expect(src).toContain('offlineQueueRef.current.push(item);');
   });
 });
 

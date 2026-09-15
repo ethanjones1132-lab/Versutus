@@ -261,6 +261,17 @@ export function isSlashCommandInput(text: string): boolean {
   return text.trimStart().startsWith('/');
 }
 
+/**
+ * A line whose words ARE a run: `/run …`, exactly the prefix the executor
+ * dispatches to `runTaskCommand`. Used at QUEUE time (D8) to write the run
+ * shape onto the row the flush will re-send — never at flush time, where a
+ * reply that merely begins `/run` must stay a reply. Punctuation that
+ * immediately follows the word (`/running`, `/run:foo`) is not a run.
+ */
+export function isRunSlashLine(text: string): boolean {
+  return /^\/run(?:\s|$)/.test(text.trimStart());
+}
+
 function firstSlashName(slash: string): string {
   return slash.trim().split(/\s+/)[0]?.replace(/^\//, '').toLowerCase() ?? '';
 }

@@ -18,6 +18,15 @@ export type OfflineQueueItem = {
   gatewayId: string;
   createdAt: number;
   /**
+   * Present exactly when the text is a run typed against a gateway that was
+   * not connected (D8 slice 1): the flush re-sends it through the run
+   * dispatch instead of ordinary chat, so the row parks a RUN, not a reply.
+   * Absent on every chat line — queued or not — and on every row written
+   * before this field existed; never answered from the TEXT, because a chat
+   * line that begins `/run` is still a chat line.
+   */
+  run?: QueuedRunShape;
+  /**
    * The Bot whose canonical Bot Chat the text was typed for, when it was a
    * reply to a notice rather than a composer line (ADR 0012). Absent on a
    * composer send and on every row written before this field existed, and an
@@ -31,6 +40,29 @@ export type OfflineQueueItem = {
    */
   sessionId?: string;
 };
+
+/**
+ * The run a queued row re-sends when the gateway is back: the destination the
+ * composer held when the line was typed (the Bot scope the run would have
+ * started under). The flush hands it to the run dispatch verbatim — the app's
+ * own flush never invents a destination the operator did not choose.
+ */
+export type QueuedRunShape = {
+  /** The Bot the run would have been scoped to, when one was selected. */
+  bot?: string;
+};
+
+function isQueuedRunShape(value: unknown): value is QueuedRunShape {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  // The one field this fold reads a present string for; anything else inside
+  // rides as it is, and a shape the app cannot read is dropped by the caller.
+  return true;
+}
+
+/** A row whose text a flush re-sends as a run, decided by the row's own shape. */
+export function isRunQueuedRow(item: OfflineQueueItem): boolean {
+  return isQueuedRunShape(item.run);
+}
 
 /** Where a queued line was typed for, when it was a reply to a notice. */
 export type OfflineQueueDestination = Pick<OfflineQueueItem, 'botId' | 'sessionId'>;
@@ -52,11 +84,11 @@ function destinationId(value: unknown): string | undefined {
 }
 
 /**
- * The row as it must be held: the validated fields kept, and a destination
- * read the way this app reads every other id. An id it cannot read is not an
- * id, so it is dropped rather than steering a send somewhere the payload never
- * named — and the FIELD is what is dropped, not the row: the operator's words
- * are worth more than the destination beside them.
+ * The row as it is held: the validated fields kept, a destination read the way
+ * this app reads every other id, and the run shape kept only when it is an
+ * object the flush could hand to the run dispatch (an unusable one is dropped,
+ * the words kept — the words are worth more than the shape, exactly as a
+ * destination is).
  */
 function normalizeOfflineQueueItem(item: OfflineQueueItem): OfflineQueueItem {
   const next: OfflineQueueItem = {
@@ -69,6 +101,11 @@ function normalizeOfflineQueueItem(item: OfflineQueueItem): OfflineQueueItem {
   if (botId) next.botId = botId;
   const sessionId = destinationId(item.sessionId);
   if (sessionId) next.sessionId = sessionId;
+  const run = isQueuedRunShape(item.run) ? item.run : undefined;
+  if (run) {
+    const bot = destinationId(run.bot);
+    next.run = bot ? { bot } : {};
+  }
   return next;
 }
 
