@@ -74,7 +74,25 @@ describe('the disclosure a call must show', () => {
   });
 });
 
+const provider = readSource('src', 'context', 'handsfree-voice-provider.tsx');
+
 describe('the ambient indicator', () => {
+  test('the banner carries no per-sample React write for the level', () => {
+    // The sample arrives at the platform's own rate (~10/s). Holding it in
+    // React state redraws the whole banner tree per sample for a shape that
+    // only answers a number, so the provider holds it in a Reanimated shared
+    // value and the Skia circle reads it on the UI thread instead. Both engines
+    // (the phone's recognizer and the Gate call) feed the same shared value.
+    expect(provider).not.toContain('setLevel');
+    expect(provider).toContain('const level = useSharedValue(0)');
+    expect(provider.split('level.value = clampLevel(event.level)').length - 1).toBe(2);
+    // The native indicator derives its geometry from the shared value in a
+    // worklet, never from render-time JS state.
+    expect(native).toContain('useDerivedValue');
+    expect(native).toContain('level.value');
+    expect(native).not.toContain('const clamped = Math.max(0, Math.min(1, level));');
+  });
+
   test('is drawn from the level stream, never required by any logic', () => {
     expect(banner).toContain('<HandsfreeCallIndicator');
     expect(banner).toContain('level={level}');

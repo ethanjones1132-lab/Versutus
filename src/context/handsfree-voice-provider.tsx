@@ -14,6 +14,8 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
+import type { SharedValue } from 'react-native-reanimated';
+import { useSharedValue } from 'react-native-reanimated';
 
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
 import { composerDraftThread, type ComposerDraftThread } from '@/lib/gateway/composer-draft';
@@ -101,8 +103,12 @@ export type HandsfreeVoiceContextValue = {
   lastEndReason?: HandsfreeTerminalReason;
   /** How many calls have finished, so the screen can react to a repeat failure. */
   callsEnded: number;
-  /** The latest 0–1 amplitude sample, when the platform supplies one. */
-  level: number;
+  /**
+   * The latest 0–1 amplitude sample, a shared value so the Skia dot reads it on
+   * the UI thread and no React render happens per sample. It stays 0 when the
+   * platform supplies none.
+   */
+  level: SharedValue<number>;
   /** The engine a live call is using, once the Gate has answered. */
   engine?: string;
   /** Why the call is not on the preferred engine, when the Gate fell back. */
@@ -156,7 +162,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const { messages, isSending, isCommandRunning } = useChatSurface();
 
   const [session, setSession] = useState<HandsfreeSessionState>(INITIAL_HANDSFREE_SESSION);
-  const [level, setLevel] = useState(0);
+  // The amplitude sample moves at the platform's own rate (~10/s) and only the
+  // banner's Skia dot reads it, so it lives in a shared value the circle reads on
+  // the UI thread rather than in React state that redraws the banner per sample.
+  const level = useSharedValue(0);
   const [availability, setAvailability] = useState<HandsfreeAvailability | null>(null);
   const [label, setLabel] = useState<string | undefined>(undefined);
   const [gateBanner, setGateBanner] = useState<GateCallBanner>(INITIAL_GATE_CALL);
@@ -288,11 +297,14 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
           dispatch({ type: 'bargeIn' });
         }),
         // `level` is banner-only: it never reaches the reducer and nothing
-        // depends on it, so a platform that omits it changes nothing.
-        module.addListener('level', (event) => setLevel(clampLevel(event.level))),
+        // depends on it, so a platform that omits it changes nothing. A sample is
+        // a shared-value write on the UI thread, never a React render.
+        module.addListener('level', (event) => {
+          level.value = clampLevel(event.level);
+        }),
       ];
     },
-    [dispatch, unsubscribe],
+    [dispatch, level, unsubscribe],
   );
 
   // What a folded Gate effect means natively. `ended` is the Gate's terminal
@@ -321,10 +333,12 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
           for (const gateEffect of next.effects) runGateEffect(gateEffect);
         }),
         // The amplitude sample is banner-only, exactly as on the phone engine.
-        module.addListener('level', (event) => setLevel(clampLevel(event.level))),
+        module.addListener('level', (event) => {
+          level.value = clampLevel(event.level);
+        }),
       ];
     },
-    [runGateEffect, unsubscribe],
+    [level, runGateEffect, unsubscribe],
   );
 
   const teardown = useCallback(async () => {
