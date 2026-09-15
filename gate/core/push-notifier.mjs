@@ -20,7 +20,7 @@ function validQuietHours(value) {
     && value.endMinutes < 24 * 60;
 }
 
-function localMinutes(timeZone) {
+function localMinutes(timeZone, now) {
   if (typeof timeZone !== 'string' || timeZone.length === 0) return null;
   try {
     const parts = new Intl.DateTimeFormat('en-US', {
@@ -28,7 +28,7 @@ function localMinutes(timeZone) {
       minute: '2-digit',
       timeZone,
       hour: '2-digit',
-    }).formatToParts(new Date());
+    }).formatToParts(now ?? new Date());
     const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? '');
     const minute = Number(parts.find((part) => part.type === 'minute')?.value ?? '');
     if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
@@ -165,11 +165,14 @@ function messageFor(classified, event, row) {
   };
 }
 
-export function createPushNotifier({ tokens, send }) {
+export function createPushNotifier({ tokens, send, now }) {
   if (!tokens || typeof tokens.listEnabled !== 'function' || typeof tokens.removeByToken !== 'function') {
     throw new Error('tokens must provide listEnabled() and removeByToken()');
   }
   if (typeof send !== 'function') throw new Error('send must be a function');
+  // Injectable clock so tests pin the minute of day honestly; production
+  // defaults to the wall clock.
+  const nowSource = typeof now === 'function' ? now : () => new Date();
 
   const seen = new Set();
 
@@ -189,7 +192,7 @@ export function createPushNotifier({ tokens, send }) {
     for (const row of Array.isArray(rows) ? rows : []) {
       if (!isRecord(row) || row.enabled !== true || typeof row.expoPushToken !== 'string' || !row.expoPushToken) continue;
       if (!allowedForBot(row, event?.botId)) continue;
-      if (isQuiet(row)) continue;
+      if (isQuiet(row, localMinutes(row.timezone, nowSource()))) continue;
       const key = `${classified.trigger}:${classified.id}:${event?.state ?? ''}`;
       if (!remember(key)) continue;
       messages.push(messageFor(classified, event, row));

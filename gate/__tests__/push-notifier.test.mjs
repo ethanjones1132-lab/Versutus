@@ -29,17 +29,50 @@ test('skips disabled devices', async () => {
   assert.deepEqual(sent, []);
 });
 
-test('skips devices inside their local quiet hours', async () => {
+// The quiet-hours comparison is clock-dependent in production (it reads the
+// device's local wall clock per row's timezone), so the fixture pins the clock
+// through the injectable `now` seam and asserts BOTH edges of the interval —
+// a fixed all-day window cannot do that without gambling on the moment verify
+// runs (a run landing on the excluded edge minute used to flip this case).
+// The row fixture uses timezone 'UTC', so a pinned UTC wall clock IS the
+// device's local minute.
+test('skips devices inside their local quiet hours at both edges of the window', async () => {
   const tokens = {
-    listEnabled: async () => [row({ quietHours: { startMinutes: 0, endMinutes: 1439 } })],
+    listEnabled: async () => [row({ quietHours: { startMinutes: 600, endMinutes: 700 } })],
     removeByToken: async () => false,
   };
   const sent = [];
-  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
 
-  await notifier.notify({ trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'done' });
+  for (const minuteOfDay of [600, 699]) {
+    const notifier = createPushNotifier({
+      tokens,
+      send: async (messages) => { sent.push(...messages); return { ok: true }; },
+      now: () => new Date(Date.UTC(2026, 8, 14, Math.floor(minuteOfDay / 60), minuteOfDay % 60)),
+    });
+    await notifier.notify({ trigger: 'final-response', sessionId: `session-${minuteOfDay}`, botId: 'bot-1', text: 'done' });
+  }
 
   assert.deepEqual(sent, []);
+});
+
+test('a device outside its quiet window still receives the push at either edge', async () => {
+  const tokens = {
+    listEnabled: async () => [row({ quietHours: { startMinutes: 600, endMinutes: 700 } })],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  // 599 is the minute before the window, 700 the first minute after it
+  // (the end is exclusive, per isQuiet's `nowMinutes < endMinutes`).
+  for (const minuteOfDay of [599, 700]) {
+    const notifier = createPushNotifier({
+      tokens,
+      send: async (messages) => { sent.push(...messages); return { ok: true }; },
+      now: () => new Date(Date.UTC(2026, 8, 14, Math.floor(minuteOfDay / 60), minuteOfDay % 60)),
+    });
+    await notifier.notify({ trigger: 'final-response', sessionId: `session-${minuteOfDay}`, botId: 'bot-1', text: 'done' });
+  }
+
+  assert.equal(sent.length, 2);
 });
 
 test('skips devices whose bot allowlist does not include the event bot', async () => {
