@@ -30,6 +30,10 @@ import {
   type ConstellationModel,
 } from '@/lib/fleet/constellation-model';
 import { botChipRoutingTag } from '@/lib/gateway/bots';
+import {
+  routineArcDetail,
+  routineArcLabel,
+} from '@/lib/fleet/routine-arc-copy';
 import { constellationStatusCopy, lastSeenCopy } from '@/lib/fleet/last-seen-label';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
 import type { ActivityRun } from '@/lib/gateway/runs';
@@ -263,13 +267,31 @@ export const ConstellationCanvas = memo(function ConstellationCanvas({
                   : health.tone === 'warn'
                     ? styles.routineWarn
                     : styles.routineDim;
+            // The arc's own words: the Bot's name joined to the health label
+            // for an attributed arc, the label alone for a gateway-owned one
+            // — with several Bots' routines in one column, the line must
+            // answer which routine is whose.
+            const label = routineArcLabel({
+              botName: arc.botId
+                ? roster?.find((bot) => bot.id === arc.botId)?.displayName
+                : undefined,
+              verdict: health,
+            });
+            // A warn/error arc carries its verdict's own detail on a second
+            // micro line — never invented, dropped when the verdict carries
+            // none.
+            const detail = routineArcDetail({ verdict: health });
             return (
-              <Text
-                key={`${arc.gatewayId}:${arc.botId ?? 'gateway'}:${index}`}
-                style={[styles.routineArc, tone]}
-                numberOfLines={1}>
-                {arc.botId ? health.label : health.label}
-              </Text>
+              <View key={`${arc.gatewayId}:${arc.botId ?? 'gateway'}:${index}`} style={styles.routineArcStack}>
+                <Text style={[styles.routineArc, tone]} numberOfLines={1}>
+                  {label}
+                </Text>
+                {detail ? (
+                  <Text style={[styles.routineArc, styles.routineDetail]} numberOfLines={1}>
+                    {detail}
+                  </Text>
+                ) : null}
+              </View>
             );
           })}
         </View>
@@ -438,6 +460,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.one,
     alignSelf: 'flex-start',
     backgroundColor: Palette.backgroundElevated,
+  },
+  routineArcStack: {
+    alignItems: 'flex-start',
+    gap: 1,
+  },
+  routineDetail: {
+    borderWidth: 0,
+    color: Palette.textTertiary,
+    backgroundColor: 'transparent',
   },
   routineOk: {
     borderColor: Palette.statusConnectedMuted,

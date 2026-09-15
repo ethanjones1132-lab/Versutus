@@ -266,4 +266,44 @@ describe('constellation route', () => {
     // The pending approval hangs on the connected gateway's node.
     expect(model.gateways[0].pendingApproval).toEqual({ runId: 'r4', prompt: 'Deploy the thing' });
   });
+
+  it('the arc line names the Bot it hangs beneath and a warn/error arc carries its detail', () => {
+    // The attributed arc's line is routineArcLabel's own answer, not the
+    // same-expression pair the drawer once rendered.
+    const drawer = readFileSync(
+      join(__dirname, '..', 'src', 'components', 'fleet', 'fleet-constellation.tsx'),
+      'utf8',
+    );
+    expect(drawer).toContain("from '@/lib/fleet/routine-arc-copy'");
+    expect(drawer).toContain('routineArcLabel(');
+    // The arc's tone keys are unchanged — colors ride the verdict as before.
+    for (const tone of ['routineOk', 'routineWarn', 'routineError', 'routineDim']) {
+      expect(drawer).toContain(tone);
+    }
+    const model = foldConstellation({
+      profiles: PROFILES,
+      reachability: {},
+      activeGatewayId: 'gw-live',
+      status: 'connected',
+      width: 400,
+      height: 400,
+      now: 0,
+      cronJobs: [
+        {
+          id: 'j1',
+          title: 'Morning brief',
+          name: '[bot:Scout] Morning brief',
+          lastStatus: 'ok',
+        },
+        { id: 'j2', title: 'Sweep', name: 'Sweep', paused: true },
+      ] as never,
+      roster: [{ id: 'Scout', displayName: 'Scout', routable: true }] as never,
+    });
+    // The arcs still carry the attribution and the verdict un-reworded; the
+    // label fold joins the roster's own name only for the attributed one —
+    // the attribution is parseRoutineName's own id read (`Scout`), which the
+    // roster's ids are written by (`routineName`).
+    expect(model.routines[0].botId).toBe('Scout');
+    expect(model.routines[1].botId).toBeUndefined();
+  });
 });
