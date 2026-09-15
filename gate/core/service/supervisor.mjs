@@ -75,15 +75,30 @@ export class Supervisor {
     this._status = 'stopping';
     this._clearTimers();
     this._emitState();
-    if (!this._child) {
+    const child = this._child;
+    if (!child) {
       this._status = 'stopped';
       this._emitState();
       return;
     }
+    // Settle on whichever comes first: the child's own exit, or the kill cap.
+    // The cap timer stays out of `_timers` — `_onExit` clears those, and a
+    // stop awaiting a cancelled timer never finished.
+    let deadline = null;
+    const exited = new Promise((resolve) => child.once?.('exit', () => resolve('exited')));
+    const timedOut = new Promise((resolve) => {
+      deadline = this._schedule(() => resolve('timeout'), this._stopKillMs);
+    });
     this._askGracefulStop();
-    const child = this._child;
-    await this._sleep(this._stopKillMs);
-    if (this._child === child && this._child) this._forceKill('stop timed out');
+    if ((await Promise.race([exited, timedOut])) === 'exited') {
+      try {
+        this._cancel(deadline);
+      } catch {
+        // Already fired — nothing to cancel.
+      }
+      return;
+    }
+    if (this._child === child) this._forceKill('stop timed out');
   }
 
   /** Graceful restart: same as stop, but the exit handler respawns. */

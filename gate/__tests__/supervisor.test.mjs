@@ -115,13 +115,23 @@ test('exit code 75 waits 60 s instead of hot-looping', async () => {
 });
 
 test('four failed probes kill the child and restart it', async () => {
-  const h = harness({ probe: async () => false });
-  h.sup.start();
-  const first = h.children[0];
-  await sleep(120);
-  assert.ok(h.killed.includes(first.pid), 'the unhealthy child was tree-killed');
-  assert.equal(h.children.length, 2, 'the kill restarted the Gate');
-  await h.sup.stop();
+  // Only the first child is unhealthy. A probe that always failed raced the
+  // host's timer resolution: with fast timers the second child was killed
+  // too and a third spawned inside a fixed wait.
+  let probes = 0;
+  const h = harness({ probe: async () => { probes += 1; return probes > 4; } });
+  try {
+    h.sup.start();
+    const first = h.children[0];
+    const deadline = Date.now() + 2000;
+    while (h.children.length < 2 && Date.now() < deadline) await sleep(5);
+    assert.ok(h.killed.includes(first.pid), 'the unhealthy child was tree-killed');
+    assert.equal(h.children.length, 2, 'the kill restarted the Gate');
+  } finally {
+    // Stop even on a failed assertion: a live supervisor keeps real timers
+    // running and the test runner never exits.
+    await h.sup.stop();
+  }
 });
 
 test('a graceful stop asks, kills after the cap, and never respawns', async () => {
@@ -138,6 +148,39 @@ test('a graceful stop asks, kills after the cap, and never respawns', async () =
   assert.equal(h.children.length, count, 'stopped means stopped');
   assert.equal(h.states.at(-1).status, 'stopped');
   assert.equal(h.states.at(-1).childPid, null);
+});
+
+test('a graceful stop resolves when the child exits, without waiting out the kill cap', async () => {
+  const scheduled = new Map();
+  const cancelled = [];
+  const h = harness({
+    stopKillMs: 60_000,
+    schedule: (fn, ms) => {
+      const id = setTimeout(fn, ms);
+      scheduled.set(id, ms);
+      return id;
+    },
+    cancel: (id) => {
+      cancelled.push(scheduled.get(id));
+      clearTimeout(id);
+    },
+  });
+  h.sup.start();
+  const child = h.children[0];
+  // A well-behaved Gate: it honours the shutdown message and exits at once.
+  child.send = (message) => {
+    child.sent.push(message);
+    if (message?.type === 'shutdown') setTimeout(() => child.emit('exit', 0, null), 5);
+    return true;
+  };
+  const outcome = await Promise.race([
+    h.sup.stop().then(() => 'resolved'),
+    sleep(500).then(() => 'still pending'),
+  ]);
+  assert.equal(outcome, 'resolved');
+  assert.deepEqual(h.killed, [], 'a child that exited on request is never tree-killed');
+  assert.equal(h.states.at(-1).status, 'stopped');
+  assert.ok(cancelled.includes(60_000), 'the kill-cap timer is cancelled, so nothing holds the process open');
 });
 
 test('state reports the transition fields on every change', async () => {
