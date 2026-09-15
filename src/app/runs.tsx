@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
 import { activityKeyboardBehavior } from '@/lib/activity/keyboard-behavior';
+import { partitionRunsByState } from '@/lib/activity/run-partition';
 
 import { AgenticRunSheet } from '@/components/activity/agentic-run-sheet';
 import { RunCard } from '@/components/activity/run-card';
@@ -103,8 +104,13 @@ export default function RunsScreen() {
     () => filterRunsByBot(activityRuns, scorecardFilter),
     [activityRuns, scorecardFilter],
   );
-  const activeRuns = visibleRuns.filter((run) => run.status === 'running' || run.status === 'waiting-approval');
-  const finishedRuns = visibleRuns.filter((run) => !activeRuns.includes(run));
+  // One partition, once per change to the visible rows — the screen's two
+  // lists fold from the same pass instead of two filters over the array,
+  // `finishedRuns` without an O(n) membership scan per row.
+  const { inFlightRuns: activeRuns, finishedRuns } = useMemo(
+    () => partitionRunsByState(visibleRuns),
+    [visibleRuns],
+  );
   const runsSupported =
     status === 'connected' &&
     capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'ready';
