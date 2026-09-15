@@ -10,6 +10,7 @@ import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
 import type { PublicBot } from '@/lib/gateway/bots';
 import { fleetConstellationInput } from '@/lib/fleet/constellation-input';
 import { constellationModel, type ConstellationNode } from '@/lib/fleet/constellation-model';
+import { gatewayHandshake } from '@/lib/fleet/gateway-handshake';
 
 /** One stable empty roster, so a disconnected render keeps its memo. */
 const NO_ROSTER: PublicBot[] = [];
@@ -33,6 +34,8 @@ export default function FleetScreen() {
     gateways,
     activeGateway,
     status,
+    statusDetail,
+    lastError,
     activityRuns,
     pendingRunApproval,
     listBots,
@@ -63,6 +66,32 @@ export default function FleetScreen() {
   }, [status, listBots]);
 
   const connectedRoster = status === 'connected' ? roster : NO_ROSTER;
+
+  // One handshake line per saved gateway, computed by the same pure helper
+  // that gates the tap — so what the map says and what the tap allows can
+  // never disagree. A failure reason is only truthful for the gateway the
+  // attempt belonged to; the reason for the attempt that belonged to another
+  // is not this node's fact.
+  const handshakeStatus = useMemo(() => {
+    const lines: Record<string, string> = {};
+    const connectionPhaseFailed = status === 'disconnected' || lastError !== null;
+    for (const gateway of gateways) {
+      const state = gatewayHandshake({
+        gatewayName: gateway.name?.trim() || gateway.id,
+        gatewayId: gateway.id,
+        connectedGatewayId: status === 'connected' ? activeGateway?.id : undefined,
+        activeGatewayId: activeGateway?.id,
+        activeGatewayName: activeGateway?.name,
+        status,
+        failureReason:
+          connectionPhaseFailed && activeGateway?.id === gateway.id
+            ? (statusDetail || lastError)
+            : null,
+      });
+      if (state.statusLine) lines[gateway.id] = state.statusLine;
+    }
+    return lines;
+  }, [gateways, status, activeGateway?.id, activeGateway?.name, statusDetail, lastError]);
 
   const model = useMemo(
     () =>
@@ -103,8 +132,20 @@ export default function FleetScreen() {
         .catch(() => requestSurface({ kind: 'roster' }));
       return;
     }
+    // The pure handshake decision gates the tap: a live gateway, an attempt
+    // already in flight (this one's or a rival's) and an unresolved pairing
+    // each refuse a second handshake; a settled gateway starts one.
     const gateway = gateways.find((candidate) => candidate.id === node.gatewayId);
-    if (gateway && !node.live) void connectGateway(gateway);
+    const handshake = gatewayHandshake({
+      gatewayName: node.label,
+      gatewayId: node.gatewayId,
+      connectedGatewayId: status === 'connected' ? activeGateway?.id : undefined,
+      activeGatewayId: activeGateway?.id,
+      activeGatewayName: activeGateway?.name,
+      status,
+    });
+    if (!gateway || !handshake.canConnect) return;
+    void connectGateway(gateway);
   };
 
   const handlePressApproval = () => {
@@ -125,6 +166,7 @@ export default function FleetScreen() {
           model={model}
           onPressNode={handlePressNode}
           onPressApproval={handlePressApproval}
+          gatewayStatus={handshakeStatus}
         />
       </ScrollView>
     </Screen>
