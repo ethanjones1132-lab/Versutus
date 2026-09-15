@@ -166,7 +166,8 @@ export function NotificationsSection() {
       <Card variant="inset" padding={Spacing.three} style={styles.card}>
         <Text variant="headline">Bot filter</Text>
         <Text variant="caption" color="secondary">
-          Only these Bots may notify this device, comma-separated. Empty means every Bot.
+          Only these Bots&apos; replies and routines reach this device, comma-separated. Empty means every Bot.
+          Approvals and run results always come through.
         </Text>
         <TextField
           value={botText}

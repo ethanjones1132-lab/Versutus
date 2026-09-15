@@ -54,6 +54,35 @@ test('skips devices whose bot allowlist does not include the event bot', async (
   assert.deepEqual(sent, []);
 });
 
+test('a Bot filter never silences an approval card, which names no Bot', async () => {
+  const tokens = {
+    listEnabled: async () => [row({ botIds: ['other-bot'] })],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  // The exact shape the environment supervisor emits (cli-environments/supervisor.mjs).
+  await notifier.notify({ trigger: 'approval', runId: 'run-1', environmentId: 'codex-local', operation: 'prompt' });
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].data.kind, 'approval');
+});
+
+test('a Bot filter never silences a run verdict, which names no Bot', async () => {
+  const tokens = {
+    listEnabled: async () => [row({ botIds: ['other-bot'] })],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({ trigger: 'run', runId: 'run-2', state: 'completed', environmentId: 'codex-local' });
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].data.kind, 'run');
+});
+
 test('deduplicates one final response per session transition', async () => {
   const tokens = {
     listEnabled: async () => [row()],

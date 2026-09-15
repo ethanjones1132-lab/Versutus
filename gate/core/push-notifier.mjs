@@ -50,7 +50,11 @@ function isQuiet(row, nowMinutes = localMinutes(row.timezone)) {
 function allowedForBot(row, botId) {
   const allowed = Array.isArray(row.botIds) ? row.botIds : [];
   if (allowed.length === 0) return true;
-  return typeof botId === 'string' && allowed.includes(botId);
+  // The filter chooses which Bots may speak. An event that names no Bot — an
+  // approval card, a run verdict — is the Gate's own, so the filter never
+  // silences it.
+  if (typeof botId !== 'string' || botId.length === 0) return true;
+  return allowed.includes(botId);
 }
 
 function truncateText(text) {
