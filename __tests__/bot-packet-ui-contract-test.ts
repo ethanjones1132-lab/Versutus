@@ -47,3 +47,29 @@ describe('the Bot handoff packet wiring', () => {
     expect(src).toContain('title="Copy profile id"');
   });
 });
+
+describe("the approval-policy editor's UI wiring (D1's editing surface)", () => {
+  test('the chat screen hands the store seams to the detail sheet, with a real Bot', () => {
+    const src = readSource('src', 'components', 'chat', 'chat-screen.tsx');
+    // The store's write finally gains its caller — and through the sheet's
+    // own props, never a second write path invented in the screen.
+    expect(src).toContain('onLoadApprovalPolicy={');
+    expect(src).toContain('onSaveApprovalPolicy={');
+    expect(src).toContain('loadBotApprovalPolicy');
+    expect(src).toContain('setBotApprovalPolicy(detailBot.id, policy)');
+    expect(src).toContain("from '@/lib/settings/bot-approval-policy'");
+  });
+
+  test('the sheet composes the save from the pure draft fold, not its own parsing', () => {
+    const src = readSource('src', 'components', 'chat', 'bot-detail-sheet.tsx');
+    // The editor states the copy that belongs to the policy — the honest
+    // framing, rendered, not only carried in a type import.
+    expect(src).toContain('APPROVAL_POLICY_LIMIT_COPY');
+    expect(src).toContain('approvalPolicyDraft(draftText, draftEnabled)');
+    expect(src).toContain('APPROVAL POLICY');
+    // The section is armed only with both seams — read-only sheet otherwise.
+    expect(src).toContain('if (!onLoad || !onSave) return null');
+    // The section rides inside the existing ScrollView, beside the rows.
+    expect(src).toContain('<ApprovalPolicySection');
+  });
+});

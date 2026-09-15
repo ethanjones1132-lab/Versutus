@@ -76,6 +76,8 @@ import {
   validateBotPacketAgainstGateway,
 } from '@/lib/gateway/bot-packet-import';
 import { BOT_PACKET_PICK_REFUSAL_COPY, pickBotPacketFile } from '@/lib/gateway/bot-packet-pick';
+import { loadBotApprovalPolicy, setBotApprovalPolicy } from '@/lib/settings/bot-approval-policy';
+import type { ApprovalPolicy } from '@/lib/settings/approval-policy';
 import { memoryStatusFromUnknown, type MemoryStatusState } from '@/lib/gateway/memory-status';
 import { composerFocusApplies } from '@/lib/gateway/composer-focus';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
@@ -1886,6 +1888,18 @@ export function ChatScreen() {
             : null
         }
         applyPacketBusy={packetApplyBusy}
+        onLoadApprovalPolicy={
+          // The enforced policy engine's editing surface: the store's read
+          // seam beside the sheet's editor section. Policy state is
+          // phone-side storage — no gateway call, so any Bot with a detail
+          // sheet can carry a policy.
+          detailBot ? () => loadBotApprovalPolicy(detailBot.id) : undefined
+        }
+        onSaveApprovalPolicy={
+          detailBot
+            ? (_botId: string, policy: ApprovalPolicy | null) => setBotApprovalPolicy(detailBot.id, policy)
+            : undefined
+        }
         onRetry={handleSoulRetry}
         onExportPacket={
           // The export half of the handoff packet: the sheet composes the

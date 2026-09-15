@@ -3,7 +3,11 @@
 // surfaces state. Matches the spend-cap verdict sibling: the pure module
 // imports nothing, so any suite (and slash-commands) can load it raw.
 
-import { approvalPolicyVerdict, APPROVAL_POLICY_LIMIT_COPY } from '@/lib/settings/approval-policy';
+import {
+  approvalPolicyDraft,
+  approvalPolicyVerdict,
+  APPROVAL_POLICY_LIMIT_COPY,
+} from '@/lib/settings/approval-policy';
 
 describe('approvalPolicyVerdict — the fold a waiting approval is pre-decided with', () => {
   const policy = { enabled: true, readOnlyCommands: ['list', 'read', 'journal'] };
@@ -32,6 +36,48 @@ describe('approvalPolicyVerdict — the fold a waiting approval is pre-decided w
   test('a prompt matching nothing is deferred, never auto-approved — fail-closed (ADR 0008)', () => {
     expect(approvalPolicyVerdict(policy, 'rm -rf /')).toEqual({ decision: 'defer' });
     expect(approvalPolicyVerdict(policy, '')).toEqual({ decision: 'defer' });
+  });
+});
+
+describe('approvalPolicyDraft — the editor draft fold, beside the verdict', () => {
+  test('splits on commas and whitespace, trims, and drops empty tokens', () => {
+    expect(approvalPolicyDraft(' list , read', true)).toEqual({
+      enabled: true,
+      readOnlyCommands: ['list', 'read'],
+    });
+    expect(approvalPolicyDraft('list, , read,', true)?.readOnlyCommands).toEqual(['list', 'read']);
+    expect(approvalPolicyDraft('journal:  git:push', true)?.readOnlyCommands).toEqual([
+      'journal:',
+      'git:push',
+    ]);
+  });
+
+  test('dedupes case-insensitively, keeping the first spelling', () => {
+    expect(approvalPolicyDraft('list, LIST, Read, list', true)?.readOnlyCommands).toEqual([
+      'list',
+      'Read',
+    ]);
+  });
+
+  test('a draft whose tokens all drop is null — nothing for the policy to govern', () => {
+    expect(approvalPolicyDraft('   ', true)).toBeNull();
+    expect(approvalPolicyDraft(',,,', true)).toBeNull();
+    expect(approvalPolicyDraft('', false)).toBeNull();
+  });
+
+  test('a disabled policy with commands is still a policy — the toggle is stored', () => {
+    expect(approvalPolicyDraft('list', false)).toEqual({
+      enabled: false,
+      readOnlyCommands: ['list'],
+    });
+  });
+
+  test('the draft round-trips through the verdict fold it feeds', () => {
+    const draft = approvalPolicyDraft('list,   read', true);
+    expect(approvalPolicyVerdict(draft, 'list the files')).toEqual({ decision: 'auto-approve' });
+    expect(approvalPolicyVerdict(approvalPolicyDraft('list', false), 'list the files')).toEqual({
+      decision: 'defer',
+    });
   });
 });
 

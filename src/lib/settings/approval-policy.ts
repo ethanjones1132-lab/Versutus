@@ -54,3 +54,27 @@ export function approvalPolicyVerdict(
 /** The honest framing every policy surface states: what the list can cover. */
 export const APPROVAL_POLICY_LIMIT_COPY =
   'Auto-approves only what the read-only list names, for this agent only.';
+
+/**
+ * The editor's draft fold: the commands text an operator typed plus the
+ * toggle's position become the one policy the store accepts. Splits on
+ * commas and whitespace, trims, drops the tokens that empty out, and
+ * dedupes case-insensitively — the same whole-word, case-free vocabulary
+ * `promptMatchesReadOnly` reads. A draft whose tokens all drop answers
+ * null: nothing for the policy to govern, so the caller clears rather
+ * than stores a word the verdict would always defer.
+ */
+export function approvalPolicyDraft(text: string, enabled: boolean): ApprovalPolicy | null {
+  const seen = new Set<string>();
+  const readOnlyCommands: string[] = [];
+  for (const token of text.split(/[\s,]+/)) {
+    const cleaned = token.trim();
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    readOnlyCommands.push(cleaned);
+  }
+  if (readOnlyCommands.length === 0) return null;
+  return { enabled, readOnlyCommands };
+}
