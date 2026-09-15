@@ -247,10 +247,15 @@ async function main() {
   );
   check('unknown method → null', resolveRoute('config.patch') === null);
   check('route count grew', Object.keys(METHOD_TO_ROUTE).length >= 23, Object.keys(METHOD_TO_ROUTE).length);
+  // session.fork and responses.get lost their routes on purpose (0ae032a,
+  // 18919da): Hermes has no remote fork endpoint and the Gate serves no
+  // /v1/responses surface, so they fail honestly with guidance instead of
+  // resolving into a 404 (pinned in __tests__/rpc-routes-test.ts).
   check(
-    'session.fork route',
-    resolveRoute('session.fork', { sessionId: 's-1' })?.path === '/api/sessions/s-1/fork',
-    resolveRoute('session.fork', { sessionId: 's-1' })?.path,
+    'session.fork has no route and says what to do instead',
+    resolveRoute('session.fork', { sessionId: 's-1' }) === null &&
+      /No remote fork endpoint/.test(METHOD_GUIDANCE['session.fork'] ?? ''),
+    resolveRoute('session.fork', { sessionId: 's-1' }),
   );
   const jobsRun = resolveRoute('jobs.run', { jobId: 'j-9' });
   check(
@@ -259,9 +264,10 @@ async function main() {
     jobsRun,
   );
   check(
-    'responses.get route',
-    resolveRoute('responses.get', { responseId: 'resp-1' })?.path === '/v1/responses/resp-1',
-    resolveRoute('responses.get', { responseId: 'resp-1' })?.path,
+    'responses.get has no route and points at the run instead',
+    resolveRoute('responses.get', { responseId: 'resp-1' }) === null &&
+      /GET \/v1\/runs\/\{run_id\}/.test(METHOD_GUIDANCE['responses.get'] ?? ''),
+    resolveRoute('responses.get', { responseId: 'resp-1' }),
   );
   check(
     'guidance present for config.get',
