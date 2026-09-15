@@ -12,6 +12,10 @@ import {
   setApprovalPolicy,
   type ApprovalAuditEntry,
 } from '@/lib/gateway/approval-policy';
+import {
+  approvalAuditTallyCopy,
+  approvalAuditRecent,
+} from '@/lib/gateway/approval-audit-view';
 
 jest.mock('@/lib/storage/key-value', () => ({
   keyValueStorage: {
@@ -136,5 +140,35 @@ describe('audit log', () => {
     expect(approvalAuditSummaryCopy(0)).toMatch(/No approval decisions/);
     expect(approvalAuditSummaryCopy(1)).toBe('1 decision recorded on this device.');
     expect(approvalAuditSummaryCopy(3)).toBe('3 decisions recorded on this device.');
+  });
+});
+
+describe('audit activity view', () => {
+  const approve = (approvalId: string, at: number): ApprovalAuditEntry => ({
+    approvalId,
+    cls: 'read',
+    decision: 'approve',
+    source: 'operator',
+    at,
+  });
+  const deny = (approvalId: string, at: number): ApprovalAuditEntry => ({
+    approvalId,
+    cls: 'destructive',
+    decision: 'deny',
+    source: 'operator',
+    at,
+  });
+
+  it('counts approved and denied decisions', () => {
+    expect(approvalAuditTallyCopy([])).toMatch(/no approval decisions/i);
+    const log = [approve('a', 1), deny('b', 2), approve('c', 3)];
+    const copy = approvalAuditTallyCopy(log);
+    expect(copy).toMatch(/2 approved/);
+    expect(copy).toMatch(/1 denied/);
+  });
+
+  it('takes the newest decisions, newest first', () => {
+    const log = [approve('a', 1), deny('b', 2), approve('c', 3), deny('d', 4), approve('e', 5)];
+    expect(approvalAuditRecent(log, 3).map((record) => record.approvalId)).toEqual(['e', 'd', 'c']);
   });
 });

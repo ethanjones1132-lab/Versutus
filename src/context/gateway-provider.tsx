@@ -2436,12 +2436,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setApprovalBusy(approvalId);
       try {
         await gatewayRequest(decision === 'approve' ? 'approval.approve' : 'approval.deny', { approvalId });
+        // The history line names what was decided: the context rides along
+        // from the row the operator actually saw in the inbox.
+        const row = pendingApprovals.find((entry) => entry.approvalId === approvalId);
         await recordApprovalDecision({
           approvalId,
-          cls: pendingApprovals.find((row) => row.approvalId === approvalId)?.cls ?? 'unknown',
+          botId: row?.botId,
+          cls: row?.cls ?? 'unknown',
           decision,
           source: 'operator',
           at: Date.now(),
+          operation: row?.operation,
+          summary: row?.summary,
         });
         await refreshPendingApprovals();
       } finally {
@@ -2585,6 +2591,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
                 decision: 'approve',
                 source: 'policy',
                 at: Date.now(),
+                // The policy line names what it approved on the run's behalf.
+                operation: prompt.slice(0, 160),
               });
               return { approved: true };
             }

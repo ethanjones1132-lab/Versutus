@@ -12,6 +12,7 @@ export type ApprovalRow = {
   cls: ApprovalClass;
   runId?: string;
   environmentId?: string;
+  botId?: string;
   operation?: string;
   summary?: string;
   createdAt?: string;
@@ -43,6 +44,7 @@ export function approvalRowsFromUnknown(payload: unknown): ApprovalRow[] {
       cls: normalizeApprovalClass(record.type ?? record.risk ?? record.action ?? record.class),
       runId: text(record.runId),
       environmentId: text(record.environmentId),
+      botId: text(record.botId),
       operation: text(record.operation),
       summary: text(record.summary) ?? text(record.description),
       createdAt: text(record.createdAt),
