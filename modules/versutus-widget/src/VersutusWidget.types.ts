@@ -10,7 +10,7 @@ export type VersutusWidgetRun = { title: string; state: string };
 export type VersutusWidgetBot = { id: string; label: string };
 
 export type VersutusWidgetPayload = {
-  v: 1 | 2;
+  v: 1 | 2 | 3;
   /** The connection word the app shows, e.g. "Connected". */
   status: string;
   /** Whether that word means connected — drives the status dot colour. */
@@ -23,6 +23,9 @@ export type VersutusWidgetPayload = {
   runs?: VersutusWidgetRun[];
   /** Version 2: up to three recent Bots for the quick-launch rows. */
   bots?: VersutusWidgetBot[];
+  /** Version 3: how many routines are failing / late — tallies, so redact keeps them. */
+  routinesFailing?: number;
+  routinesLate?: number;
   /** True when the device asked for the result and Bot names to stay off the card. */
   redact?: boolean;
   /** How many runs wait on the operator; > 0 shows the approval call to action. */

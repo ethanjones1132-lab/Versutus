@@ -12,7 +12,7 @@ const base: GlanceableSnapshot = {
 describe('androidWidgetPayload', () => {
   test('carries the same words the iOS widget draws, plus what the native card needs', () => {
     expect(androidWidgetPayload(base)).toEqual({
-      v: 2,
+      v: 3,
       status: 'Connected',
       connected: true,
       work: '1 run waiting on your approval · 2 runs in flight',
@@ -20,6 +20,22 @@ describe('androidWidgetPayload', () => {
       approvalsPending: 1,
       writtenAt: 1_757_700_000_000,
     });
+  });
+
+  test('carries the routine tallies, and they survive redaction — counts are not names', () => {
+    const payload = androidWidgetPayload({
+      ...base,
+      bots: [{ id: 'a', label: 'A' }],
+      redact: true,
+      routineAlerts: { late: 1, failing: 2 },
+    });
+    expect(payload.routinesLate).toBe(1);
+    expect(payload.routinesFailing).toBe(2);
+  });
+
+  test('a snapshot with no routine tallies leaves them out', () => {
+    expect(androidWidgetPayload(base)).not.toHaveProperty('routinesLate');
+    expect(androidWidgetPayload(base)).not.toHaveProperty('routinesFailing');
   });
 
   test('an absent result stays absent', () => {
@@ -47,7 +63,7 @@ describe('androidWidgetPayload', () => {
         { title: 'd', state: 'Running' },
       ],
     });
-    expect(payload.v).toBe(2);
+    expect(payload.v).toBe(3);
     expect(payload.runs).toEqual([
       { title: 'a', state: 'Running' },
       { title: 'b', state: 'Running' },
