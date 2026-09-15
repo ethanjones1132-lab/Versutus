@@ -26,6 +26,11 @@ export type ConstellationViewProps = {
   onPressNode?: (node: ConstellationNode) => void;
   /** An approvals badge tap: the route opens Activity. */
   onPressApproval?: (node: ConstellationNode) => void;
+  /**
+   * One handshake line per gateway id (Connecting / Reconnecting / Needs
+   * approval / a named failure) — the route computes it; this only paints it.
+   */
+  gatewayStatus?: Record<string, string>;
 };
 
 const NODE_BOX_WIDTH = 148;
@@ -47,6 +52,7 @@ export function ConstellationView({
   size,
   onPressNode,
   onPressApproval,
+  gatewayStatus,
 }: ConstellationViewProps) {
   // One reading of the clock for every "last seen" line: not a ticking
   // display, so it never re-renders on its own.
@@ -96,6 +102,11 @@ export function ConstellationView({
               {node.lastSeenAt !== undefined && !node.live ? (
                 <Text variant="micro" color="tertiary" numberOfLines={1}>
                   {relativeLastSeenCopy(node.lastSeenAt, now)}
+                </Text>
+              ) : null}
+              {node.kind === 'gateway' && !node.live && gatewayStatus?.[node.gatewayId] ? (
+                <Text variant="micro" color="secondary" numberOfLines={2} style={styles.statusLine}>
+                  {gatewayStatus[node.gatewayId]}
                 </Text>
               ) : null}
               {node.badges.length > 0 ? (
@@ -157,6 +168,10 @@ const styles = StyleSheet.create({
     position: 'absolute',
     alignItems: 'center',
     gap: Spacing.half,
+  },
+  statusLine: {
+    textAlign: 'center',
+    maxWidth: NODE_BOX_WIDTH,
   },
   badges: {
     flexDirection: 'row',

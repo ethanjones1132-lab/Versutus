@@ -54,6 +54,13 @@ describe('the fleet route projects the fleet and adds no protocol', () => {
     expect(src).not.toContain("node.id.replace(");
     expect(src).not.toContain("split(':')");
   });
+
+  test('a gateway tap is gated by the pure handshake decision, and its lines are painted', () => {
+    const src = fleetRoute();
+    expect(src).toContain('gatewayHandshake(');
+    expect(src).toContain('!handshake.canConnect');
+    expect(src).toContain('handshakeStatus');
+  });
 });
 
 describe('the fleet is a Stack destination with one entry on Home', () => {
