@@ -99,7 +99,11 @@ import {
   probeGatewayUrl,
   probeHighPriorityCandidates,
 } from '@/lib/gateway/probe';
-import { isSlashCommandInput, shouldPassthroughSkillSlash } from '@/lib/gateway/slash-commands';
+import {
+  isSlashCommandInput,
+  shouldPassthroughSkillSlash,
+  executeGatewaySlashCommand,
+} from '@/lib/gateway/slash-commands';
 import { decideBusySlash } from '@/lib/gateway/busy-slash';
 import type { Skill } from '@/lib/gateway/skills';
 import { findConfirmableSlash } from '@/lib/gateway/command-match';
@@ -2779,7 +2783,6 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
         // Execute gateway slash command — stream agent-transport output live.
         let streamedText = '';
-        const { executeGatewaySlashCommand } = await import('@/lib/gateway/slash-commands');
         // `/workflow` reads this device's stored step sequences for the
         // active gateway; no gateway route carries them.
         const workflows = activeGateway ? await loadWorkflows(activeGateway.id) : [];
