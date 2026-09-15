@@ -64,10 +64,13 @@ import { planCouncil, type CouncilReply, type CouncilResultSlot } from '@/lib/ga
 import {
   botPacketFileName,
   buildBotPacket,
+  type BotPacket,
 } from '@/lib/gateway/bot-packet';
 import { shareBotPacketFile } from '@/lib/gateway/bot-packet-share';
 import {
   BOT_PACKET_IMPORT_REFUSAL_COPY,
+  BOT_PACKET_APPLY_REFUSAL_COPY,
+  applyBotPacket,
   botPacketVerdictCopy,
   parseBotPacket,
   validateBotPacketAgainstGateway,
@@ -420,6 +423,11 @@ export function ChatScreen() {
   // bot-packet-import.ts. Reading applies nothing — this state never feeds
   // a write path, it is the honest answer to "what would this packet land"?
   const [packetReadNote, setPacketReadNote] = useState<string | null>(null);
+  // The packet's apply arm: the parsed packet the verdict came from, kept
+  // only while its note is on screen, plus the busy bit while the write
+  // runs. Cleared with the note, so a dismissed sheet forgets the packet.
+  const [packetToApply, setPacketToApply] = useState<BotPacket | null>(null);
+  const [packetApplyBusy, setPacketApplyBusy] = useState(false);
   // The soul is read only when a Bot is actually opened - it is off the roster
   // payload on purpose (a soul can be long, the roster is re-read constantly).
   const [soulState, setSoulState] = useState<BotSoulState & { botId: string | null }>({
@@ -1811,15 +1819,17 @@ export function ChatScreen() {
         memory={memoryRead && detailBot && memoryRead.botId === detailBot.id ? memoryRead.state : undefined}
         onClose={() => {
           setPacketReadNote(null);
+          setPacketToApply(null);
+          setPacketApplyBusy(false);
           setDetailBot(null);
         }}
         onImportPacket={
           // The import half of the handoff packet, validate-first per the
           // spec: pick a file, parse its shape, and fold its model pin
-          // against the catalog THIS gateway already serves. Nothing applies
-          // — the note is the whole outcome. Armed only on a connected
-          // gateway, because a verdict about what would land needs the
-          // gateway to be there.
+          // against the catalog THIS gateway already serves. The verdict is
+          // the note; the packet is kept beside it for the apply arm below.
+          // Armed only on a connected gateway, because a verdict about what
+          // would land needs the gateway to be there.
           status === 'connected' && detailBot
             ? () => {
                 void (async () => {
@@ -1833,16 +1843,49 @@ export function ChatScreen() {
                     setPacketReadNote(BOT_PACKET_IMPORT_REFUSAL_COPY[parsed.reason]);
                     return;
                   }
-                  setPacketReadNote(
-                    botPacketVerdictCopy(
-                      parsed.packet,
-                      validateBotPacketAgainstGateway(parsed.packet, modelCatalog),
-                    ),
-                  );
+                  const verdict = validateBotPacketAgainstGateway(parsed.packet, modelCatalog);
+                  setPacketToApply(parsed.packet);
+                  setPacketReadNote(botPacketVerdictCopy(parsed.packet, verdict));
                 })();
               }
             : undefined
         }
+        onApplyPacket={
+          // The apply arm of the read-back: the kept packet rides the pure
+          // `applyBotPacket` fold, and only its ok arm reaches `createBot`.
+          // Armed only when the fold says the write would be accepted —
+          // the gateway manages Bots and the pin is matched or absent. An
+          // unknown pin keeps the read-back note, never a write.
+          packetToApply
+            ? () => {
+                if (packetApplyBusy) return;
+                const decision = applyBotPacket(
+                  packetToApply,
+                  validateBotPacketAgainstGateway(packetToApply, modelCatalog),
+                  hasBotManagement,
+                );
+                if (!decision.ok) {
+                  setPacketReadNote(BOT_PACKET_APPLY_REFUSAL_COPY[decision.reason]);
+                  return;
+                }
+                setPacketApplyBusy(true);
+                void (async () => {
+                  try {
+                    const bot = await createBot(decision.input);
+                    setPacketReadNote(`Applied as "${bot.displayName}".`);
+                    setPacketToApply(null);
+                  } catch (error) {
+                    setPacketReadNote(
+                      `Apply failed: ${error instanceof Error ? error.message : String(error)}`,
+                    );
+                  } finally {
+                    setPacketApplyBusy(false);
+                  }
+                })();
+              }
+            : null
+        }
+        applyPacketBusy={packetApplyBusy}
         onRetry={handleSoulRetry}
         onExportPacket={
           // The export half of the handoff packet: the sheet composes the

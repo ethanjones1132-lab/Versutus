@@ -146,6 +146,50 @@ export function validateBotPacketAgainstGateway(
   return { model: 'unknown' };
 }
 
+/**
+ * Why `applyBotPacket` refused to write. One code, one honest sentence.
+ */
+export type BotPacketApplyReason = 'unknown-pin' | 'no-management';
+
+/** Operator words for each apply refusal. */
+export const BOT_PACKET_APPLY_REFUSAL_COPY: Record<BotPacketApplyReason, string> = {
+  'unknown-pin':
+    'This packet pins a model this gateway does not serve, so nothing was applied — remap the pin first.',
+  'no-management':
+    'This gateway does not create Bots, so nothing was applied.',
+};
+
+/** What `applyBotPacket` answered: an exact `createBot` input, or a refusal. */
+export type BotPacketApplyDecision =
+  | { ok: true; input: { name: string; soul?: string; description?: string; modelId?: string } }
+  | { ok: false; reason: BotPacketApplyReason };
+
+/**
+ * Fold one parsed packet + its gateway verdict + whether the gateway
+ * creates Bots at all into the exact `createBot` input the packet
+ * promises, or a named refusal. Pure: no fetch, no platform — the caller
+ * owns the write. The gates: Apply only when the gateway manages Bots
+ * (`hasBotManagement`) AND the model pin is `matched` or `absent` — an
+ * `unknown` pin stays a read-back note, never a write.
+ */
+export function applyBotPacket(
+  packet: BotPacket,
+  verdict: BotPacketGatewayVerdict,
+  canManage: boolean,
+): BotPacketApplyDecision {
+  if (!canManage) return { ok: false, reason: 'no-management' };
+  if (verdict.model === 'unknown') return { ok: false, reason: 'unknown-pin' };
+  return {
+    ok: true,
+    input: {
+      name: packet.bot.name,
+      ...(packet.soul ? { soul: packet.soul } : {}),
+      ...(packet.bot.description ? { description: packet.bot.description } : {}),
+      ...(packet.modelPin && verdict.model === 'matched' ? { modelId: packet.modelPin } : {}),
+    },
+  };
+}
+
 // The verdict copy imports `sameModelId` exactly like the send path does, so
 // a catalog id qualified with providers matches the packet's pin either way.
 

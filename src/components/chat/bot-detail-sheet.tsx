@@ -66,6 +66,15 @@ export type BotDetailSheetProps = {
    */
   onImportPacket?: () => void;
   /**
+   * Applies the last-read packet as a new Bot, riding the pure
+   * `applyBotPacket` fold the parent composes with its own `createBot`
+   * seam. Armed only when the fold says the gateway would accept the
+   * packet (management gate + a matched-or-absent pin) — otherwise no arm
+   * and the note stays the whole outcome. `busy` while the write runs.
+   */
+  onApplyPacket?: (() => void) | null;
+  applyPacketBusy?: boolean;
+  /**
    * The read-back's answer, shown as a fact — what would land, what would
    * not, and (always next to it) what never travels. Null renders nothing,
    * so a sheet that has not asked yet shows no answer.
@@ -80,7 +89,7 @@ export type BotDetailSheetProps = {
  * then act: message the agent, copy the id for host-side commands, or edit
  * what the Gate holds.
  */
-export function BotDetailSheet({ bot, soul, memory, onClose, onMessage, onEdit, onRetry, onExportPacket, onImportPacket, packetReadNote }: BotDetailSheetProps) {
+export function BotDetailSheet({ bot, soul, memory, onClose, onMessage, onEdit, onRetry, onExportPacket, onImportPacket, onApplyPacket, applyPacketBusy, packetReadNote }: BotDetailSheetProps) {
   if (!bot) return null;
   const detail = describeBotDetail(bot);
   const soulState = soul ?? EMPTY_BOT_SOUL;
@@ -216,6 +225,19 @@ export function BotDetailSheet({ bot, soul, memory, onClose, onMessage, onEdit, 
               {packetReadNote}
             </Text>
           </View>
+        ) : null}
+        {/* The apply arm: the same handoff area, one gate-checked button
+            below the read-back note. Explicitly `null` and `undefined` are
+            the same "no affordance" — the parent arms it only when the
+            apply fold says the gateway would accept the packet. */}
+        {packetReadNote && onApplyPacket ? (
+          <Button
+            label="Apply as new Bot"
+            variant="primary"
+            size="sm"
+            busy={applyPacketBusy}
+            onPress={onApplyPacket}
+          />
         ) : null}
         {onImportPacket ? (
           <ListRow
