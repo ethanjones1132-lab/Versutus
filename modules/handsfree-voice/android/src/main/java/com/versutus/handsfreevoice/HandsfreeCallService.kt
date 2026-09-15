@@ -77,6 +77,21 @@ class HandsfreeCallService : Service() {
   private var destroyed = false
   private var foregroundStarted = false
 
+  /** The Bot/surface label the operator tapped Start on — a re-post keeps it. */
+  private var notificationTitle: String = ""
+
+  /**
+   * (Re)posts the ongoing notification for the call as it stands. The body is
+   * the bodyFor fold answered from the phase facts this service holds, so
+   * mute, speech and recognition edges each give the line the operator reads
+   * while backgrounded. The title the session started with is kept.
+   */
+  private fun postNotification() {
+    if (!foregroundStarted) return
+    val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    manager.notify(NOTIFICATION_ID, buildNotification(notificationTitle))
+  }
+
   private val audioManager: AudioManager
     get() = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
@@ -130,6 +145,7 @@ class HandsfreeCallService : Service() {
   /** Opens the session. Answers false if one is already running. */
   fun startSession(title: String): Boolean {
     if (!state.start()) return false
+    notificationTitle = title
     if (!foregroundStarted) {
       startForegroundWithNotification(title)
       foregroundStarted = true
@@ -163,7 +179,13 @@ class HandsfreeCallService : Service() {
     return NotificationCompat.Builder(this, CHANNEL_ID)
       .setSmallIcon(android.R.drawable.ic_btn_speak_now)
       .setContentTitle(HandsfreeCallNotification.titleFor(title))
-      .setContentText(HandsfreeCallNotification.TEXT)
+      .setContentText(
+        HandsfreeCallNotification.bodyFor(
+          state.muted,
+          listening,
+          speaking,
+        ),
+      )
       .setOngoing(true)
       .setSilent(true)
       .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -262,6 +284,7 @@ class HandsfreeCallService : Service() {
     endpoints.begin(SystemClock.elapsedRealtime())
     try {
       engine.startListening(buildRecognizerIntent())
+      postNotification()
       scheduleTick()
     } catch (error: Exception) {
       listening = false
@@ -298,6 +321,7 @@ class HandsfreeCallService : Service() {
       stopRequested = true
       listening = false
       cancelTick()
+      postNotification()
       try {
         recognizer?.cancel()
       } catch (_: Exception) {
@@ -478,6 +502,7 @@ class HandsfreeCallService : Service() {
     val generation = speechGeneration
     speaking = true
     queuedSpeech = chunks.toMutableList()
+    postNotification()
     playChunk(engine, generation, 0)
     startBargeIn()
   }
@@ -530,6 +555,7 @@ class HandsfreeCallService : Service() {
       speaking = false
       queuedSpeech.clear()
       stopBargeIn()
+      postNotification()
       try {
         tts?.stop()
       } catch (_: Exception) {
@@ -690,6 +716,7 @@ class HandsfreeCallService : Service() {
         } catch (_: Exception) {
         }
       }
+      postNotification()
       // Unmuting does not itself start a turn: the JS reducer decides which
       // phase the call is in and asks for recognition when it is listening.
     }

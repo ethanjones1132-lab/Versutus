@@ -19,10 +19,18 @@ class HandsfreeCallNotificationTest {
   }
 
   @Test
-  fun theBodyLineIsWhatTheCallIsDoing() {
+  fun theBodyLineIsWhatTheCallIsDoingRightNow() {
+    // The body answers what the service actually holds, never a blanket claim.
+    assertEquals("Listening", HandsfreeCallNotification.bodyFor(false, true, false))
+    assertEquals("Speaking", HandsfreeCallNotification.bodyFor(false, false, true))
+    assertEquals("Muted", HandsfreeCallNotification.bodyFor(true, false, false))
+    assertEquals("Muted", HandsfreeCallNotification.bodyFor(true, true, true))
+    // None of the service-visible phases active means the turn is sending or
+    // the reply is incoming — phases only JS knows, so the neutral line stands
+    // and never claims the microphone.
     assertEquals(
-      "Listening and speaking through the microphone",
-      HandsfreeCallNotification.TEXT,
+      "Hands-free call in progress",
+      HandsfreeCallNotification.bodyFor(false, false, false),
     )
   }
 
