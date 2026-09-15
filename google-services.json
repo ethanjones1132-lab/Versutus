@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "527621777503",
+    "project_id": "versutus-1d3c1",
+    "storage_bucket": "versutus-1d3c1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:527621777503:android:3a5f9fa2044bdc097f53ea",
+        "android_client_info": {
+          "package_name": "com.versutus.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBrhAUCzYl9K-5B5n21DGVLIaSD2pr1RiQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
