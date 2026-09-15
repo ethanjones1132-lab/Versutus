@@ -55,6 +55,20 @@ describe('the fleet route projects the fleet and adds no protocol', () => {
     expect(src).not.toContain("split(':')");
   });
 
+  test('a disconnected or non-routable Bot tap lands on the roster detail, only a routable one calls openBot', () => {
+    const src = fleetRoute();
+    // The pure decision gates the Bot tap the way gatewayHandshake gates the gateway's.
+    expect(src).toContain('botTap(');
+    expect(src).toContain('connectedRoster.find(');
+    // The verdict travels from the roster read: only reported-routable opens a chat.
+    expect(src).toMatch(/bot \?\? \{ id: botId \}/);
+    // The unroutable destination is the roster surface, not a silent no-op.
+    expect(src).toContain("requestSurface({ kind: 'roster' })");
+    // And the chat path is the decision's onChat, not an unconditional open.
+    expect(src).toMatch(/onChat: \(\) => \{\s*void openBot\(botId\)/);
+    expect(src).toMatch(/onDetail: showRosterFallback/);
+  });
+
   test('a gateway tap is gated by the pure handshake decision, and its lines are painted', () => {
     const src = fleetRoute();
     expect(src).toContain('gatewayHandshake(');
