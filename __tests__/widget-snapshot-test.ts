@@ -259,6 +259,75 @@ describe('glanceableSnapshot', () => {
     expect(snapshot.lastResult).toBeUndefined();
   });
 
+  test('a late routine is one whose next run is due, not running, off, or unknown — tallied as routineAlerts', () => {
+    const snapshot = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [],
+        routines: [
+          job({ id: 'late', nextRunAt: new Date(NOW - 60_000).toISOString(), lastStatus: 'ok' }),
+          job({ id: 'current', nextRunAt: new Date(NOW + 600_000).toISOString(), lastStatus: 'ok' }),
+          job({ id: 'busy', nextRunAt: new Date(NOW - 120_000).toISOString(), running: true, lastStatus: 'ok' }),
+          job({ id: 'paused', nextRunAt: new Date(NOW - 120_000).toISOString(), paused: true }),
+          job({ id: 'fresh', nextRunAt: new Date(NOW - 120_000).toISOString(), lastStatus: null }),
+        ],
+      },
+      NOW,
+    );
+
+    expect(snapshot.routineAlerts).toEqual({ late: 1, failing: 0 });
+  });
+
+  test('a failing routine is one the gateway judges error — a warn is a warning, not failing', () => {
+    const snapshot = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [],
+        routines: [
+          job({ id: 'failing', failureStreak: 1, lastError: 'token expired', lastStatus: 'error' }),
+          job({ id: 'delivery', lastStatus: 'ok', lastDeliveryError: 'no channel' }),
+          job({ id: 'bad', lastStatus: 'warned' }),
+        ],
+      },
+      NOW,
+    );
+
+    expect(snapshot.routineAlerts).toEqual({ late: 0, failing: 1 });
+  });
+
+  test('a job can be both late and failing, and counts in both tallies', () => {
+    const snapshot = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [],
+        routines: [
+          job({ id: 'both', nextRunAt: new Date(NOW - 60_000).toISOString(), failureStreak: 2, lastError: 'boom', lastStatus: 'error' }),
+        ],
+      },
+      NOW,
+    );
+
+    expect(snapshot.routineAlerts).toEqual({ late: 1, failing: 1 });
+  });
+
+  test('routineAlerts is absent when no routine is late or failing', () => {
+    const snapshot = glanceableSnapshot(
+      {
+        status: 'connected',
+        runs: [],
+        routines: [
+          job({ id: 'fine', lastStatus: 'ok' }),
+          job({ id: 'future', nextRunAt: new Date(NOW + 600_000).toISOString() }),
+        ],
+      },
+      NOW,
+    );
+    const empty = glanceableSnapshot({ status: 'connecting', runs: [], routines: [] }, NOW);
+
+    expect(snapshot).not.toHaveProperty('routineAlerts');
+    expect(empty).not.toHaveProperty('routineAlerts');
+  });
+
   test('writtenAt is the now it was handed, so staleness is always sayable', () => {
     const snapshot = glanceableSnapshot({ status: 'connected', runs: [], routines: [] }, NOW - 5_000);
 
