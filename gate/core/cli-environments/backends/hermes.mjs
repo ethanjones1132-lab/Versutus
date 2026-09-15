@@ -533,38 +533,30 @@ export function createHermesBackend({
     },
 
     async deliverGroupMessage({ name, memberIds, mentionedIds, text } = {}) {
-      const { planGroupRounds, groupSessionTitle, groupTurnPrompt, isSilentReply } =
+      const { planGroupRounds, groupSessionTitle, groupTurnPrompt, runGroupTurns } =
         await import('../bot-groups.mjs');
       const steps = planGroupRounds({ memberIds: memberIds ?? [], mentionedIds: mentionedIds ?? [] });
-      const replies = [];
       // A quiet bot is skipped; a wholly quiet ROUND ends the conversation.
       // Breaking on the first silence cut a three-bot room to one speaker,
-      // because the bot after the quiet one was never asked.
-      const perRound = new Set(steps.filter((s) => s.round === 0).map((s) => s.botId)).size || 1;
-      let round = 0;
-      let silentThisRound = 0;
-      for (const step of steps) {
-        if (step.round !== round) {
-          if (silentThisRound >= perRound) break;
-          round = step.round;
-          silentThisRound = 0;
-        }
-        const scoped = await this.forBot(step.botId);
-        const sessions = await scoped.listSessions();
-        const title = groupSessionTitle(name);
-        let session = sessions.find((entry) => entry.title === title);
-        if (!session) session = await scoped.createSession({ title });
-        // Each speaker hears the room, not just the original message. Handing
-        // every bot the same prompt in isolation is what turned one message
-        // into nine near-identical replies — there was nothing to build on and
-        // no way for a round to end.
-        const prompt = groupTurnPrompt({ text: text ?? '', replies, botId: step.botId });
-        const result = await scoped.sendMessage(session.id, { text: prompt });
-        const reply = typeof result?.text === 'string' ? result.text.trim() : '';
-        if (isSilentReply(reply)) { silentThisRound += 1; continue; }
-        replies.push({ botId: step.botId, text: reply });
-      }
-      return { replies };
+      // because the bot after the quiet one was never asked. A throw or a hang
+      // is that speaker's miss — the rest of the round still answers.
+      return runGroupTurns({
+        steps,
+        ask: async (step, spoken) => {
+          const scoped = await this.forBot(step.botId);
+          const sessions = await scoped.listSessions();
+          const title = groupSessionTitle(name);
+          let session = sessions.find((entry) => entry.title === title);
+          if (!session) session = await scoped.createSession({ title });
+          // Each speaker hears the room, not just the original message. Handing
+          // every bot the same prompt in isolation is what turned one message
+          // into nine near-identical replies — there was nothing to build on and
+          // no way for a round to end.
+          const prompt = groupTurnPrompt({ text: text ?? '', replies: spoken, botId: step.botId });
+          const result = await scoped.sendMessage(session.id, { text: prompt });
+          return typeof result?.text === 'string' ? result.text : '';
+        },
+      });
     },
 
     async handoffMention({ fromId, toId, text } = {}) {

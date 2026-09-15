@@ -53,11 +53,15 @@ function makeEntryId() {
 export function transcriptEntriesForSend({ text, replies = [], makeId = makeEntryId, now = Date.now() } = {}) {
   const entries = [{ id: makeId(), role: 'user', text: String(text ?? ''), at: now }];
   for (const reply of replies) {
+    const line = String(reply.text ?? '');
+    // A missed speaker (throw, hang) is returned as an error reply with no
+    // text so the phone can name the cause. It is not a line in the room.
+    if (!line) continue;
     entries.push({
       id: makeId(),
       role: 'bot',
       botId: String(reply.botId ?? ''),
-      text: String(reply.text ?? ''),
+      text: line,
       at: now,
     });
   }
@@ -374,6 +378,82 @@ export function isSilentReply(text) {
   const trimmed = String(text ?? '').trim();
   if (!trimmed) return true;
   return /^[([]?\s*(\[silent\]|silent|nothing to add|no comment|pass)\s*[)\]]?\.?$/i.test(trimmed);
+}
+
+/**
+ * How long one speaker may owe its reply before the round moves on. The
+ * upstream turn is not killed — the ceiling is about the room, not a cancel.
+ */
+export const GROUP_TURN_TIMEOUT_MS = 90_000;
+
+function withTimeout(promise, ms, message) {
+  if (!Number.isFinite(ms) || ms <= 0) return promise;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error(message);
+      error.code = 'group_turn_timeout';
+      reject(error);
+    }, ms);
+    timer.unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * Walk a planned group round. A throw or a hang is that speaker's miss —
+ * named on `errors` — and the round still returns whatever already came
+ * back. `replies` stays the speakers who answered, so a group room never
+ * draws an empty bubble for a miss. A quiet speaker is skipped; a wholly
+ * quiet round ends the rest. Later speakers see only the replies that
+ * actually spoke, never the misses.
+ */
+export async function runGroupTurns({
+  steps,
+  ask,
+  timeoutMs = GROUP_TURN_TIMEOUT_MS,
+} = {}) {
+  const replies = [];
+  const errors = [];
+  const planned = Array.isArray(steps) ? steps : [];
+  const perRound = new Set(planned.filter((step) => step.round === 0).map((step) => step.botId)).size || 1;
+  let round = 0;
+  let silentThisRound = 0;
+  for (const step of planned) {
+    if (step.round !== round) {
+      if (silentThisRound >= perRound) break;
+      round = step.round;
+      silentThisRound = 0;
+    }
+    let text = '';
+    try {
+      const result = await withTimeout(
+        Promise.resolve(ask(step, replies)),
+        timeoutMs,
+        `bot "${step.botId}" timed out`,
+      );
+      text = typeof result === 'string' ? result.trim() : '';
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      errors.push({ botId: step.botId, error: detail });
+      silentThisRound += 1;
+      continue;
+    }
+    if (isSilentReply(text)) {
+      silentThisRound += 1;
+      continue;
+    }
+    replies.push({ botId: step.botId, text });
+  }
+  return errors.length > 0 ? { replies, errors } : { replies };
 }
 
 /**

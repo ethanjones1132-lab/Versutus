@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createBotGroupStore, groupTurnPrompt, isSilentReply, MAX_GROUP_HISTORY, planGroupRounds, transcriptEntriesForSend, validateGroup } from '../core/cli-environments/bot-groups.mjs';
+import { createBotGroupStore, groupTurnPrompt, isSilentReply, MAX_GROUP_HISTORY, planGroupRounds, runGroupTurns, transcriptEntriesForSend, validateGroup } from '../core/cli-environments/bot-groups.mjs';
 
 test('validateGroup enforces 2–6 members', () => {
   assert.equal(validateGroup({ name: 'crew', memberIds: ['a'] }).ok, false);
@@ -181,6 +181,19 @@ test('transcriptEntriesForSend records the operator line plus each reply in orde
   // A silent round still keeps the user's line — "nobody answered" is history.
   const silent = transcriptEntriesForSend({ text: 'anyone there?', replies: [], makeId: () => 'x', now: 9 });
   assert.deepEqual(silent, [{ id: 'x', role: 'user', text: 'anyone there?', at: 9 }]);
+
+  // A missed speaker is an error reply with no text — not a blank room line.
+  const missed = transcriptEntriesForSend({
+    text: 'status',
+    replies: [
+      { botId: 'coder', text: 'ok' },
+      { botId: 'night', text: '', error: 'offline' },
+    ],
+    makeId: () => 'm',
+    now: 2,
+  });
+  assert.equal(missed.filter((entry) => entry.role === 'bot').length, 1);
+  assert.equal(missed[1].botId, 'coder');
 });
 
 test('store transcripts append, replay oldest-first, and cap at MAX_GROUP_HISTORY', async () => {
@@ -321,6 +334,42 @@ test('one message means one round — each member speaks once', () => {
 test('a caller that wants a real multi-round exchange can still ask', () => {
   const planned = planGroupRounds({ memberIds: ['a', 'b'], maxRounds: 3 });
   assert.equal(planned.length, 6);
+});
+
+test('one speaker throwing still returns the answers already in', async () => {
+  const asked = [];
+  const { replies, errors } = await runGroupTurns({
+    steps: planGroupRounds({ memberIds: ['a', 'b', 'c'] }),
+    ask: (step, spoken) => {
+      asked.push(step.botId);
+      if (step.botId === 'b') throw new Error('offline');
+      if (step.botId === 'c') {
+        assert.deepEqual(spoken.map((reply) => reply.botId), ['a']);
+      }
+      return `${step.botId} ok`;
+    },
+  });
+  assert.deepEqual(asked, ['a', 'b', 'c']);
+  assert.deepEqual(replies.map((reply) => reply.botId), ['a', 'c']);
+  assert.equal(replies.find((reply) => reply.botId === 'a').text, 'a ok');
+  assert.equal(replies.find((reply) => reply.botId === 'c').text, 'c ok');
+  assert.deepEqual(errors, [{ botId: 'b', error: 'offline' }]);
+});
+
+test('a hung speaker times out and the rest of the round still answers', async () => {
+  const asked = [];
+  const { replies, errors } = await runGroupTurns({
+    steps: planGroupRounds({ memberIds: ['a', 'b', 'c'] }),
+    timeoutMs: 20,
+    ask: (step) => {
+      asked.push(step.botId);
+      if (step.botId === 'b') return new Promise(() => {});
+      return `${step.botId} ok`;
+    },
+  });
+  assert.deepEqual(asked, ['a', 'b', 'c']);
+  assert.deepEqual(replies.map((reply) => reply.botId), ['a', 'c']);
+  assert.match(errors.find((miss) => miss.botId === 'b').error, /timed out/);
 });
 
 test('verifyMembers re-checks the live roster at the send door', async () => {
