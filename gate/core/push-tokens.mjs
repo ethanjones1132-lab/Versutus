@@ -17,8 +17,21 @@ function validDeviceId(deviceId) {
 }
 
 export class PushTokenStore {
+  // Every mutation reads the whole file and writes a full snapshot back, so
+  // two mutations in flight interleave read-read-write-write and the last write
+  // resurrects what the first deleted (a notify reporting several dead tokens
+  // removes them concurrently). Mutations queue here; reads stay free-running.
+  #pending = Promise.resolve();
+
   constructor(path) {
     this.path = path;
+  }
+
+  #serialize(mutation) {
+    const run = this.#pending.then(mutation, mutation);
+    // Keep the queue alive when a mutation rejects; the caller still sees it.
+    this.#pending = run.catch(() => {});
+    return run;
   }
 
   async #readAll() {
@@ -43,26 +56,28 @@ export class PushTokenStore {
     if (!validDeviceId(deviceId)) throw new Error('deviceId is required');
     if (!isRecord(patch)) throw new Error('patch must be an object');
 
-    const rows = await this.#readAll();
-    const existing = isRecord(rows[deviceId]) ? rows[deviceId] : {};
-    const botIds = patch.botIds === undefined
-      ? (Array.isArray(existing.botIds) ? existing.botIds : [])
-      : Array.isArray(patch.botIds) ? patch.botIds : [];
-    const quietHours = patch.quietHours === undefined
-      ? (existing.quietHours ?? DEFAULT_ROW.quietHours)
-      : patch.quietHours;
+    return this.#serialize(async () => {
+      const rows = await this.#readAll();
+      const existing = isRecord(rows[deviceId]) ? rows[deviceId] : {};
+      const botIds = patch.botIds === undefined
+        ? (Array.isArray(existing.botIds) ? existing.botIds : [])
+        : Array.isArray(patch.botIds) ? patch.botIds : [];
+      const quietHours = patch.quietHours === undefined
+        ? (existing.quietHours ?? DEFAULT_ROW.quietHours)
+        : patch.quietHours;
 
-    const row = {
-      ...DEFAULT_ROW,
-      ...existing,
-      ...patch,
-      botIds,
-      quietHours,
-      updatedAtMs: Date.now(),
-    };
-    rows[deviceId] = row;
-    await this.#writeAll(rows);
-    return row;
+      const row = {
+        ...DEFAULT_ROW,
+        ...existing,
+        ...patch,
+        botIds,
+        quietHours,
+        updatedAtMs: Date.now(),
+      };
+      rows[deviceId] = row;
+      await this.#writeAll(rows);
+      return row;
+    });
   }
 
   async get(deviceId) {
@@ -81,20 +96,24 @@ export class PushTokenStore {
 
   async remove(deviceId) {
     if (!validDeviceId(deviceId)) return false;
-    const rows = await this.#readAll();
-    if (!(deviceId in rows)) return false;
-    delete rows[deviceId];
-    await this.#writeAll(rows);
-    return true;
+    return this.#serialize(async () => {
+      const rows = await this.#readAll();
+      if (!(deviceId in rows)) return false;
+      delete rows[deviceId];
+      await this.#writeAll(rows);
+      return true;
+    });
   }
 
   async removeByToken(expoPushToken) {
     if (typeof expoPushToken !== 'string' || !expoPushToken) return false;
-    const rows = await this.#readAll();
-    const deviceId = Object.keys(rows).find((id) => rows[id]?.expoPushToken === expoPushToken);
-    if (!deviceId) return false;
-    delete rows[deviceId];
-    await this.#writeAll(rows);
-    return true;
+    return this.#serialize(async () => {
+      const rows = await this.#readAll();
+      const deviceId = Object.keys(rows).find((id) => rows[id]?.expoPushToken === expoPushToken);
+      if (!deviceId) return false;
+      delete rows[deviceId];
+      await this.#writeAll(rows);
+      return true;
+    });
   }
 }

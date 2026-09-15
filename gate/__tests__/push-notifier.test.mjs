@@ -28,17 +28,66 @@ test('skips disabled devices', async () => {
   assert.deepEqual(sent, []);
 });
 
-test('skips devices inside their local quiet hours', async () => {
+// Quiet hours read the device's wall clock, so the fixture pins the clock
+// through `now` and checks both edges of the window. The old fixed window
+// (0–1439) flipped whenever the suite ran at 23:59 UTC, the excluded end minute.
+test('skips devices inside their local quiet hours at both edges of the window', async () => {
   const tokens = {
-    listEnabled: async () => [row({ quietHours: { startMinutes: 0, endMinutes: 1439 } })],
+    listEnabled: async () => [row({ quietHours: { startMinutes: 600, endMinutes: 700 } })],
     removeByToken: async () => false,
   };
   const sent = [];
-  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
-
-  await notifier.notify({ trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'done' });
+  for (const minuteOfDay of [600, 699]) {
+    const notifier = createPushNotifier({
+      tokens,
+      send: async (messages) => { sent.push(...messages); return { ok: true }; },
+      now: () => new Date(Date.UTC(2026, 8, 14, Math.floor(minuteOfDay / 60), minuteOfDay % 60)),
+    });
+    await notifier.notify({ trigger: 'final-response', sessionId: `session-${minuteOfDay}`, botId: 'bot-1', text: 'done' });
+  }
 
   assert.deepEqual(sent, []);
+});
+
+test('a device outside its quiet window still receives the push at either edge', async () => {
+  const tokens = {
+    listEnabled: async () => [row({ quietHours: { startMinutes: 600, endMinutes: 700 } })],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  // 599 is the minute before the window; 700 is the first minute after it (the end is exclusive).
+  for (const minuteOfDay of [599, 700]) {
+    const notifier = createPushNotifier({
+      tokens,
+      send: async (messages) => { sent.push(...messages); return { ok: true }; },
+      now: () => new Date(Date.UTC(2026, 8, 14, Math.floor(minuteOfDay / 60), minuteOfDay % 60)),
+    });
+    await notifier.notify({ trigger: 'final-response', sessionId: `session-${minuteOfDay}`, botId: 'bot-1', text: 'done' });
+  }
+
+  assert.equal(sent.length, 2);
+});
+
+test('a result carrying several dead tokens leaves none of them in the store', async () => {
+  const { mkdtemp } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { PushTokenStore } = await import('../core/push-tokens.mjs');
+  const dir = await mkdtemp(join(tmpdir(), 'gate-push-notifier-'));
+  const tokens = new PushTokenStore(join(dir, 'push-tokens.json'));
+  await tokens.upsert('phone-1', { expoPushToken: 'ExponentPushToken[dead-1]', enabled: true });
+  await tokens.upsert('phone-2', { expoPushToken: 'ExponentPushToken[dead-2]', enabled: true });
+  const notifier = createPushNotifier({
+    tokens,
+    send: async () => ({ ok: true, deadTokens: ['ExponentPushToken[dead-1]', 'ExponentPushToken[dead-2]'] }),
+  });
+
+  const result = await notifier.notify({ trigger: 'run', runId: 'run-1' });
+
+  assert.equal(result.ok, true);
+  assert.equal(await tokens.get('phone-1'), null);
+  assert.equal(await tokens.get('phone-2'), null);
+  assert.deepEqual(await tokens.listEnabled(), []);
 });
 
 test('skips devices whose bot allowlist does not include the event bot', async () => {
