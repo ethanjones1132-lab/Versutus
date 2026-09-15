@@ -60,6 +60,8 @@ export type GlanceableWidgetLines = {
   work: string;
   /** The newest judged outcome in its own words; absent when there was none. */
   result?: string;
+  /** The routine tallies, worded; absent when the snapshot recorded neither. */
+  routines?: string;
   /** When all of the above was true, so a frozen snapshot says so. */
   written: string;
 };
@@ -92,6 +94,13 @@ export function glanceableWidgetLines(
   now: number = Date.now(),
 ): GlanceableWidgetLines {
   const stillGoing = snapshot.runsInFlight - snapshot.approvalsPending;
+  const alerts = snapshot.routineAlerts;
+  // The same order the tally is read elsewhere: failing first, then late —
+  // the operator's decision runs through "what is broken" before "what is due".
+  const routineParts: string[] = [];
+  if (alerts && alerts.failing > 0) routineParts.push(`${alerts.failing} failing`);
+  if (alerts && alerts.late > 0) routineParts.push(`${alerts.late} late`);
+
   const work: string[] = [];
 
   if (snapshot.approvalsPending > 0) {
@@ -105,6 +114,7 @@ export function glanceableWidgetLines(
     // Absent rather than empty: a snapshot with nothing judged yet has no
     // result, and an empty line would read as one.
     ...(snapshot.lastResult ? { result: snapshot.lastResult } : {}),
+    ...(routineParts.length > 0 ? { routines: routineParts.join(' · ') } : {}),
     written: writtenLine(snapshot.writtenAt, now),
   };
 }

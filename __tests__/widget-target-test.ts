@@ -393,6 +393,22 @@ describe('glanceableWidgetLines', () => {
     );
   });
 
+  test('the routine tallies become a single line, worded from the snapshot only', () => {
+    expect(
+      glanceableWidgetLines(snapshot({ routineAlerts: { late: 1, failing: 2 } })).routines,
+    ).toBe('2 failing · 1 late');
+    expect(glanceableWidgetLines(snapshot({ routineAlerts: { late: 0, failing: 1 } })).routines).toBe(
+      '1 failing',
+    );
+    expect(glanceableWidgetLines(snapshot({ routineAlerts: { late: 3, failing: 0 } })).routines).toBe(
+      '3 late',
+    );
+    // A zero-both tally is nothing to read: absent, not "0 · 0".
+    expect('routines' in glanceableWidgetLines(snapshot({ routineAlerts: { late: 0, failing: 0 } })))
+      .toBe(false);
+    expect('routines' in glanceableWidgetLines(snapshot())).toBe(false);
+  });
+
   test('an unreadable stamp says so instead of printing a blank one', () => {
     expect(glanceableWidgetLines(snapshot({ writtenAt: Number.NaN }), NOW).written).toBe(
       'Written at an unreadable time',
