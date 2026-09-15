@@ -160,7 +160,14 @@ export type ApprovalAuditEntry = {
   decision: 'approve' | 'deny';
   source: 'operator' | 'policy';
   at: number;
+  /** What the command was, for the history line; absent on older entries. */
+  operation?: string;
+  /** The Gate's summary of the command when no operation string exists. */
+  summary?: string;
 };
+
+const trimContext = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 
 function isAuditEntry(value: unknown): value is ApprovalAuditEntry {
   if (!value || typeof value !== 'object') return false;
@@ -202,7 +209,8 @@ export async function loadApprovalAudit(): Promise<ApprovalAuditEntry[]> {
 export function approvalAuditCopy(entry: ApprovalAuditEntry): string {
   const verb =
     entry.source === 'policy' ? 'Auto-approved' : entry.decision === 'approve' ? 'Approved' : 'Denied';
-  return `${verb} · ${entry.cls} · ${entry.source}`;
+  const what = trimContext(entry.operation) ?? trimContext(entry.summary);
+  return what ? `${verb} · ${entry.cls} · ${entry.source} · ${what}` : `${verb} · ${entry.cls} · ${entry.source}`;
 }
 
 /** The history card's empty/live sentence. */

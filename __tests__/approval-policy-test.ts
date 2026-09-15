@@ -116,6 +116,22 @@ describe('audit log', () => {
     ).toBe('Denied · destructive · operator');
   });
 
+  it('appends the operation or summary to the line when one is present', () => {
+    expect(approvalAuditCopy({ ...entry('a', 1), operation: 'ls -la' })).toBe(
+      'Auto-approved · read · policy · ls -la',
+    );
+    expect(
+      approvalAuditCopy({ ...entry('b', 2), decision: 'deny', source: 'operator', summary: 'rm -rf /tmp/x' }),
+    ).toBe('Denied · read · operator · rm -rf /tmp/x');
+    expect(approvalAuditCopy({ ...entry('c', 3), operation: '  ', summary: '  ' })).toBe(
+      'Auto-approved · read · policy',
+    );
+  });
+
+  it('keeps accepting and copying entries without context', () => {
+    expect(approvalAuditFromUnknown([{ nope: 1 }, entry('ok', 1)])).toEqual([entry('ok', 1)]);
+  });
+
   it('summarizes an empty or live history honestly', () => {
     expect(approvalAuditSummaryCopy(0)).toMatch(/No approval decisions/);
     expect(approvalAuditSummaryCopy(1)).toBe('1 decision recorded on this device.');
