@@ -653,10 +653,70 @@ test('the push observer hears the approval card and the terminal verdict', async
     const approval = heard.find((event) => event.trigger === 'approval');
     assert.ok(approval, 'the approval card going up must report');
     assert.equal(approval.runId, handle.runId);
+    assert.equal(typeof approval.text, 'string');
+    assert.ok(approval.text.length > 0, 'the approval push must carry the summary');
     const verdict = heard.find((event) => event.trigger === 'run');
     assert.ok(verdict, 'the terminal verdict must report');
     assert.equal(verdict.runId, handle.runId);
     assert.equal(verdict.state, 'completed');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('a cancelled run\'s push event carries the cancel reason', async () => {
+  const heard = [];
+  const { service, children, cleanup } = await makeService({}, {
+    onRunEvent: (event) => { heard.push(event); },
+  });
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'prompt',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: { prompt: 'SLEEP:30000' },
+    });
+    const drained = collectEvents(service, handle.runId, 'approve');
+    for (let waited = 0; waited < 2000 && children.length === 0; waited += 10) {
+      await sleep(10);
+    }
+    assert.equal(children.length, 1, 'a prompt run must spawn before it can be cancelled');
+    await service.cancel(handle.runId);
+    await drained;
+    const verdict = heard.find((event) => event.trigger === 'run');
+    assert.ok(verdict, 'the cancel must report');
+    assert.equal(verdict.state, 'cancelled');
+    assert.equal(verdict.text, 'cancelled');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('a failed run\'s push event carries the failure message', async () => {
+  const heard = [];
+  const { service, cleanup } = await makeService({}, {
+    spawnImpl: () => {
+      throw new Error('spawn exploded');
+    },
+    onRunEvent: (event) => { heard.push(event); },
+  });
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'status',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: {},
+    });
+    const events = await collectEvents(service, handle.runId);
+    assert.equal(events.at(-1).type, 'run.failed');
+    const verdict = heard.find((event) => event.trigger === 'run');
+    assert.ok(verdict, 'the failure must report');
+    assert.equal(verdict.state, 'failed');
+    assert.match(verdict.text, /spawn exploded/);
   } finally {
     await cleanup();
   }

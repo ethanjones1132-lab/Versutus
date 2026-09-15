@@ -132,11 +132,14 @@ function messageFor(classified, event, row) {
     };
   }
   if (classified.data.kind === 'run') {
+    const title = state === 'failed' || state === 'error'
+      ? `${bot ?? 'Versutus'} hit an error`
+      : state === 'cancelled'
+        ? `${bot ?? 'Versutus'} cancelled a run`
+        : `${bot ?? 'Versutus'} finished a run`;
     return {
       to: row.expoPushToken,
-      title: state === 'failed' || state === 'error'
-        ? `${bot ?? 'Versutus'} hit an error`
-        : `${bot ?? 'Versutus'} finished a run`,
+      title,
       body,
       data: classified.data,
       channelId: 'model-replies',

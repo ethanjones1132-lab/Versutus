@@ -118,6 +118,48 @@ test('a Bot filter never silences an approval card, which names no Bot', async (
   assert.equal(sent[0].data.kind, 'approval');
 });
 
+test('a cancelled run is titled as cancelled, not finished', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({ trigger: 'run', runId: 'run-3', state: 'cancelled', text: 'cancelled' });
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].title, 'Versutus cancelled a run');
+});
+
+test('a rich-body device gets the approval summary and the run failure', async () => {
+  const tokens = {
+    listEnabled: async () => [row({ richBody: true })],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({
+    trigger: 'approval',
+    runId: 'run-4',
+    operation: 'prompt',
+    text: 'This task can modify files in its workspace — approve to let it start.',
+  });
+  await notifier.notify({
+    trigger: 'run',
+    runId: 'run-5',
+    state: 'failed',
+    text: 'task exceeded its 30s time limit and was stopped',
+  });
+
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0].data.kind, 'approval');
+  assert.match(sent[0].body, /modify files/);
+  assert.equal(sent[1].title, 'Versutus hit an error');
+  assert.match(sent[1].body, /time limit/);
+});
+
 test('a Bot filter never silences a run verdict, which names no Bot', async () => {
   const tokens = {
     listEnabled: async () => [row({ botIds: ['other-bot'] })],

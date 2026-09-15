@@ -57,6 +57,18 @@ const APPROVAL_SUMMARY = {
   bypass: 'This task asks to bypass safety controls — approve only if you trust it.',
 };
 
+/**
+ * The one line a tray notice can show for a run verdict. The supervisor
+ * already had the failure message and the cancel reason; the notifier never
+ * saw them, so a rich-body device got a title and a blank body.
+ */
+function runEventText(state, payload = {}) {
+  if (typeof payload.message === 'string' && payload.message.trim()) return payload.message.trim();
+  if (typeof payload.reason === 'string' && payload.reason.trim()) return payload.reason.trim();
+  if (state === 'failed' && payload.exitCode != null) return `exited ${payload.exitCode}`;
+  return null;
+}
+
 function createOutputPump(emit) {
   const decoders = new Map();
 
@@ -405,13 +417,14 @@ export class CliEnvironmentService {
     }
 
     run.approvalId = verdict.approvalId;
+    const summary = APPROVAL_SUMMARY[verdict.type] ?? 'This run needs your approval to continue.';
     run.log.emit({
       type: 'approval.required',
       payload: {
         approvalId: verdict.approvalId,
         operation: run.request.operation,
         risk: verdict.type,
-        summary: APPROVAL_SUMMARY[verdict.type] ?? 'This run needs your approval to continue.',
+        summary,
       },
     });
     // The phone may be in a pocket: the approval card going up is the
@@ -421,6 +434,7 @@ export class CliEnvironmentService {
       runId: run.runId,
       environmentId: run.request.environmentId,
       operation: run.request.operation,
+      text: summary,
     });
 
     let timedOut = false;
@@ -627,11 +641,13 @@ export class CliEnvironmentService {
       : type === 'run.failed' ? 'failed'
       : type === 'run.cancelled' ? 'cancelled' : null;
     if (state) {
+      const text = runEventText(state, payload);
       this.emitRunEvent({
         trigger: 'run',
         runId: run.runId,
         state,
         environmentId: run.request.environmentId,
+        ...(text ? { text } : {}),
       });
     }
   }
