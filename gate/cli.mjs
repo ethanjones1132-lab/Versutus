@@ -551,8 +551,10 @@ async function serviceRun() {
       [join(SERVICE_CODE_ROOT, 'gate', 'cli.mjs'), 'start'],
       { cwd: SERVICE_CODE_ROOT, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true },
     );
-    child.stdout?.on('data', (chunk) => rlog.write('gate', chunk));
-    child.stderr?.on('data', (chunk) => rlog.write('gate', chunk));
+    // Separate stream keys: a half line held from stdout must never be glued
+    // onto stderr's text, or a `Token:` line escapes redaction.
+    child.stdout?.on('data', (chunk) => rlog.write('gate', chunk, 'stdout'));
+    child.stderr?.on('data', (chunk) => rlog.write('gate', chunk, 'stderr'));
     return child;
   };
   const probe = async () => (await probeLocalGate(

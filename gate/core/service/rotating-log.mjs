@@ -18,7 +18,11 @@ export class RotatingLog {
     this.name = name;
     this.maxBytes = maxBytes;
     this.keep = keep;
-    this._tail = '';
+    // Held half lines, one per stream: the child's stdout and stderr and the
+    // supervisor's own lines interleave, and a half line from one must never
+    // be glued onto another's text — that splice is how `Token:` escaped
+    // redaction.
+    this._tails = new Map();
     mkdirSync(dir, { recursive: true });
   }
 
@@ -26,30 +30,39 @@ export class RotatingLog {
     return join(this.dir, this.name);
   }
 
-  /** Append a chunk from `source` ('gate' or 'supervisor') as timestamped lines. */
-  write(source, chunk) {
-    const lines = String(chunk ?? '').split(/\r?\n/);
-    // A chunk that does not end in a newline is half a line: hold it back
-    // until the rest arrives so the prefix lands on whole lines only.
-    if (!String(chunk ?? '').endsWith('\n')) {
-      this._tail += lines.pop() ?? '';
-    }
+  /**
+   * Append a chunk from `source` ('gate' or 'supervisor') as timestamped
+   * lines. `stream` keys the held half line: pass distinct keys for streams
+   * that interleave under one source (the child's stdout and stderr).
+   */
+  write(source, chunk, stream = source) {
+    const key = JSON.stringify([source, stream]);
+    // Join first, then split: the held half line belongs in front of this
+    // chunk's first line, and whatever follows the chunk's last newline is
+    // the new half line.
+    const lines = `${this._tails.get(key)?.text ?? ''}${String(chunk ?? '')}`.split(/\r?\n/);
+    const tail = lines.pop() ?? '';
+    if (tail === '') this._tails.delete(key);
+    else this._tails.set(key, { source, text: tail });
     const stamp = new Date().toISOString();
     for (const line of lines) {
-      const text = `${this._tail}${line}`;
-      this._tail = '';
-      if (text === '') continue;
-      this._rotate();
-      appendFileSync(this.path, `${stamp} [${source}] ${redact(text)}\n`, 'utf8');
+      if (line !== '') this._append(stamp, source, line);
     }
   }
 
-  /** Flush a held partial line (shutdown path). */
+  /** Flush every held half line under its own source (shutdown path). */
   close() {
-    if (this._tail === '') return;
+    const stamp = new Date().toISOString();
+    for (const { source, text } of this._tails.values()) {
+      const line = text.replace(/\r$/, '');
+      if (line !== '') this._append(stamp, source, line);
+    }
+    this._tails.clear();
+  }
+
+  _append(stamp, source, line) {
     this._rotate();
-    appendFileSync(this.path, `${new Date().toISOString()} [supervisor] ${redact(this._tail)}\n`, 'utf8');
-    this._tail = '';
+    appendFileSync(this.path, `${stamp} [${source}] ${redact(line)}\n`, 'utf8');
   }
 
   _rotate() {
@@ -72,6 +85,7 @@ export class RotatingLog {
   }
 }
 
+/** A `Token:` value is redacted wherever it appears in the line, not only at its start. */
 function redact(line) {
-  return line.replace(/^Token: .*$/, 'Token: [redacted]');
+  return line.replace(/(Token:\s*)\S+/g, '$1[redacted]');
 }
