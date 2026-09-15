@@ -144,6 +144,34 @@ describe('one send per completed turn', () => {
   });
 });
 
+describe('a long streaming reply does not kill the call at the watchdog', () => {
+  // A reply that appeared proves the turn left; the watchdog's own contract is
+  // a reply nothing produced, so it is disarmed on the reply-appeared edge.
+  test('the watchdog is cleared on the reply-appeared edge, not only when speech starts', () => {
+    const watcher = between(
+      provider,
+      'const turnId = turnIdRef.current;',
+      'streamReplyText(reply.text',
+    );
+    const clearAt = watcher.indexOf('clearWatchdog()');
+    const replyAt = watcher.indexOf("dispatch({ type: 'reply-appeared' })");
+    expect(clearAt).toBeGreaterThan(-1);
+    expect(replyAt).toBeGreaterThan(-1);
+    // Clearing runs at the SAME stateful edge, before the phase turns.
+    expect(clearAt).toBeLessThan(replyAt);
+    expect(watcher).not.toContain("dispatch({ type: 'end' })");
+  });
+
+  test('a watchdog that still fires while a reply id is bound reopens the mic, not the call', () => {
+    const arm = between(provider, 'const armWatchdog = useCallback(', '}, [clearWatchdog, dispatch]);').trim();
+    const fire = between(arm, 'watchdogRef.current = setTimeout(() => {', '}, HANDSFREE_REPLY_WATCHDOG_MS);');
+    expect(fire).toContain('replyIdRef.current');
+    // The fire branches on the reply id: a bound id is the reply-failed reopen
+    // arm, no id is still a genuinely silent turn and stays send-failed.
+    expect(fire).toMatch(/replyIdRef\.current\s*\?\s*\{\s*type:\s*'reply-failed'\s*\}\s*:\s*\{\s*type:\s*'send-failed'\s*\}/);
+  });
+});
+
 describe('reply correlation and progressive speech', () => {
   test('the send promise does not move the phase; the placeholder does', () => {
     expect(provider).toContain('handsfreeReplyForTurn(messages, turnId)');

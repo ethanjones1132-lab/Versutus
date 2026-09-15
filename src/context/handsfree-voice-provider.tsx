@@ -417,7 +417,12 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     clearWatchdog();
     watchdogRef.current = setTimeout(() => {
       watchdogRef.current = null;
-      dispatch({ type: 'send-failed' });
+      // A reply id already bound means the reply APPEARED and is still
+      // streaming — the watchdog's contract is a reply nothing produced, so
+      // this is the reply-failed reopen-not-die turn, not a dead call.
+      dispatch(
+        replyIdRef.current ? { type: 'reply-failed' } : { type: 'send-failed' },
+      );
     }, HANDSFREE_REPLY_WATCHDOG_MS);
   }, [clearWatchdog, dispatch]);
 
@@ -565,6 +570,12 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     if (phase === 'sending') {
       if (replyIdRef.current === reply.id) return;
       replyIdRef.current = reply.id;
+      // A reply that appeared proves the turn left; the reply row is on screen
+      // even while it streams for longer than the watchdog, so the watchdog's
+      // contract (a reply nothing produced) is discharged HERE, not at the
+      // first word spoken. A later watchdog fire while the id is bound is the
+      // reply-failed reopen arm, not a dead call.
+      clearWatchdog();
       dispatch({ type: 'reply-appeared' });
       return;
     }
@@ -574,7 +585,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       return;
     }
     streamReplyText(reply.text, Boolean(reply.streaming));
-  }, [messages, session.phase, dispatch, streamReplyText]);
+  }, [messages, session.phase, dispatch, streamReplyText, clearWatchdog]);
 
   // Read the device's call capability while connected, so the Call control is
   // only offered where a tap can actually start a session.
