@@ -76,6 +76,12 @@ describe('the council route sends through the existing group round', () => {
     expect(src).toContain('hasGroupRooms');
     expect(src).not.toContain('gatewayRequest(');
   });
+
+  test('a slash-leading prompt is refused before the group round is sent', () => {
+    const src = councilRoute();
+    expect(src).toContain('councilPromptIssue(');
+    expect(src).toContain('round.errors');
+  });
 });
 
 describe('the council is a Stack destination with one entry on Home', () => {

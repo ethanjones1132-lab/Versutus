@@ -95,3 +95,14 @@ export function councilRoomName(prompt: string): string {
 export function councilDisabledCopy(): string {
   return 'This gateway does not offer group rooms, so a council cannot compare Bots here.';
 }
+
+/**
+ * What a prompt shared by several Bots may not be: a command. A `/` line
+ * would go to every Bot as plain text — the council refuses it before any
+ * send happens.
+ */
+export function councilPromptIssue(prompt: string): string | undefined {
+  return prompt.trim().startsWith('/')
+    ? 'The council sends one prompt, not a command — drop the leading slash.'
+    : undefined;
+}

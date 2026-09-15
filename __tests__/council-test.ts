@@ -1,4 +1,5 @@
 import {
+  councilPromptIssue,
   councilSummaryCopy,
   councilTargets,
   runCouncil,
@@ -61,5 +62,15 @@ describe('the council fan-out', () => {
       text: `answer ${index + 1}`,
     }));
     expect(councilSummaryCopy(allAnswered)).toBe('Both answered.');
+  });
+});
+
+describe('a council prompt is never a command', () => {
+  test('a slash-leading prompt is refused before any leg is sent', () => {
+    expect(councilPromptIssue('/run build the thing')).toBe(
+      'The council sends one prompt, not a command — drop the leading slash.',
+    );
+    expect(councilPromptIssue('compare these drafts')).toBeUndefined();
+    expect(councilPromptIssue('   ')).toBeUndefined();
   });
 });

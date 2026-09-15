@@ -74,6 +74,7 @@ import {
   type BotGroupRoom,
   type GroupReply,
   type GroupTranscriptEntry,
+  type GroupTurnError,
 } from '@/lib/gateway/groups';
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
 import { formatRunFailure, modelSubstitutionNote, shouldShowModelSubstitution } from '@/lib/gateway/run-failures';
@@ -389,7 +390,7 @@ type GatewayContextValue = {
     send: (
       groupId: string,
       input: { text: string; mentionedIds?: string[] },
-    ) => Promise<{ replies: GroupReply[] }>;
+    ) => Promise<{ replies: GroupReply[]; errors?: GroupTurnError[] }>;
     history: (groupId: string) => Promise<GroupTranscriptEntry[]>;
     rename: (groupId: string, name: string) => Promise<BotGroupRoom>;
     leave: (groupId: string, memberId: string) => Promise<BotGroupRoom>;

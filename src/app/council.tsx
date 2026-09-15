@@ -9,6 +9,7 @@ import { useGateway } from '@/context/gateway-provider';
 import type { PublicBot } from '@/lib/gateway/bots';
 import {
   councilDisabledCopy,
+  councilPromptIssue,
   councilRoomName,
   councilTargets,
   runCouncil,
@@ -66,15 +67,23 @@ export default function CouncilScreen() {
     );
   };
 
+  const promptIssue = councilPromptIssue(prompt);
+
   const canCompare =
     status === 'connected' &&
     hasGroupRooms &&
     targets.length >= 2 &&
     prompt.trim().length > 0 &&
+    !promptIssue &&
     !sending;
 
   const handleCompare = async () => {
     const text = prompt.trim();
+    const issue = councilPromptIssue(text);
+    if (issue) {
+      setError(issue);
+      return;
+    }
     if (!text || targets.length < 2 || sending) return;
     setSending(true);
     setError(undefined);
@@ -88,6 +97,8 @@ export default function CouncilScreen() {
       roomId = room.id;
       const round = await botGroups.send(room.id, { text });
       const result = await runCouncil(text, targets, async (target) => {
+        const miss = round.errors?.find((candidate) => candidate.botId === target.botId);
+        if (miss) throw new Error(miss.error);
         const reply = round.replies.find((candidate) => candidate.botId === target.botId);
         if (!reply) throw new Error('no reply');
         return reply.text;
@@ -159,9 +170,9 @@ export default function CouncilScreen() {
                 onPress={() => void handleCompare()}
                 disabled={!canCompare}
               />
-              {error ? (
+              {error || promptIssue ? (
                 <Text variant="caption" color="tertiary">
-                  {error}
+                  {error ?? promptIssue}
                 </Text>
               ) : null}
             </Card>

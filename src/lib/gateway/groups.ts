@@ -76,6 +76,9 @@ export function resolveOpenGroup(groupId: string, state: GroupsState): OpenGroup
 /** One bot's reply inside a group send (wire shape of deliverGroupMessage). */
 export type GroupReply = { botId: string; text: string };
 
+/** One speaker that threw or timed out during a group send. */
+export type GroupTurnError = { botId: string; error: string };
+
 /** One stored room exchange line (wire shape of GET /v1/bot-groups/:id/messages). */
 export type GroupTranscriptEntry = {
   id: string;

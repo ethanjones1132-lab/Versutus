@@ -2,7 +2,7 @@ import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/cha
 import type { PublicBot } from '@/lib/gateway/bots';
 import type { ChatContentPart } from '@/lib/gateway/chat-parts';
 import type { CronJob, CronRun, CronTurn } from '@/lib/gateway/cron';
-import type { BotGroupRoom, GroupReply, GroupTranscriptEntry } from '@/lib/gateway/groups';
+import type { BotGroupRoom, GroupReply, GroupTranscriptEntry, GroupTurnError } from '@/lib/gateway/groups';
 import { HEALTH_CHECK_TIMEOUT_MS } from '@/lib/gateway/client';
 import { isAuthRejection } from '@/lib/gateway/errors';
 import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
@@ -665,7 +665,7 @@ export class ManifestClient implements PortalClient {
   async sendGroupMessage(
     groupId: string,
     input: { text: string; mentionedIds?: string[] },
-  ): Promise<{ replies: GroupReply[]; roomDisbanded?: boolean }> {
+  ): Promise<{ replies: GroupReply[]; errors?: GroupTurnError[]; roomDisbanded?: boolean }> {
     const path = this.requireEndpoint('botGroups');
     return this.rootTransport.request(
       'POST',
