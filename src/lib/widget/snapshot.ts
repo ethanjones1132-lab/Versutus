@@ -45,6 +45,8 @@ export type GlanceableBot = { id: string; label: string };
 /** A Bot read from the roster; the label is absent when the Gate did not name it. */
 export type GlanceableFactBot = { id: string; label?: string };
 
+export type RoutineAlerts = { late: number; failing: number };
+
 export type GlanceableSnapshot = {
   /** The connection state the app last observed. */
   status: ConnectionStatus;
@@ -58,6 +60,8 @@ export type GlanceableSnapshot = {
   runs?: GlanceableRun[];
   /** Up to three recent Bots for the quick-launch rows. Absent when there are none. */
   bots?: GlanceableBot[];
+  /** Routines that need the operator: those past due and those failing. Absent when neither. */
+  routineAlerts?: RoutineAlerts;
   /** True when the device asked the widget to keep the result and Bot names off it. */
   redact?: boolean;
   /** When the snapshot was composed — always present, so staleness is sayable. */
@@ -173,6 +177,21 @@ export function glanceableSnapshot(
     if (!newestRun || verdict.at > newestRun.at) newestRun = verdict;
   }
 
+  // The same judgment `nextRunLabel` already makes when it reads 'due'
+  // (cron.ts:128-132) — counted here, not worded: late is a next run at or
+  // past now on a job that is not running now and not off/unknown on purpose.
+  let routineAlerts: RoutineAlerts | null = null;
+  for (const job of facts.routines) {
+    const health = describeCronHealth(job);
+    if (health.tone === 'off' || health.tone === 'unknown') continue;
+    const nextAt = job.nextRunAt ? Date.parse(job.nextRunAt) : Number.NaN;
+    const late = Number.isFinite(nextAt) && nextAt <= now && !job.running;
+    if (!late && health.tone !== 'error') continue;
+    if (routineAlerts === null) routineAlerts = { late: 0, failing: 0 };
+    if (late) routineAlerts.late += 1;
+    if (health.tone === 'error') routineAlerts.failing += 1;
+  }
+
   return {
     status: facts.status,
     runsInFlight,
@@ -180,6 +199,7 @@ export function glanceableSnapshot(
     ...(newestRun ? { lastResult: newestRun.text } : {}),
     ...(runs.length > 0 ? { runs } : {}),
     ...(bots.length > 0 ? { bots } : {}),
+    ...(routineAlerts ? { routineAlerts } : {}),
     ...(facts.redact ? { redact: true } : {}),
     writtenAt: now,
   };
