@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { ConstellationView } from '@/components/fleet/constellation-view';
@@ -8,6 +8,7 @@ import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
 import type { PublicBot } from '@/lib/gateway/bots';
+import { botTap } from '@/lib/fleet/bot-tap';
 import { fleetConstellationInput } from '@/lib/fleet/constellation-input';
 import { constellationModel, type ConstellationNode } from '@/lib/fleet/constellation-model';
 import { gatewayHandshake } from '@/lib/fleet/gateway-handshake';
@@ -67,6 +68,15 @@ export default function FleetScreen() {
 
   const connectedRoster = status === 'connected' ? roster : NO_ROSTER;
 
+  // Where an unroutable or disconnected tap lands: the Chat tab's roster,
+  // which carries the detail surface naming the verdict and the fix. The
+  // route owns navigation; the sheet lives there (chat-screen's detailBot),
+  // so this hands over the way every other cross-tab surface request does.
+  const showRosterFallback = useCallback(() => {
+    requestSurface({ kind: 'roster' });
+    router.navigate('/chat');
+  }, [requestSurface, router]);
+
   // One handshake line per saved gateway, computed by the same pure helper
   // that gates the tap — so what the map says and what the tap allows can
   // never disagree. A failure reason is only truthful for the gateway the
@@ -120,16 +130,32 @@ export default function FleetScreen() {
     if (node.kind === 'bot') {
       const botId = node.botId;
       if (!botId) return;
-      void openBot(botId)
-        .then((opened) => {
-          if (!opened) {
-            requestSurface({ kind: 'roster' });
-            return;
-          }
-          requestSurface({ kind: 'bot', botId });
-          router.navigate('/chat');
-        })
-        .catch(() => requestSurface({ kind: 'roster' }));
+      // The same pure decision the socket feed's chat tap defers to (`botTap`,
+      // out of this class's own family of pure helpers): a routable Bot on the
+      // live connection opens its thread; anything else opens the roster's
+      // detail surface, which already shows why — never a silent no-op, never
+      // an open the world has not reported it can carry.
+      const bot = connectedRoster.find((candidate) => candidate.id === botId);
+      const open = botTap(
+        { connected: Boolean(bot && status === 'connected') },
+        bot ?? { id: botId },
+        {
+          onChat: () => {
+            void openBot(botId)
+              .then((opened) => {
+                if (!opened) {
+                  showRosterFallback();
+                  return;
+                }
+                requestSurface({ kind: 'bot', botId });
+                router.navigate('/chat');
+              })
+              .catch(() => showRosterFallback());
+          },
+          onDetail: showRosterFallback,
+        },
+      );
+      open?.();
       return;
     }
     // The pure handshake decision gates the tap: a live gateway, an attempt
