@@ -12,10 +12,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      # The gate is proven on Node 24, the host's version. Node 20's
+      # `node --test` takes no glob arguments, so test:gate's quoted
+      # "__tests__/*.test.mjs" finds nothing there.
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - name: Install dependencies
         run: npm ci
