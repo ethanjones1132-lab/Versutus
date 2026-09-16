@@ -194,6 +194,7 @@ import {
 import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
 import { SESSION_SPEND_LIST_LIMIT } from '@/lib/gateway/session-analytics';
 import { botBudget, botSpendFromSessions, checkBotBudget, loadBudgets } from '@/lib/gateway/budgets';
+import { botOpenFailureKeepsScope } from '@/lib/gateway/bot-open-failure';
 import {
   approvalPolicyDecision,
   loadApprovalPolicies,
@@ -3921,8 +3922,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // The Bot Chat is the session a send goes to now, so the open landed.
       return true;
     } catch (error) {
-      client.setBotId(undefined);
-      setSelectedBotId(undefined);
+      // A slow host keeps the Bot: dropping it here left the Bot Chat on screen
+      // while the next message went out with no Bot at all (bot-open-failure.ts).
+      if (!botOpenFailureKeepsScope(error)) {
+        client.setBotId(undefined);
+        setSelectedBotId(undefined);
+      }
       setLastError(error instanceof Error ? error.message : String(error));
       throw error;
     }
