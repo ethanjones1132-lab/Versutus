@@ -3,12 +3,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { ConstellationView } from '@/components/fleet/constellation-view';
+import { FleetBotSheet } from '@/components/fleet/bot-sheet';
 import { Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
 import type { PublicBot } from '@/lib/gateway/bots';
 import { botTap } from '@/lib/fleet/bot-tap';
+import { botSheetView, type BotSheetView } from '@/lib/fleet/bot-sheet';
 import { fleetConstellationInput } from '@/lib/fleet/constellation-input';
 import { constellationModel, type ConstellationNode } from '@/lib/fleet/constellation-model';
 import { gatewayHandshake } from '@/lib/fleet/gateway-handshake';
@@ -203,6 +205,54 @@ export default function FleetScreen() {
     router.push('/activity');
   };
 
+  // The long-pressed Bot star's detail sheet: the node and its roster row
+  // fold through the same pure view-model the sheet renders, and Open Chat
+  // is the tap's own decision (botTap) replayed — never an unconditional
+  // open for a Bot the verdict refuses.
+  const [botSheet, setBotSheet] = useState<BotSheetView | null>(null);
+
+  const handleLongPressNode = (node: ConstellationNode) => {
+    if (node.kind !== 'bot') return;
+    const bot = connectedRoster.find((candidate) => candidate.id === node.botId);
+    setBotSheet(
+      botSheetView({
+        node: {
+          label: node.label,
+          botId: node.botId,
+          runningRunName: node.runningRunName,
+          badges: node.badges,
+        },
+        bot: bot ?? null,
+      }),
+    );
+  };
+
+  const openBotSheetChat = () => {
+    const botId = botSheet?.id;
+    if (!botId) return;
+    setBotSheet(null);
+    const bot = connectedRoster.find((candidate) => candidate.id === botId);
+    botTap(
+      { connected: Boolean(bot && status === 'connected') },
+      bot ?? { id: botId },
+      {
+        onChat: () => {
+          void openBot(botId)
+            .then((opened) => {
+              if (!opened) {
+                showRosterFallback();
+                return;
+              }
+              requestSurface({ kind: 'bot', botId });
+              router.navigate('/chat');
+            })
+            .catch(() => showRosterFallback());
+        },
+        onDetail: showRosterFallback,
+      },
+    )?.();
+  };
+
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.content}>
@@ -216,10 +266,12 @@ export default function FleetScreen() {
         <ConstellationView
           model={model}
           onPressNode={handlePressNode}
+          onLongPressNode={handleLongPressNode}
           onPressApproval={handlePressApproval}
           gatewayStatus={handshakeStatus}
         />
       </ScrollView>
+      <FleetBotSheet view={botSheet} onClose={() => setBotSheet(null)} onOpenChat={openBotSheetChat} />
     </Screen>
   );
 }

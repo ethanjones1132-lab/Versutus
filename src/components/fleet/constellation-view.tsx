@@ -25,6 +25,8 @@ export type ConstellationViewProps = {
   size?: number;
   /** A node tap: the route decides (Bot Chat, or connect a gateway). */
   onPressNode?: (node: ConstellationNode) => void;
+  /** A node long-press: the route shows its detail sheet (Bot star). */
+  onLongPressNode?: (node: ConstellationNode) => void;
   /** An approvals badge tap: the route opens Activity. */
   onPressApproval?: (node: ConstellationNode) => void;
   /**
@@ -52,6 +54,7 @@ export function ConstellationView({
   model,
   size,
   onPressNode,
+  onLongPressNode,
   onPressApproval,
   gatewayStatus,
 }: ConstellationViewProps) {
@@ -92,6 +95,8 @@ export function ConstellationView({
             <PressableScale
               key={node.id}
               onPress={() => onPressNode?.(node)}
+              onLongPress={() => onLongPressNode?.(node)}
+              delayLongPress={350}
               accessibilityRole="button"
               accessibilityLabel={constellationNodeAccessibilityLabel(node)}
               style={[
