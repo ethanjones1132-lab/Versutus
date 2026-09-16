@@ -369,7 +369,22 @@ export function createHermesBackend({
     async startRun(prompt, { sessionId, model } = {}) {
       const payload = { input: prompt };
       if (sessionId) payload.session_id = sessionId;
-      if (model) payload.model = model;
+      // Hermes' runs handler reads `provider` and `model` separately, exactly
+      // as chat does. A qualified "provider/model" forwarded whole reached it
+      // as a bare model with no provider, which it routed to a custom endpoint
+      // that rejected the id (2026-09-16). Split it the way sendMessage does.
+      if (model && typeof model === 'object') {
+        if (model.modelId) payload.model = model.modelId;
+        if (model.providerId) payload.provider = model.providerId;
+      } else if (typeof model === 'string' && model) {
+        const separator = model.indexOf('/');
+        if (separator > 0) {
+          payload.provider = model.slice(0, separator);
+          payload.model = model.slice(separator + 1);
+        } else {
+          payload.model = model;
+        }
+      }
       return call('/v1/runs', { method: 'POST', body: JSON.stringify(payload) });
     },
 

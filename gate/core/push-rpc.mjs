@@ -58,15 +58,31 @@ function preferencesFrom(row) {
   };
 }
 
-function requireDevice(ctx) {
+/** A client-supplied device id: a stable identifier, never free text. */
+const BOOTSTRAP_DEVICE_ID = /^[A-Za-z0-9._:-]{8,128}$/;
+
+/**
+ * The push row this caller owns.
+ *
+ * A paired device grant is its own identity, and a client-supplied id is
+ * ignored for it. A caller holding the Gate's bootstrap token has no grant —
+ * and on 2026-09-16 that was the phone, so every registration was refused and
+ * push could never reach it. The bootstrap token is already full operator
+ * access, so refusing it push protects nothing; what must still hold is that it
+ * cannot overwrite a PAIRED device's row. It registers under its own
+ * well-formed device id in a separate `bootstrap:` namespace.
+ */
+function requireDevice(ctx, params) {
   const deviceId = ctx?.deviceId;
-  if (typeof deviceId !== 'string' || deviceId.length === 0) {
-    const error = new Error('A paired device grant is required');
-    error.status = 403;
-    error.code = 'pairing_required';
-    throw error;
+  if (typeof deviceId === 'string' && deviceId.length > 0) return deviceId;
+  const supplied = params?.deviceId;
+  if (ctx?.bootstrap === true && typeof supplied === 'string' && BOOTSTRAP_DEVICE_ID.test(supplied)) {
+    return `bootstrap:${supplied}`;
   }
-  return deviceId;
+  const error = new Error('A paired device grant is required');
+  error.status = 403;
+  error.code = 'pairing_required';
+  throw error;
 }
 
 export function createPushRpc({ tokens, send }) {
@@ -77,7 +93,7 @@ export function createPushRpc({ tokens, send }) {
 
   return {
     'notifications.register': async (params, ctx) => {
-      const deviceId = requireDevice(ctx);
+      const deviceId = requireDevice(ctx, params);
       const expoPushToken = requiredString(params?.expoPushToken, 'expoPushToken');
       if (!EXPO_PUSH_TOKEN.test(expoPushToken)) {
         throw new Error('expoPushToken must match ExponentPushToken[...]');
@@ -88,18 +104,18 @@ export function createPushRpc({ tokens, send }) {
     },
 
     'notifications.deregister': async (params, ctx) => {
-      const deviceId = requireDevice(ctx);
+      const deviceId = requireDevice(ctx, params);
       const removed = await tokens.remove(deviceId);
       return { removed };
     },
 
     'notifications.preferences.get': async (params, ctx) => {
-      const deviceId = requireDevice(ctx);
+      const deviceId = requireDevice(ctx, params);
       return preferencesFrom(await tokens.get(deviceId));
     },
 
     'notifications.preferences.set': async (params, ctx) => {
-      const deviceId = requireDevice(ctx);
+      const deviceId = requireDevice(ctx, params);
       const patch = {
         ...(optionalBoolean(params?.enabled, 'enabled') === undefined ? {} : { enabled: params.enabled }),
         ...(optionalBoolean(params?.richBody, 'richBody') === undefined ? {} : { richBody: params.richBody }),
@@ -114,7 +130,7 @@ export function createPushRpc({ tokens, send }) {
     },
 
     'notifications.test': async (params, ctx) => {
-      const deviceId = requireDevice(ctx);
+      const deviceId = requireDevice(ctx, params);
       const row = await tokens.get(deviceId);
       if (!row?.expoPushToken) return { skipped: 'no-token' };
       const result = await send([{

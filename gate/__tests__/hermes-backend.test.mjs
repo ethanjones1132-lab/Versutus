@@ -604,3 +604,34 @@ test('listModels reads /api/model/options and does not mark unsigned-in provider
   const qwen = models.find((m) => m.modelId === 'qwen3');
   assert.equal(qwen.available, false);
 });
+
+test('a run pinned to a provider-qualified model reaches Hermes with the provider split out', async () => {
+  // Hermes' runs handler honours `provider` + `model` exactly as chat does
+  // (api_server_runs.py, _request_agent_overrides). The Gate used to forward the
+  // qualified string whole, so Hermes saw no provider, treated
+  // "opencode-go/omen-alpha" as a bare model, routed it to a custom OpenRouter
+  // endpoint and failed "not a valid model ID" (2026-09-16, POST /v1/runs).
+  const { calls, hermes } = backend(() => ({ ok: true, status: 202, json: async () => ({ run_id: 'run_1', status: 'started' }) }));
+  await hermes.startRun('hello', { model: 'opencode-go-session/deepseek-v4-flash' });
+  assert.equal(calls[0].url, 'http://h:8642/v1/runs');
+  assert.equal(calls[0].body.model, 'deepseek-v4-flash');
+  assert.equal(calls[0].body.provider, 'opencode-go-session');
+});
+
+test('a run with a bare model id or a split model object is passed through as it is', async () => {
+  const { calls, hermes } = backend(() => ({ ok: true, status: 202, json: async () => ({ run_id: 'run_2', status: 'started' }) }));
+  await hermes.startRun('hello', { model: 'deepseek-v4-flash' });
+  assert.equal(calls[0].body.model, 'deepseek-v4-flash');
+  assert.equal(calls[0].body.provider, undefined);
+  await hermes.startRun('hello', { model: { modelId: 'glm-5.3', providerId: 'kilo' } });
+  assert.equal(calls[1].body.model, 'glm-5.3');
+  assert.equal(calls[1].body.provider, 'kilo');
+});
+
+test('a run with no model names none, so Hermes keeps its own default', async () => {
+  const { calls, hermes } = backend(() => ({ ok: true, status: 202, json: async () => ({ run_id: 'run_3', status: 'started' }) }));
+  await hermes.startRun('hello', { sessionId: 'ses_1' });
+  assert.equal(calls[0].body.model, undefined);
+  assert.equal(calls[0].body.provider, undefined);
+  assert.equal(calls[0].body.session_id, 'ses_1');
+});

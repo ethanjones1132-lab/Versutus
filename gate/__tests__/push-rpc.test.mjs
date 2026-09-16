@@ -75,6 +75,65 @@ test('rejects a bootstrap token with pairing_required', async () => {
   }
 });
 
+test('a bootstrap-token phone registers under its own device id, kept apart from paired grants', async () => {
+  // 2026-09-16: the phone connects with the Gate's bootstrap token, so every
+  // registration was refused 403 pairing_required and swallowed by the app —
+  // push could never reach it, however many times notifications were allowed.
+  // The bootstrap token is already full operator access; what must still hold
+  // is that it cannot overwrite a PAIRED device's row, so it registers under a
+  // separate `bootstrap:` namespace.
+  const { gateHome, gate } = await fixture();
+  try {
+    const response = await rpc(gate, gate.token, 'notifications.register', {
+      expoPushToken: 'ExponentPushToken[bootstrap-phone]',
+      platform: 'android',
+      timezone: 'America/New_York',
+      deviceId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+    });
+    assert.equal(response.status, 200);
+    const rows = JSON.parse(await readFile(join(gateHome, 'push-tokens.json'), 'utf8'));
+    const stored = rows.devices ?? rows;
+    assert.ok(stored['bootstrap:a1b2c3d4e5f60718293a4b5c6d7e8f90']);
+    assert.equal(stored['bootstrap:a1b2c3d4e5f60718293a4b5c6d7e8f90'].expoPushToken, 'ExponentPushToken[bootstrap-phone]');
+  } finally {
+    await gate.close();
+  }
+});
+
+test("a bootstrap registration naming a paired device's id cannot overwrite that device", async () => {
+  const { gateHome, pairedToken, gate } = await fixture();
+  try {
+    const paired = await rpc(gate, pairedToken, 'notifications.register', {
+      expoPushToken: 'ExponentPushToken[real-paired-phone]', platform: 'ios', timezone: 'UTC',
+    });
+    assert.equal(paired.status, 200);
+    const spoof = await rpc(gate, gate.token, 'notifications.register', {
+      expoPushToken: 'ExponentPushToken[spoof]', platform: 'android', timezone: 'UTC', deviceId: 'phone-grant',
+    });
+    assert.equal(spoof.status, 200);
+    const rows = JSON.parse(await readFile(join(gateHome, 'push-tokens.json'), 'utf8'));
+    const stored = rows.devices ?? rows;
+    assert.equal(stored['phone-grant'].expoPushToken, 'ExponentPushToken[real-paired-phone]');
+    assert.equal(stored['bootstrap:phone-grant'].expoPushToken, 'ExponentPushToken[spoof]');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a bootstrap registration with a malformed device id is still refused', async () => {
+  const { gate } = await fixture();
+  try {
+    for (const deviceId of ['', 'x', 'has space in it', 'a'.repeat(300), 42]) {
+      const response = await rpc(gate, gate.token, 'notifications.register', {
+        expoPushToken: 'ExponentPushToken[phone]', platform: 'android', timezone: 'UTC', deviceId,
+      });
+      assert.equal(response.status, 403, `deviceId ${JSON.stringify(deviceId)} must not register`);
+    }
+  } finally {
+    await gate.close();
+  }
+});
+
 test('registers under the paired device grant and ignores a lying params deviceId', async () => {
   const { root, gateHome, pairedToken, gate } = await fixture();
   try {

@@ -1822,16 +1822,27 @@ export async function createGate(config = {}) {
       if (pathname === '/v1/models' && method === 'GET') {
         // A backend owns its own catalog (ADR-0003); asking for one by id
         // must return only that catalog, never the Gate's provider list.
+        // A Bot names its environment the same way, so a Bot's model list is
+        // that Bot's own catalogue. `bot=` used to be ignored here: a Bot's
+        // picker was handed the Gate's provider catalogue, the operator pinned
+        // a provider Hermes does not have, and every turn to that Bot failed
+        // (2026-09-16).
         const requestedBackendId = url.searchParams.get('backendId');
-        if (requestedBackendId) {
-          const backend = await resolveConversationBackend(requestedBackendId, readBotId(url));
+        const requestedBotId = readBotId(url);
+        if (requestedBackendId || requestedBotId) {
+          const backend = await resolveConversationBackend(requestedBackendId, requestedBotId);
           if (!backend) return;
           try {
             const models = await backend.listModels();
             res.writeHead(200);
             res.end(JSON.stringify({
               object: 'list',
-              data: models.map((model) => ({ ...model, object: 'model', backendId: requestedBackendId })),
+              data: models.map((model) => ({
+                ...model,
+                object: 'model',
+                ...(requestedBackendId ? { backendId: requestedBackendId } : {}),
+                ...(requestedBotId ? { bot: requestedBotId } : {}),
+              })),
             }));
           } catch (error) {
             // The streaming branch above may already have sent headers.
@@ -2006,6 +2017,22 @@ export async function createGate(config = {}) {
           return;
         }
 
+        // Past this point the turn goes to one of the Gate's own providers, and
+        // that needs a model to say which. With none named there is nothing to
+        // route: this used to take the first model any provider advertised, so
+        // a chat that had lost its Bot silently went to an arbitrary provider
+        // and failed with that provider's error (2026-09-16).
+        if (!body.model && !body.providerId) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: {
+              message: 'This chat names no Bot, backend or model, so the Gate has nowhere to send it. Open a Bot or pick a model.',
+              code: 'scope_required',
+            },
+          }));
+          return;
+        }
+
         const snapshots = await providerService.list();
         const advertised = snapshots.flatMap((snapshot) => (
           snapshot.catalog?.models ?? []
@@ -2073,7 +2100,12 @@ export async function createGate(config = {}) {
           // ignore the second; only notifications.* (push-rpc.mjs) reads it,
           // via requireDevice(ctx), to bind a registration to the caller's
           // own paired identity rather than a client-supplied device id.
-          const result = await handler(params, { deviceId: deviceGrant?.deviceId ?? null });
+          // `bootstrap` marks a caller holding the Gate's own token and no grant;
+          // push-rpc.mjs lets it register only in its own namespace.
+          const result = await handler(params, {
+            deviceId: deviceGrant?.deviceId ?? null,
+            bootstrap: !deviceGrant,
+          });
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ result }));
         } catch (error) {
