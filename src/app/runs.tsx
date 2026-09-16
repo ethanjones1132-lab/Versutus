@@ -21,12 +21,9 @@ import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { tabContentPaddingBottom } from '@/lib/motion/tab-insets';
 import type { CronJob } from '@/lib/gateway/cron';
 import { readBotSpend, type BotSpendRow } from '@/lib/gateway/spend-report';
-import type { ActivityRun } from '@/lib/gateway/runs';
+import { focusedRunItemId, type RunListItem as ActivityItem } from '@/lib/notifications/run-list-focus';
 
-type ActivityItem =
-  | { kind: 'label'; id: string; text: string }
-  | { kind: 'active'; id: string; run: ActivityRun }
-  | { kind: 'finished'; id: string; run: ActivityRun };
+import type { ActivityRun } from '@/lib/gateway/runs';
 
 /**
  * The individual run surface, extracted from the Activity tab (Workflows slice
@@ -88,13 +85,22 @@ export default function RunsScreen() {
   // The filter goes, so the run the notice was about is not hidden behind a Bot
   // it never belonged to — and only the filter: a run this device does not hold
   // has no row to reach, so nothing here selects one the read cannot prove is
-  // there. Deferred a tick like every other state write from an effect in this
-  // repo, and the request is retired with it so it cannot fight the operator's
-  // own next navigation.
+  // there. The row that IS there is highlighted (`focusedRunItemId`): the
+  // notice promised the run, not merely its list. Deferred a tick like every
+  // other state write from an effect in this repo, and the request is retired
+  // with it so it cannot fight the operator's own next navigation.
+  const [focusedRunId, setFocusedRunId] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ runId: string } | null>(null);
+
+  // The FIRST tick retires the request and asks for the highlight: the filter
+  // drop and the focus ask are one operator intent, and both defer out of the
+  // effect body the same way. The id itself is checked in the second tick
+  // (below), against the folded rows once the filter drop has landed.
   useEffect(() => {
     if (!requestedRunFocus) return undefined;
     const timer = setTimeout(() => {
       setScorecardFilter(null);
+      setFocusRequest({ runId: requestedRunFocus.runId });
       clearRequestedRunFocus();
     }, 0);
     return () => clearTimeout(timer);
@@ -111,6 +117,7 @@ export default function RunsScreen() {
     () => partitionRunsByState(visibleRuns),
     [visibleRuns],
   );
+
   const runsSupported =
     status === 'connected' &&
     capabilitySnapshot.groups.find((group) => group.id === 'agent')?.status === 'ready';
@@ -233,6 +240,22 @@ export default function RunsScreen() {
     return items;
   }, [activeRuns, finishedRuns]);
 
+  // The highlight fold reads the list rows this screen already folds, so a
+  // highlighted id is by construction an id a row actually carries, never a
+  // guess. It runs in a second tick (the first retired the request and dropped
+  // the filter, above), so the id is checked against the folded rows once that
+  // filter drop has landed. A run the list does not hold highlights nothing;
+  // the filter drop and the open have already happened, and that is still the
+  // honest answer.
+  useEffect(() => {
+    if (!focusRequest) return undefined;
+    const timer = setTimeout(() => {
+      setFocusedRunId(focusedRunItemId(listData, focusRequest));
+      setFocusRequest(null);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [focusRequest, listData]);
+
   const renderItem = useCallback(
     ({ item }: { item: ActivityItem }) => {
       switch (item.kind) {
@@ -248,13 +271,14 @@ export default function RunsScreen() {
           return (
             <RunCard
               run={item.run}
+              highlighted={item.id === focusedRunId}
               onOpenTranscript={setOpenAgenticRunId}
               onRetry={(prompt) => retryRun({ ...item.run, prompt })}
             />
           );
       }
     },
-    [stopActivityRun, retryRun],
+    [stopActivityRun, retryRun, focusedRunId],
   );
 
   const listHeader = (

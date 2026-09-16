@@ -47,6 +47,12 @@ export type RunCardProps = {
    * the operator reaches from chat.
    */
   onRetry?: (prompt: string) => void;
+  /**
+   * The row a notification tap named: the operator's eye is taken to this
+   * card (the focus fold colors its edge; the card's own content is
+   * unchanged). False by default, so a card without a focus is identical.
+   */
+  highlighted?: boolean;
 };
 
 /** Ticking elapsed label for a live run; the only per-second re-render in the card. */
@@ -60,7 +66,7 @@ function LiveElapsed({ startedAt }: { startedAt: number }) {
 }
 
 /** Live run monitor card: status, elapsed, latest event, expandable event log. */
-export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript, onRetry }: RunCardProps) {
+export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript, onRetry, highlighted = false }: RunCardProps) {
   const tokens = useTokens();
   const [expanded, setExpanded] = useState(false);
   const live = run.status === 'running' || run.status === 'waiting-approval';
@@ -84,7 +90,9 @@ export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript, on
         styles.card,
         {
           borderColor:
-            run.status === 'waiting-approval'
+            // The focus edge wins only where the card would not already ring
+            // in the warm accent (a waiting-approval card already does).
+            highlighted && run.status !== 'waiting-approval'
               ? tokens.accentWarm
               : run.status === 'failed'
                 ? tokens.statusDisconnected

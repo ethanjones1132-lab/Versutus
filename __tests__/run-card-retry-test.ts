@@ -21,7 +21,9 @@ describe('run card retry affordance', () => {
     // gated on both status and prompt, not on the prop alone.
     const src = readSource('src', 'components', 'activity', 'run-card.tsx');
     expect(src).toMatch(/onRetry\?: \(prompt: string\) => void;/);
-    expect(src).toMatch(/function RunCard\(\{ run, onStop, onOpenTranscript, onRetry \}/);
+    expect(src).toMatch(
+      /function RunCard\(\{ run, onStop, onOpenTranscript, onRetry(?:, highlighted = false)? \}/,
+    );
   });
 
   test('the Retry button is gated on !live && status !== complete && onRetry && non-empty prompt', () => {
@@ -83,7 +85,7 @@ describe('runs screen retry wiring', () => {
     expect(screen).toMatch(
       /case 'finished':\s*return \([\s\S]*?<RunCard[\s\S]*?onOpenTranscript=\{setOpenAgenticRunId\}[\s\S]*?onRetry=\{\s*\(prompt\)\s*=>\s*retryRun\(\{\s*\.\.\.item\.run,\s*prompt\s*\}\)\s*\}\s*\/>/,
     );
-    expect(screen).toMatch(/\[stopActivityRun, retryRun\]/);
+    expect(screen).toMatch(/\[stopActivityRun, retryRun, focusedRunId\]/);
   });
 
   test('retryRun trims an empty or whitespace-only prompt and never fires sendChatInput', () => {

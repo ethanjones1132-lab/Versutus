@@ -463,9 +463,10 @@ describe('a run notice’s tap drops a stale Bot filter', () => {
 
     // The id on the request makes two taps the same tap; the destination drops
     // the filter and never narrows the list to a run the read may not hold.
+    // The highlight ask is a separate effect's input, not a selection here.
     expect(body).toContain('setScorecardFilter(null)');
-    expect(body).not.toContain('runId');
     expect(body).not.toContain('setOpenAgenticRunId');
+    expect(src).not.toContain('setOpenAgenticRunId({ runId');
   });
 
   test('the unfiltered default is untouched', () => {
