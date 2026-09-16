@@ -112,6 +112,15 @@ class HandsfreeCallService : Service() {
         emit("endRequested", mapOf("reason" to "user"))
         end("user")
       }
+      // The notification's Mute/Unmute reach the same state the UI's mute
+      // control holds: judged against the machine (a mute on an already-ended
+      // call is refused like a second End) and reposted so the next label and
+      // body follow. Unmuting does not itself start a turn — the JS reducer
+      // decides which phase asks for recognition.
+      ACTION_MUTE, ACTION_UNMUTE -> {
+        val muted = HandsfreeCallNotification.mutedForAction(intent.action)
+        if (muted != null) setMuted(muted)
+      }
       else -> {
         val title = intent?.getStringExtra(EXTRA_TITLE) ?: ""
         startSession(title)
@@ -184,8 +193,16 @@ class HandsfreeCallService : Service() {
     val endIntent = Intent(this, HandsfreeCallService::class.java).setAction(ACTION_END)
     val endPending = PendingIntent.getService(
       this,
-      0,
+      REQUEST_CODE_END,
       endIntent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+    val muteIntent = Intent(this, HandsfreeCallService::class.java)
+      .setAction(if (state.muted) ACTION_UNMUTE else ACTION_MUTE)
+    val mutePending = PendingIntent.getService(
+      this,
+      REQUEST_CODE_MUTE,
+      muteIntent,
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
     return NotificationCompat.Builder(this, CHANNEL_ID)
@@ -195,8 +212,14 @@ class HandsfreeCallService : Service() {
       .setOngoing(true)
       .setSilent(true)
       .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-      .addAction(0, HandsfreeCallNotification.END_ACTION_LABEL, endPending)
-      .build()
+      // End stays the terminal action, last; Mute/Unmute sits first, labelled
+      // with the state the tap will reach, and asks for that state through the
+      // service — the label follows what the service holds, never a guess.
+      .addAction(0, HandsfreeCallNotification.muteActionLabelFor(state.muted), mutePending)
+      .run {
+        addAction(0, HandsfreeCallNotification.END_ACTION_LABEL, endPending)
+        build()
+      }
   }
 
   /**
@@ -840,7 +863,13 @@ class HandsfreeCallService : Service() {
   companion object {
     const val ACTION_START = "com.versutus.handsfreevoice.action.START"
     const val ACTION_END = "com.versutus.handsfreevoice.action.END"
+    const val ACTION_MUTE = "com.versutus.handsfreevoice.action.MUTE"
+    const val ACTION_UNMUTE = "com.versutus.handsfreevoice.action.UNMUTE"
     const val EXTRA_TITLE = "com.versutus.handsfreevoice.extra.TITLE"
+    // Distinct request codes: one PendingIntent per action, so the Mute intent
+    // never overwrites the End intent's tap.
+    private const val REQUEST_CODE_END = 8402
+    private const val REQUEST_CODE_MUTE = 8403
     private const val CHANNEL_ID = "handsfree-call-v2"
     private const val LEGACY_CHANNEL_ID = "handsfree-call"
     /** Flip after the device matrix if Samsung's default recognizer misbehaves. */

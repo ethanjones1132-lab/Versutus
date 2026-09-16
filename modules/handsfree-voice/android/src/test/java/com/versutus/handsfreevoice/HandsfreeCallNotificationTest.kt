@@ -61,4 +61,62 @@ class HandsfreeCallNotificationTest {
     assertFalse(state.requestEnd("user"))
     assertEquals("user", state.endReason())
   }
+
+  @Test
+  fun theMuteActionLabelFollowsTheStateTheServiceHolds() {
+    // The action's label offers the state the tap will reach: a live call
+    // offers Mute, a muted one offers Unmute. The body already reports the
+    // state held ("Muted"), so the label never argues with it.
+    assertEquals("Mute", HandsfreeCallNotification.muteActionLabelFor(false))
+    assertEquals("Unmute", HandsfreeCallNotification.muteActionLabelFor(true))
+  }
+
+  @Test
+  fun onlyTheServiceMuteActionsAreTheMuteActions() {
+    assertTrue(HandsfreeCallNotification.isMuteAction(HandsfreeCallService.ACTION_MUTE))
+    assertTrue(HandsfreeCallNotification.isMuteAction(HandsfreeCallService.ACTION_UNMUTE))
+    assertFalse(HandsfreeCallNotification.isMuteAction(HandsfreeCallService.ACTION_END))
+    assertFalse(HandsfreeCallNotification.isMuteAction(null))
+    assertFalse(HandsfreeCallNotification.isMuteAction("com.versutus.handsfreevoice.action.OTHER"))
+  }
+
+  @Test
+  fun theMuteIntentNamesTheStateItWants() {
+    // Each action names exactly one state, so a tap cannot silently ask for
+    // what the service already holds.
+    assertEquals(false, HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_MUTE))
+    assertEquals(true, HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_UNMUTE))
+    // An End or unknown action is not a mute request, not a mute-to-false.
+    assertEquals(null, HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_END))
+    assertEquals(null, HandsfreeCallNotification.mutedForAction("junk"))
+    assertEquals(null, HandsfreeCallNotification.mutedForAction(null))
+  }
+
+  @Test
+  fun theMuteActionDrivesTheSameStateTheServiceHolds() {
+    // The path the notification's Mute drives: the judged action names a
+    // state, the machine mutes only a live call, and the label the next
+    // repost draws offers the state the call will reach — so a muted call
+    // offers Unmute without a second tap guessing.
+    val state = HandsfreeCallState()
+    assertTrue(state.start())
+    assertTrue(HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_MUTE) == false)
+    assertTrue(state.setMuted(true))
+    assertEquals(
+      "Unmute",
+      HandsfreeCallNotification.muteActionLabelFor(state.muted),
+    )
+    // Unmuting from the notification asks for false and lands there.
+    assertTrue(HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_UNMUTE) == true)
+    assertTrue(state.setMuted(false))
+    assertEquals(
+      "Mute",
+      HandsfreeCallNotification.muteActionLabelFor(state.muted),
+    )
+    // After End the mute actions do nothing: only End is terminal, and it
+    // already happened — the second ask is refused like the second End.
+    assertTrue(state.requestEnd("user"))
+    assertFalse(state.setMuted(true))
+    assertFalse(state.setMuted(false))
+  }
 }
