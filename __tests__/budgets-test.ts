@@ -9,6 +9,7 @@ import {
   checkBotBudget,
   evaluateBudget,
   loadBudgets,
+  parseSpendCapInput,
   saveBudgets,
   setBotBudget,
 } from '@/lib/gateway/budgets';
@@ -53,6 +54,19 @@ describe('budget keys and storage', () => {
     expect(await loadBudgets()).toEqual({});
   });
 
+  test('the cap parses as people type it: plain, with a dollar sign, with thousands commas', () => {
+    expect(parseSpendCapInput('5')).toBe(5);
+    expect(parseSpendCapInput('7.25')).toBeCloseTo(7.25);
+    expect(parseSpendCapInput('$5')).toBe(5);
+    expect(parseSpendCapInput('1,500')).toBe(1500);
+    expect(parseSpendCapInput('$1,500.00')).toBe(1500);
+    expect(parseSpendCapInput('  5  ')).toBe(5);
+    expect(parseSpendCapInput('')).toBeUndefined();
+    expect(parseSpendCapInput('nope')).toBeUndefined();
+    expect(parseSpendCapInput('-3')).toBeUndefined();
+    expect(parseSpendCapInput('0')).toBeUndefined();
+  });
+
   test('the row copy names the cap or says there is none', () => {
     expect(budgetRowCopy(5)).toBe('Budget $5.00');
     expect(budgetRowCopy(undefined)).toBe('No budget');
@@ -91,6 +105,15 @@ describe('the budget verdict', () => {
     expect(verdict.overBy).toBeCloseTo(2.5);
     expect(verdict.reason).toContain('7.50');
     expect(verdict.reason).toContain('5.00');
+  });
+
+  test('the refusal says the run did not start, the cap stands, and its scope', () => {
+    const verdict = evaluateBudget(5, 7.5);
+    if (!verdict.allowed) {
+      expect(verdict.reason).toContain('not started');
+      expect(verdict.reason).toContain('cap stands');
+      expect(verdict.reason).toContain('runs started from this app');
+    }
   });
 
   test('checkBotBudget allows when there is no cap, or the spend read is unknown', async () => {

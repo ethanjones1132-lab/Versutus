@@ -55,6 +55,19 @@ export function budgetsFromUnknown(value: unknown): BotBudgets {
   return budgets;
 }
 
+/**
+ * Parse the cap the way people type it: a leading dollar sign and thousands
+ * commas are accepted, so `$1,500.00` is a real cap, not a refusal. Anything
+ * that is not one clean positive number (junk, negatives, zero, a comma that
+ * is not a thousands separator) is undefined — the caller decides that is a
+ * clear, never a store of junk.
+ */
+export function parseSpendCapInput(text: string): number | undefined {
+  const cleaned = text.trim().replace(/^\$/, '').replace(/,/g, '');
+  const value = cleaned === '' ? Number.NaN : Number(cleaned);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 export type BudgetVerdict =
   | { allowed: true; cap?: number; spent?: number }
   | { allowed: false; cap: number; spent: number; overBy: number; reason: string };
@@ -77,7 +90,10 @@ export function evaluateBudget(
     cap,
     spent: spentValue,
     overBy,
-    reason: `This Bot has spent $${spentValue.toFixed(2)} of its $${cap.toFixed(2)} budget. Raise its cap or run it elsewhere.`,
+    reason:
+      `The run was not started: this Bot has spent $${spentValue.toFixed(2)} of its ` +
+      `$${cap.toFixed(2)} budget, and the cap stands. Caps govern runs started ` +
+      `from this app only. Raise its cap or run it elsewhere.`,
   };
 }
 

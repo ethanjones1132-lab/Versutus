@@ -4,7 +4,7 @@ import { StyleSheet, View } from 'react-native';
 import { Button, Card, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { SESSION_SPEND_LIST_LIMIT } from '@/lib/gateway/session-analytics';
-import { botBudget, budgetRowCopy, type BotBudgets } from '@/lib/gateway/budgets';
+import { botBudget, budgetRowCopy, parseSpendCapInput, type BotBudgets } from '@/lib/gateway/budgets';
 import {
   botSpendCapCopy,
   botSpendRowCopy,
@@ -90,8 +90,7 @@ export function SpendPerBotSection({
                     label="Save cap"
                     size="sm"
                     onPress={() => {
-                      const value = Number.parseFloat(draft);
-                      onSetBudget?.(row.botId, Number.isFinite(value) && value > 0 ? value : undefined);
+                      onSetBudget?.(row.botId, parseSpendCapInput(draft));
                       setEditing(null);
                     }}
                   />
