@@ -16,7 +16,7 @@ export function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
-/** Relative timestamp: "just now", "4m ago", "2h ago", "3d ago", else short date. */
+/** Relative timestamp: "just now", "4m ago", "2h ago", "3d ago", else short date (with year if different from current year). */
 export function formatRelativeTime(timestamp: number): string {
   if (!Number.isFinite(timestamp)) return 'just now';
   const ms = timestamp > 1_000_000_000_000 ? timestamp : timestamp * 1000;
@@ -28,7 +28,12 @@ export function formatRelativeTime(timestamp: number): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ago`;
-  return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+  const date = new Date(ms);
+  const dateString = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return date.getFullYear() !== new Date().getFullYear()
+    ? `${dateString} ${date.getFullYear()}`
+    : dateString;
 }
 
 /** Compact clock time for message details: "14:03" */
