@@ -9,6 +9,7 @@ import {
   constellationEmptyCopy,
   constellationLayout,
   constellationNodeAccessibilityLabel,
+  constellationNodeBoxWidth,
   constellationSummaryCopy,
   relativeLastSeenCopy,
   type ConstellationModel,
@@ -82,7 +83,12 @@ export function ConstellationView({
       <GlassSurface variant="hero" radius={Radius.xxl} style={styles.stage}>
         <View style={[styles.mapWrap, { width: box, height: box }]}>
           <ConstellationCanvas model={model} size={box} />
-          {layout.nodes.map((node) => (
+          {layout.nodes.map((node) => {
+            // A Bot's label gets exactly the room its row was packed for,
+            // scaled to this screen; a fixed 148px box drawn over Bots ~21px
+            // apart is what smeared a 15-Bot roster into one line.
+            const boxWidth = constellationNodeBoxWidth(node, box, NODE_BOX_WIDTH);
+            return (
             <PressableScale
               key={node.id}
               onPress={() => onPressNode?.(node)}
@@ -91,9 +97,9 @@ export function ConstellationView({
               style={[
                 styles.node,
                 {
-                  left: node.x - NODE_BOX_WIDTH / 2,
+                  left: node.x - boxWidth / 2,
                   top: node.y - LABEL_OFFSET,
-                  width: NODE_BOX_WIDTH,
+                  width: boxWidth,
                 },
               ]}>
               <Text variant="micro" numberOfLines={1} color={node.live ? 'accentWarm' : 'tertiary'}>
@@ -127,7 +133,8 @@ export function ConstellationView({
                 </View>
               ) : null}
             </PressableScale>
-          ))}
+            );
+          })}
         </View>
         {/* The HUD: one honest line from the model's own summary. */}
         <View style={[styles.hud, { borderTopColor: tokens.glassBorder }]}>

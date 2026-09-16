@@ -54,7 +54,13 @@ describe('the constellation is painted from one layout', () => {
     expect(src).toContain('styles.mapWrap');
     expect(src).toContain("width: box, height: box");
     expect(src).toContain('<ConstellationCanvas model={model} size={box} />');
-    expect(src).toContain('left: node.x - NODE_BOX_WIDTH / 2');
+    // Each press target is centred on its node with the width that node was
+    // given: a Bot's scaled label budget, a gateway's default box
+    // (constellationNodeBoxWidth). A single fixed box over tightly packed Bots
+    // is what smeared a 15-Bot roster into one line on 2026-09-16.
+    expect(src).toContain('constellationNodeBoxWidth(node, box, NODE_BOX_WIDTH)');
+    expect(src).toContain('left: node.x - boxWidth / 2');
+    expect(src).toContain('width: boxWidth,');
   });
 
   test('the HUD reads the model summary, not its own arithmetic', () => {

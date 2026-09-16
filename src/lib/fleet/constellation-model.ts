@@ -24,11 +24,12 @@ const CENTER_Y = CONSTELLATION_HEIGHT / 2;
 const GATEWAY_RADIUS = 210;
 const SINGLE_GATEWAY_Y = CENTER_Y - 120;
 const BOT_ROW_OFFSET = 72;
-// The widest row (9 Bots at full spacing) would land ±384 from center — past
-// the design edge. The row compacts instead: spacing shrinks to the width a
-// real roster can occupy, so every Bot star stays inside the sky.
-const BOT_SPACING = 96;
-const DESIGN_MARGIN = 32;
+// Bots never compress below a label's width: a roster too wide for one row
+// wraps into the next, BOT_ROW_GAP further down. BOT_LABEL_WIDTH is the room a
+// Bot's name is given, so two neighbours BOT_SPACING apart cannot overlap.
+const BOT_SPACING = 104;
+const BOT_LABEL_WIDTH = 96;
+const BOT_ROW_GAP = 64;
 
 export type FleetGatewayInput = { id: string; name?: string };
 export type FleetReachability = Record<string, { lastProbeAt?: number } | undefined>;
@@ -66,6 +67,12 @@ export type ConstellationNode = {
   botId?: string;
   /** One live run name, when a run is in flight — the map links the actor. */
   runningRunName?: string;
+  /**
+   * The width, in design units, this node's label may occupy. Bots carry it
+   * because their rows are packed to exactly this budget; a gateway leaves it
+   * to the view's default box.
+   */
+  labelWidth?: number;
 };
 
 export type ConstellationEdge = { from: string; to: string; kind: 'hosts' | 'routine' };
@@ -154,16 +161,29 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
 
     if (!live) return;
     const roster = input.roster ?? [];
+    // Bots wrap into rows beneath their gateway at a spacing a label can own.
+    // The row used to compress to fit the sky instead: at 15 Bots that was 41
+    // design units apart for labels drawn 148 wide, and every name overlapped
+    // into one unreadable smear (2026-09-16). A row now holds only as many
+    // Bots as fit at BOT_SPACING with their labels inside the sky, and the
+    // rest start the next row down.
+    const botsPerRow = Math.max(
+      1,
+      Math.floor((CONSTELLATION_WIDTH - BOT_LABEL_WIDTH) / BOT_SPACING) + 1,
+    );
     roster.forEach((bot, botIndex) => {
-      // The row compacts to the design sky: at big rosters the full spacing
-      // would push the outer Bots past the edge, so spacing shrinks to fit.
-      const usable = CONSTELLATION_WIDTH - 2 * DESIGN_MARGIN;
-      const spacing = Math.min(BOT_SPACING, roster.length > 1 ? usable / (roster.length - 1) : BOT_SPACING);
-      const botX = Math.min(
-        CONSTELLATION_WIDTH - DESIGN_MARGIN,
-        Math.max(DESIGN_MARGIN, x + (botIndex - (roster.length - 1) / 2) * spacing),
+      const row = Math.floor(botIndex / botsPerRow);
+      const rowStart = row * botsPerRow;
+      const rowCount = Math.min(botsPerRow, roster.length - rowStart);
+      const rowWidth = (rowCount - 1) * BOT_SPACING;
+      // Centre the row under the gateway, then slide the whole row (never
+      // squeeze it) so its outer labels stay on the sky.
+      const rowLeft = Math.min(
+        CONSTELLATION_WIDTH - BOT_LABEL_WIDTH / 2 - rowWidth,
+        Math.max(BOT_LABEL_WIDTH / 2, x - rowWidth / 2),
       );
-      const botY = y + BOT_ROW_OFFSET;
+      const botX = rowLeft + (botIndex - rowStart) * BOT_SPACING;
+      const botY = y + BOT_ROW_OFFSET + row * BOT_ROW_GAP;
       const botBadges: ConstellationBadge[] = [];
       let runningRunName: string | undefined;
       if (runningBots.has(bot.id)) {
@@ -188,6 +208,7 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
         label: bot.displayName?.trim() || bot.id,
         x: botX,
         y: botY,
+        labelWidth: BOT_LABEL_WIDTH,
         live: true,
         badges: botBadges,
         botId: bot.id,
@@ -369,6 +390,21 @@ export type ConstellationLayout = {
  * tighter-fitting axis and centering on the other. A node never leaves the
  * box: this is what keeps every profile on screen at any fleet width.
  */
+/**
+ * The on-screen width a node's label box may take in a map drawn `boxSize`
+ * wide. A Bot carries the label budget its row was packed to (design units),
+ * scaled here to the screen; a node without one keeps the view's own default.
+ * A fixed default box over tightly packed Bots is what overlapped every name.
+ */
+export function constellationNodeBoxWidth(
+  node: Pick<ConstellationNode, 'labelWidth'>,
+  boxSize: number,
+  fallback: number,
+): number {
+  if (node.labelWidth === undefined || !Number.isFinite(boxSize) || boxSize <= 0) return fallback;
+  return (node.labelWidth * boxSize) / CONSTELLATION_WIDTH;
+}
+
 export function constellationLayout(
   model: ConstellationModel,
   width: number,

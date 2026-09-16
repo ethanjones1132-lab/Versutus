@@ -2,6 +2,7 @@ import {
   CONSTELLATION_HEIGHT,
   CONSTELLATION_WIDTH,
   constellationModel,
+  constellationNodeBoxWidth,
 } from '@/lib/fleet/constellation-model';
 import type { CronJob } from '@/lib/gateway/cron';
 
@@ -183,5 +184,77 @@ describe('routine arcs', () => {
       { from: 'gateway:gw-home', to: 'bot:gw-home:scout', kind: 'hosts' },
       { from: 'gateway:gw-home', to: 'bot:gw-home:night', kind: 'hosts' },
     ]);
+  });
+});
+
+describe('a large roster stays readable', () => {
+  // On 2026-09-16 a 15-Bot fleet rendered as one unreadable smear: every Bot
+  // sat in a single row 41 design units apart while each label drew in a
+  // 148-unit box, so all fifteen names overlapped. The map was useless at
+  // exactly the size a real fleet has.
+  const roster = [
+    'default', 'alchemist', 'column', 'orator', 'exile', 'forge', 'herald', 'ledger',
+    'memory', 'newbacte', 'oracle', 'pact', 'relay', 'scout', 'versutus-dev',
+  ].map((id) => ({ id, displayName: id }));
+
+  const model = constellationModel({
+    profiles: [{ id: 'gw-home', name: 'Home' }],
+    connectedGatewayId: 'gw-home',
+    roster,
+  });
+  const gateway = model.nodes.find((node) => node.kind === 'gateway')!;
+  const bots = model.nodes.filter((node) => node.kind === 'bot');
+
+  test('no two Bot labels on the same row overlap', () => {
+    expect(bots).toHaveLength(15);
+    for (const bot of bots) {
+      expect(bot.labelWidth).toBeGreaterThan(0);
+      for (const other of bots) {
+        if (other === bot || other.y !== bot.y) continue;
+        const gap = Math.abs(other.x - bot.x);
+        expect(gap).toBeGreaterThanOrEqual((bot.labelWidth! + other.labelWidth!) / 2);
+      }
+    }
+  });
+
+  test('the roster wraps into rows beneath its gateway instead of compressing one row', () => {
+    const rows = new Set(bots.map((bot) => bot.y));
+    expect(rows.size).toBeGreaterThan(1);
+    expect(bots.every((bot) => bot.y > gateway.y)).toBe(true);
+  });
+
+  test('every Bot stays on the sky', () => {
+    for (const bot of bots) {
+      expect(bot.x - bot.labelWidth! / 2).toBeGreaterThanOrEqual(0);
+      expect(bot.x + bot.labelWidth! / 2).toBeLessThanOrEqual(CONSTELLATION_WIDTH);
+      expect(bot.y).toBeLessThanOrEqual(CONSTELLATION_HEIGHT);
+    }
+  });
+
+  test('a small roster keeps its single row', () => {
+    const small = constellationModel({
+      profiles: [{ id: 'gw-home', name: 'Home' }],
+      connectedGatewayId: 'gw-home',
+      roster: roster.slice(0, 3),
+    });
+    const smallBots = small.nodes.filter((node) => node.kind === 'bot');
+    expect(new Set(smallBots.map((bot) => bot.y)).size).toBe(1);
+  });
+});
+
+describe('a node label box on screen', () => {
+  test("a Bot's label budget scales with the map it is drawn in", () => {
+    // Design space is 640 wide; a 320-wide map halves every budget.
+    expect(constellationNodeBoxWidth({ labelWidth: 96 }, 320, 148)).toBe(48);
+    expect(constellationNodeBoxWidth({ labelWidth: 96 }, 640, 148)).toBe(96);
+  });
+
+  test('a node with no budget keeps the view default', () => {
+    expect(constellationNodeBoxWidth({}, 320, 148)).toBe(148);
+  });
+
+  test('an unmeasured map never produces a zero or NaN box', () => {
+    expect(constellationNodeBoxWidth({ labelWidth: 96 }, 0, 148)).toBe(148);
+    expect(constellationNodeBoxWidth({ labelWidth: 96 }, Number.NaN, 148)).toBe(148);
   });
 });
