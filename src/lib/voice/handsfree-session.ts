@@ -59,7 +59,7 @@ export type HandsfreeEffect =
 /** Everything that can arrive at the reducer, from native or the provider. */
 export type HandsfreeEvent =
   | { type: 'start' }
-  | { type: 'started' }
+  | { type: 'started'; startedAtMs?: number }
   | { type: 'start-refused' }
   | { type: 'partial'; text: string }
   | { type: 'final'; text: string }
@@ -97,6 +97,11 @@ export type HandsfreeSessionState = {
   partial: string;
   /** The text accumulated for the pending turn (finals + grace-window speech). */
   held: string;
+  /** The epoch (`Date.now()`) at which the call actually started, so the
+   * surface can say how long it has been running; set only once the
+   * native side confirms `started`. The reducer stays clock-free — the
+   * provider stamps the value in. */
+  startedAtMs?: number;
   /** Where unmute returns: the phase mute was entered from. */
   resumePhase?: 'listening' | 'speaking';
   /** Whether the correlated reply is still being spoken (mute does not stop it). */
@@ -206,7 +211,7 @@ export function reduceHandsfreeSession(
     case 'starting': {
       if (event.type === 'started') {
         return {
-          state: { ...state, phase: 'listening', partial: '', held: '' },
+          state: { ...state, phase: 'listening', partial: '', held: '', startedAtMs: event.startedAtMs },
           effects: [{ kind: 'start-listening' }],
         };
       }

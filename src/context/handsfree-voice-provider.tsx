@@ -96,6 +96,13 @@ export type HandsfreeVoiceContextValue = {
   phase: HandsfreePhase;
   /** A call is live (not idle and not ended). */
   active: boolean;
+  /**
+   * The epoch (`Date.now()`) the live call started at, once the native side
+   * confirmed `started`; undefined for an idle call or one whose start this
+   * device never recorded. The surface folds it through
+   * `handsfreeElapsedCopy` to say how long the call has been running.
+   */
+  startedAtMs: number | undefined;
   /** The live transcript of the current turn, for the banner. */
   partial: string;
   label: string | undefined;
@@ -740,7 +747,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         // A disconnect or thread change already tore this call down.
         return 'unavailable';
       }
-      dispatch({ type: 'started' });
+      dispatch({ type: 'started', startedAtMs: Date.now() });
       return 'started';
     },
     [dispatch, refuseGateStart, subscribeGate],
@@ -808,7 +815,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       }
       beginHandsfreeCall();
       setEngineInfo({ engine: 'phone' });
-      dispatch({ type: 'started' });
+      dispatch({ type: 'started', startedAtMs: Date.now() });
       return 'started';
     },
     [dispatch, startGateCall, subscribe, unsubscribe],
@@ -872,6 +879,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const value: HandsfreeVoiceContextValue = {
     phase,
     active,
+    startedAtMs: session.startedAtMs,
     partial,
     label,
     reason: session.reason,

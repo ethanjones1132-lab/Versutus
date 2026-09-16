@@ -37,6 +37,21 @@ export const HANDSFREE_SPEAKING_HINT = 'say something to interrupt';
  * pause with the turn already heard does not read as a dead recognizer. */
 export const HANDSFREE_CONFIRMING_HINT = 'finishing…';
 
+/**
+ * How long the call has been running, folded from the epoch the session
+ * recorded when it started. Null when the start time is unknown: a call
+ * whose start this device never recorded must not be shown a zero
+ * duration — silence is more honest than a lie about time.
+ */
+export function handsfreeElapsedCopy(startedAtMs: number | undefined, nowMs: number): string | null {
+  if (startedAtMs === undefined) return null;
+  const elapsedMs = Math.max(0, nowMs - startedAtMs);
+  const totalMinutes = Math.floor(elapsedMs / 60_000);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+  return hours > 0 ? `running ${hours}h ${minutes}m` : `running ${minutes}m`;
+}
+
 export const HANDSFREE_MUTE_LABEL = 'Mute hands-free call';
 export const HANDSFREE_UNMUTE_LABEL = 'Unmute hands-free call';
 export const HANDSFREE_SKIP_LABEL = 'Skip spoken reply';

@@ -4,6 +4,7 @@
 // composer: the permanent "speech auto-sends" label states what the call does,
 // and the transcript never passes through the composer writer.
 
+import { useCallback, useSyncExternalStore } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -21,14 +22,31 @@ import {
   HANDSFREE_SKIP_LABEL,
   HANDSFREE_SPEAKING_HINT,
   HANDSFREE_UNMUTE_LABEL,
+  handsfreeElapsedCopy,
   handsfreePhaseLabel,
 } from '@/lib/voice/handsfree-call-copy';
 
 export function HandsfreeCallBanner() {
-  const { active, phase, partial, label, level, engine, engineReason, mute, unmute, skipReply, end } =
+  const { active, phase, partial, label, level, engine, engineReason, mute, unmute, skipReply, end, startedAtMs } =
     useHandsfreeVoice();
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
+  // The elapsed time is wall-clock truth: the per-second clock is an
+  // external store the banner subscribes to for the whole call, so React
+  // owns when the fold re-runs and no impure Date.now() is read during
+  // render — A call whose start is unknown stays silent, never zero.
+  const subscribeElapsedSeconds = useCallback((onStoreChange: () => void) => {
+    const id = setInterval(onStoreChange, 1000);
+    return () => clearInterval(id);
+  }, []);
+  const elapsedSeconds = useSyncExternalStore(
+    subscribeElapsedSeconds,
+    () => Math.floor(Date.now() / 1000),
+  );
+  const elapsedCopy =
+    startedAtMs !== undefined
+      ? handsfreeElapsedCopy(startedAtMs, elapsedSeconds * 1000)
+      : null;
 
   if (!active) return null;
 
@@ -55,12 +73,13 @@ export function HandsfreeCallBanner() {
           style={styles.body}
           accessibilityRole="summary"
           accessibilityLiveRegion="polite"
-          accessibilityLabel={`${HANDSFREE_BANNER_TITLE} with ${label ?? 'this chat'}, ${phaseLine}`}>
+          accessibilityLabel={`${HANDSFREE_BANNER_TITLE} with ${label ?? 'this chat'}, ${phaseLine}${elapsedCopy ? `, ${elapsedCopy}` : ''}`}>
           <HandsfreeCallIndicator level={level} active={!muted} color={tokens.accent} />
           <View style={styles.text}>
             <Text variant="caption" color="primary" numberOfLines={1}>
               {HANDSFREE_BANNER_TITLE}
               {label ? ` · ${label}` : ''}
+              {elapsedCopy ? ` · ${elapsedCopy}` : ''}
             </Text>
             <Text variant="caption" color="accentWarm" numberOfLines={1}>
               {phaseLine}

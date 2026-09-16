@@ -10,6 +10,7 @@ import {
   HANDSFREE_SPEAKING_HINT,
   HANDSFREE_START_LABEL,
   HANDSFREE_UNMUTE_LABEL,
+  handsfreeElapsedCopy,
   handsfreeEndReasonCopy,
   handsfreePhaseLabel,
   handsfreeStartResultCopy,
@@ -246,6 +247,28 @@ describe('an ended or refused call explains itself', () => {
     expect(screen).toContain('handsfreeEndReasonCopy(handsfreeLastEndReason)');
     expect(screen).toMatch(/\[handsfreeCallsEnded, handsfreeLastEndReason\]/);
     expect(screen).toContain('setCallError(handsfreeStartResultCopy(result))');
+  });
+});
+
+describe('the call says how long it has been running', () => {
+  test('the banner folds the started-at epoch through the copy module, on a per-second tick', () => {
+    expect(banner).toContain('handsfreeElapsedCopy(');
+    expect(banner).toContain('startedAtMs');
+    // The tick is wall-clock truth and unsubscribes cleanly: no drift between
+    // the fold and what the operator reads.
+    expect(banner).toContain('setInterval');
+  });
+
+  test('a call with no recorded start stays silent, never zero', () => {
+    // The copy is the single honest fold; the banner renders only when the
+    // epoch is known — a brand-new or unrecorded call gains no fake line.
+    expect(handsfreeElapsedCopy(undefined, 1_000_000)).toBeNull();
+  });
+
+  test('the provider stamps the clock at started, once per call', () => {
+    expect(provider).toContain("dispatch({ type: 'started', startedAtMs: Date.now() })");
+    // The reducer records it; the context value exposes it.
+    expect(provider).toContain('startedAtMs: session.startedAtMs,');
   });
 });
 
