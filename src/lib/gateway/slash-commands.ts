@@ -28,6 +28,7 @@ import {
   createWorkflow,
   deleteWorkflow,
   findWorkflow,
+  recordWorkflowRun,
   renameWorkflow,
   workflowSummaryCopy,
   type Workflow,
@@ -345,6 +346,12 @@ export function getSlashCommandSuggestions(
    */
   limit: number = 12,
   skills: Skill[] = [],
+  /**
+   * This device's stored workflows. Each one adds a `/workflow <name>` row so
+   * the operator does not have to remember and retype stored names; absent or
+   * empty leaves the palette exactly as before.
+   */
+  storedWorkflows: Workflow[] = [],
 ): SlashCommandSuggestion[] {
   const needle = input.trimStart().toLowerCase();
 
@@ -420,12 +427,27 @@ export function getSlashCommandSuggestions(
     }))
     .filter((item) => !builtInSlashes.has(item.value));
 
+  // One row per stored workflow: `/workflow <name>` completes the exact name,
+  // so the operator taps instead of remembering it.
+  const workflowSuggestions: SlashCommandSuggestion[] = storedWorkflows.map((workflow) => {
+    const tally = workflowRunTallyCopy(workflow);
+    return {
+      value: `/workflow ${workflow.name} `,
+      label: `/workflow ${workflow.name}`,
+      description: workflowSummaryCopy(workflow) + (tally ? ` · ${tally.toLowerCase()}` : ''),
+      danger: 'write' as const,
+      family: 'Routine',
+      unavailable: false,
+    };
+  });
+
   let suggestions = [
     ...recentSuggestions,
     ...localWithMeta,
     ...registrySuggestions,
     ...dynamicSuggestions,
     ...skillSuggestions,
+    ...workflowSuggestions,
   ];
 
   if (needle) {
@@ -805,7 +827,13 @@ async function runWorkflowCommand(
       return textResult('No workflows yet. Define one with a name and its steps.', '/workflow');
     }
     return textResult(
-      ['Workflows:', ...workflows.map((workflow) => `- ${workflowSummaryCopy(workflow)}`)].join('\n'),
+      [
+        'Workflows:',
+        ...workflows.map((workflow) => {
+          const tally = workflowRunTallyCopy(workflow);
+          return `- ${workflowSummaryCopy(workflow)}${tally ? ` — ${tally.toLowerCase()}` : ''}`;
+        }),
+      ].join('\n'),
       '/workflow',
     );
   }
@@ -829,6 +857,7 @@ async function runWorkflowCommand(
 
   const input = rest.join(' ');
   const lines: string[] = [];
+  let stopped = false;
   for (const step of workflow.steps) {
     const prompt = applyWorkflowInput(step.prompt, input);
     try {
@@ -841,15 +870,37 @@ async function runWorkflowCommand(
         /fail/i.test(outcome.status ?? '');
       if (failed) {
         lines.push(`Stopped at step ${step.id}.`);
+        stopped = true;
         break;
       }
     } catch (error) {
       lines.push(`${step.id}: ${error instanceof Error ? error.message : String(error)}`);
       lines.push(`Stopped at step ${step.id}.`);
+      stopped = true;
       break;
     }
   }
-  return textResult(`${workflow.name}:\n${lines.join('\n')}`, '/workflow');
+  // Only a run that reached its last step counts as a run; the list copy then
+  // shows it alongside the step count.
+  if (!stopped && context.onWorkflowsChanged) {
+    await context.onWorkflowsChanged(recordWorkflowRun(workflows, workflow.id));
+  }
+  const tally = workflowRunTallyCopy(workflow);
+  return textResult(
+    `${workflow.name}:\n${lines.join('\n')}${tally ? `\n\n${tally}` : ''}`,
+    '/workflow',
+  );
+}
+
+/**
+ * One line about a workflow's run history, for the list and the run reply.
+ * A workflow this device has never run (or one stored before the tally
+ * existed) says nothing rather than claiming zero.
+ */
+function workflowRunTallyCopy(workflow: Workflow): string {
+  if (typeof workflow.runCount !== 'number' || workflow.runCount <= 0) return '';
+  const when = workflow.lastRunAt ? `; last ${new Date(workflow.lastRunAt).toLocaleString()}` : '';
+  return `Run ${workflow.runCount} time${workflow.runCount === 1 ? '' : 's'}${when}`;
 }
 
 /** `/workflow new|rename|delete` — the management half of the same command. */

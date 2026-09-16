@@ -656,6 +656,102 @@ describe('/workflow runs stored step sequences', () => {
     expect(runTask).not.toHaveBeenCalled();
     expect(result.text).toContain('Unknown workflow: nope');
   });
+
+  test('a completed run tallies into the stored set; a stopped one does not', async () => {
+    const onWorkflowsChanged = jest.fn();
+    const succeeded = { runId: 'r', status: 'succeeded', result: 'ok' };
+    await executeGatewaySlashCommand('/workflow Digest', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      runTask: jest.fn().mockResolvedValue(succeeded),
+      onWorkflowsChanged,
+    });
+    expect(onWorkflowsChanged).toHaveBeenCalledTimes(1);
+    expect(onWorkflowsChanged.mock.calls[0][0][0].runCount).toBe(1);
+    expect(typeof onWorkflowsChanged.mock.calls[0][0][0].lastRunAt).toBe('number');
+
+    // A failing step stops the workflow — that is not a run of it.
+    onWorkflowsChanged.mockClear();
+    const failing = jest
+      .fn()
+      .mockResolvedValueOnce({ runId: 'r1', status: 'failed', error: 'boom' });
+    await executeGatewaySlashCommand('/workflow Digest', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      runTask: failing,
+      onWorkflowsChanged,
+    });
+    expect(onWorkflowsChanged).not.toHaveBeenCalled();
+
+    // A list can be tallied without a save path; nothing is written.
+    onWorkflowsChanged.mockClear();
+    await executeGatewaySlashCommand('/workflow Digest', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows,
+      runTask: jest.fn().mockResolvedValue(succeeded),
+    });
+    expect(onWorkflowsChanged).not.toHaveBeenCalled();
+  });
+
+  test('the list names a workflow its run count and last stamp', async () => {
+    const tallied = [
+      {
+        id: 'w1',
+        name: 'Digest',
+        steps: [{ id: 's1', prompt: 'p' }],
+        runCount: 2,
+        lastRunAt: 1758000000000,
+      },
+    ];
+    const result = await executeGatewaySlashCommand('/workflow', {
+      hello: null,
+      gatewayRequest: jest.fn(),
+      runAgentCommand: jest.fn(),
+      workflows: tallied,
+    });
+    expect(result.text).toContain('Digest: 1 step — run 2 times');
+    expect(result.text).toContain('last');
+  });
+});
+
+describe('the palette completes stored workflow names', () => {
+  test('each stored workflow is a `/workflow <name>` row', () => {
+    const rows = getSlashCommandSuggestions(
+      '/workflow ',
+      null,
+      [],
+      {},
+      [],
+      12,
+      [],
+      [
+        {
+          id: 'w1',
+          name: 'Digest',
+          steps: [{ id: 's1', prompt: 'p' }],
+          runCount: 2,
+          lastRunAt: 1758000000000,
+        },
+        { id: 'w2', name: 'Triage bugs', steps: [{ id: 's1', prompt: 'p' }] },
+      ],
+    );
+    const digest = rows.find((row) => row.value === '/workflow Digest ');
+    expect(digest).toBeDefined();
+    expect(digest?.family).toBe('Routine');
+    expect(digest?.description).toContain('run 2 times');
+    const triage = rows.find((row) => row.value === '/workflow Triage bugs ');
+    expect(triage?.description).toContain('1 step');
+  });
+
+  test('without stored workflows the palette is unchanged', () => {
+    expect(getSlashCommandSuggestions('/workflow ', null, [], {}, [], 12, [])).toHaveLength(0);
+  });
 });
 
 describe('/workflow management', () => {

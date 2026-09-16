@@ -202,7 +202,7 @@ import {
 } from '@/lib/gateway/approval-policy';
 import { approvalRowsFromUnknown, type ApprovalRow } from '@/lib/gateway/approvals';
 import { buildChatContent, type ChatAttachment } from '@/lib/gateway/chat-parts';
-import { loadWorkflows, saveWorkflows } from '@/lib/gateway/workflows';
+import { loadWorkflows, saveWorkflows, type Workflow } from '@/lib/gateway/workflows';
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
 import { writeWidgetSnapshot } from '@/lib/widget/widget-device';
 import { loadWidgetResultHidden, subscribeWidgetPrivacy } from '@/lib/settings/widget-privacy';
@@ -398,6 +398,8 @@ type GatewayContextValue = {
     addMembers: (groupId: string, memberIds: string[]) => Promise<BotGroupRoom>;
   };
   runAgentCommand: (command: string, options?: { onDelta?: (delta: string) => void }) => Promise<string>;
+  /** Stored workflows for the active gateway (P2's `/workflow` palette). */
+  relatedWorkflows: Workflow[];
   dynamicCommands: GatewayCapabilityCommand[];
   deleteGateway: (id: string) => Promise<void>;
   connectGateway: (gateway: GatewayProfile) => Promise<void>;
@@ -2703,6 +2705,29 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
+  // This device's stored workflows, keyed by the gateway they were read for,
+  // per connected transition and refreshed when `/workflow` writes one. Feeds
+  // the palette's `/workflow <name>` rows; it is display state, not the
+  // command's own read (the executor re-reads the store at send time). A row
+  // whose gateway no longer matches the active one reads as none, so a
+  // disconnect never shows another gateway's workflows.
+  const [workflowStore, setWorkflowStore] = useState<{ gatewayId: string; workflows: Workflow[] }>({
+    gatewayId: '',
+    workflows: [],
+  });
+  useEffect(() => {
+    if (!activeGateway || status !== 'connected') return undefined;
+    const gatewayId = activeGateway.id;
+    void loadWorkflows(gatewayId).then((workflows) => {
+      setWorkflowStore({ gatewayId, workflows });
+    });
+    return undefined;
+  }, [activeGateway, status]);
+  const relatedWorkflows = useMemo(
+    () => (workflowStore.gatewayId === (activeGateway?.id ?? '') ? workflowStore.workflows : []),
+    [workflowStore, activeGateway],
+  );
+
   const sendChatInput = useCallback(
     async (
       text: string,
@@ -2819,7 +2844,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           workflows,
           onWorkflowsChanged: (next) => {
             const gateway = activeGatewayRef.current;
-            if (gateway) void saveWorkflows(gateway.id, next);
+            if (gateway) {
+              void saveWorkflows(gateway.id, next).then(() =>
+                setWorkflowStore({ gatewayId: gateway.id, workflows: next }),
+              );
+            }
           },
           currentModel: activeGateway?.model,
           gatewayRequest,
@@ -4176,6 +4205,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       botJobs,
       botGroups,
       cron,
+      relatedWorkflows,
       runAgentCommand,
       dynamicCommands,
       setupFromPcAddress,
@@ -4254,6 +4284,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       historyLoading, createNewSession, deleteSessionById, deleteLocalMessage,
       tlsFingerprintChange,
       dynamicCommands,
+      relatedWorkflows,
       hasMoreHistory, loadingEarlierHistory, loadEarlierMessages,
     ],
   );

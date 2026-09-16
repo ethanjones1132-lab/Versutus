@@ -16,6 +16,13 @@ export type Workflow = {
   id: string;
   name: string;
   steps: WorkflowStep[];
+  /**
+   * How many times `/workflow <name>` has run it from this device, with the
+   * stamp of the last run. Absent on a workflow the device has never run (or
+   * one stored before these fields existed) — not a zero.
+   */
+  runCount?: number;
+  lastRunAt?: number;
 };
 
 function text(value: unknown): string | undefined {
@@ -50,7 +57,13 @@ export function workflowsFromUnknown(value: unknown): Workflow[] {
     const name = text(record.name);
     const steps = stepsFromUnknown(record.steps);
     if (!id || !name || steps.length === 0) continue;
-    workflows.push({ id, name, steps });
+    const workflow: Workflow = { id, name, steps };
+    // Stored shapes older than the run tally read as never-run, not zero.
+    const runCount = typeof record.runCount === 'number' && record.runCount >= 0 ? record.runCount : undefined;
+    const lastRunAt = typeof record.lastRunAt === 'number' ? record.lastRunAt : undefined;
+    if (runCount !== undefined) workflow.runCount = runCount;
+    if (lastRunAt !== undefined) workflow.lastRunAt = lastRunAt;
+    workflows.push(workflow);
   }
   return workflows;
 }
@@ -102,4 +115,20 @@ export function applyWorkflowInput(prompt: string, input: string): string {
 export function workflowSummaryCopy(workflow: Workflow): string {
   const count = workflow.steps.length;
   return `${workflow.name}: ${count} ${count === 1 ? 'step' : 'steps'}`;
+}
+
+/**
+ * Fold one completed run of a workflow into the stored set. Unchanged when no
+ * workflow matches — a run can only ever tally the name that started it.
+ */
+export function recordWorkflowRun(
+  workflows: Workflow[],
+  id: string,
+  ranAt: number = Date.now(),
+): Workflow[] {
+  return workflows.map((workflow) =>
+    workflow.id === id
+      ? { ...workflow, runCount: (workflow.runCount ?? 0) + 1, lastRunAt: ranAt }
+      : workflow,
+  );
 }

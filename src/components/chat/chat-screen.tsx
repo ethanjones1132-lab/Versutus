@@ -366,6 +366,7 @@ export function ChatScreen() {
     botJobs,
     botGroups,
     selectedBotId,
+    relatedWorkflows,
     gatewayRequest,
     requestedSurface,
     clearRequestedSurface,
@@ -956,9 +957,10 @@ export function ChatScreen() {
             dynamicCommands,
             12,
             skillsState.skills,
+            relatedWorkflows,
           )
         : [],
-    [draft, activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands, skillsState.skills],
+    [draft, activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands, skillsState.skills, relatedWorkflows],
   );
   // Stable across streamed frames (icons + drafts never change) so the memoized
   // ChatComposer short-circuits when only `messages` changed.
@@ -983,8 +985,9 @@ export function ChatScreen() {
         dynamicCommands,
         Number.POSITIVE_INFINITY,
         skillsState.skills,
+        relatedWorkflows,
       ),
-    [activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands, skillsState.skills],
+    [activeHello, recentCommands, capabilitySnapshot.methods, dynamicCommands, skillsState.skills, relatedWorkflows],
   );
 
   // The open config sheet's session list re-renders its visible rows whenever

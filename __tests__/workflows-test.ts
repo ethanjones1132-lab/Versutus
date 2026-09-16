@@ -5,10 +5,12 @@ import {
   deleteWorkflow,
   findWorkflow,
   loadWorkflows,
+  recordWorkflowRun,
   renameWorkflow,
   saveWorkflows,
   workflowSummaryCopy,
   workflowsFromUnknown,
+  type Workflow,
 } from '@/lib/gateway/workflows';
 
 jest.mock('@/lib/storage/key-value', () => ({
@@ -100,5 +102,40 @@ describe('a workflow is a named ordered list of steps', () => {
         ],
       }),
     ).toBe('A: 2 steps');
+  });
+});
+
+const ranAt = 1758000000000;
+const tallyWorkflow = (): Workflow[] => [
+  { id: 'w1', name: 'Digest', steps: [{ id: 's1', prompt: 'p' }] },
+];
+
+describe('a run is tallied on the workflow', () => {
+  test('recordWorkflowRun counts a first run and stamps it, and only the named workflow', () => {
+    const next = recordWorkflowRun(tallyWorkflow(), 'w1', ranAt);
+    expect(next[0].runCount).toBe(1);
+    expect(next[0].lastRunAt).toBe(ranAt);
+    expect(next[0].name).toBe('Digest');
+
+    const again = recordWorkflowRun(next, 'w1', ranAt + 1);
+    expect(again[0].runCount).toBe(2);
+    expect(again[0].lastRunAt).toBe(ranAt + 1);
+
+    const untouched = recordWorkflowRun(next, 'other', ranAt);
+    expect(untouched).toEqual(next);
+  });
+
+  test('a stored workflow without the tally loads as never-run, and junk fields are dropped', () => {
+    const loaded = workflowsFromUnknown([
+      { id: 'w1', name: 'Digest', steps: [{ id: 's1', prompt: 'p' }] },
+      { id: 'w2', name: 'Bad', steps: [{ id: 's1', prompt: 'p' }], runCount: -2, lastRunAt: 'junk' },
+      { id: 'w3', name: 'Good', steps: [{ id: 's1', prompt: 'p' }], runCount: 3, lastRunAt: ranAt },
+    ]);
+    // A stored shape older than the tally reads as never-run, not zero, and a
+    // negative or non-numeric count is junk rather than a run.
+    expect(loaded[0]).toEqual({ id: 'w1', name: 'Digest', steps: [{ id: 's1', prompt: 'p' }] });
+    expect(loaded[1]).toEqual({ id: 'w2', name: 'Bad', steps: [{ id: 's1', prompt: 'p' }] });
+    expect(loaded[2].runCount).toBe(3);
+    expect(loaded[2].lastRunAt).toBe(ranAt);
   });
 });
