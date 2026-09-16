@@ -46,7 +46,7 @@ function plainBackend(calls = []) {
 }
 
 /** A Hermes-shaped backend: it inventories Bots and can scope itself to one. */
-function botsBackend(calls) {
+function botsBackend(calls, sendMessageImpl) {
   const forBot = (botId) => ({
     async listSessions(limit) { calls.push(`listSessions:${botId}:${limit}`); return [session('bot_1', 'api_server')]; },
     async createSession(input) {
@@ -62,6 +62,7 @@ function botsBackend(calls) {
     async listMessages(id) { calls.push(`listMessages:${botId}:${id}`); return []; },
     async sendMessage(id, input) {
       calls.push(`sendMessage:${botId}:${input?.model?.providerId ?? ''}/${input?.model?.modelId ?? ''}`);
+      if (sendMessageImpl) return sendMessageImpl(input);
       return { text: 'ok', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] }, runtime: { model: input?.model?.modelId } };
     },
     async listModels() {
@@ -86,7 +87,7 @@ function botsBackend(calls) {
   };
 }
 
-function registryFor(calls) {
+function registryFor(calls, sendMessageImpl) {
   const make = (adapterId, capabilities, backend) => ({
     adapterId,
     adapterRevision: '1',
@@ -99,7 +100,7 @@ function registryFor(calls) {
   });
   const adapters = [
     make('plaincli', ['sessions', 'tools', 'models'], plainBackend(calls)),
-    make('botscli', ['sessions', 'tools', 'models', 'bots'], botsBackend(calls)),
+    make('botscli', ['sessions', 'tools', 'models', 'bots'], botsBackend(calls, sendMessageImpl)),
   ];
   return {
     get(id) {
@@ -122,7 +123,7 @@ async function environmentFile(gateHome, id, adapterId) {
   }), 'utf8');
 }
 
-async function makeGate() {
+async function makeGate(overrides = {}) {
   const calls = [];
   const root = await mkdtemp(join(tmpdir(), 'gate-hermesscope-'));
   roots.push(root);
@@ -140,7 +141,7 @@ async function makeGate() {
     root,
     port: 0,
     gateHome,
-    environmentRegistry: registryFor(calls),
+    environmentRegistry: registryFor(calls, overrides.sendText ? (input) => ({ text: overrides.sendText, message: { role: 'assistant', content: [{ type: 'text', text: overrides.sendText }] } }) : undefined),
     backendServerFactory: () => ({
       ensureRunning: async () => ({ baseUrl: 'http://127.0.0.1:1', attached: true }),
       stop: async () => {},
@@ -180,6 +181,48 @@ test('an unknown Bot is refused by name, not answered with provider models', asy
   try {
     const response = await fetch(`${base(gate)}/v1/models?bot=ghost`, { headers: auth(gate) });
     assert.notEqual(response.status, 200);
+  } finally {
+    await gate.close();
+  }
+});
+
+// 2026-09-16: Hermes returns an upstream failure as a NORMAL 200 completion whose
+// whole assistant text is the error — e.g. "HTTP 400: omen-alpha is not a valid
+// model ID". Through the Gate this rendered as the Bot SPEAKING the error. Only
+// a message that IS the shape `HTTP <3 digits>: <text>` is a failure; a reply
+// that merely MENTIONS "HTTP 400" inside prose is delivered untouched.
+
+test('a backend turn whose whole reply is an upstream refusal answers 502, not the refusal as speech', async () => {
+  const { gate } = await makeGate({ sendText: 'HTTP 400: omen-alpha is not a valid model ID' });
+  try {
+    const response = await fetch(`${base(gate)}/v1/chat/completions`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ bot: 'default', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(response.status, 502);
+    const body = await response.json();
+    assert.equal(body.error.code, 'upstream_error');
+    assert.equal(body.error.message, 'HTTP 400: omen-alpha is not a valid model ID');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a real reply that merely mentions an HTTP status is delivered untouched', async () => {
+  const { gate } = await makeGate({ sendText: 'The host answered HTTP 400 and I retried with a backoff.' });
+  try {
+    const response = await fetch(`${base(gate)}/v1/chat/completions`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ bot: 'default', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(
+      body.choices[0].message.content,
+      'The host answered HTTP 400 and I retried with a backoff.',
+    );
   } finally {
     await gate.close();
   }

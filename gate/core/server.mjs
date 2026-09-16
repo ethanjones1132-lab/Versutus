@@ -43,6 +43,7 @@ import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-
 import { verifySignedAccessRequest } from './signature.mjs';
 import { describeAuthFailure } from './auth-failure.mjs';
 import { unresolvedBackendResponse } from './backend-resolution.mjs';
+import { backendUpstreamRefusal } from './upstream-refusal.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
 
@@ -1983,6 +1984,16 @@ export async function createGate(config = {}) {
             }
 
             const result = await backend.sendMessage(sessionId, { text, model });
+            // A turn that failed upstream arrives as a NORMAL completion whose
+            // whole assistant text is the error (backendUpstreamRefusal).
+            // Answering it 200 would render the error as the Bot's speech;
+            // it is a refusal, and it answers as one.
+            const refusal = backendUpstreamRefusal(result?.text);
+            if (refusal) {
+              res.writeHead(502, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: { message: refusal, code: 'upstream_error' } }));
+              return;
+            }
             const hasContent = Boolean(result?.text && result.text.trim())
               || Boolean(result?.message?.tool_calls?.length);
             if (!hasContent) {
