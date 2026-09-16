@@ -80,6 +80,59 @@ describe('the fleet constellation model', () => {
     expect(bot?.badges).toContainEqual({ label: '2 approvals', tone: 'danger' });
   });
 
+  test('failed runs count as a failure badge, in the scorecard\'s own fold', () => {
+    const model = constellationModel({
+      profiles: [{ id: 'gw-home', name: 'Home' }],
+      connectedGatewayId: 'gw-home',
+      roster: [
+        { id: 'scout', displayName: 'Scout' },
+        { id: 'night', displayName: 'Night' },
+      ],
+      activityRuns: [
+        { id: 'r1', botId: 'scout', status: 'failed' },
+        { id: 'r2', botId: 'scout', status: 'failed' },
+        { id: 'r3', botId: 'scout', status: 'running' },
+      ],
+    });
+
+    const scout = model.nodes.find((node) => node.kind === 'bot' && node.botId === 'scout');
+    const night = model.nodes.find((node) => node.kind === 'bot' && node.botId === 'night');
+    expect(scout?.badges).toContainEqual({ label: '2 failed', tone: 'danger' });
+    expect(scout?.badges).toContainEqual({ label: 'Running', tone: 'accent' });
+    // A Bot with no facts gets no badge rather than a neutral-looking one.
+    expect(night?.badges).toEqual([]);
+  });
+
+  test('a cancelled or unresolved run is not a failure; a Bot it belongs to shows no failure badge', () => {
+    const model = constellationModel({
+      profiles: [{ id: 'gw-home', name: 'Home' }],
+      connectedGatewayId: 'gw-home',
+      roster: [{ id: 'scout', displayName: 'Scout' }],
+      activityRuns: [
+        { id: 'r1', botId: 'scout', status: 'cancelled' },
+        { id: 'r2', botId: 'scout', status: 'unresolved' },
+      ],
+    });
+
+    const bot = model.nodes.find((node) => node.kind === 'bot');
+    expect(bot?.badges.some((badge) => badge.label.includes('failed'))).toBe(false);
+  });
+
+  test('a run naming no Bot, or a Bot off the roster, is attributed to nobody', () => {
+    const model = constellationModel({
+      profiles: [{ id: 'gw-home', name: 'Home' }],
+      connectedGatewayId: 'gw-home',
+      roster: [{ id: 'scout', displayName: 'Scout' }],
+      activityRuns: [
+        { id: 'r1', status: 'failed' },
+        { id: 'r2', botId: 'ghost', status: 'failed' },
+      ],
+    });
+
+    const bot = model.nodes.find((node) => node.kind === 'bot');
+    expect(bot?.badges.some((badge) => badge.label.includes('failed'))).toBe(false);
+  });
+
   test('positions are finite and deterministic for one input', () => {
     const input = {
       profiles: [

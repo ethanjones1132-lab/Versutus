@@ -109,6 +109,16 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
   // A live run and its Bot: the map shows what each star is doing, one
   // running name at most per Bot — the newest run wins, order is the input's.
   const runningRuns = new Map<string, string>();
+  // The failure count per Bot is the same per-run status the scorecard's
+  // `scorecardFate` reads: only `failed` counts, never cancelled (the
+  // operator's own stop), unresolved (a fate never learned) or anything
+  // unsettled. A run naming no Bot lands nowhere — the same discipline the
+  // scorecard applies to a row with no `botId`.
+  const failuresByBot = new Map<string, number>();
+  for (const run of input.activityRuns ?? []) {
+    if (run.status !== 'failed' || typeof run.botId !== 'string' || !run.botId) continue;
+    failuresByBot.set(run.botId, (failuresByBot.get(run.botId) ?? 0) + 1);
+  }
   for (const run of input.activityRuns ?? []) {
     if (run.status !== 'running' || typeof run.botId !== 'string' || !run.botId) continue;
     if (!runningRuns.has(run.botId)) runningRuns.set(run.botId, '');
@@ -189,6 +199,17 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
       if (runningBots.has(bot.id)) {
         botBadges.push({ label: 'Running', tone: 'accent' });
         runningRunName = runningRuns.get(bot.id) || undefined;
+      }
+      // The failed-count badge: the same run-derived fact the Activity
+      // scorecard folds (`only a run this device saw reached `failed``), so
+      // the map and that card cannot disagree about what a failure is. A
+      // Bot with no failed runs gets no badge rather than a `0 failed` one.
+      const failures = failuresByBot.get(bot.id) ?? 0;
+      if (failures > 0) {
+        botBadges.push({
+          label: `${failures} failed`,
+          tone: 'danger',
+        });
       }
       const approvals = approvalsByBot.get(bot.id) ?? 0;
       approvalsTotal += approvals;
