@@ -52,6 +52,9 @@ class HandsfreeCallService : Service() {
 
   private var recognizer: SpeechRecognizer? = null
   private var listening = false
+
+  /** When listening last started (elapsedRealtime), for [HandsfreeFocusPolicy]. */
+  private var listenStartedAtMs = 0L
   private var stopRequested = false
   private val endpoints = HandsfreeEndpointing()
   private var currentPartial: String = ""
@@ -87,13 +90,15 @@ class HandsfreeCallService : Service() {
     get() = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
   private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
-    when (change) {
-      AudioManager.AUDIOFOCUS_LOSS,
-      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> handleFocusLoss()
-      // A notification chime or a navigation prompt ducks the call; it is not a
-      // reason to end it. A phone call still ends it (the product contract says
-      // a call never resumes itself after a system call).
-      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> Unit
+    // The recognizer the call itself starts takes transient focus, so a loss
+    // is judged by when it lands (HandsfreeFocusPolicy). A duck never ends the
+    // call; a phone call or another app still does.
+    val msSinceListenStart =
+      if (listening) SystemClock.elapsedRealtime() - listenStartedAtMs else null
+    if (HandsfreeFocusPolicy.endsCall(change, msSinceListenStart)) {
+      handleFocusLoss()
+    } else if (change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+      Log.i(TAG, "focus loss ${msSinceListenStart}ms after listen start is the recognizer's own; call continues")
     }
   }
 
@@ -336,7 +341,8 @@ class HandsfreeCallService : Service() {
     stopRequested = false
     listening = true
     currentPartial = ""
-    endpoints.begin(SystemClock.elapsedRealtime())
+    listenStartedAtMs = SystemClock.elapsedRealtime()
+    endpoints.begin(listenStartedAtMs)
     try {
       engine.startListening(buildRecognizerIntent())
       postNotification()
