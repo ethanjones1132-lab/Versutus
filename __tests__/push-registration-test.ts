@@ -9,6 +9,7 @@ import { Platform } from 'react-native';
 
 import * as Notifications from 'expo-notifications';
 import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
+import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 
 import {
   deregisterWithGate,
@@ -36,6 +37,13 @@ jest.mock('@/lib/storage/secure-key-value', () => ({
   },
 }));
 
+jest.mock('@/lib/gateway/device-identity', () => ({
+  loadOrCreateDeviceIdentity: jest.fn(),
+}));
+
+const mockIdentity = loadOrCreateDeviceIdentity as jest.Mock;
+const DEVICE_ID = 'a'.repeat(64);
+
 const STORE_KEY = 'versutus:expo-push-token:v1';
 
 const mockGet = secureKeyValueStorage.getItem as jest.Mock;
@@ -50,6 +58,7 @@ function rpcStub(): { rpcRequest: jest.Mock } {
 
 describe('push registration', () => {
   beforeEach(() => {
+    mockIdentity.mockResolvedValue({ deviceId: DEVICE_ID });
     jest.clearAllMocks();
     mockGet.mockResolvedValue(null);
     mockSet.mockResolvedValue(undefined);
@@ -70,7 +79,25 @@ describe('push registration', () => {
       expoPushToken: 'ExponentPushToken[abc]',
       platform: Platform.OS,
       timezone: expect.any(String),
+      // The Gate lets a bootstrap-token phone register only under its own
+      // device id; without it every registration was refused (2026-09-16).
+      deviceId: DEVICE_ID,
     });
+  });
+
+  test('deregistering names the same device', async () => {
+    const rpc = rpcStub();
+    await deregisterWithGate(rpc);
+    expect(rpc.rpcRequest).toHaveBeenCalledWith('notifications.deregister', { deviceId: DEVICE_ID });
+  });
+
+  test('an unreadable device identity still registers, just without the id', async () => {
+    mockIdentity.mockRejectedValueOnce(new Error('secure store unavailable'));
+    const rpc = rpcStub();
+    await registerWithGate(rpc, 'ExponentPushToken[abc]');
+    const params = rpc.rpcRequest.mock.calls[0][1];
+    expect(params.expoPushToken).toBe('ExponentPushToken[abc]');
+    expect(params.deviceId).toBeUndefined();
   });
 
   test('a rotated token is written to secure storage, then registered', async () => {
@@ -138,7 +165,7 @@ describe('push registration', () => {
 
     await deregisterWithGate(rpc);
 
-    expect(rpc.rpcRequest).toHaveBeenCalledWith('notifications.deregister');
+    expect(rpc.rpcRequest).toHaveBeenCalledWith('notifications.deregister', { deviceId: DEVICE_ID });
   });
 
   test('loadStoredExpoPushToken reads the persisted key', async () => {
@@ -146,5 +173,17 @@ describe('push registration', () => {
 
     await expect(loadStoredExpoPushToken()).resolves.toBe('ExponentPushToken[stored]');
     expect(mockGet).toHaveBeenCalledWith(STORE_KEY);
+  });
+});
+
+describe('every notification call a bootstrap-token phone makes names its device', () => {
+  test('the preferences hook sends the device id on get, set and test', () => {
+    const nodeFs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
+    const path = jest.requireActual('path') as { join(...parts: string[]): string };
+    const hook = nodeFs.readFileSync(path.join(__dirname, '..', 'src', 'hooks', 'use-notification-preferences.ts'), 'utf8');
+    expect(hook).toContain("'notifications.preferences.get', await pushDeviceParams()");
+    expect(hook).toContain("'notifications.test', await pushDeviceParams()");
+    const setCall = hook.slice(hook.indexOf("'notifications.preferences.set'"));
+    expect(setCall.slice(0, setCall.indexOf('});'))).toContain('...(await pushDeviceParams())');
   });
 });

@@ -14,6 +14,7 @@ import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
+import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
 import { registerWidgetPushTask } from '@/lib/widget/widget-push-task';
 
@@ -83,17 +84,37 @@ export async function obtainExpoPushToken(): Promise<string | null> {
 }
 
 /** Hand one token to the Gate under the paired device's own grant. */
+/**
+ * This device's stable id for the Gate's push rows.
+ *
+ * A paired device grant already names the device, and the Gate ignores this
+ * for it. A phone connected with the Gate's bootstrap token has no grant, so
+ * the Gate refused every notifications.* call 403 pairing_required — and push
+ * could never reach the phone, however often notifications were allowed
+ * (2026-09-16). The Gate files a bootstrap caller's row under this id in its
+ * own namespace. An unreadable identity sends nothing rather than failing.
+ */
+export async function pushDeviceParams(): Promise<{ deviceId?: string }> {
+  try {
+    const { deviceId } = await loadOrCreateDeviceIdentity();
+    return deviceId ? { deviceId } : {};
+  } catch {
+    return {};
+  }
+}
+
 export async function registerWithGate(rpc: Rpc, token: string): Promise<void> {
   await rpc.rpcRequest('notifications.register', {
     expoPushToken: token,
     platform: Platform.OS,
     timezone: deviceTimezone(),
+    ...(await pushDeviceParams()),
   });
 }
 
 /** Tell the Gate to drop this device's token. */
 export async function deregisterWithGate(rpc: Rpc): Promise<void> {
-  await rpc.rpcRequest('notifications.deregister');
+  await rpc.rpcRequest('notifications.deregister', await pushDeviceParams());
 }
 
 /** Obtain the token and register it; a device with no token asks for nothing. */

@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from 'react';
 import * as Notifications from 'expo-notifications';
 
 import { useGateway } from '@/context/gateway-provider';
-import { syncPushRegistration } from '@/lib/notifications/push-registration';
+import { pushDeviceParams, syncPushRegistration } from '@/lib/notifications/push-registration';
 
 export type NotificationPreferences = {
   enabled: boolean;
@@ -77,7 +77,7 @@ export function useNotificationPreferences() {
     setLoading(true);
     setError(null);
     try {
-      const raw = await gatewayRequest<Record<string, unknown>>('notifications.preferences.get', {});
+      const raw = await gatewayRequest<Record<string, unknown>>('notifications.preferences.get', await pushDeviceParams());
       setPrefs(normalize(raw));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load notification preferences.');
@@ -100,6 +100,8 @@ export function useNotificationPreferences() {
       try {
         const raw = await gatewayRequest<Record<string, unknown>>('notifications.preferences.set', {
           ...(patch as Record<string, unknown>),
+          // The row a bootstrap-token phone owns is filed under its device id.
+          ...(await pushDeviceParams()),
         });
         setPrefs(normalize(raw));
       } catch (err) {
@@ -152,7 +154,7 @@ export function useNotificationPreferences() {
     setTestResult(null);
     setError(null);
     try {
-      const result = (await gatewayRequest<Record<string, unknown>>('notifications.test', {})) as {
+      const result = (await gatewayRequest<Record<string, unknown>>('notifications.test', await pushDeviceParams())) as {
         skipped?: string;
         ok?: boolean;
       };
