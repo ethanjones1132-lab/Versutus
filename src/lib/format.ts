@@ -1,11 +1,10 @@
-/** Small display formatters shared across chat, home, and activity surfaces. */
-
-/** 1200 → "1.2k", 2500000 → "2.5M" */
+/** 1200 → "1.2k", 2500000 → "2.5M", 1200000000 → "1.2B" */
 export function formatTokenCount(count: number): string {
   if (!Number.isFinite(count) || count < 0) return '0';
   if (count < 1000) return String(Math.round(count));
   if (count < 1_000_000) return `${(count / 1000).toFixed(count < 10_000 ? 1 : 0)}k`;
-  return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count < 1_000_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  return `${(count / 1_000_000_000).toFixed(1)}B`;
 }
 
 /** 0.0042 → "$0.0042", 1.2 → "$1.20" */
