@@ -63,8 +63,33 @@ class WidgetPayloadTest {
     assertEquals(emptyList<WidgetBot>(), parsed.payload.bots)
   }
 
-  @Test fun `a newer version asks for an app update instead of guessing`() {
-    assertEquals(WidgetPayload.Parsed.NeedsUpdate, WidgetPayload.parse("""{"v":3,"anything":true}"""))
+  @Test fun `a v3 payload carries its routine tallies`() {
+    val parsed = WidgetPayload.parse(
+      """{"v":3,"status":"Connected","connected":true,"work":"w","approvalsPending":0,"writtenAt":5,"routinesFailing":2,"routinesLate":1}""",
+    ) as WidgetPayload.Parsed.Ok
+    assertEquals(2, parsed.payload.routinesFailing)
+    assertEquals(1, parsed.payload.routinesLate)
+  }
+
+  @Test fun `a v3 payload without tallies carries none, and negative ones clamp to zero`() {
+    val plain = WidgetPayload.parse(
+      """{"v":3,"status":"Connected","connected":true,"work":"w","approvalsPending":0,"writtenAt":5}""",
+    ) as WidgetPayload.Parsed.Ok
+    assertEquals(0, plain.payload.routinesFailing)
+    assertEquals(0, plain.payload.routinesLate)
+    val negative = WidgetPayload.parse(
+      """{"v":3,"status":"Connected","connected":true,"work":"w","approvalsPending":0,"writtenAt":5,"routinesFailing":-2,"routinesLate":-1}""",
+    ) as WidgetPayload.Parsed.Ok
+    assertEquals(0, negative.payload.routinesFailing)
+    assertEquals(0, negative.payload.routinesLate)
+  }
+
+  @Test fun `a v3 payload missing the required fields is invalid, still an app-side refusal`() {
+    assertEquals(WidgetPayload.Parsed.Invalid, WidgetPayload.parse("""{"v":3,"anything":true}"""))
+  }
+
+  @Test fun `a version beyond the card's own asks for an app update instead of guessing`() {
+    assertEquals(WidgetPayload.Parsed.NeedsUpdate, WidgetPayload.parse("""{"v":4,"anything":true}"""))
   }
 
   @Test fun `junk, missing fields and a non-finite stamp are refused`() {

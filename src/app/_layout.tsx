@@ -424,6 +424,18 @@ function GatewayDeepLinkRouter() {
       return;
     }
 
+    // An activity link (the Home widget's routine-tally row is the one
+    // producer today) lands the operator where the cron jobs live — the same
+    // scheduled-work surface a routine notice routes a tap to, minus the
+    // named run or reply a notice may carry. The link names nothing else, so
+    // nothing else is asked for: no draft, no cursor, no thread open on top.
+    if (target.kind === 'activity') {
+      if (status !== 'connected') return;
+      handledRef.current = url;
+      router.navigate('/activity');
+      return;
+    }
+
     // A compose link (item 5's shared text) carries words rather than an open:
     // it brings the Chat tab up and hands the text to the screen, which is
     // where a thread's draft lives. Where the link names a Bot it opens that

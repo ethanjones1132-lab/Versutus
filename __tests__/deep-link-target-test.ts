@@ -232,10 +232,20 @@ describe('deepLinkTarget (the app link vocabulary)', () => {
     expect(deepLinkTarget('call/', {})).toBeNull();
   });
 
+  test('an activity link is a target even with no query, and a repeated value is dropped', () => {
+    expect(deepLinkTarget('activity', {})).toEqual({ kind: 'activity' });
+    expect(deepLinkTarget('/activity', {})).toEqual({ kind: 'activity' });
+    expect(deepLinkTarget('activity', { bot: 'scout', whatever: 'x' })).toEqual({
+      kind: 'activity',
+    });
+  });
+
   test('every other path is nothing at all', () => {
     expect(deepLinkTarget('settings', { bot: 'scout' })).toBeNull();
     // The vocabulary is case-sensitive and has no trailing-slash spelling:
     // an unrecognized path is a no-op, not a guess at the nearest one.
+    expect(deepLinkTarget('ACTIVITY', {})).toBeNull();
+    expect(deepLinkTarget('activity/', {})).toBeNull();
     expect(deepLinkTarget('CHAT', { bot: 'scout' })).toBeNull();
     expect(deepLinkTarget('chat/', { bot: 'scout' })).toBeNull();
     expect(deepLinkTarget('COMPOSE', { text: 'hi' })).toBeNull();
@@ -440,6 +450,19 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
     expect(screen).toContain('setCallSheetVisible(true)');
   });
 
+  test('an activity link lands on the Activity tab, and nothing on the way can send', () => {
+    const src = routerSource();
+    const activity = src.slice(
+      src.indexOf("if (target.kind === 'activity')"),
+      src.indexOf('// A Bot Chat link opens the way a roster tap opens one'),
+    );
+
+    expect(activity.length).toBeGreaterThan(0);
+    expect(activity).toContain("router.navigate('/activity')");
+    // The scheduled-work surface is where the cron jobs live; a link lands the
+    // operator there and takes no further action — no draft, no thread open.
+  });
+
   test('every target the fold answers has a branch, and none of them sends', () => {
     const src = routerSource();
 
@@ -447,16 +470,18 @@ describe('GatewayDeepLinkRouter routes on that target', () => {
     // a draft the operator reviews. No branch of this router sends it.
     expect(src).not.toContain('sendChatInput');
 
-    // The fold answers four targets and each has a branch of its own, in that
+    // The fold answers five targets and each has a branch of its own, in that
     // order: no target can fall through unhandled and ride the union's Bot id
     // into `openBot` — the guard that stood in for the compose branch while it
     // was a later slice has nothing left to hold back.
     const add = src.indexOf("if (target.kind === 'add')");
+    const activity = src.indexOf("if (target.kind === 'activity')");
     const compose = src.indexOf("if (target.kind === 'compose')");
     const call = src.indexOf("if (target.kind === 'call')");
     const chat = src.indexOf('// A Bot Chat link opens the way a roster tap opens one');
     expect(add).toBeGreaterThan(-1);
-    expect(compose).toBeGreaterThan(add);
+    expect(activity).toBeGreaterThan(add);
+    expect(compose).toBeGreaterThan(activity);
     expect(call).toBeGreaterThan(compose);
     expect(chat).toBeGreaterThan(call);
     expect(src).not.toContain("if (target.kind !== 'chat') return;");

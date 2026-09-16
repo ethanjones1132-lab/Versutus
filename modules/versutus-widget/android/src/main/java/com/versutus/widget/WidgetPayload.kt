@@ -9,7 +9,7 @@ data class WidgetRun(val title: String, val state: String)
 /** One quick-launch Bot: the id to open, and the name to draw. */
 data class WidgetBot(val id: String, val label: String)
 
-/** The v1 and v2 payloads the JS side writes; see VersutusWidget.types.ts. */
+/** The v1, v2 and v3 payloads the JS side writes; see VersutusWidget.types.ts. */
 data class WidgetPayload(
   val status: String,
   val connected: Boolean,
@@ -19,6 +19,9 @@ data class WidgetPayload(
   val writtenAt: Long,
   val runs: List<WidgetRun> = emptyList(),
   val bots: List<WidgetBot> = emptyList(),
+  /** Version 3: the routine warn tallies. Zero on both counts means silent. */
+  val routinesFailing: Int = 0,
+  val routinesLate: Int = 0,
   val redact: Boolean = false,
 ) {
   sealed interface Parsed {
@@ -34,7 +37,7 @@ data class WidgetPayload(
         val o = JSONObject(json)
         val version = o.optInt("v", -1)
         when (version) {
-          1, 2 -> Unit
+          1, 2, 3 -> Unit
           -1 -> return Parsed.Invalid
           else -> return Parsed.NeedsUpdate
         }
@@ -48,8 +51,15 @@ data class WidgetPayload(
         val result = o.optString("result", "").takeIf { it.isNotBlank() }
         val runs = if (version >= 2) parseRuns(o.optJSONArray("runs")) else emptyList()
         val bots = if (version >= 2) parseBots(o.optJSONArray("bots")) else emptyList()
+        // A count the app never wrote reads as silent rather than negative:
+        // the JS side clamps before it writes, so only hand-mangled state
+        // gets here, and a negative tally would word itself as a debt.
+        val routinesFailing = if (version >= 3) o.optInt("routinesFailing", 0).coerceAtLeast(0) else 0
+        val routinesLate = if (version >= 3) o.optInt("routinesLate", 0).coerceAtLeast(0) else 0
         val redact = o.optBoolean("redact", false)
-        Parsed.Ok(WidgetPayload(status, o.getBoolean("connected"), work, result, approvals, writtenAt, runs, bots, redact))
+        Parsed.Ok(
+          WidgetPayload(status, o.getBoolean("connected"), work, result, approvals, writtenAt, runs, bots, routinesFailing, routinesLate, redact),
+        )
       } catch (_: Exception) {
         Parsed.Invalid
       }

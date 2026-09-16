@@ -121,6 +121,10 @@ private fun Lines(payload: WidgetPayload, variant: WidgetVariant, pinned: String
       Line("${run.title} — ${run.state}")
     }
   }
+  if (variant != WidgetVariant.TINY && payload.tallies()) {
+    Spacer(GlanceModifier.height(3.dp))
+    RoutineTalliesRow(payload)
+  }
   val bots = when {
     pinned == null -> payload.bots
     payload.bots.any { it.id == pinned } -> payload.bots.filter { it.id == pinned }
@@ -180,6 +184,32 @@ private fun DecideRow() {
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Line("Decide in Versutus", bold = true)
+  }
+}
+
+/** The routine tallies in the words [WidgetLinks.ACTIVITY_URI] is the way into. */
+internal fun routineTalliesCopy(failing: Int, late: Int): String {
+  val parts = ArrayList<String>(2)
+  if (failing > 0) parts.add("$failing failing")
+  if (late > 0) parts.add("$late late")
+  return parts.joinToString(" · ")
+}
+
+/** A payload whose tallies name something the row can answer. */
+internal fun WidgetPayload.tallies(): Boolean = routinesFailing > 0 || routinesLate > 0
+
+/** One routine-tallies row; the tap opens the scheduled-work surface, and decides nothing here. */
+@Composable
+private fun RoutineTalliesRow(payload: WidgetPayload) {
+  val context = LocalContext.current
+  Row(
+    modifier = GlanceModifier
+      .fillMaxWidth()
+      .clickable(actionStartActivity(openAppIntent(context, WidgetLinks.ACTIVITY_URI)))
+      .padding(vertical = 2.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Line(routineTalliesCopy(payload.routinesFailing, payload.routinesLate), bold = true)
   }
 }
 

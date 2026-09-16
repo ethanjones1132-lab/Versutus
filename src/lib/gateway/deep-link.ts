@@ -35,6 +35,7 @@ export type DeepLinkCallEngine = 'auto' | 'local' | 'codex' | 'phone';
 export type DeepLinkTarget =
   | { kind: 'add'; params: Record<string, string> }
   | { kind: 'chat'; botId: string }
+  | { kind: 'activity' }
   | { kind: 'compose'; text: string; botId?: string }
   | {
       kind: 'call';
@@ -94,6 +95,14 @@ export function deepLinkTarget(
       if (first !== undefined && first.length > 0) params[key] = first;
     }
     return { kind: 'add', params };
+  }
+
+  // An activity link (the Home widget's routine-tally row is the one producer)
+  // asks for the scheduled-work surface and names nothing else, so it carries
+  // no query of its own — an unrecognized spelling (`ACTIVITY`, a trailing
+  // slash) is still a no-op, the same rule every path here follows.
+  if (normalized === 'activity') {
+    return { kind: 'activity' };
   }
 
   if (normalized === 'chat') {
