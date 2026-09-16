@@ -5,6 +5,7 @@ import { StyleSheet, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 
 import { PulsingDot, statusColor } from '@/components/connection-badge';
+import { connectionErrorShown } from '@/lib/connection/stale-error';
 import { DiscoveredGatewayRow } from '@/components/discovered-gateway-row';
 import { CapabilityHive } from '@/components/gateway/capability-hive';
 import { ChannelStatusRow } from '@/components/gateway/channel-status-row';
@@ -263,7 +264,11 @@ export function GatewayHomeDashboard() {
           </PressableScale>
         ) : null}
 
-        {lastError ? (
+        {/* A connection failure the live connection has disproved is not shown:
+            the card names the gateway connection as affected and sends the
+            operator to replace the token, which a gateway that is answering has
+            not refused (stale-error.ts). */}
+        {connectionErrorShown(status, lastError) ? (
           <ErrorCard
             {...humanizeGatewayError(lastError)}
             retryLabel="Retry"

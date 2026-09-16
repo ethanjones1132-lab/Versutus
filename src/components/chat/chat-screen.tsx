@@ -1230,7 +1230,23 @@ export function ChatScreen() {
   // A call that ended without the operator ending it reopens the sheet with the
   // reason, so a failure is never a banner that silently disappears. The state
   // updates run on a microtask so they are not synchronous within the effect.
+  //
+  // `lastEndReason` lives in the provider and outlives this screen, so the end
+  // it names must be counted, not merely read: keyed on the value alone, this
+  // effect re-fires on every mount and re-announces an old end as news — on
+  // 2026-09-16 opening Chat raised the start sheet carrying "another app or a
+  // phone call took the audio" from a call that had ended much earlier. The
+  // ref adopts the provider's count on mount (that end has already been
+  // reported, or happened before this screen existed) and only a higher count
+  // is a new end.
+  const handledCallEndRef = useRef<number | null>(null);
   useEffect(() => {
+    if (handledCallEndRef.current === null) {
+      handledCallEndRef.current = handsfreeCallsEnded;
+      return;
+    }
+    if (handsfreeCallsEnded <= handledCallEndRef.current) return;
+    handledCallEndRef.current = handsfreeCallsEnded;
     if (!handsfreeLastEndReason) return;
     const copy = handsfreeEndReasonCopy(handsfreeLastEndReason);
     if (!copy) return;

@@ -290,3 +290,29 @@ describe('the sheet names the engine before consent', () => {
     expect(screen).toContain("transport: callEngine && callEngine.engine !== 'phone' ? 'gate' : 'phone'");
   });
 });
+
+describe('an ended call is announced once, not on every visit to Chat', () => {
+  test('the screen only reopens the sheet for an end it has not already reported', () => {
+    // Observed 2026-09-16: opening Chat re-raised the start sheet carrying
+    // "The call ended because another app or a phone call took the audio." from
+    // a call that had ended long before. `lastEndReason` lives in the provider
+    // and survives this screen, so an effect keyed only on its value re-fires
+    // on every mount and re-announces history as news.
+    //
+    // The guard is a count the screen has already handled: on mount it adopts
+    // the provider's current `callsEnded`, and only a HIGHER count is a new
+    // end worth surfacing.
+    expect(screen).toContain('handledCallEndRef');
+    expect(screen).toContain('handledCallEndRef.current === null');
+    expect(screen).toContain('handsfreeCallsEnded <= handledCallEndRef.current');
+  });
+
+  test('a genuinely new end still reopens the sheet with its reason', () => {
+    expect(screen).toContain('setCallError(copy)');
+    expect(screen).toContain('setCallSheetVisible(true)');
+    // The reducer clears the reason when the next call starts, so a reason only
+    // ever describes the call that just ended.
+    const session = readSource('src', 'lib', 'voice', 'handsfree-session.ts');
+    expect(session).toContain("phase: 'starting', lastEndReason: undefined");
+  });
+});
