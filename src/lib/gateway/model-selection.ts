@@ -234,17 +234,86 @@ export function resolveSendModel(
  * signal and count as available.
  */
 export function staleModelPin(
-  catalog: readonly { id: string; available?: boolean }[],
+  catalog: readonly { id: string; available?: boolean; providerId?: string }[],
   pinnedModel: string | undefined,
-): { pinned: string; fallback?: string } | null {
+  options: {
+    /**
+     * True when the catalogue lists EVERY provider its environment has — a
+     * Bot's Hermes catalogue does (`/api/model/options` enumerates configured
+     * providers). Only then does a missing provider condemn a pin; a partial
+     * catalogue elsewhere still proves nothing.
+     */
+    providersAuthoritative?: boolean;
+  } = {},
+): { pinned: string; fallback?: string; reason: 'unavailable' | 'unknown-provider' } | null {
   const pinned = pinnedModel?.trim();
   if (!pinned) return null;
+  const fallbackFor = () =>
+    catalog.find((entry) => entry.available !== false && !sameModelId(entry.id, pinned))?.id;
   const match = catalog.find((entry) => sameModelId(entry.id, pinned));
-  if (!match || match.available !== false) return null;
-  const fallback = catalog.find(
-    (entry) => entry.available !== false && !sameModelId(entry.id, pinned),
-  )?.id;
-  return { pinned, fallback };
+  if (match) {
+    return match.available === false ? { pinned, fallback: fallbackFor(), reason: 'unavailable' } : null;
+  }
+  // Absence alone condemns nothing: an older Hermes can answer a partial
+  // catalogue. But a pin naming a PROVIDER this catalogue does not have at all
+  // cannot run here. On 2026-09-16 a Bot carried "opencode-go/omen-alpha" from
+  // the Gate's provider list; its Hermes catalogue has no `opencode-go`, every
+  // turn failed, and the pin survived because the model was merely unlisted.
+  if (!options.providersAuthoritative) return null;
+  const pinnedProvider = providerOf(pinned);
+  if (!pinnedProvider) return null;
+  const providers = new Set(
+    catalog.map((entry) => entry.providerId ?? providerOf(entry.id)).filter((id): id is string => Boolean(id)),
+  );
+  if (providers.size === 0 || providers.has(pinnedProvider)) return null;
+  return { pinned, fallback: fallbackFor(), reason: 'unknown-provider' };
+}
+
+/**
+ * The system note a repaired (or unrepairable) pin leaves in the thread. The
+ * two reasons need different words: an unknown provider is a pin this Bot can
+ * never run, not a login that lapsed.
+ */
+export function stalePinNote(stale: {
+  pinned: string;
+  fallback?: string;
+  reason: 'unavailable' | 'unknown-provider';
+}): string {
+  const why =
+    stale.reason === 'unknown-provider'
+      ? 'this Bot has no such provider'
+      : 'its provider is not signed in on the host';
+  if (!stale.fallback) {
+    return stale.reason === 'unknown-provider'
+      ? `Pinned model ${stale.pinned} cannot run — ${why}, and its catalogue has no other model to switch to. Pick another model.`
+      : `Pinned model ${stale.pinned} cannot run — ${why}, and the catalog has no signed-in model to switch to. Sign in (run hermes model on the host) or pick another model.`;
+  }
+  return `Pinned model ${stale.pinned} cannot run — ${why}. Switched to ${stale.fallback}; a new session opens on the next send.`;
+}
+
+/**
+ * The model a first connect may pin as a profile's default, or undefined.
+ *
+ * Only a provider-only Gate needs one: its chats have nowhere else to go. A
+ * Gate that fronts backends routes chat through them (Hermes owns its models),
+ * and pinning its first PROVIDER model sent every turn that had lost its Bot to
+ * that provider instead of Hermes (2026-09-16).
+ */
+export function connectDefaultModel(
+  profile: { model?: string },
+  manifest: { backends?: readonly unknown[] },
+  providers: readonly { models?: readonly string[] }[],
+): string | undefined {
+  if (profile.model) return undefined;
+  if ((manifest.backends?.length ?? 0) > 0) return undefined;
+  const first = providers[0]?.models?.[0];
+  return typeof first === 'string' && first.length > 0 ? first : undefined;
+}
+
+/** The provider segment of a qualified "provider/model" id, if it has one. */
+function providerOf(id: string): string | undefined {
+  const separator = id.indexOf('/');
+  return separator > 0 ? id.slice(0, separator) : undefined;
 }
 
 /** One collapsible provider group in the picker's section list. */

@@ -84,7 +84,7 @@ import {
   environmentProbeFailureText,
   probeEnvironmentLifecycle,
 } from '@/lib/gateway/environment-probe';
-import { applyModelOverride, effectiveModel, modelSwitchAnnouncement, resolveSendModel, scopeModelsToBackend, shouldReleaseSessionForModel, staleModelPin, withSelectedModel } from '@/lib/gateway/model-selection';
+import { applyModelOverride, effectiveModel, modelSwitchAnnouncement, resolveSendModel, scopeModelsToBackend, shouldReleaseSessionForModel, staleModelPin, stalePinNote, withSelectedModel, connectDefaultModel } from '@/lib/gateway/model-selection';
 import {
   buildEarlyProbeUrls,
   dropAlreadyWavedCandidates,
@@ -165,10 +165,12 @@ import type {
   RunEvent,
 } from '@/lib/gateway/types';
 import {
+  addGatewayProfile,
   createGatewayProfile,
   loadActiveGatewayId,
   loadGateways,
   removeGateway,
+  repairDuplicateGateways,
   saveActiveGatewayId,
   upsertGateway,
 } from '@/lib/gateway/storage';
@@ -941,6 +943,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const authFailureRef = useRef(false);
 
   const clientRef = useRef<PortalClient | null>(null);
+  // The stored-pin repair, shared by the connect path and a landed Bot Chat
+  // open. Bot pins live per Bot, so checking only at connect (when usually no
+  // Bot is selected yet) never looked at them: a Bot pinned to a provider its
+  // Hermes catalogue does not have kept failing every turn (2026-09-16).
+  const repairStalePinRef = useRef<
+    ((client: PortalClient, isCurrent: () => boolean, fallbackGateway: GatewayProfile | undefined) => Promise<void>) | null
+  >(null);
   /**
    * Bumped on every attach/teardown. Callbacks from a superseded client carry a
    * stale generation and are ignored, so a torn-down client cannot push status,
@@ -1280,9 +1289,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             source: 'manifest',
             identifiedAt: Date.now(),
           };
-          const firstModel = providers[0]?.models?.[0];
+          // Only a provider-only Gate gets a provider model pinned as its default;
+          // one fronting backends routes chat through them (connectDefaultModel).
+          const firstModel = connectDefaultModel(gateway, manifest, providers);
           const needsKind = gateway.kind !== 'custom';
-          const needsModel = !gateway.model && typeof firstModel === 'string' && firstModel.length > 0;
+          const needsModel = firstModel !== undefined;
           if (needsKind || needsModel) {
             const corrected = {
               ...gateway,
@@ -1491,53 +1502,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // else stops a send to the now-dead model. Re-validate the stored pin
       // against the live catalog off the connect path — a slow or failed
       // catalog read must not hold up or fail the connect.
-      void (async () => {
-        let catalog: Awaited<ReturnType<typeof client.getModels>>;
-        try {
-          catalog = await client.getModels();
-        } catch {
-          // An unreadable catalog says nothing about the pin — keep it.
-          return;
-        }
-        if (!isCurrent()) return;
-        const backendId = selectedBackendIdRef.current;
-        const botId = selectedBotIdRef.current;
-        // Validate the live profile, not the connect-time one — the operator
-        // may have re-picked while the catalog read was in flight.
-        const current = activeGatewayRef.current ?? gateway;
-        const stale = staleModelPin(catalog, effectiveModel(current, backendId, botId));
-        if (!stale) return;
-        if (!stale.fallback) {
-          setMessages((prev) =>
-            appendSystemNote(
-              prev,
-              `Pinned model ${stale.pinned} cannot run — its provider is not signed in on the host, and the catalog has no signed-in model to switch to. Sign in (run hermes model on the host) or pick another model.`,
-            ),
-          );
-          return;
-        }
-        const updated = withSelectedModel(current, stale.fallback, backendId, botId);
-        // Same release as selectModel: the open session is pinned to the dead
-        // model and a Hermes session cannot change its own, so the next send
-        // must open a fresh one on the fallback.
-        sessionIdRef.current = undefined;
-        setCurrentSessionId(undefined);
-        const pinnedProfile = pinLiveSession({
-          client: clientRef.current ?? { setSessionId: () => undefined },
-          sessionId: undefined,
-          profile: updated,
-        });
-        const next = pinnedProfile ?? updated;
-        activeGatewayRef.current = next;
-        setActiveGateway(next);
-        void upsertGateway(next).then(setGateways);
-        setMessages((prev) =>
-          appendSystemNote(
-            prev,
-            `Pinned model ${stale.pinned} cannot run — its provider is not signed in on the host. Switched to ${stale.fallback}; a new session opens on the next send.`,
-          ),
-        );
-      })();
+      void repairStalePinRef.current?.(client, isCurrent, gateway);
 
       // Fetch is cheap and idempotent; only a manifest-serving gate returns
       // providers[] at all, so this is a no-op against Hermes/OpenClaw.
@@ -1622,7 +1587,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           kind = identity.kind;
         }
       }
-      const profile = createGatewayProfile({
+      const created = createGatewayProfile({
         name: appSettings.pcName ?? discoveredMatch?.name ?? friendlyPcName(appSettings.tailscaleHost ?? 'Gateway'),
         url,
         token,
@@ -1634,7 +1599,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               ? 'local'
               : 'manual',
       });
-      const next = await upsertGateway(profile);
+      // A gateway already saved under this URL is updated, never duplicated (profile-dedupe.ts).
+      const { profile, gateways: next } = await addGatewayProfile(created);
       setGateways(next);
       return profile;
     },
@@ -1685,13 +1651,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         );
         if (wsBeacon) {
           setProbeMessage(`Connecting to ${wsBeacon.name}…`);
-          const profile = createGatewayProfile({
+          const created = createGatewayProfile({
             name: wsBeacon.name,
             url: wsBeacon.url,
             kind: 'openclaw',
             discoverySource: 'local',
           });
-          const next = await upsertGateway(profile);
+          // A gateway already saved under this URL is updated, never duplicated (profile-dedupe.ts).
+          const { profile, gateways: next } = await addGatewayProfile(created);
           setGateways(next);
           await saveAppSettings({ lastSuccessfulUrl: profile.url });
           setSettings((prev) => ({ ...prev, lastSuccessfulUrl: profile.url }));
@@ -1799,13 +1766,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const bootstrap = useCallback(async () => {
     try {
-      const [loadedSettings, loadedGateways, activeId, restoredQueue, restoredRuns] = await Promise.all([
+      const [loadedSettings, repairedGateways, restoredQueue, restoredRuns] = await Promise.all([
         loadAppSettings(),
-        loadGateways(),
-        loadActiveGatewayId(),
+        // Saved duplicates of one gateway collapse to the profile that can
+        // authenticate before anything connects (profile-dedupe.ts).
+        repairDuplicateGateways(),
         loadOfflineQueue(),
         loadActivityRuns(),
       ]);
+      const loadedGateways = repairedGateways.gateways;
+      const activeId = repairedGateways.activeId;
 
       setSettings(loadedSettings);
       setGateways(loadedGateways);
@@ -1872,8 +1842,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       agentId?: string;
       discoverySource?: GatewayProfile['discoverySource'];
     }) => {
-      const profile = createGatewayProfile(input);
-      const next = await upsertGateway(profile);
+      const created = createGatewayProfile(input);
+      // A gateway already saved under this URL is updated, never duplicated (profile-dedupe.ts).
+      const { profile, gateways: next } = await addGatewayProfile(created);
       setGateways(next);
 
       // Adding a gateway IS completing onboarding: without this, a first-run
@@ -3919,6 +3890,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         void upsertGateway(pinned).then(setGateways);
       }
       if (activeGateway) void reloadHistoryFor(activeGateway);
+      // A Bot's pin is only checkable once the Bot is selected: its catalogue is
+      // the Bot's Hermes catalogue, which lists every provider it has.
+      void repairStalePinRef.current?.(
+        client,
+        () => clientRef.current === client,
+        activeGatewayRef.current ?? activeGateway ?? undefined,
+      );
       // The Bot Chat is the session a send goes to now, so the open landed.
       return true;
     } catch (error) {
@@ -3932,6 +3910,56 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       throw error;
     }
   }, [activeGateway, reloadHistoryFor]);
+
+  useEffect(() => {
+    repairStalePinRef.current = async (client, isCurrent, fallbackGateway) => {
+      // A pin written while its provider was signed in outlives the login: the
+      // picker's lock only applies while the picker is open, so nothing else
+      // stops a send to the now-dead model. Re-validate the stored pin against
+      // the live catalogue off the connect path — a slow or failed catalogue
+      // read must not hold up or fail the connect.
+      let catalog: Awaited<ReturnType<typeof client.getModels>>;
+      try {
+        catalog = await client.getModels();
+      } catch {
+        // An unreadable catalogue says nothing about the pin — keep it.
+        return;
+      }
+      if (!isCurrent()) return;
+      const backendId = selectedBackendIdRef.current;
+      const botId = selectedBotIdRef.current;
+      // Validate the live profile, not the connect-time one — the operator may
+      // have re-picked while the catalogue read was in flight.
+      const current = activeGatewayRef.current ?? fallbackGateway;
+      if (!current) return;
+      const stale = staleModelPin(catalog, effectiveModel(current, backendId, botId), {
+        // A Bot's catalogue is its Hermes catalogue, which enumerates every
+        // configured provider; elsewhere absence still proves nothing.
+        providersAuthoritative: Boolean(botId),
+      });
+      if (!stale) return;
+      if (!stale.fallback) {
+        setMessages((prev) => appendSystemNote(prev, stalePinNote(stale)));
+        return;
+      }
+      const updated = withSelectedModel(current, stale.fallback, backendId, botId);
+      // Same release as selectModel: the open session is pinned to the dead
+      // model and a Hermes session cannot change its own, so the next send must
+      // open a fresh one on the fallback.
+      sessionIdRef.current = undefined;
+      setCurrentSessionId(undefined);
+      const pinnedProfile = pinLiveSession({
+        client: clientRef.current ?? { setSessionId: () => undefined },
+        sessionId: undefined,
+        profile: updated,
+      });
+      const next = pinnedProfile ?? updated;
+      activeGatewayRef.current = next;
+      setActiveGateway(next);
+      void upsertGateway(next).then(setGateways);
+      setMessages((prev) => appendSystemNote(prev, stalePinNote(stale)));
+    };
+  });
 
   const runTaskRef = useRef(runTask);
   useEffect(() => {

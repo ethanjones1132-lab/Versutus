@@ -1,3 +1,4 @@
+import { collapseDuplicateGateways, mergeIntoExistingGateway } from '@/lib/gateway/profile-dedupe';
 import { normalizeGatewayUrl } from '@/lib/gateway/url';
 import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
 
@@ -75,6 +76,43 @@ export async function removeGateway(id: string): Promise<GatewayProfile[]> {
     );
     await writeGateways(gateways);
     return gateways;
+  });
+}
+
+/**
+ * Add a profile, merging it into a saved profile for the same gateway rather
+ * than creating a second one (profile-dedupe.ts). Returns the profile that is
+ * actually stored — the caller must connect with THAT, not the one it built.
+ */
+export async function addGatewayProfile(
+  profile: GatewayProfile,
+): Promise<{ profile: GatewayProfile; gateways: GatewayProfile[] }> {
+  return enqueueStoreMutation(async () => {
+    const merged = mergeIntoExistingGateway(await loadGateways(), profile);
+    await writeGateways(merged.gateways);
+    return merged;
+  });
+}
+
+/**
+ * Collapse duplicate profiles already saved, once, at startup: keep the one
+ * that can authenticate and re-point the active id if it was a duplicate.
+ * Writes only when something actually changed.
+ */
+export async function repairDuplicateGateways(): Promise<{ gateways: GatewayProfile[]; activeId: string | null }> {
+  return enqueueStoreMutation(async () => {
+    const [gateways, activeId] = await Promise.all([
+      loadGateways(),
+      secureKeyValueStorage.getItem(ACTIVE_GATEWAY_KEY),
+    ]);
+    const collapsed = collapseDuplicateGateways(gateways, activeId);
+    if (collapsed.changed) {
+      await writeGateways(collapsed.gateways);
+      if (collapsed.activeId && collapsed.activeId !== activeId) {
+        await secureKeyValueStorage.setItem(ACTIVE_GATEWAY_KEY, collapsed.activeId);
+      }
+    }
+    return { gateways: collapsed.gateways, activeId: collapsed.activeId };
   });
 }
 

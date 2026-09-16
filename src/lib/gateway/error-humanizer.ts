@@ -27,6 +27,23 @@ export function humanizeGatewayError(error: unknown): HumanizedError {
     };
   }
 
+  // A model provider refusing the Gate's own upstream call arrives as
+  // "chat failed: <status>" (gate/core/providers/profiles/registry.mjs). It is
+  // not this device's gateway token: reading it as one sent the operator to
+  // replace a token that was working (2026-09-16).
+  const providerRefusal = /^(?:local provider )?chat failed: (\d{3})$/.exec(
+    (error instanceof Error ? error.message : String(error)).trim(),
+  );
+  if (providerRefusal) {
+    return {
+      title: 'Model provider refused the request',
+      cause: `The model provider behind this chat refused it (${providerRefusal[1]}). Your gateway connection is fine.`,
+      affected: 'this model',
+      next: 'Open a Bot, or pick a model from a provider that is signed in.',
+      action: 'dismiss',
+    };
+  }
+
   if (isAuthRejection(error)) {
     return {
       title: 'Gateway rejected the key',

@@ -2,6 +2,8 @@ import { effectiveModel, resolveSendModel, withSelectedModel,
   shouldReleaseSessionForModel, applyModelOverride,
   sameModelId, flattenHermesModelOptions, modelPickerName,
   staleModelPin,
+  stalePinNote,
+  connectDefaultModel,
 } from '@/lib/gateway/model-selection';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
@@ -270,6 +272,7 @@ describe('staleModelPin', () => {
     expect(staleModelPin(CATALOG, 'nous/poolside/laguna-xs-2.1:free')).toEqual({
       pinned: 'nous/poolside/laguna-xs-2.1:free',
       fallback: 'xai/grok-4.6',
+      reason: 'unavailable',
     });
   });
 
@@ -302,6 +305,7 @@ describe('staleModelPin', () => {
     expect(staleModelPin(allLocked, 'nous/poolside/laguna-xs-2.1:free')).toEqual({
       pinned: 'nous/poolside/laguna-xs-2.1:free',
       fallback: undefined,
+      reason: 'unavailable',
     });
   });
 });
@@ -337,5 +341,95 @@ describe('flattenHermesModelOptions', () => {
   it('is empty on a missing or empty catalog rather than throwing', () => {
     expect(flattenHermesModelOptions(undefined)).toEqual([]);
     expect(flattenHermesModelOptions({})).toEqual([]);
+  });
+});
+
+describe('a pin the catalogue cannot serve at all', () => {
+  // 2026-09-16: a Bot's picker was fed the Gate's provider catalogue, so
+  // "opencode-go/omen-alpha" was pinned onto a Hermes Bot. Hermes has no
+  // `opencode-go` provider (only `opencode-go-session`), every turn failed, and
+  // the repair kept the pin because the catalogue simply did not list it — the
+  // rule only condemned rows explicitly marked unavailable.
+  const hermesCatalog = [
+    { id: 'opencode-go-session/deepseek-v4-flash', providerId: 'opencode-go-session', available: true },
+    { id: 'kilo/glm-5.3', providerId: 'kilo', available: true },
+  ];
+
+  test("a pin whose provider this catalogue does not have is condemned, with a fallback", () => {
+    expect(staleModelPin(hermesCatalog, 'opencode-go/omen-alpha', { providersAuthoritative: true })).toEqual({
+      pinned: 'opencode-go/omen-alpha',
+      fallback: 'opencode-go-session/deepseek-v4-flash',
+      reason: 'unknown-provider',
+    });
+  });
+
+  test('a pin from a provider the catalogue has is kept even when the model is not listed', () => {
+    // An older Hermes can answer a partial catalogue; absence of one model from
+    // a provider it does serve proves nothing.
+    expect(staleModelPin(hermesCatalog, 'kilo/some-new-model', { providersAuthoritative: true })).toBeNull();
+  });
+
+  test('an explicitly unavailable pin still reads as unavailable', () => {
+    const catalog = [
+      { id: 'kilo/glm-5.3', providerId: 'kilo', available: false },
+      { id: 'opencode-go-session/deepseek-v4-flash', providerId: 'opencode-go-session', available: true },
+    ];
+    expect(staleModelPin(catalog, 'kilo/glm-5.3')).toEqual({
+      pinned: 'kilo/glm-5.3',
+      fallback: 'opencode-go-session/deepseek-v4-flash',
+      reason: 'unavailable',
+    });
+  });
+
+  test('an empty or bare-id catalogue condemns nothing it cannot judge', () => {
+    expect(staleModelPin([], 'opencode-go/omen-alpha', { providersAuthoritative: true })).toBeNull();
+    // A catalogue not known to be complete keeps the old caution: absence,
+    // even of a whole provider, proves nothing.
+    expect(staleModelPin(hermesCatalog, 'opencode-go/omen-alpha')).toBeNull();
+    expect(staleModelPin([{ id: 'deepseek-v4-flash' }], 'opencode-go/omen-alpha')).toBeNull();
+    expect(staleModelPin(hermesCatalog, 'deepseek-v4-flash')).toBeNull();
+  });
+});
+
+describe('the note a repaired pin leaves in the thread', () => {
+  test('an unknown provider says this Bot cannot run it, not that a login lapsed', () => {
+    const note = stalePinNote({ pinned: 'opencode-go/omen-alpha', fallback: 'opencode-go-session/deepseek-v4-flash', reason: 'unknown-provider' });
+    expect(note).toContain('opencode-go/omen-alpha');
+    expect(note).toContain('opencode-go-session/deepseek-v4-flash');
+    expect(note).not.toMatch(/signed in/);
+  });
+
+  test('an unavailable provider keeps the sign-in explanation', () => {
+    expect(stalePinNote({ pinned: 'kilo/glm-5.3', fallback: 'x/y', reason: 'unavailable' })).toMatch(/not signed in/);
+  });
+
+  test('with no fallback the note says what to do instead of switching', () => {
+    const note = stalePinNote({ pinned: 'opencode-go/omen-alpha', reason: 'unknown-provider' });
+    expect(note).toMatch(/pick another model/i);
+  });
+});
+
+describe('the model a first connect may pin as the default', () => {
+  const providers = [{ models: ['meta/llama-3.3-70b'] }];
+
+  test('a Gate that fronts backends gets no provider model pinned', () => {
+    // 2026-09-16: a first connect to a Gate fronting Hermes pinned the Gate's
+    // first PROVIDER model as the profile default, so any turn that lost its
+    // Bot went to that provider instead of Hermes.
+    expect(connectDefaultModel({ model: undefined }, { backends: [{ id: 'hermes-local' }] }, providers)).toBeUndefined();
+  });
+
+  test('a provider-only Gate still gets its first model as the default', () => {
+    expect(connectDefaultModel({ model: undefined }, { backends: [] }, providers)).toBe('meta/llama-3.3-70b');
+    expect(connectDefaultModel({ model: undefined }, {}, providers)).toBe('meta/llama-3.3-70b');
+  });
+
+  test('a profile that already has a model keeps it', () => {
+    expect(connectDefaultModel({ model: 'kilo/glm-5.3' }, {}, providers)).toBeUndefined();
+  });
+
+  test('no advertised model means nothing to pin', () => {
+    expect(connectDefaultModel({ model: undefined }, {}, [])).toBeUndefined();
+    expect(connectDefaultModel({ model: undefined }, {}, [{ models: [''] }])).toBeUndefined();
   });
 });

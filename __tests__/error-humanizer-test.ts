@@ -168,3 +168,24 @@ describe('describeGatewayError', () => {
     expect(describeGatewayError(undefined).length).toBeGreaterThan(0);
   });
 });
+
+describe('a refusal is attributed to whoever refused', () => {
+  // 2026-09-16: "chat failed: 401" is a MODEL PROVIDER refusing the Gate's call
+  // upstream. The app read any 401 as the gateway token and said "Open gateway
+  // setup and update the token" — sending the operator to replace a token that
+  // was working.
+  test("a provider's upstream refusal is not the gateway token", () => {
+    const providerRefusal = new GatewayHttpError('chat failed: 401', 401);
+    const result = humanizeGatewayError(providerRefusal);
+    expect(result.title).not.toBe('Gateway rejected the key');
+    expect(result.affected).not.toBe('gateway connection');
+    expect(result.cause).toMatch(/model provider/i);
+    expect(result.action).not.toBe('setup');
+    expect(humanizeGatewayError(new Error('chat failed: 403')).cause).toMatch(/model provider/i);
+  });
+
+  test("the Gate's own refusal of its token still reads as the gateway key", () => {
+    const gateRefusal = new GatewayHttpError('Bearer token required', 401);
+    expect(humanizeGatewayError(gateRefusal).title).toBe('Gateway rejected the key');
+  });
+});
