@@ -27,4 +27,16 @@ class WidgetStampTest {
   @Test fun `an unreadable stamp says so`() {
     assertEquals("Written at an unreadable time", WidgetStamp.line(Long.MIN_VALUE, 0L, zone, Locale.UK))
   }
+
+  @Test fun `a snapshot past the stated age is stale`() {
+    val twelveHours = 12L * 60 * 60 * 1000
+    val written = at(2026, 9, 12, 8, 0)
+    // One minute inside the stated age is still fresh; one hour past it is stale.
+    assertEquals(false, WidgetStamp.isStale(written, written + twelveHours - 60_000))
+    assertEquals(true, WidgetStamp.isStale(written, written + twelveHours + 60 * 60 * 1000))
+  }
+
+  @Test fun `an unreadable stamp is not stale`() {
+    assertEquals(false, WidgetStamp.isStale(Long.MIN_VALUE, 9_000_000_000L))
+  }
 }

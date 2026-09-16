@@ -99,6 +99,8 @@ private fun StatusCard(parsed: WidgetPayload.Parsed) {
 
 @Composable
 private fun Lines(payload: WidgetPayload, variant: WidgetVariant, pinned: String?) {
+  val stamp = WidgetStamp.line(payload.writtenAt, System.currentTimeMillis(), ZoneId.systemDefault(), Locale.getDefault())
+  val stale = WidgetStamp.isStale(payload.writtenAt, System.currentTimeMillis())
   if (variant == WidgetVariant.TINY) {
     Row(verticalAlignment = Alignment.CenterVertically) {
       Dot(payload.connected)
@@ -107,7 +109,11 @@ private fun Lines(payload: WidgetPayload, variant: WidgetVariant, pinned: String
     }
     return
   }
-  val stamp = WidgetStamp.line(payload.writtenAt, System.currentTimeMillis(), ZoneId.systemDefault(), Locale.getDefault())
+  if (stale) {
+    // A frozen card says when it froze, first and bold, before any line reads as live.
+    Line("$stamp — not updated since", bold = true)
+    Spacer(GlanceModifier.height(4.dp))
+  }
   Row(verticalAlignment = Alignment.CenterVertically) {
     Dot(payload.connected)
     Spacer(GlanceModifier.width(6.dp))
