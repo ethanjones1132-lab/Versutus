@@ -16,6 +16,12 @@ import {
   type DiagnosticsRead,
   type DiagnosticsState,
 } from '@/lib/gateway/diagnostics-read';
+import {
+  memoryStatusCopy,
+  memoryStatusFromUnknown,
+  memoryStatusTone,
+  type MemoryStatusState,
+} from '@/lib/gateway/memory-status';
 
 /**
  * Named checks from GET /health/detailed. This is the gateway's own
@@ -24,6 +30,10 @@ import {
 export function HealthChecksPane() {
   const { status, gatewayRequest, activeGateway } = useGateway();
   const [state, setState] = useState<DiagnosticsState & { gatewayId?: string }>(EMPTY_DIAGNOSTICS);
+  // The memory doctor rides the same read as the checks: one on-demand
+  // call when the pane loads, folded to one line below. Host-wide — it
+  // describes the gateway host's memory, not a single Bot.
+  const [memory, setMemory] = useState<{ state?: MemoryStatusState; gatewayId?: string }>({});
   const gatewayId = activeGateway?.id;
   const visible =
     status === 'connected' && !!gatewayId && healthChecksVisibleOn({ kind: activeGateway?.kind });
@@ -36,11 +46,22 @@ export function HealthChecksPane() {
         return { ...applyDiagnosticsRead(base, read), gatewayId };
       });
     };
+    const foldMemory = (read: unknown) => {
+      setMemory({ state: memoryStatusFromUnknown(read), gatewayId });
+    };
     try {
       const payload = await gatewayRequest('diagnostics.full');
       fold(diagnosticsReadFromUnknown(payload));
     } catch {
       fold({ ok: false });
+    }
+    // The doctor read rides on its own success/failure — a gateway that
+    // does not serve the method renders the unknown line, never silence
+    // dressed as healthy.
+    try {
+      foldMemory(await gatewayRequest('doctor.memory.status', {}));
+    } catch (read) {
+      foldMemory(read);
     }
   }, [gatewayId, gatewayRequest, visible]);
 
@@ -79,6 +100,18 @@ export function HealthChecksPane() {
       {!shown.loaded && shown.failed ? (
         <Button label="Retry" variant="ghost" size="sm" onPress={() => void load()} />
       ) : null}
+      {(() => {
+        const memoryState = memory.gatewayId === gatewayId ? memory.state : undefined;
+        if (!memoryState) return null;
+        return (
+          <View style={styles.memoryRow}>
+            <Badge label={memoryState.loaded ? memoryState.status ?? '' : '?'} tone={memoryStatusTone(memoryState)} />
+            <Text variant="micro" color="secondary" style={{ flexShrink: 1 }}>
+              {memoryStatusCopy(memoryState)}
+            </Text>
+          </View>
+        );
+      })()}
       {shown.checks.map((check, index) => {
         const row = healthCheckRowCopy(check);
         return (
@@ -105,4 +138,5 @@ const styles = StyleSheet.create({
   },
   row: { marginBottom: Spacing.one },
   gap: { marginTop: Spacing.two },
+  memoryRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
 });
