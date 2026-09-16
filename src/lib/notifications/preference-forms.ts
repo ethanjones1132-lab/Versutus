@@ -58,3 +58,48 @@ export function parseBotIdsInput(text: string): string[] {
 export function formatBotIds(ids: readonly string[]): string {
   return ids.join(', ');
 }
+
+/** One switch row: a roster Bot, or a stored id the roster does not know. */
+export type BotFilterRow =
+  | { kind: 'bot'; botId: string; displayName: string; enabled: boolean }
+  | { kind: 'unknown'; botId: string; enabled: true };
+
+/**
+ * Fold the roster and the stored allowlist into per-Bot switch rows. The Gate
+ * keeps an allowlist (empty = every Bot), so a stored id not on the roster is
+ * a name the operator remembers but the host does not — it stays visible as an
+ * "unknown" row with its own remove action rather than silently muting that
+ * Bot forever. Duplicate stored ids collapse onto their roster Bot.
+ */
+export function botFilterRows(bots: readonly { id: string; displayName: string }[], storedIds: readonly string[]): BotFilterRow[] {
+  const idSet = new Set(storedIds);
+  const rows: (BotFilterRow & { botId: string })[] = [];
+  for (const bot of bots) {
+    if (rows.some((row) => row.botId === bot.id)) continue;
+    rows.push({ kind: 'bot', botId: bot.id, displayName: bot.displayName, enabled: idSet.has(bot.id) });
+  }
+  for (const id of storedIds) {
+    if (!idSet.has(id) || rows.some((row) => row.botId === id)) continue;
+    rows.push({ kind: 'unknown', botId: id, enabled: true });
+  }
+  return rows;
+}
+
+export type BotFilterPatch = { botIds: string[] };
+
+/**
+ * Apply a switch toggle back onto the allowlist. Turning a row ON adds its id,
+ * turning it OFF removes it. An empty list means every Bot — switching any
+ * single Bot ON starts the explicit allowlist, not a filter that admits
+ * nobody else, and clearing the last ON switch returns to the empty
+ * (every-Bot) list.
+ */
+export function toggleBotFilter(rows: readonly BotFilterRow[], botId: string, value: boolean): BotFilterPatch {
+  const ids = rows
+    .filter((row) => row.enabled || (row.botId === botId && value))
+    .filter((row) => !(row.botId === botId && !value))
+    .map((row) => row.botId);
+  const seen = new Set(ids);
+  if (value) seen.add(botId);
+  return { botIds: [...seen] };
+}

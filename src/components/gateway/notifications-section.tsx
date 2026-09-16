@@ -9,11 +9,12 @@ import { StyleSheet, Switch, View } from 'react-native';
 import { Button, Card, Text, TextField } from '@/components/ui';
 import { useTokens } from '@/hooks/use-tokens';
 import { useNotificationPreferences } from '@/hooks/use-notification-preferences';
+import { useGateway } from '@/context/gateway-provider';
 import {
-  formatBotIds,
+  botFilterRows,
   formatMinutes,
-  parseBotIdsInput,
   parseQuietHoursInput,
+  toggleBotFilter,
 } from '@/lib/notifications/preference-forms';
 import { Spacing } from '@/constants/tokens';
 
@@ -36,7 +37,27 @@ export function NotificationsSection() {
   const [quietStart, setQuietStart] = useState('');
   const [quietEnd, setQuietEnd] = useState('');
   const [quietError, setQuietError] = useState<string | null>(null);
-  const [botText, setBotText] = useState('');
+
+  // The roster feeds the switch rows; a failed read shows the stored ids as
+  // unknowns rather than an empty filter that reads as "no Bots".
+  const { listBots } = useGateway();
+  const [rosterBots, setRosterBots] = useState<{ id: string; displayName: string }[]>([]);
+  useEffect(() => {
+    if (!connected) return;
+    let cancelled = false;
+    void listBots()
+      .then((bots) => {
+        if (!cancelled) setRosterBots(bots.map(({ id, displayName }) => ({ id, displayName })));
+      })
+      .catch(() => {
+        if (!cancelled) setRosterBots([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connected, listBots]);
+
+  const filterRows = botFilterRows(rosterBots, prefs.botIds);
 
   // The Gate is the authority: seed the fields from what it reports. Deferred
   // past the effect (the section pattern) so the seed cannot cascade renders.
@@ -44,10 +65,9 @@ export function NotificationsSection() {
     const timer = setTimeout(() => {
       setQuietStart(prefs.quietHours ? formatMinutes(prefs.quietHours.startMinutes) : '');
       setQuietEnd(prefs.quietHours ? formatMinutes(prefs.quietHours.endMinutes) : '');
-      setBotText(formatBotIds(prefs.botIds));
     }, 0);
     return () => clearTimeout(timer);
-  }, [prefs.quietHours, prefs.botIds]);
+  }, [prefs.quietHours]);
 
   if (!connected) {
     return (
@@ -69,8 +89,13 @@ export function NotificationsSection() {
     void setPatch({ quietHours: parsed.quietHours });
   };
 
-  const saveBotFilter = () => {
-    void setPatch({ botIds: parseBotIdsInput(botText) });
+  const saveBotFilter = (rows: Parameters<typeof toggleBotFilter>[0]) => {
+    // Row removals save immediately; there is no separate save button to lose
+    // a switch toggle behind.
+    return (botId: string, value: boolean) => {
+      const patch = toggleBotFilter(rows, botId, value);
+      void setPatch({ botIds: patch.botIds });
+    };
   };
 
   return (
@@ -166,16 +191,31 @@ export function NotificationsSection() {
       <Card variant="inset" padding={Spacing.three} style={styles.card}>
         <Text variant="headline">Bot filter</Text>
         <Text variant="caption" color="secondary">
-          Only these Bots&apos; replies and routines reach this device, comma-separated. Empty means every Bot.
-          Approvals and run results always come through.
+          Switch a Bot on to let its replies and routines reach this device. With every switch off, every Bot may
+          notify. Approvals and run results always come through.
         </Text>
-        <TextField
-          value={botText}
-          onChangeText={setBotText}
-          placeholder="scout, herald"
-          accessibilityLabel="Bot allowlist, comma-separated"
-        />
-        <Button label={saving ? 'Saving…' : 'Save Bot filter'} onPress={saveBotFilter} disabled={saving} />
+        {filterRows.map((row) => (
+          <View key={row.botId} style={styles.row}>
+            <Text variant="body" style={styles.filterName} numberOfLines={1}>
+              {row.kind === 'bot' ? row.displayName : row.botId}
+              {row.kind === 'unknown' ? (
+                <Text variant="caption" color="secondary">
+                  {' '}
+                  (unknown id)
+                </Text>
+              ) : null}
+            </Text>
+            <Switch
+              value={row.enabled}
+              onValueChange={(value) => saveBotFilter(filterRows)(row.botId, value)}
+              trackColor={{ true: tokens.accent, false: tokens.border }}
+              thumbColor={tokens.textPrimary}
+              disabled={saving}
+              accessibilityLabel={`Allow ${row.kind === 'bot' ? row.displayName : row.botId} notifications`}
+              accessibilityState={{ checked: row.enabled }}
+            />
+          </View>
+        ))}
       </Card>
 
       <Card variant="inset" padding={Spacing.three} style={styles.card}>
@@ -211,4 +251,5 @@ const styles = StyleSheet.create({
   eyebrow: { textTransform: 'uppercase' },
   timeRow: { flexDirection: 'row', gap: Spacing.two },
   timeField: { flex: 1, gap: 4 },
+  filterName: { flex: 1 },
 });
