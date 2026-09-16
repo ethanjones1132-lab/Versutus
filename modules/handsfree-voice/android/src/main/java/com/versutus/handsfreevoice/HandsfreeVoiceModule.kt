@@ -29,6 +29,8 @@ class HandsfreeVoiceModule : Module() {
       "noSpeech",
       "speechFinished",
       "interruption",
+      "interruptionPause",
+      "interruptionResume",
       "endRequested",
       "fatalError",
       "bargeIn",

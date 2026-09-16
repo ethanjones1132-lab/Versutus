@@ -26,6 +26,8 @@ const EVENTS = [
   'noSpeech',
   'speechFinished',
   'interruption',
+  'interruptionPause',
+  'interruptionResume',
   'endRequested',
   'fatalError',
   'bargeIn',
@@ -104,15 +106,65 @@ describe('hands-free native contract', () => {
   });
 
   it('emits every service-side event through the bridge', () => {
-    for (const event of ['partial', 'final', 'noSpeech', 'speechFinished', 'interruption', 'fatalError', 'bargeIn', 'level']) {
+    for (const event of [
+      'partial',
+      'final',
+      'noSpeech',
+      'speechFinished',
+      'interruption',
+      'interruptionPause',
+      'interruptionResume',
+      'fatalError',
+      'bargeIn',
+      'level',
+    ]) {
       expect(service).toContain(`emit("${event}"`);
     }
   });
 
   it('emits the iOS service-side events through sendEvent', () => {
-    for (const event of ['partial', 'final', 'noSpeech', 'speechFinished', 'interruption', 'fatalError', 'bargeIn', 'level']) {
+    for (const event of [
+      'partial',
+      'final',
+      'noSpeech',
+      'speechFinished',
+      'interruption',
+      'interruptionPause',
+      'interruptionResume',
+      'fatalError',
+      'bargeIn',
+      'level',
+    ]) {
       expect(swift).toContain(`emit("${event}"`);
     }
+  });
+
+  it('keeps the call alive through a transient audio focus loss (Android)', () => {
+    // Only the full AUDIOFOCUS_LOSS may end the call. The transient flavors
+    // pause and resume instead — ending on transient made every notification
+    // chime fatal (the every-call-fails hands-free diagnosis, 2026-09-14).
+    expect(service).toContain('AUDIOFOCUS_LOSS ->');
+    expect(service).toContain('handleTransientFocusLoss');
+    expect(service).toContain('AUDIOFOCUS_GAIN ->');
+    // The end reason may only be issued from the full-loss path.
+    expect(service).toContain('end("system-interruption")');
+  });
+
+  it('keeps the call alive through an iOS session interruption', () => {
+    // .began pauses via pauseActiveCapture; .ended + shouldResume restarts.
+    // The old code ended the call on every .began — same class of bug.
+    expect(swift).toContain('interruptionPause');
+    expect(swift).toContain('interruptionResume');
+    expect(swift).toContain('pauseActiveCapture');
+    expect(swift).toContain('shouldResume');
+  });
+
+  it('never opens the barge-in VAD while recognition owns the mic', () => {
+    // Concurrent capture is what makes Android revoke the audio: the VAD may
+    // only run during TTS playback, and recognition start must stop speech
+    // (and with it the VAD) before opening the recognizer.
+    expect(service).toMatch(/if \(!listening\) startBargeIn\(\)/);
+    expect(service).toMatch(/startListeningInternal\(\) \{[\s\S]*?if \(speaking\) \{[\s\S]*?stopBargeIn\(\)/);
   });
 
   it('reports the availability shape the call path reads', () => {

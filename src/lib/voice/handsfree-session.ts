@@ -76,6 +76,8 @@ export type HandsfreeEvent =
   | { type: 'bargeIn' }
   | { type: 'skipReply' }
   | { type: 'interruption' }
+  | { type: 'interruption-pause' }
+  | { type: 'interruption-resume' }
   | { type: 'endRequested' }
   | { type: 'fatalError'; reason: 'recognition-failed' | 'speech-failed' }
   | { type: 'mute' }
@@ -179,6 +181,11 @@ export function reduceHandsfreeSession(
   if (event.type === 'disconnect') return endCall(state, 'disconnect');
   if (event.type === 'thread-changed') return endCall(state, 'thread-changed');
   if (event.type === 'interruption') return endCall(state, 'system-interruption');
+  // A transient audio takeover (ding, clip) pauses the capture natively;
+  // the call stays alive and the phase rides it out rather than ending.
+  if (event.type === 'interruption-pause' || event.type === 'interruption-resume') {
+    return stay(state);
+  }
   if (event.type === 'fatalError') return endCall(state, event.reason);
 
   switch (phase) {

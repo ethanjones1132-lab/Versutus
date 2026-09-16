@@ -227,6 +227,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         module.addListener('interruption', () => {
           dispatch({ type: 'interruption' });
         }),
+        // Transient audio-focus takeovers pause natively and resume without
+        // ending: neither event is terminal (handsfree-session reducer).
+        module.addListener('interruptionPause', () => {}),
+        module.addListener('interruptionResume', () => {}),
         module.addListener('endRequested', () => {
           dispatch({ type: 'endRequested' });
         }),

@@ -42,6 +42,7 @@ public class HandsfreeVoiceModule: Module {
   private var lastLevelEmit: TimeInterval = 0
 
   private var interruptionObserver: NSObjectProtocol?
+  private var endedObserver: NSObjectProtocol?
   private var routeObserver: NSObjectProtocol?
 
   public func definition() -> ModuleDefinition {
@@ -53,6 +54,8 @@ public class HandsfreeVoiceModule: Module {
       "noSpeech",
       "speechFinished",
       "interruption",
+      "interruptionPause",
+      "interruptionResume",
       "endRequested",
       "fatalError",
       "bargeIn",
@@ -378,6 +381,20 @@ public class HandsfreeVoiceModule: Module {
     endpointing.reset()
   }
 
+  /** Silence recognition and speech while another app holds the session. */
+  private func pauseActiveCapture() {
+    if isListening { stopListeningLocked() }
+    if isSpeaking { stopSpeakingLocked() }
+  }
+
+  /** The session came back: recognition restarts, the speech queue is dropped. */
+  private func restartRecognition() {
+    audioQueue.async {
+      guard self.sessionActive, !self.isMuted else { return }
+      self.beginRecognition()
+    }
+  }
+
   // MARK: - Speech
 
   private func speakLocked(
@@ -481,8 +498,32 @@ public class HandsfreeVoiceModule: Module {
       else { return }
       self.audioQueue.async {
         guard self.sessionActive else { return }
-        self.emit("interruption", ["reason": "audio-session"])
-        self.end(reason: "system-interruption")
+        // iOS interruption.began is by design transient — the system hands
+        // the session back with .ended (and ShouldResume), so mirror the
+        // Android pause/resume path instead of ending the call.
+        self.emit("interruptionPause", ["reason": "audio-session"])
+        self.pauseActiveCapture()
+      }
+    }
+    endedObserver = center.addObserver(
+      forName: AVAudioSession.interruptionNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] note in
+      guard let self = self else { return }
+      guard
+        let info = note.userInfo,
+        let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+        let type = AVAudioSession.InterruptionType(rawValue: raw),
+        type == .ended
+      else { return }
+      let optionsRaw = (info?[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0
+      let options = AVAudioSession.InterruptionOptions(rawValue: optionsRaw)
+      guard options.contains(.shouldResume) else { return }
+      self.audioQueue.async {
+        guard self.sessionActive else { return }
+        self.emit("interruptionResume", ["reason": "audio-session-ended"])
+        self.restartRecognition()
       }
     }
     routeObserver = center.addObserver(
@@ -510,8 +551,10 @@ public class HandsfreeVoiceModule: Module {
   private func removeObservers() {
     let center = NotificationCenter.default
     if let observer = interruptionObserver { center.removeObserver(observer) }
+    if let observer = endedObserver { center.removeObserver(observer) }
     if let observer = routeObserver { center.removeObserver(observer) }
     interruptionObserver = nil
+    endedObserver = nil
     routeObserver = nil
   }
 

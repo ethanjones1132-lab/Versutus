@@ -82,10 +82,61 @@ class HandsfreeCallService : Service() {
 
   private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
     when (change) {
-      AudioManager.AUDIOFOCUS_LOSS,
+      // A full loss is final: the audio belongs to someone else now. A
+      // transient loss (a ding, a directions clip, CAN_DUCK) only pauses —
+      // recognition and speech resume on GAIN instead of killing the call.
+      // Ending on transient losses made every notification chime fatal
+      // (REC-2301, the every-call-fails diagnosis).
+      AudioManager.AUDIOFOCUS_LOSS -> {
+        android.util.Log.i(TAG, "audio focus LOSS -> end call")
+        handleFocusLoss()
+      }
       AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> handleFocusLoss()
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+        android.util.Log.i(TAG, "audio focus transient loss -> pause")
+        handleTransientFocusLoss()
+      }
+      AudioManager.AUDIOFOCUS_GAIN -> {
+        android.util.Log.i(TAG, "audio focus GAIN -> resume")
+        handleFocusGain()
+      }
     }
+  }
+
+  /** Silence everything while someone else holds the audio, stay alive. */
+  private fun handleTransientFocusLoss() {
+    emit("interruptionPause", mapOf("reason" to "audio-focus-transient"))
+    if (listening) {
+      listening = false
+      cancelTick()
+      try {
+        recognizer?.stopListening()
+      } catch (_: Exception) {
+      }
+    }
+    if (speaking) {
+      speechGeneration += 1
+      speaking = false
+      queuedSpeech.clear()
+      stopBargeIn()
+      try {
+        tts?.stop()
+      } catch (_: Exception) {
+      }
+    }
+  }
+
+  /** Focus came back: recognition restarts, the speech queue is dropped. */
+  private fun handleFocusGain() {
+    emit("interruptionResume", mapOf("reason" to "audio-focus-gain"))
+    restartIfActive()
+  }
+
+  private fun handleFocusLoss() {
+    // A final loss is not silently recovered into: another app or a phone
+    // call has the audio, and the operator must Start again.
+    emit("interruption", mapOf("reason" to "audio-focus"))
+    end("system-interruption")
   }
 
   override fun onCreate() {
@@ -250,6 +301,18 @@ class HandsfreeCallService : Service() {
 
   private fun startListeningInternal() {
     if (!state.isActive || state.muted || listening) return
+    // Recognition is about to own the mic: the barge-in VAD's second capture
+    // must exit first, or concurrent capture makes Android revoke the audio.
+    if (speaking) {
+      speechGeneration += 1
+      speaking = false
+      queuedSpeech.clear()
+      stopBargeIn()
+      try {
+        tts?.stop()
+      } catch (_: Exception) {
+      }
+    }
     val engine = ensureRecognizer()
     if (engine == null) {
       emit("fatalError", mapOf("reason" to "recognition-failed", "message" to "recognition-unavailable"))
@@ -478,8 +541,12 @@ class HandsfreeCallService : Service() {
     val generation = speechGeneration
     speaking = true
     queuedSpeech = chunks.toMutableList()
+    // Recognition owns the mic while listening: the barge-in VAD may only
+    // add a second capture during speech (the window barge-in is
+    // actually needed). Opening it during recognition is the concurrent-
+    // capture contention that makes Android revoke the audio permanently.
+    if (!listening) startBargeIn()
     playChunk(engine, generation, 0)
-    startBargeIn()
   }
 
   private fun playChunk(engine: TextToSpeech, generation: Long, index: Int) {
@@ -760,6 +827,7 @@ class HandsfreeCallService : Service() {
     const val ACTION_END = "com.versutus.handsfreevoice.action.END"
     const val EXTRA_TITLE = "com.versutus.handsfreevoice.extra.TITLE"
     private const val CHANNEL_ID = "handsfree-call"
+    const val TAG = "VersutusHandsfree"
     private const val NOTIFICATION_ID = 8401
     private const val TICK_MS = 200L
     private const val BUSY_RETRY_MS = 400L
