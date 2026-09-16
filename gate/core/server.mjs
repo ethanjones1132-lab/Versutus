@@ -42,6 +42,7 @@ import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
 import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest } from './signature.mjs';
 import { describeAuthFailure } from './auth-failure.mjs';
+import { unresolvedBackendResponse } from './backend-resolution.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
 
@@ -967,14 +968,20 @@ export async function createGate(config = {}) {
           if (!backend) return null;
           return requireBackendMethod(backend, method) ? backend : null;
         }
+        // A backend that fails to start is recorded, not forgotten: if nothing
+        // reachable implements the method, an outage must not be reported as
+        // "unsupported" (backend-resolution.mjs).
+        const failures = [];
         for (const entry of await backendManager.list()) {
-          const backend = await backendManager.get(entry.id).catch(() => null);
+          const backend = await backendManager.get(entry.id).catch((error) => {
+            failures.push({ id: entry.id, error });
+            return null;
+          });
           if (backend && typeof backend[method] === 'function') return backend;
         }
-        res.writeHead(501, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          error: { message: `No attached backend implements ${method}`, code: 'backend_unsupported' },
-        }));
+        const unresolved = unresolvedBackendResponse(method, failures);
+        res.writeHead(unresolved.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(unresolved.body));
         return null;
       }
 
