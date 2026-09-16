@@ -6,7 +6,12 @@ const globals = require("globals");
 module.exports = defineConfig([
   expoConfig,
   {
-    ignores: ["dist/*"],
+    // `dist/*` is build output. `.claude/**` and `.worktrees/**` are nested git
+    // worktrees other agents check out INSIDE this repo: a second copy of every
+    // source file, which the gate would otherwise lint, typecheck and run tests
+    // from. On 2026-09-16 one such worktree added 549 stale suites and 52
+    // failures to `npm run verify`, so every sprint iteration reset.
+    ignores: ["dist/*", ".claude/**", ".worktrees/**"],
   },
   {
     // The Gate is a Node service, not React Native. Without this it reported 60
