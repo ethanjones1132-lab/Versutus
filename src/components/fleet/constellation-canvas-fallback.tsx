@@ -1,5 +1,5 @@
 import { StyleSheet, View } from 'react-native';
-import Svg, { Circle, G, Line } from 'react-native-svg';
+import Svg, { Circle, G, Line, Path } from 'react-native-svg';
 
 import { useTokens } from '@/hooks/use-tokens';
 import {
@@ -36,7 +36,22 @@ export function ConstellationCanvasFallback({ model, size, height }: Constellati
   return (
     <View style={[styles.canvas, { width: size, height: boxHeight }]}>
       <Svg width={size} height={boxHeight}>
-        {layout.edges.map((edge) => (
+        {/* Host threads first, then the arcs — scheduled work reads as its own
+            class and never as a second host edge. */}
+        {layout.edges.map((edge) =>
+          edge.kind === 'routine' ? (
+            <Path
+              key={edge.id}
+              d={`M ${edge.x1} ${edge.y1} Q ${(edge.x1 + edge.x2) / 2} ${
+                (edge.y1 + edge.y2) / 2 - 18
+              } ${edge.x2} ${edge.y2}`}
+              fill="none"
+              stroke={tokens.accent as string}
+              strokeWidth={1.5}
+              opacity={0.55}
+              strokeDasharray="4 4"
+            />
+          ) : (
           <G key={edge.id}>
             <Line
               x1={edge.x1}
@@ -57,7 +72,8 @@ export function ConstellationCanvasFallback({ model, size, height }: Constellati
               opacity={0.5}
             />
           </G>
-        ))}
+          ),
+        )}
         {/* Live halos first, so stars paint over their own glow. */}
         {layout.nodes
           .filter((node) => node.live)

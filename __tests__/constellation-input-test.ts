@@ -1,5 +1,15 @@
 import { constellationModel } from '@/lib/fleet/constellation-model';
 import { fleetConstellationInput } from '@/lib/fleet/constellation-input';
+import type { CronJob } from '@/lib/gateway/cron';
+
+function job(overrides: Partial<CronJob> & { id: string }): CronJob {
+  return {
+    title: overrides.title ?? overrides.id,
+    name: overrides.name ?? null,
+    botId: overrides.botId ?? null,
+    ...overrides,
+  };
+}
 
 describe('fleetConstellationInput projects provider state onto the model input', () => {
   test('profiles pass through and a finite probe stamp becomes last seen', () => {
@@ -88,5 +98,34 @@ describe('fleetConstellationInput projects provider state onto the model input',
     expect(input.activityRuns).toEqual([]);
     expect(input.pendingApprovals).toEqual([]);
     expect(constellationModel(input).empty).toBe(true);
+  });
+});
+
+describe('the projection folds routine jobs into arcs', () => {
+  test('a connected mesh of jobs land on the model as routine arcs', () => {
+    const model = constellationModel(
+      fleetConstellationInput({
+        gateways: [{ id: 'gw-home', name: 'Home' }],
+        connectedGatewayId: 'gw-home',
+        roster: [{ id: 'scout', displayName: 'Scout' }],
+        cronJobs: [
+          job({ id: 'j1', name: '[bot:scout] every morning' }),
+          job({ id: 'j2', name: 'gateway sweep', botId: 'gateway' }),
+        ],
+      }),
+    );
+
+    expect(model.edges).toContainEqual({ from: 'gateway:gw-home', to: 'bot:gw-home:scout', kind: 'routine' });
+    expect(model.edges).toContainEqual({ from: 'gateway:gw-home', to: 'gateway:gw-home', kind: 'routine' });
+  });
+
+  test('no jobs arriving is no arcs at all, not a guessed empty roster', () => {
+    const input = fleetConstellationInput({
+      gateways: [{ id: 'gw-home' }],
+      connectedGatewayId: 'gw-home',
+      roster: [{ id: 'scout', displayName: 'Scout' }],
+    });
+    expect(input.cronJobs).toEqual([]);
+    expect(constellationModel(input).edges.filter((edge) => edge.kind === 'routine')).toEqual([]);
   });
 });

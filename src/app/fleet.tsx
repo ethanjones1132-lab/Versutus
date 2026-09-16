@@ -16,6 +16,9 @@ import { gatewayHandshake } from '@/lib/fleet/gateway-handshake';
 /** One stable empty roster, so a disconnected render keeps its memo. */
 const NO_ROSTER: PublicBot[] = [];
 
+/** One stable empty routine list, so a disconnected render keeps its memo. */
+const NO_ROUTINE_JOBS: import('@/lib/gateway/cron').CronJob[] = [];
+
 /**
  * D2's destination, rebuilt: the fleet as a living star map. It reads only
  * what the app already holds — the saved profiles, the connected gateway's
@@ -68,6 +71,15 @@ export default function FleetScreen() {
 
   const connectedRoster = status === 'connected' ? roster : NO_ROSTER;
 
+  // The connected gateway's routine read, through the provider state the
+  // widget write reads once per connected transition — one read, two
+  // surfaces. A failed read keeps the last list there (its staleness is
+  // sayable); a disconnected screen shows no arcs rather than a previous
+  // gateway's routines.
+  const { routineJobs } = useGateway();
+  const connectedRoutineJobs =
+    status === 'connected' ? routineJobs : NO_ROUTINE_JOBS;
+
   // Where an unroutable or disconnected tap lands: the Chat tab's roster,
   // which carries the detail surface naming the verdict and the fix. The
   // route owns navigation; the sheet lives there (chat-screen's detailBot),
@@ -111,6 +123,18 @@ export default function FleetScreen() {
           connectedGatewayId: status === 'connected' ? activeGateway?.id : undefined,
           reachability,
           roster: connectedRoster.map((bot) => ({ id: bot.id, displayName: bot.displayName })),
+          cronJobs: connectedRoutineJobs.map((job) => ({
+            id: job.id,
+            name: job.name ?? undefined,
+            title: job.title,
+            paused: job.paused ?? undefined,
+            running: job.running ?? undefined,
+            lastStatus: job.lastStatus ?? undefined,
+            lastError: job.lastError ?? undefined,
+            lastDeliveryError: job.lastDeliveryError ?? undefined,
+            cooldownReason: job.cooldownReason ?? undefined,
+            failureStreak: job.failureStreak ?? undefined,
+          })),
           activityRuns,
           pendingRunApproval,
         }),
@@ -121,6 +145,7 @@ export default function FleetScreen() {
       activeGateway?.id,
       reachability,
       connectedRoster,
+      connectedRoutineJobs,
       activityRuns,
       pendingRunApproval,
     ],

@@ -278,6 +278,14 @@ type GatewayContextValue = {
   selectedBotId: string | undefined;
   listBots: () => Promise<PublicBot[]>;
   /**
+   * The connected gateway's routine read (`cron.list()`), read once per
+   * connected transition for the widget write — the fleet map consumes the
+   * same state, so one read feeds both surfaces. A failed read keeps the
+   * last list; a disconnect does NOT clear it (the widget's rule), so the
+   * map masks it by status itself.
+   */
+  routineJobs: import('@/lib/gateway/cron').CronJob[];
+  /**
    * Whether this gateway can be asked for one Bot's own session catalogue.
    * P5's per-Bot spend section gates on it, so a gateway that could only
    * refuse the scoped read is never asked for one.
@@ -4203,6 +4211,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       requestRunFocus,
       clearRequestedRunFocus,
       botJobs,
+      routineJobs,
       botGroups,
       cron,
       relatedWorkflows,
@@ -4270,7 +4279,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       lastError, clearLastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedComposerFocus, requestComposerFocus, clearRequestedComposerFocus, requestedComposeRequest, requestComposeRequest, clearRequestedComposeRequest, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
+      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedComposerFocus, requestComposerFocus, clearRequestedComposerFocus, requestedComposeRequest, requestComposeRequest, clearRequestedComposeRequest, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, routineJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
       setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

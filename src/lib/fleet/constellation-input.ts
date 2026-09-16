@@ -20,6 +20,7 @@ export type FleetConstellationArgs = {
   connectedGatewayId?: string | null;
   reachability?: Record<string, FleetProjectionReachability | undefined>;
   roster?: FleetProjectionBot[];
+  cronJobs?: unknown[];
   activityRuns?: FleetProjectionRun[];
   pendingRunApproval?: { runId: string } | null;
 };
@@ -49,12 +50,16 @@ export function fleetConstellationInput(args: FleetConstellationArgs): Constella
     : [];
 
   const connectedGatewayId = args.connectedGatewayId ?? undefined;
+  // The routine read rides along as the model's own shape — no re-parse
+  // here, no loss: the fold into arcs is the model's, so the projection and
+  // the Activity surface consume the same rows the same way.
   const input: ConstellationInput = {
     profiles,
     reachability,
     roster: args.roster ?? [],
     activityRuns,
     pendingApprovals,
+    cronJobs: args.cronJobs ?? [],
   };
   if (connectedGatewayId) input.connectedGatewayId = connectedGatewayId;
   return input;

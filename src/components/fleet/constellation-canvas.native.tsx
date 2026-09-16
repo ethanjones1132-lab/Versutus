@@ -6,7 +6,9 @@ import {
   Circle,
   Group,
   Line,
+  Path,
   RadialGradient,
+  Skia,
   vec,
 } from '@shopify/react-native-skia';
 import {
@@ -59,6 +61,23 @@ export function ConstellationCanvas(props: ConstellationCanvasProps) {
 }
 
 const PULSE = Easing.inOut(Easing.sin);
+
+/**
+ * One routine arc as a Skia path: a gentle quadratic lift between the same
+ * two points the hosts edge spans, so the thread reads as a different class
+ * while still plainly connecting the same pair.
+ */
+function routineArc(edge: { x1: number; y1: number; x2: number; y2: number }) {
+  const path = Skia.Path.Make();
+  path.moveTo(edge.x1, edge.y1);
+  path.quadTo(
+    (edge.x1 + edge.x2) / 2,
+    (edge.y1 + edge.y2) / 2 - 18,
+    edge.x2,
+    edge.y2,
+  );
+  return path;
+}
 
 function SkiaConstellation({ model, size: width, height }: ConstellationCanvasProps) {
   const tokens = useTokens();
@@ -123,6 +142,22 @@ function SkiaConstellation({ model, size: width, height }: ConstellationCanvasPr
             </Group>
           ))}
         </Group>
+
+        {/* Routine arcs: dashed threads in the quieter accent, lifted off the
+            host class so scheduled work reads as its own truth, not a second
+            host edge. One per gateway–Bot pairing. */}
+        {layout.edges
+          .filter((edge) => edge.kind === 'routine')
+          .map((edge) => (
+            <Path
+              key={edge.id}
+              path={routineArc(edge)}
+              color={tokens.accent}
+              style="stroke"
+              strokeWidth={1.5}
+              opacity={0.55}
+            />
+          ))}
 
         {/* Stars: gateway nodes are the bright class; saved gateways are
             dimmed hollow rings, the truth classes never blur. */}

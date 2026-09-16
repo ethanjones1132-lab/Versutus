@@ -13,6 +13,9 @@
 // whatever box the screen offers, choosing the larger axis to fill. A fleet
 // of any width fits on screen; labels no longer bleed off the edges.
 
+import { describeCronHealth, type CronHealth } from '@/lib/gateway/cron';
+import { parseRoutineName } from '@/lib/gateway/routines';
+
 export const CONSTELLATION_WIDTH = 640;
 export const CONSTELLATION_HEIGHT = 640;
 
@@ -65,7 +68,7 @@ export type ConstellationNode = {
   runningRunName?: string;
 };
 
-export type ConstellationEdge = { from: string; to: string; kind: 'hosts' };
+export type ConstellationEdge = { from: string; to: string; kind: 'hosts' | 'routine' };
 
 export type ConstellationModel = {
   nodes: ConstellationNode[];
@@ -104,6 +107,12 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
     if (!runningRuns.has(run.botId)) runningRuns.set(run.botId, '');
   }
   const runningBots = new Set(runningRuns.keys());
+
+  // The routine read the connected gateway reported — described, not re-worded.
+  // A gateway that named no jobs is a map with no arcs, not a map that guesses.
+  const routineTonesByBot = input.cronJobs ? constellationRoutines(input.cronJobs) : null;
+  const routineTonesFor = (botId: string): CronHealth['tone'][] | undefined =>
+    routineTonesByBot?.get(botId);
 
   const approvalsByBot = new Map<string, number>();
   for (const approval of input.pendingApprovals ?? []) {
@@ -186,7 +195,26 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
       if (runningRunName) node.runningRunName = runningRunName;
       nodes.push(node);
       edges.push({ from: `gateway:${profile.id}`, to: id, kind: 'hosts' });
+      // The routine arc: one per gateway–Bot pairing, deduped — the map says
+      // "this Bot's routines schedule through this gateway", not one thread
+      // per job. The arc's label is the worst verdict's tone, the same words
+      // the Routine surfaces print, and a Bot the read named no job for gets
+      // no arc rather than an empty-looking one.
+      const routineTones = routineTonesFor(bot.id);
+      if (routineTones?.length) {
+        const worst = worstRoutineTone(routineTones);
+        if (worst) botBadges.push(routineToneBadge(worst));
+        edges.push({ from: `gateway:${profile.id}`, to: id, kind: 'routine' });
+      }
     });
+
+    // A job whose name attributes no Bot is still a word the gateway said:
+    // its arc lands on nobody — a thread to the gateway itself rather than
+    // being guessed into some Bot's star.
+    const unownedTones = routineTonesByBot?.get(null);
+    if (unownedTones && unownedTones.length > 0) {
+      edges.push({ from: `gateway:${profile.id}`, to: `gateway:${profile.id}`, kind: 'routine' });
+    }
   });
 
   return {
@@ -205,6 +233,107 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
   };
 }
 
+// ─── Routine arcs (D2 build 2) ────────────────────────────────────────────
+// The map is a lens over work the host already reported, and the scheduled
+// work is one of its four surfaces. A routine is an ARC, not a node: it runs
+// between the gateway that schedules it and the Bot it belongs to.
+
+const TONE_RANK: readonly CronHealth['tone'][] = ['error', 'warn', 'unknown', 'ok', 'off'];
+
+/**
+ * The worst verdict among a Bot's routines, in `describeCronHealth`'s own
+ * vocabulary (`scorecard.ts`'s rank, names attached to their own order):
+ * a failure is what the operator acts on, an off-on-purpose job is not
+ * unhealthy, and a job that never ran is UNKNOWN rather than a reassuring
+ * claim. No tones at all is no facts — never `ok`.
+ */
+export function worstRoutineTone(
+  tones: readonly CronHealth['tone'][],
+): CronHealth['tone'] | undefined {
+  let worst: CronHealth['tone'] | undefined;
+  for (const tone of tones) {
+    const rank = TONE_RANK.indexOf(tone);
+    if (rank === -1) continue;
+    if (worst === undefined || rank < TONE_RANK.indexOf(worst)) worst = tone;
+  }
+  return worst;
+}
+
+/**
+ * Fold the gateway's cron read into per-Bot routine facts. Attribution is the
+ * Bot the job's own name carries (`[bot:<name>]` — the convention
+ * `routineName` writes and `parseRoutineName` reads, read here the same way
+ * `scorecardRoutineHealth` reads it): a job whose name attributes no Bot gets
+ * an arc to nobody rather than a guessed Bot. A row this fold cannot even
+ * read an id from is dropped, the way `routineJobsFromList` drops one — a
+ * malformed row cannot put an arc into the sky.
+ */
+export function constellationRoutines(
+  jobs: readonly unknown[],
+): ReadonlyMap<string | null, CronHealth['tone'][]> {
+  const tonesByBot = new Map<string | null, CronHealth['tone'][]>();
+  for (const job of jobs) {
+    if (typeof job !== 'object' || job === null || Array.isArray(job)) continue;
+    const record = job as Record<string, unknown>;
+    const id = typeof record.id === 'string' ? record.id.trim() : '';
+    if (!id) continue;
+    const ownedName =
+      typeof record.name === 'string' && record.name.trim().length > 0
+        ? record.name
+        : id;
+    // An empty bracket (`[bot:]`) is a tag with no owner in it, not a Bot
+    // whose id is empty — the parse answers no Bot, and so does this fold.
+    const parsed = parseRoutineName(ownedName);
+    const botId = parsed.botId && parsed.botId.length > 0 ? parsed.botId : null;
+    // The health verdict is the gateway's own vocabulary — never re-worded
+    // here: the tone arrives, the words stay behind.
+    const tone = describeCronHealth({
+      id,
+      title: typeof record.title === 'string' ? record.title : id,
+      name: typeof record.name === 'string' ? record.name : null,
+      botId,
+      paused: record.paused === true,
+      running: record.running === true,
+      lastStatus: typeof record.lastStatus === 'string' ? record.lastStatus : null,
+      lastError: typeof record.lastError === 'string' ? record.lastError : null,
+      lastDeliveryError:
+        typeof record.lastDeliveryError === 'string' ? record.lastDeliveryError : null,
+      cooldownReason: typeof record.cooldownReason === 'string' ? record.cooldownReason : null,
+      failureStreak:
+        typeof record.failureStreak === 'number' && Number.isFinite(record.failureStreak)
+          ? record.failureStreak
+          : 0,
+    }).tone;
+    const bucket = tonesByBot.get(botId);
+    if (bucket) bucket.push(tone);
+    else tonesByBot.set(botId, [tone]);
+  }
+  return tonesByBot;
+}
+
+/**
+ * The badge a Bot star wears for its routines: the worst verdict's own word
+ * (`describeCronHealth`'s label), so the map says what the Routine surfaces
+ * say and two surfaces never describe one host state two ways. `unknown`
+ * keeps its honesty — "Not run yet" is not a reassuring badge.
+ */
+export function routineToneBadge(
+  tone: CronHealth['tone'],
+): { label: string; tone: ConstellationBadge['tone'] } {
+  switch (tone) {
+    case 'error':
+      return { label: 'routine failing', tone: 'danger' };
+    case 'warn':
+      return { label: 'routine behind', tone: 'accent' };
+    case 'off':
+      return { label: 'routine paused', tone: 'neutral' };
+    case 'unknown':
+      return { label: 'routine unreported', tone: 'neutral' };
+    default:
+      return { label: 'routines', tone: 'neutral' };
+  }
+}
+
 // ─── Render geometry (slice 2) ────────────────────────────────────────────
 // The Skia layer and the plain fallback draw ONE layout, so the map is the
 // same picture on either path and neither works out the graph a second time.
@@ -218,7 +347,7 @@ export type ConstellationLayoutEdge = {
   id: string;
   from: string;
   to: string;
-  kind: 'hosts';
+  kind: 'hosts' | 'routine';
   x1: number;
   y1: number;
   x2: number;

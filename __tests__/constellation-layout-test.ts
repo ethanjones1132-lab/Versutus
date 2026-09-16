@@ -22,6 +22,29 @@ const FLEET = {
 };
 
 describe('constellationLayout places the graph the model emitted', () => {
+  test('a routine arc resolves to the same positions as its hosts edge', () => {
+    const layout = constellationLayout(
+      constellationModel({
+        ...FLEET,
+        cronJobs: [
+          { id: 'j1', title: 'every morning', name: '[bot:scout] every morning' },
+        ],
+      }),
+      300,
+    );
+    const routine = layout.edges.find((edge) => edge.kind === 'routine');
+    expect(routine).toEqual({
+      id: 'gateway:gw-home->bot:gw-home:scout',
+      from: 'gateway:gw-home',
+      to: 'bot:gw-home:scout',
+      kind: 'routine',
+      x1: layout.edges[0].x1,
+      y1: layout.edges[0].y1,
+      x2: layout.edges[0].x2,
+      y2: layout.edges[0].y2,
+    });
+  });
+
   test('every node lands inside the square it was scaled to', () => {
     const layout = constellationLayout(constellationModel(FLEET), 320);
     expect(layout.size).toBe(320);

@@ -3,6 +3,16 @@ import {
   CONSTELLATION_WIDTH,
   constellationModel,
 } from '@/lib/fleet/constellation-model';
+import type { CronJob } from '@/lib/gateway/cron';
+
+function job(overrides: Partial<CronJob> & { id: string }): CronJob {
+  return {
+    title: overrides.title ?? overrides.id,
+    name: overrides.name ?? null,
+    botId: overrides.botId ?? null,
+    ...overrides,
+  };
+}
 
 describe('the fleet constellation model', () => {
   test('an empty fleet is a dignified empty model', () => {
@@ -87,5 +97,91 @@ describe('the fleet constellation model', () => {
       expect(Number.isFinite(node.x)).toBe(true);
       expect(Number.isFinite(node.y)).toBe(true);
     }
+  });
+});
+
+describe('routine arcs', () => {
+  const base = {
+    profiles: [{ id: 'gw-home', name: 'Home' }],
+    connectedGatewayId: 'gw-home',
+    roster: [
+      { id: 'scout', displayName: 'Scout' },
+      { id: 'night', displayName: 'Night' },
+    ],
+  };
+
+  test('each named routine is an arc from its gateway to the Bot that owns it', () => {
+    const model = constellationModel({
+      ...base,
+      cronJobs: [
+        job({ id: 'j1', name: '[bot:scout] every morning' }),
+        job({ id: 'j2', name: '[bot:night] night sweep' }),
+      ],
+    });
+
+    expect(model.edges).toContainEqual({ from: 'gateway:gw-home', to: 'bot:gw-home:scout', kind: 'routine' });
+    expect(model.edges).toContainEqual({ from: 'gateway:gw-home', to: 'bot:gw-home:night', kind: 'routine' });
+  });
+
+  test('the twin arcs the same Bot owns share one deduped arc per pairing', () => {
+    const model = constellationModel({
+      ...base,
+      cronJobs: [
+        job({ id: 'j1', name: '[bot:scout] first' }),
+        job({ id: 'j2', name: '[bot:scout] second' }),
+        job({ id: 'j3', name: '[bot:scout] third' }),
+      ],
+    });
+
+    const routineEdges = model.edges.filter((edge) => edge.kind === 'routine');
+    expect(routineEdges).toEqual([
+      { from: 'gateway:gw-home', to: 'bot:gw-home:scout', kind: 'routine' },
+    ]);
+  });
+
+  test('a job whose name attributes no Bot gets an arc to nobody rather than a guessed Bot', () => {
+    const owned = constellationModel({
+      ...base,
+      cronJobs: [
+        job({ id: 'j1', name: 'gateway sweep', botId: 'gateway' }),
+        job({ id: 'j2', name: '[bot:]' }),
+      ],
+    });
+
+    expect(owned.edges).toEqual([
+      // The host edges come first, then the routine arcs.
+      { from: 'gateway:gw-home', to: 'bot:gw-home:scout', kind: 'hosts' },
+      { from: 'gateway:gw-home', to: 'bot:gw-home:night', kind: 'hosts' },
+      // botId: 'gateway' is not a Bot the roster lists, and an empty
+      // attribution is not an owner either — neither is guessed.
+      { from: 'gateway:gw-home', to: 'gateway:gw-home', kind: 'routine' },
+    ]);
+  });
+
+  test('a Bot off the roster gets no arc that pretends the roster held it', () => {
+    const model = constellationModel({
+      ...base,
+      cronJobs: [job({ id: 'j1', name: '[bot:ghost] unseen' })],
+    });
+
+    expect(model.edges.filter((edge) => edge.kind === 'routine')).toEqual([]);
+  });
+
+  test('the arc endpoints are the nodes the layout already drew', () => {
+    const model = constellationModel({
+      ...base,
+      cronJobs: [job({ id: 'j1', name: '[bot:scout] every morning' })],
+    });
+    const ids = new Set(model.nodes.map((node) => node.id));
+    expect(ids.has('gateway:gw-home')).toBe(true);
+    expect(ids.has('bot:gw-home:scout')).toBe(true);
+  });
+
+  test('the existing gateway and Bot layout is unchanged when no jobs arrive', () => {
+    const model = constellationModel({ ...base });
+    expect(model.edges).toEqual([
+      { from: 'gateway:gw-home', to: 'bot:gw-home:scout', kind: 'hosts' },
+      { from: 'gateway:gw-home', to: 'bot:gw-home:night', kind: 'hosts' },
+    ]);
   });
 });
