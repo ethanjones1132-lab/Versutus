@@ -175,7 +175,27 @@ describe('hands-free native contract', () => {
   });
 
   it('does not end a call when another sound merely ducks it', () => {
-    expect(service).toMatch(/AudioManager\.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> Unit/);
+    // The rule moved out of the service's focus listener into the JVM-tested
+    // HandsfreeFocusPolicy (2026-09-16), so the listener is pinned to route
+    // every focus change through it, and the policy is pinned to end the call
+    // only on a real loss — a duck falls to `else -> false`. The cases
+    // themselves are proved in HandsfreeFocusPolicyTest.kt.
+    expect(service).toContain('HandsfreeFocusPolicy.endsCall(change, msSinceListenStart)');
+    const policy = readSource(
+      'modules',
+      'handsfree-voice',
+      'android',
+      'src',
+      'main',
+      'java',
+      'com',
+      'versutus',
+      'handsfreevoice',
+      'HandsfreeFocusPolicy.kt',
+    );
+    expect(policy).toMatch(/AudioManager\.AUDIOFOCUS_LOSS -> true/);
+    expect(policy).toMatch(/else -> false/);
+    expect(policy).not.toMatch(/AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK/);
   });
 
   it('classifies recognizer errors through the tested helper and speaks progressively without dropping sentences', () => {
