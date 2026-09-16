@@ -140,6 +140,22 @@ test('a device can opt into widget updates, and the default is off', async () =>
   }
 });
 
+test('the approval exemption defaults to off, flips on, and rejects a non-boolean', async () => {
+  const { pairedToken, gate } = await fixture();
+  try {
+    const before = await (await rpc(gate, pairedToken, 'notifications.preferences.get')).json();
+    assert.equal(before.result.quietHoursAllowApprovals, false);
+    const set = await rpc(gate, pairedToken, 'notifications.preferences.set', { quietHoursAllowApprovals: true });
+    assert.equal(set.status, 200);
+    const after = await (await rpc(gate, pairedToken, 'notifications.preferences.get')).json();
+    assert.equal(after.result.quietHoursAllowApprovals, true);
+    const bad = await rpc(gate, pairedToken, 'notifications.preferences.set', { quietHoursAllowApprovals: 'yes' });
+    assert.equal(bad.status, 400);
+  } finally {
+    await gate.close();
+  }
+});
+
 test('revoking a paired device also drops its push row', async () => {
   const { pairedToken, gate, gateHome } = await fixture();
   try {

@@ -53,6 +53,24 @@ test('upsert stores one record per device id and fills defaults', async () => {
   assert.deepEqual(await tokens.get('phone-2'), second);
 });
 
+test('the approval exemption default is off and persists as a boolean', async () => {
+  const { tokens } = await store();
+
+  const first = await tokens.upsert('phone-1', { expoPushToken: 'ExponentPushToken[one]' });
+  assert.equal(first.quietHoursAllowApprovals, false);
+
+  const opted = await tokens.upsert('phone-1', { quietHoursAllowApprovals: true });
+  assert.equal(opted.quietHoursAllowApprovals, true);
+
+  // A subsequent patch that does not name the field keeps the stored choice.
+  const kept = await tokens.upsert('phone-1', { richBody: true });
+  assert.equal(kept.quietHoursAllowApprovals, true);
+
+  // A truthy non-boolean cannot survive — the row never carries a guess.
+  const coerced = await tokens.upsert('phone-2', { expoPushToken: 'ExponentPushToken[two]', quietHoursAllowApprovals: 'yes' });
+  assert.equal(coerced.quietHoursAllowApprovals, false);
+});
+
 test('upsert rotates the token for an existing device id', async () => {
   const { tokens } = await store();
 

@@ -16,6 +16,7 @@ export type NotificationPreferences = {
   widgetUpdates: boolean;
   botIds: string[];
   quietHours: { startMinutes: number; endMinutes: number } | null;
+  quietHoursAllowApprovals: boolean;
 };
 
 const DEFAULT_PREFS: NotificationPreferences = {
@@ -24,6 +25,7 @@ const DEFAULT_PREFS: NotificationPreferences = {
   widgetUpdates: false,
   botIds: [],
   quietHours: null,
+  quietHoursAllowApprovals: false,
 };
 
 function normalize(raw: unknown): NotificationPreferences {
@@ -32,6 +34,7 @@ function normalize(raw: unknown): NotificationPreferences {
     enabled: row.enabled === true,
     richBody: row.richBody === true,
     widgetUpdates: row.widgetUpdates === true,
+    quietHoursAllowApprovals: row.quietHoursAllowApprovals === true,
     botIds: Array.isArray(row.botIds) ? row.botIds.filter((id): id is string => typeof id === 'string') : [],
     quietHours:
       row.quietHours &&

@@ -47,6 +47,14 @@ function isQuiet(row, nowMinutes = localMinutes(row.timezone)) {
   return nowMinutes >= startMinutes || nowMinutes < endMinutes;
 }
 
+// Quiet hours exist so the phone does not speak overnight. An approval, though,
+// blocks a live run waiting on a human: when the device opted in, the one kind
+// that needs the operator pierces the window rather than waiting until morning.
+function quietExemptsEvent(row, classified) {
+  if (row.quietHoursAllowApprovals !== true) return false;
+  return classified?.data?.kind === 'approval';
+}
+
 function allowedForBot(row, botId) {
   const allowed = Array.isArray(row.botIds) ? row.botIds : [];
   if (allowed.length === 0) return true;
@@ -252,7 +260,7 @@ export function createPushNotifier({ tokens, send, snapshot = null, now }) {
     for (const row of Array.isArray(rows) ? rows : []) {
       if (!isRecord(row) || row.enabled !== true || typeof row.expoPushToken !== 'string' || !row.expoPushToken) continue;
       if (!allowedForBot(row, event?.botId)) continue;
-      if (isQuiet(row, localMinutes(row.timezone, nowSource()))) continue;
+      if (isQuiet(row, localMinutes(row.timezone, nowSource())) && !quietExemptsEvent(row, classified)) continue;
       const key = `${classified.trigger}:${classified.id}:${event?.state ?? ''}`;
       if (!remember(key)) continue;
       messages.push(messageFor(classified, event, row));

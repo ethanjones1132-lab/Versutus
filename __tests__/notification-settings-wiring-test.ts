@@ -38,6 +38,14 @@ describe('settings notifications wiring', () => {
     expect(hook).toContain('syncPushRegistration');
   });
 
+  test('approvals pierce quiet hours only when the device opted in', () => {
+    const section = readSource('src', 'components', 'gateway', 'notifications-section.tsx');
+    expect(section).toContain('quietHoursAllowApprovals');
+    expect(section).toContain('Let approval notices through during quiet hours');
+    const hook = readSource('src', 'hooks', 'use-notification-preferences.ts');
+    expect(hook).toContain('quietHoursAllowApprovals: false');
+  });
+
   test('the Android app points at the Firebase services file', () => {
     const raw = readSource('app.json');
     const config = JSON.parse(raw) as {

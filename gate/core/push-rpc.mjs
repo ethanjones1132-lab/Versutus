@@ -5,6 +5,7 @@ const DEFAULT_PREFERENCES = Object.freeze({
   widgetUpdates: false,
   botIds: [],
   quietHours: null,
+  quietHoursAllowApprovals: false,
 });
 
 function isRecord(value) {
@@ -52,6 +53,8 @@ function preferencesFrom(row) {
     ...(isRecord(row) ? row : {}),
     botIds: Array.isArray(row?.botIds) ? row.botIds : [],
     quietHours: isRecord(row?.quietHours) ? row.quietHours : null,
+    // A legacy row with no such field reads as off, never as on.
+    quietHoursAllowApprovals: row?.quietHoursAllowApprovals === true,
   };
 }
 
@@ -103,6 +106,9 @@ export function createPushRpc({ tokens, send }) {
         ...(optionalBoolean(params?.widgetUpdates, 'widgetUpdates') === undefined ? {} : { widgetUpdates: params.widgetUpdates }),
         ...(validBotIds(params?.botIds) === undefined ? {} : { botIds: validBotIds(params.botIds) }),
         ...(validQuietHours(params?.quietHours) === undefined ? {} : { quietHours: validQuietHours(params.quietHours) }),
+        ...(optionalBoolean(params?.quietHoursAllowApprovals, 'quietHoursAllowApprovals') === undefined
+          ? {}
+          : { quietHoursAllowApprovals: params.quietHoursAllowApprovals }),
       };
       return tokens.upsert(deviceId, patch);
     },

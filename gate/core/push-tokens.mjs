@@ -6,6 +6,7 @@ const DEFAULT_ROW = Object.freeze({
   richBody: false,
   botIds: [],
   quietHours: null,
+  quietHoursAllowApprovals: false,
 });
 
 function isRecord(value) {
@@ -65,6 +66,9 @@ export class PushTokenStore {
       const quietHours = patch.quietHours === undefined
         ? (existing.quietHours ?? DEFAULT_ROW.quietHours)
         : patch.quietHours;
+      const quietHoursAllowApprovals = patch.quietHoursAllowApprovals === undefined
+        ? existing.quietHoursAllowApprovals === true
+        : patch.quietHoursAllowApprovals === true;
 
       const row = {
         ...DEFAULT_ROW,
@@ -72,6 +76,7 @@ export class PushTokenStore {
         ...patch,
         botIds,
         quietHours,
+        quietHoursAllowApprovals,
         updatedAtMs: Date.now(),
       };
       rows[deviceId] = row;

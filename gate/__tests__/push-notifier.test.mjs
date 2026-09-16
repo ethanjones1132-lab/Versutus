@@ -68,6 +68,51 @@ test('a device outside its quiet window still receives the push at either edge',
   assert.equal(sent.length, 2);
 });
 
+test('a device opted into approval exemptions gets the approval push even inside quiet hours', async () => {
+  // The exemption is per-event-kind: a routine result in the same minute, for
+  // the same opted-in device, stays silenced — only the blocking card runs.
+  const tokens = {
+    listEnabled: async () => [row({
+      quietHours: { startMinutes: 600, endMinutes: 700 },
+      quietHoursAllowApprovals: true,
+    })],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({
+    tokens,
+    send: async (messages) => { sent.push(...messages); return { ok: true }; },
+    now: () => new Date(Date.UTC(2026, 8, 14, 10, 1)), // minute 601, inside the window
+  });
+
+  await notifier.notify({ trigger: 'approval', runId: 'run-7', environmentId: 'codex-local', operation: 'prompt' });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].channelId, 'approvals');
+
+  await notifier.notify({ trigger: 'run', runId: 'run-8', state: 'completed', sessionId: 'session-8' });
+
+  assert.equal(sent.length, 1, 'a run verdict inside the window still waits until morning');
+});
+
+test('with the exemption off (or absent from the row), quiet hours silence approvals as before', async () => {
+  for (const quietHoursAllowApprovals of [false, undefined]) {
+    const tokens = {
+      listEnabled: async () => [row({ quietHours: { startMinutes: 600, endMinutes: 700 }, quietHoursAllowApprovals })],
+      removeByToken: async () => false,
+    };
+    const sent = [];
+    const notifier = createPushNotifier({
+      tokens,
+      send: async (messages) => { sent.push(...messages); return { ok: true }; },
+      now: () => new Date(Date.UTC(2026, 8, 14, 10, 1)),
+    });
+
+    await notifier.notify({ trigger: 'approval', runId: `run-9-${String(quietHoursAllowApprovals)}`, operation: 'prompt' });
+
+    assert.deepEqual(sent, []);
+  }
+});
+
 test('a result carrying several dead tokens leaves none of them in the store', async () => {
   const { mkdtemp } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');

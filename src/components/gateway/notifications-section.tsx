@@ -186,6 +186,22 @@ export function NotificationsSection() {
         </View>
         {quietError ? <Text color="secondary">{quietError}</Text> : null}
         <Button label={saving ? 'Saving…' : 'Save quiet hours'} onPress={saveQuietHours} disabled={saving} />
+        <View style={styles.row}>
+          <Text variant="body">Approvals pierce quiet hours</Text>
+          <Switch
+            value={prefs.quietHoursAllowApprovals}
+            onValueChange={(value) => void setPatch({ quietHoursAllowApprovals: value })}
+            trackColor={{ true: tokens.accent, false: tokens.border }}
+            thumbColor={tokens.textPrimary}
+            disabled={saving}
+            accessibilityLabel="Let approval notices through during quiet hours"
+            accessibilityState={{ checked: prefs.quietHoursAllowApprovals }}
+          />
+        </View>
+        <Text variant="caption" color="secondary">
+          An approval waits on you before a run may continue. With this on, only approvals ring during the window —
+          replies, runs and routines stay quiet. Off keeps quiet hours absolute.
+        </Text>
       </Card>
 
       <Card variant="inset" padding={Spacing.three} style={styles.card}>
