@@ -41,6 +41,7 @@ import { voicePaths, voiceStatus, installVoice, uvRunner } from './voice/runtime
 import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
 import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-engine.mjs';
 import { verifySignedAccessRequest } from './signature.mjs';
+import { describeAuthFailure } from './auth-failure.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
 
@@ -826,6 +827,9 @@ export async function createGate(config = {}) {
       const callerId = deviceGrant?.deviceId ?? 'bootstrap-token';
 
       if (!isAuthenticated) {
+        // The log is the only place a refusal can be diagnosed from; the line
+        // names the credential's shape, never its value (auth-failure.mjs).
+        console.warn(describeAuthFailure({ method, pathname, authorization: authHeader }));
         res.writeHead(401);
         res.end(JSON.stringify({
           error: 'Unauthorized',
