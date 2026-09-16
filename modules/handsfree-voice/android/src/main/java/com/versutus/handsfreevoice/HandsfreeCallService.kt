@@ -275,13 +275,6 @@ class HandsfreeCallService : Service() {
     audioManager.mode = AudioManager.MODE_NORMAL
   }
 
-  private fun handleFocusLoss() {
-    // A transient loss is not silently recovered into: another app or a phone
-    // call has the audio, and the operator must Start again.
-    emit("interruption", mapOf("reason" to "audio-focus"))
-    end("system-interruption")
-  }
-
   // ── Recognition ──────────────────────────────────────────────────────────
 
   fun startListening(): Boolean {
