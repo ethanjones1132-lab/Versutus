@@ -1,7 +1,8 @@
 import { useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
+import * as DocumentPicker from 'expo-document-picker';
 import { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button, Card, Screen, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
@@ -12,16 +13,41 @@ import {
   parseBotHandoffText,
 } from '@/lib/gateway/handoff-import';
 
+/** A file the operator picked, or why its content could not be read. */
+type PickedHandoffFile = { name: string; content: string; error?: string };
+
 /**
- * D6 on the receiving host: a packet exported from another gateway is pasted
- * (or read from the clipboard) and, only if it is a real packet and this
- * gateway can create Bots, becomes a new Bot here.
+ * Open the document picker for the packet file and read it as text. A
+ * cancelled picker answers `undefined` so the pasted field is left alone.
+ * `expo-file-system` reads the picked URI; a read or decode failure becomes
+ * the refusal the card shows, not a crash.
+ */
+async function pickHandoffFile(): Promise<PickedHandoffFile | undefined> {
+  const result = await DocumentPicker.getDocumentAsync({
+    type: 'application/json',
+    copyToCacheDirectory: true,
+  });
+  if (result.canceled || result.assets.length === 0) return undefined;
+  const asset = result.assets[0];
+  try {
+    const FileSystem = await import('expo-file-system');
+    const content = await FileSystem.readAsStringAsync(asset.uri);
+    return { name: asset.name ?? 'packet.json', content };
+  } catch {
+    return { name: asset.name ?? 'packet.json', content: '', error: 'The picked file could not be read.' };
+  }
+}
+
+/**
+ * D6 on the receiving host: a packet exported from another gateway is pasted,
+ * read from the clipboard or picked as a file and, only if it is a real
+ * packet and this gateway can create Bots, becomes a new Bot here.
  *
- * The clipboard is the picker this build actually has: no document picker is
- * installed and the Android share filter carries text only, so a `.json` file
- * cannot be handed to the app directly. The packet text is the same JSON the
- * export writes, and the validation is the same `handoff-import` fold the
- * tests pin — memory and credentials are never on it.
+ * The file picker (`expo-document-picker`) opens the SAME `.json` packet the
+ * export writes, and its content lands in the same TextField the paste row
+ * feeds — so a picked file and a pasted text go through the identical
+ * `handoff-import` plan the tests pin, and memory and credentials are never
+ * on it either way.
  */
 export default function ImportBotScreen() {
   const router = useRouter();
@@ -29,6 +55,7 @@ export default function ImportBotScreen() {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [fileNote, setFileNote] = useState<string | undefined>(undefined);
 
   const plan = useMemo(
     () => botHandoffImportPlan(parseBotHandoffText(text), { canCreateBots: hasBotManagement }),
@@ -39,6 +66,21 @@ export default function ImportBotScreen() {
     void Clipboard.getStringAsync()
       .then((value) => setText(value ?? ''))
       .catch(() => setError('The clipboard could not be read.'));
+  };
+
+  const pickFile = () => {
+    void pickHandoffFile()
+      .then((picked) => {
+        if (picked === undefined) return; // picker cancelled: leave the field alone
+        setText(picked.content);
+        if (picked.error) {
+          setError(picked.error);
+          setFileNote(undefined);
+        } else {
+          setFileNote(`Read ${picked.name}: ${picked.content.length.toLocaleString()} characters.`);
+        }
+      })
+      .catch(() => setError('The file could not be read.'));
   };
 
   const handleImport = () => {
@@ -71,17 +113,23 @@ export default function ImportBotScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <Card variant="surface" padding={Spacing.three} style={styles.card}>
           <Text variant="body" color="secondary">
-            Paste a Bot handoff packet, or read one from the clipboard, then import it as a new
-            Bot on this gateway.
+            Paste a Bot handoff packet, pick its file, or read one from the clipboard, then import
+            it as a new Bot on this gateway.
           </Text>
           <TextField
             value={text}
-            onChangeText={setText}
+            onChangeText={(value) => {
+              setText(value);
+              setFileNote(undefined);
+            }}
             placeholder="Paste a Bot handoff packet"
             multiline
             accessibilityLabel="Bot handoff packet"
           />
-          <Button label="Read clipboard" variant="secondary" onPress={readClipboard} />
+          <View style={styles.sourcesRow}>
+            <Button label="Read clipboard" variant="secondary" onPress={readClipboard} />
+            <Button label="Pick file" variant="secondary" onPress={pickFile} />
+          </View>
         </Card>
 
         {text.trim() ? (
@@ -89,6 +137,11 @@ export default function ImportBotScreen() {
             <Text variant="body" color={plan.ok ? 'secondary' : 'tertiary'}>
               {botHandoffImportCopy(plan)}
             </Text>
+            {fileNote ? (
+              <Text variant="micro" color="tertiary">
+                {fileNote}
+              </Text>
+            ) : null}
             {plan.ok ? (
               <>
                 <Text variant="micro" color="tertiary">
@@ -117,5 +170,9 @@ const styles = StyleSheet.create({
   },
   card: {
     gap: Spacing.three,
+  },
+  sourcesRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
   },
 });

@@ -1,5 +1,6 @@
 import {
   BOT_HANDOFF_FORMAT,
+  BOT_HANDOFF_VERSION,
   buildBotHandoff,
 } from '@/lib/gateway/handoff';
 import {
@@ -29,34 +30,58 @@ const packet = buildBotHandoff({
 
 describe('parseBotHandoffText reads what the export wrote', () => {
   test('it accepts the packet as JSON text or already parsed', () => {
-    expect(parseBotHandoffText(JSON.stringify(packet))).toEqual(packet);
-    expect(parseBotHandoffText(packet)).toEqual(packet);
+    expect(parseBotHandoffText(JSON.stringify(packet))).toEqual({ ok: true, packet });
+    expect(parseBotHandoffText(packet)).toEqual({ ok: true, packet });
   });
 
-  test('junk, blankness, a wrong format/version and a missing id are not packets', () => {
-    expect(parseBotHandoffText('not json')).toBeNull();
-    expect(parseBotHandoffText('   ')).toBeNull();
-    expect(parseBotHandoffText(null)).toBeNull();
-    expect(parseBotHandoffText(undefined)).toBeNull();
-    expect(parseBotHandoffText(JSON.stringify({ format: 'other' }))).toBeNull();
-    expect(parseBotHandoffText({ format: BOT_HANDOFF_FORMAT, version: 99, bot: { id: 'x' } })).toBeNull();
-    expect(parseBotHandoffText({ format: BOT_HANDOFF_FORMAT, version: 1, bot: {} })).toBeNull();
+  test('blankness and junk are refused as not JSON', () => {
+    expect(parseBotHandoffText('not json')).toEqual({
+      ok: false,
+      reason: expect.stringContaining('not valid JSON'),
+    });
+    expect(parseBotHandoffText('   ')).toEqual({
+      ok: false,
+      reason: expect.stringContaining('not valid JSON'),
+    });
+  });
+
+  test('a wrong format, a wrong version and a missing id each have their own line', () => {
+    const wrongKind = parseBotHandoffText(JSON.stringify({ format: 'other', version: BOT_HANDOFF_VERSION, bot: { id: 'x' } }));
+    expect(wrongKind.ok).toBe(false);
+    if (!wrongKind.ok) expect(wrongKind.reason).toContain('not a Versutus Bot handoff packet');
+
+    const wrongVersion = parseBotHandoffText(
+      JSON.stringify({ format: BOT_HANDOFF_FORMAT, version: BOT_HANDOFF_VERSION + 1, bot: { id: 'x' } }),
+    );
+    expect(wrongVersion.ok).toBe(false);
+    if (!wrongVersion.ok) expect(wrongVersion.reason).toContain('version');
+
+    const noBot = parseBotHandoffText(
+      JSON.stringify({ format: BOT_HANDOFF_FORMAT, version: BOT_HANDOFF_VERSION, bot: {} }),
+    );
+    expect(noBot.ok).toBe(false);
+    if (!noBot.ok) expect(noBot.reason).toContain('no Bot record');
+
+    expect(parseBotHandoffText(null)).toEqual({ ok: false, reason: expect.any(String) });
+    expect(parseBotHandoffText(undefined)).toEqual({ ok: false, reason: expect.any(String) });
   });
 });
 
 describe('botHandoffImportPlan refuses what the receiving host cannot take', () => {
-  test('a non-packet and a gateway that cannot create Bots each name their reason', () => {
-    const noPacket = botHandoffImportPlan(null, { canCreateBots: true });
-    expect(noPacket.ok).toBe(false);
-    if (!noPacket.ok) expect(noPacket.reason).toContain('handoff packet');
+  test('a failed parse keeps its own reason in the plan', () => {
+    const plan = botHandoffImportPlan(parseBotHandoffText('not json'), { canCreateBots: true });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.reason).toContain('not valid JSON');
+  });
 
-    const noCapability = botHandoffImportPlan(packet, { canCreateBots: false });
-    expect(noCapability.ok).toBe(false);
-    if (!noCapability.ok) expect(noCapability.reason).toContain('cannot create Bots');
+  test('a gateway that cannot create Bots refuses with its own reason', () => {
+    const plan = botHandoffImportPlan(parseBotHandoffText(packet), { canCreateBots: false });
+    expect(plan.ok).toBe(false);
+    if (!plan.ok) expect(plan.reason).toContain('cannot create Bots');
   });
 
   test('an allowed packet yields the Bot core and the packet exclusion list', () => {
-    const plan = botHandoffImportPlan(packet, { canCreateBots: true });
+    const plan = botHandoffImportPlan(parseBotHandoffText(packet), { canCreateBots: true });
     expect(plan.ok).toBe(true);
     if (plan.ok) {
       expect(plan.bot.id).toBe('scout');
@@ -70,20 +95,20 @@ describe('botHandoffImportPlan refuses what the receiving host cannot take', () 
 
 describe('the import copy never promises what the packet excludes', () => {
   test('an allowed plan names the Bot and what this host applies', () => {
-    const copy = botHandoffImportCopy(botHandoffImportPlan(packet, { canCreateBots: true }));
+    const copy = botHandoffImportCopy(botHandoffImportPlan(parseBotHandoffText(packet), { canCreateBots: true }));
     expect(copy).toContain('Scout');
     expect(copy).toMatch(/never|not applied/i);
     expect(copy).not.toMatch(/imports? (your )?memory/i);
   });
 
   test('a refused plan shows the reason, not a Bot name', () => {
-    const copy = botHandoffImportCopy(botHandoffImportPlan(null, { canCreateBots: true }));
-    expect(copy).toContain('handoff packet');
+    const copy = botHandoffImportCopy(botHandoffImportPlan(parseBotHandoffText('not json'), { canCreateBots: true }));
+    expect(copy).toContain('not valid JSON');
   });
 });
 
-// The screen's contract: it reads a packet from the clipboard or a pasted
-// field, plans it against the receiving gateway's capability, and only then
+// The screen's contract: it reads a packet from the clipboard or a picked
+// file, plans it against the receiving gateway's capability, and only then
 // creates the Bot — never importing memory or credentials, which are not on
 // the plan at all.
 describe('the import screen and its entry', () => {
@@ -101,6 +126,17 @@ describe('the import screen and its entry', () => {
     expect(src).toContain('botHandoffImportCopy(');
     expect(src).not.toContain('.memory');
     expect(src).not.toContain('.credentials');
+  });
+
+  test('a picked file feeds the same plan, and the picker is a real dependency', () => {
+    const src = importScreen();
+    const pkg = JSON.parse(nodeFs.readFileSync([__dirname, '..', 'package.json'].join(SEP), 'utf8') as string) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(Object.keys(pkg.dependencies ?? {})).toContain('expo-document-picker');
+    expect(src).toContain('pickHandoffFile');
+    expect(src).toContain('getDocumentAsync');
+    expect(src).toMatch(/setText\(picked\.content\)/);
   });
 
   test('the roster footer offers the Import row and the screen routes to it', () => {
