@@ -42,6 +42,7 @@ import { entering } from '@/lib/motion/presets';
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
 import { useHandsfreeVoice } from '@/context/handsfree-voice-provider';
 import { describeGatewayError, errorBannerButton, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
+import { modelLockFor } from '@/lib/gateway/run-failures';
 import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDividerCached } from '@/lib/format';
@@ -327,6 +328,7 @@ export function ChatScreen() {
     closeModelPicker,
     stopStreaming,
     selectModel,
+    clearModelLock,
     modelCatalog,
     modelCatalogError,
     sessionSelector,
@@ -1025,10 +1027,15 @@ export function ChatScreen() {
           auth: (model.authStatus ?? model.auth) as string | undefined,
           usage: model.usage as string | undefined,
           backendId: model.backendId as string | undefined,
+          // This device's recorded turn failure for the row, when one exists —
+          // the picker renders the row locked with its reason.
+          modelLock: modelLockFor(activeGateway?.modelLocks, String(
+            model.id || model.model || model.name || '',
+          )),
         })),
         selectedBackendId,
       ),
-    [modelCatalog, selectedBackendId],
+    [modelCatalog, selectedBackendId, activeGateway?.modelLocks],
   );
 
   // The header's name for the thread, through the store's own fold: the
@@ -2422,6 +2429,7 @@ export function ChatScreen() {
         modelMode={modelPicker.mode}
         modelAgentId={modelPicker.agentId}
         onSelectModel={selectModel}
+        onClearModelLock={clearModelLock}
         onRefreshModels={() => {
           closeModelPicker();
           void openModelPicker(modelPicker.mode, modelPicker.agentId);

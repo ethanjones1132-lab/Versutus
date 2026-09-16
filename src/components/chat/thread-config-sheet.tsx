@@ -7,6 +7,7 @@ import Animated from 'react-native-reanimated';
 import { Badge, BaseSheet, Button, ConfirmSheet, EmptyState, Icon, ListRow, PressableScale, SegmentedControl, Text, TextField } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { sessionBotChatBadge } from '@/lib/gateway/bots';
+import { modelLockNote, type ModelTurnLock } from '@/lib/gateway/run-failures';
 import { formatCost, formatRelativeTime, formatTokenCount } from '@/lib/format';
 import {
   filterModels,
@@ -87,6 +88,7 @@ type ModelItem = {
   usage?: string;
   catalogState?: string;
   backendId?: string;
+  modelLock?: ModelTurnLock;
 };
 
 type PickerSection = ModelSection<ModelItem>;
@@ -148,6 +150,8 @@ export type ThreadConfigSheetProps = {
   modelMode?: ModelPickerMode;
   modelAgentId?: string;
   onSelectModel?: (modelId: string, providerId?: string) => void;
+  /** Drop this device's recorded turn-failure lock for a model. */
+  onClearModelLock?: (modelId: string) => void;
   onRefreshModels?: () => void;
   /** Set when the last model-catalog read failed. Empty is not "no catalog". */
   modelsError?: string;
@@ -640,6 +644,7 @@ function ModelsSection({
   currentDefault,
   backendLabel,
   onSelect,
+  onClearLock,
   onRefresh,
 }: {
   models?: ModelItem[];
@@ -649,6 +654,8 @@ function ModelsSection({
   /** Names the backend the list is locked to; absent when there is nothing to lock against. */
   backendLabel?: string;
   onSelect?: (modelId: string, providerId?: string) => void;
+  /** Release this device's recorded turn-failure lock for a model. */
+  onClearLock?: (modelId: string) => void;
   onRefresh?: () => void;
 }) {
   const tokens = useTokens();
@@ -695,6 +702,10 @@ function ModelsSection({
     ({ item }: { item: ModelItem }) => {
       const isCurrent = sameModelId(item.id, currentDefault) || item.id === currentDefault;
       const name = modelPickerName(item);
+      // This device recorded a turn failure for this model: the operator's
+      // own verdict outranks the catalogue's sign-in guess, so the row shows
+      // locked with the reason even when `available` reads true.
+      const locked = item.modelLock !== undefined;
       const meta = [
         item.catalogState,
         formatContext(item.context),
@@ -712,13 +723,13 @@ function ModelsSection({
               {
                 backgroundColor: tokens.backgroundInset,
                 borderColor: isCurrent ? tokens.accentWarm : tokens.borderSubtle,
-                opacity: item.available === false ? 0.6 : 1,
+                opacity: item.available === false || locked ? 0.6 : 1,
               },
             ]}
-            disabled={item.available === false}
+            disabled={item.available === false || locked}
             accessibilityRole="button"
             accessibilityLabel={`Apply model ${name}`}
-            accessibilityState={{ selected: isCurrent, disabled: item.available === false }}
+            accessibilityState={{ selected: isCurrent, disabled: item.available === false || locked }}
             onPress={async () => {
               await Haptics.selectionAsync();
               onSelect?.(item.id, item.providerId ?? item.provider);
@@ -731,12 +742,29 @@ function ModelsSection({
                 <Badge label="Current" tone="accent" dot={false} />
               ) : (
                 <Badge
-                  label={item.available === false ? 'Locked' : 'Available'}
-                  tone={item.available === false ? 'neutral' : 'success'}
+                  label={item.available === false || locked ? 'Locked' : 'Available'}
+                  tone={item.available === false || locked ? 'neutral' : 'success'}
                   dot={false}
                 />
               )}
             </View>
+            {locked ? (
+              <View style={styles.modelLockRow}>
+                <Text variant="micro" color="tertiary" numberOfLines={2} style={styles.modelMeta}>
+                  {modelLockNote(item.modelLock!)}
+                </Text>
+                {onClearLock ? (
+                  <PressableScale
+                    accessibilityRole="button"
+                    accessibilityLabel={`Clear lock for ${name}`}
+                    onPress={() => onClearLock(item.id)}>
+                    <Text variant="micro" color="secondary">
+                      Clear
+                    </Text>
+                  </PressableScale>
+                ) : null}
+              </View>
+            ) : null}
             {meta ? (
               <Text variant="micro" color="tertiary" numberOfLines={1} style={styles.modelMeta}>
                 {meta}
@@ -954,6 +982,7 @@ export function ThreadConfigSheet({
   modelMode,
   modelAgentId,
   onSelectModel,
+  onClearModelLock,
   onRefreshModels,
   modelsError,
   backendLabel,
@@ -1009,6 +1038,7 @@ export function ThreadConfigSheet({
           currentDefault={currentModel}
           backendLabel={backendLabel}
           onSelect={onSelectModel}
+          onClearLock={onClearModelLock}
           onRefresh={onRefreshModels}
         />
       ) : (
@@ -1136,5 +1166,12 @@ const styles = StyleSheet.create({
   },
   modelMeta: {
     marginTop: 2,
+  },
+  modelLockRow: {
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
   },
 });

@@ -52,7 +52,7 @@ describe('thread-config show-older busy state', () => {
   test('the session and model picker selected wirings stay untouched', () => {
     const src = readSheet();
     expect(src).toContain('accessibilityState={{ selected: isCurrent }}');
-    expect(src).toContain('accessibilityState={{ selected: isCurrent, disabled: item.available === false }}');
+    expect(src).toContain('accessibilityState={{ selected: isCurrent, disabled: item.available === false || locked }}');
   });
 
   test('Button still spreads busy only when defined', () => {

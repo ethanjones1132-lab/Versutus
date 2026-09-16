@@ -31,8 +31,9 @@ describe('chat-screen session and model derivations', () => {
     // The catalog is still mapped, but inside a useMemo keyed by `modelCatalog`.
     expect(screen).toMatch(/const modelRows = useMemo\(/);
     expect(screen).toMatch(/modelCatalog\.map\(/);
-    // The rows are scoped to the selected backend, so the key carries it too.
-    expect(screen).toMatch(/\[modelCatalog, selectedBackendId\]/);
+    // The rows are scoped to the selected backend, so the key carries it too —
+    // plus the model locks the 2026-09-16 turn-failure feature reads.
+    expect(screen).toMatch(/\[modelCatalog, selectedBackendId, activeGateway\?\.modelLocks\]/);
     // The prop reads the memoized array by name.
     expect(screen).toMatch(/models=\{\s*modelRows\s*\}/);
   });

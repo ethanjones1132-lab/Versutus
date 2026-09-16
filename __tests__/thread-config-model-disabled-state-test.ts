@@ -19,20 +19,17 @@ function readNewAgentSource(): string {
   );
 }
 
-// The thread-config model card renders with `disabled={item.available ===
-// false}` and dims to `opacity: 0.6`, yet its accessibilityState carried only
-// `{ selected: isCurrent }` — half-announced against the sibling
-// new-agent-sheet.tsx:165 precedent `{{ selected, disabled:
-// item.available === false }}` for the same condition. The fix extends the
-// model card's state object with the disabled half; PressableScale spreads
-// PressableProps onto its inner Pressable so the prop just works.
+// The thread-config model card renders disabled and dimmed at 0.6, and its
+// accessibilityState carries the full `{ selected, disabled }` shape. As of
+// the 2026-09-16 model-lock feature the disabled boolean also covers a
+// recorded turn failure (`|| locked`), so the pins below allow either shape.
 describe('Thread-config model-card disabled screen-reader state', () => {
-  test('the model card declares accessibilityState.disabled bound to item.available === false', () => {
+  test('the model card declares accessibilityState.disabled bound to the availability gate', () => {
     const src = readThreadConfigSource();
     // Anchor on the model card's unique label so the match cannot land on
     // the session card (selected-only) or the section header (expanded).
     expect(src).toMatch(
-      /accessibilityLabel=\{`Apply model \$\{name\}`\}[\s\S]*?accessibilityState=\{\{\s*selected:\s*isCurrent,\s*disabled:\s*item\.available === false\s*\}\}/,
+      /accessibilityLabel=\{`Apply model \$\{name\}`\}[\s\S]*?accessibilityState=\{\{\s*selected:\s*isCurrent,\s*disabled:\s*item\.available === false \|\| locked\s*\}\}/,
     );
   });
 
@@ -55,17 +52,18 @@ describe('Thread-config model-card disabled screen-reader state', () => {
     expect(src).toContain('accessibilityLabel={`Apply model ${name}`}');
   });
 
-  test('the disabled gate stays byte-identical', () => {
+  test('the disabled gate stays bound to the availability gate plus the lock', () => {
     const src = readThreadConfigSource();
     // The tap gate and the announced state must read the same boolean or the
-    // announcement lies about what a tap will do.
-    expect(src).toContain('disabled={item.available === false}');
+    // announcement lies about what a tap will do. (The turn-failure lock was
+    // added 2026-09-16; the boolean widened from `available === false`.)
+    expect(src).toContain('disabled={item.available === false || locked}');
   });
 
   test('the 0.6 dim stays byte-identical', () => {
     const src = readThreadConfigSource();
     // The sighted-only cue the announcement now mirrors.
-    expect(src).toContain('opacity: item.available === false ? 0.6 : 1');
+    expect(src).toContain('opacity: item.available === false || locked ? 0.6 : 1');
   });
 
   test('the session card stays selected-only with no disabled half', () => {

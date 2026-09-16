@@ -55,6 +55,11 @@ export type GatewayProfile = {
    * Not a backend — see ADR 0014.
    */
   botModels?: Record<string, string>;
+  /**
+   * Model ids this device recorded a failed turn for, keyed by the model the
+   * failed turn was sent with (run-failures.ts `ModelTurnLock`).
+   */
+  modelLocks?: Record<string, import('@/lib/gateway/run-failures').ModelTurnLock>;
   /** Provider that owns the selected model. */
   providerId?: string;
   createdAt: number;

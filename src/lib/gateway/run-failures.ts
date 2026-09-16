@@ -16,6 +16,153 @@
 
 import { sameModelId } from '@/lib/gateway/model-selection';
 
+/**
+ * A recorded failure of a pinned model, kept on the device against the
+ * profile that pinned it.
+ */
+export type ModelTurnLock = {
+  /** The qualified pin the failed turn was sent with. */
+  model: string;
+  /** The upstream refusal text, verbatim. */
+  reason: string;
+  /** When this device recorded the failure (epoch ms). */
+  recordedAt: number;
+  /** The profile that pinned it, when the caller knew one. */
+  profileId?: string;
+};
+
+/**
+ * The whole-message shape a Hermes host answers an unusable model with
+ * (Hermes API-server chat path, reproduced 2026-09-16 via POST
+ * /v1/chat/completions). Only a message that IS this shape is a refusal —
+ * a real reply that merely MENTIONS "HTTP 400" stays a reply.
+ */
+export function upstreamModelRefusal(message: string | undefined | null): string | null {
+  const text = message?.trim() ?? '';
+  const match = text.match(/^HTTP \d{3}: .+$/i);
+  return match ? text : null;
+}
+
+/** The model a failed turn was sent with, when the caller knows it. */
+export type ModelTurnContext = {
+  model?: string;
+  profileId?: string;
+};
+
+/**
+ * Record (or drop) the on-device lock a failed turn earns.
+ *
+ * The catalogue's `available` flag only reflects the provider's sign-in and
+ * the picker's own gate; a model ·marked· available can still fail every
+ * turn (2026-09-16: `omen-alpha` listed under the wrong provider id in a
+ * Bot's catalogue, `available: true`, every chat 400'd). After a turn
+ * returns the whole-message upstream refusal for a pinned model, keep that
+ * verdict on the device: the picker then shows the row locked with its
+ * reason, and the stale-pin fold can fall back from it.
+ *
+ * `answered` (a turn on the same model completing) clears the lock — the
+ * operator re-pinned after the host gained the provider, and the model
+ * clearly CAN answer here. This keeps `recordModelTurnFailure` and the
+ * answer path the same pure fold: a lock can only be earned by a failure
+ * and dropped by an answer or a clear, never by guessing.
+ */
+export function recordModelTurnFailure(
+  locks: Record<string, ModelTurnLock> | undefined,
+  turn: { raw?: string; answered?: boolean },
+  context: ModelTurnContext = {},
+): Record<string, ModelTurnLock> {
+  const model = context.model?.trim();
+  if (turn.answered === true && model) {
+    if (!locks?.[model]) return locks ?? {};
+    const next = { ...locks };
+    delete next[model];
+    return next;
+  }
+  const reason = upstreamModelRefusal(turn.raw);
+  if (!reason || !model) return locks ?? {};
+  const existing = locks?.[model];
+  if (existing) return locks ?? {};
+  return {
+    ...(locks ?? {}),
+    [model]: { model, reason, recordedAt: Date.now(), profileId: context.profileId },
+  };
+}
+
+/**
+ * Pick the first visible, unlocked model as a fallback for a pinned one.
+ * Pure — the caller passes whatever rows it has and decides whether to apply.
+ */
+export function modelLockFallback(
+  rows: readonly { id: string; available?: boolean; modelLocks?: Record<string, ModelTurnLock> }[],
+  pinned: string | undefined,
+): string | undefined {
+  if (!pinned) return undefined;
+  return rows.find(
+    (row) =>
+      row.available !== false &&
+      !isModelLocked(row.modelLocks ?? {}, row.id) &&
+      !sameModelId(row.id, pinned),
+  )?.id;
+}
+
+/**
+ * The picker consults locks BEFORE catalogue availability, so the picker's
+ * cheap sign-in gate never hides a model that carries a recorded turn
+ * failure on this device.
+ */
+export function isModelLocked(
+  locks: Record<string, ModelTurnLock> | null | undefined,
+  modelId: string | null | undefined,
+): boolean {
+  if (!modelId) return false;
+  const key = modelId.trim();
+  if (!key) return false;
+  if (locks?.[key]) return true;
+  return Object.keys(locks ?? {}).some((locked) => sameModelId(locked, key));
+}
+
+/**
+ * The lock a model id resolves to, exact id first then under qualification
+ * (`omen-alpha` matches a lock recorded for `opencode-go/omen-alpha`).
+ */
+export function modelLockFor(
+  locks: Record<string, ModelTurnLock> | null | undefined,
+  modelId: string | null | undefined,
+): ModelTurnLock | undefined {
+  if (!modelId) return undefined;
+  const key = modelId.trim();
+  if (!key) return undefined;
+  const exact = locks?.[key];
+  if (exact) return exact;
+  const match = Object.entries(locks ?? {}).find(([locked]) => sameModelId(locked, key));
+  return match?.[1];
+}
+
+/** Release the on-device lock for `modelId` (the operator cleared it). */
+export function clearModelLock(
+  locks: Record<string, ModelTurnLock> | undefined,
+  modelId: string,
+): Record<string, ModelTurnLock> {
+  const a = modelLockFor(locks, modelId);
+  if (!a) return locks ?? {};
+  const next = { ...locks };
+  delete next[a.model];
+  return next;
+}
+
+/** The operator-facing line for a locked row: what it said and what to do. */
+export function modelLockNote(lock: ModelTurnLock): string {
+  const why = lock.reason?.trim() ? ` Reason: ${lock.reason.trim()}` : '';
+  return `Locked on this device: ${lock.model}.${why} Pick another model or clear the lock.`;
+}
+
+/** The lock carried by every visible gate — counts nothing but actual tags. */
+export function failedModelLocks(
+  rows: readonly { id?: string; modelLocks?: unknown }[],
+): { id?: string; modelLocks?: unknown }[] {
+  return rows.filter((row) => row.modelLocks !== undefined && row.modelLocks !== null);
+}
+
 export type RunFailureKind =
   /** Multiplex off (ADR 0008): named-prefix chat fails until the host enables it. */
   | 'multiplex_disabled'

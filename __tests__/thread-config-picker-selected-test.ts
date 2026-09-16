@@ -42,9 +42,10 @@ describe('Thread-config picker-card screen-reader state', () => {
     // Anchor on the model card's unique label so the match cannot land on
     // the session card or the section header. The state object also carries
     // disabled (see thread-config-model-disabled-state-test.ts) so the pin
-    // allows the trailing disabled half after selected.
+    // allows the trailing disabled half after selected — widened 2026-09-16
+    // to `item.available === false || locked` for the model-turn lock.
     expect(src).toMatch(
-      /accessibilityLabel=\{`Apply model \$\{name\}`\}[\s\S]*?accessibilityState=\{\{\s*selected:\s*isCurrent,\s*disabled:\s*item\.available === false\s*\}\}/,
+      /accessibilityLabel=\{`Apply model \$\{name\}`\}[\s\S]*?accessibilityState=\{\{\s*selected:\s*isCurrent,\s*disabled:\s*item\.available === false \|\| locked\s*\}\}/,
     );
   });
 
@@ -57,8 +58,8 @@ describe('Thread-config picker-card screen-reader state', () => {
     // plain view).
     const roles = src.match(/accessibilityRole="button"/g) ?? [];
     // Session card, session-delete button, session Pin, session Rename,
-    // model card, section header.
-    expect(roles.length).toBe(6);
+    // model card, section header, model-lock Clear (2026-09-16).
+    expect(roles.length).toBe(7);
   });
 
   test('both picker labels stay byte-identical', () => {
@@ -73,11 +74,12 @@ describe('Thread-config picker-card screen-reader state', () => {
     expect(src).toContain('accessibilityLabel={`Apply model ${name}`}');
   });
 
-  test('the model card keeps disabled={item.available === false} byte-identical', () => {
+  test('the model card keeps its disabled gate bound to the availability gate plus the lock', () => {
     const src = readThreadConfigSource();
     // The disabled gate dims unavailable models; the new selected state must
-    // follow isCurrent, not bypass the availability gate.
-    expect(src).toContain('disabled={item.available === false}');
+    // follow isCurrent, not bypass the availability gate. The boolean widened
+    // 2026-09-16 to `|| locked` (the model-turn lock).
+    expect(src).toContain('disabled={item.available === false || locked}');
   });
 
   test('the session-delete gate stays byte-identical', () => {

@@ -77,7 +77,7 @@ import {
   type GroupTurnError,
 } from '@/lib/gateway/groups';
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
-import { formatRunFailure, modelSubstitutionNote, shouldShowModelSubstitution } from '@/lib/gateway/run-failures';
+import { formatRunFailure, modelLockFallback, modelLockFor, modelSubstitutionNote, recordModelTurnFailure, shouldShowModelSubstitution, upstreamModelRefusal, clearModelLock as clearModelLockFn } from '@/lib/gateway/run-failures';
 import { resolveDefaultBackend } from '@/lib/gateway/backend-defaults';
 import {
   decideEnvironmentProbe,
@@ -487,6 +487,8 @@ type GatewayContextValue = {
   openModelPicker: (mode: 'default' | 'fallbacks' | 'agent', agentId?: string) => void;
   closeModelPicker: () => void;
   selectModel: (modelId: string, providerId?: string) => void;
+  /** Drop this device's recorded turn-failure lock for a model. */
+  clearModelLock: (modelId: string) => void;
   modelCatalog: any[];
   /** Set when the last model-catalog read failed. A cached catalog stays usable. */
   modelCatalogError?: string;
@@ -2336,6 +2338,26 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // Mark as complete
         setMessages((prev) => finalizeStreamingMessage(prev, runId));
         setLastError(null);
+        // A turn that completed on the pinned model is the strongest proof it
+        // runs: drop any lock a previous failed turn recorded (the operator
+        // may have re-pinned after the host gained the provider), mirroring
+        // the record-on-failure arm below. Only re-persists when a lock was
+        // actually held, so ordinary turns change nothing.
+        {
+          const sentModel = resolveSendModel(gateway, selectedBackendId, selectedBotId).model;
+          const held = sentModel
+            ? modelLockFor(activeGatewayRef.current?.modelLocks, sentModel)
+            : undefined;
+          if (held) {
+            const next = {
+              ...gateway,
+              modelLocks: clearModelLockFn(activeGatewayRef.current?.modelLocks, sentModel!),
+            };
+            activeGatewayRef.current = next;
+            setActiveGateway(next);
+            void upsertGateway(next).then(setGateways);
+          }
+        }
         // Bot-to-bot handoff after a successful reply: deliver @mentions of
         // other bots on the roster. Failures here used to be swallowed — the
         // user believed the other bot received the handoff when it did not.
@@ -2366,6 +2388,26 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        // A turn whose whole answer is the upstream model-ID refusal makes the
+        // pinned model unusable through Hermes (2026-09-16: omen-alpha under
+        // opencode-go in a Bot's catalogue). Record the verdict on this
+        // device so the picker shows the row locked and the pin repair can
+        // read it; a model that never fails keeps no lock. Best-effort: the
+        // record must never lose the failure already standing.
+        const sentModel = resolveSendModel(gateway, selectedBackendId, selectedBotId).model;
+        if (sentModel && upstreamModelRefusal(message)) {
+          const updated = recordModelTurnFailure(
+            activeGatewayRef.current?.modelLocks,
+            { raw: message },
+            { model: sentModel, profileId: gateway.id },
+          );
+          if (updated !== activeGatewayRef.current?.modelLocks) {
+            const next = { ...gateway, modelLocks: updated };
+            activeGatewayRef.current = next;
+            setActiveGateway(next);
+            void upsertGateway(next).then(setGateways);
+          }
+        }
         const aborted = isUserAbort(error, abortController.signal);
         if (aborted) {
           batcher.cancel();
@@ -2391,6 +2433,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
     },
     [activeGateway, isSending, selectedBackendId, selectedBotId],
+  );
+
+  /**
+   * Release a recorded turn-failure lock the operator has dismissed — the
+   * same fold `recordModelTurnFailure`'s answered arm takes, when the
+   * operator clears it from the picker before a turn ever runs.
+   */
+  const clearDeviceModelLock = useCallback(
+    (modelId: string) => {
+      const gateway = activeGateway;
+      if (!gateway || !modelId.trim()) return;
+      const updated = clearModelLockFn(activeGatewayRef.current?.modelLocks, modelId.trim());
+      if (updated === activeGatewayRef.current?.modelLocks) return;
+      const next = { ...gateway, modelLocks: updated };
+      activeGatewayRef.current = next;
+      setActiveGateway(next);
+      void upsertGateway(next).then(setGateways);
+    },
+    [activeGateway],
   );
 
   const resolveRunApproval = useCallback((approved: boolean, feedback?: string) => {
@@ -3932,6 +3993,40 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // have re-picked while the catalogue read was in flight.
       const current = activeGatewayRef.current ?? fallbackGateway;
       if (!current) return;
+      // This device's own turn-failure verdict for the pin outranks a
+      // catalogue that still says available (2026-09-16: omen-alpha marked
+      // available under a provider every turn refused). A lock forces the
+      // stale path even when the catalogue lists the model.
+      const sentModel = effectiveModel(current, backendId, botId);
+      if (sentModel && modelLockFor(current.modelLocks, sentModel)) {
+        const fallback = modelLockFallback(
+          catalog.map((entry) => ({ ...entry, modelLocks: current.modelLocks })),
+          sentModel,
+        );
+        const stale = {
+          pinned: sentModel,
+          ...(fallback ? { fallback } : {}),
+          reason: 'unavailable' as const,
+        };
+        if (!stale.fallback) {
+          setMessages((prev) => appendSystemNote(prev, stalePinNote(stale)));
+          return;
+        }
+        const updated = withSelectedModel(current, stale.fallback, backendId, botId);
+        sessionIdRef.current = undefined;
+        setCurrentSessionId(undefined);
+        const pinnedProfile = pinLiveSession({
+          client: clientRef.current ?? { setSessionId: () => undefined },
+          sessionId: undefined,
+          profile: updated,
+        });
+        const next = pinnedProfile ?? updated;
+        activeGatewayRef.current = next;
+        setActiveGateway(next);
+        void upsertGateway(next).then(setGateways);
+        setMessages((prev) => appendSystemNote(prev, stalePinNote(stale)));
+        return;
+      }
       const stale = staleModelPin(catalog, effectiveModel(current, backendId, botId), {
         // A Bot's catalogue is its Hermes catalogue, which enumerates every
         // configured provider; elsewhere absence still proves nothing.
@@ -4286,6 +4381,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       openModelPicker,
       closeModelPicker,
       selectModel,
+      clearModelLock: clearDeviceModelLock,
       modelCatalog,
       modelCatalogError,
       sessionSelector,
@@ -4320,7 +4416,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       approveTlsFingerprintChange,
       rejectTlsFingerprintChange,
       runTask, activityRuns, stopActivityRun, loadRunEvents, modelPicker, openModelPicker, closeModelPicker,
-      selectModel, modelCatalog, modelCatalogError, sessionSelector,
+      selectModel, modelCatalog, modelCatalogError, sessionSelector, clearDeviceModelLock,
       openSessionSelector, closeSessionSelector, selectSession, sessionListState, currentSessionId,
       sessionListHasOlder, loadingOlderSessions, loadOlderSessions,
       historyLoading, createNewSession, deleteSessionById, deleteLocalMessage,
