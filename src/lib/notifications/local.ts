@@ -1,7 +1,7 @@
 // ─── Local notifications (ADR-0001) ───────────────────────────────
-// The app fires these itself while its connection to the gateway is
-// alive. True server-delivered push is deferred behind the Phase D
-// relay; nothing here claims otherwise.
+// The app fires these itself only while its connection to the Gateway is
+// alive. They do not deliver new Gateway events after that connection is lost.
+// True push is delivered separately by the Gate relay via the Expo Push Service.
 
 import * as Notifications from 'expo-notifications';
 import { AppState, Platform } from 'react-native';

@@ -182,7 +182,9 @@ Coverage is mid-40s and rising, scoped deliberately to `src/lib/gateway` — the
 
 Stated plainly, because a client that pretends otherwise will lie to its user:
 
-- **True push, background keepalive, and public-internet relay require a companion server.** Not invented here. Local notifications fire only while the app's gateway connection is alive.
+- **True push is implemented by the Versutus Gate relay** for replies, run results, approvals, and Routine results. Delivery requires the Gate companion server to be running with access to the Expo Push Service, plus a registered device with notification permission and push enabled. This can deliver notices without an active app connection; delivery still depends on Expo and the device OS, not a guarantee from the app.
+- **Local notifications fire only while the app's Gateway connection is alive.** These app-fired notices are separate from true push and cannot announce new Gateway events after the connection is lost.
+- **Push does not keep the app alive or expose the Gateway to the public internet.** Background keepalive and public-internet access require separate infrastructure; enabling notifications provides neither.
 - **Hermes host-only administration** — config file, channel daemons, on-disk logs — is guidance surfaced in slash commands, not remote REST. The app does not pretend to reach them.
 - **Shell requires a gateway that advertises a terminal endpoint.** Hermes does not.
 - **Discovery TLS fingerprints are observed, not pinned.** See above.
