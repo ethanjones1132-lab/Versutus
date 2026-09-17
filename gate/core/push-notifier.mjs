@@ -262,20 +262,20 @@ export function createPushNotifier({ tokens, send, snapshot = null, now }) {
     const classified = classifiedEvent(event);
     if (!classified) return { ok: true, sent: 0 };
 
+    // The dedupe must answer "did I already speak for THIS event?", not "did
+    // this row already speak?". One event produces one notice per eligible
+    // device, so the key is claimed once before the device loop — claiming it
+    // inside the loop would let the first recipient consume the slot and skip
+    // every later device.
+    const key = `${classified.trigger}:${classified.id}:${event?.state ?? ''}`;
+    if (!remember(key)) return { ok: true, sent: 0 };
+
     const rows = await tokens.listEnabled();
     const messages = [];
     for (const row of Array.isArray(rows) ? rows : []) {
       if (!isRecord(row) || row.enabled !== true || typeof row.expoPushToken !== 'string' || !row.expoPushToken) continue;
       if (!allowedForBot(row, event?.botId)) continue;
       if (isQuiet(row, localMinutes(row.timezone, nowSource())) && !quietExemptsEvent(row, classified)) continue;
-      // The dedupe must answer "did I already speak for THIS turn?", not
-      // "did this Session ever produce a reply?". A Session earns one
-      // notification per completed turn, and a cron job one per scheduled
-      // execution (each execution carries its own timestamped Session).
-      // Only retries of the literally-same delivery collapse onto one key —
-      // as does an unchanged `remember(key)` replay.
-      const key = `${classified.trigger}:${classified.id}:${event?.state ?? ''}`;
-      if (!remember(key)) continue;
       messages.push(messageFor(classified, event, row));
       const companion = widgetCompanion(row, event, snapshot);
       if (companion) messages.push(companion);

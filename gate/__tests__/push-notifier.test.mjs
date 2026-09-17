@@ -236,6 +236,26 @@ test('deduplicates one final response per session transition', async () => {
   assert.equal(sent[0].data.sessionId, 'session-1');
 });
 
+test('every enabled device receives one event; one device cannot consume the dedupe slot', async () => {
+  const tokens = {
+    listEnabled: async () => [row({ expoPushToken: 'ExponentPushToken[token-1]' }), row({ expoPushToken: 'ExponentPushToken[token-2]' })],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({ trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'done' });
+
+  assert.deepEqual(
+    sent.map((message) => message.to).sort(),
+    ['ExponentPushToken[token-1]', 'ExponentPushToken[token-2]'],
+    'both enabled devices must appear in the send batch',
+  );
+
+  await notifier.notify({ trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'done' });
+  assert.equal(sent.length, 2, 'a replayed event still stays deduped across the fleet');
+});
+
 test('two distinct replies in one Session each reach the device', async () => {
   const tokens = {
     listEnabled: async () => [row()],
