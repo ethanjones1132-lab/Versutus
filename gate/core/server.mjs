@@ -220,6 +220,16 @@ async function proxyChat(root, provider, requestBody, res) {
   await relayNormalizedSse(upstreamResponse, flavorModule, res);
 }
 
+function endProviderStreamWithError(res, error) {
+  if (res.destroyed || res.writableEnded) return;
+  const message = typeof error?.message === 'string' && error.message.trim()
+    ? error.message : 'Provider stream interrupted before completion';
+  const code = typeof error?.code === 'string' && error.code
+    ? error.code : 'upstream_error';
+  // A failed turn ends with its error, never a success-shaped [DONE] marker.
+  res.end(`data: ${JSON.stringify({ error: { message, code } })}\n\n`);
+}
+
 /**
  * Read an upstream SSE body and re-emit it in the OpenAI delta shape the app's
  * clients parse, whatever dialect the vendor speaks.
@@ -257,6 +267,9 @@ async function relayNormalizedSse(upstreamResponse, flavorModule, res) {
         }
       }
     }
+  } catch (error) {
+    endProviderStreamWithError(res, error);
+    return;
   } finally {
     reader.cancel().catch(() => {});
   }
@@ -648,9 +661,14 @@ export async function createGate(config = {}) {
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     });
-    for await (const event of result) {
-      const text = typeof event === 'string' ? event : event?.choices?.[0]?.delta?.content;
-      if (text) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
+    try {
+      for await (const event of result) {
+        const text = typeof event === 'string' ? event : event?.choices?.[0]?.delta?.content;
+        if (text) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
+      }
+    } catch (error) {
+      endProviderStreamWithError(res, error);
+      return;
     }
     res.write('data: [DONE]\n\n');
     res.end();
