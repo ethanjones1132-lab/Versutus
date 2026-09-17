@@ -337,6 +337,51 @@ test('createBot refuses a failed model pin without forwarding CLI output', async
   );
 });
 
+for (const [stage, message] of [
+  [0, 'failed to create profile'],
+  [1, 'failed to pin model'],
+  [2, 'failed to pin provider'],
+]) {
+  for (const outcome of ['undefined', 'null', 'terminated', 'rejected']) {
+    test(`createBot reports a safe refusal at command ${stage} when ${outcome}`, async () => {
+      const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+      const argvLog = [];
+      const commands = [
+        { args: ['profile', 'create', 'coder', '--no-alias'], options: { timeoutMs: 60_000 } },
+        { args: ['-p', 'coder', 'config', 'set', 'model.default', 'test-model'], options: { timeoutMs: 15_000 } },
+        { args: ['-p', 'coder', 'config', 'set', 'model.provider', 'test-provider'], options: { timeoutMs: 15_000 } },
+      ];
+      const hermes = createHermesBackend({
+        baseUrl: 'http://h:8642',
+        profilesHome: home,
+        executablePath: 'hermes',
+        runCliImpl: async (_exe, args, options) => {
+          argvLog.push({ args, options });
+          if (argvLog.length - 1 !== stage) return { code: 0, stdout: '', stderr: '' };
+          if (outcome === 'rejected') throw new Error('transport failed: API_SERVER_KEY=test-listen-key');
+          if (outcome === 'terminated') return { code: null, stdout: '', stderr: '' };
+          return outcome === 'null' ? null : undefined;
+        },
+      });
+
+      await assert.rejects(
+        () => hermes.createBot({
+          name: 'coder', soul: 'A focused Bot.', modelId: 'test-model', providerId: 'test-provider',
+        }),
+        (error) => {
+          assert.equal(error.code, 'bot_create_failed');
+          assert.equal(error.status, 502);
+          assert.equal(error.message, message);
+          assert.doesNotMatch(error.stack, /test-listen-key|transport failed/);
+          assert.doesNotMatch(JSON.stringify(error), /test-listen-key|transport failed/);
+          return true;
+        },
+      );
+      assert.deepEqual(argvLog, commands.slice(0, stage + 1));
+    });
+  }
+}
+
 test('createBot returns a Bot after a successful provider-only pin', async () => {
   const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
   const argvLog = [];

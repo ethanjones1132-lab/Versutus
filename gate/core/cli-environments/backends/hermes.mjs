@@ -660,16 +660,21 @@ export function createHermesBackend({
         error.status = 409;
         throw error;
       }
-      const args = createBotArgs({ name: id, inheritKeys, description });
-      const result = await runCliImpl(executablePath, args, { timeoutMs: 60_000 });
-      if (result.code !== 0) {
-        // CLI diagnostics can contain inherited credentials (the provider-pin
-        // branch below names its failure the same way).
-        const error = new Error('failed to create profile');
+      const runCreateCommand = async (args, timeoutMs, message) => {
+        let result;
+        try {
+          result = await runCliImpl(executablePath, args, { timeoutMs });
+        } catch {
+          // Transport errors, like CLI output, can contain inherited credentials.
+        }
+        if (result?.code === 0) return;
+        const error = new Error(message);
         error.code = 'bot_create_failed';
         error.status = 502;
         throw error;
-      }
+      };
+      const args = createBotArgs({ name: id, inheritKeys, description });
+      await runCreateCommand(args, 60_000, 'failed to create profile');
       const botHome = join(profilesHome, 'profiles', id);
       await mkdir(botHome, { recursive: true });
       const defaultKey = (await getHermesBot(profilesHome, 'default'))?.listenKey ?? null;
@@ -685,32 +690,18 @@ export function createHermesBackend({
         await writeFile(join(botHome, 'SOUL.md'), soul, 'utf8');
       }
       if (modelId) {
-        const pin = await runCliImpl(
-          executablePath,
+        await runCreateCommand(
           ['-p', id, 'config', 'set', 'model.default', String(modelId)],
-          { timeoutMs: 15_000 },
+          15_000,
+          'failed to pin model',
         );
-        if (pin.code !== 0) {
-          // CLI diagnostics can contain inherited credentials.
-          const error = new Error('failed to pin model');
-          error.code = 'bot_create_failed';
-          error.status = 502;
-          throw error;
-        }
       }
       if (providerId) {
-        const pin = await runCliImpl(
-          executablePath,
+        await runCreateCommand(
           ['-p', id, 'config', 'set', 'model.provider', String(providerId)],
-          { timeoutMs: 15_000 },
+          15_000,
+          'failed to pin provider',
         );
-        if (pin.code !== 0) {
-          // CLI diagnostics can contain inherited credentials.
-          const error = new Error('failed to pin provider');
-          error.code = 'bot_create_failed';
-          error.status = 502;
-          throw error;
-        }
       }
       const record = await getHermesBot(profilesHome, id);
       return toPublicBot(
