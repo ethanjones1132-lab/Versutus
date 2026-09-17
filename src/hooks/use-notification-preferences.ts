@@ -164,6 +164,8 @@ export function useNotificationPreferences() {
             ? 'The Gate has no token for this device yet — reconnect, then try again.'
             : `The Gate skipped the test (${result.skipped}).`,
         );
+      } else if (result?.ok !== true) {
+        setError('The Gate could not send the test through Expo — try again.');
       } else {
         setTestResult('Test sent — it should arrive with the app backgrounded or killed.');
       }
