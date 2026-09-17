@@ -15,6 +15,7 @@
 
 import { describeCronHealth, type CronHealth } from '@/lib/gateway/cron';
 import { parseRoutineName } from '@/lib/gateway/routines';
+import type { FleetRosterReadStatus } from '@/lib/fleet/roster-read';
 import type { FleetRoutineReadStatus } from '@/lib/fleet/routine-read';
 
 export const CONSTELLATION_WIDTH = 640;
@@ -49,6 +50,7 @@ export type ConstellationInput = {
   reachability?: FleetReachability;
   /** The connected gateway's roster; the only one this device can read. */
   roster?: FleetBotInput[];
+  rosterReadStatus?: FleetRosterReadStatus;
   cronJobs?: unknown[];
   routineReadStatus?: FleetRoutineReadStatus;
   activityRuns?: FleetRunInput[];
@@ -100,6 +102,7 @@ export type ConstellationModel = {
     running: number;
     approvals: number;
     routineReadStatus?: FleetRoutineReadStatus;
+    rosterReadStatus?: FleetRosterReadStatus;
   };
 };
 
@@ -184,6 +187,9 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
     nodes.push(gatewayNode);
 
     if (!live) return;
+    const rosterWarning: ConstellationBadge | undefined = input.rosterReadStatus && input.rosterReadStatus !== 'ready'
+      ? { label: `Roster ${input.rosterReadStatus}`, tone: 'neutral' } : undefined;
+    if (rosterWarning) badges.push(rosterWarning);
     const roster = input.roster ?? [];
     // Bots wrap into rows beneath their gateway at a spacing a label can own.
     // The row used to compress to fit the sky instead: at 15 Bots that was 41
@@ -208,7 +214,7 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
       );
       const botX = rowLeft + (botIndex - rowStart) * BOT_SPACING;
       const botY = y + BOT_ROW_OFFSET + row * BOT_ROW_GAP;
-      const botBadges: ConstellationBadge[] = [];
+      const botBadges: ConstellationBadge[] = rosterWarning ? [rosterWarning] : [];
       let runningRunName: string | undefined;
       if (runningBots.has(bot.id)) {
         botBadges.push({ label: 'Running', tone: 'accent' });
@@ -295,6 +301,7 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
       running: runningTotal,
       approvals: approvalsTotal,
       routineReadStatus,
+      rosterReadStatus: input.rosterReadStatus,
     },
   };
 }
@@ -575,12 +582,19 @@ export function constellationSummaryCopy(summary: ConstellationModel['summary'])
       ? '1 gateway saved — none connected'
       : `${summary.gateways} gateways saved — none connected`;
   }
-  const bots = summary.bots === 1 ? '1 Bot' : `${summary.bots} Bots`;
+  const rosterStatus = summary.rosterReadStatus;
+  const bots = rosterStatus === 'unreported' || rosterStatus === 'unavailable'
+    ? `Roster ${rosterStatus}`
+    : rosterStatus === 'stale'
+      ? `${summary.bots} last-known Bot${summary.bots === 1 ? '' : 's'}`
+      : summary.bots === 1 ? '1 Bot' : `${summary.bots} Bots`;
   const rest: string[] = [];
+  if (rosterStatus === 'stale') rest.push('Roster stale');
   if (summary.running > 0) rest.push(`${summary.running} running`);
   if (summary.approvals > 0) rest.push(`${summary.approvals} approvals waiting`);
   if (summary.routineReadStatus && summary.routineReadStatus !== 'ready') {
     rest.push(`routines ${summary.routineReadStatus}`);
   }
-  return rest.length > 0 ? `${bots} · ${rest.join(' · ')}` : `${bots} · all quiet`;
+  if (rest.length > 0) return `${bots} · ${rest.join(' · ')}`;
+  return rosterStatus === 'unreported' || rosterStatus === 'unavailable' ? bots : `${bots} · all quiet`;
 }

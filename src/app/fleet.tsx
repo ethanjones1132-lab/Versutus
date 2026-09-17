@@ -8,16 +8,13 @@ import { Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
-import type { PublicBot } from '@/lib/gateway/bots';
 import { botTap } from '@/lib/fleet/bot-tap';
 import { botSheetView, type BotSheetView } from '@/lib/fleet/bot-sheet';
 import { fleetConstellationInput } from '@/lib/fleet/constellation-input';
 import { constellationModel, type ConstellationNode } from '@/lib/fleet/constellation-model';
 import { gatewayHandshake } from '@/lib/fleet/gateway-handshake';
 import { fleetRoutineRead } from '@/lib/fleet/routine-read';
-
-/** One stable empty roster, so a disconnected render keeps its memo. */
-const NO_ROSTER: PublicBot[] = [];
+import { failFleetRosterRead, fleetRosterRead, UNREPORTED_ROSTER } from '@/lib/fleet/roster-read';
 
 /**
  * D2's destination, rebuilt: the fleet as a living star map. It reads only
@@ -48,28 +45,34 @@ export default function FleetScreen() {
     connectGateway,
   } = useGateway();
   const reachability = useGatewayReachability({ gateways, activeGateway, status });
-  const [roster, setRoster] = useState<PublicBot[]>([]);
+  const [rosterRead, setRosterRead] = useState(UNREPORTED_ROSTER);
+  const rosterRequest = useMemo(
+    () => ({ gatewayId: activeGateway?.id, status, listBots }),
+    [activeGateway?.id, status, listBots],
+  );
 
-  // The connected gateway's roster, through the read the Chat roster already
-  // uses. One read on connect, never a poll; a refusal leaves the cluster
-  // empty rather than inventing Bots. A stale roster from a previous
-  // connection is masked below rather than cleared in the effect body.
+  // One existing read per connection, never a poll. The request identity
+  // masks a prior connection before its effect runs; late results are ignored.
   useEffect(() => {
-    if (status !== 'connected') return undefined;
+    const { gatewayId, status: readStatus, listBots } = rosterRequest;
+    if (readStatus !== 'connected' || !gatewayId) return undefined;
     let cancelled = false;
     void listBots()
       .then((bots) => {
-        if (!cancelled) setRoster(bots);
+        if (!cancelled) setRosterRead({ gatewayId, bots, status: 'ready', request: rosterRequest });
       })
       .catch(() => {
-        if (!cancelled) setRoster([]);
+        if (!cancelled) setRosterRead((read) => failFleetRosterRead(read, gatewayId, rosterRequest));
       });
     return () => {
       cancelled = true;
     };
-  }, [status, listBots]);
+  }, [rosterRequest]);
 
-  const connectedRoster = status === 'connected' ? roster : NO_ROSTER;
+  const connectedRosterRead = useMemo(() => fleetRosterRead(rosterRead,
+    status === 'connected' ? activeGateway?.id : undefined, rosterRequest),
+  [rosterRead, status, activeGateway?.id, rosterRequest]);
+  const connectedRoster = connectedRosterRead.bots;
 
   // The connected gateway's routine read, through the provider state the
   // widget write reads once per connected transition — one read, two
@@ -123,6 +126,7 @@ export default function FleetScreen() {
           gateways,
           connectedGatewayId: status === 'connected' ? activeGateway?.id : undefined,
           reachability,
+          rosterReadStatus: connectedRosterRead.status,
           roster: connectedRoster.map((bot) => ({ id: bot.id, displayName: bot.displayName })),
           routineReadStatus: connectedRoutineRead.status,
           cronJobs: connectedRoutineJobs.map((job) => ({
@@ -147,6 +151,7 @@ export default function FleetScreen() {
       activeGateway?.id,
       reachability,
       connectedRoster,
+      connectedRosterRead.status,
       connectedRoutineJobs,
       connectedRoutineRead.status,
       activityRuns,
