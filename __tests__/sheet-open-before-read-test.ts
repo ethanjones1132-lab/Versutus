@@ -46,7 +46,7 @@ describe('sheet openers show the sheet before reading', () => {
     const fn = provider.match(/const openSessionSelector = useCallback\([\s\S]*?\n  \}, \[\]\);/)?.[0];
     expect(fn).toBeDefined();
     const show = fn!.indexOf('setSessionSelector({ visible: true })');
-    const read = fn!.indexOf('await client.getSessions');
+    const read = fn!.indexOf('await readSessionList');
     expect(show).toBeGreaterThan(-1);
     expect(read).toBeGreaterThan(-1);
     // The whole defect: visibility used to come after the await.
@@ -56,13 +56,16 @@ describe('sheet openers show the sheet before reading', () => {
   test('openSessionSelector never re-shows the sheet after the await', () => {
     // A read landing after the operator dismissed used to re-open the sheet.
     const fn = provider.match(/const openSessionSelector = useCallback\([\s\S]*?\n  \}, \[\]\);/)?.[0];
-    const afterAwait = fn!.slice(fn!.indexOf('await client.getSessions'));
+    const afterAwait = fn!.slice(fn!.indexOf('await readSessionList'));
     expect(afterAwait).not.toContain('setSessionSelector');
   });
 
   test('a superseded read is dropped instead of overwriting a fresher one', () => {
     const fn = provider.match(/const openSessionSelector = useCallback\([\s\S]*?\n  \}, \[\]\);/)?.[0];
-    expect(fn).toContain('if (seq !== sessionReadSeqRef.current) return;');
+    expect(fn).toContain('seq === sessionReadSeqRef.current && clientRef.current === client');
+    expect(fn).toMatch(/await readSessionList\(\s*\(\) => client\.getSessions\(SESSION_LIST_PAGE_SIZE\),\s*isCurrent,/);
+    const reader = readSource('src', 'lib', 'gateway', 'session-list-read.ts');
+    expect(reader).toContain('if (isCurrent()) apply(result);');
   });
 
   test('openModelPicker has the same shape', () => {

@@ -48,6 +48,7 @@ import {
   SESSION_LIST_PAGE_SIZE,
   type SessionListState,
 } from '@/lib/gateway/session-list';
+import { readSessionList } from '@/lib/gateway/session-list-read';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import {
   hasBotManagement as probeBotManagement,
@@ -864,6 +865,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const sessionListLimitRef = useRef(SESSION_LIST_PAGE_SIZE);
   const [sessionListHasOlder, setSessionListHasOlder] = useState(false);
   const [loadingOlderSessions, setLoadingOlderSessions] = useState(false);
+  const loadingOlderSessionsRef = useRef(false);
+  const resetSessionSelector = useCallback(() => {
+    ++sessionReadSeqRef.current;
+    loadingOlderSessionsRef.current = false;
+    sessionListLimitRef.current = SESSION_LIST_PAGE_SIZE;
+    setSessionListState(emptySessionList<HermesSession>());
+    setSessionListHasOlder(false);
+    setLoadingOlderSessions(false);
+  }, []);
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [loadingEarlierHistory, setLoadingEarlierHistory] = useState(false);
@@ -1217,6 +1227,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     (removedIds: readonly string[], remaining: readonly GatewayProfile[]) => {
       if (!retirementTookActiveGateway(removedIds, activeGatewayRef.current)) return;
       clientGenerationRef.current += 1;
+      resetSessionSelector();
       if (autoRetryTimerRef.current) {
         clearTimeout(autoRetryTimerRef.current);
         autoRetryTimerRef.current = null;
@@ -1236,7 +1247,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       void saveActiveGatewayId(null);
       resumeAfterRetiredTeardownRef.current(remaining);
     },
-    [applyStatus],
+    [applyStatus, resetSessionSelector],
   );
 
   const attachClient = useCallback(
@@ -1256,6 +1267,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
       // Supersede the outgoing client so its teardown cannot drive provider state.
       clientGenerationRef.current += 1;
+      resetSessionSelector();
       setActiveManifest(null);
       const generation = clientGenerationRef.current;
       const isCurrent = () => clientGenerationRef.current === generation;
@@ -1538,7 +1550,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // patchActivityRuns is a useCallback with [] deps, so its identity is stable
     // for the provider's lifetime; listing it satisfies exhaustive-deps without
     // changing when this callback is rebuilt.
-    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns, teardownRetiredActiveGateway],
+    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns, teardownRetiredActiveGateway, resetSessionSelector],
   );
 
   const connectGateway = useCallback(
@@ -1904,6 +1916,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const selectBackend = useCallback(
     (backendId: string | undefined) => {
       ++botOpenRequestRef.current;
+      resetSessionSelector();
       const client = clientRef.current as (PortalClient & { setBackendId?: (id: string | undefined) => void }) | null;
       client?.setBackendId?.(backendId);
       client?.setBotId?.(undefined);
@@ -1934,7 +1947,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         void reloadHistoryFor(updated);
       }
     },
-    [activeGateway, reloadHistoryFor],
+    [activeGateway, reloadHistoryFor, resetSessionSelector],
   );
 
   /**
@@ -1968,6 +1981,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // from an effect body trips react-hooks/set-state-in-effect.
       const timer = setTimeout(() => {
         const client = clientRef.current as (PortalClient & { setBackendId?: (id?: string) => void }) | null;
+        resetSessionSelector();
         client?.setBackendId?.(resolved);
         setSelectedBackendId(resolved);
 
@@ -2010,7 +2024,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       });
     }, 0);
     return () => clearTimeout(timer);
-  }, [backends, gatewayRequest, reloadHistoryFor, selectedBackendId, status]);
+  }, [backends, gatewayRequest, reloadHistoryFor, selectedBackendId, status, resetSessionSelector]);
 
 
   const runAgentCommand = useCallback(
@@ -2172,6 +2186,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       activeGateway?.id === id || activeGateway?.parentId === id;
     if (activeWasRemoved) {
       clientGenerationRef.current += 1;
+      resetSessionSelector();
       if (autoRetryTimerRef.current) {
         clearTimeout(autoRetryTimerRef.current);
         autoRetryTimerRef.current = null;
@@ -2208,12 +2223,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         applyConnectionPhase('idle');
       }
     }
-  }, [activeGateway, gateways, settings, runAutoConnect, applyStatus, applyConnectionPhase]);
+  }, [activeGateway, gateways, settings, runAutoConnect, applyStatus, applyConnectionPhase, resetSessionSelector]);
 
   const disconnectGateway = useCallback(() => {
     // Supersede first: the client emits 'disconnected' synchronously, and the
     // stale handler would otherwise queue an auto-retry the user did not ask for.
     clientGenerationRef.current += 1;
+    resetSessionSelector();
     if (autoRetryTimerRef.current) {
       clearTimeout(autoRetryTimerRef.current);
       autoRetryTimerRef.current = null;
@@ -2233,7 +2249,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setIsSending(false);
     applyConnectionPhase('idle');
     void saveActiveGatewayId(null);
-  }, [applyStatus, applyConnectionPhase]);
+  }, [applyStatus, applyConnectionPhase, resetSessionSelector]);
 
   const sendMessage = useCallback(
     async (
@@ -3077,47 +3093,59 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * so a slow first open cannot overwrite a faster second one.
    */
   const openSessionSelector = useCallback(async () => {
-    const seq = sessionReadSeqRef.current + 1;
-    sessionReadSeqRef.current = seq;
+    const seq = ++sessionReadSeqRef.current;
+    loadingOlderSessionsRef.current = false;
+    setLoadingOlderSessions(false);
     setSessionListState(beginSessionListRead);
     setSessionSelector({ visible: true });
     const client = clientRef.current;
     if (!client) return;
-    // A fresh open starts back at one page — a widened window from a
-    // previous "show older" must not stick around and surprise the next
-    // open with a slower read.
+    const isCurrent = () => seq === sessionReadSeqRef.current && clientRef.current === client;
+    // Each open replaces any widened window or in-flight older page.
     sessionListLimitRef.current = SESSION_LIST_PAGE_SIZE;
-    try {
-      const sessions = await client.getSessions(SESSION_LIST_PAGE_SIZE);
-      if (seq !== sessionReadSeqRef.current) return;
-      setSessionListState((previous) => applySessionListRead(previous, { ok: true, sessions }));
-      setSessionListHasOlder(sessionListMayHaveOlder(sessions.length, SESSION_LIST_PAGE_SIZE));
-    } catch {
-      if (seq !== sessionReadSeqRef.current) return;
-      setSessionListState((previous) => applySessionListRead(previous, { ok: false }));
-    }
+    await readSessionList(
+      () => client.getSessions(SESSION_LIST_PAGE_SIZE),
+      isCurrent,
+      (result) => {
+        setSessionListState((previous) => isCurrent() ? applySessionListRead(previous, result) : previous);
+        if (result.ok) {
+          setSessionListHasOlder(sessionListMayHaveOlder(result.sessions.length, SESSION_LIST_PAGE_SIZE));
+        }
+      },
+    );
   }, []);
 
   const loadOlderSessions = useCallback(async () => {
     const client = clientRef.current;
-    if (!client || loadingOlderSessions) return;
+    if (!client || loadingOlderSessionsRef.current) return;
     const nextLimit = nextSessionListLimit(sessionListLimitRef.current);
     if (nextLimit <= sessionListLimitRef.current) {
       setSessionListHasOlder(false);
       return;
     }
+    const seq = ++sessionReadSeqRef.current;
+    const isCurrent = () => seq === sessionReadSeqRef.current && clientRef.current === client;
+    loadingOlderSessionsRef.current = true;
     setLoadingOlderSessions(true);
     try {
-      const sessions = await client.getSessions(nextLimit);
-      sessionListLimitRef.current = nextLimit;
-      setSessionListState((previous) => applySessionListRead(previous, { ok: true, sessions }));
-      setSessionListHasOlder(sessionListMayHaveOlder(sessions.length, nextLimit));
-    } catch {
-      setSessionListState((previous) => applySessionListRead(previous, { ok: false }));
+      await readSessionList(
+        () => client.getSessions(nextLimit),
+        isCurrent,
+        (result) => {
+          setSessionListState((previous) => isCurrent() ? applySessionListRead(previous, result) : previous);
+          if (result.ok) {
+            sessionListLimitRef.current = nextLimit;
+            setSessionListHasOlder(sessionListMayHaveOlder(result.sessions.length, nextLimit));
+          }
+        },
+      );
     } finally {
-      setLoadingOlderSessions(false);
+      if (isCurrent()) {
+        loadingOlderSessionsRef.current = false;
+        setLoadingOlderSessions(false);
+      }
     }
-  }, [loadingOlderSessions]);
+  }, []);
 
   const closeSessionSelector = useCallback(() => {
     setSessionSelector({ visible: false });
@@ -3872,10 +3900,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const clearBot = useCallback(() => {
     ++botOpenRequestRef.current;
+    resetSessionSelector();
     selectedBotIdRef.current = undefined;
     clientRef.current?.setBotId?.(undefined);
     setSelectedBotId(undefined);
-  }, []);
+  }, [resetSessionSelector]);
 
   // A surface the chat screen must move to, asked for from outside it. The
   // screen owns which surface it shows — its header, its panes and its backends
@@ -3944,6 +3973,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // that broke, which is a different thing to say to the operator.
       return false;
     }
+    resetSessionSelector();
     client.setBotId(botId);
     selectedBotIdRef.current = botId;
     setSelectedBotId(botId);
@@ -3988,6 +4018,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // A slow host keeps the Bot: dropping it here left the Bot Chat on screen
       // while the next message went out with no Bot at all (bot-open-failure.ts).
       if (!botOpenFailureKeepsScope(error)) {
+        resetSessionSelector();
         client.setBotId(undefined);
         selectedBotIdRef.current = undefined;
         setSelectedBotId(undefined);
@@ -3995,7 +4026,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLastError(error instanceof Error ? error.message : String(error));
       throw error;
     }
-  }, [activeGateway, reloadHistoryFor]);
+  }, [activeGateway, reloadHistoryFor, resetSessionSelector]);
 
   useEffect(() => {
     repairStalePinRef.current = async (client, isCurrent, fallbackGateway) => {
