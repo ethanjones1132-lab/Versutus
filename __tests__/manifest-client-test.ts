@@ -1033,6 +1033,39 @@ describe('ManifestClient sessions and runs when advertised', () => {
     await expect(client.getModels()).resolves.toEqual(rows);
   });
 
+  test.each([
+    { data: { id: 'm1', object: 'model' } },
+    { data: 'models unavailable' },
+    { data: 42 },
+    { data: false },
+    { data: null },
+    {},
+    null,
+    'models unavailable',
+    42,
+    false,
+  ])('getModels returns an empty catalog for a non-list response: %j', async (body) => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn().mockResolvedValue(jsonResponse(body));
+    const client = clientWithEndpoints({ health: '/health', models: '/v1/models' });
+    await expect(client.getModels()).resolves.toEqual([]);
+  });
+
+  test.each(['', '{"data":'])('getModels tolerates an empty or invalid JSON body: %j', async (text) => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => text,
+    });
+    const client = clientWithEndpoints({ health: '/health', models: '/v1/models' });
+    await expect(client.getModels()).resolves.toEqual([]);
+  });
+
+  test.each([{ body: [] }, { body: { data: [] } }])('getModels preserves an explicitly empty catalog: %j', async ({ body }) => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn().mockResolvedValue(jsonResponse(body));
+    const client = clientWithEndpoints({ health: '/health', models: '/v1/models' });
+    await expect(client.getModels()).resolves.toEqual([]);
+  });
+
   test('collection readers accept a bare array or a { data } envelope: Bots', async () => {
     const rows = [{ id: 'default', displayName: 'default', routable: true }];
     const fetchMock = jest

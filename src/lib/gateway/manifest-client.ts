@@ -243,11 +243,15 @@ export class ManifestClient implements PortalClient {
 
   async getModels(): Promise<ModelInfo[]> {
     const path = this.requireEndpoint('models');
-    const result = await this.rootTransport.request<{ data?: ModelInfo[] } | ModelInfo[]>(
-      'GET',
-      this.withScope(path),
-    );
-    return Array.isArray(result) ? result : result.data ?? [];
+    const result = await this.rootTransport.request<unknown>('GET', this.withScope(path));
+    // A transitional or malformed gate answer must not escape as a non-list
+    // and poison picker state: only a real catalog (a bare array or a
+    // { data: [...] } envelope) reaches the caller; anything else is empty.
+    if (Array.isArray(result)) return result;
+    if (result && typeof result === 'object' && Array.isArray((result as { data?: unknown }).data)) {
+      return (result as { data: ModelInfo[] }).data;
+    }
+    return [];
   }
 
   /**
