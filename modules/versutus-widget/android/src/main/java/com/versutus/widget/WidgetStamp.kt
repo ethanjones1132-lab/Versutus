@@ -20,10 +20,10 @@ object WidgetStamp {
 
   /** True only when the stamp is readable and older than the stated age. */
   fun isStale(writtenAt: Long, now: Long): Boolean =
-    writtenAt > 0 && (now - writtenAt) >= STALE_MS
+    writtenAt > 0 && writtenAt <= now && (now - writtenAt) >= STALE_MS
 
   fun line(writtenAt: Long, now: Long, zone: ZoneId, locale: Locale): String {
-    if (writtenAt <= 0) return UNREADABLE
+    if (writtenAt <= 0 || writtenAt > now) return UNREADABLE
     val written = Instant.ofEpochMilli(writtenAt).atZone(zone)
     val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
     val days = ChronoUnit.DAYS.between(written.toLocalDate(), today)

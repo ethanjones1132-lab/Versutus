@@ -28,6 +28,28 @@ class WidgetStampTest {
     assertEquals("Written at an unreadable time", WidgetStamp.line(Long.MIN_VALUE, 0L, zone, Locale.UK))
   }
 
+  @Test fun `a future stamp is unreadable even on the same calendar day`() {
+    val now = at(2026, 9, 12, 8, 0)
+    for (written in listOf(now + 1, at(2026, 9, 13, 8, 0), Long.MAX_VALUE)) {
+      assertEquals("Written at an unreadable time", WidgetStamp.line(written, now, zone, Locale.UK))
+      assertEquals(false, WidgetStamp.isStale(written, now))
+    }
+  }
+
+  @Test fun `a clock rolled before the epoch cannot make a future stamp stale by overflow`() {
+    val written = at(2026, 9, 12, 8, 0)
+    assertEquals("Written at an unreadable time", WidgetStamp.line(written, Long.MIN_VALUE, zone, Locale.UK))
+    assertEquals(false, WidgetStamp.isStale(written, Long.MIN_VALUE))
+  }
+
+  @Test fun `a stamp becomes readable exactly when the clock catches up`() {
+    val written = at(2026, 9, 12, 8, 0)
+    assertEquals("Written Today 08:00", WidgetStamp.line(written, written, zone, Locale.UK))
+    assertEquals(false, WidgetStamp.isStale(written, written))
+    assertEquals("Written Today 08:00", WidgetStamp.line(written, written + 1, zone, Locale.UK))
+    assertEquals(false, WidgetStamp.isStale(written, written + 1))
+  }
+
   @Test fun `a snapshot past the stated age is stale`() {
     val twelveHours = 12L * 60 * 60 * 1000
     val written = at(2026, 9, 12, 8, 0)
