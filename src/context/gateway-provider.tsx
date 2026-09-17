@@ -2598,7 +2598,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       try {
         const outcome = await executeRun(runCapable, prompt, {
           sessionId: sessionIdRef.current,
-          model: gateway.model,
+          ...resolveSendModel(gateway, selectedBackendIdRef.current, selectedBotIdRef.current),
           signal: abortController.signal,
           onStarted: (runId) => {
             patchActivityRuns((prev) =>
