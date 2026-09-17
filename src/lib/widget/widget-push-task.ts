@@ -28,10 +28,15 @@ export async function handleWidgetPush(
 ): Promise<boolean> {
   const payload = widgetPayloadFromData(data);
   if (!payload) return false;
-  const module = await load();
-  if (!module) return false;
-  await module.setPayload(payload);
-  return true;
+  try {
+    const module = await load();
+    if (!module) return false;
+    await module.setPayload(payload);
+    return true;
+  } catch {
+    // The card keeps the snapshot it already holds; the task stays registered.
+    return false;
+  }
 }
 
 TaskManager.defineTask(WIDGET_PUSH_TASK, async ({ data }) => {
