@@ -1468,8 +1468,20 @@ export async function createGate(config = {}) {
       if (pathname === '/v1/bots' && method === 'GET') {
         const backend = await resolveBackendFor('listBots');
         if (!backend) return;
-        res.writeHead(200);
-        res.end(JSON.stringify(await backend.listBots()));
+        try {
+          const roster = await backend.listBots();
+          res.writeHead(200);
+          res.end(JSON.stringify(roster));
+        } catch (error) {
+          const upstreamStatus = Number(error?.status);
+          const status = Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus < 600
+            ? upstreamStatus : 502;
+          res.writeHead(status, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: {
+            message: typeof error?.message === 'string' && error.message ? error.message : 'Could not read the Bot roster',
+            code: typeof error?.code === 'string' && error.code ? error.code : 'bot_read_failed',
+          } }));
+        }
         return;
       }
 

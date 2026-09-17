@@ -909,6 +909,47 @@ test('the fronted routes proxy to the backend and are reachable', async () => {
   }
 });
 
+for (const { label, failure, status, code, message } of [
+  { label: 'an inventory refusal', failure: Object.assign(new Error('Roster inventory unavailable'), { status: 503, code: 'inventory_unavailable' }), status: 503, code: 'inventory_unavailable', message: 'Roster inventory unavailable' },
+  { label: 'a filesystem failure', failure: new Error('Roster directory unreadable'), status: 502, code: 'bot_read_failed', message: 'Roster directory unreadable' },
+  { label: 'an invalid upstream status', failure: Object.assign(new Error('Roster unavailable'), { status: 200, code: 'inventory_unavailable' }), status: 502, code: 'inventory_unavailable', message: 'Roster unavailable' },
+  { label: 'a missing diagnostic', failure: null, status: 502, code: 'bot_read_failed', message: 'Could not read the Bot roster' },
+]) {
+  test(`the Bot roster returns an error envelope for ${label} and can be read again`, async () => {
+    const calls = [];
+    const registry = stubFrontedRegistry(calls);
+    const adapter = registry.get('stubcli');
+    const createBackend = adapter.createBackend.bind(adapter);
+    let shouldFail = true;
+    adapter.createBackend = (...args) => {
+      const backend = createBackend(...args);
+      return {
+        ...backend,
+        async listBots() {
+          if (shouldFail) throw failure;
+          return backend.listBots();
+        },
+      };
+    };
+    const { gate } = await makeGate({ calls, registry });
+    try {
+      const url = `http://127.0.0.1:${gate.port}/v1/bots`;
+      const response = await fetch(url, { headers: auth(gate) });
+      assert.equal(response.status, status);
+      assert.match(response.headers.get('content-type'), /application\/json/);
+      assert.deepEqual(await response.json(), { error: { message, code } });
+      shouldFail = false;
+      const retry = await fetch(url, { headers: auth(gate) });
+      assert.equal(retry.status, 200);
+      assert.deepEqual(await retry.json(), {
+        object: 'list', data: [{ id: 'researcher', displayName: 'researcher', routable: true }],
+      });
+    } finally {
+      await gate.close();
+    }
+  });
+}
+
 test('POST /v1/bots creates via createBot', async () => {
   const calls = [];
   const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
