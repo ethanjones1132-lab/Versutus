@@ -8,10 +8,15 @@
 // pending run approval is attributed to the Bot its run row names — an orphan
 // approval stays unattributed rather than guessing a Bot.
 
-import type { ConstellationInput } from '@/lib/fleet/constellation-model';
+import type { ConstellationInput, FleetReachability } from '@/lib/fleet/constellation-model';
 
 export type FleetProjectionGateway = { id: string; name?: string };
-export type FleetProjectionReachability = { state?: string; checkedAt?: number };
+export type FleetProjectionReachability = {
+  state?: string;
+  checkedAt?: number;
+  latencyMs?: number;
+  error?: string;
+};
 export type FleetProjectionRun = { id: string; botId?: string; status: string };
 export type FleetProjectionBot = { id: string; displayName?: string };
 
@@ -31,12 +36,22 @@ export function fleetConstellationInput(args: FleetConstellationArgs): Constella
     return name ? { id: gateway.id, name } : { id: gateway.id };
   });
 
-  const reachability: Record<string, { lastProbeAt: number }> = {};
+  const reachability: FleetReachability = {};
   for (const [gatewayId, sample] of Object.entries(args.reachability ?? {})) {
+    // A cached connected sample is not proof of a connection now; only
+    // connectedGatewayId can make a gateway live.
+    const state = sample?.state;
+    const verdict: NonNullable<FleetReachability[string]> = {
+      state: state === 'reachable' || state === 'unreachable' || state === 'checking'
+        ? state : 'unknown',
+    };
     const checkedAt = sample?.checkedAt;
     if (typeof checkedAt === 'number' && Number.isFinite(checkedAt)) {
-      reachability[gatewayId] = { lastProbeAt: checkedAt };
+      verdict.lastProbeAt = checkedAt;
     }
+    if (state === 'reachable') verdict.latencyMs = sample?.latencyMs;
+    if (state === 'unreachable') verdict.error = sample?.error;
+    reachability[gatewayId] = verdict;
   }
 
   const activityRuns = (args.activityRuns ?? []).map((run) => {

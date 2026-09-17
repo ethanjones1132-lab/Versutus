@@ -112,7 +112,12 @@ export function ConstellationView({
               </Text>
               {node.lastSeenAt !== undefined && !node.live ? (
                 <Text variant="micro" color="tertiary" numberOfLines={1}>
-                  {relativeLastSeenCopy(node.lastSeenAt, now)}
+                  Probe {relativeLastSeenCopy(node.lastSeenAt, now)}
+                </Text>
+              ) : null}
+              {node.probeDetail ? (
+                <Text variant="micro" color="tertiary" numberOfLines={2} style={styles.statusLine}>
+                  {node.probeDetail}
                 </Text>
               ) : null}
               {node.kind === 'gateway' && !node.live && gatewayStatus?.[node.gatewayId] ? (

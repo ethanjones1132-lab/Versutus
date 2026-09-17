@@ -32,7 +32,12 @@ const BOT_LABEL_WIDTH = 96;
 const BOT_ROW_GAP = 64;
 
 export type FleetGatewayInput = { id: string; name?: string };
-export type FleetReachability = Record<string, { lastProbeAt?: number } | undefined>;
+export type FleetReachability = Record<string, {
+  state?: 'reachable' | 'unreachable' | 'checking' | 'unknown';
+  lastProbeAt?: number;
+  latencyMs?: number;
+  error?: string;
+} | undefined>;
 export type FleetBotInput = { id: string; displayName?: string };
 export type FleetRunInput = { id: string; botId?: string; status: string };
 export type FleetApprovalInput = { botId?: string };
@@ -62,6 +67,7 @@ export type ConstellationNode = {
   y: number;
   live: boolean;
   lastSeenAt?: number;
+  probeDetail?: string;
   badges: ConstellationBadge[];
   /** On a Bot node, the roster id a tap opens. Gateway nodes carry none. */
   botId?: string;
@@ -148,13 +154,14 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
     const x = profiles.length === 1 ? CENTER_X : CENTER_X + GATEWAY_RADIUS * Math.cos(angle);
     const y = profiles.length === 1 ? SINGLE_GATEWAY_Y : CENTER_Y + GATEWAY_RADIUS * Math.sin(angle);
     const live = profile.id === input.connectedGatewayId;
-    const lastSeenAt = input.reachability?.[profile.id]?.lastProbeAt;
-
+    const probe = input.reachability?.[profile.id];
+    const lastSeenAt = probe?.lastProbeAt;
+    const probeLabel = probe?.state === 'reachable' ? 'Reachable'
+      : probe?.state === 'unreachable' ? 'Unreachable'
+        : probe?.state === 'checking' ? 'Checking' : 'Unknown';
     const badges: ConstellationBadge[] = live
       ? [{ label: 'Live', tone: 'success' }]
-      : lastSeenAt !== undefined
-        ? [{ label: 'Last seen', tone: 'neutral' }]
-        : [{ label: 'Offline', tone: 'neutral' }];
+      : [{ label: probeLabel, tone: 'neutral' }];
 
     const gatewayNode: ConstellationNode = {
       id: `gateway:${profile.id}`,
@@ -166,7 +173,9 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
       live,
       badges,
     };
-    if (lastSeenAt !== undefined) gatewayNode.lastSeenAt = lastSeenAt;
+    if (lastSeenAt !== undefined && Number.isFinite(lastSeenAt)) gatewayNode.lastSeenAt = lastSeenAt;
+    const probeDetail = live ? undefined : savedProbeDetail(probe);
+    if (probeDetail) gatewayNode.probeDetail = probeDetail;
     nodes.push(gatewayNode);
 
     if (!live) return;
@@ -273,6 +282,23 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
       approvals: approvalsTotal,
     },
   };
+}
+
+function savedProbeDetail(probe: FleetReachability[string]): string | undefined {
+  if (probe?.state === 'reachable') {
+    const latency = probe.latencyMs;
+    if (typeof latency !== 'number' || !Number.isFinite(latency) || latency < 0) return undefined;
+    return latency > 99_999 ? '99999+ ms' : `${Math.round(latency)} ms`;
+  }
+  if (probe?.state !== 'unreachable' || !probe.error?.trim()) return undefined;
+  // Probe failures may contain a URL or a platform exception. Classify them
+  // rather than copying raw diagnostics into the map or spoken label.
+  const error = probe.error;
+  const http = /^Gateway returned HTTP ([1-5]\d{2})$/.exec(error);
+  if (http) return `HTTP ${http[1]}`;
+  if (/timed out|timeout/i.test(error)) return 'Probe timed out';
+  if (/network|fetch|connect|enotfound|getaddrinfo/i.test(error)) return 'Could not reach the gateway';
+  return 'Probe failed';
 }
 
 // ─── Routine arcs (D2 build 2) ────────────────────────────────────────────
@@ -502,18 +528,19 @@ export function relativeLastSeenCopy(at: number, now: number): string {
 
 /**
  * What a screen reader announces for one node. The truth class leads: a live
- * gateway is `live`, a saved one is `last seen` (or `offline` when it was
- * never probed) — a down gateway can never be voiced as live.
+ * gateway is `live`, a saved one carries its probe verdict and bounded
+ * detail — a probe stamp alone never claims reachability.
  */
 export function constellationNodeAccessibilityLabel(node: ConstellationNode): string {
   const parts: string[] = [node.label];
   if (node.kind === 'gateway') {
-    parts.push(node.live ? 'live' : node.lastSeenAt !== undefined ? 'last seen' : 'offline');
+    parts.push(node.live ? 'live' : 'saved gateway');
   }
   for (const badge of node.badges) {
     const label = badge.label.toLowerCase();
     if (!parts.some((part) => part.toLowerCase() === label)) parts.push(label);
   }
+  if (node.probeDetail) parts.push(node.probeDetail);
   return parts.join(', ');
 }
 

@@ -12,7 +12,7 @@ function job(overrides: Partial<CronJob> & { id: string }): CronJob {
 }
 
 describe('fleetConstellationInput projects provider state onto the model input', () => {
-  test('profiles pass through and a finite probe stamp becomes last seen', () => {
+  test('profiles pass through with their probe verdict and finite stamp', () => {
     const input = fleetConstellationInput({
       gateways: [
         { id: 'gw-home', name: 'Home' },
@@ -30,7 +30,10 @@ describe('fleetConstellationInput projects provider state onto the model input',
       { id: 'gw-travel', name: 'Travel' },
     ]);
     expect(input.connectedGatewayId).toBe('gw-home');
-    expect(input.reachability).toEqual({ 'gw-travel': { lastProbeAt: 1_700_000_000_000 } });
+    expect(input.reachability).toEqual({
+      'gw-travel': { state: 'unreachable', lastProbeAt: 1_700_000_000_000 },
+      'gw-home': { state: 'unknown' },
+    });
   });
 
   test('a non-finite or absent stamp is not a date', () => {
@@ -41,7 +44,28 @@ describe('fleetConstellationInput projects provider state onto the model input',
         'gw-b': { state: 'checking', checkedAt: Number.NaN },
       },
     });
-    expect(input.reachability).toEqual({});
+    expect(input.reachability).toEqual({
+      'gw-a': { state: 'unknown' },
+      'gw-b': { state: 'checking' },
+    });
+  });
+
+  test('probe details survive projection without making a saved gateway live', () => {
+    const samples = {
+      reachable: { state: 'reachable', latencyMs: 23.6, checkedAt: 100 },
+      unreachable: { state: 'unreachable', error: 'Timed out waiting for gateway', checkedAt: 100 },
+      checking: { state: 'checking', latencyMs: 20, error: 'old failure', checkedAt: 100 },
+      unknown: { state: 'unknown' },
+      formerlyConnected: { state: 'connected', checkedAt: 100 },
+    };
+    const input = fleetConstellationInput({ reachability: samples });
+    expect(input.reachability).toMatchObject({
+      reachable: { state: 'reachable', latencyMs: 23.6, lastProbeAt: 100 },
+      unreachable: { state: 'unreachable', error: 'Timed out waiting for gateway', lastProbeAt: 100 },
+      checking: { state: 'checking', lastProbeAt: 100 },
+      unknown: { state: 'unknown' },
+      formerlyConnected: { state: 'unknown', lastProbeAt: 100 },
+    });
   });
 
   test('a pending run approval is attributed to the Bot its run names', () => {

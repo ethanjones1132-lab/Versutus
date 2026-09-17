@@ -161,7 +161,7 @@ describe('relativeLastSeenCopy dates a down gateway without ever going negative'
 });
 
 describe('constellationNodeAccessibilityLabel never calls a down gateway live', () => {
-  test('a live gateway reads live once, a saved one reads last seen or offline', () => {
+  test('a live gateway reads live once, a saved one without a verdict reads unknown', () => {
     const model = constellationModel(FLEET);
     const home = model.nodes.find((node) => node.id === 'gateway:gw-home');
     const travel = model.nodes.find((node) => node.id === 'gateway:gw-travel');
@@ -170,8 +170,8 @@ describe('constellationNodeAccessibilityLabel never calls a down gateway live', 
     }).nodes[0];
 
     expect(constellationNodeAccessibilityLabel(home!)).toBe('Home, live');
-    expect(constellationNodeAccessibilityLabel(travel!)).toBe('Travel, last seen');
-    expect(constellationNodeAccessibilityLabel(offline)).toBe('Cold, offline');
+    expect(constellationNodeAccessibilityLabel(travel!)).toBe('Travel, saved gateway, unknown');
+    expect(constellationNodeAccessibilityLabel(offline)).toBe('Cold, saved gateway, unknown');
     expect(constellationNodeAccessibilityLabel(travel!)).not.toMatch(/live/);
   });
 

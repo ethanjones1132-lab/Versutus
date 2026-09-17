@@ -43,7 +43,7 @@ describe('the fleet constellation model', () => {
     expect(home?.badges).toContainEqual({ label: 'Live', tone: 'success' });
     expect(travel?.live).toBe(false);
     expect(travel?.lastSeenAt).toBe(1_700_000_000_000);
-    expect(travel?.badges).toContainEqual({ label: 'Last seen', tone: 'neutral' });
+    expect(travel?.badges).toContainEqual({ label: 'Unknown', tone: 'neutral' });
     expect(travel?.badges).not.toContainEqual({ label: 'Live', tone: 'success' });
   });
 

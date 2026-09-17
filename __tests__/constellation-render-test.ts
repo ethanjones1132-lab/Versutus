@@ -1,3 +1,6 @@
+import { fleetConstellationInput } from '@/lib/fleet/constellation-input';
+import { constellationModel, constellationNodeAccessibilityLabel } from '@/lib/fleet/constellation-model';
+
 declare const __dirname: string;
 
 const SEP = __dirname.includes('\\') ? '\\' : '/';
@@ -18,6 +21,77 @@ const webCanvas = () => fleetComponents('constellation-canvas.web.tsx');
 const defaultCanvas = () => fleetComponents('constellation-canvas.tsx');
 const fallbackCanvas = () => fleetComponents('constellation-canvas-fallback.tsx');
 const constellationView = () => fleetComponents('constellation-view.tsx');
+
+describe('saved gateway probe verdicts reach the map and its spoken copy', () => {
+  test.each([
+    ['reachable', 'Reachable', '23 ms'],
+    ['unreachable', 'Unreachable', 'Probe timed out'],
+    ['checking', 'Checking', undefined],
+    ['unknown', 'Unknown', undefined],
+    ['connected', 'Unknown', undefined],
+    ['unexpected', 'Unknown', undefined],
+  ])('%s is a saved verdict, never a live connection', (state, label, detail) => {
+    const model = constellationModel(fleetConstellationInput({
+      gateways: [{ id: 'saved', name: 'Saved' }, { id: 'live', name: 'Live gateway' }],
+      connectedGatewayId: 'live',
+      reachability: {
+        saved: { state, checkedAt: 100, latencyMs: 23.2, error: 'Timed out waiting for gateway' },
+        live: { state: 'unreachable', error: 'old error' },
+      },
+      roster: [{ id: 'scout' }],
+    }));
+    const saved = model.nodes[0];
+    expect(saved.live).toBe(false);
+    expect(saved.badges).toEqual([{ label, tone: 'neutral' }]);
+    expect(saved.probeDetail).toBe(detail);
+    expect(saved.lastSeenAt).toBe(100);
+    expect(constellationNodeAccessibilityLabel(saved)).toBe(
+      ['Saved', 'saved gateway', label!.toLowerCase(), detail].filter(Boolean).join(', '),
+    );
+    const live = model.nodes.find((node) => node.id === 'gateway:live')!;
+    expect(live.badges).toEqual([{ label: 'Live', tone: 'success' }]);
+    expect(live.probeDetail).toBeUndefined();
+    expect(model.nodes.filter((node) => node.kind === 'bot').map((node) => node.gatewayId)).toEqual(['live']);
+  });
+
+  test.each([
+    ['Gateway returned HTTP 503', 'HTTP 503'],
+    ['Network request failed', 'Could not reach the gateway'],
+    ['private diagnostic '.repeat(100), 'Probe failed'],
+    ['', undefined],
+  ])('probe errors have bounded display copy for %s', (error, expected) => {
+    const node = constellationModel(fleetConstellationInput({
+      gateways: [{ id: 'saved' }],
+      reachability: { saved: { state: 'unreachable', error } },
+    })).nodes[0];
+    expect(node.probeDetail).toBe(expected);
+    expect(node.probeDetail?.length ?? 0).toBeLessThanOrEqual(80);
+  });
+
+  test.each([
+    [0, '0 ms'], [23.6, '24 ms'], [100_000, '99999+ ms'],
+    [Number.NaN, undefined], [Infinity, undefined], [-1, undefined],
+  ])('latency %s is bounded or omitted', (latencyMs, expected) => {
+    const node = constellationModel(fleetConstellationInput({
+      gateways: [{ id: 'saved' }],
+      reachability: { saved: { state: 'reachable', latencyMs } },
+    })).nodes[0];
+    expect(node.probeDetail).toBe(expected);
+  });
+
+  test('an absent probe is unknown, not evidence the gateway is offline', () => {
+    const node = constellationModel({ profiles: [{ id: 'saved' }] }).nodes[0];
+    expect(node.badges).toEqual([{ label: 'Unknown', tone: 'neutral' }]);
+    expect(node.lastSeenAt).toBeUndefined();
+  });
+
+  test('the view paints the same bounded detail that the shared spoken label reads', () => {
+    const src = constellationView();
+    expect(src).toContain('{node.probeDetail}');
+    expect(src).toContain('Probe {relativeLastSeenCopy(node.lastSeenAt, now)}');
+    expect(src).toContain('constellationNodeAccessibilityLabel(node)');
+  });
+});
 
 // D2's render: one pure layout, painted in Skia on native and in plain views
 // (SVG) on web and whenever the Skia mount fails. The view is only the
