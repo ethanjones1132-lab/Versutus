@@ -36,7 +36,7 @@ const ALL_MESSAGES = Array.from({ length: 25 }, (_, i) => ({
   timestamp: i + 1,
 }));
 
-function pagingRegistry(calls, listMessagesImpl) {
+function pagingRegistry(calls, listMessagesImpl, { failListMessages, failListSessions }) {
   const adapter = {
     adapterId: 'stubcli',
     adapterRevision: '1',
@@ -46,7 +46,17 @@ function pagingRegistry(calls, listMessagesImpl) {
     server: { defaultPort: 1, healthPath: '/', args: () => [], portFromOutput: () => null },
     async probe() { return { state: 'ready', cliVersion: '1.0.0', protocol: 'acp' }; },
     createBackend() {
+      const forBot = (botId) => ({
+        async listSessions(limit) { calls.push(`listSessions:${botId}:${limit}`); if (failListSessions) return failListSessions(botId); return [SESSION]; },
+        async listMessages(id, limit) {
+          calls.push(`listMessages:${botId}:${id}:${limit ?? 'all'}`);
+          if (failListMessages) return failListMessages(botId, id);
+          if (listMessagesImpl) return listMessagesImpl(id, limit);
+          return typeof limit === 'number' ? ALL_MESSAGES.slice(-limit) : ALL_MESSAGES;
+        },
+      });
       return {
+        forBot,
         async listSessions() { return [SESSION]; },
         async createSession(input) { return { ...SESSION, title: input?.title ?? null }; },
         async deleteSession() {},
@@ -69,7 +79,7 @@ function pagingRegistry(calls, listMessagesImpl) {
   };
 }
 
-async function makeGate({ calls = [], listMessagesImpl } = {}) {
+async function makeGate({ calls = [], listMessagesImpl, failListMessages, failListSessions } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'gate-paging-'));
   roots.push(root);
   const gateHome = join(root, '.gate-home');
@@ -90,7 +100,7 @@ async function makeGate({ calls = [], listMessagesImpl } = {}) {
     root,
     port: 0,
     gateHome,
-    environmentRegistry: pagingRegistry(calls, listMessagesImpl),
+    environmentRegistry: pagingRegistry(calls, listMessagesImpl, { failListMessages, failListSessions }),
     backendServerFactory: () => ({
       ensureRunning: async () => ({ baseUrl: 'http://127.0.0.1:1', attached: true }),
       stop: async () => {},
@@ -104,8 +114,8 @@ function auth(gate) {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` };
 }
 
-function messagesUrl(gate, query) {
-  return `http://127.0.0.1:${gate.port}/v1/sessions/ses_1/messages?backendId=stub-local&${query}`;
+function messagesUrl(gate, query, scoped) {
+  return `http://127.0.0.1:${gate.port}/v1/sessions/ses_1/messages?${scoped ? 'bot=atlas' : 'backendId=stub-local'}&${query}`;
 }
 
 test('a first page returns the newest turns and a cursor to walk back from', async () => {
@@ -180,6 +190,38 @@ test('no limit returns the whole history with no cursor', async () => {
     assert.equal(body.data.length, ALL_MESSAGES.length);
     assert.equal(body.hasMore, false);
     assert.equal(body.nextBefore, null);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a failing read for a named Bot is answered with that Bot, not the default environment', async () => {
+  const { gate, calls } = await makeGate({
+    failListMessages: (botId) => { throw Object.assign(new Error(`hermes: HTTP 500 for ${botId}`), { status: 500 }); },
+  });
+  try {
+    const response = await fetch(messagesUrl(gate, 'limit=10', true), { headers: auth(gate) });
+    assert.equal(response.status, 500);
+    const body = await response.json();
+    assert.equal(body.error.code, 'bot_read_failed');
+    assert.match(body.error.message, /Bot atlas/);
+    assert.ok(calls.some((c) => c.startsWith('listMessages:atlas:')), `the Bot-scoped backend never read: ${calls.join(', ')}`);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a failing Bot session-list read preserves its status and names the Bot', async () => {
+  const { gate } = await makeGate({
+    failListSessions: (botId) => { throw Object.assign(new Error(`unauthorized: listen key test-listen-key refused for ${botId}`), { status: 401 }); },
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/sessions?bot=atlas&limit=10`, { headers: auth(gate) });
+    assert.equal(response.status, 401);
+    const body = await response.json();
+    assert.equal(body.error.code, 'bot_read_failed');
+    assert.match(body.error.message, /Bot atlas/);
+    assert.doesNotMatch(body.error.message, /test-listen-key/, 'a credential value never rides in an error');
   } finally {
     await gate.close();
   }

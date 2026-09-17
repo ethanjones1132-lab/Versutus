@@ -46,9 +46,13 @@ function plainBackend(calls = []) {
 }
 
 /** A Hermes-shaped backend: it inventories Bots and can scope itself to one. */
-function botsBackend(calls) {
+function botsBackend(calls, reads = {}) {
   const forBot = (botId) => ({
-    async listSessions(limit) { calls.push(`listSessions:${botId}:${limit}`); return [session('bot_1', 'api_server')]; },
+    async listSessions(limit) {
+      calls.push(`listSessions:${botId}:${limit}`);
+      if (reads.listSessions) return reads.listSessions(botId, limit);
+      return [session('bot_1', 'api_server')];
+    },
     async createSession(input) {
       calls.push(`createSession:${botId}`);
       if (input?.title === 'Taken') {
@@ -59,7 +63,11 @@ function botsBackend(calls) {
       return { ...session('bot_new', 'api_server'), title: input?.title ?? null };
     },
     async deleteSession() {},
-    async listMessages(id) { calls.push(`listMessages:${botId}:${id}`); return []; },
+    async listMessages(id) {
+      calls.push(`listMessages:${botId}:${id}`);
+      if (reads.listMessages) return reads.listMessages(botId, id);
+      return [];
+    },
     async sendMessage(id, input) {
       calls.push(`sendMessage:${botId}`);
       return { text: 'ok', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] }, runtime: { model: input?.model?.modelId } };
@@ -73,7 +81,10 @@ function botsBackend(calls) {
     ...plainBackend(calls),
     async listBots() { calls.push('listBots'); return { object: 'list', data: [{ id: 'default', displayName: 'default', routable: true }] }; },
     async forBot(botId) {
-      if (botId !== 'default') {
+      if (botId === 'offline') {
+        throw Object.assign(new Error('Bot has no listen key'), { code: 'bot_not_routable' });
+      }
+      if (botId !== 'default' && botId !== 'rook') {
         const error = new Error(`unknown bot "${botId}"`);
         error.code = 'unknown_bot';
         throw error;
@@ -83,7 +94,7 @@ function botsBackend(calls) {
   };
 }
 
-function registryFor(calls) {
+function registryFor(calls, reads) {
   const make = (adapterId, capabilities, backend) => ({
     adapterId,
     adapterRevision: '1',
@@ -96,7 +107,7 @@ function registryFor(calls) {
   });
   const adapters = [
     make('plaincli', ['sessions', 'tools', 'models'], plainBackend(calls)),
-    make('botscli', ['sessions', 'tools', 'models', 'bots'], botsBackend(calls)),
+    make('botscli', ['sessions', 'tools', 'models', 'bots'], botsBackend(calls, reads)),
   ];
   return {
     get(id) {
@@ -119,7 +130,7 @@ async function environmentFile(gateHome, id, adapterId) {
   }), 'utf8');
 }
 
-async function makeGate() {
+async function makeGate(reads) {
   const calls = [];
   const root = await mkdtemp(join(tmpdir(), 'gate-botres-'));
   roots.push(root);
@@ -137,7 +148,7 @@ async function makeGate() {
     root,
     port: 0,
     gateHome,
-    environmentRegistry: registryFor(calls),
+    environmentRegistry: registryFor(calls, reads),
     backendServerFactory: () => ({
       ensureRunning: async () => ({ baseUrl: 'http://127.0.0.1:1', attached: true }),
       stop: async () => {},
@@ -229,6 +240,130 @@ test('an unknown Bot is a 404 from the environment that actually has Bots', asyn
     await gate.close();
   }
 });
+
+test('a failing Bot session read names the Bot instead of hiding behind a generic error', async () => {
+  const { gate } = await makeGate({ listSessions: () => { throw Object.assign(new Error('hermes: sessions API HTTP 503'), { status: 503 }); } });
+  try {
+    const response = await fetch(`${base(gate)}/v1/sessions?bot=rook&limit=20`, { headers: auth(gate) });
+    assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.equal(body.error.code, 'bot_read_failed');
+    assert.match(body.error.message, /Bot rook/);
+    assert.match(body.error.message, /HTTP 503/);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a failing Bot session read cannot name a different Bot the caller never asked for', async () => {
+  const { gate } = await makeGate({ listSessions: () => { throw Object.assign(new Error('hermes: sessions API HTTP 503'), { status: 503, code: 'upstream_unavailable' }); } });
+  try {
+    const response = await fetch(`${base(gate)}/v1/sessions?bot=default`, { headers: auth(gate) });
+    assert.equal(response.status, 503);
+    const body = await response.json();
+    assert.equal(body.error.code, 'upstream_unavailable');
+    assert.match(body.error.message, /Bot default/);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a failing Bot session read cannot leak a listen key into the error', async () => {
+  const { gate } = await makeGate({ listSessions: () => { throw Object.assign(new Error('unauthorized: listen key test-listen-key refused'), { status: 401 }); } });
+  try {
+    const response = await fetch(`${base(gate)}/v1/sessions?bot=rook&limit=20`, { headers: auth(gate) });
+    assert.equal(response.status, 401);
+    const body = await response.json();
+    assert.equal(body.error.code, 'bot_read_failed');
+    assert.doesNotMatch(body.error.message, /test-listen-key/, 'a credential value never rides in an error');
+    assert.doesNotMatch(JSON.stringify(body), /test-listen-key/);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a failing Bot history read answers with the Bot named, and an unroutable Bot is refused before any read', async () => {
+  const { gate, calls } = await makeGate({
+    listMessages: () => { throw Object.assign(new Error('hermes: session messages HTTP 500'), { status: 500 }); },
+  });
+  try {
+    const failing = await fetch(`${base(gate)}/v1/sessions/bot_1/messages?bot=rook`, { headers: auth(gate) });
+    assert.equal(failing.status, 500);
+    const failingBody = await failing.json();
+    assert.equal(failingBody.error.code, 'bot_read_failed');
+    assert.match(failingBody.error.message, /Bot rook/);
+
+    // Routing still refuses an unroutable Bot before any upstream read.
+    const unroutable = await fetch(`${base(gate)}/v1/sessions?bot=offline`, { headers: auth(gate) });
+    assert.equal(unroutable.status, 409);
+    const unroutableBody = await unroutable.json();
+    assert.equal(unroutableBody.error.code, 'bot_not_routable');
+    assert.ok(!calls.some((c) => c.startsWith('listSessions:offline')), 'no read may run for a Bot the Gate cannot route');
+  } finally {
+    await gate.close();
+  }
+});
+
+for (const [method, path] of [
+  ['listSessions', '/v1/sessions'],
+  ['listMessages', '/v1/sessions/bot_1/messages'],
+]) {
+  test(`${method} keeps a late failure separate from another Bot's successful read`, async () => {
+    let release;
+    let started;
+    const waiting = new Promise((resolve) => { started = resolve; });
+    const failure = new Promise((resolve) => { release = resolve; });
+    const { gate, calls } = await makeGate({
+      [method]: async (botId) => {
+        if (botId === 'rook') {
+          started();
+          await failure;
+          throw Object.assign(new Error('read unavailable'), { status: 503, code: 'upstream_unavailable' });
+        }
+        return [{ id: 'default-only' }];
+      },
+    });
+    try {
+      const pending = fetch(`${base(gate)}${path}?bot=rook`, { headers: auth(gate) });
+      await waiting;
+      const success = await fetch(`${base(gate)}${path}?bot=default`, { headers: auth(gate) });
+      assert.equal(success.status, 200);
+      assert.deepEqual((await success.json()).data, [{ id: 'default-only' }]);
+      release();
+      const rejected = await pending;
+      assert.equal(rejected.status, 503);
+      assert.deepEqual(await rejected.json(), {
+        error: { message: 'Bot rook: read unavailable', code: 'upstream_unavailable', botId: 'rook' },
+      });
+      for (const [botId, status] of [['nobody', 404], ['offline', 409]]) {
+        const refused = await fetch(`${base(gate)}${path}?bot=${botId}`, { headers: auth(gate) });
+        assert.equal(refused.status, status);
+        assert.ok(!calls.some((entry) => entry.startsWith(`${method}:${botId}:`)));
+      }
+    } finally {
+      release();
+      await gate.close();
+    }
+  });
+
+  test(`${method} redacts credential fields and authorization diagnostics`, async () => {
+    const diagnostic = 'listen_key="fixture" API_SERVER_KEY=fixture Authorization: Basic fixture token=fixture';
+    const { gate } = await makeGate({
+      [method]: () => { throw Object.assign(new Error(diagnostic), { status: 403, code: 'upstream_forbidden' }); },
+    });
+    try {
+      const response = await fetch(`${base(gate)}${path}?bot=rook`, { headers: auth(gate) });
+      assert.equal(response.status, 403);
+      const body = await response.json();
+      assert.equal(body.error.botId, 'rook');
+      assert.equal(body.error.code, 'upstream_forbidden');
+      assert.match(body.error.message, /Bot rook/);
+      assert.doesNotMatch(JSON.stringify(body), /fixture/);
+    } finally {
+      await gate.close();
+    }
+  });
+}
 
 test("the caller's session limit reaches the backend instead of dying at the Gate", async () => {
   // Slicing at the Gate cannot recover rows the backend never returned:

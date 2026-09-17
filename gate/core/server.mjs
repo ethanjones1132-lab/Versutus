@@ -962,6 +962,25 @@ export async function createGate(config = {}) {
         return resolveForBot(backend, botId);
       }
 
+      function sessionReadError(error, botId, fallbackCode) {
+        const rawMessage = typeof error?.message === 'string' && error.message
+          ? error.message : 'Could not read sessions';
+        const missing = error?.code === 'unknown_session' || /not found/i.test(rawMessage);
+        const upstreamStatus = Number(error?.status);
+        const status = Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus < 600
+          ? upstreamStatus : missing ? 404 : 502;
+        const safeText = (text) => text
+          .replace(/\b(?:Bearer|Basic)\s+[^\s,;"'}]+/gi, '[redacted]')
+          .replace(/\b((?:listen[ _-]?key|api[ _-]?(?:server[ _-]?)?key|access[ _-]?token|refresh[ _-]?token|token|password|secret|authorization)["']?\s*(?:[:=]\s*)?)(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi, '$1[redacted]');
+        const code = typeof error?.code === 'string' && error.code
+          ? safeText(error.code) : missing ? 'unknown_session' : botId ? 'bot_read_failed' : fallbackCode;
+        const message = safeText(rawMessage);
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          error: { message: botId ? `Bot ${botId}: ${message}` : message, code, ...(botId ? { botId } : {}) },
+        }));
+      }
+
       async function resolveForBot(backend, botId) {
         if (typeof backend.forBot !== 'function') {
           res.writeHead(501, { 'Content-Type': 'application/json' });
@@ -1699,7 +1718,13 @@ export async function createGate(config = {}) {
         // page, so a request for 200 quietly meant 50 — and a Bot Chat older
         // than that window read as absent, which sent the caller off to create
         // a second one that Hermes then refused by title.
-        const sessions = await backend.listSessions(limit);
+        let sessions;
+        try {
+          sessions = await backend.listSessions(limit);
+        } catch (error) {
+          sessionReadError(error, readBotId(url), 'session_list_failed');
+          return;
+        }
         res.writeHead(200);
         res.end(JSON.stringify({ object: 'list', data: limit ? sessions.slice(0, limit) : sessions }));
         return;
@@ -1750,11 +1775,7 @@ export async function createGate(config = {}) {
         try {
           all = await backend.listMessages(decodeURIComponent(sessionMessagesMatch[1]));
         } catch (error) {
-          const missing = error?.code === 'unknown_session' || /not found/i.test(error?.message ?? '');
-          res.writeHead(missing ? 404 : 502, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            error: { message: error?.message ?? 'Could not read this session', code: missing ? 'unknown_session' : 'session_read_failed' },
-          }));
+          sessionReadError(error, readBotId(url), 'session_read_failed');
           return;
         }
         const cutoff = before ? all.findIndex((message) => message?.id === before) : -1;
