@@ -15,6 +15,7 @@
 
 import { describeCronHealth, type CronHealth } from '@/lib/gateway/cron';
 import { parseRoutineName } from '@/lib/gateway/routines';
+import type { FleetRoutineReadStatus } from '@/lib/fleet/routine-read';
 
 export const CONSTELLATION_WIDTH = 640;
 export const CONSTELLATION_HEIGHT = 640;
@@ -49,6 +50,7 @@ export type ConstellationInput = {
   /** The connected gateway's roster; the only one this device can read. */
   roster?: FleetBotInput[];
   cronJobs?: unknown[];
+  routineReadStatus?: FleetRoutineReadStatus;
   activityRuns?: FleetRunInput[];
   pendingApprovals?: FleetApprovalInput[];
 };
@@ -97,6 +99,7 @@ export type ConstellationModel = {
     bots: number;
     running: number;
     approvals: number;
+    routineReadStatus?: FleetRoutineReadStatus;
   };
 };
 
@@ -134,6 +137,7 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
 
   // The routine read the connected gateway reported — described, not re-worded.
   // A gateway that named no jobs is a map with no arcs, not a map that guesses.
+  const routineReadStatus = input.routineReadStatus ?? 'unreported';
   const routineTonesByBot = input.cronJobs ? constellationRoutines(input.cronJobs) : null;
   const routineTonesFor = (botId: string): CronHealth['tone'][] | undefined =>
     routineTonesByBot?.get(botId);
@@ -256,8 +260,16 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
       const routineTones = routineTonesFor(bot.id);
       if (routineTones?.length) {
         const worst = worstRoutineTone(routineTones);
-        if (worst) botBadges.push(routineToneBadge(worst));
+        if (worst) {
+          const badge = routineToneBadge(worst);
+          botBadges.push(routineReadStatus === 'ready' ? badge : {
+            ...badge,
+            label: `${badge.label} · ${routineReadStatus}`,
+          });
+        }
         edges.push({ from: `gateway:${profile.id}`, to: id, kind: 'routine' });
+      } else if (routineReadStatus !== 'ready') {
+        botBadges.push({ label: `routines ${routineReadStatus}`, tone: 'neutral' });
       }
     });
 
@@ -282,6 +294,7 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
       bots: botsTotal,
       running: runningTotal,
       approvals: approvalsTotal,
+      routineReadStatus,
     },
   };
 }
@@ -566,5 +579,8 @@ export function constellationSummaryCopy(summary: ConstellationModel['summary'])
   const rest: string[] = [];
   if (summary.running > 0) rest.push(`${summary.running} running`);
   if (summary.approvals > 0) rest.push(`${summary.approvals} approvals waiting`);
+  if (summary.routineReadStatus && summary.routineReadStatus !== 'ready') {
+    rest.push(`routines ${summary.routineReadStatus}`);
+  }
   return rest.length > 0 ? `${bots} · ${rest.join(' · ')}` : `${bots} · all quiet`;
 }

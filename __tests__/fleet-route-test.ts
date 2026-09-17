@@ -91,3 +91,15 @@ describe('the fleet is a Stack destination with one entry on Home', () => {
     expect(src).toContain("router.push('/fleet')");
   });
 });
+
+
+test('the Fleet scopes Routine facts to their gateway and forwards freshness without a new read', () => {
+  const src = fleetRoute();
+  expect(src).toContain('fleetRoutineRead(routineRead,');
+  expect(src).toContain('routineReadStatus: connectedRoutineRead.status');
+  expect(src).toContain('connectedRoutineRead.jobs');
+  const provider = readSource('src', 'context', 'gateway-provider.tsx');
+  expect(provider).toContain('setRoutineRead(beginFleetRoutineRead)');
+  expect(provider).toContain("setRoutineRead({ gatewayId, jobs, status: 'ready' })");
+  expect(provider).toContain('[activeGateway?.id, cron, status]');
+});

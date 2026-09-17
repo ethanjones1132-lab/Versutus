@@ -124,6 +124,7 @@ import {
   type RunCapableClient,
 } from '@/lib/gateway/runs';
 import { routineJobsFromList } from '@/lib/gateway/routines';
+import { beginFleetRoutineRead, type FleetRoutineRead } from '@/lib/fleet/routine-read';
 import {
   durableQueueRows,
   isRunQueuedRow,
@@ -289,6 +290,7 @@ type GatewayContextValue = {
    * map masks it by status itself.
    */
   routineJobs: import('@/lib/gateway/cron').CronJob[];
+  routineRead: FleetRoutineRead;
   /**
    * Whether this gateway can be asked for one Bot's own session catalogue.
    * P5's per-Bot spend section gates on it, so a gateway that could only
@@ -3708,21 +3710,27 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * an empty list would drop the widget's result line for a reason nobody
    * said. The snapshot's own `writtenAt` is what says how old the list is.
    */
-  const [routineJobs, setRoutineJobs] = useState<import('@/lib/gateway/cron').CronJob[]>([]);
+  const [routineRead, setRoutineRead] = useState<FleetRoutineRead>({ jobs: [], status: 'unreported' });
+  const routineJobs = routineRead.jobs;
 
   useEffect(() => {
-    if (status !== 'connected' || !cron.available) return;
     let live = true;
-    void cron
-      .list()
-      .then((jobs) => {
-        if (live) setRoutineJobs(jobs);
-      })
-      .catch(() => undefined);
+    const gatewayId = activeGateway?.id;
+    void Promise.resolve().then(async () => {
+      if (!live) return;
+      setRoutineRead(beginFleetRoutineRead);
+      if (status !== 'connected' || !cron.available || !gatewayId) return;
+      try {
+        const jobs = await cron.list();
+        if (live) setRoutineRead({ gatewayId, jobs, status: 'ready' });
+      } catch {
+        // The read began stale (or unreported); failure keeps those facts.
+      }
+    });
     return () => {
       live = false;
     };
-  }, [cron, status]);
+  }, [activeGateway?.id, cron, status]);
 
   /**
    * The widget's Bot half. The roster is read once per connected transition,
@@ -4345,6 +4353,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       clearRequestedRunFocus,
       botJobs,
       routineJobs,
+      routineRead,
       botGroups,
       cron,
       relatedWorkflows,
@@ -4413,7 +4422,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       lastError, clearLastError, deviceId, pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
-      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedComposerFocus, requestComposerFocus, clearRequestedComposerFocus, requestedComposeRequest, requestComposeRequest, clearRequestedComposeRequest, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, routineJobs, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
+      cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedComposerFocus, requestComposerFocus, clearRequestedComposerFocus, requestedComposeRequest, requestComposeRequest, clearRequestedComposeRequest, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, routineJobs, routineRead, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,
       setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,

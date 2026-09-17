@@ -33,6 +33,7 @@ describe('only approval badges offer the Activity action', () => {
       roster: [{ id: 'scout', displayName: 'Scout' }],
       activityRuns: [{ id: 'failed-run', botId: 'scout', status: 'failed' }],
       pendingApprovals: Array.from({ length: count }, () => ({ botId: 'scout' })),
+      routineReadStatus: 'ready',
       cronJobs: [{ id: 'routine', name: '[bot:scout] Check', lastStatus: 'error', failureStreak: 3 }],
     });
     const onPressApproval = jest.fn();

@@ -9,6 +9,7 @@
 // approval stays unattributed rather than guessing a Bot.
 
 import type { ConstellationInput, FleetReachability } from '@/lib/fleet/constellation-model';
+import type { FleetRoutineReadStatus } from '@/lib/fleet/routine-read';
 
 export type FleetProjectionGateway = { id: string; name?: string };
 export type FleetProjectionReachability = {
@@ -26,6 +27,7 @@ export type FleetConstellationArgs = {
   reachability?: Record<string, FleetProjectionReachability | undefined>;
   roster?: FleetProjectionBot[];
   cronJobs?: unknown[];
+  routineReadStatus?: FleetRoutineReadStatus;
   activityRuns?: FleetProjectionRun[];
   pendingRunApproval?: { runId: string } | null;
 };
@@ -75,6 +77,7 @@ export function fleetConstellationInput(args: FleetConstellationArgs): Constella
     activityRuns,
     pendingApprovals,
     cronJobs: args.cronJobs ?? [],
+    routineReadStatus: args.routineReadStatus,
   };
   if (connectedGatewayId) input.connectedGatewayId = connectedGatewayId;
   return input;

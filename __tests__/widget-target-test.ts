@@ -328,13 +328,17 @@ describe('the provider writes the snapshot as run state changes', () => {
 
   test('the routine half is read through the same cron seam the Activity tab uses', () => {
     const src = provider();
-    const read = src.match(
-      /useEffect\(\(\) => \{\n    if \(status !== 'connected' \|\| !cron\.available\) return;[\s\S]*?\n  \}, \[cron, status\]\);/,
-    )?.[0];
-    expect(read).toBeDefined();
-    expect(read).toContain('.list()');
-    // A failed read is not an empty one: only a landed list may replace it.
-    expect(read).toContain('if (live) setRoutineJobs(jobs);');
+    const start = src.indexOf('const [routineRead, setRoutineRead]');
+    const end = src.indexOf('}, [activeGateway?.id, cron, status]);', start);
+    const read = src.slice(start, end);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(read).toContain('await cron.list()');
+    expect(read).toContain('setRoutineRead(beginFleetRoutineRead)');
+    expect(read).toContain("if (status !== 'connected' || !cron.available || !gatewayId) return;");
+    // A failed read retains the list; only a landed list may replace it.
+    expect(read).toContain("if (live) setRoutineRead({ gatewayId, jobs, status: 'ready' });");
+    expect(read).toContain('live = false;');
   });
 
   test('the Bot rows come from the roster read once per connect, like the routines', () => {

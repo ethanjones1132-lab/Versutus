@@ -153,3 +153,12 @@ describe('the projection folds routine jobs into arcs', () => {
     expect(constellationModel(input).edges.filter((edge) => edge.kind === 'routine')).toEqual([]);
   });
 });
+
+
+test.each(['ready', 'stale', 'unreported'] as const)('the Routine read status %s survives projection', (routineReadStatus) => {
+  const input = fleetConstellationInput({
+    gateways: [{ id: 'home' }], connectedGatewayId: 'home', routineReadStatus,
+  });
+  expect(input.routineReadStatus).toBe(routineReadStatus);
+  expect(constellationModel(input).summary.routineReadStatus).toBe(routineReadStatus);
+});

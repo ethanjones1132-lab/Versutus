@@ -1,3 +1,4 @@
+import { botSheetView } from '@/lib/fleet/bot-sheet';
 import {
   CONSTELLATION_HEIGHT,
   CONSTELLATION_WIDTH,
@@ -101,8 +102,8 @@ describe('the fleet constellation model', () => {
     const night = model.nodes.find((node) => node.kind === 'bot' && node.botId === 'night');
     expect(scout?.badges).toContainEqual({ label: '2 failed', tone: 'danger' });
     expect(scout?.badges).toContainEqual({ label: 'Running', tone: 'accent' });
-    // A Bot with no facts gets no badge rather than a neutral-looking one.
-    expect(night?.badges).toEqual([]);
+    // No failure is invented; the missing Routine read stays unreported.
+    expect(night?.badges).toEqual([{ label: 'routines unreported', tone: 'neutral' }]);
   });
 
   test('a cancelled or unresolved run is not a failure; a Bot it belongs to shows no failure badge', () => {
@@ -311,5 +312,52 @@ describe('a node label box on screen', () => {
   test('an unmeasured map never produces a zero or NaN box', () => {
     expect(constellationNodeBoxWidth({ labelWidth: 96 }, 0, 148)).toBe(148);
     expect(constellationNodeBoxWidth({ labelWidth: 96 }, Number.NaN, 148)).toBe(148);
+  });
+});
+
+
+describe('Routine read freshness on the Fleet', () => {
+  const base = {
+    profiles: [{ id: 'home' }, { id: 'travel' }],
+    connectedGatewayId: 'home',
+    roster: [{ id: 'scout' }, { id: 'night' }],
+    cronJobs: [job({ id: 'morning', name: '[bot:scout] morning', lastStatus: 'error', failureStreak: 3 })],
+  };
+
+  test('stale facts retain their arcs and verdict but admit staleness in the map, sheet and spoken label', () => {
+    const model = constellationModel({ ...base, routineReadStatus: 'stale' });
+    const scout = model.nodes.find((node) => node.botId === 'scout')!;
+    expect(scout.badges).toContainEqual({ label: 'routine failing · stale', tone: 'danger' });
+    expect(botSheetView({ node: scout }).routine).toBe('routine failing · stale');
+    expect(constellationNodeAccessibilityLabel(scout)).toContain('routine failing · stale');
+    expect(model.edges.filter((edge) => edge.kind === 'routine')).toHaveLength(1);
+    expect(model.nodes.find((node) => node.botId === 'night')?.badges)
+      .toContainEqual({ label: 'routines stale', tone: 'neutral' });
+    expect(constellationSummaryCopy(model.summary)).toContain('routines stale');
+    expect(constellationSummaryCopy(model.summary)).not.toContain('all quiet');
+    expect(model.nodes.find((node) => node.gatewayId === 'travel')?.badges)
+      .toEqual([{ label: 'Unknown', tone: 'neutral' }]);
+  });
+
+  test('no freshness fact means unreported, not a successful empty read', () => {
+    const model = constellationModel({ ...base, cronJobs: [] });
+    const scout = model.nodes.find((node) => node.botId === 'scout')!;
+    expect(botSheetView({ node: scout }).routine).toBe('routines unreported');
+    expect(constellationNodeAccessibilityLabel(scout)).toContain('routines unreported');
+    expect(constellationSummaryCopy(model.summary)).toContain('routines unreported');
+  });
+
+  test('a successful empty read removes stale warnings and routine arcs', () => {
+    const model = constellationModel({ ...base, cronJobs: [], routineReadStatus: 'ready' });
+    expect(model.nodes.find((node) => node.botId === 'scout')?.badges).toEqual([]);
+    expect(model.edges.filter((edge) => edge.kind === 'routine')).toEqual([]);
+    expect(constellationSummaryCopy(model.summary)).toBe('2 Bots · all quiet');
+  });
+
+  test('a disconnected gateway carries neither retained arcs nor freshness claims', () => {
+    const model = constellationModel({ ...base, connectedGatewayId: undefined, routineReadStatus: 'stale' });
+    expect(model.edges).toEqual([]);
+    expect(model.nodes.every((node) => !node.live)).toBe(true);
+    expect(constellationSummaryCopy(model.summary)).toBe('2 gateways saved — none connected');
   });
 });

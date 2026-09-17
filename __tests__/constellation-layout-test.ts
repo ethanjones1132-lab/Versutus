@@ -177,6 +177,6 @@ describe('constellationNodeAccessibilityLabel never calls a down gateway live', 
 
   test('a Bot reads its badges after its name', () => {
     const bot = constellationModel(FLEET).nodes.find((node) => node.kind === 'bot');
-    expect(constellationNodeAccessibilityLabel(bot!)).toBe('Scout, running, 2 approvals');
+    expect(constellationNodeAccessibilityLabel(bot!)).toBe('Scout, running, 2 approvals, routines unreported');
   });
 });

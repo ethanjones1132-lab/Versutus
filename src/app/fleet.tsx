@@ -14,12 +14,10 @@ import { botSheetView, type BotSheetView } from '@/lib/fleet/bot-sheet';
 import { fleetConstellationInput } from '@/lib/fleet/constellation-input';
 import { constellationModel, type ConstellationNode } from '@/lib/fleet/constellation-model';
 import { gatewayHandshake } from '@/lib/fleet/gateway-handshake';
+import { fleetRoutineRead } from '@/lib/fleet/routine-read';
 
 /** One stable empty roster, so a disconnected render keeps its memo. */
 const NO_ROSTER: PublicBot[] = [];
-
-/** One stable empty routine list, so a disconnected render keeps its memo. */
-const NO_ROUTINE_JOBS: import('@/lib/gateway/cron').CronJob[] = [];
 
 /**
  * D2's destination, rebuilt: the fleet as a living star map. It reads only
@@ -78,9 +76,10 @@ export default function FleetScreen() {
   // surfaces. A failed read keeps the last list there (its staleness is
   // sayable); a disconnected screen shows no arcs rather than a previous
   // gateway's routines.
-  const { routineJobs } = useGateway();
-  const connectedRoutineJobs =
-    status === 'connected' ? routineJobs : NO_ROUTINE_JOBS;
+  const { routineRead } = useGateway();
+  const connectedRoutineRead = fleetRoutineRead(routineRead,
+    status === 'connected' ? activeGateway?.id : undefined);
+  const connectedRoutineJobs = connectedRoutineRead.jobs;
 
   // Where an unroutable or disconnected tap lands: the Chat tab's roster,
   // which carries the detail surface naming the verdict and the fix. The
@@ -125,6 +124,7 @@ export default function FleetScreen() {
           connectedGatewayId: status === 'connected' ? activeGateway?.id : undefined,
           reachability,
           roster: connectedRoster.map((bot) => ({ id: bot.id, displayName: bot.displayName })),
+          routineReadStatus: connectedRoutineRead.status,
           cronJobs: connectedRoutineJobs.map((job) => ({
             id: job.id,
             name: job.name ?? undefined,
@@ -148,6 +148,7 @@ export default function FleetScreen() {
       reachability,
       connectedRoster,
       connectedRoutineJobs,
+      connectedRoutineRead.status,
       activityRuns,
       pendingRunApproval,
     ],
