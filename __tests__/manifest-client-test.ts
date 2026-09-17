@@ -593,6 +593,91 @@ describe('ManifestClient sessions and runs when advertised', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain('/api/sessions/abc/messages?limit=20');
   });
 
+  test('getSessionMessages encodes a reserved session id on the fallback path', async () => {
+    // Same rule as deleteSession: a fallback-built path is ONE segment, so a
+    // session key carrying `/`, `?` or `#` cannot truncate the route to an
+    // unrelated one (a `/` splits it; the URL parser drops everything after `#`).
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ object: 'list', data: [] }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({ health: '/health', sessions: '/api/sessions' });
+    await client.getSessionMessages('weird/id?x#y', 7);
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/api/sessions/weird%2Fid%3Fx%23y/messages?limit=7',
+    );
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain('/api/sessions/weird/id');
+  });
+
+  test('a Bot-scoped history request on the fallback path keeps bot= beside the encoded id', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ object: 'list', data: [] }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({ health: '/health', sessions: '/api/sessions' });
+    client.setBotId('researcher');
+    await client.getSessionMessages('odd/session', 5);
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/api/sessions/odd%2Fsession/messages?limit=5&bot=researcher',
+    );
+  });
+
+  test('a backend-scoped history request on the fallback path keeps backendId= beside the encoded id', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ object: 'list', data: [] }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({ health: '/health', sessions: '/api/sessions' });
+    client.setBackendId('hermes-local');
+    await client.getSessionMessages('odd/session', 5);
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/api/sessions/odd%2Fsession/messages?limit=5&backendId=hermes-local',
+    );
+  });
+
+  test('a paging cursor stays encoded while the fallback id is encoded beside it', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ object: 'list', data: [] }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({ health: '/health', sessions: '/api/sessions' });
+    await client.getSessionMessagePage('abc', 20, 'cursor/1');
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/api/sessions/abc/messages?limit=20&before=cursor%2F1',
+    );
+  });
+
+  test('an advertised sessionMessages template keeps its own query and interpolation byte-for-byte', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ object: 'list', data: [] }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({
+      health: '/health',
+      sessions: '/v1/sessions',
+      sessionMessages: '/v1/sessions/{id}/messages?lang=en',
+    });
+    await client.getSessionMessages('plain', 9);
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/v1/sessions/plain/messages?lang=en&limit=9',
+    );
+  });
+
   test('getSessions appends bot= when a bot is selected', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,

@@ -858,7 +858,7 @@ export class ManifestClient implements PortalClient {
     }
     const path = template
       ? interpolatePath(template, { id: sessionId, sessionId })
-      : `${sessions!.replace(/\/+$/, '')}/${sessionId}/messages`;
+      : `${sessions!.replace(/\/+$/, '')}/${encodeURIComponent(sessionId)}/messages`;
     const separator = path.includes('?') ? '&' : '?';
     const query = `limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ''}`;
     const result = await this.rootTransport.request<SessionMessagesResponse | SessionMessage[]>(
