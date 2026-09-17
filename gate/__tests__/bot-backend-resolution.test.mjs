@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createGate } from '../core/server.mjs';
+import { decodeBackendRunHandle } from '../core/cli-environments/backend-run-handle.mjs';
 
 // A Gate usually fronts several CLI environments, and only one of them —
 // Hermes — knows what a Bot is. The route that answers "give me this Bot's
@@ -30,6 +31,25 @@ const session = (id, source) => ({
   has_model_config: false,
 });
 
+function runBackend(calls, scope) {
+  return {
+    async startRun(prompt, options) {
+      calls.push({ action: 'start', scope, prompt, options });
+      return { run_id: 'shared-run', status: 'running' };
+    },
+    async getRunStatus(id) {
+      calls.push({ action: 'status', scope, id });
+      return { run_id: id, status: 'completed', result: scope };
+    },
+    async runEvents(id) {
+      calls.push({ action: 'events', scope, id });
+      return new Response(`data: ${JSON.stringify({ type: 'run.completed', data: { text: scope } })}\n\n`);
+    },
+    async stopRun(id) { calls.push({ action: 'stop', scope, id }); },
+    async replyApproval(id, decision) { calls.push({ action: 'approval', scope, id, decision }); },
+  };
+}
+
 /** A backend with no idea what a Bot is — Claude Code, Codex, OpenCode. */
 function plainBackend(calls = []) {
   return {
@@ -42,6 +62,7 @@ function plainBackend(calls = []) {
     async abort() {},
     async replyApproval() {},
     async streamEvents() {},
+    ...runBackend(calls, 'configurable'),
   };
 }
 
@@ -76,6 +97,7 @@ function botsBackend(calls, reads = {}) {
     async abort() {},
     async replyApproval() {},
     async streamEvents() {},
+    ...runBackend(calls, botId),
   });
   return {
     ...plainBackend(calls),
@@ -467,4 +489,105 @@ test('a turn naming neither a backend nor a Bot still uses the provider path', a
   } finally {
     await gate.close();
   }
+});
+
+
+test('Bot runs select the Bot-capable environment and retain scope across the full lifecycle', async () => {
+  const { gate, calls } = await makeGate();
+  try {
+    const start = await fetch(`${base(gate)}/v1/runs?bot=rook`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({ input: 'check', session_id: 'bot-chat', model: 'chosen-model' }),
+    });
+    assert.equal(start.status, 200);
+    const { run_id: handle } = await start.json();
+    assert.deepEqual(decodeBackendRunHandle(handle), { backendId: 'zzz-bots', runId: 'shared-run', botId: 'rook' });
+    assert.deepEqual(calls[0], { action: 'start', scope: 'rook', prompt: 'check', options: { sessionId: 'bot-chat', model: 'chosen-model' } });
+    // Follow-up requests need no current selection: the handle survives reconnects.
+    const status = await fetch(`${base(gate)}/v1/runs/${handle}`, { headers: auth(gate) });
+    assert.deepEqual(await status.json(), { run_id: handle, status: 'completed', result: 'rook' });
+    const events = await fetch(`${base(gate)}/v1/runs/${handle}/events?bot=rook`, { headers: auth(gate) });
+    assert.match(await events.text(), /rook/);
+    for (const action of ['approval', 'stop']) {
+      const response = await fetch(`${base(gate)}/v1/runs/${handle}/${action}?bot=rook`, {
+        method: 'POST', headers: auth(gate), body: JSON.stringify({ approved: false, feedback: 'not now' }),
+      });
+      assert.equal(response.status, 200);
+    }
+    assert.deepEqual(calls.slice(1), [
+      { action: 'status', scope: 'rook', id: 'shared-run' },
+      { action: 'events', scope: 'rook', id: 'shared-run' },
+      { action: 'approval', scope: 'rook', id: 'shared-run', decision: { approved: false, feedback: 'not now' } },
+      { action: 'stop', scope: 'rook', id: 'shared-run' },
+    ]);
+    const before = calls.length;
+    for (const suffix of ['', '/events', '/approval', '/stop']) {
+      const response = await fetch(`${base(gate)}/v1/runs/${handle}${suffix}?bot=default`, {
+        method: suffix === '/approval' || suffix === '/stop' ? 'POST' : 'GET', headers: auth(gate),
+      });
+      assert.equal(response.status, 409);
+      assert.equal((await response.json()).error.code, 'run_bot_mismatch');
+    }
+    assert.equal(calls.length, before, 'a changed Bot never reads or controls the old run, including its archive');
+  } finally { await gate.close(); }
+});
+
+for (const [query, body, status, code] of [
+  ['?bot=nobody', {}, 404, 'unknown_bot'],
+  ['', { bot: 'offline' }, 409, 'bot_not_routable'],
+  ['?bot=rook&backendId=aaa-plain', {}, 501, 'backend_unsupported'],
+]) {
+  test(`Bot run start refuses ${code} before any run starts`, async () => {
+    const { gate, calls } = await makeGate();
+    try {
+      const response = await fetch(`${base(gate)}/v1/runs${query}`, {
+        method: 'POST', headers: auth(gate), body: JSON.stringify({ input: 'check', ...body }),
+      });
+      assert.equal(response.status, status);
+      assert.equal((await response.json()).error.code, code);
+      assert.equal(calls.length, 0);
+    } finally { await gate.close(); }
+  });
+}
+
+test('configurable runs stay unscoped and an explicit runnable environment stays pinned', async () => {
+  const { gate, calls } = await makeGate();
+  try {
+    for (const [query, body, backendId, scope] of [
+      ['', {}, 'aaa-plain', 'configurable'],
+      ['?backendId=zzz-bots', { bot: 'rook' }, 'zzz-bots', 'rook'],
+    ]) {
+      const response = await fetch(`${base(gate)}/v1/runs${query}`, {
+        method: 'POST', headers: auth(gate), body: JSON.stringify({ input: 'check', ...body }),
+      });
+      assert.equal(response.status, 200);
+      const decoded = decodeBackendRunHandle((await response.json()).run_id);
+      assert.equal(decoded.backendId, backendId);
+      assert.equal(calls.at(-1).scope, scope);
+    }
+    const response = await fetch(`${base(gate)}/v1/runs/legacy-run?bot=rook`, { headers: auth(gate) });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).result, 'rook');
+  } finally { await gate.close(); }
+});
+
+test('Bots with the same upstream run id keep separate archived event streams', async () => {
+  const { gate } = await makeGate();
+  try {
+    const handles = [];
+    for (const bot of ['rook', 'default']) {
+      const started = await fetch(`${base(gate)}/v1/runs?bot=${bot}`, {
+        method: 'POST', headers: auth(gate), body: JSON.stringify({ input: 'check' }),
+      });
+      const handle = (await started.json()).run_id;
+      handles.push(handle);
+      const response = await fetch(`${base(gate)}/v1/runs/${handle}/events`, { headers: auth(gate) });
+      assert.match(await response.text(), new RegExp(bot));
+    }
+    assert.notEqual(handles[0], handles[1]);
+    for (const [index, bot] of ['rook', 'default'].entries()) {
+      const response = await fetch(`${base(gate)}/v1/runs/${handles[index]}/events`, { headers: auth(gate) });
+      assert.match(await response.text(), new RegExp(bot));
+    }
+  } finally { await gate.close(); }
 });

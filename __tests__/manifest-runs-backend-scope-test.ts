@@ -114,15 +114,38 @@ describe('ManifestClient startRun backend scoping', () => {
       text: async () => JSON.stringify({ run_id: 'run-3', status: 'started' }),
     });
     const client = clientWith(fetchMock);
-    // A Bot names its chat environment, but runs are a Gate-level surface
-    // (same class as listBots): the bot must not leak a backend pin when the
-    // operator never picked one for this run.
+    // A Bot scopes the run without inventing an environment pin.
     client.setBotId('scribe');
 
     await client.startRun('status?');
     const url = String(fetchMock.mock.calls[0][0]);
     expect(url).not.toContain('backendId=');
-    expect(url).not.toContain('bot=');
+    expect(url).toContain('bot=scribe');
+  });
+
+  test('Bot scope reaches every run request and outranks the inherited chat backend', async () => {
+    const fetchMock = jest.fn((input: unknown) => Promise.resolve(
+      String(input).includes('/events') ? sseResponse() : jsonResponse({ run_id: 'run-bot' }),
+    ));
+    const client = clientWith(fetchMock);
+    // The connect path auto-adopts a configurable-chat environment and openBot
+    // keeps it; a deliberate environment pick would have cleared the Bot.
+    client.setBotId('rook');
+    client.setBackendId('claude-local');
+    await client.startRun('check', { sessionId: 'bot-chat', model: 'chosen-model' });
+    await client.getRunStatus('run-bot');
+    await client.streamRunEvents('run-bot', () => undefined);
+    await client.resolveApproval('run-bot', false);
+    await client.stopRun('run-bot');
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    for (const [url] of fetchMock.mock.calls) {
+      const query = new URL(String(url)).searchParams;
+      expect(query.get('bot')).toBe('rook');
+      expect(query.get('backendId')).toBeNull();
+    }
+    client.setBotId(undefined);
+    await client.getRunStatus('configurable-run');
+    expect(String(fetchMock.mock.calls[5][0])).not.toContain('bot=');
   });
 
   test('every follow-up action keeps the explicitly selected backend', async () => {

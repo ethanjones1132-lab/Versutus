@@ -1033,8 +1033,23 @@ export async function createGate(config = {}) {
        * the Gate a runs API without reimplementing an agent loop. Paths mirror
        * Hermes exactly, which is also what the app's client already speaks.
        */
-      async function resolveRunBackend(backendId) {
+      async function resolveRunBackend(backendId, botId = readBotId(url)) {
         const explicit = backendId ?? url.searchParams.get('backendId');
+        if (botId) {
+          let selected = explicit;
+          if (!selected) {
+            for (const entry of await backendManager.list()) {
+              const candidate = await backendManager.get(entry.id).catch(() => null);
+              if (typeof candidate?.forBot === 'function') {
+                selected = entry.id;
+                break;
+              }
+            }
+          }
+          const backend = await resolveConversationBackend(selected, botId);
+          if (!backend || !requireBackendMethod(backend, 'startRun')) return null;
+          return { backend, backendId: selected, botId };
+        }
         if (explicit) {
           const backend = await resolveBackend(explicit);
           if (!backend) return null;
@@ -1081,25 +1096,39 @@ export async function createGate(config = {}) {
         }
       }
 
-      async function resolveExistingRun(run) {
+      async function validateRunScope(run) {
+        const botId = readBotId(url);
+        if (run.botId && botId && run.botId !== botId) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: {
+            message: 'This run belongs to a different Bot', code: 'run_bot_mismatch',
+          } }));
+          return false;
+        }
         const explicit = url.searchParams.get('backendId');
-        const resolved = await resolveRunBackend(explicit || run.backendId);
-        if (!resolved) return null;
         if (run.backendId && explicit && explicit !== run.backendId) {
+          if (!await resolveRunBackend(explicit)) return false;
           res.writeHead(409, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: {
             message: 'This run belongs to a different CLI environment', code: 'run_backend_mismatch',
           } }));
-          return null;
+          return false;
         }
-        return resolved.backend;
+        return true;
+      }
+
+      async function resolveExistingRun(run) {
+        if (!await validateRunScope(run)) return null;
+        const explicit = url.searchParams.get('backendId');
+        const resolved = await resolveRunBackend(explicit || run.backendId, run.botId || readBotId(url));
+        return resolved?.backend ?? null;
       }
 
       if (pathname === '/v1/runs' && method === 'POST') {
         const body = (await readJsonBody(req)) ?? {};
-        const resolved = await resolveRunBackend(body.backendId);
+        const resolved = await resolveRunBackend(body.backendId, readBotId(url, body));
         if (!resolved) return;
-        const { backend, backendId } = resolved;
+        const { backend, backendId, botId } = resolved;
         const prompt = typeof body.input === 'string'
           ? body.input
           : lastUserText(Array.isArray(body.input) ? body.input : body.messages);
@@ -1119,23 +1148,26 @@ export async function createGate(config = {}) {
           return;
         }
         res.writeHead(200);
-        res.end(JSON.stringify(scopeBackendRunResponse(started, backendId)));
+        res.end(JSON.stringify(scopeBackendRunResponse(started, backendId, botId)));
         return;
       }
 
       const runEventsMatch = pathname.match(/^\/v1\/runs\/([^/]+)\/events$/);
       if (runEventsMatch && method === 'GET') {
         const run = readRunHandle(runEventsMatch[1]);
-        if (!run) return;
-        const runId = backendRunArchiveKey(run.handle);
-        // A matching scope is already carried by the handle: replay must not
-        // need its CLI environment online. A different explicit pin is refused.
+        if (!run || !await validateRunScope(run)) return;
+        // Handles preserve scope even when the CLI environment is offline.
+        // Legacy requests with an explicit Bot must not share an unscoped archive.
+        const botId = run.botId || readBotId(url);
         let backend;
-        const explicit = url.searchParams.get('backendId');
-        if (explicit && run.backendId && explicit !== run.backendId) {
-          backend = await resolveExistingRun(run);
-          if (!backend) return;
+        let handle = run.handle;
+        if (botId && !run.botId) {
+          const resolved = await resolveRunBackend(run.backendId, botId);
+          if (!resolved) return;
+          backend = resolved.backend;
+          handle = scopeBackendRunResponse({ id: run.runId }, resolved.backendId, botId).id;
         }
+        const runId = backendRunArchiveKey(handle);
         // Replay answers from the Gate's own archive when one exists: Hermes
         // buffers a run's events only while it is live, so replaying a
         // finished run upstream 404s. The archived bytes are exactly what was
@@ -1288,7 +1320,7 @@ export async function createGate(config = {}) {
           return;
         }
         res.writeHead(200);
-        res.end(JSON.stringify(run.backendId ? scopeBackendRunResponse(status, run.backendId) : status));
+        res.end(JSON.stringify(run.backendId ? scopeBackendRunResponse(status, run.backendId, run.botId || readBotId(url)) : status));
         return;
       }
 

@@ -472,7 +472,7 @@ export class ManifestClient implements PortalClient {
   }
 
   /**
-   * Scope a conversation route.
+   * Scope a conversation or run route.
    *
    * A Bot names its own environment — it is a Hermes profile, and the Gate
    * resolves `bot=` to the environment that actually has Bots. Sending the
@@ -481,6 +481,13 @@ export class ManifestClient implements PortalClient {
    * not implement bots": tapping an agent bounced straight back to the
    * roster. With no Bot selected the chosen environment is exactly right —
    * that is what configurable chat means.
+   *
+   * Runs follow the same rule: the connect path auto-adopts a configurable-
+   * chat backend (gateway-provider), and opening a Bot Chat keeps it — so
+   * appending it to a Bot-scoped run pinned every Bot run onto the
+   * environment that cannot run a Bot at all. A deliberate environment pick
+   * clears the Bot (selectBackend), so a Bot set means the Bot names the
+   * environment and the inherited backend has no say.
    */
   private withScope(path: string): string {
     return this.botId ? this.withBot(path) : this.withBackend(path);
@@ -925,23 +932,7 @@ export class ManifestClient implements PortalClient {
     const body: Record<string, unknown> = { input: prompt };
     if (options?.sessionId) body.session_id = options.sessionId;
     if (options?.model) body.model = options.model;
-    return this.rootTransport.request<RunResponse>('POST', this.withExplicitBackend(runs), body);
-  }
-
-  /**
-   * Scopes a run route to the backend the operator explicitly chose — and only
-   * then (same rule as `withBackend` now that `backendId` carries no default).
-   * Runs are a capability the Gate resolves like Bots and jobs: naming the
-   * default environment turned every run into a deliberate pin on the one that
-   * refuses runs (501 runs_unsupported). An explicit pick survives; nothing
-   * selected leaves the route unpinned so the Gate resolves the runnable
-   * environment by capability.
-   */
-  private withExplicitBackend(path: string): string {
-    const backendId = this.selectedBackendId;
-    if (!backendId) return path;
-    const separator = path.includes('?') ? '&' : '?';
-    return `${path}${separator}backendId=${encodeURIComponent(backendId)}`;
+    return this.rootTransport.request<RunResponse>('POST', this.withScope(runs), body);
   }
 
   async getRunStatus(runId: string): Promise<RunStatus> {
@@ -949,7 +940,7 @@ export class ManifestClient implements PortalClient {
     const path = template
       ? interpolatePath(template, { id: runId, runId, run_id: runId })
       : `${this.requireRunsEndpoint().replace(/\/+$/, '')}/${runId}`;
-    return this.rootTransport.request<RunStatus>('GET', this.withExplicitBackend(path));
+    return this.rootTransport.request<RunStatus>('GET', this.withScope(path));
   }
 
   async streamRunEvents(
@@ -962,7 +953,7 @@ export class ManifestClient implements PortalClient {
       ? interpolatePath(template, { id: runId, runId, run_id: runId })
       : `${this.requireRunsEndpoint().replace(/\/+$/, '')}/${runId}/events`;
 
-    const response = await streamingFetch(`${this.rootTransport.baseUrl}${this.withExplicitBackend(path)}`, {
+    const response = await streamingFetch(`${this.rootTransport.baseUrl}${this.withScope(path)}`, {
       headers: this.rootTransport.headers,
       signal,
     });
@@ -995,7 +986,7 @@ export class ManifestClient implements PortalClient {
     const path = template
       ? interpolatePath(template, { id: runId, runId, run_id: runId })
       : `${this.requireRunsEndpoint().replace(/\/+$/, '')}/${runId}/approval`;
-    await this.rootTransport.request<unknown>('POST', this.withExplicitBackend(path), {
+    await this.rootTransport.request<unknown>('POST', this.withScope(path), {
       approved,
       ...(feedback ? { feedback } : {}),
     });
@@ -1022,7 +1013,7 @@ export class ManifestClient implements PortalClient {
     const path = template
       ? interpolatePath(template, { id: runId, runId })
       : `${runs!.replace(/\/+$/, '')}/${runId}/stop`;
-    await this.rootTransport.request<unknown>('POST', this.withExplicitBackend(path), {});
+    await this.rootTransport.request<unknown>('POST', this.withScope(path), {});
   }
 
   private setStatus(status: ConnectionStatus, detail = '') {

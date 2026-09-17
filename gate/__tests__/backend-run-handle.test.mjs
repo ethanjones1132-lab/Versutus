@@ -44,3 +44,14 @@ test('archives distinguish environments and long ids while keeping legacy filena
   for (const key of keys) assert.match(key, /^scoped-[a-f0-9]{64}$/);
   assert.equal(backendRunArchiveKey('legacy_run'), 'legacy_run');
 });
+
+
+test('Bot run handles preserve Bot identity without changing existing environment handles', () => {
+  const first = encodeBackendRunHandle('hermes', 'same-run', 'rook');
+  const second = encodeBackendRunHandle('hermes', 'same-run', 'default');
+  assert.deepEqual(decodeBackendRunHandle(first), { backendId: 'hermes', runId: 'same-run', botId: 'rook' });
+  assert.notEqual(first, second);
+  assert.notEqual(backendRunArchiveKey(first), backendRunArchiveKey(second));
+  assert.deepEqual(scopeBackendRunResponse({ id: 'same-run' }, 'hermes', 'rook'), { id: first });
+  assert.match(encodeBackendRunHandle('hermes', 'same-run'), /^gate-run-v1\./);
+});
