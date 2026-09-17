@@ -85,6 +85,20 @@ async function relayStreamingTurn(upstream, { onDelta, onToolCall, onChunk, sign
 }
 
 /**
+ * Whether a `sendMessageStreaming` refusal means the backend cannot stream at
+ * all, rather than that the turn failed. A 404 (unknown route) or 501
+ * (unimplemented) is an answer about the endpoint, so a backend that predates
+ * streaming can still be served by `sendMessage`; an explicit
+ * `stream_unsupported` code counts even without a status. Anything else -- a
+ * timeout, a 5xx, a dropped connection -- may already have been accepted, and
+ * re-sending the turn would run it twice.
+ */
+function isStreamUnsupported(error) {
+  if (error?.code === 'stream_unsupported') return true;
+  return error?.status === 404 || error?.status === 501;
+}
+
+/**
  * Run one backend turn, reporting each visible piece through callbacks.
  *
  * @param {object} backend A CLI backend (sendMessage/streamEvents, or the
@@ -124,11 +138,16 @@ export async function runBackendTurn(backend, sessionId, { text, model } = {}, {
       let upstream = null;
       try {
         upstream = await backend.sendMessageStreaming(sessionId, { text, model }, controller.signal);
-      } catch {
-        // Nothing has been written yet, so the whole-turn path below can still
-        // serve this turn -- unless the caller walked away.
+      } catch (error) {
         upstream = null;
+        // The streaming POST may have been accepted even though the stream
+        // failed -- a timeout or 5xx after Hermes read the body would run the
+        // same prompt twice if it were re-sent below. Only a refusal that says
+        // "this backend cannot stream at all" may fall through to the
+        // whole-turn path; every other failure propagates. When the caller has
+        // walked away, the turn is over either way.
         if (signal?.aborted) return { hasContent: false, report: {}, aborted: true };
+        if (!isStreamUnsupported(error)) throw error;
       }
 
       if (upstream) {

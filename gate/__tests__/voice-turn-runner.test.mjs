@@ -176,6 +176,57 @@ test('a refused stream falls back to the whole turn rather than losing the reply
   assert.ok(backend.calls.includes('sendMessage'));
 });
 
+test('a backend that names its missing streaming endpoint falls back without a status', async () => {
+  const seen = collector();
+  const backend = fakeBackend({
+    streamingError: Object.assign(new Error('hermes: HTTP 404'), { status: 404, code: 'stream_unsupported' }),
+    result: { text: 'the fallback answer', message: null },
+  });
+
+  await runBackendTurn(backend, 'ses_1', { text: 'hi' }, seen.handlers);
+
+  assert.deepEqual(seen.deltas, ['the fallback answer']);
+  assert.ok(backend.calls.includes('sendMessage'));
+});
+
+test('a streaming POST that may have been accepted is not silently re-sent as a whole turn', async () => {
+  const seen = collector();
+  const backend = fakeBackend({
+    streamingError: Object.assign(new Error('hermes: HTTP 500'), { status: 500 }),
+    result: { text: 'the duplicate answer', message: null },
+  });
+
+  await assert.rejects(
+    () => runBackendTurn(backend, 'ses_1', { text: 'hi' }, seen.handlers),
+    /HTTP 500/,
+  );
+  assert.deepEqual(backend.calls, ['sendMessageStreaming']);
+});
+
+test('a whole-turn failure on the fallback path still propagates', async () => {
+  const backend = fakeBackend({
+    streamingError: Object.assign(new Error('hermes: HTTP 404'), { status: 404 }),
+  });
+  backend.sendMessage = async () => { throw new Error('backend blew up'); };
+
+  await assert.rejects(
+    () => runBackendTurn(backend, 'ses_1', { text: 'hi' }, collector().handlers),
+    /backend blew up/,
+  );
+});
+
+test('a streaming POST the caller already aborted never re-sends the turn', async () => {
+  const backend = fakeBackend({
+    streamingError: Object.assign(new Error('hermes: HTTP 500'), { status: 500 }),
+    result: { text: 'must not run', message: null },
+  });
+
+  const outcome = await runBackendTurn(backend, 'ses_1', { text: 'hi' }, { signal: AbortSignal.abort() });
+
+  assert.equal(outcome.aborted, true);
+  assert.deepEqual(backend.calls, ['sendMessageStreaming']);
+});
+
 test('a backend error propagates so the caller can name it', async () => {
   const backend = fakeBackend({ events: [] });
   backend.sendMessage = async () => { throw new Error('backend blew up'); };
