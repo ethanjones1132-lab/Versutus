@@ -122,7 +122,10 @@ export function createHermesBackend({
       error.status = response.status;
       throw error;
     }
-    return response.json();
+    // Session and Routine deletes may succeed without a JSON body.
+    const text = await response.text();
+    if (text === '') return undefined;
+    return JSON.parse(text);
   }
 
   /**

@@ -15,7 +15,7 @@ function recordingFetch(responder) {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
     calls.push({ url, init, body: init.body ? JSON.parse(init.body) : undefined });
-    return responder?.(url, init) ?? { ok: true, status: 200, json: async () => ({}) };
+    return responder?.(url, init) ?? Response.json({});
   };
   return { calls, fetchImpl };
 }
@@ -55,6 +55,49 @@ test('job actions address the job by id and distinguish pause from resume', asyn
     'http://h:8642/api/jobs/nightly%20build/resume',
   ]);
   assert.ok(calls.every((c) => c.init.method === 'POST'));
+});
+
+for (const [method, path] of [['deleteSession', 'sessions'], ['removeJob', 'jobs']]) {
+  for (const status of [200, 204, 205]) {
+    test(`${method} accepts an empty HTTP ${status} success`, async () => {
+      const { calls, hermes } = backend(() => new Response(null, { status }));
+      assert.equal(await hermes[method]('nightly build'), undefined);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].url, `http://h:8642/api/${path}/nightly%20build`);
+      assert.equal(calls[0].init.method, 'DELETE');
+    });
+  }
+
+  test(`${method} still accepts a JSON success`, async () => {
+    const { hermes } = backend(() => Response.json({ deleted: true }));
+    assert.equal(await hermes[method]('nightly build'), undefined);
+  });
+
+  for (const [status, body, message] of [
+    [409, JSON.stringify({ error: { message: 'still running' } }), 'still running'],
+    [503, 'temporarily unavailable', 'temporarily unavailable'],
+    [404, '', 'HTTP 404'],
+  ]) {
+    test(`${method} preserves an HTTP ${status} refusal`, async () => {
+      const { hermes } = backend(() => new Response(body, { status }));
+      await assert.rejects(() => hermes[method]('nightly build'), (error) => {
+        assert.equal(error.status, status);
+        assert.equal(error.message, `hermes: ${message}`);
+        return true;
+      });
+    });
+  }
+
+  test(`${method} does not hide malformed non-empty JSON`, async () => {
+    const { hermes } = backend(() => new Response('{broken', { status: 200 }));
+    await assert.rejects(() => hermes[method]('nightly build'), SyntaxError);
+  });
+}
+
+test('a non-empty Hermes success still returns its JSON to the caller', async () => {
+  const body = { data: [{ id: 'nightly', paused: false }] };
+  const { hermes } = backend(() => Response.json(body));
+  assert.deepEqual(await hermes.listJobs(), body);
 });
 
 test('a streamed turn is bound to its session and asks for OpenAI-shaped chunks', async () => {
@@ -143,7 +186,7 @@ test('forBot rejects unknown and unroutable bots', async () => {
   const hermes = createHermesBackend({
     baseUrl: 'http://h:8642',
     apiKey: 'default-listen',
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    fetchImpl: async () => Response.json({}),
     profilesHome: home,
   });
   await assert.rejects(() => hermes.forBot('nope'), (err) => err.code === 'unknown_bot');
@@ -157,7 +200,7 @@ test('createBot runs bounded profile create, rotates listen key, writes soul', a
   const hermes = createHermesBackend({
     baseUrl: 'http://h:8642',
     apiKey: 'default-listen',
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    fetchImpl: async () => Response.json({}),
     profilesHome: home,
     executablePath: 'hermes',
     runCliImpl: async (_exe, args) => {
@@ -195,7 +238,7 @@ test('listBots returns every profile including default and never leaks listen ke
   const hermes = createHermesBackend({
     baseUrl: 'http://h:8642',
     apiKey: 'default-listen',
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    fetchImpl: async () => Response.json({}),
     profilesHome: home,
   });
   const body = await hermes.listBots();
@@ -216,7 +259,7 @@ test('a bot holding the default listen key is refused with the fix named', async
   const hermes = createHermesBackend({
     baseUrl: 'http://h:8642',
     apiKey: 'gate-key',
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    fetchImpl: async () => Response.json({}),
     profilesHome: home,
   });
   await assert.rejects(
@@ -237,7 +280,7 @@ test('listBots reports a default-key copy as unroutable without leaking keys', a
   const hermes = createHermesBackend({
     baseUrl: 'http://h:8642',
     apiKey: 'gate-key',
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    fetchImpl: async () => Response.json({}),
     profilesHome: home,
   });
   const body = await hermes.listBots();
@@ -263,7 +306,7 @@ test('updateBot rewrites only what the request carries, on the CLI writer\'s own
   const hermes = createHermesBackend({
     baseUrl: 'http://h:8642',
     apiKey: 'k',
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    fetchImpl: async () => Response.json({}),
     profilesHome: home,
     executablePath: 'hermes',
     runCliImpl: async (_exe, args) => {
@@ -323,7 +366,7 @@ test('updateBot with no editable field changes nothing at all', async () => {
   const hermes = createHermesBackend({
     baseUrl: 'http://h:8642',
     apiKey: 'k',
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    fetchImpl: async () => Response.json({}),
     profilesHome: home,
     executablePath: 'hermes',
     runCliImpl: async (_exe, args) => {
@@ -357,7 +400,7 @@ test('updateBot clears explicit null model fields and preserves provider credent
   const hermes = createHermesBackend({
     baseUrl: 'http://h:8642',
     apiKey: 'k',
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    fetchImpl: async () => Response.json({}),
     profilesHome: home,
     executablePath: 'hermes',
     runCliImpl: async (_exe, args) => {
@@ -382,7 +425,7 @@ test('updateBot refuses default, invalid and unknown bots before touching disk',
   const hermes = createHermesBackend({
     baseUrl: 'http://h:8642',
     apiKey: 'k',
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    fetchImpl: async () => Response.json({}),
     profilesHome: home,
     executablePath: 'hermes',
     runCliImpl: async () => ({ code: 0, stdout: '', stderr: '' }),
@@ -437,7 +480,7 @@ test('a title Hermes already holds resolves to that session, not a failure', asy
         text: async () => JSON.stringify({ detail: 'Title already in use by session api_1787256183_54a46d4a' }),
       };
     }
-    return { ok: true, status: 200, json: async () => ({ session: existing }) };
+    return Response.json({ session: existing });
   });
 
   const session = await hermes.createSession({ title: 'Bot Chat' });
@@ -451,7 +494,7 @@ test('a refusal that is not a title collision still fails', async () => {
     if (init.method === 'POST') {
       return { ok: false, status: 400, text: async () => JSON.stringify({ detail: 'model unavailable' }) };
     }
-    return { ok: true, status: 200, json: async () => ({}) };
+    return Response.json({});
   });
   await assert.rejects(() => hermes.createSession({ title: 'Bot Chat' }), /model unavailable/);
 });
@@ -464,10 +507,7 @@ test('a turn reports which model actually ran, not just which was asked for', as
   // swap was invisible.
   const { hermes } = backend((url, init) => {
     if (init.method === 'POST') {
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
+      return new Response(JSON.stringify({
           message: { id: 'm1', role: 'assistant', content: 'ok' },
           usage: {
             input_tokens: 10,
@@ -478,10 +518,9 @@ test('a turn reports which model actually ran, not just which was asked for', as
               requested: { provider: 'opencode-go', model: 'longcat-2.0' },
             },
           },
-        }),
-      };
+        }), { status: 200 });
     }
-    return { ok: true, status: 200, json: async () => ({}) };
+    return Response.json({});
   });
 
   const result = await hermes.sendMessage('ses_1', {
@@ -496,20 +535,16 @@ test('a turn reports which model actually ran, not just which was asked for', as
 test('a turn that was not substituted reports the model it ran', async () => {
   const { hermes } = backend((url, init) => {
     if (init.method === 'POST') {
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
+      return new Response(JSON.stringify({
           message: { id: 'm1', role: 'assistant', content: 'ok' },
           runtime: {
             provider: 'opencode-go',
             model: 'longcat-2.0',
             requested: { provider: 'opencode-go', model: 'longcat-2.0' },
           },
-        }),
-      };
+        }), { status: 200 });
     }
-    return { ok: true, status: 200, json: async () => ({}) };
+    return Response.json({});
   });
 
   const result = await hermes.sendMessage('ses_1', {
@@ -528,7 +563,7 @@ test('getBot returns one Bot with its soul and still never leaks listen keys', a
   const hermes = createHermesBackend({
     baseUrl: 'http://h:8642',
     apiKey: 'default-listen',
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    fetchImpl: async () => Response.json({}),
     profilesHome: home,
   });
 
@@ -548,7 +583,7 @@ test('getBotMemory returns one Bot memory and never a non-whitelisted file', asy
   const hermes = createHermesBackend({
     baseUrl: 'http://h:8642',
     apiKey: 'default-listen',
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    fetchImpl: async () => Response.json({}),
     profilesHome: home,
   });
 
@@ -578,7 +613,7 @@ test('getBot on an unknown Bot is refused, not an empty Bot', async () => {
   const hermes = createHermesBackend({
     baseUrl: 'http://h:8642',
     apiKey: 'default-listen',
-    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({}) }),
+    fetchImpl: async () => Response.json({}),
     profilesHome: home,
   });
 
@@ -586,16 +621,12 @@ test('getBot on an unknown Bot is refused, not an empty Bot', async () => {
 });
 
 test('listModels reads /api/model/options and does not mark unsigned-in providers available', async () => {
-  const { calls, hermes } = backend(() => ({
-    ok: true,
-    status: 200,
-    json: async () => ({
+  const { calls, hermes } = backend(() => new Response(JSON.stringify({
       providers: [
         { slug: 'nous', name: 'Nous Portal', authenticated: true, models: ['poolside/laguna-xs-2.1:free'] },
         { slug: 'qwen-oauth', name: 'Qwen', authenticated: false, models: ['qwen3'] },
       ],
-    }),
-  }));
+    }), { status: 200 }));
   const models = await hermes.listModels();
   assert.equal(calls[0].url, 'http://h:8642/api/model/options');
   const laguna = models.find((m) => m.modelId === 'poolside/laguna-xs-2.1:free');
@@ -611,7 +642,7 @@ test('a run pinned to a provider-qualified model reaches Hermes with the provide
   // qualified string whole, so Hermes saw no provider, treated
   // "opencode-go/omen-alpha" as a bare model, routed it to a custom OpenRouter
   // endpoint and failed "not a valid model ID" (2026-09-16, POST /v1/runs).
-  const { calls, hermes } = backend(() => ({ ok: true, status: 202, json: async () => ({ run_id: 'run_1', status: 'started' }) }));
+  const { calls, hermes } = backend(() => Response.json({ run_id: 'run_1', status: 'started' }, { status: 202 }));
   await hermes.startRun('hello', { model: 'opencode-go-session/deepseek-v4-flash' });
   assert.equal(calls[0].url, 'http://h:8642/v1/runs');
   assert.equal(calls[0].body.model, 'deepseek-v4-flash');
@@ -619,7 +650,7 @@ test('a run pinned to a provider-qualified model reaches Hermes with the provide
 });
 
 test('a run with a bare model id or a split model object is passed through as it is', async () => {
-  const { calls, hermes } = backend(() => ({ ok: true, status: 202, json: async () => ({ run_id: 'run_2', status: 'started' }) }));
+  const { calls, hermes } = backend(() => Response.json({ run_id: 'run_2', status: 'started' }, { status: 202 }));
   await hermes.startRun('hello', { model: 'deepseek-v4-flash' });
   assert.equal(calls[0].body.model, 'deepseek-v4-flash');
   assert.equal(calls[0].body.provider, undefined);
@@ -629,7 +660,7 @@ test('a run with a bare model id or a split model object is passed through as it
 });
 
 test('a run with no model names none, so Hermes keeps its own default', async () => {
-  const { calls, hermes } = backend(() => ({ ok: true, status: 202, json: async () => ({ run_id: 'run_3', status: 'started' }) }));
+  const { calls, hermes } = backend(() => Response.json({ run_id: 'run_3', status: 'started' }, { status: 202 }));
   await hermes.startRun('hello', { sessionId: 'ses_1' });
   assert.equal(calls[0].body.model, undefined);
   assert.equal(calls[0].body.provider, undefined);

@@ -111,12 +111,7 @@ test('a healthy cron listing still returns its jobs', async () => {
   const backend = createHermesBackend({
     baseUrl: 'http://127.0.0.1:8642',
     apiKey: 'test-key',
-    fetchImpl: async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ data: [{ id: 'job_1', paused: false }] }),
-      text: async () => '',
-    }),
+    fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: 'job_1', paused: false }] }), { status: 200 }),
   });
   const body = await backend.listJobs();
   assert.equal(body.data.length, 1);
@@ -127,17 +122,12 @@ test('a healthy transcript read still maps and filters', async () => {
   const backend = createHermesBackend({
     baseUrl: 'http://127.0.0.1:8642',
     apiKey: 'test-key',
-    fetchImpl: async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
+    fetchImpl: async () => new Response(JSON.stringify({
         data: [
           { id: 'm1', role: 'assistant', content: 'answer', timestamp: 1 },
           { id: 'm2', role: 'assistant', content: '', timestamp: 2 },
         ],
-      }),
-      text: async () => '',
-    }),
+      }), { status: 200 }),
   });
   const messages = await backend.listMessages('sess_1', 5);
   assert.equal(messages.length, 1);
@@ -190,12 +180,7 @@ test('a healthy read still returns its sessions', async () => {
   const backend = createHermesBackend({
     baseUrl: 'http://127.0.0.1:8642',
     apiKey: 'k',
-    fetchImpl: async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ data: [{ id: 'sess_1', title: 'one' }] }),
-      text: async () => '',
-    }),
+    fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: 'sess_1', title: 'one' }] }), { status: 200 }),
   });
   const sessions = await backend.listSessions(5);
   assert.equal(sessions.length, 1);
