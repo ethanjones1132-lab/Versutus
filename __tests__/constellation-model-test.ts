@@ -7,6 +7,7 @@ import {
   constellationNodeAccessibilityLabel,
   constellationSummaryCopy,
 } from '@/lib/fleet/constellation-model';
+import type { GatewayCapabilitySnapshot } from '@/lib/gateway/types';
 import type { CronJob } from '@/lib/gateway/cron';
 
 function job(overrides: Partial<CronJob> & { id: string }): CronJob {
@@ -17,6 +18,63 @@ function job(overrides: Partial<CronJob> & { id: string }): CronJob {
     ...overrides,
   };
 }
+
+describe('connected gateway capability readiness', () => {
+  const base = {
+    profiles: [{ id: 'home' }, { id: 'saved' }],
+    connectedGatewayId: 'home',
+    roster: [{ id: 'scout' }],
+  };
+  const snapshot: GatewayCapabilitySnapshot = {
+    checkedAt: 100, status: 'fresh', methods: {}, scopes: [],
+    groups: [
+      { id: 'chat', label: 'Chat', status: 'ready' },
+      { id: 'memory', label: 'Memory', status: 'available' },
+      { id: 'cron', label: 'Routines', status: 'missing-scope' },
+      { id: 'imaginary', label: 'Imaginary', status: 'undeclared' },
+    ],
+  };
+
+  test('counts only declared groups and shares no capability facts with saved gateways or Bots', () => {
+    const model = constellationModel({ ...base, capabilitySnapshot: snapshot });
+    const live = model.nodes[0];
+    expect(live.capabilityDetail).toBe('Capabilities 2/3 ready');
+    expect(live.badges).toContainEqual({ label: 'Live', tone: 'success' });
+    expect(constellationNodeAccessibilityLabel(live)).toContain('Capabilities 2/3 ready');
+    for (const node of model.nodes.slice(1)) expect(node.capabilityDetail).toBeUndefined();
+    const disconnected = constellationModel({ ...base, connectedGatewayId: undefined, capabilitySnapshot: snapshot });
+    expect(disconnected.nodes.every((node) => node.capabilityDetail === undefined)).toBe(true);
+  });
+
+  test.each([
+    ['fresh', 'Capabilities 2/3 ready'],
+    ['partial', 'Capabilities partial · 2/3 ready'],
+    ['stale', 'Capabilities stale · 2/3 last known ready'],
+    ['warming', 'Capabilities warming'],
+    ['offline', 'Capabilities unreported'],
+  ] as const)('%s preserves the snapshot verdict rather than equating live with ready', (status, detail) => {
+    expect(constellationModel({ ...base, capabilitySnapshot: { ...snapshot, status } }).nodes[0].capabilityDetail)
+      .toBe(detail);
+  });
+
+  test.each([{ groups: [] }, { groups: [{ id: 'imaginary', label: 'Imaginary', status: 'undeclared' as const }] }])(
+    'no declared groups never claims readiness', ({ groups }) => {
+      expect(constellationModel({ ...base, capabilitySnapshot: { ...snapshot, groups } }).nodes[0].capabilityDetail)
+        .toBe('Capabilities unreported');
+    },
+  );
+
+  test('a missing snapshot is unreported, not ready', () => {
+    expect(constellationModel(base).nodes[0].capabilityDetail).toBe('Capabilities unreported');
+  });
+
+  test('non-ready group verdicts are counted but never promoted to ready', () => {
+    const groups = (['unavailable', 'unknown', 'unsupported', 'warming', 'stale', 'partial', 'unhealthy', 'experimental'] as const)
+      .map((status) => ({ id: status, label: status, status }));
+    expect(constellationModel({ ...base, capabilitySnapshot: { ...snapshot, groups } }).nodes[0].capabilityDetail)
+      .toBe('Capabilities 0/8 ready');
+  });
+});
 
 describe('the fleet constellation model', () => {
   test('an empty fleet is a dignified empty model', () => {

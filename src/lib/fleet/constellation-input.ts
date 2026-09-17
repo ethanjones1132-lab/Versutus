@@ -11,6 +11,7 @@
 import type { ConstellationInput, FleetReachability } from '@/lib/fleet/constellation-model';
 import type { FleetRosterReadStatus } from '@/lib/fleet/roster-read';
 import type { FleetRoutineReadStatus } from '@/lib/fleet/routine-read';
+import type { GatewayCapabilitySnapshot } from '@/lib/gateway/types';
 
 export type FleetProjectionGateway = { id: string; name?: string };
 export type FleetProjectionReachability = {
@@ -25,6 +26,7 @@ export type FleetProjectionBot = { id: string; displayName?: string };
 export type FleetConstellationArgs = {
   gateways?: FleetProjectionGateway[];
   connectedGatewayId?: string | null;
+  capabilitySnapshot?: GatewayCapabilitySnapshot;
   reachability?: Record<string, FleetProjectionReachability | undefined>;
   roster?: FleetProjectionBot[];
   rosterReadStatus?: FleetRosterReadStatus;
@@ -82,7 +84,10 @@ export function fleetConstellationInput(args: FleetConstellationArgs): Constella
     cronJobs: args.cronJobs ?? [],
     routineReadStatus: args.routineReadStatus,
   };
-  if (connectedGatewayId) input.connectedGatewayId = connectedGatewayId;
+  if (connectedGatewayId) {
+    input.connectedGatewayId = connectedGatewayId;
+    input.capabilitySnapshot = args.capabilitySnapshot;
+  }
   return input;
 }
 

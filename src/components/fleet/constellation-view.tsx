@@ -146,6 +146,11 @@ export function ConstellationView({
             );
           })}
         </View>
+        {model.nodes.filter((node) => node.capabilityDetail).map((node) => (
+          <Text key={node.id} variant="caption" color="secondary" style={styles.capabilityDetail}>
+            {`${node.label} · ${node.capabilityDetail}`}
+          </Text>
+        ))}
         {/* The HUD: one honest line from the model's own summary. */}
         <View style={[styles.hud, { borderTopColor: tokens.glassBorder }]}>
           <Icon
@@ -195,6 +200,10 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'center',
     gap: Spacing.half,
+  },
+  capabilityDetail: {
+    paddingHorizontal: Spacing.three,
+    paddingBottom: Spacing.two,
   },
   hud: {
     flexDirection: 'row',

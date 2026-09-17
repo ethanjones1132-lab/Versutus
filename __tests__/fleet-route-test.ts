@@ -1,3 +1,53 @@
+import { createElement } from 'react';
+import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+
+import FleetScreen from '@/app/fleet';
+import { ConstellationView } from '@/components/fleet/constellation-view';
+import { useGateway } from '@/context/gateway-provider';
+import type { GatewayCapabilitySnapshot } from '@/lib/gateway/types';
+
+jest.mock('expo-router', () => ({ useRouter: () => ({ navigate: jest.fn(), push: jest.fn() }) }));
+jest.mock('@/components/fleet/constellation-view', () => ({ ConstellationView: 'ConstellationView' }));
+jest.mock('@/components/fleet/bot-sheet', () => ({ FleetBotSheet: 'FleetBotSheet' }));
+jest.mock('@/components/ui', () => ({ Screen: 'Screen', Text: 'Text' }));
+jest.mock('@/constants/tokens', () => ({ Spacing: { one: 4, four: 16 } }));
+jest.mock('@/context/gateway-provider', () => ({ useGateway: jest.fn() }));
+jest.mock('@/hooks/use-gateway-reachability', () => ({ useGatewayReachability: () => ({}) }));
+
+describe('the Fleet uses the existing capability snapshot', () => {
+  let renderer: ReactTestRenderer;
+  afterEach(async () => { if (renderer) await act(async () => { renderer.unmount(); }); });
+
+  test('snapshot changes update the live star without a read and disconnect removes its facts', async () => {
+    const snapshot: GatewayCapabilitySnapshot = {
+      checkedAt: 100, status: 'fresh', methods: {}, scopes: [],
+      groups: [{ id: 'chat', label: 'Chat', status: 'ready' }],
+    };
+    const home = { id: 'home' };
+    const state = {
+      gateways: [home, { id: 'saved' }], activeGateway: home, status: 'connected', lastError: null,
+      capabilitySnapshot: snapshot, listBots: jest.fn().mockResolvedValue([]),
+      routineRead: { gatewayId: 'home', jobs: [], status: 'ready' },
+      gatewayRequest: jest.fn(), refreshCapabilities: jest.fn(),
+    };
+    jest.mocked(useGateway).mockImplementation(() => state as unknown as ReturnType<typeof useGateway>);
+    await act(async () => { renderer = create(createElement(FleetScreen)); });
+    const nodes = () => renderer.root.findByType(ConstellationView).props.model.nodes as
+      import('@/lib/fleet/constellation-model').ConstellationNode[];
+    expect(nodes()[0].capabilityDetail).toBe('Capabilities 1/1 ready');
+    expect(nodes()[1].capabilityDetail).toBeUndefined();
+    state.capabilitySnapshot = { ...snapshot, status: 'stale' };
+    await act(async () => { renderer.update(createElement(FleetScreen)); });
+    expect(nodes()[0].capabilityDetail).toBe('Capabilities stale · 1/1 last known ready');
+    state.status = 'disconnected';
+    await act(async () => { renderer.update(createElement(FleetScreen)); });
+    expect(nodes().every((node) => node.capabilityDetail === undefined)).toBe(true);
+    expect(state.listBots).toHaveBeenCalledTimes(1);
+    expect(state.gatewayRequest).not.toHaveBeenCalled();
+    expect(state.refreshCapabilities).not.toHaveBeenCalled();
+  });
+});
+
 declare const __dirname: string;
 
 const SEP = __dirname.includes('\\') ? '\\' : '/';

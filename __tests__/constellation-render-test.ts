@@ -2,7 +2,7 @@ import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 
 import { ConstellationView } from '@/components/fleet/constellation-view';
-import { Badge, PressableScale } from '@/components/ui';
+import { Badge, PressableScale, Text } from '@/components/ui';
 import { fleetConstellationInput } from '@/lib/fleet/constellation-input';
 import { constellationModel, constellationNodeAccessibilityLabel } from '@/lib/fleet/constellation-model';
 
@@ -21,6 +21,27 @@ jest.mock('@/components/ui/Icon', () => ({ Icon: 'Icon' }));
 jest.mock('@/components/fleet/constellation-canvas', () => ({ ConstellationCanvas: 'Canvas' }));
 jest.mock('@/hooks/use-now', () => ({ useNow: () => 100 }));
 jest.mock('@/hooks/use-tokens', () => ({ useTokens: () => ({ glassBorder: '#000' }) }));
+
+test('the live gateway reports readiness outside the packed star labels and saved gateways do not', async () => {
+  const model = constellationModel({
+    profiles: [{ id: 'home' }, { id: 'saved' }], connectedGatewayId: 'home',
+    capabilitySnapshot: {
+      checkedAt: 100, status: 'fresh', methods: {}, scopes: [],
+      groups: [{ id: 'chat', label: 'Chat', status: 'ready' }],
+    },
+  });
+  let renderer!: ReactTestRenderer;
+  await act(async () => { renderer = create(createElement(ConstellationView, { model, size: 320 })); });
+  try {
+    const stars = renderer.root.findAllByType(PressableScale);
+    expect(renderer.root.findAllByType(Text).map((text) => text.props.children)).toContain('home · Capabilities 1/1 ready');
+    expect(stars[0].findAllByType(Text).map((text) => text.props.children)).not.toContain('Capabilities 1/1 ready');
+    expect(stars[0].props.accessibilityLabel).toContain('Capabilities 1/1 ready');
+    expect(stars[1].findAllByType(Text).map((text) => text.props.children)).not.toContain('Capabilities 1/1 ready');
+  } finally {
+    await act(async () => { renderer.unmount(); });
+  }
+});
 
 describe('only approval badges offer the Activity action', () => {
   let renderer: ReactTestRenderer;

@@ -169,7 +169,7 @@ describe('constellationNodeAccessibilityLabel never calls a down gateway live', 
       profiles: [{ id: 'gw-cold', name: 'Cold' }],
     }).nodes[0];
 
-    expect(constellationNodeAccessibilityLabel(home!)).toBe('Home, live');
+    expect(constellationNodeAccessibilityLabel(home!)).toBe('Home, live, Capabilities unreported');
     expect(constellationNodeAccessibilityLabel(travel!)).toBe('Travel, saved gateway, unknown');
     expect(constellationNodeAccessibilityLabel(offline)).toBe('Cold, saved gateway, unknown');
     expect(constellationNodeAccessibilityLabel(travel!)).not.toMatch(/live/);

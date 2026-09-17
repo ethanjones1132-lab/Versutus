@@ -15,6 +15,7 @@
 
 import { describeCronHealth, type CronHealth } from '@/lib/gateway/cron';
 import { parseRoutineName } from '@/lib/gateway/routines';
+import type { GatewayCapabilitySnapshot } from '@/lib/gateway/types';
 import type { FleetRosterReadStatus } from '@/lib/fleet/roster-read';
 import type { FleetRoutineReadStatus } from '@/lib/fleet/routine-read';
 
@@ -48,6 +49,7 @@ export type ConstellationInput = {
   profiles: FleetGatewayInput[];
   connectedGatewayId?: string | null;
   reachability?: FleetReachability;
+  capabilitySnapshot?: GatewayCapabilitySnapshot;
   /** The connected gateway's roster; the only one this device can read. */
   roster?: FleetBotInput[];
   rosterReadStatus?: FleetRosterReadStatus;
@@ -73,6 +75,7 @@ export type ConstellationNode = {
   live: boolean;
   lastSeenAt?: number;
   probeDetail?: string;
+  capabilityDetail?: string;
   badges: ConstellationBadge[];
   /** On a Bot node, the roster id a tap opens. Gateway nodes carry none. */
   botId?: string;
@@ -114,6 +117,18 @@ const EMPTY: ConstellationModel = {
   empty: true,
   summary: { gateways: 0, live: false, bots: 0, running: 0, approvals: 0 },
 };
+
+function capabilityReadinessCopy(snapshot?: GatewayCapabilitySnapshot): string {
+  if (!snapshot || snapshot.status === 'offline') return 'Capabilities unreported';
+  if (snapshot.status === 'warming') return 'Capabilities warming';
+  const counted = snapshot.groups.filter((group) => group.status !== 'undeclared');
+  if (counted.length === 0) return 'Capabilities unreported';
+  const ready = counted.filter((group) => group.status === 'ready' || group.status === 'available').length;
+  const tally = `${ready}/${counted.length}`;
+  if (snapshot.status === 'stale') return `Capabilities stale · ${tally} last known ready`;
+  if (snapshot.status === 'partial') return `Capabilities partial · ${tally} ready`;
+  return `Capabilities ${tally} ready`;
+}
 
 export function constellationModel(input: ConstellationInput): ConstellationModel {
   const profiles = input.profiles ?? [];
@@ -184,6 +199,7 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
     if (lastSeenAt !== undefined && Number.isFinite(lastSeenAt)) gatewayNode.lastSeenAt = lastSeenAt;
     const probeDetail = live ? undefined : savedProbeDetail(probe);
     if (probeDetail) gatewayNode.probeDetail = probeDetail;
+    if (live) gatewayNode.capabilityDetail = capabilityReadinessCopy(input.capabilitySnapshot);
     nodes.push(gatewayNode);
 
     if (!live) return;
@@ -563,6 +579,7 @@ export function constellationNodeAccessibilityLabel(node: ConstellationNode): st
     if (!parts.some((part) => part.toLowerCase() === label)) parts.push(label);
   }
   if (node.probeDetail) parts.push(node.probeDetail);
+  if (node.capabilityDetail) parts.push(node.capabilityDetail);
   return parts.join(', ');
 }
 
