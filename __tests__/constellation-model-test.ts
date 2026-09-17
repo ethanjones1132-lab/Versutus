@@ -3,6 +3,8 @@ import {
   CONSTELLATION_WIDTH,
   constellationModel,
   constellationNodeBoxWidth,
+  constellationNodeAccessibilityLabel,
+  constellationSummaryCopy,
 } from '@/lib/fleet/constellation-model';
 import type { CronJob } from '@/lib/gateway/cron';
 
