@@ -142,6 +142,59 @@ describe('push registration', () => {
     expect(mockToken).not.toHaveBeenCalled();
   });
 
+  test('revoked permission deregisters this device even without a locally stored token', async () => {
+    mockPermissions.mockResolvedValue({ granted: false });
+    const rpc = rpcStub();
+
+    await expect(syncPushRegistration(rpc)).resolves.toBeUndefined();
+
+    expect(rpc.rpcRequest).toHaveBeenCalledTimes(1);
+    expect(rpc.rpcRequest).toHaveBeenCalledWith('notifications.deregister', { deviceId: DEVICE_ID });
+    expect(mockToken).not.toHaveBeenCalled();
+  });
+
+  test('granting permission after revocation registers the fresh token', async () => {
+    const rpc = rpcStub();
+    mockPermissions.mockResolvedValueOnce({ granted: false });
+    await syncPushRegistration(rpc);
+    await syncPushRegistration(rpc);
+
+    expect(rpc.rpcRequest).toHaveBeenNthCalledWith(1, 'notifications.deregister', { deviceId: DEVICE_ID });
+    expect(rpc.rpcRequest).toHaveBeenNthCalledWith(2, 'notifications.register',
+      expect.objectContaining({ deviceId: DEVICE_ID, expoPushToken: 'ExponentPushToken[new]' }));
+  });
+
+  test('a refused deregistration never rejects connect and is retried at the next sync', async () => {
+    mockPermissions.mockResolvedValue({ granted: false });
+    const rpc = rpcStub();
+    rpc.rpcRequest.mockRejectedValueOnce(new Error('offline'));
+
+    await expect(syncPushRegistration(rpc)).resolves.toBeUndefined();
+    await expect(syncPushRegistration(rpc)).resolves.toBeUndefined();
+
+    expect(rpc.rpcRequest).toHaveBeenCalledTimes(2);
+    expect(rpc.rpcRequest).toHaveBeenLastCalledWith('notifications.deregister', { deviceId: DEVICE_ID });
+  });
+
+  test('an unreadable permission does not deregister an existing device', async () => {
+    mockPermissions.mockRejectedValueOnce(new Error('native module unavailable'));
+    const rpc = rpcStub();
+
+    await expect(syncPushRegistration(rpc)).resolves.toBeUndefined();
+
+    expect(rpc.rpcRequest).not.toHaveBeenCalled();
+    expect(mockToken).not.toHaveBeenCalled();
+  });
+
+  test('a temporary token failure does not deregister an existing device', async () => {
+    mockToken.mockRejectedValueOnce(new Error('Expo unavailable'));
+    const rpc = rpcStub();
+
+    await expect(syncPushRegistration(rpc)).resolves.toBeUndefined();
+
+    expect(rpc.rpcRequest).not.toHaveBeenCalled();
+  });
+
   test('a getExpoPushTokenAsync throw resolves null, never thrown to connect', async () => {
     mockToken.mockRejectedValue(new Error('no native module'));
 

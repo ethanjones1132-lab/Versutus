@@ -70,6 +70,14 @@ export async function obtainExpoPushToken(): Promise<string | null> {
   try {
     const permissions = await Notifications.getPermissionsAsync();
     if (!permissions.granted) return null;
+    return await obtainGrantedExpoPushToken();
+  } catch {
+    return null;
+  }
+}
+
+async function obtainGrantedExpoPushToken(): Promise<string | null> {
+  try {
     const result = await Notifications.getExpoPushTokenAsync({
       projectId: resolvedProjectId(),
     });
@@ -117,23 +125,28 @@ export async function deregisterWithGate(rpc: Rpc): Promise<void> {
   await rpc.rpcRequest('notifications.deregister', await pushDeviceParams());
 }
 
-/** Obtain the token and register it; a device with no token asks for nothing. */
+/** Sync the Gate token with permission; confirmed denial drops the device row. */
 export async function syncPushRegistration(rpc: Rpc): Promise<void> {
-  // The background widget task is registered before the token question: a
-  // device that has not granted notification permission still gets data-only
-  // pushes into the widget. A registration that fails keeps the timer refresh.
+  // Prepare the background widget task independently of token registration.
+  // Without a push row, the widget still has its timer refresh.
   try {
     await registerWidgetPushTask();
   } catch {
     // Ignore: the six-hourly worker still rolls the stamp over.
   }
-  const token = await obtainExpoPushToken();
-  if (!token) return;
-  // Registration must never break the connect path that calls this: a Gate
-  // that refuses the RPC (unpaired grant, older build) just means no relay.
+  if (Platform.OS === 'web') return;
+  // Only a confirmed permission denial removes the row. A temporary native
+  // or Expo failure must not erase this device's registration or preferences.
   try {
+    const permissions = await Notifications.getPermissionsAsync();
+    if (!permissions.granted) {
+      await deregisterWithGate(rpc);
+      return;
+    }
+    const token = await obtainGrantedExpoPushToken();
+    if (!token) return;
     await registerWithGate(rpc, token);
   } catch {
-    // Swallowed by design — the next connect retries.
+    // Neither RPC may reject the connect path — the next connect retries.
   }
 }
