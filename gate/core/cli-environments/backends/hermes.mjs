@@ -696,11 +696,18 @@ export function createHermesBackend({
         }
       }
       if (providerId) {
-        await runCliImpl(
+        const pin = await runCliImpl(
           executablePath,
           ['-p', id, 'config', 'set', 'model.provider', String(providerId)],
           { timeoutMs: 15_000 },
         );
+        if (pin.code !== 0) {
+          // CLI diagnostics can contain inherited credentials.
+          const error = new Error('failed to pin provider');
+          error.code = 'bot_create_failed';
+          error.status = 502;
+          throw error;
+        }
       }
       const record = await getHermesBot(profilesHome, id);
       return toPublicBot(

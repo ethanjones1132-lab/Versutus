@@ -230,6 +230,73 @@ test('createBot runs bounded profile create, rotates listen key, writes soul', a
   assert.match(soul, /focused coding assistant/);
 });
 
+for (const [label, result] of [
+  ['nonzero exit', { code: 1, stdout: '', stderr: '' }],
+  ['credential diagnostics', {
+    code: 2,
+    stdout: 'provider credential: test-provider-credential',
+    stderr: 'API_SERVER_KEY=test-listen-key',
+  }],
+  ['terminated command', { code: null, stdout: '', stderr: '' }],
+]) {
+  test(`createBot refuses a failed provider pin: ${label}`, async () => {
+    const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+    const argvLog = [];
+    const hermes = createHermesBackend({
+      baseUrl: 'http://h:8642',
+      profilesHome: home,
+      executablePath: 'hermes',
+      runCliImpl: async (_exe, args, options) => {
+        argvLog.push({ args, options });
+        return args.includes('model.provider') ? result : { code: 0, stdout: '', stderr: '' };
+      },
+    });
+
+    await assert.rejects(
+      () => hermes.createBot({ name: 'coder', modelId: 'test-model', providerId: 'test-provider' }),
+      (error) => {
+        assert.equal(error.code, 'bot_create_failed');
+        assert.equal(error.status, 502);
+        assert.equal(error.message, 'failed to pin provider');
+        assert.doesNotMatch(error.stack, /test-provider-credential|test-listen-key/);
+        assert.doesNotMatch(JSON.stringify(error), /test-provider-credential|test-listen-key/);
+        return true;
+      },
+    );
+    assert.deepEqual(argvLog, [
+      { args: ['profile', 'create', 'coder', '--no-alias'], options: { timeoutMs: 60_000 } },
+      { args: ['-p', 'coder', 'config', 'set', 'model.default', 'test-model'], options: { timeoutMs: 15_000 } },
+      { args: ['-p', 'coder', 'config', 'set', 'model.provider', 'test-provider'], options: { timeoutMs: 15_000 } },
+    ]);
+  });
+}
+
+test('createBot returns a Bot after a successful provider-only pin', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  const argvLog = [];
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    profilesHome: home,
+    executablePath: 'hermes',
+    runCliImpl: async (_exe, args, options) => {
+      argvLog.push({ args, options });
+      if (args.includes('model.provider')) {
+        await writeFile(join(home, 'profiles', 'coder', 'config.yaml'), 'model:\n  provider: test-provider\n');
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  });
+
+  const bot = await hermes.createBot({ name: 'coder', providerId: 'test-provider' });
+  assert.equal(bot.id, 'coder');
+  assert.deepEqual(bot.model, { default: null, provider: 'test-provider' });
+  assert.equal(bot.routable, true);
+  assert.deepEqual(argvLog, [
+    { args: ['profile', 'create', 'coder', '--no-alias'], options: { timeoutMs: 60_000 } },
+    { args: ['-p', 'coder', 'config', 'set', 'model.provider', 'test-provider'], options: { timeoutMs: 15_000 } },
+  ]);
+});
+
 test('listBots returns every profile including default and never leaks listen keys', async () => {
   const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
   await writeFile(join(home, '.env'), 'API_SERVER_KEY=default-listen\nOPENAI_API_KEY=sk-nope\n');
