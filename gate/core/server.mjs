@@ -697,13 +697,17 @@ export async function createGate(config = {}) {
     const pathname = url.pathname;
     const method = req.method;
 
+    const invalidJsonBody = new Error('Request body must be valid JSON');
     async function readJsonBody(req) {
       const chunks = [];
       for await (const chunk of req) chunks.push(chunk);
+      const text = Buffer.concat(chunks).toString('utf8');
+      // Bodyless Routine actions are valid; nonempty invalid JSON is not.
+      if (text.length === 0) return null;
       try {
-        return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        return JSON.parse(text);
       } catch {
-        return null;
+        throw invalidJsonBody;
       }
     }
 
@@ -2291,6 +2295,11 @@ export async function createGate(config = {}) {
         return;
       }
     } catch (err) {
+      if (err === invalidJsonBody) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: { message: err.message, code: 'bad_json' } }));
+        return;
+      }
       console.error('Request handler error:', err);
       // This is the last line of defence, so it must not be able to throw.
       // A streaming route (SSE chat, run events, terminal) has already

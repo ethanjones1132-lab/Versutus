@@ -950,6 +950,65 @@ for (const { label, failure, status, code, message } of [
   });
 }
 
+for (const [method, path] of [
+  ['POST', '/v1/jobs'],
+  ['POST', '/v1/bots'],
+  ['PATCH', '/v1/bots/coder'],
+  ['POST', '/v1/sessions'],
+  ['POST', '/v1/jobs/job-1/run'],
+  ['POST', '/v1/jobs/job-1/pause'],
+  ['POST', '/v1/jobs/job-1/resume'],
+]) {
+  test(`${method} ${path} refuses malformed JSON before calling a Gateway method`, async () => {
+    const calls = [];
+    const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+    try {
+      const response = await fetch(`http://127.0.0.1:${gate.port}${path}`, {
+        method,
+        headers: auth(gate),
+        body: '{"name":',
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: { message: 'Request body must be valid JSON', code: 'bad_json' },
+      });
+      assert.deepEqual(calls, []);
+    } finally {
+      await gate.close();
+    }
+  });
+}
+
+test('valid empty objects retain route validation and bodyless Routine actions still work', async () => {
+  const calls = [];
+  const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    const invalidRpc = await fetch(`${base}/v1/capabilities/rpc`, {
+      method: 'POST', headers: auth(gate), body: '{}',
+    });
+    assert.equal(invalidRpc.status, 400);
+    assert.equal((await invalidRpc.json()).error.code, 'invalid_request');
+    assert.deepEqual(calls, []);
+
+    const session = await fetch(`${base}/v1/sessions`, {
+      method: 'POST', headers: auth(gate), body: '{}',
+    });
+    assert.equal(session.status, 200);
+    assert.equal((await session.json()).title, null);
+    assert.deepEqual(calls, ['createSession']);
+
+    const routine = await fetch(`${base}/v1/jobs/job-1/run`, {
+      method: 'POST', headers: auth(gate),
+    });
+    assert.equal(routine.status, 200);
+    assert.deepEqual(await routine.json(), { started: true });
+    assert.deepEqual(calls, ['createSession', 'runJob:job-1']);
+  } finally {
+    await gate.close();
+  }
+});
+
 test('POST /v1/bots creates via createBot', async () => {
   const calls = [];
   const { gate } = await makeGate({ calls, registry: stubFrontedRegistry(calls) });

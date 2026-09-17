@@ -219,10 +219,14 @@ test('malformed run input stays 400 and successful lifecycle responses keep thei
   const { gate, state } = await makeGate();
   try {
     state.startError = new Error('must not start malformed input');
-    for (const body of ['{', '{}', JSON.stringify({ input: [] })]) {
+    for (const [body, code] of [
+      ['{', 'bad_json'],
+      ['{}', 'invalid_request'],
+      [JSON.stringify({ input: [] }), 'invalid_request'],
+    ]) {
       const response = await fetch(`${base(gate)}/v1/runs`, { method: 'POST', headers: auth(gate), body });
       assert.equal(response.status, 400);
-      assert.equal((await response.json()).error.code, 'invalid_request');
+      assert.equal((await response.json()).error.code, code);
     }
     delete state.startError;
     const started = await fetch(`${base(gate)}/v1/runs`, {
