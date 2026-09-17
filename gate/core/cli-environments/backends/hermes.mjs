@@ -797,8 +797,8 @@ export function createHermesBackend({
             ['-p', botId, 'config', 'set', 'model.default', modelId.trim()],
             { timeoutMs: 15_000 },
           );
-          if (pin.code !== 0) {
-            const error = new Error(pin.stderr || 'failed to pin model');
+          if (pin?.code !== 0) {
+            const error = new Error(pin?.stderr || 'failed to pin model');
             error.code = 'bot_update_failed';
             error.status = 502;
             throw error;
@@ -810,8 +810,8 @@ export function createHermesBackend({
             ['-p', botId, 'config', 'set', 'model.provider', providerId.trim()],
             { timeoutMs: 15_000 },
           );
-          if (pin.code !== 0) {
-            const error = new Error(pin.stderr || 'failed to pin provider');
+          if (pin?.code !== 0) {
+            const error = new Error(pin?.stderr || 'failed to pin provider');
             error.code = 'bot_update_failed';
             error.status = 502;
             throw error;
