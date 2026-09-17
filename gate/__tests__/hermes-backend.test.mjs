@@ -963,6 +963,54 @@ test('listModels reads /api/model/options and does not mark unsigned-in provider
   assert.equal(qwen.available, false);
 });
 
+for (const shape of ['array', 'object']) {
+  test(`listModels keeps valid rows in a ${shape} catalog containing malformed providers`, async () => {
+    const rows = [
+      { slug: 'nous', name: 'Nous Portal', authenticated: true, models: ['poolside/laguna-xs-2.1:free'] },
+      null, false, 42, 'invalid', [], {},
+      { slug: 42, models: ['invalid'] },
+      { slug: {}, models: ['invalid'] },
+      { slug: ' ', models: ['invalid'] },
+      { slug: 'broken', models: { id: 'invalid' } },
+      { slug: 'broken', models: 42 },
+      { slug: 'broken', models: 'not-a-list' },
+      { slug: 'empty', models: null },
+      { id: 'qwen-oauth', name: 'Qwen', authenticated: false, models: ['qwen3'] },
+      { name: 'local', models: ['local/model'] },
+    ];
+    const providers = shape === 'array' ? rows : Object.fromEntries(rows.map((row, index) => [index, row]));
+    const { calls, hermes } = backend(() => Response.json({ providers }));
+    assert.deepEqual(await hermes.listModels(), [
+      { id: 'nous/poolside/laguna-xs-2.1:free', providerId: 'nous', modelId: 'poolside/laguna-xs-2.1:free', provider: 'Nous Portal', label: 'Nous Portal · poolside/laguna-xs-2.1:free', available: true },
+      { id: 'qwen-oauth/qwen3', providerId: 'qwen-oauth', modelId: 'qwen3', provider: 'Qwen', label: 'Qwen · qwen3', available: false },
+      { id: 'local/local/model', providerId: 'local', modelId: 'local/model', provider: 'local', label: 'local · local/model', available: true },
+    ]);
+    assert.equal(calls[0].url, 'http://h:8642/api/model/options');
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer k');
+  });
+}
+
+test('listModels discards invalid model ids without changing valid qualified ids', async () => {
+  const { hermes } = backend(() => Response.json({ providers: [
+    { slug: 'nous', models: ['before', null, false, 42, {}, [], '', '  ', 'vendor/model:free'] },
+    { slug: 'local', name: {}, models: ['after'] },
+  ] }));
+  assert.deepEqual(await hermes.listModels(), [
+    { id: 'nous/before', providerId: 'nous', modelId: 'before', provider: 'nous', label: 'nous · before', available: true },
+    { id: 'nous/vendor/model:free', providerId: 'nous', modelId: 'vendor/model:free', provider: 'nous', label: 'nous · vendor/model:free', available: true },
+    { id: 'local/after', providerId: 'local', modelId: 'after', provider: 'local', label: 'local · after', available: true },
+  ]);
+});
+
+test('listModels returns an empty list when no provider catalog is present', async () => {
+  for (const body of [null, {}, { providers: null }, { providers: false }, { providers: 42 }, { providers: 'invalid' }]) {
+    const { hermes } = backend(() => Response.json(body));
+    assert.deepEqual(await hermes.listModels(), []);
+  }
+  const { hermes } = backend(() => new Response(null, { status: 204 }));
+  assert.deepEqual(await hermes.listModels(), []);
+});
+
 test('a run pinned to a provider-qualified model reaches Hermes with the provider split out', async () => {
   // Hermes' runs handler honours `provider` + `model` exactly as chat does
   // (api_server_runs.py, _request_agent_overrides). The Gate used to forward the

@@ -285,22 +285,26 @@ export function createHermesBackend({
      */
     async listModels() {
       const body = await call('/api/model/options');
-      const providers = Array.isArray(body.providers)
-        ? body.providers
-        : Object.values(body.providers ?? {});
+      const catalog = body?.providers;
+      const providers = Array.isArray(catalog)
+        ? catalog
+        : catalog && typeof catalog === 'object' ? Object.values(catalog) : [];
 
       const models = [];
       for (const provider of providers) {
+        if (!provider || typeof provider !== 'object' || Array.isArray(provider)) continue;
         const providerId = provider.slug ?? provider.id ?? provider.name;
-        if (!providerId) continue;
+        if (typeof providerId !== 'string' || !providerId.trim() || !Array.isArray(provider.models)) continue;
+        const providerName = typeof provider.name === 'string' ? provider.name : providerId;
         const available = provider.authenticated !== false;
-        for (const modelId of provider.models ?? []) {
+        for (const modelId of provider.models) {
+          if (typeof modelId !== 'string' || !modelId.trim()) continue;
           models.push({
             id: `${providerId}/${modelId}`,
             providerId,
             modelId,
-            provider: provider.name ?? providerId,
-            label: `${provider.name ?? providerId} · ${modelId}`,
+            provider: providerName,
+            label: `${providerName} · ${modelId}`,
             available,
           });
         }
