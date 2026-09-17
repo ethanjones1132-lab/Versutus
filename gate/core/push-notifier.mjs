@@ -72,10 +72,13 @@ function truncateText(text) {
 function classifiedEvent(event) {
   const trigger = event?.trigger;
   const cron = trigger === 'final-response' ? parseCronSessionId(event?.sessionId) : null;
-  if (cron) {
+  if (trigger === 'final-response' && cron) {
+    // Each scheduled execution records its own timestamped Session, so the
+    // Session id is already per-execution: dedupe on it, never on the job id
+    // a daily Routine would then lose after its first run.
     return {
       trigger: 'routine',
-      id: cron.jobId,
+      id: `${cron.jobId}@${event.sessionId}`,
       data: {
         kind: 'routine',
         jobId: cron.jobId,
@@ -86,9 +89,13 @@ function classifiedEvent(event) {
 
   if (trigger === 'final-response') {
     const sessionId = nonEmptyString(event?.sessionId);
+    // A chat Session earns one notification per turn, and the Gate replays a
+    // completed turn's event verbatim, so the turn's own final text is the
+    // smallest key that lets a replay collapse while the Session's next turn
+    // still notifies.
     return sessionId ? {
       trigger,
-      id: sessionId,
+      id: `${sessionId}@${typeof event.text === 'string' ? event.text : ''}`,
       data: {
         kind: 'reply',
         sessionId,
@@ -261,6 +268,12 @@ export function createPushNotifier({ tokens, send, snapshot = null, now }) {
       if (!isRecord(row) || row.enabled !== true || typeof row.expoPushToken !== 'string' || !row.expoPushToken) continue;
       if (!allowedForBot(row, event?.botId)) continue;
       if (isQuiet(row, localMinutes(row.timezone, nowSource())) && !quietExemptsEvent(row, classified)) continue;
+      // The dedupe must answer "did I already speak for THIS turn?", not
+      // "did this Session ever produce a reply?". A Session earns one
+      // notification per completed turn, and a cron job one per scheduled
+      // execution (each execution carries its own timestamped Session).
+      // Only retries of the literally-same delivery collapse onto one key —
+      // as does an unchanged `remember(key)` replay.
       const key = `${classified.trigger}:${classified.id}:${event?.state ?? ''}`;
       if (!remember(key)) continue;
       messages.push(messageFor(classified, event, row));

@@ -236,6 +236,56 @@ test('deduplicates one final response per session transition', async () => {
   assert.equal(sent[0].data.sessionId, 'session-1');
 });
 
+test('two distinct replies in one Session each reach the device', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({ trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'first turn' });
+  await notifier.notify({ trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'second turn' });
+
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0].body ?? '', '');
+  assert.equal(sent[0].data.sessionId, 'session-1');
+});
+
+test('replaying the same turn event still sends at most one reply notification', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+  const event = { trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'same turn' };
+
+  await notifier.notify(event);
+  await notifier.notify(event);
+
+  assert.equal(sent.length, 1);
+});
+
+test('two scheduled executions of one job each notify, while a replay stays deduped', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+  const morning = { trigger: 'final-response', sessionId: 'cron_job1_20260916_090000', text: 'morning run' };
+  const evening = { trigger: 'final-response', sessionId: 'cron_job1_20260916_180000', text: 'evening run' };
+
+  await notifier.notify(morning);
+  await notifier.notify(evening);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1].data.jobId, 'job1');
+
+  await notifier.notify(morning);
+  assert.equal(sent.length, 2, 'a replayed execution must not notify twice');
+});
+
 test('classifies a cron final response as a routine', async () => {
   const tokens = {
     listEnabled: async () => [row()],
