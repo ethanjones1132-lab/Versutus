@@ -81,6 +81,16 @@ describe('widgetWriteGate', () => {
     }
   });
 
+  test('a configuration-only Roster change writes without waiting for the floor', () => {
+    const bots = [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }, { id: 'c', label: 'C' }];
+    const configBots = [...bots, { id: 'd', label: 'D' }];
+    const last = stateFor(snapshot({ bots, configBots }));
+    expect(widgetWriteGate(last, snapshot({ bots, configBots }), NOW + 1).write).toBe(false);
+    for (const next of [[...bots, { id: 'd', label: 'Renamed' }], bots, []]) {
+      expect(widgetWriteGate(last, snapshot({ bots, configBots: next }), NOW + 1).write).toBe(true);
+    }
+  });
+
   test('repeated unchanged facts leave the accepted stamp until the floor', () => {
     let last: WidgetWriteGateState | null = null;
     const writes: number[] = [];

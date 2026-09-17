@@ -22,6 +22,7 @@ export function androidWidgetPayload(snapshot: GlanceableSnapshot): VersutusWidg
     ...(!redact && lines.result ? { result: lines.result } : {}),
     ...(!redact && runs.length > 0 ? { runs } : {}),
     ...(!redact && bots.length > 0 ? { bots } : {}),
+    ...(!redact && snapshot.configBots !== undefined ? { configBots: snapshot.configBots } : {}),
     ...(snapshot.routineAlerts && (snapshot.routineAlerts.failing > 0 || snapshot.routineAlerts.late > 0)
       ? {
           routinesFailing: Math.max(0, Math.trunc(snapshot.routineAlerts.failing)),

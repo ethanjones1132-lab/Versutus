@@ -139,7 +139,7 @@ private fun Lines(payload: WidgetPayload, variant: WidgetVariant, pinned: String
     Spacer(GlanceModifier.height(3.dp))
     RoutineTalliesRow(payload)
   }
-  val selection = WidgetConfigState.selection(pinned, payload.bots)
+  val selection = WidgetConfigState.selection(pinned, payload.bots, payload.configBots)
   if (!payload.redact && selection.unavailable) {
     Spacer(GlanceModifier.height(3.dp))
     UnavailableBotRow()

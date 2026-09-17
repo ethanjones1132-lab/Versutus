@@ -60,6 +60,8 @@ export type GlanceableSnapshot = {
   runs?: GlanceableRun[];
   /** Up to three recent Bots for the quick-launch rows. Absent when there are none. */
   bots?: GlanceableBot[];
+  /** Complete Roster for widget configuration; an explicit empty list means no Bots. */
+  configBots?: GlanceableBot[];
   /** Routines that need the operator: those past due and those failing. Absent when neither. */
   routineAlerts?: RoutineAlerts;
   /** True when the device asked the widget to keep the result and Bot names off it. */
@@ -142,6 +144,11 @@ export function glanceableSnapshot(
     const label = bot.label?.trim();
     if (id && label) labels.set(id, label);
   }
+  const roster = new Map<string, GlanceableBot>();
+  for (const bot of facts.bots ?? []) {
+    const id = bot.id.trim();
+    if (id) roster.set(id, { id, label: labels.get(id) ?? id });
+  }
   const bots: GlanceableBot[] = [];
   const seenBots = new Set<string>();
   const addBot = (rawId: string | undefined): void => {
@@ -199,6 +206,7 @@ export function glanceableSnapshot(
     ...(newestRun ? { lastResult: newestRun.text } : {}),
     ...(runs.length > 0 ? { runs } : {}),
     ...(bots.length > 0 ? { bots } : {}),
+    ...(facts.bots !== undefined ? { configBots: [...roster.values()] } : {}),
     ...(routineAlerts ? { routineAlerts } : {}),
     ...(facts.redact ? { redact: true } : {}),
     writtenAt: now,

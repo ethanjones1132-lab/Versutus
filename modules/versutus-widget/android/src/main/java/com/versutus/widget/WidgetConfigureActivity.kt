@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -44,10 +45,10 @@ class WidgetConfigureActivity : Activity() {
     root.addView(TextView(this).apply { text = "Pin a Bot to this widget" })
     root.addView(button("No Bot (show every row)", null))
     val parsed = WidgetPayload.parse(WidgetPayloadStore.read(this))
-    if (parsed is WidgetPayload.Parsed.Ok) {
-      for (bot in parsed.payload.bots) root.addView(button(bot.label, bot.id))
+    if (parsed is WidgetPayload.Parsed.Ok && !parsed.payload.redact) {
+      for (bot in parsed.payload.configBots) root.addView(button(bot.label, bot.id))
     }
-    setContentView(root)
+    setContentView(ScrollView(this).apply { addView(root) })
   }
 
   override fun onDestroy() {

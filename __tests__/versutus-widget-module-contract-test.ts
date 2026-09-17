@@ -156,7 +156,7 @@ describe('M4: configurable per instance', () => {
 
   test('an unavailable pinned Bot opens Versutus instead of a fabricated Bot Chat', () => {
     const widget = kotlin('VersutusStatusWidget.kt');
-    expect(widget).toContain('WidgetConfigState.selection(pinned, payload.bots)');
+    expect(widget).toContain('WidgetConfigState.selection(pinned, payload.bots, payload.configBots)');
     expect(widget).not.toContain('WidgetBot(pinned, pinned)');
     expect(widget).toContain('if (!payload.redact && selection.unavailable)');
     expect(widget).toContain('Line("Bot unavailable", bold = true)');
@@ -164,6 +164,13 @@ describe('M4: configurable per instance', () => {
     const recovery = widget.slice(widget.indexOf('private fun UnavailableBotRow()'), widget.indexOf('/** The approval'));
     expect(recovery).toContain('actionStartActivity(openAppIntent(context, "versutus://chat"))');
     expect(recovery).not.toContain('botChatUri');
+  });
+
+  test('configuration offers the full Roster in a scrollable list', () => {
+    const activity = kotlin('WidgetConfigureActivity.kt');
+    expect(activity).toContain('for (bot in parsed.payload.configBots)');
+    expect(activity).toContain('if (parsed is WidgetPayload.Parsed.Ok && !parsed.payload.redact)');
+    expect(activity).toContain('setContentView(ScrollView(this).apply { addView(root) })');
   });
 
   test('choosing a Bot saves off the UI thread and cancels when the activity is destroyed', () => {

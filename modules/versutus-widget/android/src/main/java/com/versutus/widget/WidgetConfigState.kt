@@ -9,9 +9,9 @@ object WidgetConfigState {
 
   data class Selection(val bots: List<WidgetBot>, val unavailable: Boolean)
 
-  fun selection(pinned: String?, bots: List<WidgetBot>): Selection {
+  fun selection(pinned: String?, bots: List<WidgetBot>, configBots: List<WidgetBot> = bots): Selection {
     if (pinned == null) return Selection(bots, false)
-    val matches = bots.filter { it.id == pinned }
+    val matches = configBots.filter { it.id == pinned }
     return Selection(matches, matches.isEmpty())
   }
 }

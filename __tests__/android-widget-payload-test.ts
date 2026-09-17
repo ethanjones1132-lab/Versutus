@@ -1,5 +1,5 @@
 import { androidWidgetPayload } from '@/lib/widget/android-widget-payload';
-import type { GlanceableSnapshot } from '@/lib/widget/snapshot';
+import { glanceableSnapshot, type GlanceableSnapshot } from '@/lib/widget/snapshot';
 
 const base: GlanceableSnapshot = {
   status: 'connected',
@@ -84,6 +84,30 @@ describe('androidWidgetPayload', () => {
     ];
     const payload = androidWidgetPayload({ ...base, bots });
     expect(payload.bots).toEqual(bots.slice(0, 3));
+  });
+
+  test('carries the full Roster separately from the three quick-launch rows', () => {
+    const bots = Array.from({ length: 12 }, (_, index) => ({ id: `bot-${index}`, label: `Bot ${index}` }));
+    const snapshot = glanceableSnapshot({ status: 'connected', runs: [], routines: [], bots }, base.writtenAt);
+    const payload = androidWidgetPayload(snapshot);
+    expect(payload.bots).toEqual(bots.slice(0, 3));
+    expect(payload.configBots).toEqual(bots);
+    expect(JSON.parse(JSON.stringify(payload)).configBots).toEqual(bots);
+    expect(androidWidgetPayload({ ...snapshot, redact: true })).not.toHaveProperty('configBots');
+  });
+
+  test('an empty Roster stays empty even when recent runs name removed Bots', () => {
+    const snapshot = glanceableSnapshot({ status: 'connected', runs: [], routines: [], bots: [] }, base.writtenAt);
+    expect(androidWidgetPayload({ ...snapshot, bots: [{ id: 'removed', label: 'Removed' }] }).configBots).toEqual([]);
+    expect(androidWidgetPayload(base)).not.toHaveProperty('configBots');
+  });
+
+  test('configuration trims and deduplicates the Roster without inventing run-only Bots', () => {
+    const snapshot = glanceableSnapshot({
+      status: 'connected', runs: [], routines: [],
+      bots: [{ id: ' a ', label: ' A ' }, { id: 'a', label: 'A' }, { id: 'b' }, { id: ' ' }],
+    }, base.writtenAt);
+    expect(androidWidgetPayload(snapshot).configBots).toEqual([{ id: 'a', label: 'A' }, { id: 'b', label: 'b' }]);
   });
 
   test('a snapshot with no Bots omits them', () => {

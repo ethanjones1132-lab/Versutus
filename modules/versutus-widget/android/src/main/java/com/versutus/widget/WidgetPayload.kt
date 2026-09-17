@@ -23,6 +23,7 @@ data class WidgetPayload(
   val routinesFailing: Int = 0,
   val routinesLate: Int = 0,
   val redact: Boolean = false,
+  val configBots: List<WidgetBot> = bots,
 ) {
   sealed interface Parsed {
     data class Ok(val payload: WidgetPayload) : Parsed
@@ -57,8 +58,13 @@ data class WidgetPayload(
         val routinesFailing = if (version >= 3) o.optInt("routinesFailing", 0).coerceAtLeast(0) else 0
         val routinesLate = if (version >= 3) o.optInt("routinesLate", 0).coerceAtLeast(0) else 0
         val redact = o.optBoolean("redact", false)
+        val configBots = when {
+          redact -> emptyList()
+          o.has("configBots") -> parseBots(o.optJSONArray("configBots"), Int.MAX_VALUE)
+          else -> bots
+        }
         Parsed.Ok(
-          WidgetPayload(status, o.getBoolean("connected"), work, result, approvals, writtenAt, runs, bots, routinesFailing, routinesLate, redact),
+          WidgetPayload(status, o.getBoolean("connected"), work, result, approvals, writtenAt, runs, bots, routinesFailing, routinesLate, redact, configBots),
         )
       } catch (_: Exception) {
         Parsed.Invalid
@@ -80,12 +86,12 @@ data class WidgetPayload(
       return runs
     }
 
-    /** Up to three named Bots; a row with no id or label is skipped. */
-    private fun parseBots(array: JSONArray?): List<WidgetBot> {
+    /** Card rows default to three; configuration reads the complete Roster. */
+    private fun parseBots(array: JSONArray?, limit: Int = 3): List<WidgetBot> {
       if (array == null) return emptyList()
       val bots = ArrayList<WidgetBot>(3)
       for (i in 0 until array.length()) {
-        if (bots.size == 3) break
+        if (bots.size == limit) break
         val item = array.optJSONObject(i) ?: continue
         val id = item.optString("id", "").trim()
         val label = item.optString("label", "").trim()

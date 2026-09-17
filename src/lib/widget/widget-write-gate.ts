@@ -56,6 +56,7 @@ export function widgetSnapshotSignature(snapshot: GlanceableSnapshot): string {
     approvals: snapshot.approvalsPending,
     runs: snapshot.runs ?? [],
     bots: snapshot.bots ?? [],
+    configBots: snapshot.configBots ?? null,
     redact: snapshot.redact === true,
   });
 }

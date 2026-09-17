@@ -23,6 +23,8 @@ export type VersutusWidgetPayload = {
   runs?: VersutusWidgetRun[];
   /** Version 2: up to three recent Bots for the quick-launch rows. */
   bots?: VersutusWidgetBot[];
+  /** Complete configuration Roster; omitted by older writers and when redacted. */
+  configBots?: VersutusWidgetBot[];
   /** Version 3: how many routines are failing / late — tallies, so redact keeps them. */
   routinesFailing?: number;
   routinesLate?: number;

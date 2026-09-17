@@ -47,6 +47,34 @@ class WidgetPayloadTest {
     assertEquals(listOf(WidgetBot("a", "A"), WidgetBot("b", "B"), WidgetBot("c", "C")), parsed.payload.bots)
   }
 
+  @Test fun `the full configuration Roster keeps Bots beyond the card cap`() {
+    val rows = (1..12).joinToString(",") { """{"id":"bot-$it","label":"Bot $it"}""" }
+    val parsed = WidgetPayload.parse(
+      """{"v":3,"status":"C","connected":true,"work":"w","approvalsPending":0,"writtenAt":5,"bots":[$rows],"configBots":[{"id":"","label":"bad"},$rows]}""",
+    ) as WidgetPayload.Parsed.Ok
+    assertEquals(3, parsed.payload.bots.size)
+    assertEquals((1..12).map { WidgetBot("bot-$it", "Bot $it") }, parsed.payload.configBots)
+    assertEquals(
+      WidgetConfigState.Selection(listOf(WidgetBot("bot-12", "Bot 12")), false),
+      WidgetConfigState.selection("bot-12", parsed.payload.bots, parsed.payload.configBots),
+    )
+    assertEquals(
+      WidgetConfigState.Selection(parsed.payload.bots, false),
+      WidgetConfigState.selection(null, parsed.payload.bots, parsed.payload.configBots),
+    )
+  }
+
+  @Test fun `older payloads fall back to card Bots but an explicit empty Roster does not`() {
+    val json = """{"v":3,"status":"C","connected":true,"work":"w","approvalsPending":0,"writtenAt":5,"bots":[{"id":"a","label":"A"}]}"""
+    val old = (WidgetPayload.parse(json) as WidgetPayload.Parsed.Ok).payload
+    assertEquals(old.bots, old.configBots)
+    val empty = (WidgetPayload.parse(json.dropLast(1) + """, "configBots":[]}""") as WidgetPayload.Parsed.Ok).payload
+    assertEquals(emptyList<WidgetBot>(), empty.configBots)
+    assertEquals(WidgetConfigState.Selection(emptyList(), true), WidgetConfigState.selection("a", empty.bots, empty.configBots))
+    val redacted = (WidgetPayload.parse(json.dropLast(1) + """, "redact":true, "configBots":[{"id":"a","label":"A"}]}""") as WidgetPayload.Parsed.Ok).payload
+    assertEquals(emptyList<WidgetBot>(), redacted.configBots)
+  }
+
   @Test fun `a v1 payload carries no bots`() {
     val parsed = WidgetPayload.parse(
       """{"v":1,"status":"C","connected":true,"work":"w","approvalsPending":0,"writtenAt":5}""",
