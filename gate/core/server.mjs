@@ -1080,15 +1080,25 @@ export async function createGate(config = {}) {
         return null;
       }
 
-      function runRequestError(error, fallbackCode) {
+      function runRequestError(error, fallbackCode, fallbackMessage = 'Run request failed') {
         const upstreamStatus = Number(error?.status);
         const status = Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus < 600
           ? upstreamStatus : 502;
         res.writeHead(status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: {
-          message: typeof error?.message === 'string' && error.message ? error.message : 'Run request failed',
+          message: typeof error?.message === 'string' && error.message ? error.message : fallbackMessage,
           code: typeof error?.code === 'string' && error.code ? error.code : fallbackCode,
         } }));
+      }
+
+      async function frontedRequest(request, fallbackCode) {
+        try {
+          const body = JSON.stringify(await request());
+          res.writeHead(200);
+          res.end(body);
+        } catch (error) {
+          runRequestError(error, fallbackCode, 'Gateway request failed');
+        }
       }
 
       function readRunHandle(encoded) {
@@ -1336,9 +1346,7 @@ export async function createGate(config = {}) {
       if (pathname === '/v1/toolsets' && method === 'GET') {
         const backend = await resolveBackendFor('listToolsets');
         if (!backend) return;
-        const toolsets = await backend.listToolsets();
-        res.writeHead(200);
-        res.end(JSON.stringify(toolsets));
+        await frontedRequest(() => backend.listToolsets(), 'toolsets_read_failed');
         return;
       }
 
@@ -1413,16 +1421,14 @@ export async function createGate(config = {}) {
       if (pathname === '/v1/skills' && method === 'GET') {
         const backend = await resolveBackendFor('listSkills');
         if (!backend) return;
-        res.writeHead(200);
-        res.end(JSON.stringify(await backend.listSkills()));
+        await frontedRequest(() => backend.listSkills(), 'skills_read_failed');
         return;
       }
 
       if (pathname === '/health/detailed' && method === 'GET') {
         const backend = await resolveBackendFor('healthDetailed');
         if (!backend) return;
-        res.writeHead(200);
-        res.end(JSON.stringify(await backend.healthDetailed()));
+        await frontedRequest(() => backend.healthDetailed(), 'diagnostics_read_failed');
         return;
       }
 
@@ -1453,8 +1459,7 @@ export async function createGate(config = {}) {
           : await resolveBackendFor('listJobs');
         if (!backend) return;
         if (!requireBackendMethod(backend, 'listJobs')) return;
-        res.writeHead(200);
-        res.end(JSON.stringify(await backend.listJobs()));
+        await frontedRequest(() => backend.listJobs(), 'jobs_read_failed');
         return;
       }
 
@@ -1466,8 +1471,7 @@ export async function createGate(config = {}) {
           : await resolveBackendFor('createJob');
         if (!backend) return;
         if (!requireBackendMethod(backend, 'createJob')) return;
-        res.writeHead(200);
-        res.end(JSON.stringify(await backend.createJob(body)));
+        await frontedRequest(() => backend.createJob(body), 'job_create_failed');
         return;
       }
 
@@ -1763,11 +1767,12 @@ export async function createGate(config = {}) {
           : await resolveBackendFor(methodName);
         if (!backend) return;
         if (!requireBackendMethod(backend, methodName)) return;
-        const result = action === 'run'
-          ? await backend.runJob(jobId)
-          : await backend.setJobPaused(jobId, action === 'pause');
-        res.writeHead(200);
-        res.end(JSON.stringify(result ?? { ok: true }));
+        await frontedRequest(async () => {
+          const result = action === 'run'
+            ? await backend.runJob(jobId)
+            : await backend.setJobPaused(jobId, action === 'pause');
+          return result ?? { ok: true };
+        }, `job_${action}_failed`);
         return;
       }
 

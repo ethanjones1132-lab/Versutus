@@ -909,6 +909,85 @@ test('the fronted routes proxy to the backend and are reachable', async () => {
   }
 });
 
+const frontedRequests = [
+  { path: '/v1/toolsets', method: 'GET', operation: 'listToolsets', code: 'toolsets_read_failed', result: { toolsets: [] } },
+  { path: '/v1/skills', method: 'GET', operation: 'listSkills', code: 'skills_read_failed', result: { data: [{ id: 'skill-1' }] } },
+  { path: '/health/detailed', method: 'GET', operation: 'healthDetailed', code: 'diagnostics_read_failed', result: { status: 'ok', checks: { db: 'ok' } } },
+  { path: '/v1/jobs', method: 'GET', operation: 'listJobs', code: 'jobs_read_failed', result: { data: [{ id: 'job-1', paused: false }] } },
+  { path: '/v1/jobs', method: 'POST', operation: 'createJob', code: 'job_create_failed', body: { name: 'Daily' }, result: { id: 'job-new', name: 'Daily' } },
+  { path: '/v1/jobs/job-1/run', method: 'POST', operation: 'runJob', code: 'job_run_failed', result: { started: true } },
+  { path: '/v1/jobs/job-1/pause', method: 'POST', operation: 'setJobPaused', code: 'job_pause_failed', result: { paused: true } },
+  { path: '/v1/jobs/job-1/resume', method: 'POST', operation: 'setJobPaused', code: 'job_resume_failed', result: { paused: false } },
+];
+
+for (const request of frontedRequests) {
+  test(`${request.method} ${request.path} preserves a fronted refusal and its successful wire shape`, async () => {
+    const calls = [];
+    const registry = stubFrontedRegistry(calls);
+    const adapter = registry.get('stubcli');
+    const createBackend = adapter.createBackend.bind(adapter);
+    let failure = Object.assign(new Error('Hermes temporarily unavailable'), { status: 503, code: 'upstream_unavailable' });
+    let shouldFail = true;
+    adapter.createBackend = (...args) => {
+      const backend = createBackend(...args);
+      return {
+        ...backend,
+        async [request.operation](...input) {
+          if (shouldFail) throw failure;
+          return backend[request.operation](...input);
+        },
+      };
+    };
+    const { gate } = await makeGate({ calls, registry });
+    try {
+      const send = () => fetch(`http://127.0.0.1:${gate.port}${request.path}`, {
+        method: request.method, headers: auth(gate),
+        ...(request.body ? { body: JSON.stringify(request.body) } : {}),
+      });
+      const refused = await send();
+      assert.equal(refused.status, 503);
+      assert.match(refused.headers.get('content-type'), /application\/json/);
+      assert.deepEqual(await refused.json(), {
+        error: { message: 'Hermes temporarily unavailable', code: 'upstream_unavailable' },
+      });
+      for (const status of [200, 399, 600, 502.5, 'invalid', undefined]) {
+        failure = Object.assign(new Error('Routine or read unavailable'), { status });
+        const invalid = await send();
+        assert.equal(invalid.status, 502);
+        assert.deepEqual(await invalid.json(), {
+          error: { message: 'Routine or read unavailable', code: request.code },
+        });
+      }
+      failure = null;
+      const missing = await send();
+      assert.equal(missing.status, 502);
+      assert.deepEqual(await missing.json(), {
+        error: { message: 'Gateway request failed', code: request.code },
+      });
+      shouldFail = false;
+      const success = await send();
+      assert.equal(success.status, 200);
+      assert.deepEqual(await success.json(), request.result);
+    } finally {
+      await gate.close();
+    }
+  });
+
+  test(`${request.method} ${request.path} retains unsupported 501`, async () => {
+    const { gate } = await makeGate();
+    try {
+      const response = await fetch(`http://127.0.0.1:${gate.port}${request.path}`, {
+        method: request.method, headers: auth(gate),
+        ...(request.body ? { body: JSON.stringify(request.body) } : {}),
+      });
+      assert.equal(response.status, 501);
+      assert.equal((await response.json()).error.code, 'backend_unsupported');
+    } finally {
+      await gate.close();
+    }
+  });
+}
+
 for (const { label, failure, status, code, message } of [
   { label: 'an inventory refusal', failure: Object.assign(new Error('Roster inventory unavailable'), { status: 503, code: 'inventory_unavailable' }), status: 503, code: 'inventory_unavailable', message: 'Roster inventory unavailable' },
   { label: 'a filesystem failure', failure: new Error('Roster directory unreadable'), status: 502, code: 'bot_read_failed', message: 'Roster directory unreadable' },
