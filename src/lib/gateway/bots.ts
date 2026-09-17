@@ -225,12 +225,30 @@ export async function ensureBotChat<T extends { title?: string | null }>(
   return findBotChat(sessions) ?? create(BOT_CHAT_TITLE);
 }
 
+export function loadBotChat<T extends { title?: string | null }>(
+  list: () => Promise<T[]>,
+  create: (title: string) => Promise<T>,
+): Promise<T>;
+export function loadBotChat<T extends { title?: string | null }>(
+  list: () => Promise<T[]>,
+  create: (title: string) => Promise<T>,
+  isCurrent: () => boolean,
+): Promise<T | undefined>;
 export async function loadBotChat<T extends { title?: string | null }>(
   list: () => Promise<T[]>,
   create: (title: string) => Promise<T>,
-): Promise<T> {
-  const sessions = await list();
-  return ensureBotChat(sessions, create);
+  isCurrent: () => boolean = () => true,
+): Promise<T | undefined> {
+  try {
+    const sessions = await list();
+    // The client scope can change while listing: do not create on the next Bot.
+    if (!isCurrent()) return undefined;
+    const chat = await ensureBotChat(sessions, create);
+    return isCurrent() ? chat : undefined;
+  } catch (error) {
+    if (!isCurrent()) return undefined;
+    throw error;
+  }
 }
 
 /**

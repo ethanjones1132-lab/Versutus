@@ -58,6 +58,79 @@ test('ensureBotChat reuses the canonical session and does not create a second', 
   expect(created).toEqual([]);
 });
 
+test('a superseded Bot list cannot create a session under the winning Bot', async () => {
+  let generation = 1;
+  let finishList!: (sessions: { id: string; title: string }[]) => void;
+  const list = new Promise<{ id: string; title: string }[]>((resolve) => { finishList = resolve; });
+  const create = jest.fn(async (title: string) => ({ id: 'wrong-bot', title }));
+  const older = loadBotChat(() => list, create, () => generation === 1);
+  generation = 2;
+  const winner = await loadBotChat(
+    async () => [{ id: 'winner', title: BOT_CHAT_TITLE }], create, () => generation === 2,
+  );
+  finishList([]);
+  expect(await older).toBeUndefined();
+  expect(winner?.id).toBe('winner');
+  expect(create).not.toHaveBeenCalled();
+});
+
+test('a superseded canonical Bot Chat cannot land after the winning request', async () => {
+  let current = true;
+  let finishList!: (sessions: { id: string; title: string }[]) => void;
+  const list = new Promise<{ id: string; title: string }[]>((resolve) => { finishList = resolve; });
+  const create = jest.fn(async (title: string) => ({ id: 'unused', title }));
+  const older = loadBotChat(() => list, create, () => current);
+  current = false;
+  finishList([{ id: 'older', title: BOT_CHAT_TITLE }]);
+  expect(await older).toBeUndefined();
+  expect(create).not.toHaveBeenCalled();
+});
+
+test('a Bot Chat created before a switch cannot land after it', async () => {
+  let current = true;
+  let finishCreate!: (session: { id: string; title: string }) => void;
+  const created = new Promise<{ id: string; title: string }>((resolve) => { finishCreate = resolve; });
+  const create = jest.fn(() => created);
+  const older = loadBotChat(async () => [], create, () => current);
+  await Promise.resolve();
+  expect(create).toHaveBeenCalledWith(BOT_CHAT_TITLE);
+  current = false;
+  finishCreate({ id: 'older', title: BOT_CHAT_TITLE });
+  expect(await older).toBeUndefined();
+});
+
+test.each(['list', 'create'] as const)('a superseded %s refusal cannot clear the winning Bot', async (stage) => {
+  let current = true;
+  let refuse!: (error: Error) => void;
+  const pending = new Promise<{ id: string; title: string }>((_, reject) => { refuse = reject; });
+  const failure = new Error('unknown Bot');
+  const older = loadBotChat(
+    () => stage === 'list' ? pending.then((chat) => [chat]) : Promise.resolve([]),
+    () => pending,
+    () => current,
+  );
+  await Promise.resolve();
+  current = false;
+  refuse(failure);
+  expect(await older).toBeUndefined();
+});
+
+test.each(['list', 'create'] as const)('the current Bot still reports a %s refusal', async (stage) => {
+  const failure = new Error('Bot is unroutable');
+  await expect(loadBotChat(
+    async () => { if (stage === 'list') throw failure; return []; },
+    async () => { throw failure; },
+    () => true,
+  )).rejects.toBe(failure);
+});
+
+test('the current Bot can still create its canonical Bot Chat', async () => {
+  const chat = await loadBotChat(
+    async () => [], async (title) => ({ id: 'new', title }), () => true,
+  );
+  expect(chat).toEqual({ id: 'new', title: BOT_CHAT_TITLE });
+});
+
 test('ensureBotChat creates Bot Chat when missing', async () => {
   const session = await ensureBotChat([{ id: 's1', title: 'notes' }], async (title) => ({ id: 'new', title }));
   expect(session.title).toBe(BOT_CHAT_TITLE);

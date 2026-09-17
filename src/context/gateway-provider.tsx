@@ -775,6 +775,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // Bot switch would re-run the effects that depend on their identity.
   const selectedBackendIdRef = useRef<string | undefined>(undefined);
   const selectedBotIdRef = useRef<string | undefined>(undefined);
+  const botOpenRequestRef = useRef(0);
   // D5's pre-run budget guard reads the per-Bot sessions capability and read
   // through refs: both are defined below `runTask`, and a dependency array
   // would evaluate them before initialization.
@@ -1902,6 +1903,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    */
   const selectBackend = useCallback(
     (backendId: string | undefined) => {
+      ++botOpenRequestRef.current;
       const client = clientRef.current as (PortalClient & { setBackendId?: (id: string | undefined) => void }) | null;
       client?.setBackendId?.(backendId);
       client?.setBotId?.(undefined);
@@ -3869,6 +3871,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const clearBot = useCallback(() => {
+    ++botOpenRequestRef.current;
+    selectedBotIdRef.current = undefined;
     clientRef.current?.setBotId?.(undefined);
     setSelectedBotId(undefined);
   }, []);
@@ -3927,7 +3931,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const clearRequestedRunFocus = useCallback(() => setRequestedRunFocus(null), []);
 
   const openBot = useCallback(async (botId: string): Promise<boolean> => {
+    const requestId = ++botOpenRequestRef.current;
     const client = clientRef.current;
+    const isCurrent = () =>
+      requestId === botOpenRequestRef.current && clientRef.current === client;
     if (!client?.setBotId || !client.createSession) {
       setLastError('This gateway does not expose bots.');
       // Nothing opened, and nothing is going to: this client cannot scope a
@@ -3938,12 +3945,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
     client.setBotId(botId);
+    selectedBotIdRef.current = botId;
     setSelectedBotId(botId);
     try {
       const chat = await loadBotChat(
         () => client.getSessions(200),
         (title) => client.createSession!(title),
+        isCurrent,
       );
+      if (!chat || !isCurrent()) return false;
       // Pinning the client is not enough: connect copies stored onto live
       // before disconnect can rewrite it. Same persist as selectSession.
       const pinned = pinLiveSession({
@@ -3968,16 +3978,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // the Bot's Hermes catalogue, which lists every provider it has.
       void repairStalePinRef.current?.(
         client,
-        () => clientRef.current === client,
+        isCurrent,
         activeGatewayRef.current ?? activeGateway ?? undefined,
       );
       // The Bot Chat is the session a send goes to now, so the open landed.
       return true;
     } catch (error) {
+      if (!isCurrent()) return false;
       // A slow host keeps the Bot: dropping it here left the Bot Chat on screen
       // while the next message went out with no Bot at all (bot-open-failure.ts).
       if (!botOpenFailureKeepsScope(error)) {
         client.setBotId(undefined);
+        selectedBotIdRef.current = undefined;
         setSelectedBotId(undefined);
       }
       setLastError(error instanceof Error ? error.message : String(error));
