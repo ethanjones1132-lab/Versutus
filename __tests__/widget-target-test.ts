@@ -281,9 +281,25 @@ describe('writeWidgetSnapshot', () => {
 describe('the provider writes the snapshot as run state changes', () => {
   const provider = () => readSource('src', 'context', 'gateway-provider.tsx');
   const writeEffect = (): string =>
-    provider().match(
-      /useEffect\(\(\) => \{\n    void writeWidgetSnapshot\([\s\S]*?\n  \}, \[[^\]]*\]\);/,
-    )?.[0] ?? '';
+    provider().match(/useEffect\(\(\) => \{[\s\S]*?\n  \}, \[[^\]]*\]\);/g)
+      ?.find((effect) => effect.includes('void writeWidgetSnapshot(')) ?? '';
+
+  test('the write gate retains its accepted state across effect fires', () => {
+    expect(provider()).toContain("from '@/lib/widget/widget-write-gate'");
+    expect(provider()).toContain('const widgetWriteRef = useRef<WidgetWriteGateState | null>(null);');
+    const effect = writeEffect();
+    expect(effect).toContain('const snapshot = glanceableSnapshot(');
+    expect(effect).toContain('const decision = widgetWriteGate(widgetWriteRef.current, snapshot, snapshot.writtenAt);');
+    expect(effect).toContain('if (!decision.write) return;');
+    expect(effect).toContain('widgetWriteRef.current = decision.last;');
+    expect(effect).toContain('void writeWidgetSnapshot(snapshot);');
+    expect(effect.indexOf('if (!decision.write) return;')).toBeLessThan(
+      effect.indexOf('widgetWriteRef.current = decision.last;'),
+    );
+    expect(effect.indexOf('widgetWriteRef.current = decision.last;')).toBeLessThan(
+      effect.indexOf('void writeWidgetSnapshot(snapshot);'),
+    );
+  });
 
   test('the snapshot is item 4a fold, composed from the facts the provider holds', () => {
     expect(provider()).toContain("import { glanceableSnapshot } from '@/lib/widget/snapshot';");

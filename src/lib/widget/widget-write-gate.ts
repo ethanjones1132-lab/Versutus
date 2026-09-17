@@ -46,11 +46,18 @@ export type WidgetWriteGateDecision = {
  * The visible card in one string: the lines the target draws (stamp excluded —
  * it names the write moment and would force a write on every fire) plus the
  * approval count, which the work line words but a future line change could
- * reword away.
+ * reword away. Run rows, Bot destinations and privacy also drive the Android
+ * card, even when these shared lines stay the same.
  */
 export function widgetSnapshotSignature(snapshot: GlanceableSnapshot): string {
   const { written: _written, ...lines } = glanceableWidgetLines(snapshot, snapshot.writtenAt);
-  return JSON.stringify({ lines, approvals: snapshot.approvalsPending });
+  return JSON.stringify({
+    lines,
+    approvals: snapshot.approvalsPending,
+    runs: snapshot.runs ?? [],
+    bots: snapshot.bots ?? [],
+    redact: snapshot.redact === true,
+  });
 }
 
 function acceptedState(state: WidgetWriteGateState | null): WidgetWriteGateState | null {

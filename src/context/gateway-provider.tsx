@@ -208,6 +208,7 @@ import { buildChatContent, type ChatAttachment } from '@/lib/gateway/chat-parts'
 import { loadWorkflows, saveWorkflows, type Workflow } from '@/lib/gateway/workflows';
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
 import { writeWidgetSnapshot } from '@/lib/widget/widget-device';
+import { widgetWriteGate, type WidgetWriteGateState } from '@/lib/widget/widget-write-gate';
 import { loadWidgetResultHidden, subscribeWidgetPrivacy } from '@/lib/settings/widget-privacy';
 export type ConnectionPhase =
   | 'idle'
@@ -3765,9 +3766,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  const widgetWriteRef = useRef<WidgetWriteGateState | null>(null);
+
   /**
-   * Item 4a's fold, handed to item 4b's seam. The snapshot is composed here
-   * from the facts above and written once per change to one of them: a start, an
+   * Item 4a's fold, handed to item 4b's seam when the write gate accepts it.
+   * The facts above trigger a decision on each change: a start, an
    * approval wait, a decision, a settle and the disconnect settle each move
    * `activityRuns`, `routineJobs` or `status`, and each is the write's own
    * trigger — there is no poller of ours, and nothing here reads back. The
@@ -3776,9 +3779,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * writes nothing at all.
    */
   useEffect(() => {
-    void writeWidgetSnapshot(
-      glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs, bots: widgetBots, redact: widgetRedact }),
-    );
+    const snapshot = glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs, bots: widgetBots, redact: widgetRedact });
+    const decision = widgetWriteGate(widgetWriteRef.current, snapshot, snapshot.writtenAt);
+    if (!decision.write) return;
+    widgetWriteRef.current = decision.last;
+    void writeWidgetSnapshot(snapshot);
   }, [activityRuns, routineJobs, status, widgetBots, widgetRedact]);
 
   const botGroups = useMemo(() => ({

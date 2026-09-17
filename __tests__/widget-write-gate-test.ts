@@ -66,6 +66,34 @@ describe('widgetSnapshotSignature', () => {
 });
 
 describe('widgetWriteGate', () => {
+  test.each([
+    { bots: [{ id: 'rook', label: 'Rook' }] },
+    { runs: [{ title: 'Review the change', state: 'Running' }] },
+    { redact: true },
+  ])('a changed Android card writes immediately: %j', (change) => {
+    expect(widgetWriteGate(stateFor(snapshot()), snapshot(change), NOW + 1).write).toBe(true);
+  });
+
+  test('a Bot label or destination change cannot leave an old quick-launch row', () => {
+    const last = stateFor(snapshot({ bots: [{ id: 'rook', label: 'Rook' }] }));
+    for (const bot of [{ id: 'rook', label: 'Reviewer' }, { id: 'keel', label: 'Rook' }]) {
+      expect(widgetWriteGate(last, snapshot({ bots: [bot] }), NOW + 1).write).toBe(true);
+    }
+  });
+
+  test('repeated unchanged facts leave the accepted stamp until the floor', () => {
+    let last: WidgetWriteGateState | null = null;
+    const writes: number[] = [];
+    for (const elapsed of [0, 1000, 2000, WIDGET_WRITE_FLOOR_MS - 1, WIDGET_WRITE_FLOOR_MS]) {
+      const next = snapshot({ writtenAt: NOW + elapsed });
+      const decision = widgetWriteGate(last, next, next.writtenAt);
+      if (!decision.write) continue;
+      last = decision.last;
+      writes.push(next.writtenAt);
+    }
+    expect(writes).toEqual([NOW, NOW + WIDGET_WRITE_FLOOR_MS]);
+  });
+
   test('the first call always writes, however quiet the snapshot is', () => {
     const gate = widgetWriteGate(null, snapshot(), NOW);
     expect(gate.write).toBe(true);
