@@ -86,6 +86,81 @@ describe('humanizeGatewayError', () => {
   });
 });
 
+describe('chat routing refusals', () => {
+  const refusals = [
+    {
+      message: 'This chat names no Bot, backend or model, so the Gate has nowhere to send it. Open a Bot or pick a model.',
+      status: 400,
+      title: 'Choose where to chat',
+      next: /Open a Bot.*pick a model/,
+    },
+    {
+      message: 'Model "network-401" is declared by multiple providers',
+      status: 409,
+      title: 'Choose a provider for this model',
+      next: /model picker.*provider/,
+    },
+    {
+      message: 'No provider declares model "network-401"',
+      status: 404,
+      title: 'Model unavailable',
+      next: /model picker.*available model/,
+    },
+    {
+      message: 'model "network-401" not found on provider "test-provider"',
+      status: 502,
+      title: 'Model unavailable',
+      next: /model picker.*available model/,
+    },
+    {
+      message: 'Unknown provider "network-401"',
+      status: 404,
+      title: 'Provider unavailable',
+      next: /another provider/,
+    },
+    {
+      message: 'Provider "network-401" does not support streaming',
+      status: 400,
+      title: 'Streaming unavailable for this provider',
+      next: /provider that supports streaming/,
+    },
+    {
+      message: 'This backend does not implement bots',
+      status: 501,
+      title: 'Capability unavailable',
+      next: /CLI environment.*supports/,
+    },
+    {
+      message: 'Backend "network-401" does not implement runs',
+      status: 501,
+      title: 'Capability unavailable',
+      next: /CLI environment.*supports/,
+    },
+  ];
+
+  it.each(refusals)('$message names a routing fix, not a reconnect', ({ message, status, title, next }) => {
+    for (const error of [message, new Error(message), new GatewayHttpError(message, status)]) {
+      const result = humanizeGatewayError(error);
+      expect(result.title).toBe(title);
+      expect(result.cause).toBe(message);
+      expect(result.affected).not.toBe('gateway connection');
+      expect(result.next).toMatch(next);
+      expect(result.action).toBe('dismiss');
+    }
+  });
+
+  it.each(['chat failed: 401', 'local provider chat failed: 403'])('%s never requests a Gateway listen key change', (message) => {
+    const result = humanizeGatewayError(new GatewayHttpError(message, 401));
+    expect(result.title).toBe('Model provider refused the request');
+    expect(result.action).toBe('dismiss');
+    expect(result.next).not.toMatch(/token|listen key|gateway setup/i);
+  });
+
+  it.each(['Network request failed', 'connection refused', 'model catalog fetch timed out'])('%s keeps the reconnect action', (message) => {
+    expect(humanizeGatewayError(new GatewayHttpError(message, 502)).action).toBe('reconnect');
+  });
+});
+
 describe('errorBannerButton', () => {
   it('opens gateway setup when the verdict is setup, not reconnect', () => {
     const verdict = humanizeGatewayError(new GatewayHttpError('invalid api key', 401));

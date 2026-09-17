@@ -11,6 +11,54 @@ export type HumanizedError = {
   action: HumanizedErrorAction;
 };
 
+function describeChatRoutingRefusal(message: string): HumanizedError | undefined {
+  const details = { cause: message, affected: 'chat routing', action: 'dismiss' as const };
+  if (message.startsWith('This chat names no Bot, backend or model,')) {
+    return {
+      ...details,
+      title: 'Choose where to chat',
+      next: 'Open a Bot from the Roster, or pick a model in configurable chat.',
+    };
+  }
+  if (/^Model ".*" is declared by multiple providers$/.test(message)) {
+    return {
+      ...details,
+      title: 'Choose a provider for this model',
+      next: 'Open the model picker and select this model from the provider you want to use.',
+    };
+  }
+  if (/^No provider declares model ".*"$/.test(message)
+    || /^model ".*" not found on provider ".*"$/.test(message)) {
+    return {
+      ...details,
+      title: 'Model unavailable',
+      next: 'Open the model picker and select an available model, or update the Bot\'s model pin.',
+    };
+  }
+  if (/^Unknown provider ".*"$/.test(message)) {
+    return {
+      ...details,
+      title: 'Provider unavailable',
+      next: 'Pick a model from another provider, or restore this provider on the Gateway.',
+    };
+  }
+  if (/^Provider ".*" does not support streaming$/.test(message)) {
+    return {
+      ...details,
+      title: 'Streaming unavailable for this provider',
+      next: 'Pick a model from a provider that supports streaming.',
+    };
+  }
+  if (/^(?:This backend|Backend ".*") does not implement \w+$/.test(message)) {
+    return {
+      ...details,
+      title: 'Capability unavailable',
+      next: 'Choose a CLI environment that supports this capability; for Bot Chat, choose a Hermes Bot from the Roster.',
+    };
+  }
+  return undefined;
+}
+
 /**
  * Turn a raw gateway/transport error into a short, actionable surface.
  *
@@ -44,6 +92,12 @@ export function humanizeGatewayError(error: unknown): HumanizedError {
     };
   }
 
+  // Chat transports retain the Gate's message, but do not all retain its code.
+  // Match its refusal templates before auth/network heuristics inspect model names.
+  const message = error instanceof Error ? error.message : String(error);
+  const routingRefusal = describeChatRoutingRefusal(message);
+  if (routingRefusal) return routingRefusal;
+
   if (isAuthRejection(error)) {
     return {
       title: 'Gateway rejected the key',
@@ -54,7 +108,6 @@ export function humanizeGatewayError(error: unknown): HumanizedError {
     };
   }
 
-  const message = error instanceof Error ? error.message : String(error);
   // The manual-add screen throws this shape when the typed/pasted address
   // cannot be canonicalized at all — an entry mistake, not a gateway fault.
   if (message.startsWith('Invalid gateway URL:')) {
