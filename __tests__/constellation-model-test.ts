@@ -79,7 +79,7 @@ describe('the fleet constellation model', () => {
 
     const bot = model.nodes.find((node) => node.kind === 'bot');
     expect(bot?.badges).toContainEqual({ label: 'Running', tone: 'accent' });
-    expect(bot?.badges).toContainEqual({ label: '2 approvals', tone: 'danger' });
+    expect(bot?.badges).toContainEqual({ label: '2 approvals', tone: 'danger', action: 'approval' });
   });
 
   test('failed runs count as a failure badge, in the scorecard\'s own fold', () => {

@@ -55,6 +55,7 @@ export type ConstellationInput = {
 
 export type ConstellationBadge = {
   label: string;
+  action?: 'approval';
   tone: 'success' | 'accent' | 'danger' | 'neutral';
 };
 
@@ -226,6 +227,7 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
         botBadges.push({
           label: `${approvals} approval${approvals === 1 ? '' : 's'}`,
           tone: 'danger',
+          action: 'approval',
         });
       }
       if (runningBots.has(bot.id)) runningTotal += 1;

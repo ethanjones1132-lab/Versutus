@@ -1,5 +1,76 @@
+import { createElement } from 'react';
+import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+
+import { ConstellationView } from '@/components/fleet/constellation-view';
+import { Badge, PressableScale } from '@/components/ui';
 import { fleetConstellationInput } from '@/lib/fleet/constellation-input';
 import { constellationModel, constellationNodeAccessibilityLabel } from '@/lib/fleet/constellation-model';
+
+jest.mock('@/constants/tokens', () => ({
+  Radius: { xxl: 24 },
+  Spacing: { half: 2, two: 8, three: 12, four: 16 },
+}));
+jest.mock('@/components/ui', () => ({
+  Badge: 'Badge',
+  EmptyState: 'EmptyState',
+  GlassSurface: 'GlassSurface',
+  PressableScale: 'PressableScale',
+  Text: 'Text',
+}));
+jest.mock('@/components/ui/Icon', () => ({ Icon: 'Icon' }));
+jest.mock('@/components/fleet/constellation-canvas', () => ({ ConstellationCanvas: 'Canvas' }));
+jest.mock('@/hooks/use-now', () => ({ useNow: () => 100 }));
+jest.mock('@/hooks/use-tokens', () => ({ useTokens: () => ({ glassBorder: '#000' }) }));
+
+describe('only approval badges offer the Activity action', () => {
+  let renderer: ReactTestRenderer;
+  afterEach(async () => { await act(async () => { renderer.unmount(); }); });
+
+  test.each([1, 2, 12])('%s approvals stay actionable alongside read-only failure facts', async (count) => {
+    const model = constellationModel({
+      profiles: [{ id: 'home' }],
+      connectedGatewayId: 'home',
+      roster: [{ id: 'scout', displayName: 'Scout' }],
+      activityRuns: [{ id: 'failed-run', botId: 'scout', status: 'failed' }],
+      pendingApprovals: Array.from({ length: count }, () => ({ botId: 'scout' })),
+      cronJobs: [{ id: 'routine', name: '[bot:scout] Check', lastStatus: 'error', failureStreak: 3 }],
+    });
+    const onPressApproval = jest.fn();
+    const onPressNode = jest.fn();
+    await act(async () => {
+      renderer = create(createElement(ConstellationView, { model, size: 320, onPressApproval, onPressNode }));
+    });
+    const buttons = renderer.root.findAllByType(PressableScale);
+    expect(buttons).toHaveLength(3);
+    expect(buttons.map((button) => button.props.accessibilityLabel)).not.toContain('Scout, 1 failed');
+    expect(buttons.map((button) => button.props.accessibilityLabel)).not.toContain('Scout, routine failing');
+    expect(renderer.root.findAllByType(Badge).map((badge) => badge.props.label)).toEqual(
+      expect.arrayContaining(['1 failed', 'routine failing']),
+    );
+    const approvalLabel = `Scout, ${count} approval${count === 1 ? '' : 's'}`;
+    await act(async () => { buttons.find((button) => button.props.accessibilityLabel === approvalLabel)!.props.onPress(); });
+    expect(onPressApproval).toHaveBeenCalledTimes(1);
+    expect(onPressApproval.mock.calls[0][0].botId).toBe('scout');
+    expect(onPressNode).not.toHaveBeenCalled();
+    const bot = model.nodes.find((node) => node.kind === 'bot')!;
+    await act(async () => {
+      buttons.find((button) => button.props.accessibilityLabel === constellationNodeAccessibilityLabel(bot))!.props.onPress();
+    });
+    expect(onPressNode).toHaveBeenCalledTimes(1);
+    expect(onPressNode.mock.calls[0][0].botId).toBe('scout');
+    expect(onPressApproval).toHaveBeenCalledTimes(1);
+  });
+
+  test('without an Activity handler an approval remains a visible fact', async () => {
+    const model = constellationModel({
+      profiles: [{ id: 'home' }], connectedGatewayId: 'home',
+      roster: [{ id: 'scout' }], pendingApprovals: [{ botId: 'scout' }],
+    });
+    await act(async () => { renderer = create(createElement(ConstellationView, { model, size: 320 })); });
+    expect(renderer.root.findAllByType(PressableScale)).toHaveLength(2);
+    expect(renderer.root.findAllByType(Badge).map((badge) => badge.props.label)).toContain('1 approval');
+  });
+});
 
 declare const __dirname: string;
 

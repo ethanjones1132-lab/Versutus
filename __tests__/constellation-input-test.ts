@@ -112,7 +112,7 @@ describe('fleetConstellationInput projects provider state onto the model input',
     expect(travel?.lastSeenAt).toBe(1_700_000_000_000);
     expect(travel?.badges).not.toContainEqual({ label: 'Live', tone: 'success' });
     expect(bot?.badges).toContainEqual({ label: 'Running', tone: 'accent' });
-    expect(bot?.badges).toContainEqual({ label: '1 approval', tone: 'danger' });
+    expect(bot?.badges).toContainEqual({ label: '1 approval', tone: 'danger', action: 'approval' });
   });
 
   test('an absent fleet is an empty input, not a crash', () => {
