@@ -402,6 +402,91 @@ test('updateBot rewrites only what the request carries, on the CLI writer\'s own
   ]);
 });
 
+for (const failure of ['model', 'provider', 'throw', 'clear']) {
+  test(`updateBot rolls back the whole patch after a ${failure} pin failure`, async () => {
+    const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+    const botHome = join(home, 'profiles', 'coder');
+    await mkdir(botHome, { recursive: true });
+    const originals = {
+      'profile.yaml': 'display_name: coder\r\ndescription: Original\r\n',
+      'SOUL.md': 'Original Soul\r\n',
+      'config.yaml': 'model:\r\n  default: old-model\r\n  provider: old-provider\r\nproviders:\r\n  saved:\r\n    api_key: test-provider-credential\r\n',
+      '.env': 'API_SERVER_KEY=test-listen-key\nPROVIDER_KEY=test-provider-credential\n',
+    };
+    for (const [name, text] of Object.entries(originals)) await writeFile(join(botHome, name), text);
+    const calls = [];
+    const hermes = createHermesBackend({
+      baseUrl: 'http://h:8642', profilesHome: home, executablePath: 'hermes',
+      runCliImpl: async (_exe, args) => {
+        calls.push(args[4]);
+        const configPath = join(botHome, 'config.yaml');
+        const text = await readFile(configPath, 'utf8');
+        await writeFile(configPath, text.replace('old-model', 'new-model'));
+        if (failure === 'throw') throw new Error('CLI transport failed');
+        const refused = failure === 'model' || args[4] === 'model.provider';
+        return { code: refused ? 1 : 0, stdout: '', stderr: 'pin refused' };
+      },
+    });
+
+    await assert.rejects(() => hermes.updateBot({
+      id: 'coder', description: 'Changed', soul: 'Changed Soul',
+      modelId: failure === 'clear' ? null : 'new-model', providerId: 'new-provider',
+    }), failure === 'throw' ? /CLI transport failed/ : { code: 'bot_update_failed', status: 502 });
+    for (const [name, text] of Object.entries(originals)) {
+      assert.equal(await readFile(join(botHome, name), 'utf8'), text, `${name} is restored byte-for-byte`);
+    }
+    assert.deepEqual(calls, failure === 'model' || failure === 'throw'
+      ? ['model.default'] : failure === 'clear' ? ['model.provider'] : ['model.default', 'model.provider']);
+  });
+}
+
+test('updateBot removes newly created edit files when the pin fails', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  const botHome = join(home, 'profiles', 'coder');
+  await mkdir(botHome, { recursive: true });
+  await writeFile(join(botHome, '.env'), 'API_SERVER_KEY=test-listen-key\n');
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642', profilesHome: home, executablePath: 'hermes',
+    runCliImpl: async () => {
+      await writeFile(join(botHome, 'config.yaml'), 'model:\n  default: new-model\n');
+      return { code: 1, stdout: '', stderr: 'pin refused' };
+    },
+  });
+  await assert.rejects(() => hermes.updateBot({
+    id: 'coder', description: 'Changed', soul: 'Changed Soul', modelId: 'new-model',
+  }), { code: 'bot_update_failed' });
+  for (const name of ['profile.yaml', 'SOUL.md', 'config.yaml']) {
+    await assert.rejects(() => readFile(join(botHome, name)), { code: 'ENOENT' });
+  }
+  assert.equal(await readFile(join(botHome, '.env'), 'utf8'), 'API_SERVER_KEY=test-listen-key\n');
+});
+
+test('updateBot applies a successful patch and preserves unrelated config and credentials', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  const botHome = join(home, 'profiles', 'coder');
+  await mkdir(botHome, { recursive: true });
+  const credentials = 'API_SERVER_KEY=test-listen-key\nPROVIDER_KEY=test-provider-credential\n';
+  await writeFile(join(botHome, '.env'), credentials);
+  const unrelated = 'providers:\n  saved:\n    api_key: test-provider-credential\n';
+  await writeFile(join(botHome, 'config.yaml'), `model:\n  default: old-model\n  provider: old-provider\n${unrelated}`);
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642', profilesHome: home, executablePath: 'hermes',
+    runCliImpl: async (_exe, args) => {
+      assert.deepEqual(args, ['-p', 'coder', 'config', 'set', 'model.provider', 'new-provider']);
+      const configPath = join(botHome, 'config.yaml');
+      await writeFile(configPath, (await readFile(configPath, 'utf8')).replace('old-provider', 'new-provider'));
+      return { code: 0, stdout: '', stderr: '' };
+    },
+  });
+  const bot = await hermes.updateBot({
+    id: 'coder', description: 'Changed', soul: '', modelId: null, providerId: 'new-provider',
+  });
+  assert.equal(bot.description, 'Changed');
+  assert.equal(await readFile(join(botHome, 'SOUL.md'), 'utf8'), '');
+  assert.equal(await readFile(join(botHome, 'config.yaml'), 'utf8'), `model:\n  provider: new-provider\n${unrelated}`);
+  assert.equal(await readFile(join(botHome, '.env'), 'utf8'), credentials);
+});
+
 test('removeModelPins removes only the model defaults and provider, preserving the rest of the config', () => {
   const source = 'model:\r\n  default: anthropic/claude\r\n  provider: kilo\r\n  temperature: 0.2\r\nproviders:\r\n  kilo:\r\n    api_key: sk-keep\r\n';
   assert.equal(

@@ -10,6 +10,48 @@
  * whole-file re-serialisation would churn unrelated history.
  */
 
+import { readFile, unlink, writeFile } from 'node:fs/promises';
+
+const pendingEdits = new Map();
+
+/** Roll back a refused Bot patch, including files first created by the CLI. */
+export async function withBotEditRollback(botHome, paths, edit) {
+  const previous = pendingEdits.get(botHome) ?? Promise.resolve();
+  const pending = previous.catch(() => {}).then(async () => {
+    const originals = await Promise.all(paths.map(async (path) => {
+      try {
+        return { path, bytes: await readFile(path) };
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        return { path, bytes: null };
+      }
+    }));
+    try {
+      return await edit();
+    } catch (error) {
+      const restored = await Promise.allSettled(originals.map(async ({ path, bytes }) => {
+        if (bytes !== null) await writeFile(path, bytes);
+        else await unlink(path).catch((failure) => {
+          if (failure.code !== 'ENOENT') throw failure;
+        });
+      }));
+      if (restored.some((result) => result.status === 'rejected')) {
+        const failure = new Error('Bot edit failed and could not be fully restored; reload the Bot before editing again');
+        failure.code = 'bot_update_rollback_failed';
+        failure.status = 500;
+        throw failure;
+      }
+      throw error;
+    }
+  });
+  pendingEdits.set(botHome, pending);
+  try {
+    return await pending;
+  } finally {
+    if (pendingEdits.get(botHome) === pending) pendingEdits.delete(botHome);
+  }
+}
+
 function foldDescription(description) {
   return String(description)
     .replace(/[\r\n\t]+/g, ' ')

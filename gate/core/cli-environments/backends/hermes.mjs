@@ -21,7 +21,7 @@ import { join } from 'node:path';
 
 import { runCli } from '../adapters/shared.mjs';
 import { createBotArgs, ensureDistinctListenKey, validateBotId } from '../hermes-bot-create.mjs';
-import { upsertProfileDescription } from '../hermes-bot-edit.mjs';
+import { upsertProfileDescription, withBotEditRollback } from '../hermes-bot-edit.mjs';
 import { removeModelPins } from '../hermes-config-edit.mjs';
 import {
   getHermesBot,
@@ -749,68 +749,78 @@ export function createHermesBackend({
       }
       const botHome = join(profilesHome, 'profiles', botId);
 
-      if (typeof description === 'string') {
-        const profilePath = join(botHome, 'profile.yaml');
-        let yamlText = '';
-        try {
-          yamlText = await readFile(profilePath, 'utf8');
-        } catch {
-          yamlText = '';
-        }
-        const next = upsertProfileDescription(yamlText, description);
-        if (next !== yamlText) {
-          await writeFile(profilePath, next, 'utf8');
-        }
-      }
-
-      if (typeof soul === 'string') {
-        await mkdir(botHome, { recursive: true });
-        await writeFile(join(botHome, 'SOUL.md'), soul, 'utf8');
-      }
-
-      const clearFields = [
-        modelId === null ? 'default' : null,
-        providerId === null ? 'provider' : null,
+      const editedPaths = [
+        typeof description === 'string' ? join(botHome, 'profile.yaml') : null,
+        typeof soul === 'string' ? join(botHome, 'SOUL.md') : null,
+        modelId === null || providerId === null
+          || (typeof modelId === 'string' && modelId.trim())
+          || (typeof providerId === 'string' && providerId.trim())
+          ? join(botHome, 'config.yaml') : null,
       ].filter(Boolean);
-      if (clearFields.length > 0) {
-        const configPath = join(botHome, 'config.yaml');
-        const configText = await readFile(configPath, 'utf8').catch(() => '');
-        const nextConfig = removeModelPins(configText, clearFields);
-        if (nextConfig !== configText) await writeFile(configPath, nextConfig, 'utf8');
-      }
-
-      if (typeof modelId === 'string' && modelId.trim()) {
-        const pin = await runCliImpl(
-          executablePath,
-          ['-p', botId, 'config', 'set', 'model.default', modelId.trim()],
-          { timeoutMs: 15_000 },
-        );
-        if (pin.code !== 0) {
-          const error = new Error(pin.stderr || 'failed to pin model');
-          error.code = 'bot_update_failed';
-          error.status = 502;
-          throw error;
+      return withBotEditRollback(botHome, editedPaths, async () => {
+        if (typeof description === 'string') {
+          const profilePath = join(botHome, 'profile.yaml');
+          let yamlText = '';
+          try {
+            yamlText = await readFile(profilePath, 'utf8');
+          } catch {
+            yamlText = '';
+          }
+          const next = upsertProfileDescription(yamlText, description);
+          if (next !== yamlText) {
+            await writeFile(profilePath, next, 'utf8');
+          }
         }
-      }
-      if (typeof providerId === 'string' && providerId.trim()) {
-        const pin = await runCliImpl(
-          executablePath,
-          ['-p', botId, 'config', 'set', 'model.provider', providerId.trim()],
-          { timeoutMs: 15_000 },
-        );
-        if (pin.code !== 0) {
-          const error = new Error(pin.stderr || 'failed to pin provider');
-          error.code = 'bot_update_failed';
-          error.status = 502;
-          throw error;
-        }
-      }
 
-      const record = await getHermesBot(profilesHome, botId);
-      // updateBot never touches keys, but the response should agree with the
-      // roster: a copied default listen key is reported, not promised.
-      const defaultKey = (await getHermesBot(profilesHome, 'default'))?.listenKey ?? null;
-      return toPublicBot(record ?? existing, defaultKey);
+        if (typeof soul === 'string') {
+          await mkdir(botHome, { recursive: true });
+          await writeFile(join(botHome, 'SOUL.md'), soul, 'utf8');
+        }
+
+        const clearFields = [
+          modelId === null ? 'default' : null,
+          providerId === null ? 'provider' : null,
+        ].filter(Boolean);
+        if (clearFields.length > 0) {
+          const configPath = join(botHome, 'config.yaml');
+          const configText = await readFile(configPath, 'utf8').catch(() => '');
+          const nextConfig = removeModelPins(configText, clearFields);
+          if (nextConfig !== configText) await writeFile(configPath, nextConfig, 'utf8');
+        }
+
+        if (typeof modelId === 'string' && modelId.trim()) {
+          const pin = await runCliImpl(
+            executablePath,
+            ['-p', botId, 'config', 'set', 'model.default', modelId.trim()],
+            { timeoutMs: 15_000 },
+          );
+          if (pin.code !== 0) {
+            const error = new Error(pin.stderr || 'failed to pin model');
+            error.code = 'bot_update_failed';
+            error.status = 502;
+            throw error;
+          }
+        }
+        if (typeof providerId === 'string' && providerId.trim()) {
+          const pin = await runCliImpl(
+            executablePath,
+            ['-p', botId, 'config', 'set', 'model.provider', providerId.trim()],
+            { timeoutMs: 15_000 },
+          );
+          if (pin.code !== 0) {
+            const error = new Error(pin.stderr || 'failed to pin provider');
+            error.code = 'bot_update_failed';
+            error.status = 502;
+            throw error;
+          }
+        }
+
+        const record = await getHermesBot(profilesHome, botId);
+        // updateBot never touches keys, but the response should agree with the
+        // roster: a copied default listen key is reported, not promised.
+        const defaultKey = (await getHermesBot(profilesHome, 'default'))?.listenKey ?? null;
+        return toPublicBot(record ?? existing, defaultKey);
+      });
     },
   };
 }
