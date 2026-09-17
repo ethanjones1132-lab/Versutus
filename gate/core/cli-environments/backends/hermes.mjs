@@ -663,7 +663,9 @@ export function createHermesBackend({
       const args = createBotArgs({ name: id, inheritKeys, description });
       const result = await runCliImpl(executablePath, args, { timeoutMs: 60_000 });
       if (result.code !== 0) {
-        const error = new Error(result.stderr || result.stdout || `hermes profile create exited ${result.code}`);
+        // CLI diagnostics can contain inherited credentials (the provider-pin
+        // branch below names its failure the same way).
+        const error = new Error('failed to create profile');
         error.code = 'bot_create_failed';
         error.status = 502;
         throw error;
@@ -689,7 +691,8 @@ export function createHermesBackend({
           { timeoutMs: 15_000 },
         );
         if (pin.code !== 0) {
-          const error = new Error(pin.stderr || 'failed to pin model');
+          // CLI diagnostics can contain inherited credentials.
+          const error = new Error('failed to pin model');
           error.code = 'bot_create_failed';
           error.status = 502;
           throw error;

@@ -271,6 +271,72 @@ for (const [label, result] of [
   });
 }
 
+for (const [label, result] of [
+  ['nonzero exit', { code: 1, stdout: '', stderr: '' }],
+  ['credential diagnostics', {
+    code: 2,
+    stdout: 'provider credential: test-provider-credential',
+    stderr: 'API_SERVER_KEY=test-listen-key',
+  }],
+  ['terminated command', { code: null, stdout: '', stderr: '' }],
+]) {
+  test(`createBot refuses a failed profile create with safe diagnostics: ${label}`, async () => {
+    const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+    const argvLog = [];
+    const hermes = createHermesBackend({
+      baseUrl: 'http://h:8642',
+      profilesHome: home,
+      executablePath: 'hermes',
+      runCliImpl: async (_exe, args) => {
+        argvLog.push(args);
+        return args[0] === 'profile' ? result : { code: 0, stdout: '', stderr: '' };
+      },
+    });
+
+    await assert.rejects(
+      () => hermes.createBot({ name: 'coder' }),
+      (error) => {
+        assert.equal(error.code, 'bot_create_failed');
+        assert.equal(error.status, 502);
+        assert.equal(error.message, 'failed to create profile');
+        assert.doesNotMatch(error.stack, /test-provider-credential|test-listen-key/);
+        assert.doesNotMatch(JSON.stringify(error), /test-provider-credential|test-listen-key/);
+        return true;
+      },
+    );
+    assert.deepEqual(argvLog, [['profile', 'create', 'coder', '--no-alias']]);
+  });
+}
+
+test('createBot refuses a failed model pin without forwarding CLI output', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
+  const hermes = createHermesBackend({
+    baseUrl: 'http://h:8642',
+    profilesHome: home,
+    executablePath: 'hermes',
+    runCliImpl: async (_exe, args) =>
+      args.includes('model.default')
+        ? {
+            code: 1,
+            stdout: 'provider credential: test-provider-credential',
+            stderr: 'API_SERVER_KEY=test-listen-key',
+          }
+        : { code: 0, stdout: '', stderr: '' },
+  });
+
+  await assert.rejects(
+    () => hermes.createBot({ name: 'coder', modelId: 'test-model' }),
+    (error) => {
+      assert.equal(error.code, 'bot_create_failed');
+      assert.equal(error.status, 502);
+      assert.equal(error.message, 'failed to pin model');
+      assert.doesNotMatch(error.stack, /test-provider-credential|test-listen-key/);
+      assert.doesNotMatch(JSON.stringify(error), /test-provider-credential|test-listen-key/);
+      return true;
+    },
+  );
+});
+
 test('createBot returns a Bot after a successful provider-only pin', async () => {
   const home = await mkdtemp(join(tmpdir(), 'hermes-bots-'));
   const argvLog = [];
