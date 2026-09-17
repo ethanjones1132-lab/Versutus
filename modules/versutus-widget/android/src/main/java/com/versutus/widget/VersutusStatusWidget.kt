@@ -68,15 +68,11 @@ private fun StatusCard(parsed: WidgetPayload.Parsed) {
   val size = LocalSize.current
   val variant = WidgetLayout.variantFor(size.width.value, size.height.value)
   val pinned = WidgetConfigState.read(currentState<Preferences>()[stringPreferencesKey(WidgetConfigState.BOT_KEY)])
-  val description = when (parsed) {
-    is WidgetPayload.Parsed.Ok -> {
-      val payload = parsed.payload
-      val stamp = WidgetStamp.line(payload.writtenAt, System.currentTimeMillis(), ZoneId.systemDefault(), Locale.getDefault())
-      "Versutus: ${payload.status}. ${payload.work}. $stamp"
-    }
-    WidgetPayload.Parsed.NeedsUpdate -> "Versutus: update the app to show status"
-    WidgetPayload.Parsed.Invalid -> "Versutus: open the app to connect"
-  }
+  val now = System.currentTimeMillis()
+  val payload = (parsed as? WidgetPayload.Parsed.Ok)?.payload
+  val stamp = payload?.let { WidgetStamp.line(it.writtenAt, now, ZoneId.systemDefault(), Locale.getDefault()) } ?: ""
+  val stale = payload?.let { WidgetStamp.isStale(it.writtenAt, now) } ?: false
+  val description = widgetDescription(parsed, variant, pinned, stamp, stale)
   Column(
     modifier = GlanceModifier
       .fillMaxSize()
@@ -87,7 +83,7 @@ private fun StatusCard(parsed: WidgetPayload.Parsed) {
       .clickable(actionStartActivity(openAppIntent(context, "versutus://chat"))),
   ) {
     when (parsed) {
-      is WidgetPayload.Parsed.Ok -> Lines(parsed.payload, variant, pinned)
+      is WidgetPayload.Parsed.Ok -> Lines(parsed.payload, variant, pinned, stamp, stale)
       WidgetPayload.Parsed.NeedsUpdate -> Line("Update Versutus to show status", bold = true)
       WidgetPayload.Parsed.Invalid -> {
         Line("Versutus", bold = true)
@@ -98,9 +94,7 @@ private fun StatusCard(parsed: WidgetPayload.Parsed) {
 }
 
 @Composable
-private fun Lines(payload: WidgetPayload, variant: WidgetVariant, pinned: String?) {
-  val stamp = WidgetStamp.line(payload.writtenAt, System.currentTimeMillis(), ZoneId.systemDefault(), Locale.getDefault())
-  val stale = WidgetStamp.isStale(payload.writtenAt, System.currentTimeMillis())
+private fun Lines(payload: WidgetPayload, variant: WidgetVariant, pinned: String?, stamp: String, stale: Boolean) {
   if (variant == WidgetVariant.TINY) {
     Column {
       Dot(payload.connected)
@@ -170,6 +164,41 @@ private fun Dot(connected: Boolean) {
       .cornerRadius(4.dp)
       .background(if (connected) GlanceTheme.colors.primary else GlanceTheme.colors.error),
   ) {}
+}
+
+/** Describes only the rows this size renders, with the same freshness facts. */
+internal fun widgetDescription(
+  parsed: WidgetPayload.Parsed, variant: WidgetVariant, pinned: String?, stamp: String, stale: Boolean,
+): String {
+  val payload = when (parsed) {
+    is WidgetPayload.Parsed.Ok -> parsed.payload
+    WidgetPayload.Parsed.NeedsUpdate -> return "Versutus: update the app to show status"
+    WidgetPayload.Parsed.Invalid -> return "Versutus: open the app to connect"
+  }
+  if (variant == WidgetVariant.TINY) {
+    val connection = if (payload.connected) "Connected" else "Disconnected"
+    return "Versutus: " + if (stale) "Stale. $connection" else payload.status
+  }
+  val parts = ArrayList<String>()
+  if (stale) parts.add("$stamp — not updated since")
+  parts.add(payload.status)
+  parts.add(payload.work)
+  if (!payload.redact && variant == WidgetVariant.LARGE) {
+    for (run in payload.runs) parts.add("${run.title} — ${run.state}")
+  }
+  if (payload.tallies()) parts.add(routineTalliesCopy(payload.routinesFailing, payload.routinesLate))
+  if (!payload.redact) {
+    val selection = WidgetConfigState.selection(pinned, payload.bots, payload.configBots)
+    if (selection.unavailable) {
+      parts.add("Bot unavailable")
+      parts.add("Open Versutus")
+    }
+    for (bot in selection.bots) parts.add(bot.label)
+  }
+  if (payload.approvalsPending > 0 && variant != WidgetVariant.SMALL) parts.add("Decide in Versutus")
+  if (!payload.redact && variant != WidgetVariant.SMALL && payload.result != null) parts.add(payload.result)
+  parts.add(stamp)
+  return "Versutus: " + parts.joinToString(". ")
 }
 
 /** One Bot quick-launch row; the tap opens that Bot's chat through the app's router. */

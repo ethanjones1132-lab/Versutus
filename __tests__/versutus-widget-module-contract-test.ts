@@ -92,6 +92,14 @@ describe('M1: looks native on any wallpaper', () => {
     expect(widget).toContain('WidgetColors.colors');
   });
 
+  test('the spoken summary uses the rendered variant, pin and shared freshness facts', () => {
+    const widget = kotlin('VersutusStatusWidget.kt');
+    expect(widget).toContain('widgetDescription(parsed, variant, pinned, stamp, stale)');
+    expect(widget).toContain('Lines(parsed.payload, variant, pinned, stamp, stale)');
+    expect(widget).toContain('.semantics { contentDescription = description }');
+    expect(widget.match(/System\.currentTimeMillis\(\)/g)).toHaveLength(1);
+  });
+
   test('the card reads as one sentence to TalkBack', () => {
     const widget = kotlin('VersutusStatusWidget.kt');
     expect(widget).toContain('contentDescription');
