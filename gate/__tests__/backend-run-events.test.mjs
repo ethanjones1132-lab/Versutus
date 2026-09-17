@@ -94,7 +94,13 @@ function registryFor(state, calls) {
     capabilities,
     server: { defaultPort: 1, healthPath: '/', args: () => [], portFromOutput: () => null },
     async probe() { return { state: 'ready', cliVersion: '1.0.0', protocol: 'acp' }; },
-    createBackend: () => backend,
+    createBackend: ({ record }) => state.scoped ? {
+      ...backend,
+      async runEvents(runId) {
+        calls.push(`environment:${record.id}`);
+        return backend.runEvents(runId);
+      },
+    } : backend,
   });
   return {
     get(id) {
@@ -149,6 +155,42 @@ async function makeGate({ mode = 'stream', gateHomeOverride } = {}) {
 
 const auth = (gate) => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` });
 const base = (gate) => `http://127.0.0.1:${gate.port}`;
+
+test('a run handle keeps live events on its original environment and replays after restart', async () => {
+  const { gate, state, calls, gateHome } = await makeGate();
+  state.scoped = true;
+  let runId;
+  try {
+    const started = await fetch(`${base(gate)}/v1/runs`, {
+      method: 'POST', headers: auth(gate), body: JSON.stringify({ input: 'keep this run' }),
+    });
+    runId = (await started.json()).id;
+    await environmentFile(gateHome, 'a-earlier');
+    const events = await fetch(`${base(gate)}/v1/runs/${encodeURIComponent(runId)}/events`, { headers: auth(gate) });
+    assert.equal(events.status, 200);
+    assert.equal(await events.text(), FRAMES.join(''), 'the stream bytes remain unchanged');
+    assert.deepEqual(calls, ['environment:hermescli', 'runEvents:run_1']);
+  } finally {
+    await gate.close();
+  }
+  const second = await makeGate({ mode: 'gone', gateHomeOverride: gateHome });
+  try {
+    await rm(join(gateHome, 'config', 'environments', 'hermescli.json'));
+    const path = `${base(second.gate)}/v1/runs/${encodeURIComponent(runId)}`;
+    const replay = await fetch(`${path}/events`, { headers: auth(second.gate) });
+    assert.equal(replay.status, 200);
+    assert.equal(await replay.text(), FRAMES.join(''));
+    const pinnedReplay = await fetch(`${path}/events?backendId=hermescli`, { headers: auth(second.gate) });
+    assert.equal(pinnedReplay.status, 200, 'a matching pin replays even without the original environment');
+    assert.equal(await pinnedReplay.text(), FRAMES.join(''));
+    const status = await fetch(path, { headers: auth(second.gate) });
+    assert.equal(status.status, 404, 'a missing original environment never falls back');
+    assert.equal((await status.json()).error.code, 'unknown_backend');
+    assert.deepEqual(second.calls, [], 'archived replay needs no upstream');
+  } finally {
+    await second.gate.close();
+  }
+});
 
 test('a live relay streams the frames and archives them for later replay', async () => {
   const { gate, state } = await makeGate();

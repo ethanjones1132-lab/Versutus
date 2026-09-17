@@ -1557,7 +1557,8 @@ test('run lifecycle routes stay on an explicit backend while unpinned creation a
       headers: auth(gate),
       body: JSON.stringify({ input: 'auto resolve' }),
     });
-    assert.equal((await unpinned.json()).run_id, 'first-runs-run');
+    const firstRunId = (await unpinned.json()).run_id;
+    assert.ok(firstRunId, 'the Gate returns a usable run handle');
 
     const scoped = '?backendId=b-second';
     const started = await fetch(`${baseUrl}/v1/runs${scoped}`, {
@@ -1565,22 +1566,23 @@ test('run lifecycle routes stay on an explicit backend while unpinned creation a
       headers: auth(gate),
       body: JSON.stringify({ input: 'stay here' }),
     });
-    assert.equal((await started.json()).run_id, 'second-runs-run');
+    const secondRunId = (await started.json()).run_id;
+    assert.ok(secondRunId);
 
-    const status = await fetch(`${baseUrl}/v1/runs/second-runs-run${scoped}`, { headers: auth(gate) });
+    const status = await fetch(`${baseUrl}/v1/runs/${encodeURIComponent(secondRunId)}${scoped}`, { headers: auth(gate) });
     assert.equal((await status.json()).status, 'completed');
 
-    const events = await fetch(`${baseUrl}/v1/runs/second-runs-run/events${scoped}`, { headers: auth(gate) });
+    const events = await fetch(`${baseUrl}/v1/runs/${encodeURIComponent(secondRunId)}/events${scoped}`, { headers: auth(gate) });
     assert.equal(await events.text(), 'data: {"type":"run.completed"}\n\n');
 
-    const approval = await fetch(`${baseUrl}/v1/runs/second-runs-run/approval${scoped}`, {
+    const approval = await fetch(`${baseUrl}/v1/runs/${encodeURIComponent(secondRunId)}/approval${scoped}`, {
       method: 'POST',
       headers: auth(gate),
       body: JSON.stringify({ approved: true }),
     });
     assert.equal(approval.status, 200);
 
-    const stopped = await fetch(`${baseUrl}/v1/runs/second-runs-run/stop${scoped}`, {
+    const stopped = await fetch(`${baseUrl}/v1/runs/${encodeURIComponent(secondRunId)}/stop${scoped}`, {
       method: 'POST',
       headers: auth(gate),
       body: JSON.stringify({}),
@@ -1595,6 +1597,48 @@ test('run lifecycle routes stay on an explicit backend while unpinned creation a
       'second-runs:replyApproval',
       'second-runs:stopRun',
     ]);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a run handle keeps status, stop and approval on the CLI environment that started it', async () => {
+  const calls = [];
+  const { gate } = await makeGate({
+    calls,
+    registry: runScopeRegistry(calls),
+    environments: [
+      { id: 'a-first', adapterId: 'first-runs' },
+      { id: 'b-second', adapterId: 'second-runs' },
+    ],
+  });
+  const baseUrl = `http://127.0.0.1:${gate.port}`;
+  try {
+    const started = await fetch(`${baseUrl}/v1/runs?backendId=b-second`, {
+      method: 'POST', headers: auth(gate), body: JSON.stringify({ input: 'stay here' }),
+    });
+    const runId = (await started.json()).run_id;
+    const path = `${baseUrl}/v1/runs/${encodeURIComponent(runId)}`;
+    assert.equal((await fetch(path, { headers: auth(gate) })).status, 200);
+    for (const action of ['approval', 'stop']) {
+      const response = await fetch(`${path}/${action}`, {
+        method: 'POST', headers: auth(gate), body: JSON.stringify({ approved: false }),
+      });
+      assert.equal(response.status, 200);
+    }
+    assert.deepEqual(calls, [
+      'second-runs:startRun', 'second-runs:getRunStatus',
+      'second-runs:replyApproval', 'second-runs:stopRun',
+    ]);
+    const conflict = await fetch(`${path}/stop?backendId=a-first`, {
+      method: 'POST', headers: auth(gate), body: '{}',
+    });
+    assert.equal(conflict.status, 409);
+    assert.equal((await conflict.json()).error.code, 'run_backend_mismatch');
+    const missing = await fetch(`${path}?backendId=missing`, { headers: auth(gate) });
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, 'unknown_backend');
+    assert.equal(calls.length, 4, 'refused controls never reach another environment');
   } finally {
     await gate.close();
   }

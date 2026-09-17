@@ -25,6 +25,7 @@ import { createApprovalRpc } from './approvals/rpc.mjs';
 import { createBackendManager } from './cli-environments/backend-manager.mjs';
 import { createBotGroupStore, transcriptEntriesForSend } from './cli-environments/bot-groups.mjs';
 import { createBackendRunStreams } from './cli-environments/backend-run-streams.mjs';
+import { decodeBackendRunHandle, scopeBackendRunResponse, backendRunArchiveKey } from './cli-environments/backend-run-handle.mjs';
 import { buildCliEnvironment } from './cli-environments/process-environment.mjs';
 import { TokenStore } from './tokens.mjs';
 import { PairingStore } from './pairing.mjs';
@@ -1007,12 +1008,12 @@ export async function createGate(config = {}) {
             }));
             return null;
           }
-          return backend;
+          return { backend, backendId: explicit };
         }
         // No backend named: pick the first that can actually run one.
         for (const entry of await backendManager.list()) {
           const backend = await backendManager.get(entry.id).catch(() => null);
-          if (backend && typeof backend.startRun === 'function') return backend;
+          if (backend && typeof backend.startRun === 'function') return { backend, backendId: entry.id };
         }
         res.writeHead(501, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -1021,10 +1022,36 @@ export async function createGate(config = {}) {
         return null;
       }
 
+      function readRunHandle(encoded) {
+        try {
+          const handle = decodeURIComponent(encoded);
+          return { handle, ...(decodeBackendRunHandle(handle) ?? { runId: handle }) };
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'Invalid Gate run handle', code: 'invalid_request' } }));
+          return null;
+        }
+      }
+
+      async function resolveExistingRun(run) {
+        const explicit = url.searchParams.get('backendId');
+        const resolved = await resolveRunBackend(explicit || run.backendId);
+        if (!resolved) return null;
+        if (run.backendId && explicit && explicit !== run.backendId) {
+          res.writeHead(409, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: {
+            message: 'This run belongs to a different CLI environment', code: 'run_backend_mismatch',
+          } }));
+          return null;
+        }
+        return resolved.backend;
+      }
+
       if (pathname === '/v1/runs' && method === 'POST') {
         const body = (await readJsonBody(req)) ?? {};
-        const backend = await resolveRunBackend(body.backendId);
-        if (!backend) return;
+        const resolved = await resolveRunBackend(body.backendId);
+        if (!resolved) return;
+        const { backend, backendId } = resolved;
         const prompt = typeof body.input === 'string'
           ? body.input
           : lastUserText(Array.isArray(body.input) ? body.input : body.messages);
@@ -1038,13 +1065,23 @@ export async function createGate(config = {}) {
           model: body.model,
         });
         res.writeHead(200);
-        res.end(JSON.stringify(started));
+        res.end(JSON.stringify(scopeBackendRunResponse(started, backendId)));
         return;
       }
 
       const runEventsMatch = pathname.match(/^\/v1\/runs\/([^/]+)\/events$/);
       if (runEventsMatch && method === 'GET') {
-        const runId = decodeURIComponent(runEventsMatch[1]);
+        const run = readRunHandle(runEventsMatch[1]);
+        if (!run) return;
+        const runId = backendRunArchiveKey(run.handle);
+        // A matching scope is already carried by the handle: replay must not
+        // need its CLI environment online. A different explicit pin is refused.
+        let backend;
+        const explicit = url.searchParams.get('backendId');
+        if (explicit && run.backendId && explicit !== run.backendId) {
+          backend = await resolveExistingRun(run);
+          if (!backend) return;
+        }
         // Replay answers from the Gate's own archive when one exists: Hermes
         // buffers a run's events only while it is live, so replaying a
         // finished run upstream 404s. The archived bytes are exactly what was
@@ -1066,12 +1103,12 @@ export async function createGate(config = {}) {
           res.end();
           return;
         }
-        const backend = await resolveRunBackend();
+        backend ??= await resolveExistingRun(run);
         if (!backend) return;
         if (!requireBackendMethod(backend, 'runEvents')) return;
         let upstream;
         try {
-          upstream = await backend.runEvents(runId);
+          upstream = await backend.runEvents(run.runId);
         } catch (error) {
           if (archived !== null) {
             // Best evidence fallback: a partial archive exists but the
@@ -1146,9 +1183,11 @@ export async function createGate(config = {}) {
 
       const runStopMatch = pathname.match(/^\/v1\/runs\/([^/]+)\/stop$/);
       if (runStopMatch && method === 'POST') {
-        const backend = await resolveRunBackend();
+        const run = readRunHandle(runStopMatch[1]);
+        if (!run) return;
+        const backend = await resolveExistingRun(run);
         if (!backend) return;
-        await backend.stopRun(decodeURIComponent(runStopMatch[1]));
+        await backend.stopRun(run.runId);
         res.writeHead(200);
         res.end(JSON.stringify({ stopped: true }));
         return;
@@ -1157,10 +1196,12 @@ export async function createGate(config = {}) {
       const runApprovalMatch = pathname.match(/^\/v1\/runs\/([^/]+)\/approval$/);
       if (runApprovalMatch && method === 'POST') {
         const body = (await readJsonBody(req)) ?? {};
-        const backend = await resolveRunBackend();
+        const run = readRunHandle(runApprovalMatch[1]);
+        if (!run) return;
+        const backend = await resolveExistingRun(run);
         if (!backend) return;
         if (!requireBackendMethod(backend, 'replyApproval')) return;
-        await backend.replyApproval(decodeURIComponent(runApprovalMatch[1]), {
+        await backend.replyApproval(run.runId, {
           approved: body.approved,
           feedback: body.feedback,
         });
@@ -1171,11 +1212,13 @@ export async function createGate(config = {}) {
 
       const runStatusMatch = pathname.match(/^\/v1\/runs\/([^/]+)$/);
       if (runStatusMatch && method === 'GET') {
-        const backend = await resolveRunBackend();
+        const run = readRunHandle(runStatusMatch[1]);
+        if (!run) return;
+        const backend = await resolveExistingRun(run);
         if (!backend) return;
-        const status = await backend.getRunStatus(decodeURIComponent(runStatusMatch[1]));
+        const status = await backend.getRunStatus(run.runId);
         res.writeHead(200);
-        res.end(JSON.stringify(status));
+        res.end(JSON.stringify(run.backendId ? scopeBackendRunResponse(status, run.backendId) : status));
         return;
       }
 
