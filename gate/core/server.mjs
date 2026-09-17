@@ -1059,6 +1059,17 @@ export async function createGate(config = {}) {
         return null;
       }
 
+      function runRequestError(error, fallbackCode) {
+        const upstreamStatus = Number(error?.status);
+        const status = Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus < 600
+          ? upstreamStatus : 502;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: {
+          message: typeof error?.message === 'string' && error.message ? error.message : 'Run request failed',
+          code: typeof error?.code === 'string' && error.code ? error.code : fallbackCode,
+        } }));
+      }
+
       function readRunHandle(encoded) {
         try {
           const handle = decodeURIComponent(encoded);
@@ -1097,10 +1108,16 @@ export async function createGate(config = {}) {
           res.end(JSON.stringify({ error: { message: "Missing 'input'", code: 'invalid_request' } }));
           return;
         }
-        const started = await backend.startRun(prompt, {
-          sessionId: body.session_id ?? body.sessionId,
-          model: body.model,
-        });
+        let started;
+        try {
+          started = await backend.startRun(prompt, {
+            sessionId: body.session_id ?? body.sessionId,
+            model: body.model,
+          });
+        } catch (error) {
+          runRequestError(error, 'run_start_failed');
+          return;
+        }
         res.writeHead(200);
         res.end(JSON.stringify(scopeBackendRunResponse(started, backendId)));
         return;
@@ -1224,7 +1241,12 @@ export async function createGate(config = {}) {
         if (!run) return;
         const backend = await resolveExistingRun(run);
         if (!backend) return;
-        await backend.stopRun(run.runId);
+        try {
+          await backend.stopRun(run.runId);
+        } catch (error) {
+          runRequestError(error, 'run_stop_failed');
+          return;
+        }
         res.writeHead(200);
         res.end(JSON.stringify({ stopped: true }));
         return;
@@ -1238,10 +1260,15 @@ export async function createGate(config = {}) {
         const backend = await resolveExistingRun(run);
         if (!backend) return;
         if (!requireBackendMethod(backend, 'replyApproval')) return;
-        await backend.replyApproval(run.runId, {
-          approved: body.approved,
-          feedback: body.feedback,
-        });
+        try {
+          await backend.replyApproval(run.runId, {
+            approved: body.approved,
+            feedback: body.feedback,
+          });
+        } catch (error) {
+          runRequestError(error, 'run_approval_failed');
+          return;
+        }
         res.writeHead(200);
         res.end(JSON.stringify({ ok: true }));
         return;
@@ -1253,7 +1280,13 @@ export async function createGate(config = {}) {
         if (!run) return;
         const backend = await resolveExistingRun(run);
         if (!backend) return;
-        const status = await backend.getRunStatus(run.runId);
+        let status;
+        try {
+          status = await backend.getRunStatus(run.runId);
+        } catch (error) {
+          runRequestError(error, 'run_status_failed');
+          return;
+        }
         res.writeHead(200);
         res.end(JSON.stringify(run.backendId ? scopeBackendRunResponse(status, run.backendId) : status));
         return;

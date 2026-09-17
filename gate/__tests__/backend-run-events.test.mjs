@@ -68,14 +68,31 @@ function plainBackend() {
 function runsBackend(state, calls = []) {
   return {
     ...plainBackend(),
-    async startRun() { return { id: 'run_1', object: 'run' }; },
-    async getRunStatus() { return { id: 'run_1', status: 'completed', exit_code: 0 }; },
+    async startRun() {
+      if (state.startError) throw state.startError;
+      return { id: 'run_1', object: 'run' };
+    },
+    async getRunStatus() {
+      if (state.statusError) throw state.statusError;
+      return { id: 'run_1', status: 'completed', exit_code: 0 };
+    },
     async steerRun() {},
-    async stopRun() {},
+    async stopRun() { if (state.stopError) throw state.stopError; },
+    async replyApproval() { if (state.approvalError) throw state.approvalError; },
     async runEvents(runId) {
       calls.push(`runEvents:${runId}`);
       if (state.mode === 'stream') {
         return { ok: true, status: 200, body: streamBody(FRAMES) };
+      }
+      if (state.mode === 'torn') {
+        let sent = false;
+        return { body: new ReadableStream({
+          pull(controller) {
+            if (sent) throw new Error('Run stream interrupted');
+            sent = true;
+            controller.enqueue(Buffer.from(FRAMES[0]));
+          },
+        }) };
       }
       const error = new Error(state.message ?? `hermes: run events HTTP ${state.status}`);
       if (state.status !== undefined) error.status = state.status;
@@ -156,6 +173,81 @@ async function makeGate({ mode = 'stream', gateHomeOverride } = {}) {
 const auth = (gate) => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` });
 const base = (gate) => `http://127.0.0.1:${gate.port}`;
 
+for (const scenario of [
+  { field: 'startError', path: '', method: 'POST', body: { input: 'start this run' }, status: 502, code: 'upstream_unavailable' },
+  { field: 'statusError', path: '/run_missing', method: 'GET', status: 404, code: 'unknown_run' },
+  { field: 'stopError', path: '/run_1/stop', method: 'POST', status: 409, code: 'run_completed' },
+  { field: 'approvalError', path: '/run_1/approval', method: 'POST', body: { approved: false }, status: 409, code: 'approval_resolved' },
+]) {
+  test(`${scenario.field} preserves the Gateway refusal status, message and code`, async () => {
+    const { gate, state } = await makeGate();
+    try {
+      state[scenario.field] = Object.assign(new Error('Run request refused'), {
+        status: scenario.status, code: scenario.code,
+      });
+      const response = await fetch(`${base(gate)}/v1/runs${scenario.path}`, {
+        method: scenario.method, headers: auth(gate),
+        ...(scenario.body ? { body: JSON.stringify(scenario.body) } : {}),
+      });
+      const body = await response.json();
+      assert.equal(response.status, scenario.status, JSON.stringify(body));
+      assert.match(response.headers.get('content-type'), /application\/json/);
+      assert.deepEqual(body, { error: { message: 'Run request refused', code: scenario.code } });
+    } finally {
+      await gate.close();
+    }
+  });
+}
+
+test('run failures without a valid error status return 502 with a stable envelope', async () => {
+  const { gate, state } = await makeGate();
+  try {
+    for (const status of [undefined, 200, 399, 600, 409.5, 'invalid']) {
+      state.statusError = Object.assign(new Error('Run status unavailable'), { status });
+      const response = await fetch(`${base(gate)}/v1/runs/run_1`, { headers: auth(gate) });
+      assert.equal(response.status, 502, `invalid status: ${status}`);
+      assert.deepEqual(await response.json(), {
+        error: { message: 'Run status unavailable', code: 'run_status_failed' },
+      });
+    }
+  } finally {
+    await gate.close();
+  }
+});
+
+test('malformed run input stays 400 and successful lifecycle responses keep their shapes', async () => {
+  const { gate, state } = await makeGate();
+  try {
+    state.startError = new Error('must not start malformed input');
+    for (const body of ['{', '{}', JSON.stringify({ input: [] })]) {
+      const response = await fetch(`${base(gate)}/v1/runs`, { method: 'POST', headers: auth(gate), body });
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).error.code, 'invalid_request');
+    }
+    delete state.startError;
+    const started = await fetch(`${base(gate)}/v1/runs`, {
+      method: 'POST', headers: auth(gate), body: JSON.stringify({ input: 'start this run' }),
+    });
+    assert.equal(started.status, 200);
+    const run = await started.json();
+    assert.deepEqual(Object.keys(run).sort(), ['id', 'object']);
+    assert.equal(run.object, 'run');
+    const path = `${base(gate)}/v1/runs/${encodeURIComponent(run.id)}`;
+    const status = await fetch(path, { headers: auth(gate) });
+    assert.equal(status.status, 200);
+    assert.deepEqual(await status.json(), { id: run.id, status: 'completed', exit_code: 0 });
+    for (const [action, expected] of [['stop', { stopped: true }], ['approval', { ok: true }]]) {
+      const response = await fetch(`${path}/${action}`, {
+        method: 'POST', headers: auth(gate), body: JSON.stringify({ approved: false }),
+      });
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), expected);
+    }
+  } finally {
+    await gate.close();
+  }
+});
+
 test('a run handle keeps live events on its original environment and replays after restart', async () => {
   const { gate, state, calls, gateHome } = await makeGate();
   state.scoped = true;
@@ -189,6 +281,23 @@ test('a run handle keeps live events on its original environment and replays aft
     assert.deepEqual(second.calls, [], 'archived replay needs no upstream');
   } finally {
     await second.gate.close();
+  }
+});
+
+test('a torn run stream closes without a second HTTP or JSON response', async () => {
+  const { gate, gateHome } = await makeGate({ mode: 'torn' });
+  try {
+    const response = await fetch(`${base(gate)}/v1/runs/run_1/events`, { headers: auth(gate) });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /text\/event-stream/);
+    assert.equal(await response.text(), FRAMES[0]);
+    const names = await readdir(join(gateHome, 'run-streams'));
+    assert.ok(!names.includes('run_1.complete'));
+    const status = await fetch(`${base(gate)}/v1/runs/run_1`, { headers: auth(gate) });
+    assert.equal(status.status, 200, 'the Gateway still answers after the torn stream');
+    await status.json();
+  } finally {
+    await gate.close();
   }
 });
 
