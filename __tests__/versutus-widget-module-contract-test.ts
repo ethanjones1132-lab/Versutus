@@ -166,6 +166,30 @@ describe('M4: configurable per instance', () => {
     expect(recovery).not.toContain('botChatUri');
   });
 
+  test('choosing a Bot saves off the UI thread and cancels when the activity is destroyed', () => {
+    const activity = kotlin('WidgetConfigureActivity.kt');
+    expect(activity).not.toContain('runBlocking');
+    expect(activity).toContain('private val scope = MainScope()');
+    expect(activity).toMatch(/override fun onDestroy\(\)\s*\{\s*scope\.cancel\(\)\s*super\.onDestroy\(\)/);
+    expect(activity).toContain('scope.launch {');
+    expect(activity).toContain('withContext(Dispatchers.IO) {');
+    const save = activity.slice(activity.indexOf('private fun choose('));
+    expect(save.indexOf('withContext(Dispatchers.IO)')).toBeLessThan(save.indexOf('updateAppWidgetState('));
+    expect(save.indexOf('updateAppWidgetState(')).toBeLessThan(save.indexOf('VersutusStatusWidget().updateAll('));
+    expect(save).toMatch(/updateAll\(this@WidgetConfigureActivity\)\s*\}\s*setResult\(RESULT_OK, Intent\(\)\.putExtra\(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId\)\)\s*finish\(\)/);
+  });
+
+  test('a pending choice cannot be overwritten and a failed save stays retryable', () => {
+    const activity = kotlin('WidgetConfigureActivity.kt');
+    expect(activity).toContain('setResult(RESULT_CANCELED)');
+    expect(activity).toContain('if (saving) return');
+    expect(activity).toMatch(/saving = true\s*scope\.launch/);
+    expect(activity).toMatch(/catch \(error: CancellationException\)\s*\{\s*throw error/);
+    expect(activity).toMatch(/catch \(error: Exception\)\s*\{\s*Toast\.makeText/);
+    expect(activity).toContain('Could not save this widget. Choose a Bot again to retry.');
+    expect(activity).toMatch(/finally\s*\{\s*saving = false/);
+  });
+
   test('the card reads the per-instance pin and the activity stores it as Glance state', () => {
     const widget = kotlin('VersutusStatusWidget.kt');
     expect(widget).toContain('currentState<Preferences>()');
