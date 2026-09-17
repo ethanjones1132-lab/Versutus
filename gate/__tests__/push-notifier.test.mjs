@@ -287,6 +287,38 @@ test('replaying the same turn event still sends at most one reply notification',
   assert.equal(sent.length, 1);
 });
 
+// The dedupe slot is claimed before the device loop, so a transport failure
+// (push-send returns { ok: false }) would otherwise retire the event with no
+// message ever delivered. The key must be forgotten on a failed batch so a
+// later notify can try again — while a successful send keeps it pinned.
+test('a failed Expo delivery keeps the event eligible for a later retry', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  let failFirst = true;
+  const notifier = createPushNotifier({
+    tokens,
+    send: async (messages) => {
+      sent.push(...messages);
+      if (failFirst) return { ok: false, error: new Error('network outage') };
+      return { ok: true };
+    },
+  });
+  const event = { trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'done' };
+
+  await notifier.notify(event);
+  assert.equal(sent.length, 1, 'the first attempt still builds and hands over the batch');
+  assert.equal(sent[0].data.sessionId, 'session-1');
+
+  failFirst = false;
+  await notifier.notify(event);
+  assert.equal(sent.length, 2, 'the same event is sent again after the failed delivery');
+  assert.equal(sent[1].data.sessionId, 'session-1');
+  assert.deepEqual(sent[0], sent[1], 'the retry carries the identical message');
+});
+
 test('two scheduled executions of one job each notify, while a replay stays deduped', async () => {
   const tokens = {
     listEnabled: async () => [row()],

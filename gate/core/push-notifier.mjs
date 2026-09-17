@@ -283,6 +283,13 @@ export function createPushNotifier({ tokens, send, snapshot = null, now }) {
 
     if (messages.length === 0) return { ok: true, sent: 0 };
     const result = await send(messages);
+    if (result?.ok !== true) {
+      // A transport failure delivered nothing: forget the slot so a later
+      // notify can retry the same event. A batch that reached Expo — even
+      // with dead tokens to prune — keeps its claim.
+      seen.delete(key);
+      return result;
+    }
     const deadTokens = Array.isArray(result?.deadTokens) ? result.deadTokens : [];
     await Promise.all(deadTokens.map((token) => tokens.removeByToken(token)));
     return result;
