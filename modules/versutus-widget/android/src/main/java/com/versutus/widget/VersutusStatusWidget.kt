@@ -139,13 +139,13 @@ private fun Lines(payload: WidgetPayload, variant: WidgetVariant, pinned: String
     Spacer(GlanceModifier.height(3.dp))
     RoutineTalliesRow(payload)
   }
-  val bots = when {
-    pinned == null -> payload.bots
-    payload.bots.any { it.id == pinned } -> payload.bots.filter { it.id == pinned }
-    else -> listOf(WidgetBot(pinned, pinned))
+  val selection = WidgetConfigState.selection(pinned, payload.bots)
+  if (!payload.redact && selection.unavailable) {
+    Spacer(GlanceModifier.height(3.dp))
+    UnavailableBotRow()
   }
-  if (!payload.redact && bots.isNotEmpty()) {
-    for (bot in bots) {
+  if (!payload.redact && selection.bots.isNotEmpty()) {
+    for (bot in selection.bots) {
       Spacer(GlanceModifier.height(3.dp))
       BotRow(bot)
     }
@@ -184,6 +184,20 @@ private fun BotRow(bot: WidgetBot) {
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Line(bot.label)
+  }
+}
+
+@Composable
+private fun UnavailableBotRow() {
+  val context = LocalContext.current
+  Column(
+    modifier = GlanceModifier
+      .fillMaxWidth()
+      .clickable(actionStartActivity(openAppIntent(context, "versutus://chat")))
+      .padding(vertical = 2.dp),
+  ) {
+    Line("Bot unavailable", bold = true)
+    Line("Open Versutus")
   }
 }
 

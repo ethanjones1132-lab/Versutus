@@ -154,6 +154,18 @@ describe('M4: configurable per instance', () => {
     expect(manifest).toContain('android.appwidget.action.APPWIDGET_CONFIGURE');
   });
 
+  test('an unavailable pinned Bot opens Versutus instead of a fabricated Bot Chat', () => {
+    const widget = kotlin('VersutusStatusWidget.kt');
+    expect(widget).toContain('WidgetConfigState.selection(pinned, payload.bots)');
+    expect(widget).not.toContain('WidgetBot(pinned, pinned)');
+    expect(widget).toContain('if (!payload.redact && selection.unavailable)');
+    expect(widget).toContain('Line("Bot unavailable", bold = true)');
+    expect(widget).toContain('Line("Open Versutus")');
+    const recovery = widget.slice(widget.indexOf('private fun UnavailableBotRow()'), widget.indexOf('/** The approval'));
+    expect(recovery).toContain('actionStartActivity(openAppIntent(context, "versutus://chat"))');
+    expect(recovery).not.toContain('botChatUri');
+  });
+
   test('the card reads the per-instance pin and the activity stores it as Glance state', () => {
     const widget = kotlin('VersutusStatusWidget.kt');
     expect(widget).toContain('currentState<Preferences>()');

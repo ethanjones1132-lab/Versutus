@@ -6,4 +6,12 @@ object WidgetConfigState {
 
   fun read(pinned: String?): String? = pinned?.trim()?.takeIf { it.isNotEmpty() }
   fun write(botId: String): String = botId.trim()
+
+  data class Selection(val bots: List<WidgetBot>, val unavailable: Boolean)
+
+  fun selection(pinned: String?, bots: List<WidgetBot>): Selection {
+    if (pinned == null) return Selection(bots, false)
+    val matches = bots.filter { it.id == pinned }
+    return Selection(matches, matches.isEmpty())
+  }
 }
