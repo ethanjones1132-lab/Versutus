@@ -123,7 +123,9 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
     }
   } catch (error) {
     if (!clientDisconnected) {
-      res.write(`data: ${JSON.stringify({ error: { message: error.message, code: 'backend_error' } })}\n\n`);
+      const code = typeof error?.code === 'string' && /^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(error.code)
+        ? error.code : 'backend_error';
+      res.write(`data: ${JSON.stringify({ error: { message: error.message, code } })}\n\n`);
     }
   } finally {
     if (!clientDisconnected) {

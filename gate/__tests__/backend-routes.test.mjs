@@ -1456,6 +1456,64 @@ test('a streaming backend has its deltas relayed unchanged', async () => {
   }
 });
 
+for (const [label, code, expected] of [
+  ['upstream code', 'capability_unavailable', 'capability_unavailable'],
+  ['missing code', undefined, 'backend_error'],
+  ['empty code', '', 'backend_error'],
+  ['non-string code', { reason: 'unavailable' }, 'backend_error'],
+  ['diagnostic text', 'refused: credential=private-value', 'backend_error'],
+  ['oversized code', 'a'.repeat(65), 'backend_error'],
+]) {
+  test(`a streamed refusal preserves a safe error code: ${label}`, async () => {
+    const registry = stubStreamingRegistry({
+      streamingError: Object.assign(new Error('Hermes is unavailable'), { status: 503, code }),
+    });
+    const { gate } = await makeGate({ registry });
+    try {
+      const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+        method: 'POST', headers: auth(gate),
+        body: JSON.stringify({
+          backendId: 'stub-local', sessionId: 'ses_1',
+          messages: [{ role: 'user', content: 'hi' }], stream: true,
+        }),
+      });
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get('content-type'), /text\/event-stream/);
+      assert.equal(await response.text(),
+        `data: ${JSON.stringify({ error: { message: 'Hermes is unavailable', code: expected } })}\n\ndata: [DONE]\n\n`);
+    } finally {
+      await gate.close();
+    }
+  });
+}
+
+test('a streamed refusal keeps partial deltas before the upstream error code and one terminator', async () => {
+  const registry = stubTurnRegistry({
+    streamEvents: async (_id, onEvent) => {
+      onEvent({ type: 'message.delta', payload: { text: 'Partial reply' } });
+    },
+    sendMessage: async () => {
+      throw Object.assign(new Error('Hermes rate limit'), { status: 429, code: 'rate_limit_exceeded' });
+    },
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'hi' }], stream: true,
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), delta('Partial reply')
+      + 'data: {"error":{"message":"Hermes rate limit","code":"rate_limit_exceeded"}}\n\n'
+      + 'data: [DONE]\n\n');
+  } finally {
+    await gate.close();
+  }
+});
+
 test('a streamed turn is bound to the session and model the caller asked for', async () => {
   const calls = [];
   const registry = stubStreamingRegistry({
