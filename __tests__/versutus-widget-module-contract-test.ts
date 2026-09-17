@@ -58,6 +58,15 @@ describe('the Android widget renders and updates honestly', () => {
     expect(widget).toContain('SizeMode.Responsive(');
   });
 
+  test('the tiny card shows Stale before returning and keeps its connection dot', () => {
+    const widget = kotlin('VersutusStatusWidget.kt');
+    const tiny = widget.slice(widget.indexOf('if (variant == WidgetVariant.TINY) {'), widget.indexOf('    return'));
+    expect(tiny).toContain('Dot(payload.connected)');
+    expect(tiny).toContain('text = if (stale) "Stale" else payload.status');
+    expect(tiny).toContain('fontSize = 10.sp');
+    expect(widget).toContain('.padding(if (variant == WidgetVariant.TINY) 4.dp else 14.dp)');
+  });
+
   test('a payload is validated before it is stored, and every placed widget is redrawn', () => {
     const module = kotlin('VersutusWidgetModule.kt');
     expect(module).toContain('Name("VersutusWidget")');

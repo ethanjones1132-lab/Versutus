@@ -83,7 +83,7 @@ private fun StatusCard(parsed: WidgetPayload.Parsed) {
       .background(GlanceTheme.colors.widgetBackground)
       .cornerRadius(android.R.dimen.system_app_widget_background_radius)
       .semantics { contentDescription = description }
-      .padding(14.dp)
+      .padding(if (variant == WidgetVariant.TINY) 4.dp else 14.dp)
       .clickable(actionStartActivity(openAppIntent(context, "versutus://chat"))),
   ) {
     when (parsed) {
@@ -102,10 +102,18 @@ private fun Lines(payload: WidgetPayload, variant: WidgetVariant, pinned: String
   val stamp = WidgetStamp.line(payload.writtenAt, System.currentTimeMillis(), ZoneId.systemDefault(), Locale.getDefault())
   val stale = WidgetStamp.isStale(payload.writtenAt, System.currentTimeMillis())
   if (variant == WidgetVariant.TINY) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Column {
       Dot(payload.connected)
-      Spacer(GlanceModifier.width(6.dp))
-      Line(payload.status, bold = true)
+      Spacer(GlanceModifier.height(3.dp))
+      Text(
+        text = if (stale) "Stale" else payload.status,
+        maxLines = 1,
+        style = TextStyle(
+          color = GlanceTheme.colors.onSurface,
+          fontSize = 10.sp,
+          fontWeight = FontWeight.Bold,
+        ),
+      )
     }
     return
   }

@@ -36,6 +36,14 @@ class WidgetStampTest {
     assertEquals(true, WidgetStamp.isStale(written, written + twelveHours + 60 * 60 * 1000))
   }
 
+  @Test fun `the compact stale indicator starts exactly at twelve hours`() {
+    val written = at(2026, 9, 12, 8, 0)
+    val threshold = written + 12L * 60 * 60 * 1000
+    assertEquals(false, WidgetStamp.isStale(written, threshold - 1))
+    assertEquals(true, WidgetStamp.isStale(written, threshold))
+    assertEquals(true, WidgetStamp.isStale(written, threshold + 1))
+  }
+
   @Test fun `an unreadable stamp is not stale`() {
     assertEquals(false, WidgetStamp.isStale(Long.MIN_VALUE, 9_000_000_000L))
   }
