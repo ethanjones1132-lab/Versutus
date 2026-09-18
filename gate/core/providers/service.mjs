@@ -13,6 +13,7 @@ export class ProviderService {
     this.createAdapter = createAdapter;
     this.agents = agents;
     this.refreshQueues = new Map();
+    this.chatOutcomeQueues = new Map();
   }
 
   adapterFor(id, config) {
@@ -104,6 +105,25 @@ export class ProviderService {
    * nothing extra to record.
    */
   async noteChatOutcome(id, error) {
+    // Concurrent turns share one provider record and each outcome is a
+    // read-modify-write: without ordering, two overlapping outcomes both read
+    // the same state and the slower write lands on a stale read, so an older
+    // failure can overwrite a newer success (or wipe a needs_reauth flag).
+    // Queue per provider like refreshCatalog does, so each outcome re-reads
+    // after the previous one commits and commits land in call order.
+    const previous = this.chatOutcomeQueues.get(id) ?? Promise.resolve();
+    const run = previous
+      .catch(() => undefined)
+      .then(() => this.noteChatOutcomeNow(id, error));
+    this.chatOutcomeQueues.set(id, run);
+    try {
+      return await run;
+    } finally {
+      if (this.chatOutcomeQueues.get(id) === run) this.chatOutcomeQueues.delete(id);
+    }
+  }
+
+  async noteChatOutcomeNow(id, error) {
     const record = await this.store.get(id);
     if (!record) return;
 

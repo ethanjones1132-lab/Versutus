@@ -88,3 +88,61 @@ test('an unknown provider id is a no-op, never a throw', async () => {
   const service = await makeService();
   await service.noteChatOutcome('nope', new Error('x'));
 });
+
+test('a concurrent failure then success still ends ready, in call order', async () => {
+  const service = await makeService();
+  const failure = new Error('chat failed: 401');
+  failure.status = 401;
+  // Without per-provider ordering both outcomes read the same `ready` state:
+  // the success takes the `already ready` early return and writes nothing,
+  // so the slower failure write wins and the provider stays unavailable.
+  await Promise.all([
+    service.noteChatOutcome('zen', failure),
+    service.noteChatOutcome('zen', null),
+  ]);
+
+  const after = (await service.store.get('zen')).state;
+  assert.equal(after.readiness.state, 'ready');
+  assert.equal(after.auth.state, 'ready');
+  assert.equal(after.lastError, undefined);
+});
+
+test('a concurrent 401 then 429 preserves the re-auth need', async () => {
+  const service = await makeService();
+  const denied = new Error('chat failed: 401');
+  denied.status = 401;
+  const limited = new Error('rate limited');
+  limited.status = 429;
+  // Without ordering both outcomes read `auth: ready`: the 429 then writes
+  // back `ready` and wipes the needs_reauth the 401 just established.
+  await Promise.all([
+    service.noteChatOutcome('zen', denied),
+    service.noteChatOutcome('zen', limited),
+  ]);
+
+  const after = (await service.store.get('zen')).state;
+  assert.equal(after.readiness.code, 'rate_limited');
+  assert.notEqual(after.readiness.state, 'unavailable');
+  assert.equal(after.auth.state, 'needs_reauth');
+});
+
+test('a failed outcome never poisons the per-provider queue', async () => {
+  const service = await makeService();
+  const failure = new Error('chat failed: 401');
+  failure.status = 401;
+  const originalPut = service.store.put.bind(service.store);
+  let calls = 0;
+  service.store.put = async (...args) => {
+    calls += 1;
+    if (calls === 1) throw new Error('disk full');
+    return originalPut(...args);
+  };
+  await Promise.all([
+    service.noteChatOutcome('zen', failure).catch(() => undefined),
+    service.noteChatOutcome('zen', null),
+  ]);
+
+  const after = (await service.store.get('zen')).state;
+  assert.equal(after.readiness.state, 'ready');
+  assert.equal(after.auth.state, 'ready');
+});
