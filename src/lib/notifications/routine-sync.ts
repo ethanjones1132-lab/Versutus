@@ -99,13 +99,21 @@ export async function syncRoutineNotification(job: RoutineJob): Promise<void> {
   }
 
   const { botId, title } = parseRoutineName(job.name ?? job.id);
+  // A routine that names no Bot cannot be tapped into a Bot Chat, so its
+  // notice would claim a destination it cannot name. Withhold it and retire
+  // any notice a past sync held for the job — the notice stays honest, like
+  // the pause branch above: never a tray entry that scatters to Activity.
+  if (!botId) {
+    await cancelKnownNotice(job.id);
+    return;
+  }
   const trigger = cronToTrigger(job.schedule ?? '', job.nextRunAt);
   // Honest null: no repeating shape and no next fire the gateway named. The
   // notice already held stays — retiring it here would let missing data
   // silence a routine the operator scheduled.
   if (!trigger) return;
 
-  const data = routineNoticeData(job.id, botId ?? '');
+  const data = routineNoticeData(job.id, botId);
 
   try {
     if (!(await ensurePermission())) return;

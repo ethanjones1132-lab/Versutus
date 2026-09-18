@@ -70,6 +70,15 @@ const complexJob = {
   nextRunAt: NEXT_FIRE,
 };
 
+// A routine whose name never gained the `[bot:<name>]` namespace. Its notice
+// cannot be tapped into a Bot Chat, so every producer must withhold it rather
+// than emit a payload that claims a destination it cannot name.
+const unnamespacedJob = {
+  id: 'job-unnamespaced',
+  name: 'Morning briefing',
+  schedule: '0 9 * * *',
+};
+
 // A decline can only be exercised before any case in this file grants the
 // permission: `ensurePermission` caches ONE granted answer for the life of the
 // process, so this suite sits ABOVE the granted-permission suite below and
@@ -131,6 +140,27 @@ describe('routine notification sync/cancel bookkeeping', () => {
     expect(request.content.title).toBe('Morning briefing is due');
     expect(request.content.data).toEqual({ kind: 'routine-due', jobId: 'job-1', botId: 'scout' });
     await expect(storedIdFor('job-1')).resolves.toBe('notif-1');
+  });
+
+  test('a routine that names no Bot schedules nothing — the notice is unaddressable', async () => {
+    await syncRoutineNotification(unnamespacedJob);
+
+    expect(mockSchedule).not.toHaveBeenCalled();
+    await expect(storedIdFor('job-unnamespaced')).resolves.toBeNull();
+  });
+
+  test('an unnamespaced routine retires a notice the job already held', async () => {
+    // A previous sync mapped this job — the held notice carries a payload that
+    // could not tap into any Bot Chat, so it must be retired, not left to fire.
+    await keyValueStorage.setItem('versutus:routine-notification:job-unnamespaced', 'notif-stale');
+    mockSchedule.mockClear();
+    mockCancel.mockClear();
+
+    await syncRoutineNotification(unnamespacedJob);
+
+    expect(mockSchedule).not.toHaveBeenCalled();
+    expect(mockCancel).toHaveBeenCalledWith('notif-stale');
+    await expect(storedIdFor('job-unnamespaced')).resolves.toBeNull();
   });
 
   test('syncing twice over an existing notice replaces it — one identifier survives', async () => {

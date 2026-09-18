@@ -65,6 +65,13 @@ describe('routeForTap (pure notification tap routing)', () => {
     expect(route).toEqual({ kind: 'routine', jobId: 'job-1', botId: 'scout' });
   });
 
+  test('a routine payload with an empty bot id is not routed', () => {
+    // The producer-side contract: a routine notice names the Bot its routine
+    // belongs to, or it is withheld. A payload that names none must never open
+    // a Bot Chat (or fall through to nothing) — so it is unrecognized.
+    expect(routeForTap(routineNoticeData('job-1', ''))).toBeNull();
+  });
+
   test('a run notice drops extra bot metadata', () => {
     expect(
       routeForTap({ kind: RUN_NOTICE_DATA_KIND, runId: 'run-7', botId: 'scout' }),

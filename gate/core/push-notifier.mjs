@@ -75,14 +75,18 @@ function classifiedEvent(event) {
   if (trigger === 'final-response' && cron) {
     // Each scheduled execution records its own timestamped Session, so the
     // Session id is already per-execution: dedupe on it, never on the job id
-    // a daily Routine would then lose after its first run.
+    // a daily Routine would then lose after its first run. A routine names
+    // its Bot on the tap — an execution that carried none is unaddressable
+    // and must not populate the tray with a payload nothing can open.
+    const botId = nonEmptyString(event?.botId);
+    if (!botId) return null;
     return {
       trigger: 'routine',
       id: `${cron.jobId}@${event.sessionId}`,
       data: {
         kind: 'routine',
         jobId: cron.jobId,
-        ...(nonEmptyString(event.botId) ? { botId: event.botId } : {}),
+        botId,
       },
     };
   }
@@ -118,15 +122,19 @@ function classifiedEvent(event) {
 
   if (trigger === 'routine') {
     const jobId = nonEmptyString(event?.jobId);
-    return jobId ? {
+    const botId = nonEmptyString(event?.botId);
+    // The tap router opens a routine in its Bot's Chat — an event that names
+    // no Bot is unaddressable, so the relay withholds it like the local path.
+    if (!jobId || !botId) return null;
+    return {
       trigger,
       id: jobId,
       data: {
         kind: 'routine',
         jobId,
-        ...(nonEmptyString(event.botId) ? { botId: event.botId } : {}),
+        botId,
       },
-    } : null;
+    };
   }
 
   return null;

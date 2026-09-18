@@ -377,8 +377,8 @@ test('two scheduled executions of one job each notify, while a replay stays dedu
   };
   const sent = [];
   const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
-  const morning = { trigger: 'final-response', sessionId: 'cron_job1_20260916_090000', text: 'morning run' };
-  const evening = { trigger: 'final-response', sessionId: 'cron_job1_20260916_180000', text: 'evening run' };
+  const morning = { trigger: 'final-response', sessionId: 'cron_job1_20260916_090000', botId: 'scout', text: 'morning run' };
+  const evening = { trigger: 'final-response', sessionId: 'cron_job1_20260916_180000', botId: 'scout', text: 'evening run' };
 
   await notifier.notify(morning);
   await notifier.notify(evening);
@@ -408,6 +408,51 @@ test('classifies a cron final response as a routine', async () => {
   assert.equal(sent.length, 1);
   assert.deepEqual(sent[0].data, { kind: 'routine', jobId: 'job1', botId: 'scout' });
   assert.equal(sent[0].channelId, 'routine-results');
+});
+
+test('a cron final response without a bot id is withheld — no destination to name', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({
+    trigger: 'final-response',
+    sessionId: 'cron_job1_20260911_090000',
+    text: 'routine finished',
+    state: 'completed',
+  });
+
+  assert.equal(sent.length, 0, 'an unaddressable routine must not populate the tray');
+});
+
+test('a direct routine trigger without a bot id is withheld — no destination to name', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({ trigger: 'routine', jobId: 'job-1' });
+
+  assert.equal(sent.length, 0);
+});
+
+test('a direct routine trigger with a bot id still delivers the routine payload', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({ trigger: 'routine', jobId: 'job-1', botId: 'scout' });
+
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].data, { kind: 'routine', jobId: 'job-1', botId: 'scout' });
 });
 
 test('a device opted into widget updates gets a data-only companion message', async () => {
