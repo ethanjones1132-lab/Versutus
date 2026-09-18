@@ -452,6 +452,17 @@ export async function createGate(config = {}) {
       // The notifier already swallows observer faults; this guards sync throws.
     }
   };
+  // A chat Session earns one notification per completed turn, and two replies
+  // can read the same. The notifier keys a chat reply on the turn id this
+  // seam attaches; a per-session sequence keeps it strictly per-turn, so a
+  // replay of the same turn's event still collapses while a later turn with
+  // identical text still notifies.
+  const turnSeqs = new Map();
+  function nextTurnId(sessionId) {
+    const seq = (turnSeqs.get(sessionId) ?? 0) + 1;
+    turnSeqs.set(sessionId, seq);
+    return `turn-${seq}`;
+  }
   environmentService.onRunEvent = notifyPush;
   // Voice sessions live on the Gate; the media socket (M2 task 2.2) reads the
   // same registry the RPC writes, so a grant and its socket cannot disagree.
@@ -2149,6 +2160,7 @@ export async function createGate(config = {}) {
                   trigger: 'final-response',
                   sessionId,
                   ...(botForTurn ? { botId: botForTurn } : {}),
+                  turnId: nextTurnId(sessionId),
                   text: streamed,
                 });
               }
@@ -2190,6 +2202,7 @@ export async function createGate(config = {}) {
                 trigger: 'final-response',
                 sessionId,
                 ...(botForTurn ? { botId: botForTurn } : {}),
+                turnId: nextTurnId(sessionId),
                 text: result.text,
               });
             }

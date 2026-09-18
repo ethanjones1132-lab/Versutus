@@ -149,7 +149,7 @@ function stubTurnRegistry({ calls = [], sendMessage, streamEvents } = {}) {
   };
 }
 
-async function makeGate({ calls = [], provider, registry, terminalSessions, environments } = {}) {
+async function makeGate({ calls = [], provider, registry, terminalSessions, environments, pushFetch } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'gate-backend-'));
   roots.push(root);
   const gateHome = join(root, '.gate-home');
@@ -201,6 +201,7 @@ async function makeGate({ calls = [], provider, registry, terminalSessions, envi
       stop: async () => {},
       isOwned: () => false,
     }),
+    ...(pushFetch ? { pushFetch } : {}),
   });
   return { gate, calls };
 }
@@ -2444,6 +2445,90 @@ test('a turn on an existing session does not open another one', async () => {
       }),
     });
     assert.ok(!calls.some((entry) => entry.startsWith('createSession')), JSON.stringify(calls));
+  } finally {
+    await gate.close();
+  }
+});
+
+// Two turns that read identically are still two turns: the notifier used to key
+// a chat reply on sessionId + text, so a Session's second identical answer
+// stayed silent. The push seam attaches a per-turn id (tested here end to end),
+// so each completed turn pushes its own notice while a replayed event still
+// collapses.
+test('two final responses with identical text in one Session each push their own notice', async () => {
+  const calls = [];
+  const registry = stubTurnRegistry({
+    calls,
+    sendMessage: async () => ({ text: 'same answer', message: { role: 'assistant', content: [{ type: 'text', text: 'same answer' }] } }),
+  });
+  const pushSends = [];
+  const pushFetch = async (url, init) => {
+    if (url.endsWith('/push/send')) {
+      const messages = JSON.parse(init.body);
+      pushSends.push(messages);
+      return {
+        ok: true,
+        status: 200,
+        async json() { return { data: messages.map((message, index) => ({ status: 'ok', id: `ticket-${index}` })) }; },
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        const ids = JSON.parse(init.body).ids;
+        return { data: Object.fromEntries(ids.map((id) => [id, { status: 'ok' }])) };
+      },
+    };
+  };
+  const { gate } = await makeGate({ calls, registry, pushFetch });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    const register = await fetch(`${base}/v1/capabilities/rpc`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        method: 'notifications.register',
+        params: {
+          expoPushToken: 'ExponentPushToken[phone]',
+          platform: 'ios',
+          timezone: 'UTC',
+          deviceId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90',
+        },
+      }),
+    });
+    assert.equal(register.status, 200);
+    const enable = await fetch(`${base}/v1/capabilities/rpc`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        method: 'notifications.preferences.set',
+        params: { enabled: true, deviceId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' },
+      }),
+    });
+    assert.equal(enable.status, 200);
+
+    const turn = {
+      backendId: 'stub-local', sessionId: 'ses_1',
+      messages: [{ role: 'user', content: 'say it twice' }],
+    };
+    const first = await fetch(`${base}/v1/chat/completions`, { method: 'POST', headers: auth(gate), body: JSON.stringify(turn) });
+    assert.equal(first.status, 200);
+    const second = await fetch(`${base}/v1/chat/completions`, { method: 'POST', headers: auth(gate), body: JSON.stringify(turn) });
+    assert.equal(second.status, 200);
+    assert.ok(calls.filter((entry) => entry === 'sendMessage').length >= 2, JSON.stringify(calls));
+
+    // The push send is best-effort and fire-and-forget, so it can land a tick
+    // after both turns answer. Bounded poll, same idiom as backend-run-events.
+    const deadline = Date.now() + 2000;
+    while (pushSends.length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    assert.equal(pushSends.length, 2, 'two identical-text replies must each reach the phone');
+    for (const batch of pushSends) {
+      assert.equal(batch.length, 1, 'one reply notice per turn');
+      assert.equal(batch[0].data.kind, 'reply');
+      assert.equal(batch[0].data.sessionId, 'ses_1');
+    }
   } finally {
     await gate.close();
   }

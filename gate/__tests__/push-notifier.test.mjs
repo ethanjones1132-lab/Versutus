@@ -287,6 +287,57 @@ test('replaying the same turn event still sends at most one reply notification',
   assert.equal(sent.length, 1);
 });
 
+// The notifier used to key a chat reply on sessionId + text, so a Session whose
+// next turn happened to read identically to the last one stayed silent. The
+// emission seam now attaches a per-turn id; two replies that share text but not
+// their turn id are two turns, and each notifies.
+test('two consecutive final responses with identical text and distinct turn ids each notify', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+
+  await notifier.notify({ trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'same text', turnId: 'turn-1' });
+  await notifier.notify({ trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'same text', turnId: 'turn-2' });
+
+  assert.equal(sent.length, 2, 'two replies with the same text but distinct turn ids must both notify');
+  assert.equal(sent[0].data.sessionId, 'session-1');
+  assert.equal(sent[1].data.sessionId, 'session-1');
+});
+
+test('replaying a turn event with a turn id stays deduped', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+  const event = { trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'same text', turnId: 'turn-1', state: 'completed' };
+
+  await notifier.notify(event);
+  await notifier.notify(event);
+
+  assert.equal(sent.length, 1, 'a replayed final response keeps its one notification');
+  assert.equal(sent[0].data.sessionId, 'session-1');
+});
+
+test('a final response without a turn id still dedupes on its text', async () => {
+  const tokens = {
+    listEnabled: async () => [row()],
+    removeByToken: async () => false,
+  };
+  const sent = [];
+  const notifier = createPushNotifier({ tokens, send: async (messages) => { sent.push(...messages); return { ok: true }; } });
+  const event = { trigger: 'final-response', sessionId: 'session-1', botId: 'bot-1', text: 'same text' };
+
+  await notifier.notify(event);
+  await notifier.notify(event);
+
+  assert.equal(sent.length, 1, 'a legacy event without a turn id still collapses a replay on its text');
+});
+
 // The dedupe slot is claimed before the device loop, so a transport failure
 // (push-send returns { ok: false }) would otherwise retire the event with no
 // message ever delivered. The key must be forgotten on a failed batch so a

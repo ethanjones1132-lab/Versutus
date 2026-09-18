@@ -90,12 +90,14 @@ function classifiedEvent(event) {
   if (trigger === 'final-response') {
     const sessionId = nonEmptyString(event?.sessionId);
     // A chat Session earns one notification per turn, and the Gate replays a
-    // completed turn's event verbatim, so the turn's own final text is the
-    // smallest key that lets a replay collapse while the Session's next turn
-    // still notifies.
+    // completed turn's event verbatim. A per-turn identity from the emission
+    // seam lets a replay collapse while the Session's next turn — even one
+    // with the same final text — still notifies. An event without a turn id
+    // (an older emitter, a test fixture) falls back to text.
+    const turn = nonEmptyString(event?.turnId) ?? (typeof event.text === 'string' ? event.text : '');
     return sessionId ? {
       trigger,
-      id: `${sessionId}@${typeof event.text === 'string' ? event.text : ''}`,
+      id: `${sessionId}@${turn}`,
       data: {
         kind: 'reply',
         sessionId,
