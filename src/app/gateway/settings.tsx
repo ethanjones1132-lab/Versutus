@@ -18,6 +18,7 @@ import {
   saveAppLock,
   type AppLockUnavailableReason,
 } from '@/lib/settings/app-lock';
+import { pushDeviceParams } from '@/lib/notifications/push-registration';
 import { deviceAppLockState } from '@/lib/settings/app-lock-device';
 import {
   WIDGET_PRIVACY_LABEL,
@@ -105,7 +106,7 @@ export default function GatewaySettingsScreen() {
       const stored = await loadAppSettings();
       if (!cancelled) setVoiceEngine(stored.voiceEngine);
       try {
-        const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', {});
+        const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', await pushDeviceParams());
         if (!cancelled) setVoiceCapabilities(read);
       } catch {
         // Offline or a Gate that predates voice: the rows still name the
@@ -139,7 +140,7 @@ export default function GatewaySettingsScreen() {
     setInstalling(true);
     setInstallNote('Downloading the PC voice models…');
     try {
-      await gatewayRequest('voice.install.start', {});
+      await gatewayRequest('voice.install.start', await pushDeviceParams());
     } catch {
       setInstalling(false);
       setInstallNote('The Gate could not start the install.');
@@ -149,7 +150,7 @@ export default function GatewaySettingsScreen() {
       await new Promise((resolve) => setTimeout(resolve, 2000));
       let status: { state?: string; reason?: string } | null = null;
       try {
-        status = await gatewayRequest<{ state?: string; reason?: string }>('voice.install.status', {});
+        status = await gatewayRequest<{ state?: string; reason?: string }>('voice.install.status', await pushDeviceParams());
       } catch {
         break;
       }
@@ -157,7 +158,7 @@ export default function GatewaySettingsScreen() {
       if (status?.state !== 'installing') break;
     }
     try {
-      const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', {});
+      const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', await pushDeviceParams());
       setVoiceCapabilities(read);
     } catch {
       // keep the last known capabilities

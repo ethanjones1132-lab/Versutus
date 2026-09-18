@@ -11,10 +11,14 @@ import { ScriptedEngine } from '../core/voice/engines/scripted-engine.mjs';
 
 const TOKENS = { 'tok-1': { deviceId: 'dev-1' }, 'tok-2': { deviceId: 'dev-2' } };
 const SESSION = { voiceSessionId: 'vs-1', deviceId: 'dev-1', engine: 'local' };
+const BOOTSTRAP_SESSION = { voiceSessionId: 'vs-boot', deviceId: 'bootstrap:phone-abc123', engine: 'local' };
+// The Gate's own token: a phone connected with it has no device grant.
+const BOOTSTRAP_TOKENS = { verify: async (authorization) => authorization === 'Bearer gate-own-token' };
 
-async function startMedia({ noAudioTimeoutMs = 30_000 } = {}) {
+async function startMedia({ noAudioTimeoutMs = 30_000, tokenStore = null } = {}) {
   const registry = new VoiceSessionRegistry();
   registry.create(SESSION);
+  registry.create(BOOTSTRAP_SESSION);
   const deviceTokens = {
     verify: async (authorization) => {
       const [scheme, token] = String(authorization ?? '').split(' ');
@@ -29,6 +33,7 @@ async function startMedia({ noAudioTimeoutMs = 30_000 } = {}) {
   const wss = attachVoiceMediaSocket({
     server,
     deviceTokens,
+    tokenStore,
     registry,
     createEngine: () => new ScriptedEngine({ text: 'from engine', framesBeforeFinal: 1 }),
     noAudioTimeoutMs,
@@ -118,5 +123,29 @@ test('a socket with no audio for the timeout closes itself', async () => {
   await once(ws, 'open');
   const [code] = await once(ws, 'close');
   assert.equal(code, 1001);
+  await media.close();
+});
+
+test("the Gate's own token opens a bootstrap phone's session", async () => {
+  const media = await startMedia({ tokenStore: BOOTSTRAP_TOKENS });
+  const ws = new WebSocket(urlFor(media.port, 'vs-boot'), { headers: { Authorization: 'Bearer gate-own-token' } });
+  await once(ws, 'open');
+  ws.close();
+  await media.close();
+});
+
+test("the Gate's own token cannot open a paired device's session", async () => {
+  const media = await startMedia({ tokenStore: BOOTSTRAP_TOKENS });
+  const ws = new WebSocket(urlFor(media.port, 'vs-1'), { headers: { Authorization: 'Bearer gate-own-token' } });
+  const [error] = await once(ws, 'error');
+  assert.match(error.message, /403/);
+  await media.close();
+});
+
+test('a device token cannot open a bootstrap session', async () => {
+  const media = await startMedia({ tokenStore: BOOTSTRAP_TOKENS });
+  const ws = new WebSocket(urlFor(media.port, 'vs-boot'), { headers: { Authorization: 'Bearer tok-1' } });
+  const [error] = await once(ws, 'error');
+  assert.match(error.message, /403/);
   await media.close();
 });

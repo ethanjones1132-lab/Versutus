@@ -72,7 +72,7 @@ const BOOTSTRAP_DEVICE_ID = /^[A-Za-z0-9._:-]{8,128}$/;
  * cannot overwrite a PAIRED device's row. It registers under its own
  * well-formed device id in a separate `bootstrap:` namespace.
  */
-function requireDevice(ctx, params) {
+export function requireDevice(ctx, params) {
   const deviceId = ctx?.deviceId;
   if (typeof deviceId === 'string' && deviceId.length > 0) return deviceId;
   const supplied = params?.deviceId;

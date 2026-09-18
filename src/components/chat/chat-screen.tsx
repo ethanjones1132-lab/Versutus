@@ -152,6 +152,7 @@ import {
   botVoiceRefinementRows,
   type BotVoiceRefinementField,
 } from '@/lib/voice/bot-voices';
+import { pushDeviceParams } from '@/lib/notifications/push-registration';
 import { handsfreeEndReasonCopy, handsfreeStartResultCopy } from '@/lib/voice/handsfree-call-copy';
 import { handsfreeStartBlockerCopy } from '@/lib/voice/handsfree-start-policy';
 import { loadAppSettings } from '@/lib/settings/app-settings';
@@ -1176,7 +1177,7 @@ export function ChatScreen() {
       const stored = await loadAppSettings();
       setCallPreference(stored.voiceEngine);
       try {
-        setCallCapabilities(await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', {}));
+        setCallCapabilities(await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', await pushDeviceParams()));
       } catch {
         // A Gate that predates voice leaves the phone engine as the only choice.
         setCallCapabilities(null);

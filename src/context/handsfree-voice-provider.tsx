@@ -30,6 +30,7 @@ import {
   type GateCallEffect,
   type HandsfreeCallTransport,
 } from '@/lib/voice/gate-call';
+import { pushDeviceParams } from '@/lib/notifications/push-registration';
 import { loadHandsfreeModule, type HandsfreeNativeModule } from '@/lib/voice/handsfree-device';
 import {
   handsfreeReplyForTurn,
@@ -717,6 +718,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
               botId: target.botId,
             },
             disclosureAcceptedAt: new Date().toISOString(),
+            // A phone on the Gate's own token has no device grant; naming its
+            // device lets the Gate file the call as bootstrap:<id>.
+            ...(await pushDeviceParams()),
           },
         );
       } catch {

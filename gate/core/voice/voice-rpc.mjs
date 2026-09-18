@@ -1,9 +1,13 @@
 // ─── Voice RPC: capability, session start/stop ───────────────────────────
-// Registered beside the push RPC. Every method needs a paired-device grant and
-// receives `{ deviceId }` exactly as `notification.*` does. One live call per
+// Registered beside the push RPC. Every method resolves its caller exactly as
+// `notification.*` does (push-rpc.mjs requireDevice): a paired-device grant, or
+// a bootstrap-token phone that names its own device id and is filed as
+// `bootstrap:<id>`. Without the second, a phone connected with the Gate's own
+// token could never start a call (2026-09-17). One live call per
 // device; a start that cannot use the requested engine names why and what it
 // used instead (§4.2), so a fallback is never silent.
 
+import { requireDevice } from '../push-rpc.mjs';
 import { randomUUID } from 'node:crypto';
 
 /** The live-call registry the media socket also reads. */
@@ -61,16 +65,6 @@ export function defaultCapabilities() {
   };
 }
 
-function requireDevice(ctx) {
-  const deviceId = ctx?.deviceId;
-  if (typeof deviceId !== 'string' || deviceId.length === 0) {
-    const error = new Error('A paired device grant is required');
-    error.status = 403;
-    error.code = 'pairing_required';
-    throw error;
-  }
-  return deviceId;
-}
 
 function rpcError(message, status, code) {
   const error = new Error(message);
@@ -138,13 +132,13 @@ export function createVoiceRpc({
   };
 
   const methods = {
-    'voice.capabilities': async (_params, ctx) => {
-      requireDevice(ctx);
+    'voice.capabilities': async (params = {}, ctx) => {
+      requireDevice(ctx, params);
       return decorate(capabilities());
     },
 
-    'voice.install.start': async (_params, ctx) => {
-      requireDevice(ctx);
+    'voice.install.start': async (params = {}, ctx) => {
+      requireDevice(ctx, params);
       if (!install) throw rpcError('This Gate cannot install the voice models.', 501, 'install_unavailable');
       if (installState.running) throw rpcError('A voice install is already running.', 409, 'install_in_progress');
       installState = { running: true, error: null };
@@ -159,15 +153,15 @@ export function createVoiceRpc({
       return { state: 'installing' };
     },
 
-    'voice.install.status': async (_params, ctx) => {
-      requireDevice(ctx);
+    'voice.install.status': async (params = {}, ctx) => {
+      requireDevice(ctx, params);
       if (installState.running) return { state: 'installing', reason: 'Installing the PC voice models…' };
       if (installState.error) return { state: 'unavailable', reason: installState.error };
       return install?.status?.() ?? { state: 'unavailable', reason: 'The voice models are not installed.' };
     },
 
     'voice.session.start': async (params = {}, ctx) => {
-      const deviceId = requireDevice(ctx);
+      const deviceId = requireDevice(ctx, params);
       if (!validThread(params.thread)) {
         throw rpcError('thread must name a session', 400, 'invalid_request');
       }
@@ -207,7 +201,7 @@ export function createVoiceRpc({
     },
 
     'voice.session.stop': async (params = {}, ctx) => {
-      const deviceId = requireDevice(ctx);
+      const deviceId = requireDevice(ctx, params);
       const session = registry.get(params.voiceSessionId);
       if (!session) throw rpcError('Unknown voice session', 404, 'unknown_session');
       if (session.deviceId !== deviceId) {

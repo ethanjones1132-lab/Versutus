@@ -2335,6 +2335,7 @@ export async function createGate(config = {}) {
   const voiceMedia = attachVoiceMediaSocket({
     server,
     deviceTokens,
+    tokenStore,
     registry: voiceRpc.registry,
     audit: (summary) => voiceAudit.record(summary),
     createEngine: (session) => (

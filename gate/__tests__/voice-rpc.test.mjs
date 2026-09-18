@@ -183,3 +183,27 @@ test('the registry tracks one live session per device', () => {
   registry.end('a');
   assert.equal(registry.liveForDevice('dev-1'), null);
 });
+
+// A phone connected with the Gate's own token has no device grant. Before
+// 2026-09-17 every voice method refused it, so hands-free could never start.
+// It is filed under its own `bootstrap:<id>` namespace, exactly like push.
+test('a bootstrap-token phone that names its device can start a call in its own namespace', async () => {
+  const { methods, registry } = createVoiceRpc({ capabilities: capabilities() });
+  const bootstrap = { deviceId: null, bootstrap: true };
+  await methods['voice.capabilities']({ deviceId: 'phone-abc123' }, bootstrap);
+  const grant = await methods['voice.session.start']({ thread, deviceId: 'phone-abc123' }, bootstrap);
+  assert.ok(grant.voiceSessionId);
+  assert.equal(registry.get(grant.voiceSessionId).deviceId, 'bootstrap:phone-abc123');
+});
+
+test('a bootstrap caller without a device id, or an unpaired non-bootstrap caller, is still refused', async () => {
+  const { methods } = createVoiceRpc({ capabilities: capabilities() });
+  await assert.rejects(
+    () => methods['voice.session.start']({ thread }, { deviceId: null, bootstrap: true }),
+    /paired device/,
+  );
+  await assert.rejects(
+    () => methods['voice.session.start']({ thread, deviceId: 'phone-abc123' }, { deviceId: null, bootstrap: false }),
+    /paired device/,
+  );
+});

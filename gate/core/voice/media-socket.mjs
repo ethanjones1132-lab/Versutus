@@ -42,6 +42,7 @@ function rejectUpgrade(socket, status, message) {
 export function attachVoiceMediaSocket({
   server,
   deviceTokens,
+  tokenStore = null,
   registry,
   createEngine,
   runTurn,
@@ -68,7 +69,12 @@ export function attachVoiceMediaSocket({
     }
 
     const grant = await deviceTokens.verify(req.headers.authorization).catch(() => null);
-    if (!grant) {
+    // A phone holding the Gate's own token has no grant; voice-rpc files its
+    // sessions as `bootstrap:<id>`, and only those may be opened with it.
+    const bootstrap = !grant && tokenStore
+      ? await Promise.resolve(tokenStore.verify(req.headers.authorization)).catch(() => false)
+      : false;
+    if (!grant && !bootstrap) {
       rejectUpgrade(socket, 401, 'Unauthorized');
       return;
     }
@@ -79,7 +85,10 @@ export function attachVoiceMediaSocket({
       rejectUpgrade(socket, 404, 'Not Found');
       return;
     }
-    if (session.deviceId !== grant.deviceId) {
+    const owns = grant
+      ? session.deviceId === grant.deviceId
+      : typeof session.deviceId === 'string' && session.deviceId.startsWith('bootstrap:');
+    if (!owns) {
       rejectUpgrade(socket, 403, 'Forbidden');
       return;
     }
