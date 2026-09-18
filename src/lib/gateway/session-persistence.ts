@@ -220,11 +220,33 @@ export async function loadActivityRuns(): Promise<ActivityRun[]> {
   }
 }
 
-export async function saveActivityRuns(runs: ActivityRun[]): Promise<void> {
-  const capped = runs.slice(0, ACTIVITY_RUNS_PERSIST_CAP);
-  if (capped.length === 0) {
-    await keyValueStorage.removeItem(ACTIVITY_RUNS_KEY);
-    return;
-  }
-  await keyValueStorage.setItem(ACTIVITY_RUNS_KEY, JSON.stringify(capped));
+// Activity-run saves are whole-list writes to one key, each carrying the state
+// it was called with. Two overlapping saves enqueue in call order and the last
+// one holds the newest runs; without ordering a slow older write can land after
+// a newer one and leave stale runs on disk. Serialize through a single promise
+// chain so each save writes in enqueue order — the newest enqueued list is
+// always the last one written. Reads stay off the queue: a load racing a write
+// may observe the pre-write state, which is acceptable, while keeping
+// loadActivityRuns off the queue avoids adding latency to the Activity restore.
+let activityRunsWriteTail: Promise<void> = Promise.resolve();
+
+function enqueueActivityRunsWrite<T>(task: () => Promise<T>): Promise<T> {
+  const result = activityRunsWriteTail.then(task);
+  // A failed write must reject its own caller without poisoning the queue:
+  // the tail always settles resolved so the next save still runs.
+  activityRunsWriteTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+export function saveActivityRuns(runs: ActivityRun[]): Promise<void> {
+  return enqueueActivityRunsWrite(() => {
+    const capped = runs.slice(0, ACTIVITY_RUNS_PERSIST_CAP);
+    if (capped.length === 0) {
+      return keyValueStorage.removeItem(ACTIVITY_RUNS_KEY);
+    }
+    return keyValueStorage.setItem(ACTIVITY_RUNS_KEY, JSON.stringify(capped));
+  });
 }
