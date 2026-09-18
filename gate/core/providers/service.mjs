@@ -12,6 +12,7 @@ export class ProviderService {
     this.adapters = adapters;
     this.createAdapter = createAdapter;
     this.agents = agents;
+    this.refreshQueues = new Map();
   }
 
   adapterFor(id, config) {
@@ -133,6 +134,19 @@ export class ProviderService {
   }
 
   async refreshCatalog(id, { force = false } = {}) {
+    const previous = this.refreshQueues.get(id) ?? Promise.resolve();
+    const run = previous
+      .catch(() => undefined)
+      .then(() => this.refreshCatalogNow(id, { force }));
+    this.refreshQueues.set(id, run);
+    try {
+      return await run;
+    } finally {
+      if (this.refreshQueues.get(id) === run) this.refreshQueues.delete(id);
+    }
+  }
+
+  async refreshCatalogNow(id, { force }) {
     const record = await this.require(id);
     const ttl = record.config.catalogPolicy?.ttlSeconds ?? 300;
     if (!force && isCatalogFresh(record.state.catalog, ttl)) {
