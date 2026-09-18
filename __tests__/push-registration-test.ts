@@ -91,13 +91,18 @@ describe('push registration', () => {
     expect(rpc.rpcRequest).toHaveBeenCalledWith('notifications.deregister', { deviceId: DEVICE_ID });
   });
 
-  test('an unreadable device identity still registers, just without the id', async () => {
+  test('an unreadable device identity does not register as an anonymous guest', async () => {
     mockIdentity.mockRejectedValueOnce(new Error('secure store unavailable'));
     const rpc = rpcStub();
-    await registerWithGate(rpc, 'ExponentPushToken[abc]');
-    const params = rpc.rpcRequest.mock.calls[0][1];
-    expect(params.expoPushToken).toBe('ExponentPushToken[abc]');
-    expect(params.deviceId).toBeUndefined();
+    await expect(registerWithGate(rpc, 'ExponentPushToken[abc]')).rejects.toThrow(/device identity/i);
+    expect(rpc.rpcRequest).not.toHaveBeenCalled();
+  });
+
+  test('a connect-time sync still resolves when identity cannot be made', async () => {
+    mockIdentity.mockRejectedValue(new Error('secure store unavailable'));
+    const rpc = rpcStub();
+    await expect(syncPushRegistration(rpc)).resolves.toBeUndefined();
+    expect(rpc.rpcRequest).not.toHaveBeenCalled();
   });
 
   test('a rotated token is written to secure storage, then registered', async () => {

@@ -1,4 +1,11 @@
-import { GatewayHttpError, isAuthRejection, isGatewayTokenRequiredMessage, isUserAbort } from '@/lib/gateway/errors';
+import {
+  DEVICE_IDENTITY_FAILURE,
+  GatewayHttpError,
+  isAuthRejection,
+  isDeviceIdentityError,
+  isGatewayTokenRequiredMessage,
+  isUserAbort,
+} from '@/lib/gateway/errors';
 import { describeRunFailure } from '@/lib/gateway/run-failures';
 
 export type HumanizedErrorAction = 'reconnect' | 'setup' | 'copy' | 'dismiss';
@@ -97,6 +104,24 @@ export function humanizeGatewayError(error: unknown): HumanizedError {
   const message = error instanceof Error ? error.message : String(error);
   const routingRefusal = describeChatRoutingRefusal(message);
   if (routingRefusal) return routingRefusal;
+
+  // A bootstrap-token phone that omitted its deviceId used to get this 403,
+  // which the auth heuristic then called a rejected gateway key. Match it
+  // before that heuristic. The identity module now refuses to send anonymously.
+  if (
+    isDeviceIdentityError(error)
+    || message === DEVICE_IDENTITY_FAILURE
+    || message === 'A paired device grant is required'
+    || /pairing_required/i.test(message)
+  ) {
+    return {
+      title: 'This phone has no device identity',
+      cause: DEVICE_IDENTITY_FAILURE,
+      affected: 'notifications and PC-powered calls',
+      next: 'Reconnect. Versutus will try to make a new identity for this phone.',
+      action: 'dismiss',
+    };
+  }
 
   if (isAuthRejection(error)) {
     return {

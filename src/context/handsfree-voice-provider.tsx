@@ -30,6 +30,7 @@ import {
   type GateCallEffect,
   type HandsfreeCallTransport,
 } from '@/lib/voice/gate-call';
+import { isDeviceIdentityError } from '@/lib/gateway/errors';
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
 import { loadHandsfreeModule, type HandsfreeNativeModule } from '@/lib/voice/handsfree-device';
 import {
@@ -91,7 +92,7 @@ export type HandsfreeCallTarget = {
 };
 
 /** `refused` is a provider precondition; the rest are the native outcome. */
-export type HandsfreeStartResult = HandsfreeStartOutcome | 'refused';
+export type HandsfreeStartResult = HandsfreeStartOutcome | 'refused' | 'identity-unavailable';
 
 export type HandsfreeVoiceContextValue = {
   phase: HandsfreePhase;
@@ -694,6 +695,14 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       subscribeGate(module);
       sessionRef.current = dispatch({ type: 'start' });
 
+      let device: { deviceId: string };
+      try {
+        device = await pushDeviceParams();
+      } catch (err) {
+        refuseGateStart();
+        return isDeviceIdentityError(err) ? 'identity-unavailable' : 'unavailable';
+      }
+
       let grant: {
         voiceSessionId?: string;
         streamPath?: string;
@@ -720,7 +729,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
             disclosureAcceptedAt: new Date().toISOString(),
             // A phone on the Gate's own token has no device grant; naming its
             // device lets the Gate file the call as bootstrap:<id>.
-            ...(await pushDeviceParams()),
+            ...device,
           },
         );
       } catch {

@@ -240,7 +240,13 @@ describe('an ended or refused call explains itself', () => {
     const copy = reasons.map(handsfreeEndReasonCopy);
     expect(copy.every((line) => typeof line === 'string' && line.length > 0)).toBe(true);
     expect(new Set(copy).size).toBe(reasons.length);
-    expect(new Set([handsfreeStartResultCopy('permission-denied'), handsfreeStartResultCopy('unavailable'), handsfreeStartResultCopy('refused')]).size).toBe(3);
+    expect(new Set([
+      handsfreeStartResultCopy('permission-denied'),
+      handsfreeStartResultCopy('unavailable'),
+      handsfreeStartResultCopy('refused'),
+      handsfreeStartResultCopy('identity-unavailable'),
+    ]).size).toBe(4);
+    expect(handsfreeStartResultCopy('identity-unavailable')).toMatch(/device identity/i);
   });
 
   test('the chat screen reopens the sheet with the reason when a call ends on its own', () => {

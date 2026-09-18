@@ -244,6 +244,10 @@ describe('start preconditions and captured target', () => {
     expect(provider).toContain("if (sessionRef.current.phase !== 'idle') return 'refused'");
   });
 
+  test('a missing device identity is named, not swallowed as a generic unavailable', () => {
+    expect(provider).toContain("return isDeviceIdentityError(err) ? 'identity-unavailable' : 'unavailable'");
+  });
+
   test('the captured gateway, session and Bot are watched, and any move ends the call', () => {
     expect(provider).toContain("dispatch({ type: 'thread-changed' })");
     expect(provider).toContain('activeGateway?.id !== target.gatewayId');

@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react';
 import * as Notifications from 'expo-notifications';
 
 import { useGateway } from '@/context/gateway-provider';
+import { describeGatewayError } from '@/lib/gateway/error-humanizer';
 import { pushDeviceParams, syncPushRegistration } from '@/lib/notifications/push-registration';
 
 export type NotificationPreferences = {
@@ -80,7 +81,7 @@ export function useNotificationPreferences() {
       const raw = await gatewayRequest<Record<string, unknown>>('notifications.preferences.get', await pushDeviceParams());
       setPrefs(normalize(raw));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load notification preferences.');
+      setError(describeGatewayError(err));
     } finally {
       setLoading(false);
     }
@@ -105,7 +106,7 @@ export function useNotificationPreferences() {
         });
         setPrefs(normalize(raw));
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Could not save notification preferences.');
+        setError(describeGatewayError(err));
       } finally {
         setSaving(false);
       }
@@ -170,7 +171,7 @@ export function useNotificationPreferences() {
         setTestResult('Test sent — it should arrive with the app backgrounded or killed.');
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'The test send failed.');
+      setError(describeGatewayError(err));
     } finally {
       setSendingTest(false);
     }

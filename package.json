@@ -23,6 +23,7 @@
     "expo-build-properties": "~57.0.10",
     "expo-clipboard": "~57.0.1",
     "expo-constants": "~57.0.10",
+    "expo-crypto": "~57.0.3",
     "expo-device": "~57.0.1",
     "expo-document-picker": "~57.0.2",
     "expo-file-system": "~57.0.6",
@@ -109,6 +110,11 @@
       "/node_modules/",
       "<rootDir>/.worktrees/",
       "<rootDir>/.claude/"
+    ],
+    "transformIgnorePatterns": [
+      "/node_modules/(?!(.pnpm|react-native|@react-native|@react-native-community|expo|@expo|@expo-google-fonts|react-navigation|@react-navigation|@sentry/react-native|native-base|standard-navigation|@noble))",
+      "/node_modules/react-native-reanimated/plugin/",
+      "/node_modules/@react-native/babel-preset/"
     ],
     "collectCoverageFrom": [
       "src/lib/gateway/**/*.ts"

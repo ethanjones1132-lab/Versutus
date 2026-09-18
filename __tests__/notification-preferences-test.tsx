@@ -62,6 +62,23 @@ test('a device without a token keeps the reconnect guidance', async () => {
   expect(preferences.error).toBeNull();
 });
 
+test('an identity failure is shown instead of a paired-device grant refusal', async () => {
+  const { DeviceIdentityError } = jest.requireActual('@/lib/gateway/errors') as {
+    DeviceIdentityError: new () => Error;
+  };
+  const push = jest.requireMock('@/lib/notifications/push-registration') as {
+    pushDeviceParams: jest.Mock;
+  };
+  mockRequest.mockClear();
+  push.pushDeviceParams.mockRejectedValueOnce(new DeviceIdentityError());
+  await act(async () => {
+    await preferences.reload();
+  });
+  expect(preferences.error).toMatch(/device identity/i);
+  expect(preferences.error).not.toMatch(/paired device grant/i);
+  expect(mockRequest).not.toHaveBeenCalled();
+});
+
 test('a failed retry clears an earlier successful result', async () => {
   mockRequest.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false });
   await act(async () => { await preferences.sendTest(); });

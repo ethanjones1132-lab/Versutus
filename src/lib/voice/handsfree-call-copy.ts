@@ -9,6 +9,7 @@
 // Android notification. It must never read as always-listening or as a
 // wake-word feature, which B5 forbids.
 
+import { DEVICE_IDENTITY_FAILURE } from '@/lib/gateway/errors';
 import type { HandsfreePhase, HandsfreeTerminalReason } from '@/lib/voice/handsfree-session';
 
 /** The exact disclosure the sheet shows before the first call, and every one. */
@@ -109,7 +110,9 @@ export function handsfreeEndReasonCopy(reason: HandsfreeTerminalReason): string 
 }
 
 /** Why a start did not open a call. */
-export function handsfreeStartResultCopy(result: 'permission-denied' | 'unavailable' | 'refused'): string {
+export function handsfreeStartResultCopy(
+  result: 'permission-denied' | 'unavailable' | 'refused' | 'identity-unavailable',
+): string {
   switch (result) {
     case 'permission-denied':
       return 'Versutus needs the microphone for a call. Allow it in Settings, then start again.';
@@ -117,5 +120,7 @@ export function handsfreeStartResultCopy(result: 'permission-denied' | 'unavaila
       return 'This phone would not open a call session. Try again; if it keeps failing, check that a speech recognition service is installed and enabled.';
     case 'refused':
       return 'A call cannot start right now. Reconnect the chat and try again.';
+    case 'identity-unavailable':
+      return DEVICE_IDENTITY_FAILURE;
   }
 }

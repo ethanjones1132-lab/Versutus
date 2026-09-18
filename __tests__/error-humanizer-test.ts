@@ -22,6 +22,14 @@ describe('humanizeGatewayError', () => {
     expect(result.action).toBe('setup');
   });
 
+  it('does not read a missing device identity as a rejected gateway key', () => {
+    const result = humanizeGatewayError(new GatewayHttpError('A paired device grant is required', 403));
+    expect(result.title).not.toBe('Gateway rejected the key');
+    expect(result.action).not.toBe('setup');
+    expect(result.cause).toMatch(/device identity/i);
+    expect(result.next).toMatch(/reconnect/i);
+  });
+
   it('maps an unparseable gateway address to an entry-mistake verdict, not a network error', () => {
     const result = humanizeGatewayError(
       new Error(

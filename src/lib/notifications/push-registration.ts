@@ -15,6 +15,7 @@ import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
+import { DeviceIdentityError, isDeviceIdentityError } from '@/lib/gateway/errors';
 import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
 import { registerWidgetPushTask } from '@/lib/widget/widget-push-task';
 
@@ -100,14 +101,17 @@ async function obtainGrantedExpoPushToken(): Promise<string | null> {
  * the Gate refused every notifications.* call 403 pairing_required — and push
  * could never reach the phone, however often notifications were allowed
  * (2026-09-16). The Gate files a bootstrap caller's row under this id in its
- * own namespace. An unreadable identity sends nothing rather than failing.
+ * own namespace. A phone that cannot make an identity must say so — sending
+ * the call without a deviceId is how the Gate answered 403 pairing_required
+ * and the Notifications screen read as "a paired device grant is required".
  */
-export async function pushDeviceParams(): Promise<{ deviceId?: string }> {
+export async function pushDeviceParams(): Promise<{ deviceId: string }> {
   try {
     const { deviceId } = await loadOrCreateDeviceIdentity();
-    return deviceId ? { deviceId } : {};
-  } catch {
-    return {};
+    if (!deviceId) throw new DeviceIdentityError();
+    return { deviceId };
+  } catch (err) {
+    throw isDeviceIdentityError(err) ? err : new DeviceIdentityError(err);
   }
 }
 

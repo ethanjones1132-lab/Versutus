@@ -1,3 +1,20 @@
+/** Why a phone that cannot name itself must not send an anonymous Gate request. */
+export const DEVICE_IDENTITY_FAILURE =
+  'This phone could not make its device identity, so the Gate cannot tell it from an unpaired guest. Notifications and PC-powered calls need that identity.';
+
+/** Thrown when this device cannot load or create its ed25519 identity. */
+export class DeviceIdentityError extends Error {
+  constructor(cause?: unknown) {
+    super(DEVICE_IDENTITY_FAILURE);
+    this.name = 'DeviceIdentityError';
+    if (cause instanceof Error) this.cause = cause;
+  }
+}
+
+export function isDeviceIdentityError(error: unknown): error is DeviceIdentityError {
+  return error instanceof Error && error.name === 'DeviceIdentityError';
+}
+
 /** An HTTP failure from the gateway, carrying the status for exact matching. */
 export class GatewayHttpError extends Error {
   constructor(
