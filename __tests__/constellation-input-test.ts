@@ -131,6 +131,7 @@ describe('the projection folds routine jobs into arcs', () => {
       fleetConstellationInput({
         gateways: [{ id: 'gw-home', name: 'Home' }],
         connectedGatewayId: 'gw-home',
+        routineReadStatus: 'ready',
         roster: [{ id: 'scout', displayName: 'Scout' }],
         cronJobs: [
           job({ id: 'j1', name: '[bot:scout] every morning' }),
@@ -140,7 +141,12 @@ describe('the projection folds routine jobs into arcs', () => {
     );
 
     expect(model.edges).toContainEqual({ from: 'gateway:gw-home', to: 'bot:gw-home:scout', kind: 'routine' });
-    expect(model.edges).toContainEqual({ from: 'gateway:gw-home', to: 'gateway:gw-home', kind: 'routine' });
+    const gateway = model.nodes.find((node) => node.kind === 'gateway')!;
+    expect(gateway.badges).toContainEqual({ label: 'routine unreported', tone: 'neutral' });
+    const routineEdges = model.edges.filter((edge) => edge.kind === 'routine');
+    expect(routineEdges).toEqual([
+      { from: 'gateway:gw-home', to: 'bot:gw-home:scout', kind: 'routine' },
+    ]);
   });
 
   test('no jobs arriving is no arcs at all, not a guessed empty roster', () => {

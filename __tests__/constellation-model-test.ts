@@ -254,23 +254,20 @@ describe('routine arcs', () => {
     ]);
   });
 
-  test('a job whose name attributes no Bot gets an arc to nobody rather than a guessed Bot', () => {
+  test('a job whose name attributes no Bot surfaces its verdict on the Gateway node instead of a self-edge', () => {
     const owned = constellationModel({
       ...base,
+      routineReadStatus: 'ready',
       cronJobs: [
         job({ id: 'j1', name: 'gateway sweep', botId: 'gateway' }),
         job({ id: 'j2', name: '[bot:]' }),
       ],
     });
 
-    expect(owned.edges).toEqual([
-      // The host edges come first, then the routine arcs.
-      { from: 'gateway:gw-home', to: 'bot:gw-home:scout', kind: 'hosts' },
-      { from: 'gateway:gw-home', to: 'bot:gw-home:night', kind: 'hosts' },
-      // botId: 'gateway' is not a Bot the roster lists, and an empty
-      // attribution is not an owner either — neither is guessed.
-      { from: 'gateway:gw-home', to: 'gateway:gw-home', kind: 'routine' },
-    ]);
+    const gateway = owned.nodes.find((node) => node.kind === 'gateway')!;
+    expect(gateway.badges).toContainEqual({ label: 'routine unreported', tone: 'neutral' });
+    const routineEdges = owned.edges.filter((edge) => edge.kind === 'routine');
+    expect(routineEdges).toEqual([]);
   });
 
   test('a Bot off the roster gets no arc that pretends the roster held it', () => {
@@ -298,6 +295,93 @@ describe('routine arcs', () => {
       { from: 'gateway:gw-home', to: 'bot:gw-home:scout', kind: 'hosts' },
       { from: 'gateway:gw-home', to: 'bot:gw-home:night', kind: 'hosts' },
     ]);
+  });
+
+  test('an unowned routine surfaces its worst verdict on the Gateway node, not as a self-edge', () => {
+    const model = constellationModel({
+      ...base,
+      routineReadStatus: 'ready',
+      cronJobs: [
+        job({ id: 'j1', name: 'gateway sweep', lastStatus: 'error', failureStreak: 2 }),
+        job({ id: 'j2', name: '[bot:]' }),
+      ],
+    });
+
+    const gateway = model.nodes.find((node) => node.kind === 'gateway')!;
+    expect(gateway.badges).toContainEqual({ label: 'routine failing', tone: 'danger' });
+    const routineEdges = model.edges.filter((edge) => edge.kind === 'routine');
+    expect(routineEdges).toEqual([]);
+  });
+
+  test('multiple unowned routines show the worst verdict on the Gateway node', () => {
+    const model = constellationModel({
+      ...base,
+      routineReadStatus: 'ready',
+      cronJobs: [
+        job({ id: 'j1', name: 'gateway sweep', lastStatus: 'error', failureStreak: 2 }),
+        job({ id: 'j2', name: 'another task', lastStatus: 'warn', failureStreak: 1 }),
+        job({ id: 'j3', name: 'paused job', paused: true }),
+      ],
+    });
+
+    const gateway = model.nodes.find((node) => node.kind === 'gateway')!;
+    expect(gateway.badges).toContainEqual({ label: 'routine failing', tone: 'danger' });
+    const routineEdges = model.edges.filter((edge) => edge.kind === 'routine');
+    expect(routineEdges).toEqual([]);
+  });
+
+  test('owned routines still badge their Bot and create arcs', () => {
+    const model = constellationModel({
+      ...base,
+      routineReadStatus: 'ready',
+      cronJobs: [
+        job({ id: 'j1', name: '[bot:scout] owned task', lastStatus: 'error', failureStreak: 1 }),
+        job({ id: 'j2', name: 'unowned task', lastStatus: 'error', failureStreak: 3 }),
+      ],
+    });
+
+    const scout = model.nodes.find((node) => node.botId === 'scout')!;
+    const gateway = model.nodes.find((node) => node.kind === 'gateway')!;
+    expect(scout.badges).toContainEqual({ label: 'routine failing', tone: 'danger' });
+    expect(gateway.badges).toContainEqual({ label: 'routine failing', tone: 'danger' });
+    const routineEdges = model.edges.filter((edge) => edge.kind === 'routine');
+    expect(routineEdges).toEqual([
+      { from: 'gateway:gw-home', to: 'bot:gw-home:scout', kind: 'routine' },
+    ]);
+  });
+
+  test('malformed unowned rows are ignored', () => {
+    const model = constellationModel({
+      ...base,
+      routineReadStatus: 'ready',
+      cronJobs: [
+        { id: '', name: 'no id' },
+        { id: 'valid', name: 'gateway task', lastStatus: 'error', failureStreak: 1 },
+      ],
+    });
+
+    const gateway = model.nodes.find((node) => node.kind === 'gateway')!;
+    expect(gateway.badges).toContainEqual({ label: 'routine failing', tone: 'danger' });
+  });
+
+  test('an unowned routine is never guessed onto a Bot', () => {
+    const model = constellationModel({
+      ...base,
+      routineReadStatus: 'ready',
+      cronJobs: [
+        job({ id: 'j1', name: 'gateway task', botId: 'ghost', lastStatus: 'error', failureStreak: 1 }),
+        job({ id: 'j2', name: '[bot:] empty attribution' }),
+      ],
+    });
+
+    const scout = model.nodes.find((node) => node.botId === 'scout')!;
+    const night = model.nodes.find((node) => node.botId === 'night')!;
+    const gateway = model.nodes.find((node) => node.kind === 'gateway')!;
+    expect(scout.badges.some((b) => b.label.includes('routine'))).toBe(false);
+    expect(night.badges.some((b) => b.label.includes('routine'))).toBe(false);
+    expect(gateway.badges).toContainEqual({ label: 'routine failing', tone: 'danger' });
+    const routineEdges = model.edges.filter((edge) => edge.kind === 'routine');
+    expect(routineEdges).toEqual([]);
   });
 });
 

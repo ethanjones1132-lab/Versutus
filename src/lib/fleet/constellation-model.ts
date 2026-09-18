@@ -296,11 +296,17 @@ export function constellationModel(input: ConstellationInput): ConstellationMode
     });
 
     // A job whose name attributes no Bot is still a word the gateway said:
-    // its arc lands on nobody — a thread to the gateway itself rather than
-    // being guessed into some Bot's star.
+    // its arc lands on nobody — but the map shows the worst verdict on the
+    // Gateway node rather than a zero-length self-edge. A Bot is never guessed.
     const unownedTones = routineTonesByBot?.get(null);
     if (unownedTones && unownedTones.length > 0) {
-      edges.push({ from: `gateway:${profile.id}`, to: `gateway:${profile.id}`, kind: 'routine' });
+      const worst = worstRoutineTone(unownedTones);
+      if (worst) {
+        const badge = routineToneBadge(worst);
+        gatewayNode.badges.push(
+          routineReadStatus === 'ready' ? badge : { ...badge, label: `${badge.label} · ${routineReadStatus}` },
+        );
+      }
     }
   });
 
