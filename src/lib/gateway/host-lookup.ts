@@ -21,11 +21,23 @@ export function isIpv4(value: string): boolean {
   });
 }
 
+const HOST_LOOKUP_SIGNAL =
+  /UnknownHostException|Unable to resolve host|ENOTFOUND|getaddrinfo|NameNotResolved/i;
+
+// Node wraps a fetch DNS miss as `TypeError: fetch failed` with the real
+// signal hanging off `cause` (an Error whose message reads "getaddrinfo
+// ENOTFOUND …" or a plain object with code ENOTFOUND). Walk that chain,
+// bounded: nothing in the platform wraps deeper than the object itself.
 export function isHostLookupFailure(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /UnknownHostException|Unable to resolve host|ENOTFOUND|getaddrinfo|NameNotResolved/i.test(
-    message,
-  );
+  let current: unknown = error;
+  for (let depth = 0; current != null && depth < 5; depth += 1) {
+    const node = current as { message?: unknown; code?: unknown; cause?: unknown };
+    const message = typeof node.message === 'string' ? node.message : String(current);
+    if (HOST_LOOKUP_SIGNAL.test(message)) return true;
+    if (node.code === 'ENOTFOUND') return true;
+    current = node.cause;
+  }
+  return false;
 }
 
 /**
