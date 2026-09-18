@@ -528,7 +528,7 @@ export function constellationLayout(
     const to = byId.get(edge.to);
     if (!from || !to) continue;
     edges.push({
-      id: `${edge.from}->${edge.to}`,
+      id: `${edge.from}->${edge.to}@${edge.kind}`,
       from: edge.from,
       to: edge.to,
       kind: edge.kind,

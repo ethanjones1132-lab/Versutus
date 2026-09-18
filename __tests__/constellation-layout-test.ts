@@ -34,7 +34,7 @@ describe('constellationLayout places the graph the model emitted', () => {
     );
     const routine = layout.edges.find((edge) => edge.kind === 'routine');
     expect(routine).toEqual({
-      id: 'gateway:gw-home->bot:gw-home:scout',
+      id: 'gateway:gw-home->bot:gw-home:scout@routine',
       from: 'gateway:gw-home',
       to: 'bot:gw-home:scout',
       kind: 'routine',

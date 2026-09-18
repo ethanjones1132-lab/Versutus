@@ -123,24 +123,26 @@ function SkiaConstellation({ model, size: width, height }: ConstellationCanvasPr
 
         {/* Host edges: fine gold threads, drifting brighter with the breath. */}
         <Group opacity={edgeOpacity}>
-          {layout.edges.map((edge) => (
-            <Group key={`edgeglow:${edge.id}`}>
-              <Line
-                p1={{ x: edge.x1, y: edge.y1 }}
-                p2={{ x: edge.x2, y: edge.y2 }}
-                color={tokens.accentWarm}
-                strokeWidth={2.5}
-                opacity={0.1}
-              />
-              <Line
-                p1={{ x: edge.x1, y: edge.y1 }}
-                p2={{ x: edge.x2, y: edge.y2 }}
-                color={tokens.accentWarm}
-                strokeWidth={StyleSheet.hairlineWidth}
-                opacity={0.5}
-              />
-            </Group>
-          ))}
+          {layout.edges
+            .filter((edge) => edge.kind === 'hosts')
+            .map((edge) => (
+              <Group key={`edgeglow:${edge.id}`}>
+                <Line
+                  p1={{ x: edge.x1, y: edge.y1 }}
+                  p2={{ x: edge.x2, y: edge.y2 }}
+                  color={tokens.accentWarm}
+                  strokeWidth={2.5}
+                  opacity={0.1}
+                />
+                <Line
+                  p1={{ x: edge.x1, y: edge.y1 }}
+                  p2={{ x: edge.x2, y: edge.y2 }}
+                  color={tokens.accentWarm}
+                  strokeWidth={StyleSheet.hairlineWidth}
+                  opacity={0.5}
+                />
+              </Group>
+            ))}
         </Group>
 
         {/* Routine arcs: dashed threads in the quieter accent, lifted off the
