@@ -197,6 +197,7 @@ import {
   updateTranscript,
 } from '@/lib/gateway/transcript';
 import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
+import { clearLastSeen } from '@/lib/home/last-seen';
 import { SESSION_SPEND_LIST_LIMIT } from '@/lib/gateway/session-analytics';
 import { botBudget, botSpendFromSessions, checkBotBudget, loadBudgets } from '@/lib/gateway/budgets';
 import { botOpenFailureKeepsScope } from '@/lib/gateway/bot-open-failure';
@@ -2252,6 +2253,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     }
     await Promise.all([...removedIds].map((removedId) => clearTranscriptsForGateway(removedId)));
     await Promise.all([...removedIds].map((removedId) => clearSessionLabelsForGateway(removedId)));
+    await Promise.all([...removedIds].map((removedId) => clearLastSeen(removedId)));
 
     // Cascade removes child profiles too — tear down if the active gateway
     // was the deleted parent or one of its children.
