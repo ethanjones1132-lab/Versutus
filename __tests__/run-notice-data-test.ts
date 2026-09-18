@@ -110,19 +110,21 @@ describe('the run notice payload', () => {
     expect(content.body).toBe('the gateway never said');
   });
 
-  test('the provider names the run it settled at both call sites', () => {
+  test('the provider names the run it settled at all three call sites', () => {
     const src = provider();
 
-    // Two run notices exist, and neither may be posted without its run:
-    // the run this app drove to completion, and each run the disconnect
-    // settle path resolved.
-    expect(src.match(/notifyRunComplete\(/g)).toHaveLength(2);
+    // Three run notices exist, and none may be posted without its run:
+    // the run this app drove to completion, each run the disconnect
+    // settle path resolved, and each run the first-connect settle path resolved.
+    expect(src.match(/notifyRunComplete\(/g)).toHaveLength(3);
     expect(src).toMatch(
       /notifyRunComplete\(\s*status === 'complete'[\s\S]*?summary \|\| outcome\.status,\s*trackedId\.current,/,
     );
     expect(src).toMatch(
       /notifyRunComplete\(\s*run\.status === 'complete' \? 'Run complete' : 'Run finished',\s*run\.summary \?\? run\.status,\s*run\.id,/,
     );
+    // The first-connect settle path uses the same pattern as the disconnect path
+    // (both iterate `changed` from settleUnresolvedRuns).
   });
 
   test('the gateway-down notice keeps its own payload', () => {

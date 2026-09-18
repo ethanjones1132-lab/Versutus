@@ -1408,6 +1408,31 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             // registration never blocks or breaks the connection itself.
             if (nextStatus === 'connected' && gateway.kind === 'custom') {
               void syncPushRegistration(client);
+              // Restored unresolved runs must be reconciled on the first successful
+              // Gateway connection, not only after a later disconnect. The
+              // onHealthCheck path handles reconnects, but the initial connect
+              // (where firstConnect is true) returns early there. Settle here so
+              // the very first connection after bootstrap also reconciles.
+              const currentRuns = activityRunsRef.current;
+              const unresolved = currentRuns.filter((run) => run.status === 'unresolved');
+              if (unresolved.length > 0 && client?.getRunStatus) {
+                void (async () => {
+                  const { runs: settled, changed } = await settleUnresolvedRuns(
+                    client as unknown as RunCapableClient,
+                    currentRuns,
+                  );
+                  if (changed.length > 0) {
+                    patchActivityRuns(() => settled);
+                    for (const run of changed) {
+                      void notifyRunComplete(
+                        run.status === 'complete' ? 'Run complete' : 'Run finished',
+                        run.summary ?? run.status,
+                        run.id,
+                      );
+                    }
+                  }
+                })();
+              }
             }
           },
           onHello: (hello) => {
