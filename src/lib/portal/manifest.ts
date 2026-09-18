@@ -2,6 +2,8 @@
 // The universal contract that makes custom gates first-class citizens
 // of the portal. See docs/portal-architecture.md §2.
 
+import { withHostLookupRetry } from '@/lib/gateway/host-lookup';
+
 export const GATEWAY_MANIFEST_PATH = '/.well-known/gateway.json';
 export const GATEWAY_MANIFEST_SPEC = 'versutus-gateway/v1';
 
@@ -247,6 +249,44 @@ export async function fetchGatewayManifest(
   baseUrl: string,
   timeoutMs = 10_000,
 ): Promise<GatewayManifest | null> {
+  try {
+    return await fetchGatewayManifestRaw(baseUrl, timeoutMs);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch the manifest with the same DNS fallback ordinary Gate requests use:
+ * a host lookup miss on the hostname is retried over the advertised IPv4s
+ * (http only — an https base keeps its hostname for TLS checks), and every
+ * other outcome resolves null exactly like the bare fetch. Used by the
+ * manifest refresh on an already-saved hostname, where a MagicDNS blip must
+ * not erase the last known manifest'ed identity.
+ */
+export async function fetchGatewayManifestWithLookupRetry(
+  baseUrl: string,
+  alternateIpv4: string[],
+  timeoutMs = 10_000,
+): Promise<GatewayManifest | null> {
+  try {
+    return await withHostLookupRetry(baseUrl, alternateIpv4, (candidateBase) =>
+      fetchGatewayManifestRaw(candidateBase, timeoutMs),
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Single manifest attempt. Returns null only when the gateway answered but
+ * did not serve a well-formed manifest; network failures propagate so a
+ * caller can classify a lookup miss and retry over an advertised IPv4.
+ */
+async function fetchGatewayManifestRaw(
+  baseUrl: string,
+  timeoutMs: number,
+): Promise<GatewayManifest | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -263,8 +303,6 @@ export async function fetchGatewayManifest(
     } catch {
       return null;
     }
-  } catch {
-    return null;
   } finally {
     clearTimeout(timer);
   }

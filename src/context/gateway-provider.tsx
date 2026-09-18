@@ -50,6 +50,7 @@ import {
 } from '@/lib/gateway/session-list';
 import { readSessionList } from '@/lib/gateway/session-list-read';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
+import { advertisedIpv4 } from '@/lib/gateway/host-lookup';
 import {
   hasBotManagement as probeBotManagement,
   hasBotSessionScoping as probeBotSessionScoping,
@@ -177,7 +178,7 @@ import {
   upsertGateway,
 } from '@/lib/gateway/storage';
 import {
-  fetchGatewayManifest,
+  fetchGatewayManifestWithLookupRetry,
   manifestAuthSchemes,
   manifestCapabilityInstances,
   manifestDynamicCommands,
@@ -660,6 +661,22 @@ async function buildActionPreview(
 }
 
 
+
+/**
+ * IPv4 fallbacks for a manifest fetch that is not yet backed by a live
+ * client: what this profile last knew and what the config declares. When a
+ * manifest is in hand, its advertised tailnet IPv4s are folded in too —
+ * exactly the set ordinary Gate requests retry over.
+ */
+function manifestAlternateIpv4(
+  gateway: GatewayProfile,
+  manifest: GatewayManifest | null,
+): string[] {
+  return advertisedIpv4({
+    advertised: manifest?.transport?.ipv4,
+    configuredHosts: [...(gateway.alternateIpv4 ?? []), ...configuredGatewayHosts()],
+  });
+}
 
 function configuredGatewayHosts(): string[] {
   const hosts = new Set<string>();
@@ -1279,6 +1296,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // kind from onboarding) is identified from the well-known when present so
       // Gate is never forced through the Hermes adapter.
       let clientKind = gateway.kind ?? 'hermes';
+      // The manifest this attach served, kept for the post-connect re-sync so
+      // it can retry over the very IPv4s the Gate just advertised.
+      let fetchedManifest: GatewayManifest | null = null;
       if (gateway.kind !== 'openclaw') {
         // Child profiles are materialised under parent.url + basePath and do
         // not host their own well-known manifest — fetch the parent's.
@@ -1287,10 +1307,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           parentUrl = known.find((item) => item.id === gateway.parentId)?.url;
         }
         const manifestUrl = manifestUrlForGateway(gateway, parentUrl);
-        const manifest = await fetchGatewayManifest(manifestUrl).catch(() => null);
+        const manifest = await fetchGatewayManifestWithLookupRetry(
+          manifestUrl,
+          manifestAlternateIpv4(gateway, null),
+        ).catch(() => null);
         // Another attachClient may have superseded us while we awaited.
         if (!isCurrent()) return;
         if (manifest) {
+          fetchedManifest = manifest;
           setActiveManifest(manifest);
           clientKind = 'custom';
           const providers = manifestProviders(manifest);
@@ -1526,7 +1550,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // providers[] at all, so this is a no-op against Hermes/OpenClaw.
       // Always use the parent origin — a child /p/{id} URL does not host the
       // well-known document, and syncing children from a child is wrong.
-      void fetchGatewayManifest(manifestUrlForGateway(gateway, parentUrl))
+      void fetchGatewayManifestWithLookupRetry(
+          manifestUrlForGateway(gateway, parentUrl),
+          manifestAlternateIpv4(gateway, fetchedManifest),
+        )
         .then((manifest) => {
           if (!manifest || !isCurrent()) return undefined;
           setActiveManifest(manifest);
@@ -3490,8 +3517,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const parent = activeGateway.parentId
         ? known.find((item) => item.id === activeGateway.parentId)
         : undefined;
-      const manifest = await fetchGatewayManifest(
+      const manifest = await fetchGatewayManifestWithLookupRetry(
         manifestUrlForGateway(activeGateway, parent?.url),
+        manifestAlternateIpv4(activeGateway, activeManifest),
       ).catch(() => null);
       if (manifest) {
         setActiveManifest(manifest);
@@ -3511,7 +3539,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // ignore
     }
-  }, [activeGateway, status, teardownRetiredActiveGateway]);
+  }, [activeGateway, status, teardownRetiredActiveGateway, activeManifest]);
 
   const confirmPendingAction = useCallback(() => {
     if (!pendingConfirmation || !activeGateway) {
