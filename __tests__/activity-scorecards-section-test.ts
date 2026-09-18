@@ -410,24 +410,25 @@ describe('a tapped card filters the runs it counted, with a way back', () => {
   });
 });
 
-describe('the Runs destination owns one filter state over the provider’s runs', () => {
+describe('the Runs destination owns one filter state over the active gateway’s runs', () => {
   test('no filter is the default, so the destination opens exactly as the tab did before', () => {
     expect(runs()).toContain('useState<ScorecardFilter>(null)');
   });
 
-  test('the visible list is the provider’s list through the shipped pure filter', () => {
+  test('the visible list is the active gateway’s runs through the shipped pure filter', () => {
     const src = runs();
 
-    expect(src).toContain('filterRunsByBot(activityRuns, scorecardFilter)');
+    expect(src).toContain('filterRunsByBot(activityRunsForActiveGateway, scorecardFilter)');
     expect(src).toContain("from '@/lib/fleet/scorecard'");
   });
 
-  test('the section folds the provider’s runs, never the filtered view', () => {
+  test('the section folds the active gateway’s runs, never the filtered view', () => {
     const src = runs();
 
-    // Folding the filtered list would shrink the cards to the very selection
-    // they produced, and the operator could never switch cards again.
-    expect(src).toContain('<ScorecardsSection runs={activityRuns}');
+    // The Scorecards section receives all runs for the active gateway (not just the
+    // Bot-filtered view) so scorecards can show per-Bot track records across the
+    // whole gateway.
+    expect(src).toContain('<ScorecardsSection runs={activityRunsForActiveGateway}');
     expect(src).not.toContain('runs={visibleRuns}');
   });
 });
@@ -496,7 +497,7 @@ describe('the Runs destination reads the gateway’s jobs, so a card can carry i
   test('the section is handed the jobs beside the runs it already folded', () => {
     const src = runs();
 
-    expect(src).toContain('<ScorecardsSection runs={activityRuns} jobs={routineJobs}');
+    expect(src).toContain('<ScorecardsSection runs={activityRunsForActiveGateway} jobs={routineJobs}');
   });
 
   test('the read is the gateway’s own job list, and a gateway that cannot answer claims nothing', () => {
@@ -516,7 +517,7 @@ describe('the Runs destination reads P5’s per-Bot spend, so a card can carry w
     const src = runs();
 
     expect(src).toContain(
-      '<ScorecardsSection runs={activityRuns} jobs={routineJobs} spendRows={spendRows}',
+      '<ScorecardsSection runs={activityRunsForActiveGateway} jobs={routineJobs} spendRows={spendRows}',
     );
   });
 
@@ -556,7 +557,7 @@ describe('what must keep working', () => {
     expect(src).toContain('<RunCard run={item.run} onStop={stopActivityRun} />');
     expect(src).toContain('onOpenTranscript={setOpenAgenticRunId}');
     expect(src).toContain('onRetry={(prompt) => retryRun({ ...item.run, prompt })}');
-    expect(src).toContain('activityRuns.length === 0');
+    expect(src).toContain('activityRunsForActiveGateway.length === 0');
   });
 
   test('the Activity footer still carries the scheduled work and the spend entry', () => {

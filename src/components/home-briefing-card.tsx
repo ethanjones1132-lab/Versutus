@@ -20,7 +20,7 @@ import { loadLastSeen } from '@/lib/home/last-seen';
 
 export function HomeBriefingCard() {
   const router = useRouter();
-  const { activeGateway, activityRuns } = useGateway();
+  const { activeGateway, activityRunsForActiveGateway } = useGateway();
   const activeGatewayId = activeGateway?.id ?? null;
   const [lastSeenAt, setLastSeenAt] = useState<number | null>(null);
 
@@ -46,9 +46,9 @@ export function HomeBriefingCard() {
   );
 
   const summary = useMemo(() => {
-    const briefing = buildHomeBriefing(activityRuns, lastSeenAt);
+    const briefing = buildHomeBriefing(activityRunsForActiveGateway, lastSeenAt);
     return briefing ? homeBriefingSummary(briefing) : null;
-  }, [activityRuns, lastSeenAt]);
+  }, [activityRunsForActiveGateway, lastSeenAt]);
 
   // No stamp means no window; no news means no card. Either way, nothing.
   if (!summary || summary.isEmpty) return null;

@@ -476,6 +476,8 @@ type GatewayContextValue = {
   ) => Promise<import('@/lib/gateway/runs').RunOutcome>;
   /** Runs initiated from this app (newest first), for the Activity surface. */
   activityRuns: ActivityRun[];
+  /** Runs for the active gateway only — other gateways' runs are preserved in storage but not shown. */
+  activityRunsForActiveGateway: ActivityRun[];
   /** Stop a running run: aborts the local driver and asks the gateway to stop it. */
   stopActivityRun: (runId: string) => void;
   /**
@@ -917,6 +919,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     activityRunsRef.current = activityRuns;
   }, [activityRuns]);
+
+  /** Runs for the active gateway only — other gateways' runs are preserved in storage but not shown. */
+  const activityRunsForActiveGateway = useMemo(
+    () => (activeGateway ? activityRuns.filter((run) => run.gatewayId === activeGateway.id) : []),
+    [activityRuns, activeGateway?.id],
+  );
   /** The runs this process is holding a progress notice for. */
   const runProgressNoticeIdsRef = useRef<Set<string>>(new Set());
   /**
@@ -4561,6 +4569,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       rejectTlsFingerprintChange,
       runTask,
       activityRuns,
+      activityRunsForActiveGateway,
       stopActivityRun,
       loadRunEvents,
       modelPicker,
@@ -4601,7 +4610,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       pendingApprovals, refreshPendingApprovals, decideApproval, approvalBusy,
       approveTlsFingerprintChange,
       rejectTlsFingerprintChange,
-      runTask, activityRuns, stopActivityRun, loadRunEvents, modelPicker, openModelPicker, closeModelPicker,
+      runTask, activityRuns, activityRunsForActiveGateway, stopActivityRun, loadRunEvents, modelPicker, openModelPicker, closeModelPicker,
       selectModel, modelCatalog, modelCatalogError, sessionSelector, clearDeviceModelLock,
       openSessionSelector, closeSessionSelector, selectSession, sessionListState, currentSessionId,
       sessionListHasOlder, loadingOlderSessions, loadOlderSessions,

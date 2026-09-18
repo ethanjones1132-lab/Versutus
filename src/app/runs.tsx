@@ -37,6 +37,7 @@ export default function RunsScreen() {
     activeGateway,
     status,
     activityRuns,
+    activityRunsForActiveGateway,
     stopActivityRun,
     connectGateway,
     capabilitySnapshot,
@@ -107,8 +108,8 @@ export default function RunsScreen() {
   }, [requestedRunFocus, clearRequestedRunFocus]);
 
   const visibleRuns = useMemo(
-    () => filterRunsByBot(activityRuns, scorecardFilter),
-    [activityRuns, scorecardFilter],
+    () => filterRunsByBot(activityRunsForActiveGateway, scorecardFilter),
+    [activityRunsForActiveGateway, scorecardFilter],
   );
   // One partition, once per change to the visible rows — the screen's two
   // lists fold from the same pass instead of two filters over the array,
@@ -341,9 +342,9 @@ export default function RunsScreen() {
           above renders, with the gateway's own routine health and P5's spend
           beside them. A tapped card filters that list; it folds the whole
           read, so the cards stay whole while the list narrows. */}
-      <ScorecardsSection runs={activityRuns} jobs={routineJobs} spendRows={spendRows} filter={scorecardFilter} onSelect={setScorecardFilter} />
+      <ScorecardsSection runs={activityRunsForActiveGateway} jobs={routineJobs} spendRows={spendRows} filter={scorecardFilter} onSelect={setScorecardFilter} />
 
-      {activityRuns.length === 0 ? (
+      {activityRunsForActiveGateway.length === 0 ? (
         <EmptyState
           icon={{ ios: 'bolt', android: 'bolt', web: 'bolt' }}
           title={
