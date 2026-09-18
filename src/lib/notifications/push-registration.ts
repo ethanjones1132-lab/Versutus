@@ -129,6 +129,18 @@ export async function deregisterWithGate(rpc: Rpc): Promise<void> {
   await rpc.rpcRequest('notifications.deregister', await pushDeviceParams());
 }
 
+/** The shape `getPermissionsAsync` reports for this device. */
+type PermissionStatus = Awaited<ReturnType<typeof Notifications.getPermissionsAsync>>;
+
+/**
+ * True only when the OS reports the user has turned notifications off. An
+ * undetermined permission (the dialog was never shown) is not a denial — it
+ * must not delete the Gate's token row, because the user can still grant.
+ */
+function isConfirmedDenial(permissions: PermissionStatus): boolean {
+  return permissions.status === 'denied';
+}
+
 /** Sync the Gate token with permission; confirmed denial drops the device row. */
 export async function syncPushRegistration(rpc: Rpc): Promise<void> {
   // Prepare the background widget task independently of token registration.
@@ -139,14 +151,16 @@ export async function syncPushRegistration(rpc: Rpc): Promise<void> {
     // Ignore: the six-hourly worker still rolls the stamp over.
   }
   if (Platform.OS === 'web') return;
-  // Only a confirmed permission denial removes the row. A temporary native
-  // or Expo failure must not erase this device's registration or preferences.
+  // Only a confirmed permission denial removes the row. An undecided
+  // permission preserves it: the dialog may still be shown, and a temporary
+  // native or Expo failure must not erase this device's registration either.
   try {
     const permissions = await Notifications.getPermissionsAsync();
-    if (!permissions.granted) {
+    if (isConfirmedDenial(permissions)) {
       await deregisterWithGate(rpc);
       return;
     }
+    if (!permissions.granted) return;
     const token = await obtainGrantedExpoPushToken();
     if (!token) return;
     await registerWithGate(rpc, token);

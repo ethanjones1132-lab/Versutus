@@ -140,7 +140,7 @@ describe('push registration', () => {
   });
 
   test('a device without notification permission gets no token', async () => {
-    mockPermissions.mockResolvedValue({ granted: false });
+    mockPermissions.mockResolvedValue({ granted: false, status: 'undetermined' });
 
     await expect(obtainExpoPushToken()).resolves.toBeNull();
 
@@ -148,7 +148,7 @@ describe('push registration', () => {
   });
 
   test('revoked permission deregisters this device even without a locally stored token', async () => {
-    mockPermissions.mockResolvedValue({ granted: false });
+    mockPermissions.mockResolvedValue({ granted: false, status: 'denied' });
     const rpc = rpcStub();
 
     await expect(syncPushRegistration(rpc)).resolves.toBeUndefined();
@@ -158,9 +158,19 @@ describe('push registration', () => {
     expect(mockToken).not.toHaveBeenCalled();
   });
 
+  test('an undecided permission preserves the existing registration', async () => {
+    mockPermissions.mockResolvedValue({ granted: false, status: 'undetermined' });
+    const rpc = rpcStub();
+
+    await expect(syncPushRegistration(rpc)).resolves.toBeUndefined();
+
+    expect(rpc.rpcRequest).not.toHaveBeenCalled();
+    expect(mockToken).not.toHaveBeenCalled();
+  });
+
   test('granting permission after revocation registers the fresh token', async () => {
     const rpc = rpcStub();
-    mockPermissions.mockResolvedValueOnce({ granted: false });
+    mockPermissions.mockResolvedValueOnce({ granted: false, status: 'denied' });
     await syncPushRegistration(rpc);
     await syncPushRegistration(rpc);
 
@@ -170,7 +180,7 @@ describe('push registration', () => {
   });
 
   test('a refused deregistration never rejects connect and is retried at the next sync', async () => {
-    mockPermissions.mockResolvedValue({ granted: false });
+    mockPermissions.mockResolvedValue({ granted: false, status: 'denied' });
     const rpc = rpcStub();
     rpc.rpcRequest.mockRejectedValueOnce(new Error('offline'));
 
