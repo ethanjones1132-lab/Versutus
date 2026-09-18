@@ -1283,11 +1283,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       // Supersede the outgoing client so its teardown cannot drive provider state.
+      const leaving = clientRef.current;
+      const leavingKind = activeGatewayRef.current?.kind;
       clientGenerationRef.current += 1;
       resetSessionSelector();
       setActiveManifest(null);
       const generation = clientGenerationRef.current;
       const isCurrent = () => clientGenerationRef.current === generation;
+      // Solution A4: a Gate this device leaves must forget this phone's push
+      // token before its client is discarded, so a replaced Gate cannot keep
+      // notifying. Best-effort, like the delete path: an unreachable Gate is
+      // still replaced.
+      if (leaving && leavingKind === 'custom') {
+        try {
+          await deregisterWithGate(leaving);
+        } catch {
+          // Ignore: the switch happens either way.
+        }
+      }
+      if (!isCurrent()) return;
       clientRef.current?.disconnect();
 
       let identityForClient: GatewayIdentity | undefined;
@@ -2255,12 +2269,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const disconnectGateway = useCallback(() => {
     // Supersede first: the client emits 'disconnected' synchronously, and the
     // stale handler would otherwise queue an auto-retry the user did not ask for.
+    const leaving = clientRef.current;
     clientGenerationRef.current += 1;
     resetSessionSelector();
     if (autoRetryTimerRef.current) {
       clearTimeout(autoRetryTimerRef.current);
       autoRetryTimerRef.current = null;
       setAutoRetry(null);
+    }
+    // Solution A4: a Gate this phone leaves must forget this device's push
+    // token before its client is discarded, so a disconnected Gate cannot
+    // keep notifying. Best-effort, like the delete path: the disconnect
+    // happens either way, and an unreachable Gate is still disconnected.
+    // The RPC goes out the HTTP transport, which disconnect does not cancel.
+    if (leaving && activeGatewayRef.current?.kind === 'custom') {
+      void deregisterWithGate(leaving).catch(() => undefined);
     }
     clientRef.current?.disconnect();
     clientRef.current = null;
