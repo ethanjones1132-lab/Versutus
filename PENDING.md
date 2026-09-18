@@ -20,6 +20,9 @@ the 09-12/09-13 agent runs. They were untracked files in the deleted Codex workt
 
 ## Open work (not started on master)
 
+- **Hands-free calls never open** - "This phone would not open a call session" on the local
+  engine, 2026-09-18. Handed to Grok 4.6: `docs/plans/HANDOFF-2026-09-18-handsfree-call-grok.md`.
+
 - **Approve/Deny on the notification** - `archive/approve-deny-notification-buttons` (8a6d0aa). Held
   on purpose until approving from the lock screen requires unlocking. Operator's call.
 - **Launcher shortcuts for recent Bots** (salvage item 15) - not on master. The stale sprint's
