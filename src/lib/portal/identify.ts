@@ -8,9 +8,10 @@
 // See docs/portal-architecture.md §3.
 
 import { httpToWsBase } from '@/lib/gateway/url';
+import { isHostLookupFailure, withHostLookupRetry } from '@/lib/gateway/host-lookup';
 import type { GatewayKind } from '@/lib/gateway/types';
 import {
-  fetchGatewayManifest,
+  fetchGatewayManifestWithLookupRetry,
   manifestAuthSchemes,
   manifestCapabilityList,
   manifestKindLabel,
@@ -50,6 +51,13 @@ export type IdentifyGatewayOptions = {
   beaconKind?: string;
   /** Skip the manifest fetch (e.g. already known to fail). */
   skipManifest?: boolean;
+  /**
+   * Tailnet IPv4s that can stand in for this gateway's hostname on a
+   * MagicDNS miss — the configured or discovered addresses the caller holds
+   * before any client exists. An https base never uses one (TLS keeps its
+   * hostname).
+   */
+  alternateIpv4?: string[];
   timeoutMs?: number;
 };
 
@@ -92,6 +100,7 @@ export async function identifyGateway(options: IdentifyGatewayOptions): Promise<
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
   const timeoutMs = options.timeoutMs ?? 15_000;
   const started = Date.now();
+  const alternateIpv4 = options.alternateIpv4 ?? [];
 
   // 1. Beacon fast path (no network).
   if (options.beaconKind) {
@@ -109,16 +118,23 @@ export async function identifyGateway(options: IdentifyGatewayOptions): Promise<
     }
   }
 
-  // 2. Manifest (authoritative for any custom gate that serves it).
+  // 2. Manifest (authoritative for any custom gate that serves it). A host
+  // lookup miss retries over the injected tailnet IPv4s — the same splice a
+  // rescued manifest refresh walks — instead of silently skipping the read. A
+  // served manifest forms the identity here; its advertised IPv4s then ride
+  // that identity into the access handshake (portal/access.ts) as the
+  // discovered tail for the next request.
   if (!options.skipManifest) {
-    const manifest = await fetchGatewayManifest(baseUrl, Math.min(10_000, timeoutMs));
+    const manifest = await fetchGatewayManifestWithLookupRetry(baseUrl, alternateIpv4, Math.min(10_000, timeoutMs));
     if (manifest) return identityFromManifest(manifest, baseUrl);
   }
 
   const remaining = () => Math.max(1500, timeoutMs - (Date.now() - started));
 
   // 3. Hermes fingerprint: /health + /v1/capabilities.
-  const hermes = await probeHermes(baseUrl, Math.min(5000, remaining()));
+  const hermes = await withHostLookupRetry(baseUrl, alternateIpv4, (candidate) =>
+    probeHermes(candidate, Math.min(5000, remaining())),
+  ).catch(() => null);
   if (hermes) return hermes;
 
   // 4. OpenClaw fingerprint: bounded WS probe expecting connect.challenge.
@@ -126,7 +142,9 @@ export async function identifyGateway(options: IdentifyGatewayOptions): Promise<
   if (openclaw) return openclaw;
 
   // 5. Unknown — but record whether HTTP answers at all.
-  const httpAlive = await probeHttpAlive(baseUrl, Math.min(3000, remaining()));
+  const httpAlive = await withHostLookupRetry(baseUrl, alternateIpv4, (candidate) =>
+    probeHttpAlive(candidate, Math.min(3000, remaining())),
+  ).catch(() => false);
   return {
     kind: 'unknown',
     kindLabel: 'Unknown gateway',
@@ -142,8 +160,9 @@ export async function identifyGateway(options: IdentifyGatewayOptions): Promise<
 async function probeHermes(baseUrl: string, timeoutMs: number): Promise<GatewayIdentity | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const base = baseUrl.replace(/\/+$/, '');
   try {
-    const healthResponse = await fetch(`${baseUrl}/health`, {
+    const healthResponse = await fetch(`${base}/health`, {
       headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
     });
@@ -163,7 +182,7 @@ async function probeHermes(baseUrl: string, timeoutMs: number): Promise<GatewayI
     let requiresToken = true;
     let capsHermes = false;
     try {
-      const capsResponse = await fetch(`${baseUrl}/v1/capabilities`, {
+      const capsResponse = await fetch(`${base}/v1/capabilities`, {
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
       });
@@ -195,8 +214,10 @@ async function probeHermes(baseUrl: string, timeoutMs: number): Promise<GatewayI
           if (caps.auth?.required === false) requiresToken = false;
         }
       }
-    } catch {
-      // capabilities optional
+    } catch (error) {
+      // Capabilities are optional — but a lookup miss is worth retrying over
+      // an IPv4, so let it reach the retry seam instead of swallowing it.
+      if (isHostLookupFailure(error)) throw error;
     }
 
     if (!healthSaysHermes && !capsHermes) return null;
@@ -216,7 +237,10 @@ async function probeHermes(baseUrl: string, timeoutMs: number): Promise<GatewayI
       source: 'probe-hermes',
       identifiedAt: Date.now(),
     };
-  } catch {
+  } catch (error) {
+    // A host lookup miss re-throws so the retry seam can try the injected
+    // tailnet IPv4s; any other failure is a definitive "not Hermes".
+    if (isHostLookupFailure(error)) throw error;
     return null;
   } finally {
     clearTimeout(timer);
@@ -279,9 +303,10 @@ async function probeHttpAlive(baseUrl: string, timeoutMs: number): Promise<boole
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${baseUrl}/health`, { signal: controller.signal });
+    const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/health`, { signal: controller.signal });
     return response.ok;
-  } catch {
+  } catch (error) {
+    if (isHostLookupFailure(error)) throw error;
     return false;
   } finally {
     clearTimeout(timer);

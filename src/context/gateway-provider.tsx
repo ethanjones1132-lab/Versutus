@@ -1627,7 +1627,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // A probe-wave winner known to be manifest-less skips the manifest
         // fetch the wave already ran; every other winner re-runs it — the
         // wave never checked the serial tail or a single-url probe.
-        const identity = await identifyGateway({ baseUrl: url, beaconKind: beaconKindForUrl(discovered, url), skipManifest });
+        const identity = await identifyGateway({ baseUrl: url, beaconKind: beaconKindForUrl(discovered, url), skipManifest, alternateIpv4: advertisedIpv4({ configuredHosts: configuredGatewayHosts() }) });
         if (identity.kind === 'custom' || identity.kind === 'hermes' || identity.kind === 'openclaw') {
           kind = identity.kind;
         }

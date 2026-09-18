@@ -1,4 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import Constants from 'expo-constants';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -8,6 +9,7 @@ import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { gatewayAddKeyboardBehavior } from '@/lib/gateway/add-keyboard-behavior';
 import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
+import { ipv4FromExpoExtra } from '@/lib/gateway/host-lookup';
 import { normalizeGatewayUrl } from '@/lib/gateway/url';
 import { requestGatewayAccess, type AccessRequestResult } from '@/lib/portal/access';
 import { identifyGateway, type GatewayIdentity } from '@/lib/portal/identify';
@@ -54,7 +56,10 @@ export default function AddGatewayScreen() {
         const normalizedUrl = normalizeGatewayUrl(url);
 
         // 1. Identify the gateway regardless of origin (manifest → fingerprints).
-        const identity = await identifyGateway({ baseUrl: normalizedUrl });
+        const identity = await identifyGateway({
+          baseUrl: normalizedUrl,
+          alternateIpv4: ipv4FromExpoExtra(Constants.expoConfig?.extra),
+        });
         setIdentified(identity);
 
         // 2. Request access through the kind-appropriate handshake.
