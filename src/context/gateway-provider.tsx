@@ -3527,6 +3527,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const refreshCapabilities = useCallback(async () => {
     if (!activeGateway) return;
+    // The refresh answers for the client/Gateway it started against only. A
+    // replacement — attachClient supersede, disconnect, delete, or a retirement
+    // teardown — bumps the generation, so a slow catalog or manifest read for a
+    // Gateway the operator already left must not populate the new Gateway's
+    // surface with the old one's catalog or commands.
+    const generation = clientGenerationRef.current;
+    const isCurrent = () => clientGenerationRef.current === generation;
     try {
       const client = clientRef.current;
       // Pre-flight guard: a stale read only skips a retryable refresh.
@@ -3534,9 +3541,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // verification because it changes when this effect/callback re-runs.
       if (client && status === 'connected') {
         await client.healthCheck();
-        void client.getCapabilities().then(setLiveCapabilities).catch(() => undefined);
+        if (!isCurrent()) return;
+        void client
+          .getCapabilities()
+          .then((capabilities) => {
+            if (isCurrent()) setLiveCapabilities(capabilities);
+          })
+          .catch(() => undefined);
       }
       const known = await loadGateways();
+      if (!isCurrent()) return;
       const parent = activeGateway.parentId
         ? known.find((item) => item.id === activeGateway.parentId)
         : undefined;
@@ -3544,20 +3558,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         manifestUrlForGateway(activeGateway, parent?.url),
         manifestAlternateIpv4(activeGateway, activeManifest),
       ).catch(() => null);
+      if (!isCurrent()) return;
       if (manifest) {
         setActiveManifest(manifest);
         if (!activeGateway.parentId) {
           const retirement = await syncChildProfiles(activeGateway, manifestProviders(manifest));
+          if (!isCurrent()) return;
           if (retirement) {
             // Same rule as the connect path: the profile and the stores keyed
             // by its id leave together, before the roster changes — and a
             // session still up on a retired profile comes down with it.
             await clearRetiredGatewayStores(retirement.removedIds);
+            if (!isCurrent()) return;
             teardownRetiredActiveGateway(retirement.removedIds, retirement.gateways);
             setGateways(retirement.gateways);
           }
         }
       }
+      if (!isCurrent()) return;
       setCapabilityCheckedAt(Date.now());
     } catch {
       // ignore
