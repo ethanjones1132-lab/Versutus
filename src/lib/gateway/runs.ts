@@ -250,7 +250,23 @@ export async function executeRun(
   // status string alone names no class, so it stays undefined until an event
   // carries a `risk`/`action`/`class`, and the policy fails closed on it.
   let commandClass: string | undefined;
-  let status = safeStatus(await client.getRunStatus(runId));
+
+  // Initial status read after startRun — a failure here means we have an
+  // accepted runId but cannot learn its state. Return unresolved so the
+  // reconnect settle path can re-read it.
+  let status: string;
+  try {
+    status = safeStatus(await client.getRunStatus(runId));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      runId,
+      status: 'unknown',
+      error: message,
+      approved,
+      unresolved: true,
+    };
+  }
   let reachedTerminal = isTerminalRunStatus(status);
 
   for (let iteration = 0; iteration < MAX_STATUS_POLLS && !reachedTerminal; iteration += 1) {
@@ -267,7 +283,18 @@ export async function executeRun(
       // abandoning a run the user just approved. The status poll below decides.
       // Unlike a failed stop, this does not report an outcome that never happened.
       await client.resolveApproval(runId, decision.approved, decision.feedback).catch(() => undefined);
-      status = safeStatus(await client.getRunStatus(runId));
+      try {
+        status = safeStatus(await client.getRunStatus(runId));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          runId,
+          status: 'unknown',
+          error: message,
+          approved,
+          unresolved: true,
+        };
+      }
       reachedTerminal = isTerminalRunStatus(status);
       continue;
     }
@@ -295,7 +322,18 @@ export async function executeRun(
     }
 
     const previousStatus = status;
-    status = safeStatus(await client.getRunStatus(runId));
+    try {
+      status = safeStatus(await client.getRunStatus(runId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        runId,
+        status: 'unknown',
+        error: message,
+        approved,
+        unresolved: true,
+      };
+    }
     reachedTerminal = isTerminalRunStatus(status);
 
     // The event stream closed while the run is still going. An unchanged
