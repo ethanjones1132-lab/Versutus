@@ -1,3 +1,4 @@
+import { sanitizeHeaderValue } from '@/lib/gateway/http-transport';
 import { collapseDuplicateGateways, mergeIntoExistingGateway } from '@/lib/gateway/profile-dedupe';
 import { normalizeGatewayUrl } from '@/lib/gateway/url';
 import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
@@ -31,12 +32,26 @@ async function writeGateways(gateways: GatewayProfile[]): Promise<void> {
   await secureKeyValueStorage.setItem(GATEWAYS_KEY, JSON.stringify(gateways));
 }
 
+/**
+ * A stored token or session key is a header value on every request. One saved
+ * with a trailing `\r` (a pasted line, an older save path that did not trim)
+ * made OkHttp refuse the terminal and hands-free calls outright, while chat
+ * worked because HttpTransport cleans its own copy. Clean it once, on load, so
+ * every consumer reads a value that is safe to send.
+ */
+function withCleanCredentials(profile: GatewayProfile): GatewayProfile {
+  const token = sanitizeHeaderValue(profile.token) || undefined;
+  const sessionKey = sanitizeHeaderValue(profile.sessionKey) || undefined;
+  if (token === profile.token && sessionKey === profile.sessionKey) return profile;
+  return { ...profile, token, sessionKey };
+}
+
 export async function loadGateways(): Promise<GatewayProfile[]> {
   const raw = await secureKeyValueStorage.getItem(GATEWAYS_KEY);
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as GatewayProfile[];
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map(withCleanCredentials) : [];
   } catch {
     return [];
   }

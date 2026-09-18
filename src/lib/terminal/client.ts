@@ -1,3 +1,4 @@
+import { sanitizeHeaderValue } from '@/lib/gateway/http-transport';
 import { httpToWsBase } from '@/lib/gateway/url';
 import { streamingFetch } from '@/lib/net/streaming-fetch';
 import { parseTerminalSseEvent, type TerminalSseFrame } from '@/lib/terminal/sse';
@@ -59,7 +60,10 @@ function handleSseEvent(
 
 function authHeaders(token?: string): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  // A control character in the value makes OkHttp reject the request before it
+  // is sent ("Unexpected char 0x0d ... in Authorization value").
+  const clean = sanitizeHeaderValue(token);
+  if (clean) headers['Authorization'] = `Bearer ${clean}`;
   return headers;
 }
 

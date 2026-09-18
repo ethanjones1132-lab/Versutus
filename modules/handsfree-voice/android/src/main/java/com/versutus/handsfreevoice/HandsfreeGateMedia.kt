@@ -67,7 +67,9 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
     val streamUrl = buildStreamUrl(url, voiceSessionId)
     val request = Request.Builder()
       .url(streamUrl)
-      .addHeader("Authorization", "Bearer $token")
+      // OkHttp throws on any control character in a header value, and a stored
+      // token with a trailing \r turned every call start into "unavailable".
+      .addHeader("Authorization", "Bearer ${cleanHeaderValue(token)}")
       .build()
     socket = client.newWebSocket(request, listener)
     startCapture(context)

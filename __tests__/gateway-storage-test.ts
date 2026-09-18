@@ -155,4 +155,26 @@ describe('gateway profile store', () => {
     await upsertGateway(profile({ id: 'gw-1', model: 'grok-4' }));
     expect(await loadGateways()).toEqual([profile({ id: 'gw-1', model: 'grok-4' })]);
   });
+
+  // A token saved with a trailing \r made OkHttp refuse the terminal and the
+  // hands-free call ("Unexpected char 0x0d ... in Authorization value") while
+  // chat kept working. Loading hands every consumer a value safe to send.
+  test('a stored token or session key with control characters loads clean', async () => {
+    backing.set(
+      GATEWAYS_KEY,
+      JSON.stringify([profile({ id: 'gw-1', token: 'test-gateway-token\r', sessionKey: ' test-session\r\n' })]),
+    );
+    const [loaded] = await loadGateways();
+    expect(loaded.token).toBe('test-gateway-token');
+    expect(loaded.sessionKey).toBe('test-session');
+  });
+
+  test('a clean profile loads unchanged and a blank token stays absent', async () => {
+    const clean = profile({ id: 'gw-1', token: 'test-gateway-token' });
+    const blank = profile({ id: 'gw-2', token: '\r\n' });
+    backing.set(GATEWAYS_KEY, JSON.stringify([clean, blank]));
+    const [first, second] = await loadGateways();
+    expect(first).toEqual(clean);
+    expect(second.token).toBeUndefined();
+  });
 });
