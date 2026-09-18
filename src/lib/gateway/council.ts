@@ -15,6 +15,7 @@ export type CouncilTarget = { botId: string; label: string };
 export type CouncilColumn = CouncilTarget &
   (
     | { state: 'answered'; text: string }
+    | { state: 'silent' }
     | { state: 'failed'; error: string }
   );
 
@@ -41,8 +42,9 @@ export function councilTargets(
 
 /**
  * Ask every target the same prompt, in parallel, and keep the roster's order.
- * A rejected send is that target's failed column; a blank answer is a failure
- * too, so an empty column never reads as an answer.
+ * A rejected send is that target's failed column; a blank or absent answer is
+ * that Bot's quiet column — the Gate's "nothing to add" — so a silence never
+ * reads as an answer or an error.
  */
 export async function runCouncil(
   prompt: string,
@@ -53,7 +55,7 @@ export async function runCouncil(
     targets.map(async (target): Promise<CouncilColumn> => {
       try {
         const text = await send(target, prompt);
-        if (!text.trim()) return { ...target, state: 'failed', error: 'empty answer' };
+        if (!text.trim()) return { ...target, state: 'silent' };
         return { ...target, state: 'answered', text };
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);

@@ -44,7 +44,7 @@ describe('the council fan-out', () => {
     expect(columns[2]).toEqual({ botId: 'ada', label: 'ada', state: 'answered', text: 'ada says hi' });
   });
 
-  test('an empty answer is a failure, not a blank column, and the summary counts answers', async () => {
+  test('a blank answer is quiet, not a failure, and the summary counts answers', async () => {
     const targets: CouncilTarget[] = [
       { botId: 'scout', label: 'Scout' },
       { botId: 'night', label: 'Night' },
@@ -52,7 +52,7 @@ describe('the council fan-out', () => {
     const columns = await runCouncil('hi', targets, async (target) =>
       target.botId === 'scout' ? '   ' : 'ok',
     );
-    expect(columns[0].state).toBe('failed');
+    expect(columns[0]).toEqual({ botId: 'scout', label: 'Scout', state: 'silent' });
     expect(columns[1].state).toBe('answered');
     expect(councilSummaryCopy(columns)).toBe('1 of 2 answered.');
     const allAnswered = columns.map((column, index) => ({
@@ -62,6 +62,25 @@ describe('the council fan-out', () => {
       text: `answer ${index + 1}`,
     }));
     expect(councilSummaryCopy(allAnswered)).toBe('Both answered.');
+  });
+
+  test('one failure and one silence leave the answering Bot in its column', async () => {
+    const targets: CouncilTarget[] = [
+      { botId: 'scout', label: 'Scout' },
+      { botId: 'night', label: 'Night' },
+      { botId: 'ada', label: 'ada' },
+    ];
+    const columns = await runCouncil('Compare notes.', targets, async (target) => {
+      if (target.botId === 'night') throw new Error('offline');
+      if (target.botId === 'ada') return '';
+      return `${target.label} says hi`;
+    });
+
+    expect(columns.map((column) => column.botId)).toEqual(['scout', 'night', 'ada']);
+    expect(columns[0]).toEqual({ botId: 'scout', label: 'Scout', state: 'answered', text: 'Scout says hi' });
+    expect(columns[1]).toEqual({ botId: 'night', label: 'Night', state: 'failed', error: 'offline' });
+    expect(columns[2]).toEqual({ botId: 'ada', label: 'ada', state: 'silent' });
+    expect(councilSummaryCopy(columns)).toBe('1 of 3 answered.');
   });
 });
 

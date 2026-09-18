@@ -37,7 +37,11 @@ export function CouncilCompareView({ columns, onPressColumn }: CouncilCompareVie
             onPress={() => onPressColumn?.(column)}
             accessibilityRole="button"
             accessibilityLabel={`${column.label}, ${
-              column.state === 'answered' ? 'answered' : 'failed'
+              column.state === 'answered'
+                ? 'answered'
+                : column.state === 'silent'
+                  ? 'had nothing to add'
+                  : 'failed'
             }`}
             style={styles.column}>
             <Card variant="surface" padding={Spacing.three} style={styles.card}>
@@ -47,6 +51,10 @@ export function CouncilCompareView({ columns, onPressColumn }: CouncilCompareVie
               {column.state === 'failed' ? (
                 <Text variant="caption" color="tertiary">
                   {column.error}
+                </Text>
+              ) : column.state === 'silent' ? (
+                <Text variant="caption" color="secondary">
+                  Nothing to add
                 </Text>
               ) : (
                 <Text variant="body" color="secondary">

@@ -56,6 +56,13 @@ describe('the council view draws the shipped columns', () => {
     expect(src).toContain('column.error');
     expect(src).toContain('column.text');
   });
+
+  test("a quiet 'nothing to add' column is muted copy, never an error slot", () => {
+    const src = compareView();
+    expect(src).toContain("column.state === 'silent'");
+    expect(src).toContain('Nothing to add');
+    expect(src).toContain('had nothing to add');
+  });
 });
 
 describe('the council route sends through the existing group round', () => {

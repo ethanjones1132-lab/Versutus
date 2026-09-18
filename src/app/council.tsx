@@ -99,9 +99,7 @@ export default function CouncilScreen() {
       const result = await runCouncil(text, targets, async (target) => {
         const miss = round.errors?.find((candidate) => candidate.botId === target.botId);
         if (miss) throw new Error(miss.error);
-        const reply = round.replies.find((candidate) => candidate.botId === target.botId);
-        if (!reply) throw new Error('no reply');
-        return reply.text;
+        return round.replies.find((candidate) => candidate.botId === target.botId)?.text ?? '';
       });
       setColumns(result);
     } catch (cause) {
