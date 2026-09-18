@@ -126,7 +126,7 @@ import {
   type RunCapableClient,
 } from '@/lib/gateway/runs';
 import { routineJobsFromList } from '@/lib/gateway/routines';
-import { beginFleetRoutineRead, type FleetRoutineRead } from '@/lib/fleet/routine-read';
+import { beginFleetRoutineRead, fleetRoutineRead, type FleetRoutineRead } from '@/lib/fleet/routine-read';
 import {
   durableQueueRows,
   isRunQueuedRow,
@@ -3954,12 +3954,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * writes nothing at all.
    */
   useEffect(() => {
-    const snapshot = glanceableSnapshot({ status, runs: activityRuns, routines: routineJobs, bots: widgetBots, redact: widgetRedact });
+    const snapshot = glanceableSnapshot({
+      status,
+      runs: activityRunsForActiveGateway,
+      routines: fleetRoutineRead(routineRead, activeGateway?.id).jobs,
+      bots: widgetBots,
+      redact: widgetRedact,
+    });
     const decision = widgetWriteGate(widgetWriteRef.current, snapshot, snapshot.writtenAt);
     if (!decision.write) return;
     widgetWriteRef.current = decision.last;
     void writeWidgetSnapshot(snapshot);
-  }, [activityRuns, routineJobs, status, widgetBots, widgetRedact]);
+  }, [activityRunsForActiveGateway, routineRead, activeGateway?.id, status, widgetBots, widgetRedact]);
 
   const botGroups = useMemo(() => ({
     list: async () => {
