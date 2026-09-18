@@ -29,22 +29,58 @@ export function isHostLookupFailure(error: unknown): boolean {
 }
 
 /**
- * Rewrite an http base URL onto an advertised IPv4. Returns null for https
- * (TLS hostname checks must keep the original host) and for a base that is
- * already that IP.
+ * Rewrite an http URL onto an advertised IPv4, keeping path and query.
+ * Returns null for https (TLS hostname checks must keep the original host)
+ * and for a URL that is already that IP.
  */
-export function rewriteHttpBaseHost(baseUrl: string, ipv4: string): string | null {
+export function rewriteHttpUrlHost(url: string, ipv4: string): string | null {
   if (!isIpv4(ipv4)) return null;
   let parsed: URL;
   try {
-    parsed = new URL(baseUrl);
+    parsed = new URL(url);
   } catch {
     return null;
   }
   if (parsed.protocol !== 'http:') return null;
   if (parsed.hostname === ipv4) return null;
   parsed.hostname = ipv4;
-  return parsed.origin;
+  return parsed.href;
+}
+
+/**
+ * Rewrite an http base URL onto an advertised IPv4. Returns null for https
+ * (TLS hostname checks must keep the original host) and for a base that is
+ * already that IP.
+ */
+export function rewriteHttpBaseHost(baseUrl: string, ipv4: string): string | null {
+  const rewritten = rewriteHttpUrlHost(baseUrl, ipv4);
+  if (!rewritten) return null;
+  return new URL(rewritten).origin;
+}
+
+/**
+ * Try `url`, then each advertised IPv4 rewrite, only when the failure is a
+ * host lookup miss. https is never rewritten (rewriteHttpUrlHost returns null).
+ * Exhausted lookup misses become HostLookupError, not the raw Java exception.
+ */
+export async function withHostLookupRetry<T>(
+  url: string,
+  alternateIpv4: string[],
+  attempt: (candidateUrl: string) => Promise<T>,
+): Promise<T> {
+  const candidates = [url];
+  for (const ip of alternateIpv4) {
+    const rewritten = rewriteHttpUrlHost(url, ip);
+    if (rewritten) candidates.push(rewritten);
+  }
+  for (const candidate of candidates) {
+    try {
+      return await attempt(candidate);
+    } catch (error) {
+      if (!isHostLookupFailure(error)) throw error;
+    }
+  }
+  throw new HostLookupError(hostnameOf(url));
 }
 
 export function advertisedIpv4(input: {

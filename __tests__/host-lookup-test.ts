@@ -4,6 +4,7 @@ import {
   ipv4FromExpoExtra,
   isHostLookupFailure,
   rewriteHttpBaseHost,
+  rewriteHttpUrlHost,
 } from '@/lib/gateway/host-lookup';
 
 describe('a DNS blip is a lookup failure, not a gateway crash', () => {
@@ -35,6 +36,24 @@ describe('retrying through an advertised IPv4', () => {
   test('does not silently turn https into http', () => {
     const rewritten = rewriteHttpBaseHost('https://ethanspc.tail3a1a8a.ts.net', '100.95.137.83');
     expect(rewritten).toBeNull();
+  });
+
+  test('rewrites a full http stream URL onto the IPv4 and keeps the path', () => {
+    expect(
+      rewriteHttpUrlHost(
+        'http://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events',
+        '100.95.137.83',
+      ),
+    ).toBe('http://100.95.137.83:8760/v1/runs/r1/events');
+  });
+
+  test('refuses to rewrite an https stream URL onto an IP', () => {
+    expect(
+      rewriteHttpUrlHost(
+        'https://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events',
+        '100.95.137.83',
+      ),
+    ).toBeNull();
   });
 
   test('advertisedIpv4 keeps unique valid IPv4s and drops hostnames', () => {

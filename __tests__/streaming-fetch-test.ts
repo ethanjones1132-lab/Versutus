@@ -2,6 +2,7 @@ import { ManifestClient } from '@/lib/gateway/manifest-client';
 import { createEnvironmentClient } from '@/lib/gateway/environment-client';
 import {
   installStreamingFetch,
+  installStreamingFetchHostFallback,
   resetStreamingFetchForTests,
   streamingFetch,
 } from '@/lib/net/streaming-fetch';
@@ -75,6 +76,70 @@ describe('streamingFetch', () => {
     installStreamingFetch((async () => new Response('second')) as unknown as typeof globalThis.fetch);
     expect(await (await streamingFetch('http://x.test')).text()).toBe('second');
   });
+
+  test('a MagicDNS miss retries the advertised IPv4 on http', async () => {
+    const calls: string[] = [];
+    installStreamingFetch((async (url: string) => {
+      calls.push(String(url));
+      if (String(url).includes('ethanspc.tail3a1a8a.ts.net')) {
+        throw new Error(
+          'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.tail3a1a8a.ts.net"',
+        );
+      }
+      return new Response('ok', { status: 200 });
+    }) as unknown as typeof globalThis.fetch);
+    installStreamingFetchHostFallback(['100.95.137.83']);
+
+    const res = await streamingFetch('http://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events');
+    expect(await res.text()).toBe('ok');
+    expect(calls).toEqual([
+      'http://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events',
+      'http://100.95.137.83:8760/v1/runs/r1/events',
+    ]);
+  });
+
+  test('does not rewrite an https URL onto an IP', async () => {
+    const calls: string[] = [];
+    installStreamingFetch((async (url: string) => {
+      calls.push(String(url));
+      throw new Error(
+        'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.tail3a1a8a.ts.net"',
+      );
+    }) as unknown as typeof globalThis.fetch);
+    installStreamingFetchHostFallback(['100.95.137.83']);
+
+    await expect(
+      streamingFetch('https://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events'),
+    ).rejects.toMatchObject({
+      name: 'HostLookupError',
+    });
+    expect(calls).toEqual(['https://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events']);
+  });
+
+  test('a lookup failure without an IPv4 fallback is a HostLookupError, not the Java exception', async () => {
+    installStreamingFetch((async () => {
+      throw new Error(
+        'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.tail3a1a8a.ts.net"',
+      );
+    }) as unknown as typeof globalThis.fetch);
+
+    await expect(
+      streamingFetch('http://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events'),
+    ).rejects.toMatchObject({
+      name: 'HostLookupError',
+      message: expect.stringMatching(/could not look up your PC's address/i),
+    });
+  });
+
+  test('a refused token is not retried as a DNS miss', async () => {
+    const fetchMock = jest.fn(async () => new Response('{"error":{"message":"Invalid API key"}}', { status: 401 }));
+    installStreamingFetch(fetchMock as unknown as typeof globalThis.fetch);
+    installStreamingFetchHostFallback(['100.95.137.83']);
+
+    const res = await streamingFetch('http://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events');
+    expect(res.status).toBe(401);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('streaming call sites', () => {
@@ -132,6 +197,47 @@ describe('streaming call sites', () => {
     expect(globalFetch).not.toHaveBeenCalled();
     expect(types).toEqual(['run.started', 'run.output', 'run.completed']);
     globalFetch.mockRestore();
+  });
+
+  test('the CLI run event stream retries advertised IPv4 after a MagicDNS miss', async () => {
+    const calls: string[] = [];
+    installStreamingFetch((async (url: string) => {
+      calls.push(String(url));
+      if (String(url).includes('ethanspc.tail3a1a8a.ts.net')) {
+        throw new Error(
+          'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.tail3a1a8a.ts.net"',
+        );
+      }
+      return sseResponse([
+        `data: ${JSON.stringify({ type: 'run.started' })}\n\n`,
+        `data: ${JSON.stringify({ type: 'run.completed', payload: { exitCode: 0 } })}\n\n`,
+      ]);
+    }) as unknown as typeof globalThis.fetch);
+
+    const fixtureManifest = IDENTITY.manifest;
+    if (!fixtureManifest) throw new Error('test fixture is missing a manifest');
+    const identity: GatewayIdentity = {
+      ...IDENTITY,
+      manifest: {
+        ...fixtureManifest,
+        transport: { primary: 'http', ipv4: ['100.95.137.83'] },
+      },
+    };
+    const client = new ManifestClient(
+      { ...PROFILE, url: 'http://ethanspc.tail3a1a8a.ts.net:8760' },
+      identity,
+      {},
+    );
+    const environments = createEnvironmentClient(
+      async <T,>() => undefined as T,
+      (path, init) => client.authorizedFetch(path, init),
+    );
+    const types: string[] = [];
+    await environments.streamRun('env-1', 'r-1', (event) => types.push(event.type));
+
+    expect(types).toEqual(['run.started', 'run.completed']);
+    expect(calls.some((url) => url.includes('ethanspc.tail3a1a8a.ts.net'))).toBe(true);
+    expect(calls.some((url) => url.includes('100.95.137.83'))).toBe(true);
   });
 });
 

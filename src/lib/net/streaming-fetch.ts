@@ -29,12 +29,29 @@
  *
  * Use this ONLY where the body is consumed as a stream. Ordinary requests have
  * no reason to route through a second implementation.
+ *
+ * A MagicDNS blip on a streamed call (Runs events, chat SSE, terminal) used to
+ * surface the raw Java UnknownHostException because only HttpTransport retried.
+ * This wrapper uses the same host-lookup fallback: advertised IPv4s, http only,
+ * never https, HostLookupError when the lookup still fails.
  */
 
+import { withHostLookupRetry } from '@/lib/gateway/host-lookup';
+
 let installed: typeof globalThis.fetch | null = null;
+let alternateIpv4: string[] = [];
 
 export function installStreamingFetch(impl: typeof globalThis.fetch): void {
   installed = impl;
+}
+
+/**
+ * IPv4s the Gate advertised (or the app already knows). HttpTransport installs
+ * these when a gateway client is constructed so every streaming call site
+ * retries a MagicDNS miss the same way ordinary HTTP does.
+ */
+export function installStreamingFetchHostFallback(ipv4s: string[]): void {
+  alternateIpv4 = [...ipv4s];
 }
 
 /**
@@ -43,6 +60,7 @@ export function installStreamingFetch(impl: typeof globalThis.fetch): void {
  */
 export function resetStreamingFetchForTests(): void {
   installed = null;
+  alternateIpv4 = [];
 }
 
 /**
@@ -57,11 +75,11 @@ function globalFetchStreams(): boolean {
   return typeof proto === 'object' && proto !== null && 'body' in proto;
 }
 
-export const streamingFetch: typeof globalThis.fetch = (input, init) => {
-  if (installed) return installed(input, init);
+function resolveFetch(): typeof globalThis.fetch {
+  if (installed) return installed;
   // Node and web never install: their global fetch already streams, so riding
   // it is correct there, not a fallback gone wrong.
-  if (globalFetchStreams()) return globalThis.fetch(input, init);
+  if (globalFetchStreams()) return globalThis.fetch;
   // A global whose Response has no body means RN device. Returning from here
   // used to hand SSE readers a body-less Response — empty bubbles on device
   // with nothing to explain them, while Node tests stayed green. Fail where
@@ -71,5 +89,19 @@ export const streamingFetch: typeof globalThis.fetch = (input, init) => {
       'has no readable response body, so streamed replies would arrive empty. Call ' +
       'installStreamingFetch(expoFetch) once at app startup before any streaming call site ' +
       'runs — src/app/_layout.tsx does this for the Expo app.',
+  );
+}
+
+function urlOf(input: RequestInfo | URL): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+export const streamingFetch: typeof globalThis.fetch = (input, init) => {
+  const fetchImpl = resolveFetch();
+  const url = urlOf(input);
+  return withHostLookupRetry(url, alternateIpv4, (candidate) =>
+    candidate === url ? fetchImpl(input, init) : fetchImpl(candidate, init),
   );
 };
