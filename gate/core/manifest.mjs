@@ -6,6 +6,8 @@
  * docs/superpowers/specs/2026-08-12-gate-capability-registry-design.md §8.
  */
 
+import { isTailnetIpv4 } from './reachability.mjs';
+
 export const MANIFEST_SPEC = 'versutus-gateway/v1';
 export const GATE_KIND = 'versutus-gate';
 
@@ -72,13 +74,20 @@ export function buildManifest({
   const backendCan = (capability) =>
     backends.some((backend) => (backend.capabilities ?? []).includes(capability));
 
+  // The phone retries the manifest's IPv4s over a tailnet, so only validated
+  // CGNAT addresses belong here: a hostname or LAN entry would become client
+  // retry input that can never resolve on cellular.
+  const advertisedIpv4 = Array.isArray(ipv4)
+    ? [...new Set(ipv4.filter((ip) => isTailnetIpv4(ip)))]
+    : [];
+
   const manifest = {
     manifest: MANIFEST_SPEC,
     kind: GATE_KIND,
     name,
     transport: {
       primary: 'http',
-      ...(Array.isArray(ipv4) && ipv4.length > 0 ? { ipv4: [...new Set(ipv4.filter((ip) => typeof ip === 'string' && ip.length > 0))] } : {}),
+      ...(advertisedIpv4.length > 0 ? { ipv4: advertisedIpv4 } : {}),
     },
     endpoints: {
       health: '/health',

@@ -36,6 +36,39 @@ test('advertises tailnet IPv4s on transport when given, and omits an empty list'
   assert.equal(without.transport.ipv4, undefined);
 });
 
+test('publishes only validated tailnet IPv4s, dropping hostnames, LAN IPs, and malformed entries', () => {
+  const manifest = buildManifest({
+    name: 'Gate',
+    capabilityKinds,
+    capabilityInstances,
+    ipv4: [
+      '100.95.137.83',
+      '100.95.137.83',
+      'gate.example.ts.net',
+      '192.168.4.30',
+      '127.0.0.1',
+      '100.64',
+      '299.1.1.1',
+      '100.64.0.1',
+      '',
+      'not-an-ip',
+      42,
+    ],
+  });
+  assert.deepEqual(manifest.transport, { primary: 'http', ipv4: ['100.95.137.83', '100.64.0.1'] });
+});
+
+test('omits the ipv4 transport key when no entry is a valid tailnet IP', () => {
+  const manifest = buildManifest({
+    name: 'Gate',
+    capabilityKinds,
+    capabilityInstances,
+    ipv4: ['gate.example.ts.net', '192.168.4.30', ''],
+  });
+  assert.deepEqual(manifest.transport, { primary: 'http' });
+  assert.equal(manifest.transport.ipv4, undefined);
+});
+
 test('advertises design-spec transport, endpoints, and capabilities', () => {
   const manifest = buildManifest({ name: 'Gate', capabilityKinds, capabilityInstances });
   assert.deepEqual(manifest.transport, { primary: 'http' });
