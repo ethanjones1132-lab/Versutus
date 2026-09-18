@@ -8,8 +8,10 @@
 //   token-required    → user must supply a token (Hermes API key today)
 //   denied            → gateway refused
 
+import Constants from 'expo-constants';
 import { httpToWsBase } from '@/lib/gateway/url';
 import { loadOrCreateDeviceIdentity, signDevicePayload } from '@/lib/gateway/device-identity';
+import { advertisedIpv4, ipv4FromExpoExtra, withHostLookupRetry } from '@/lib/gateway/host-lookup';
 import { OpenClawGatewayClient } from '@/lib/gateway/openclaw-client';
 import type { GatewayHelloOk, PairingDetails } from '@/lib/gateway/types';
 import { GATEWAY_MANIFEST_SPEC } from '@/lib/portal/manifest';
@@ -209,65 +211,81 @@ async function postSignedAccessRequest(
     ].join('|');
     const signature = await signDevicePayload(identity, payload);
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 10000);
+    const url = `${baseUrl}${grantPath}`;
+    const body = JSON.stringify({
+      manifest: GATEWAY_MANIFEST_SPEC,
+      device: {
+        id: identity.deviceId,
+        publicKey: identity.publicKeyB64Url,
+        clientId: CLIENT_ID,
+        clientMode: CLIENT_MODE,
+      },
+      role,
+      scopes,
+      signedAtMs,
+      signature,
+      client: { name: 'Versutus', version: '1.0.0', platform: 'mobile' },
+    });
+    const timeoutMs = options.timeoutMs ?? 10000;
 
-    try {
-      const response = await fetch(`${baseUrl}${grantPath}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          manifest: GATEWAY_MANIFEST_SPEC,
-          device: {
-            id: identity.deviceId,
-            publicKey: identity.publicKeyB64Url,
-            clientId: CLIENT_ID,
-            clientMode: CLIENT_MODE,
-          },
-          role,
-          scopes,
-          signedAtMs,
-          signature,
-          client: { name: 'Versutus', version: '1.0.0', platform: 'mobile' },
-        }),
-      });
+    // The same tails the ordinary Gate requests retry over: what this gate
+    // advertised when it was just identified, plus the configured hosts the
+    // adapters install on a profile — all present here before any client or
+    // profile exists. A host lookup miss on the request is retried onto them;
+    // https is never rewritten (withHostLookupRetry keeps an https host). The
+    // body and device identity are identical on every attempt.
+    const alternateIpv4 = advertisedIpv4({
+      advertised: options.identity.manifest?.transport?.ipv4,
+      configuredHosts: ipv4FromExpoExtra(Constants.expoConfig?.extra),
+    });
 
-      if (response.status === 404 || response.status === 405) {
-        return { status: 'token-required', hint: 'This gateway does not serve universal access requests. Supply its token.' };
+    const response = await withHostLookupRetry(url, alternateIpv4, (candidateUrl) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return fetch(candidateUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body,
+        });
+      } finally {
+        clearTimeout(timer);
       }
+    });
 
-      const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
-      const status = typeof body?.status === 'string' ? body.status : undefined;
-      if (response.ok && status === 'granted' && typeof body?.token === 'string') {
-        return {
-          status: 'granted',
-          token: body.token,
-          role: typeof body.role === 'string' ? body.role : undefined,
-          scopes: Array.isArray(body.scopes) ? body.scopes.filter((s): s is string => typeof s === 'string') : undefined,
-        };
-      }
-      if (response.status === 202 || status === 'pending') {
-        const requestId = typeof body?.requestId === 'string' ? body.requestId : undefined;
-        return {
-          status: 'pending-approval',
-          requestId,
-          hint: pendingApprovalHint(requestId),
-        };
-      }
-      if (status === 'token-required') {
-        return { status: 'token-required', hint: typeof body?.hint === 'string' ? body.hint : undefined };
-      }
-      if (response.status === 403 || status === 'denied') {
-        return {
-          status: 'denied',
-          reason: typeof body?.reason === 'string' ? body.reason : 'The gateway denied the access request.',
-        };
-      }
-      return { status: 'denied', reason: `Unexpected access response (HTTP ${response.status}).` };
-    } finally {
-      clearTimeout(timer);
+    if (response.status === 404 || response.status === 405) {
+      return { status: 'token-required', hint: 'This gateway does not serve universal access requests. Supply its token.' };
     }
+
+    const parsedBody = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    const status = typeof parsedBody?.status === 'string' ? parsedBody.status : undefined;
+    if (response.ok && status === 'granted' && typeof parsedBody?.token === 'string') {
+      return {
+        status: 'granted',
+        token: parsedBody.token,
+        role: typeof parsedBody.role === 'string' ? parsedBody.role : undefined,
+        scopes: Array.isArray(parsedBody.scopes) ? parsedBody.scopes.filter((s): s is string => typeof s === 'string') : undefined,
+      };
+    }
+    if (response.status === 202 || status === 'pending') {
+      const requestId = typeof parsedBody?.requestId === 'string' ? parsedBody.requestId : undefined;
+      return {
+        status: 'pending-approval',
+        requestId,
+        hint: pendingApprovalHint(requestId),
+      };
+    }
+    if (status === 'token-required') {
+      return { status: 'token-required', hint: typeof parsedBody?.hint === 'string' ? parsedBody.hint : undefined };
+    }
+    if (response.status === 403 || status === 'denied') {
+      return {
+        status: 'denied',
+        reason: typeof parsedBody?.reason === 'string' ? parsedBody.reason : 'The gateway denied the access request.',
+      };
+    }
+    return { status: 'denied', reason: `Unexpected access response (HTTP ${response.status}).` };
   } catch (error) {
     return {
       status: 'denied',
