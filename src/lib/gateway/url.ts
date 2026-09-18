@@ -17,6 +17,26 @@ export function isTailnetHost(host: string): boolean {
   return host.toLowerCase().replace(/\.$/, '').endsWith('.ts.net');
 }
 
+// A hostname whose dot-separated labels are all decimal numbers or `0x` hex
+// literals is one the WHATWG URL parser will treat as an IPv4 address. A real
+// hostname (letters in a label) never reaches the numeric branch — that split
+// is shared with the onboarding validator's dotted-decimal-first check.
+const NUMERIC_HOST_LABEL = /^(?:\d+|0x[0-9a-f]+)$/;
+const CANONICAL_IPV4_OCTET = /^(?:0|[1-9]\d?|1\d\d|2[0-4]\d|25[0-5])$/;
+
+export function isNumericHost(host: string): boolean {
+  return host.toLowerCase().split('.').every(label => NUMERIC_HOST_LABEL.test(label));
+}
+
+export function isCanonicalIpv4(host: string): boolean {
+  const labels = host.toLowerCase().split('.');
+  return labels.length === 4 && labels.every(label => CANONICAL_IPV4_OCTET.test(label));
+}
+
+export function hasImpossibleNumericOctets(host: string): boolean {
+  return isNumericHost(host) && !isCanonicalIpv4(host);
+}
+
 export function shouldUseTlsForHost(_host: string): boolean {
   // Hermes API server typically runs plain HTTP on LAN/tailnet.
   // TLS is handled by Tailscale Serve or a reverse proxy if needed.
@@ -46,6 +66,16 @@ export function normalizeGatewayUrl(
     new Error(
       `Invalid gateway URL: "${trimmed}" ${detail} — include host and port, e.g. http://yourpc.tailnet.ts.net:8760`,
     );
+
+  // The WHATWG URL parser does not reject every impossible numeric host — it
+  // silently reinterprets a bare integer (2130706433 => 127.0.0.1), a short
+  // dotted-decimal (1.2.3 => 1.2.0.3), and octal/hex labels (0250.168.0.1 =>
+  // 168.168.0.1). Judge the host text as typed, so the address probed and saved
+  // is the one the operator wrote, or refuse the entry outright.
+  const rawHost = withScheme.replace(/^https?:\/\//i, '').match(/^[^/?#:]*/)?.[0] ?? '';
+  if (hasImpossibleNumericOctets(rawHost)) {
+    throw invalid('names an impossible IP address');
+  }
 
   let parsed: URL;
   try {
