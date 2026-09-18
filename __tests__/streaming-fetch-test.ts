@@ -88,7 +88,7 @@ describe('streamingFetch', () => {
       }
       return new Response('ok', { status: 200 });
     }) as unknown as typeof globalThis.fetch);
-    installStreamingFetchHostFallback(['100.95.137.83']);
+    installStreamingFetchHostFallback('ethanspc.tail3a1a8a.ts.net', ['100.95.137.83']);
 
     const res = await streamingFetch('http://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events');
     expect(await res.text()).toBe('ok');
@@ -96,6 +96,21 @@ describe('streamingFetch', () => {
       'http://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events',
       'http://100.95.137.83:8760/v1/runs/r1/events',
     ]);
+  });
+
+  // With two gateways, the fallback addresses belong to one PC. A lookup miss on
+  // the other gateway must fail honestly, not retry against the first PC (and
+  // hand it the other gateway's token).
+  test("a lookup miss on another gateway never borrows this gateway's address", async () => {
+    const calls: string[] = [];
+    installStreamingFetch((async (url: string) => {
+      calls.push(String(url));
+      throw new Error('fetch failed: java.net.UnknownHostException: Unable to resolve host "otherpc.tail3a1a8a.ts.net"');
+    }) as unknown as typeof globalThis.fetch);
+    installStreamingFetchHostFallback('ethanspc.tail3a1a8a.ts.net', ['100.95.137.83']);
+
+    await expect(streamingFetch('http://otherpc.tail3a1a8a.ts.net:8760/v1/runs/r1/events')).rejects.toThrow();
+    expect(calls).toEqual(['http://otherpc.tail3a1a8a.ts.net:8760/v1/runs/r1/events']);
   });
 
   test('does not rewrite an https URL onto an IP', async () => {
@@ -106,7 +121,7 @@ describe('streamingFetch', () => {
         'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.tail3a1a8a.ts.net"',
       );
     }) as unknown as typeof globalThis.fetch);
-    installStreamingFetchHostFallback(['100.95.137.83']);
+    installStreamingFetchHostFallback('ethanspc.tail3a1a8a.ts.net', ['100.95.137.83']);
 
     await expect(
       streamingFetch('https://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events'),
@@ -134,7 +149,7 @@ describe('streamingFetch', () => {
   test('a refused token is not retried as a DNS miss', async () => {
     const fetchMock = jest.fn(async () => new Response('{"error":{"message":"Invalid API key"}}', { status: 401 }));
     installStreamingFetch(fetchMock as unknown as typeof globalThis.fetch);
-    installStreamingFetchHostFallback(['100.95.137.83']);
+    installStreamingFetchHostFallback('ethanspc.tail3a1a8a.ts.net', ['100.95.137.83']);
 
     const res = await streamingFetch('http://ethanspc.tail3a1a8a.ts.net:8760/v1/runs/r1/events');
     expect(res.status).toBe(401);

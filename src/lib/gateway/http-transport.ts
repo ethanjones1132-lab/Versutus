@@ -1,5 +1,5 @@
 import { GatewayHttpError } from '@/lib/gateway/errors';
-import { withHostLookupRetry } from '@/lib/gateway/host-lookup';
+import { hostnameOf, withHostLookupRetry } from '@/lib/gateway/host-lookup';
 import { messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 import { installStreamingFetchHostFallback } from '@/lib/net/streaming-fetch';
 
@@ -29,12 +29,12 @@ export class HttpTransport {
   private contactAt = 0;
 
   constructor(private options: HttpTransportOptions) {
-    installStreamingFetchHostFallback(options.alternateIpv4 ?? []);
+    installStreamingFetchHostFallback(hostnameOf(options.baseUrl), options.alternateIpv4 ?? []);
   }
 
   update(options: HttpTransportOptions) {
     this.options = options;
-    installStreamingFetchHostFallback(options.alternateIpv4 ?? []);
+    installStreamingFetchHostFallback(hostnameOf(options.baseUrl), options.alternateIpv4 ?? []);
   }
 
   get baseUrl(): string {

@@ -36,10 +36,12 @@
  * never https, HostLookupError when the lookup still fails.
  */
 
-import { withHostLookupRetry } from '@/lib/gateway/host-lookup';
+import { hostnameOf, withHostLookupRetry } from '@/lib/gateway/host-lookup';
 
 let installed: typeof globalThis.fetch | null = null;
-let alternateIpv4: string[] = [];
+// Keyed by the gateway's hostname: with two gateways, a lookup miss on one must
+// never be retried against the other PC's address (and handed its token).
+const alternateIpv4ByHost = new Map<string, string[]>();
 
 export function installStreamingFetch(impl: typeof globalThis.fetch): void {
   installed = impl;
@@ -50,8 +52,9 @@ export function installStreamingFetch(impl: typeof globalThis.fetch): void {
  * these when a gateway client is constructed so every streaming call site
  * retries a MagicDNS miss the same way ordinary HTTP does.
  */
-export function installStreamingFetchHostFallback(ipv4s: string[]): void {
-  alternateIpv4 = [...ipv4s];
+export function installStreamingFetchHostFallback(host: string, ipv4s: string[]): void {
+  if (ipv4s.length) alternateIpv4ByHost.set(host, [...ipv4s]);
+  else alternateIpv4ByHost.delete(host);
 }
 
 /**
@@ -60,7 +63,7 @@ export function installStreamingFetchHostFallback(ipv4s: string[]): void {
  */
 export function resetStreamingFetchForTests(): void {
   installed = null;
-  alternateIpv4 = [];
+  alternateIpv4ByHost.clear();
 }
 
 /**
@@ -101,7 +104,7 @@ function urlOf(input: RequestInfo | URL): string {
 export const streamingFetch: typeof globalThis.fetch = (input, init) => {
   const fetchImpl = resolveFetch();
   const url = urlOf(input);
-  return withHostLookupRetry(url, alternateIpv4, (candidate) =>
+  return withHostLookupRetry(url, alternateIpv4ByHost.get(hostnameOf(url)) ?? [], (candidate) =>
     candidate === url ? fetchImpl(input, init) : fetchImpl(candidate, init),
   );
 };
