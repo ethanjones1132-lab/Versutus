@@ -49,20 +49,22 @@ describe('thread config models error', () => {
     expect(picker).toContain('setModelCatalogError(undefined);\n    const client = clientRef.current;');
   });
 
-  test('the model read sequence guard still owns both landings', () => {
+  test('the model read sequence guard and generation guard own both landings', () => {
     const src = readProvider();
     const picker = src.match(
       /const openModelPicker = useCallback\(async \(mode[\s\S]*?\n  \}, \[\]\);/,
     )?.[0];
     expect(picker).toBeDefined();
     expect(picker).toContain('const seq = modelReadSeqRef.current + 1;');
+    expect(picker).toContain('const generation = clientGenerationRef.current;');
+    expect(picker).toContain('const isCurrent = () => clientGenerationRef.current === generation;');
     expect(picker).toContain('setModelCatalog(models);');
     // A superseded read must not settle state — success or refusal.
     expect(picker).toMatch(
-      /if \(seq !== modelReadSeqRef\.current\) return;\s*setModelCatalog\(models\);/,
+      /if \(seq !== modelReadSeqRef\.current \|\| !isCurrent\(\)\) return;[\s\S]*?setModelCatalog\(models\);/,
     );
     expect(picker).toMatch(
-      /catch \(error\) \{\s*if \(seq !== modelReadSeqRef\.current\) return;/,
+      /catch \(error\) \{\s*if \(seq !== modelReadSeqRef\.current \|\| !isCurrent\(\)\) return;/,
     );
   });
 

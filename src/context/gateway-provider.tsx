@@ -885,6 +885,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const loadingOlderSessionsRef = useRef(false);
   const resetSessionSelector = useCallback(() => {
     ++sessionReadSeqRef.current;
+    ++modelReadSeqRef.current;
     loadingOlderSessionsRef.current = false;
     sessionListLimitRef.current = SESSION_LIST_PAGE_SIZE;
     setSessionListState(emptySessionList<HermesSession>());
@@ -3104,6 +3105,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const openModelPicker = useCallback(async (mode: 'default' | 'fallbacks' | 'agent', agentId?: string) => {
     const seq = modelReadSeqRef.current + 1;
     modelReadSeqRef.current = seq;
+    const generation = clientGenerationRef.current;
+    const isCurrent = () => clientGenerationRef.current === generation;
     setModelPicker({ visible: true, mode, agentId });
     // A fresh attempt drops the past refusal — reporting it before the new
     // read answers would be reporting the past as the present. The cached
@@ -3113,11 +3116,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     if (!client) return;
     try {
       const models = await client.getModels();
-      if (seq !== modelReadSeqRef.current) return;
+      if (seq !== modelReadSeqRef.current || !isCurrent()) return;
       setModelCatalog(models);
       setModelCatalogError(undefined);
     } catch (error) {
-      if (seq !== modelReadSeqRef.current) return;
+      if (seq !== modelReadSeqRef.current || !isCurrent()) return;
       // The sheet used to read a refused catalog as "never reported".
       const message = error instanceof Error ? error.message : String(error);
       setModelCatalogError(message || 'Model catalog could not be read.');
