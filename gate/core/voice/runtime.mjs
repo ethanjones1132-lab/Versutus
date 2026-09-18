@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveGateHome } from '../paths.mjs';
+import { codexRealtimeStatus, readCodexAuthMode } from './codex-status.mjs';
 
 const WORKER_DIR = fileURLToPath(new URL('../../../gate/voice-worker', import.meta.url));
 
@@ -178,7 +179,7 @@ export function readVoiceUsage({ paths, now = () => new Date() } = {}) {
 }
 
 /** What `voice.capabilities` reports for each engine, from the runtime and config. */
-export function voiceStatus({ paths, now } = {}) {
+export function voiceStatus({ paths, now, readAuthMode = readCodexAuthMode } = {}) {
   const config = readVoiceConfig({ paths });
   const usage = readVoiceUsage({ paths, now });
   const off = config.enabled === false;
@@ -194,10 +195,7 @@ export function voiceStatus({ paths, now } = {}) {
     codex:
       off || config.engines.codex.enabled === false
         ? { state: 'disabled', reason: disabledReason('codex') }
-        : {
-            state: 'disabled',
-            reason: 'Codex realtime needs an API key; the ChatGPT login does not provide one.',
-          },
+        : codexRealtimeStatus(readAuthMode()),
   };
   return {
     enabled: !off,

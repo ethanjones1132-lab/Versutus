@@ -323,6 +323,9 @@ describe('a Gate-powered call is one transport away from the phone engine', () =
     expect(provider).toContain('startGateCall');
     expect(provider).toContain("'voice.session.start'");
     expect(provider).toContain('startGateMedia');
+    expect(provider).toContain('mediaSocketUrl(gateway.url, grant.streamPath)');
+    expect(provider).toContain('token: gateway.token ??');
+    expect(provider).toContain('voiceSessionId: grant.voiceSessionId');
     expect(provider).toContain("addListener('gate'");
     expect(provider).toContain('reduceGateCall');
     expect(provider).toContain('sendGateControl');

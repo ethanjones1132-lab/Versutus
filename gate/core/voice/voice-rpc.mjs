@@ -9,6 +9,7 @@
 
 import { requireDevice } from '../push-rpc.mjs';
 import { randomUUID } from 'node:crypto';
+import { codexRealtimeStatus } from './codex-status.mjs';
 
 /** The live-call registry the media socket also reads. */
 export class VoiceSessionRegistry {
@@ -53,12 +54,9 @@ export function defaultCapabilities() {
         state: 'not-installed',
         reason: 'The PC voice models are not installed. Run voice install on the Gate.',
       },
-      // M1 S1: codex app-server realtime requires API-key auth; the ChatGPT
-      // login cannot provide it, so this engine does not ship.
-      codex: {
-        state: 'disabled',
-        reason: 'Codex realtime needs an API key; the ChatGPT login does not provide one.',
-      },
+      // M1 S1: ChatGPT login cannot start thread/realtime; the engine is
+      // unavailable, not operator-disabled.
+      codex: codexRealtimeStatus(null),
     },
     limits: { codexMinutesPerDay: 60, maxConcurrentCalls: 1 },
     usedToday: { localMinutes: 0, codexMinutes: 0 },

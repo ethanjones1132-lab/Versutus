@@ -32,6 +32,7 @@ import {
 } from '@/lib/voice/gate-call';
 import { isDeviceIdentityError } from '@/lib/gateway/errors';
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
+import { mediaSocketUrl } from '@/lib/voice/gate-media-url';
 import { loadHandsfreeModule, type HandsfreeNativeModule } from '@/lib/voice/handsfree-device';
 import {
   handsfreeReplyForTurn,
@@ -149,12 +150,6 @@ function callDraftThread(target: HandsfreeCallTarget): ComposerDraftThread | und
 function clampLevel(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
-}
-
-/** The websocket URL for the Gate's media socket, from the gateway's HTTP base. */
-function mediaSocketUrl(baseUrl: string, streamPath: string): string {
-  const wsBase = baseUrl.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:').replace(/\/$/, '');
-  return `${wsBase}${streamPath}`;
 }
 
 export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode }) {

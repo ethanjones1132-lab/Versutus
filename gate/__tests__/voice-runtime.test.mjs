@@ -108,7 +108,7 @@ test('a per-engine switch turns only that engine off, and the kill switch turns 
   assert.equal(status.enabled, true);
   assert.equal(status.engines.local.state, 'disabled');
   assert.match(status.engines.local.reason, /off/i);
-  assert.equal(status.engines.codex.state, 'disabled');
+  assert.equal(status.engines.codex.state, 'unavailable');
 
   writeFileSync(join(paths.root, 'voice.json'), JSON.stringify({ enabled: false }));
   status = voiceStatus({ paths });
@@ -150,7 +150,7 @@ test('voiceStatus reports not-installed without a venv and ready with one', () =
   const paths = voicePaths({ VERSUTUS_GATE_HOME: dir }, 'linux');
   let status = voiceStatus({ paths });
   assert.equal(status.engines.local.state, 'not-installed');
-  assert.equal(status.engines.codex.state, 'disabled');
+  assert.equal(status.engines.codex.state, 'unavailable');
 
   mkdirSync(paths.venv, { recursive: true });
   mkdirSync(join(paths.venv, 'bin'), { recursive: true });
@@ -163,6 +163,17 @@ test('voiceStatus reports not-installed without a venv and ready with one', () =
   }
   status = voiceStatus({ paths });
   assert.equal(status.engines.local.state, 'ready');
+});
+
+test('Codex stays unavailable on a ChatGPT login and is not ready on an API key', () => {
+  const dir = tempDir();
+  const paths = voicePaths({ VERSUTUS_GATE_HOME: dir }, 'linux');
+  const chatgpt = voiceStatus({ paths, readAuthMode: () => 'chatgpt' });
+  assert.equal(chatgpt.engines.codex.state, 'unavailable');
+  assert.match(chatgpt.engines.codex.reason, /ChatGPT login/i);
+  const keyed = voiceStatus({ paths, readAuthMode: () => 'api_key' });
+  assert.equal(keyed.engines.codex.state, 'unavailable');
+  assert.notEqual(keyed.engines.codex.state, 'ready');
 });
 
 test('install fetches optional weights even though readiness does not need them', async () => {
