@@ -74,7 +74,10 @@ function describeChatRoutingRefusal(message: string): HumanizedError | undefined
  * the common typed errors to text that reads like product language instead of
  * an exception dump.
  */
-export function humanizeGatewayError(error: unknown): HumanizedError {
+export function humanizeGatewayError(
+  error: unknown,
+  options: { sentDeviceId?: boolean } = {},
+): HumanizedError {
   if (isUserAbort(error)) {
     return {
       title: 'Cancelled',
@@ -108,18 +111,33 @@ export function humanizeGatewayError(error: unknown): HumanizedError {
 
   // A bootstrap-token phone that omitted its deviceId used to get this 403,
   // which the auth heuristic then called a rejected gateway key. Match it
-  // before that heuristic. The identity module now refuses to send anonymously.
+  // before that heuristic. The identity module now refuses to send
+  // anonymously, so a pairing_required refusal that reached a call *after* it
+  // sent a deviceId is the Gate's own verdict — the phone named itself and
+  // was still not read as paired — not a missing identity and not a rejected
+  // key. A caller whose request carried the device marks that with
+  // `sentDeviceId`; without it the anonymous-call reading stands.
+  const pairingRequired =
+    message === 'A paired device grant is required' || /pairing_required/i.test(message);
   if (
     isDeviceIdentityError(error)
     || message === DEVICE_IDENTITY_FAILURE
-    || message === 'A paired device grant is required'
-    || /pairing_required/i.test(message)
+    || (!options.sentDeviceId && pairingRequired)
   ) {
     return {
       title: 'This phone has no device identity',
       cause: DEVICE_IDENTITY_FAILURE,
       affected: 'notifications and PC-powered calls',
       next: 'Reconnect. Versutus will try to make a new identity for this phone.',
+      action: 'dismiss',
+    };
+  }
+  if (options.sentDeviceId && pairingRequired) {
+    return {
+      title: 'The gateway does not treat this phone as paired',
+      cause: 'The gateway refused this request as an unpaired device.',
+      affected: 'notifications',
+      next: 'Pair this phone with the gateway, then reopen notifications.',
       action: 'dismiss',
     };
   }
@@ -254,8 +272,11 @@ export function errorBannerButton(action: HumanizedErrorAction): ErrorBannerButt
  * template around the raw exception, which is exactly the dev-speak the
  * humanizer exists to remove.
  */
-export function describeGatewayError(error: unknown): string {
-  const { cause, next } = humanizeGatewayError(error);
+export function describeGatewayError(
+  error: unknown,
+  options?: { sentDeviceId?: boolean },
+): string {
+  const { cause, next } = humanizeGatewayError(error, options);
   const trimmedCause = cause.trim();
   if (!next) return trimmedCause;
   const separator = /[.!?]$/.test(trimmedCause) ? ' ' : '. ';

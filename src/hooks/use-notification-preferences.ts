@@ -77,11 +77,16 @@ export function useNotificationPreferences() {
     if (!connected) return;
     setLoading(true);
     setError(null);
+    let sentDeviceId = false;
     try {
-      const raw = await gatewayRequest<Record<string, unknown>>('notifications.preferences.get', await pushDeviceParams());
+      const params = await pushDeviceParams();
+      sentDeviceId = true;
+      const raw = await gatewayRequest<Record<string, unknown>>('notifications.preferences.get', params);
       setPrefs(normalize(raw));
     } catch (err) {
-      setError(describeGatewayError(err));
+      // A refusal that arrived after the phone named itself is the Gate's own
+      // verdict (unpaired), not the missing-identity copy.
+      setError(describeGatewayError(err, { sentDeviceId }));
     } finally {
       setLoading(false);
     }
@@ -98,15 +103,18 @@ export function useNotificationPreferences() {
     async (patch: Partial<NotificationPreferences>) => {
       setSaving(true);
       setError(null);
+      let sentDeviceId = false;
       try {
+        const params = await pushDeviceParams();
+        sentDeviceId = true;
         const raw = await gatewayRequest<Record<string, unknown>>('notifications.preferences.set', {
           ...(patch as Record<string, unknown>),
           // The row a bootstrap-token phone owns is filed under its device id.
-          ...(await pushDeviceParams()),
+          ...params,
         });
         setPrefs(normalize(raw));
       } catch (err) {
-        setError(describeGatewayError(err));
+        setError(describeGatewayError(err, { sentDeviceId }));
       } finally {
         setSaving(false);
       }
@@ -154,8 +162,11 @@ export function useNotificationPreferences() {
     setSendingTest(true);
     setTestResult(null);
     setError(null);
+    let sentDeviceId = false;
     try {
-      const result = (await gatewayRequest<Record<string, unknown>>('notifications.test', await pushDeviceParams())) as {
+      const params = await pushDeviceParams();
+      sentDeviceId = true;
+      const result = (await gatewayRequest<Record<string, unknown>>('notifications.test', params)) as {
         skipped?: string;
         ok?: boolean;
       };
@@ -171,7 +182,7 @@ export function useNotificationPreferences() {
         setTestResult('Test sent — it should arrive with the app backgrounded or killed.');
       }
     } catch (err) {
-      setError(describeGatewayError(err));
+      setError(describeGatewayError(err, { sentDeviceId }));
     } finally {
       setSendingTest(false);
     }

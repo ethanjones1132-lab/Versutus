@@ -239,9 +239,11 @@ describe('every notification call a bootstrap-token phone makes names its device
     const nodeFs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
     const path = jest.requireActual('path') as { join(...parts: string[]): string };
     const hook = nodeFs.readFileSync(path.join(__dirname, '..', 'src', 'hooks', 'use-notification-preferences.ts'), 'utf8');
-    expect(hook).toContain("'notifications.preferences.get', await pushDeviceParams()");
-    expect(hook).toContain("'notifications.test', await pushDeviceParams()");
+    expect(hook).toContain("const params = await pushDeviceParams();");
+    expect(hook).toContain("'notifications.preferences.get', params");
+    expect(hook).toContain("'notifications.test', params");
+    expect(hook).not.toContain("...(await pushDeviceParams())");
     const setCall = hook.slice(hook.indexOf("'notifications.preferences.set'"));
-    expect(setCall.slice(0, setCall.indexOf('});'))).toContain('...(await pushDeviceParams())');
+    expect(setCall.slice(0, setCall.indexOf('});'))).toContain('...params');
   });
 });

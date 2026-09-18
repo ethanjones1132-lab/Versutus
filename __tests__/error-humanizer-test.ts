@@ -1,4 +1,4 @@
-import { GatewayHttpError } from '@/lib/gateway/errors';
+import { DEVICE_IDENTITY_FAILURE, DeviceIdentityError, GatewayHttpError } from '@/lib/gateway/errors';
 import { describeGatewayError, errorBannerButton, humanizeGatewayError, parseStructuredError } from '@/lib/gateway/error-humanizer';
 
 describe('humanizeGatewayError', () => {
@@ -28,6 +28,24 @@ describe('humanizeGatewayError', () => {
     expect(result.action).not.toBe('setup');
     expect(result.cause).toMatch(/device identity/i);
     expect(result.next).toMatch(/reconnect/i);
+  });
+
+  it('keeps a refusal after a device id was sent as a pairing verdict, not a missing identity', () => {
+    const result = humanizeGatewayError(
+      new GatewayHttpError('A paired device grant is required', 403),
+      { sentDeviceId: true },
+    );
+    expect(result.title).toBe('The gateway does not treat this phone as paired');
+    expect(result.cause).toMatch(/unpaired device/i);
+    expect(result.affected).toBe('notifications');
+    expect(result.next).not.toMatch(/new identity/i);
+    expect(result.action).toBe('dismiss');
+  });
+
+  it('still reads a device identity failure as a missing identity even when the flow names a device', () => {
+    const result = humanizeGatewayError(new DeviceIdentityError(), { sentDeviceId: true });
+    expect(result.title).toBe('This phone has no device identity');
+    expect(result.cause).toBe(DEVICE_IDENTITY_FAILURE);
   });
 
   it('maps an unparseable gateway address to an entry-mistake verdict, not a network error', () => {

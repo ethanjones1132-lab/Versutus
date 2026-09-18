@@ -79,6 +79,19 @@ test('an identity failure is shown instead of a paired-device grant refusal', as
   expect(mockRequest).not.toHaveBeenCalled();
 });
 
+test('a paired-device refusal after the phone named itself reads as pairing, not a missing identity', async () => {
+  const { GatewayHttpError } = jest.requireActual('@/lib/gateway/errors') as {
+    GatewayHttpError: new (message: string, status: number) => Error;
+  };
+  mockRequest.mockRejectedValueOnce(new GatewayHttpError('A paired device grant is required', 403));
+  await act(async () => {
+    await preferences.reload();
+  });
+  expect(mockRequest).toHaveBeenCalledWith('notifications.preferences.get', { deviceId: 'test-device' });
+  expect(preferences.error).toMatch(/paired/i);
+  expect(preferences.error).not.toMatch(/could not make its device identity/i);
+});
+
 test('a failed retry clears an earlier successful result', async () => {
   mockRequest.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false });
   await act(async () => { await preferences.sendTest(); });
