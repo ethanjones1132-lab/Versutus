@@ -3902,22 +3902,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   /**
    * The widget's Bot half. The roster is read once per connected transition,
    * like the routine list above, so the quick-launch rows name real Bots; a
-   * failed read keeps the last list rather than emptying the rows.
+   * failed read keeps the last list rather than emptying the rows. A late
+   * result from an older Gateway is ignored so a connected-to-connected
+   * replacement cannot leave the prior roster in the widget.
    */
   const [widgetBots, setWidgetBots] = useState<import('@/lib/gateway/bots').PublicBot[]>([]);
 
   useEffect(() => {
     if (status !== 'connected') return;
     let live = true;
+    const gatewayId = activeGateway?.id;
     void listBots()
       .then((bots) => {
-        if (live) setWidgetBots(bots);
+        if (live && gatewayId === activeGateway?.id) setWidgetBots(bots);
       })
       .catch(() => undefined);
     return () => {
       live = false;
     };
-  }, [listBots, status]);
+  }, [activeGateway?.id, listBots, status]);
 
   /**
    * The widget's privacy preference. Read on mount and again whenever the

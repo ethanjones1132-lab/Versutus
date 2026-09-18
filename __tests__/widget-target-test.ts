@@ -344,11 +344,12 @@ describe('the provider writes the snapshot as run state changes', () => {
 
   test('the Bot rows come from the roster read once per connect, like the routines', () => {
     const read = provider().match(
-      /useEffect\(\(\) => \{\n    if \(status !== 'connected'\) return;[\s\S]*?\n  \}, \[listBots, status\]\);/,
+      /useEffect\(\(\) => \{\n    if \(status !== 'connected'\) return;[\s\S]*?\n  \}, \[activeGateway\?\.id, listBots, status\]\);/,
     )?.[0];
     expect(read).toBeDefined();
+    expect(read).toContain('const gatewayId = activeGateway?.id;');
     expect(read).toContain('.then((bots) =>');
-    expect(read).toContain('if (live) setWidgetBots(bots);');
+    expect(read).toContain('if (live && gatewayId === activeGateway?.id) setWidgetBots(bots);');
     expect(read).toContain('.catch(() => undefined);');
   });
 
