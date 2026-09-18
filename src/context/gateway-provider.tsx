@@ -1293,14 +1293,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const isCurrent = () => clientGenerationRef.current === generation;
       // Solution A4: a Gate this device leaves must forget this phone's push
       // token before its client is discarded, so a replaced Gate cannot keep
-      // notifying. Best-effort, like the delete path: an unreachable Gate is
-      // still replaced.
+      // notifying. Best-effort and not awaited: an unreachable Gate would
+      // otherwise hold the switch for the whole request timeout.
       if (leaving && leavingKind === 'custom') {
-        try {
-          await deregisterWithGate(leaving);
-        } catch {
+        void deregisterWithGate(leaving).catch(() => {
           // Ignore: the switch happens either way.
-        }
+        });
       }
       if (!isCurrent()) return;
       clientRef.current?.disconnect();

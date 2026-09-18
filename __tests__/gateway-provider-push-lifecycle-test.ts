@@ -44,9 +44,12 @@ describe('push registration lifecycle', () => {
   test('an attach that supersedes a Gate deregisters it before discarding the client', () => {
     // The outgoing client is captured before the supersede bumps the generation.
     expect(attach).toContain('const leaving = clientRef.current;');
-    const deregisterAt = attach.indexOf('await deregisterWithGate(leaving)');
+    // Fired, not awaited (like the explicit disconnect): an unreachable Gate must
+    // not hold the switch for the whole request timeout.
+    const deregisterAt = attach.indexOf('void deregisterWithGate(leaving)');
     expect(deregisterAt).toBeGreaterThan(-1);
-    // The deregistration lands before the old client is discarded.
+    expect(attach).not.toContain('await deregisterWithGate(leaving)');
+    // The deregistration is issued before the old client is discarded.
     const disconnectAt = attach.indexOf('clientRef.current?.disconnect();');
     expect(disconnectAt).toBeGreaterThan(deregisterAt);
   });
@@ -55,11 +58,12 @@ describe('push registration lifecycle', () => {
     // Only a Gate the manifest flow identified has a push row; Hermes and
     // OpenClaw are never told to forget a token they never registered.
     expect(attach).toContain("leavingKind === 'custom'");
-    const deregisterAt = attach.indexOf('await deregisterWithGate(leaving)');
+    const deregisterAt = attach.indexOf('void deregisterWithGate(leaving)');
     const after = attach.slice(deregisterAt);
-    // A Gate that is already unreachable is still switched away from.
-    expect(after).toContain('catch {');
-    // If a newer attach superseded us while we awaited, it owns the teardown.
+    // A Gate that is already unreachable is still switched away from, and its
+    // rejection is swallowed rather than surfacing as an unhandled promise.
+    expect(after).toContain('.catch(');
+    // If a newer attach superseded us meanwhile, it owns the teardown.
     expect(after).toContain('if (!isCurrent()) return;');
   });
 
