@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import { buildDeviceAuthPayloadV3 } from '@/lib/gateway/auth-payload';
 import { clearDeviceAuthToken, loadDeviceAuthToken, saveDeviceAuthToken } from '@/lib/gateway/device-auth-token';
 import { loadOrCreateDeviceIdentity, signDevicePayload } from '@/lib/gateway/device-identity';
+import { DEVICE_IDENTITY_FAILURE, isDeviceIdentityError } from '@/lib/gateway/errors';
 import { ConnectionMonitor } from '@/lib/gateway/connection-monitor';
 import type { ChatEventPayload, GatewayFrame } from '@/lib/gateway/openclaw-types';
 import type { ConnectionStatus, GatewayHelloOk, GatewayProfile, PairingDetails } from '@/lib/gateway/types';
@@ -386,9 +387,18 @@ export class OpenClawGatewayClient {
         if (code === 'PAIRING_REQUIRED' || code === 'DEVICE_IDENTITY_REQUIRED') {
           const details = readPairingDetails(frame.error?.details);
           this.callbacks.onPairingRequired?.(details);
-          void this.getIdentity().then((identity) => {
-            this.setStatus('pairing', `Waiting for approval · ${identity.deviceId.slice(0, 12)}…`);
-          });
+          void this.getIdentity()
+            .then((identity) => {
+              this.setStatus('pairing', `Waiting for approval · ${identity.deviceId.slice(0, 12)}…`);
+            })
+            .catch((error) => {
+              // The pairing callback already carries the request details; a
+              // failed identity read must not leave 'connecting' forever — and
+              // never leaks raw storage or key text into the status.
+              const message = isDeviceIdentityError(error) ? error.message : DEVICE_IDENTITY_FAILURE;
+              this.setStatus('pairing', message);
+              this.callbacks.onError?.(message);
+            });
         } else if (code === 'AUTH_DEVICE_TOKEN_MISMATCH' && this.connectUsedStoredDeviceToken && !this.staleTokenRetryUsed) {
           this.staleTokenRetryUsed = true;
           void this.getIdentity()

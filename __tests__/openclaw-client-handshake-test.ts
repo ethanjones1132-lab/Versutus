@@ -23,11 +23,19 @@ import {
   loadDeviceAuthToken,
   saveDeviceAuthToken,
 } from '@/lib/gateway/device-auth-token';
-import { signDevicePayload } from '@/lib/gateway/device-identity';
+import { loadOrCreateDeviceIdentity, signDevicePayload } from '@/lib/gateway/device-identity';
+import { DeviceIdentityError, DEVICE_IDENTITY_FAILURE } from '@/lib/gateway/errors';
 
 const mockLoadToken = loadDeviceAuthToken as jest.Mock;
 const mockSign = signDevicePayload as jest.Mock;
 const mockSaveToken = saveDeviceAuthToken as jest.Mock;
+const mockIdentity = loadOrCreateDeviceIdentity as jest.Mock;
+const DEFAULT_IDENTITY = {
+  deviceId: 'device-1',
+  publicKeyB64Url: 'public-key',
+  privateKeyB64Url: 'private-key',
+  createdAtMs: 0,
+};
 
 /**
  * The client only ever touches three members of a WebSocket — onopen,
@@ -117,6 +125,7 @@ describe('OpenClawGatewayClient handshake', () => {
     mockLoadToken.mockReset().mockResolvedValue(null);
     mockSign.mockReset().mockResolvedValue('signature');
     mockSaveToken.mockClear();
+    mockIdentity.mockReset().mockResolvedValue(DEFAULT_IDENTITY);
     (globalThis as { WebSocket: unknown }).WebSocket = FakeWebSocket;
     client = new OpenClawGatewayClient(PROFILE, {});
   });
@@ -385,5 +394,96 @@ describe('OpenClawGatewayClient handshake', () => {
     client.resumeReconnect(); // foregrounded → immediate fresh attempt
     expect(client.connectionStatus).toBe('connecting');
     expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  test('a pairing-required answer reports the request id and a pairing status that names this device', async () => {
+    const paired: unknown[] = [];
+    const c = new OpenClawGatewayClient(PROFILE, {
+      onPairingRequired: (details) => paired.push(details),
+    });
+    c.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.serverOpen();
+    ws.serverFrame(challenge('n1'));
+    await flush();
+    expect(ws.sentFrames()).toHaveLength(1); // identity was read, connect went out
+
+    ws.serverFrame({
+      type: 'res',
+      id: 'connect',
+      ok: false,
+      error: {
+        code: 'PAIRING_REQUIRED',
+        message: 'Approval required',
+        details: { requestId: 'req-77', reason: 'untrusted device' },
+      },
+    });
+    await flush();
+
+    expect(paired[0]).toEqual({ reason: 'untrusted device', requestId: 'req-77' });
+    expect(c.connectionStatus).toBe('pairing');
+    expect(c.statusDetail).toBe('Waiting for approval · device-1…');
+    c.disconnect();
+  });
+
+  test('a pairing-required answer with a failing identity read reports the identity failure, not a silent wait', async () => {
+    const errors: string[] = [];
+    const statuses: Array<[string, string]> = [];
+    const paired: unknown[] = [];
+    const c = new OpenClawGatewayClient(PROFILE, {
+      onError: (message) => errors.push(message),
+      onStatus: (status, detail) => statuses.push([status, detail ?? '']),
+      onPairingRequired: (details) => paired.push(details),
+    });
+    c.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.serverOpen();
+    mockIdentity.mockRejectedValueOnce(new Error('could not read private-key bytes'));
+    ws.serverFrame(challenge('n1')); // sendConnect trips over the failed identity read
+    await flush();
+    expect(ws.sentFrames()).toHaveLength(0); // nothing was sent
+
+    ws.serverFrame({
+      type: 'res',
+      id: 'connect',
+      ok: false,
+      error: { code: 'PAIRING_REQUIRED', message: 'Approval required', details: { requestId: 'req-77' } },
+    });
+    await flush();
+
+    expect(paired[0]).toEqual({ requestId: 'req-77' }); // the pairing callback still tells the UI
+    expect(statuses).toContainEqual(['pairing', DEVICE_IDENTITY_FAILURE]);
+    expect(c.connectionStatus).toBe('pairing');
+    expect(c.statusDetail).toBe(DEVICE_IDENTITY_FAILURE);
+    expect(c.statusDetail).not.toMatch(/private-key/); // key material is never status text
+    expect(errors[errors.length - 1]).toBe(DEVICE_IDENTITY_FAILURE); // the product copy, not the raw error
+    c.disconnect();
+  });
+
+  test('a DeviceIdentityError from the pairing read keeps its product copy, not raw storage text', async () => {
+    const paired: unknown[] = [];
+    const c = new OpenClawGatewayClient(PROFILE, {
+      onPairingRequired: (details) => paired.push(details),
+    });
+    c.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.serverOpen();
+    mockIdentity.mockRejectedValueOnce(new DeviceIdentityError());
+    ws.serverFrame(challenge('n1'));
+    await flush();
+
+    ws.serverFrame({
+      type: 'res',
+      id: 'connect',
+      ok: false,
+      error: { code: 'PAIRING_REQUIRED', message: 'Approval required' },
+    });
+    await flush();
+
+    expect(paired).toHaveLength(1);
+    expect(c.connectionStatus).toBe('pairing');
+    expect(c.statusDetail).toBe(DEVICE_IDENTITY_FAILURE);
+    expect(c.statusDetail).not.toMatch(/private-key|secure store/);
+    c.disconnect();
   });
 });
