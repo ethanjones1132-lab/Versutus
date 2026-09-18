@@ -95,6 +95,7 @@ export class HermesGatewayClient {
       baseUrl: profile.url,
       token: profile.token,
       sessionKey: profile.sessionKey,
+      alternateIpv4: profile.alternateIpv4,
     });
     this.monitor = new ConnectionMonitor({
       probe: async () => (await this.healthCheck()) !== null,
@@ -126,6 +127,7 @@ export class HermesGatewayClient {
       baseUrl: profile.url,
       token: profile.token,
       sessionKey: profile.sessionKey,
+      alternateIpv4: profile.alternateIpv4,
     });
     // A new endpoint may speak the other dialect; re-identify on next read.
     this.modelDialect = null;

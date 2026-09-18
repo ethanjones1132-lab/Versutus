@@ -108,6 +108,78 @@ describe('HttpTransport', () => {
     expect(transport.displayHost).toBe('ethanspc.tail3a1a8a.ts.net');
   });
 
+  test('a MagicDNS miss retries the advertised IPv4 on http', async () => {
+    const calls: string[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((url: unknown) => {
+      calls.push(String(url));
+      if (String(url).includes('ethanspc.tail3a1a8a.ts.net')) {
+        return Promise.reject(
+          new Error(
+            'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.tail3a1a8a.ts.net"',
+          ),
+        );
+      }
+      return Promise.resolve(jsonResponse({ ok: true }));
+    });
+
+    const transport = new HttpTransport({
+      baseUrl: 'http://ethanspc.tail3a1a8a.ts.net:8760',
+      alternateIpv4: ['100.95.137.83'],
+    });
+    await expect(transport.request('GET', '/v1/runs')).resolves.toEqual({ ok: true });
+    expect(calls).toEqual([
+      'http://ethanspc.tail3a1a8a.ts.net:8760/v1/runs',
+      'http://100.95.137.83:8760/v1/runs',
+    ]);
+  });
+
+  test('does not rewrite an https URL onto an IP', async () => {
+    const calls: string[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((url: unknown) => {
+      calls.push(String(url));
+      return Promise.reject(
+        new Error(
+          'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.tail3a1a8a.ts.net"',
+        ),
+      );
+    });
+
+    const transport = new HttpTransport({
+      baseUrl: 'https://ethanspc.tail3a1a8a.ts.net:8760',
+      alternateIpv4: ['100.95.137.83'],
+    });
+    await expect(transport.request('GET', '/v1/runs')).rejects.toMatchObject({
+      name: 'HostLookupError',
+    });
+    expect(calls).toEqual(['https://ethanspc.tail3a1a8a.ts.net:8760/v1/runs']);
+  });
+
+  test('a lookup failure without an IPv4 fallback is a HostLookupError, not the Java exception', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.reject(
+        new Error(
+          'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.tail3a1a8a.ts.net"',
+        ),
+      ),
+    );
+    const transport = new HttpTransport({ baseUrl: 'http://ethanspc.tail3a1a8a.ts.net:8760' });
+    await expect(transport.request('GET', '/v1/runs')).rejects.toMatchObject({
+      name: 'HostLookupError',
+      message: expect.stringMatching(/could not look up your PC's address/i),
+    });
+  });
+
+  test('a refused token is not retried as a DNS miss', async () => {
+    const fetchMock = jest.fn(() => Promise.resolve(jsonResponse({ error: { message: 'Invalid API key' } }, 401)));
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const transport = new HttpTransport({
+      baseUrl: 'http://ethanspc.tail3a1a8a.ts.net:8760',
+      alternateIpv4: ['100.95.137.83'],
+    });
+    await expect(transport.request('GET', '/v1/runs')).rejects.toBeInstanceOf(GatewayHttpError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   test('prefers JSON message when error is the generic HTTP phrase', async () => {
     (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
       Promise.resolve(

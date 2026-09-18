@@ -3,6 +3,8 @@
 // talks to a single PortalClient surface; each adapter speaks its own
 // dialect underneath. See docs/portal-architecture.md §6.
 
+import Constants from 'expo-constants';
+import { advertisedIpv4, ipv4FromExpoExtra } from '@/lib/gateway/host-lookup';
 import { HermesGatewayClient, type GatewayClientCallbacks } from '@/lib/gateway/client';
 import type { PublicBot } from '@/lib/gateway/bots';
 import type { BotGroupRoom, GroupReply, GroupTranscriptEntry, GroupTurnError } from '@/lib/gateway/groups';
@@ -193,23 +195,37 @@ export function adapterForKind(kind: GatewayKind): AdapterDefinition {
  *   supplied (requires endpoints.health so connect can probe); falls back to
  *   the Hermes-shaped HTTP adapter when the manifest has no usable routes.
  */
+function profileWithAlternateIpv4(profile: GatewayProfile, identity?: GatewayIdentity): GatewayProfile {
+  return {
+    ...profile,
+    alternateIpv4: advertisedIpv4({
+      advertised: identity?.manifest?.transport?.ipv4,
+      configuredHosts: [
+        ...(profile.alternateIpv4 ?? []),
+        ...ipv4FromExpoExtra(Constants.expoConfig?.extra),
+      ],
+    }),
+  };
+}
+
 export function createClientForKind(
   kind: GatewayKind,
   profile: GatewayProfile,
   callbacks: PortalClientCallbacks = {},
   identity?: GatewayIdentity,
 ): PortalClient {
+  const reachable = profileWithAlternateIpv4(profile, identity);
   switch (kind) {
     case 'openclaw':
-      return new OpenClawAdapterClient(profile, callbacks);
+      return new OpenClawAdapterClient(reachable, callbacks);
     case 'custom':
       if (identity?.manifest?.endpoints?.health) {
-        return new ManifestClient(profile, identity, callbacks);
+        return new ManifestClient(reachable, identity, callbacks);
       }
-      return new HermesGatewayClient(profile, callbacks as GatewayClientCallbacks);
+      return new HermesGatewayClient(reachable, callbacks as GatewayClientCallbacks);
     case 'hermes':
     case 'unknown':
     default:
-      return new HermesGatewayClient(profile, callbacks as GatewayClientCallbacks);
+      return new HermesGatewayClient(reachable, callbacks as GatewayClientCallbacks);
   }
 }

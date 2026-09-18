@@ -52,6 +52,7 @@ export function buildManifest({
   capabilityKinds = [],
   capabilityInstances = [],
   rpcMethods = [],
+  ipv4 = [],
 }) {
   // v2 providers are owned by ProviderService and persist under Gate home;
   // legacy ones are registry files. Both are advertised, but a v2 record wins
@@ -75,7 +76,10 @@ export function buildManifest({
     manifest: MANIFEST_SPEC,
     kind: GATE_KIND,
     name,
-    transport: { primary: 'http' },
+    transport: {
+      primary: 'http',
+      ...(Array.isArray(ipv4) && ipv4.length > 0 ? { ipv4: [...new Set(ipv4.filter((ip) => typeof ip === 'string' && ip.length > 0))] } : {}),
+    },
     endpoints: {
       health: '/health',
       models: '/v1/models',

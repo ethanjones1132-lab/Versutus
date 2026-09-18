@@ -24,6 +24,18 @@ test('declares the manifest spec version and kind', () => {
   assert.equal(manifest.name, "Ethan's Gate");
 });
 
+test('advertises tailnet IPv4s on transport when given, and omits an empty list', () => {
+  const withIp = buildManifest({
+    name: 'Gate',
+    capabilityKinds,
+    capabilityInstances,
+    ipv4: ['100.95.137.83', '100.95.137.83'],
+  });
+  assert.deepEqual(withIp.transport, { primary: 'http', ipv4: ['100.95.137.83'] });
+  const without = buildManifest({ name: 'Gate', capabilityKinds, capabilityInstances });
+  assert.equal(without.transport.ipv4, undefined);
+});
+
 test('advertises design-spec transport, endpoints, and capabilities', () => {
   const manifest = buildManifest({ name: 'Gate', capabilityKinds, capabilityInstances });
   assert.deepEqual(manifest.transport, { primary: 'http' });

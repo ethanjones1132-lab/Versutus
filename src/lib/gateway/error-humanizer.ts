@@ -6,6 +6,7 @@ import {
   isGatewayTokenRequiredMessage,
   isUserAbort,
 } from '@/lib/gateway/errors';
+import { HostLookupError, isHostLookupFailure } from '@/lib/gateway/host-lookup';
 import { describeRunFailure } from '@/lib/gateway/run-failures';
 
 export type HumanizedErrorAction = 'reconnect' | 'setup' | 'copy' | 'dismiss';
@@ -170,6 +171,19 @@ export function humanizeGatewayError(error: unknown): HumanizedError {
           : 'bot routing',
       next: failureView.next,
       action: 'copy',
+    };
+  }
+
+  if (error instanceof HostLookupError || isHostLookupFailure(error)) {
+    const hostname = error instanceof HostLookupError ? error.hostname : undefined;
+    return {
+      title: 'The phone could not look up your PC',
+      cause: hostname
+        ? `The phone could not look up your PC's address (${hostname}).`
+        : "The phone could not look up your PC's address.",
+      affected: 'gateway connection',
+      next: 'Stay on the tailnet and retry. If this keeps happening, reconnect using the PC\'s tailnet IP.',
+      action: 'reconnect',
     };
   }
 

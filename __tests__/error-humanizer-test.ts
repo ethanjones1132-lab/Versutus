@@ -48,6 +48,17 @@ describe('humanizeGatewayError', () => {
     expect(result.action).toBe('reconnect');
   });
 
+  it('maps a MagicDNS miss to a lookup verdict, not a raw Java exception', () => {
+    const result = humanizeGatewayError(
+      new Error(
+        'fetch failed: java.net.UnknownHostException: Unable to resolve host "ethanspc.tail3a1a8a.ts.net"',
+      ),
+    );
+    expect(result.title).toMatch(/look up your PC/i);
+    expect(result.cause).not.toMatch(/UnknownHostException/);
+    expect(result.action).toBe('reconnect');
+  });
+
   it('maps generic gateway HTTP errors to reconnect action', () => {
     const result = humanizeGatewayError(new GatewayHttpError('internal server error', 500));
     expect(result.title).toBe('Gateway error 500');

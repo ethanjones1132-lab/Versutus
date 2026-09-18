@@ -8,6 +8,7 @@ import { isAuthRejection } from '@/lib/gateway/errors';
 import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
 import { withGetSessionsRetry } from '@/lib/gateway/get-sessions-retry';
 import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
+import { advertisedIpv4 } from '@/lib/gateway/host-lookup';
 import { HttpTransport } from '@/lib/gateway/http-transport';
 import { ConnectionMonitor, hasRecentContact } from '@/lib/gateway/connection-monitor';
 import { streamingFetch } from '@/lib/net/streaming-fetch';
@@ -65,15 +66,21 @@ export class ManifestClient implements PortalClient {
     private callbacks: PortalClientCallbacks = {},
   ) {
     this.endpoints = identity.manifest?.endpoints ?? {};
+    const alternateIpv4 = advertisedIpv4({
+      advertised: identity.manifest?.transport?.ipv4,
+      configuredHosts: profile.alternateIpv4,
+    });
     this.transport = new HttpTransport({
       baseUrl: profile.url,
       token: profile.token,
       sessionKey: profile.sessionKey,
+      alternateIpv4,
     });
     this.rootTransport = new HttpTransport({
       baseUrl: gatewayRootUrl(profile.url),
       token: profile.token,
       sessionKey: profile.sessionKey,
+      alternateIpv4,
     });
     this.monitor = new ConnectionMonitor({
       probe: async () => (await this.healthCheck()) !== null,
@@ -111,11 +118,21 @@ export class ManifestClient implements PortalClient {
 
   updateProfile(profile: GatewayProfile) {
     this.profile = profile;
-    this.transport.update({ baseUrl: profile.url, token: profile.token, sessionKey: profile.sessionKey });
+    const alternateIpv4 = advertisedIpv4({
+      advertised: this.identity.manifest?.transport?.ipv4,
+      configuredHosts: profile.alternateIpv4,
+    });
+    this.transport.update({
+      baseUrl: profile.url,
+      token: profile.token,
+      sessionKey: profile.sessionKey,
+      alternateIpv4,
+    });
     this.rootTransport.update({
       baseUrl: gatewayRootUrl(profile.url),
       token: profile.token,
       sessionKey: profile.sessionKey,
+      alternateIpv4,
     });
   }
 

@@ -1,4 +1,5 @@
 import { GatewayHttpError } from '@/lib/gateway/errors';
+import { hostnameOf, HostLookupError, isHostLookupFailure, rewriteHttpBaseHost } from '@/lib/gateway/host-lookup';
 import { messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 
 export const DEFAULT_TIMEOUT_MS = 30000;
@@ -7,6 +8,8 @@ export type HttpTransportOptions = {
   baseUrl: string;
   token?: string;
   sessionKey?: string;
+  /** IPv4s the Gate advertised (or the app already knows) for a DNS blip. */
+  alternateIpv4?: string[];
 };
 
 /**
@@ -57,6 +60,15 @@ export class HttpTransport {
     return headers;
   }
 
+  private requestUrls(path: string): string[] {
+    const urls = [`${this.baseUrl}${path}`];
+    for (const ip of this.options.alternateIpv4 ?? []) {
+      const rewritten = rewriteHttpBaseHost(this.baseUrl, ip);
+      if (rewritten) urls.push(`${rewritten}${path}`);
+    }
+    return urls;
+  }
+
   async request<T>(
     method: string,
     path: string,
@@ -64,38 +76,45 @@ export class HttpTransport {
     timeoutMs = DEFAULT_TIMEOUT_MS,
     extraHeaders?: Record<string, string>,
   ): Promise<T> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const response = await fetch(`${this.baseUrl}${path}`, {
-        method,
-        headers: { ...this.headers, ...extraHeaders },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      // Any HTTP response proves the gateway is alive, including a rejection.
-      this.contactAt = Date.now();
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        throw new GatewayHttpError(messageFromHttpErrorBody(errorText, response.status), response.status);
-      }
-
-      const text = await response.text();
+    let lastError: unknown;
+    for (const url of this.requestUrls(path)) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        return JSON.parse(text) as T;
-      } catch {
-        return text as unknown as T;
+        const response = await fetch(url, {
+          method,
+          headers: { ...this.headers, ...extraHeaders },
+          body: body ? JSON.stringify(body) : undefined,
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        // Any HTTP response proves the gateway is alive, including a rejection.
+        this.contactAt = Date.now();
+
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => '');
+          throw new GatewayHttpError(messageFromHttpErrorBody(errorText, response.status), response.status);
+        }
+
+        const text = await response.text();
+        try {
+          return JSON.parse(text) as T;
+        } catch {
+          return text as unknown as T;
+        }
+      } catch (error) {
+        clearTimeout(timer);
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          throw new Error(`Request timed out: ${method} ${path}`);
+        }
+        lastError = error;
+        if (!isHostLookupFailure(error)) throw error;
       }
-    } catch (error) {
-      clearTimeout(timer);
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        throw new Error(`Request timed out: ${method} ${path}`);
-      }
-      throw error;
     }
+    if (isHostLookupFailure(lastError) || lastError === undefined) {
+      throw new HostLookupError(hostnameOf(this.baseUrl));
+    }
+    throw lastError;
   }
 
   /** Read an SSE body, invoking onChunk for each `data:` payload. */

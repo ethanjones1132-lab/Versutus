@@ -70,6 +70,11 @@ export type GatewayProfile = {
    * added directly.
    */
   parentId?: string;
+  /**
+   * IPv4s this device last saw the Gate advertise. Used to retry a request
+   * when MagicDNS cannot resolve the hostname.
+   */
+  alternateIpv4?: string[];
 };
 
 // ─── Health ───────────────────────────────────────────────────────

@@ -77,7 +77,7 @@ export function isGatewayTokenRequiredMessage(message?: string | null): boolean 
  */
 export function isConnectionError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /(fetch|network|connection|reachable|timed out|timeout|econnrefused|ENOTFOUND|getaddrinfo|failed to fetch|aborted by peer|network error|stream closed unexpectedly)/i.test(
+  return /(fetch|network|connection|reachable|timed out|timeout|econnrefused|ENOTFOUND|getaddrinfo|UnknownHostException|Unable to resolve host|failed to fetch|aborted by peer|network error|stream closed unexpectedly)/i.test(
     message,
   );
 }

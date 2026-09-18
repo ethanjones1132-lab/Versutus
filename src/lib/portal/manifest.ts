@@ -140,6 +140,8 @@ export type GatewayManifest = {
     primary?: 'http' | 'ws';
     /** WS path when primary transport is 'ws' (e.g. '/openclaw'). */
     basePath?: string;
+    /** Tailnet IPv4s this Gate advertises so a DNS blip is not fatal. */
+    ipv4?: string[];
   };
   capabilities?: {
     chat?: boolean;

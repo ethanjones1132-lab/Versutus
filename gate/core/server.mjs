@@ -9,6 +9,7 @@ import { createGatewayMethods } from './capabilities/gateway-methods.mjs';
 import { createTerminalSessions } from './cli-environments/terminal.mjs';
 import { getSecret } from './capabilities/secrets.mjs';
 import { buildManifest } from './manifest.mjs';
+import { tailnetIpv4FromInterfaces } from './reachability.mjs';
 import { ProviderStore } from './providers/store.mjs';
 import { migrateLegacyProviders } from './providers/migrate-v1.mjs';
 import { ProviderService } from './providers/service.mjs';
@@ -561,6 +562,7 @@ export async function createGate(config = {}) {
         ...Object.keys(gatewayMethods),
         ...dispatch.keys(),
       ])].sort(),
+      ipv4: tailnetIpv4FromInterfaces(),
     });
     return { kinds, instances, providers, manifest, dispatch };
   }
