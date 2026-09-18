@@ -13,6 +13,7 @@ master yet. Nothing else in the repo is pending: every other branch was merged a
 | 5088d5d | fix(format): a timestamp from another year shows its year | from `archive/gemma-sprint-optimization`; needs `npm run verify` |
 | 33a06b2 | fix(format): a count in the billions reads as B rather than thousands of M | same |
 | 3010a62 | fix(encoding): an unpaired surrogate encodes as U+FFFD rather than invalid UTF-8 | same (its stale coverage-baseline hunk was dropped) |
+| (latest) | fix(fleet): host and routine edges render with unique keys and native filters host layer | last commit of the Jev sprint (71158ef, 09-18 18:44), not yet audited |
 
 `docs/plans/archive-2026-09-12/` - realtime-voice and Android-widget plans, briefs and drafts from
 the 09-12/09-13 agent runs. They were untracked files in the deleted Codex worktrees; kept for history.
