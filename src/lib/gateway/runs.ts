@@ -74,6 +74,13 @@ export type ActivityRun = {
    * guessed into a Bot (D3's step zero, FUTURE-ITEMS.md:792-797).
    */
   botId?: string;
+  /**
+   * The gateway this run was started on. Used to ensure stop/replay actions
+   * target the correct gateway client. Absent on rows persisted before this
+   * field existed; a run with no gatewayId can only be acted on when its
+   * gateway is the active one (legacy behavior preserved).
+   */
+  gatewayId?: string;
 };
 
 export const ACTIVITY_EVENT_CAP = 50;

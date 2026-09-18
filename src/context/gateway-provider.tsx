@@ -2676,13 +2676,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // remembers the Bot it was started for — the app's selected Bot scope at
       // creation, which is absent for configurable chat. Scorecards fold on it
       // (D3); no later mutation writes it, because a run cannot change Bot.
+      // The gatewayId stamps the owning gateway so stop/replay can refuse
+      // stale-owner actions when the operator has switched gateways.
       const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const startedAt = Date.now();
+      const gatewayId = gateway.id;
       const patchRun = (runId: string, patch: Partial<ActivityRun>) => {
         patchActivityRuns((prev) => prev.map((run) => (run.id === runId ? { ...run, ...patch } : run)));
       };
       patchActivityRuns((prev) => [
-        { id: localId, prompt, status: 'running', startedAt, events: [], botId: selectedBotIdRef.current },
+        { id: localId, prompt, status: 'running', startedAt, events: [], botId: selectedBotIdRef.current, gatewayId },
         ...prev,
       ]);
       const trackedId = { current: localId };
@@ -2800,6 +2803,25 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const stopActivityRun = useCallback(
     (runId: string) => {
+      // Find the run to check its owning gateway.
+      const runs = activityRunsRef.current;
+      const run = runs.find((r) => r.id === runId);
+      const activeGatewayId = activeGatewayRef.current?.id;
+
+      // If the run has a gatewayId and it doesn't match the active gateway,
+      // refuse honestly — we don't have the old gateway's client anymore.
+      if (run?.gatewayId && run.gatewayId !== activeGatewayId) {
+        const message = `This run belongs to another gateway (${run.gatewayId}). Reconnect to that gateway to stop it.`;
+        patchActivityRuns((prev) =>
+          prev.map((r) =>
+            r.id === runId && (r.status === 'running' || r.status === 'waiting-approval')
+              ? { ...r, status: 'failed', finishedAt: Date.now(), summary: message.slice(0, 160) }
+              : r,
+          ),
+        );
+        return;
+      }
+
       // Abort the local driver (denies any pending approval, stops the stream).
       abortAndClear(runAbortControllerRef);
       // Ask the gateway to stop the run server-side (best effort).
@@ -2822,9 +2844,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * the SSE end-marker after the replay finishes). The `signal` lets the
    * caller cut a replay mid-stream when the sheet closes — the SSE response is
    * released and no more events are appended.
+   *
+   * Refuses to replay if the run's owning gateway is not the active one, since
+   * we only hold a client for the current gateway.
    */
   const loadRunEvents = useCallback(
     async (runId: string, signal: AbortSignal): Promise<RunEvent[]> => {
+      const run = activityRunsRef.current.find((r) => r.id === runId);
+      const activeGatewayId = activeGatewayRef.current?.id;
+
+      // If the run has a gatewayId and it doesn't match the active gateway,
+      // refuse honestly — we don't have the old gateway's client.
+      if (run?.gatewayId && run.gatewayId !== activeGatewayId) {
+        throw new Error(`This run belongs to another gateway (${run.gatewayId}). Reconnect to that gateway to replay it.`);
+      }
+
       const client = clientRef.current;
       if (!client || !client.streamRunEvents) {
         throw new Error('This gateway does not expose run events.');
