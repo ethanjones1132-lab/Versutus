@@ -121,6 +121,7 @@ import {
   outcomeToActivityStatus,
   runEventPreview,
   runStatusToActivityStatus,
+  runsForGateway,
   settleUnresolvedRuns,
   type ActivityRun,
   type RunCapableClient,
@@ -923,7 +924,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   /** Runs for the active gateway only — other gateways' runs are preserved in storage but not shown. */
   const activityRunsForActiveGateway = useMemo(
-    () => (activeGateway ? activityRuns.filter((run) => run.gatewayId === activeGateway.id) : []),
+    () => runsForGateway(activityRuns, activeGateway?.id),
     [activityRuns, activeGateway?.id],
   );
   /** The runs this process is holding a progress notice for. */

@@ -85,6 +85,17 @@ export type ActivityRun = {
 
 export const ACTIVITY_EVENT_CAP = 50;
 
+/**
+ * The runs Home, Activity and the widget show for one gateway. A run saved
+ * before `gatewayId` existed names no gateway; it stays visible under the
+ * active one (the pre-scoping behaviour) instead of silently vanishing from
+ * every screen, which is what a strict id match did to existing history.
+ */
+export function runsForGateway(runs: ActivityRun[], gatewayId: string | undefined): ActivityRun[] {
+  if (!gatewayId) return [];
+  return runs.filter((run) => !run.gatewayId || run.gatewayId === gatewayId);
+}
+
 /** Defensive one-line preview of a run event payload. */
 export function runEventPreview(event: RunEvent): string {
   const data = event.data as Record<string, unknown> | undefined;

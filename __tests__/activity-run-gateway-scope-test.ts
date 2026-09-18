@@ -121,8 +121,9 @@ describe('gateway-provider filters activityRuns by active gateway', () => {
   test('activityRunsForActiveGateway is derived from activityRuns and activeGateway', () => {
     const src = readSource('src', 'context', 'gateway-provider.tsx');
     const derivation = between(src, 'const activityRunsForActiveGateway = useMemo(', '},');
-    expect(derivation).toContain('activityRuns.filter');
-    expect(derivation).toContain('run.gatewayId === activeGateway.id');
+    // The scoping rule itself lives in runsForGateway (tested below); legacy runs
+    // with no gatewayId stay visible instead of vanishing from Home and Activity.
+    expect(derivation).toContain('runsForGateway(activityRuns, activeGateway?.id)');
   });
 
   test('activityRunsForActiveGateway is exposed in the context value', () => {
@@ -219,5 +220,29 @@ describe('stopActivityRun and loadRunEvents respect gateway ownership', () => {
     // The condition is falsy when gatewayId is undefined, so legacy runs are allowed
     expect(stopFn).toContain('run?.gatewayId && run.gatewayId !== activeGatewayId');
     expect(loadFn).toContain('run?.gatewayId && run.gatewayId !== activeGatewayId');
+  });
+});
+describe('runsForGateway', () => {
+  const { runsForGateway } = jest.requireActual('@/lib/gateway/runs') as typeof import('@/lib/gateway/runs');
+  const run = (id: string, gatewayId?: string): ActivityRun => ({
+    id,
+    prompt: id,
+    status: 'complete',
+    startedAt: 1,
+    events: [],
+    ...(gatewayId ? { gatewayId } : {}),
+  });
+  const ids = (runs: ActivityRun[]) => runs.map((r) => r.id);
+
+  test("keeps the active gateway's runs and drops another gateway's", () => {
+    expect(ids(runsForGateway([run('a', 'gw-1'), run('b', 'gw-2')], 'gw-1'))).toEqual(['a']);
+  });
+
+  test('a run saved before gatewayId existed stays visible instead of vanishing', () => {
+    expect(ids(runsForGateway([run('legacy'), run('a', 'gw-1'), run('b', 'gw-2')], 'gw-1'))).toEqual(['legacy', 'a']);
+  });
+
+  test('with no active gateway nothing is shown', () => {
+    expect(runsForGateway([run('legacy'), run('a', 'gw-1')], undefined)).toEqual([]);
   });
 });
