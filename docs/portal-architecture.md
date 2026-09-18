@@ -72,8 +72,13 @@ type AccessRequestResult =
   | { status: 'granted'; token: string; role?: string; scopes?: string[] }
   | { status: 'pending-approval'; requestId?: string; hint?: string }
   | { status: 'token-required'; hint?: string }
-  | { status: 'denied'; reason: string };
+  | { status: 'denied'; reason: string }
+  | { status: 'device-identity'; reason: string };
 ```
+
+A failed identity load or sign (secure store unavailable, key error) resolves
+`device-identity` — this phone's problem, not a gateway verdict — and the raw
+error is never echoed, so no private key material can surface.
 
 | Kind | Dialect |
 |------|---------|

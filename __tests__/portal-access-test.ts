@@ -8,11 +8,11 @@
 // denial answers once.
 
 jest.mock('@/lib/gateway/device-identity', () => ({
-  loadOrCreateDeviceIdentity: async () => ({
+  loadOrCreateDeviceIdentity: jest.fn(async () => ({
     deviceId: 'device-abc',
     publicKeyB64Url: 'public-key',
-  }),
-  signDevicePayload: async () => 'signed-payload',
+  })),
+  signDevicePayload: jest.fn(async () => 'signed-payload'),
 }));
 
 // access.ts also imports the OpenClaw client for the WS pairing dialect; its
@@ -36,7 +36,12 @@ jest.mock('expo-constants', () => ({
 }));
 
 import { requestGatewayAccess } from '@/lib/portal/access';
+import { loadOrCreateDeviceIdentity, signDevicePayload } from '@/lib/gateway/device-identity';
+import { DeviceIdentityError, DEVICE_IDENTITY_FAILURE } from '@/lib/gateway/errors';
 import type { GatewayIdentity } from '@/lib/portal/identify';
+
+const mockIdentity = loadOrCreateDeviceIdentity as jest.Mock;
+const mockSign = signDevicePayload as jest.Mock;
 
 function manifestIdentity(overrides: Partial<GatewayIdentity> = {}): GatewayIdentity {
   return {
@@ -285,5 +290,58 @@ describe('a denial or refusal is answered once, never written a second time', ()
 
     expect(result.status).toBe('token-required');
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('a phone that cannot make its device identity is not read as a gateway denial', () => {
+  test('a failed identity creation resolves device-identity, not denied', async () => {
+    mockIdentity.mockRejectedValueOnce(new Error('secure store unavailable'));
+    const result = await requestGatewayAccess({
+      baseUrl: 'http://gate.test',
+      identity: manifestIdentity(),
+    });
+
+    expect(result.status).toBe('device-identity');
+    expect((result as { reason: string }).reason).toBe(DEVICE_IDENTITY_FAILURE);
+  });
+
+  test('a DeviceIdentityError keeps its product message and no raw storage text', async () => {
+    mockIdentity.mockRejectedValueOnce(new DeviceIdentityError());
+    const result = await requestGatewayAccess({
+      baseUrl: 'http://gate.test',
+      identity: manifestIdentity(),
+    });
+
+    expect(result).toEqual({ status: 'device-identity', reason: DEVICE_IDENTITY_FAILURE });
+  });
+
+  test('a failed sign reads device-identity and never leaks private key material', async () => {
+    mockSign.mockRejectedValueOnce(new Error('invalid private key bytes'));
+    const result = await requestGatewayAccess({
+      baseUrl: 'http://gate.test',
+      identity: manifestIdentity(),
+    });
+
+    expect(result.status).toBe('device-identity');
+    expect((result as { reason: string }).reason).toBe(DEVICE_IDENTITY_FAILURE);
+    expect(JSON.stringify(result)).not.toContain('private');
+    expect(JSON.stringify(result)).not.toContain('invalid private key');
+  });
+
+  test('the identity failure is answered without any access POST', async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init: unknown) => {
+      recordCall(calls, input, init);
+      return Promise.resolve(grantedResponse());
+    });
+    mockIdentity.mockRejectedValueOnce(new Error('secure store unavailable'));
+
+    const result = await requestGatewayAccess({
+      baseUrl: 'http://gate.test',
+      identity: manifestIdentity(),
+    });
+
+    expect(result.status).toBe('device-identity');
+    expect(calls).toHaveLength(0);
   });
 });

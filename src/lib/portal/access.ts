@@ -7,10 +7,12 @@
 //   pending-approval  → gateway-side approval required (OpenClaw pairing)
 //   token-required    → user must supply a token (Hermes API key today)
 //   denied            → gateway refused
+//   device-identity   → this phone could not make its device identity
 
 import Constants from 'expo-constants';
 import { httpToWsBase } from '@/lib/gateway/url';
 import { loadOrCreateDeviceIdentity, signDevicePayload } from '@/lib/gateway/device-identity';
+import { DEVICE_IDENTITY_FAILURE, isDeviceIdentityError } from '@/lib/gateway/errors';
 import { advertisedIpv4, ipv4FromExpoExtra, withHostLookupRetry } from '@/lib/gateway/host-lookup';
 import { OpenClawGatewayClient } from '@/lib/gateway/openclaw-client';
 import type { GatewayHelloOk, PairingDetails } from '@/lib/gateway/types';
@@ -21,7 +23,8 @@ export type AccessRequestResult =
   | { status: 'granted'; token: string; role?: string; scopes?: string[] }
   | { status: 'pending-approval'; requestId?: string; hint?: string }
   | { status: 'token-required'; hint?: string }
-  | { status: 'denied'; reason: string };
+  | { status: 'denied'; reason: string }
+  | { status: 'device-identity'; reason: string };
 
 export type RequestGatewayAccessOptions = {
   baseUrl: string;
@@ -196,11 +199,18 @@ async function postSignedAccessRequest(
   grantPath: string,
   options: RequestGatewayAccessOptions,
 ): Promise<AccessRequestResult> {
+  const signedAtMs = Date.now();
+  const role = options.role ?? 'operator';
+  const scopes = options.scopes ?? DEFAULT_SCOPES;
+
+  // Signing needs the phone's ed25519 identity; a load or sign failure is this
+  // phone's problem, not the gateway's verdict. Classify it as its own result
+  // so the manual-add flow renders the humanized identity failure instead of a
+  // warm "denied", and never echo the raw error — a storage or key fault could
+  // name the phone's private key material.
+  let signedDevice: { deviceId: string; publicKeyB64Url: string; signature: string };
   try {
     const identity = await loadOrCreateDeviceIdentity();
-    const signedAtMs = Date.now();
-    const role = options.role ?? 'operator';
-    const scopes = options.scopes ?? DEFAULT_SCOPES;
     const payload = [
       'v4',
       identity.deviceId,
@@ -209,21 +219,32 @@ async function postSignedAccessRequest(
       scopes.join(','),
       String(signedAtMs),
     ].join('|');
-    const signature = await signDevicePayload(identity, payload);
+    signedDevice = {
+      deviceId: identity.deviceId,
+      publicKeyB64Url: identity.publicKeyB64Url,
+      signature: await signDevicePayload(identity, payload),
+    };
+  } catch (error) {
+    return {
+      status: 'device-identity',
+      reason: isDeviceIdentityError(error) ? error.message : DEVICE_IDENTITY_FAILURE,
+    };
+  }
 
+  try {
     const url = `${baseUrl}${grantPath}`;
     const body = JSON.stringify({
       manifest: GATEWAY_MANIFEST_SPEC,
       device: {
-        id: identity.deviceId,
-        publicKey: identity.publicKeyB64Url,
+        id: signedDevice.deviceId,
+        publicKey: signedDevice.publicKeyB64Url,
         clientId: CLIENT_ID,
         clientMode: CLIENT_MODE,
       },
       role,
       scopes,
       signedAtMs,
-      signature,
+      signature: signedDevice.signature,
       client: { name: 'Versutus', version: '1.0.0', platform: 'mobile' },
     });
     const timeoutMs = options.timeoutMs ?? 10000;

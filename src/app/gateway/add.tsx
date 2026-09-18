@@ -81,6 +81,14 @@ export default function AddGatewayScreen() {
             setSaving(false);
             return;
           }
+          // A phone that could not make its device identity is not a gateway
+          // verdict — render the humanized identity failure instead of a warm
+          // "denied" note.
+          if (result.status === 'device-identity') {
+            setSaveError(result.reason);
+            setSaving(false);
+            return;
+          }
           if (result.status === 'token-required') {
             setAccessNote(result.hint ?? 'This gateway requires a token.');
             setShowAdvanced(true);
