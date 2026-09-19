@@ -40,6 +40,13 @@ describe('chooseVoiceEngine', () => {
     expect(neither.reason).toBe('not installed');
   });
 
+  test('auto on a ready PC engine carries no warning about the engine it skipped', () => {
+    // 2026-09-19: the sheet said "This PC — local voice" and still showed
+    // "Codex realtime needs an API key" under it.
+    const codexOff = { state: 'unavailable', reason: 'Codex realtime needs an API key' } as const;
+    expect(chooseVoiceEngine('auto', caps(localReady, codexOff))).toEqual({ engine: 'local' });
+  });
+
   test('an explicit ready engine is chosen unchanged', () => {
     expect(chooseVoiceEngine('local', caps(localReady, codexReady))).toEqual({ engine: 'local' });
     expect(chooseVoiceEngine('codex', caps(localReady, codexReady))).toEqual({ engine: 'codex' });

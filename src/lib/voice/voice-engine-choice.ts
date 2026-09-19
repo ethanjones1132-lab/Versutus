@@ -90,6 +90,9 @@ export function chooseVoiceEngine(
   const engine = next ?? 'phone';
 
   if (!requested) {
+    // `auto` that landed on a ready PC engine has nothing to warn about: the
+    // unready engine it skipped (Codex, usually) is not the one being used.
+    if (engine !== 'phone') return { engine };
     // `auto` has no request to fall back from; the reason is the first gate
     // engine's, so a phone call on a PC-less Gate still says why.
     const reason = statusOf(capabilities, 'local').reason
