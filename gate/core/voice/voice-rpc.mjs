@@ -57,10 +57,11 @@ export class VoiceSessionRegistry {
     return null;
   }
 
-  end(voiceSessionId) {
+  end(voiceSessionId, reason = 'unspecified') {
     const session = this.sessions.get(voiceSessionId);
     if (!session) return false;
     session.ended = true;
+    session.endedReason = reason;
     return true;
   }
 }

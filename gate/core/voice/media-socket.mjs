@@ -29,6 +29,10 @@ export const OUTPUT_SAMPLE_RATE = 24_000;
 export const OUTPUT_CHANNELS = 1;
 // How long a turn started on an early end survives before it is committed.
 export const SPECULATION_WINDOW_MS = 600;
+// How long one Bot turn may run before the call names it failed and reopens,
+// symmetric with the phone engine's reply watchdog: a backend that never
+// answers must not park the call in thinking forever.
+export const TURN_TIMEOUT_MS = 120_000;
 
 function rejectUpgrade(socket, status, message) {
   try {
@@ -52,6 +56,7 @@ export function attachVoiceMediaSocket({
   noAudioTimeoutMs = NO_AUDIO_TIMEOUT_MS,
   resumeTimeoutMs = RESUME_TIMEOUT_MS,
   audioBufferMs = AUDIO_BUFFER_MS,
+  turnTimeoutMs = TURN_TIMEOUT_MS,
 } = {}) {
   const wss = new WebSocketServer({ noServer: true });
   const calls = new Map();
@@ -119,8 +124,10 @@ export function attachVoiceMediaSocket({
     const maxBufferedAudioBytes = (audioBufferMs / 1000) * OUTPUT_SAMPLE_RATE * 2 * OUTPUT_CHANNELS;
     let ws = null;
     let ended = false;
+    let endingNow = false;
     let call = INITIAL_VOICE_SESSION;
     let turnAbort = null;
+    let turnTimer = null;
     let speculative = null;
     let resumeTimer = null;
     let audioTimer = null;
@@ -133,6 +140,13 @@ export function attachVoiceMediaSocket({
     let bufferedAudioBytes = 0;
 
     const api = { attach, end, get ended() { return ended; } };
+
+    const clearTurnTimer = () => {
+      if (turnTimer) {
+        clearTimeout(turnTimer);
+        turnTimer = null;
+      }
+    };
 
     const clearResumeTimer = () => {
       if (resumeTimer) {
@@ -249,6 +263,13 @@ export function attachVoiceMediaSocket({
       }
       call = out.state;
       for (const effect of out.effects) runEffect(effect);
+      // Every terminal path converges on `ending`; the socket's own end()
+      // closes the WebSocket, frees the registry and deletes the call. Without
+      // this a user hang-up left the call half-alive: the socket open, the
+      // registry occupied, and a new start answered call_in_progress until the
+      // client happened to close the socket. `endingNow` is the re-entry
+      // guard: end() dispatches the terminal event itself.
+      if (call.phase === 'ending' && !ended && !endingNow) end(call.endedReason ?? 'ended');
     };
 
     const startTurn = async (text, { speculative: isSpeculative = false } = {}) => {
@@ -258,6 +279,18 @@ export function attachVoiceMediaSocket({
       }
       const controller = new AbortController();
       turnAbort = controller;
+      // A backend that never answers must not park the call in thinking: the
+      // turn is failed and listening reopens, exactly as the phone engine's
+      // reply watchdog does. Aborting also discharges a late resolution.
+      let timedOut = false;
+      turnTimer = setTimeout(() => {
+        timedOut = true;
+        if (turnAbort === controller) {
+          dispatch({ type: 'replyFailed', message: 'The turn timed out.' });
+        }
+        controller.abort();
+      }, turnTimeoutMs);
+      turnTimer.unref?.();
       if (isSpeculative) {
         const entry = { text, controller, committed: false, timer: null };
         entry.timer = setTimeout(() => {
@@ -274,6 +307,7 @@ export function attachVoiceMediaSocket({
             dispatch({ type: 'approvalRequired', summary: approval?.summary ?? 'Approval needed' }),
         });
         if (controller.signal.aborted) return;
+        if (timedOut) return;
         if (result && result.hasContent === false) {
           dispatch({ type: 'replyFailed', message: 'The turn produced no reply.' });
         } else {
@@ -284,6 +318,7 @@ export function attachVoiceMediaSocket({
           dispatch({ type: 'replyFailed', message: error.message });
         }
       } finally {
+        clearTurnTimer();
         if (turnAbort === controller) turnAbort = null;
         if (speculative?.controller === controller) {
           clearTimeout(speculative.timer);
@@ -352,16 +387,22 @@ export function attachVoiceMediaSocket({
     }
 
     function end(reason) {
-      if (ended) return;
+      // `endingNow` guards re-entry (end() dispatches the terminal event); the
+      // `ended` flag only goes up once the terminal frames are on the wire, so
+      // sendFrame's guard must not swallow the reducer's own `ended` frame.
+      if (ended || endingNow) return;
+      endingNow = true;
       clearResumeTimer();
       clearAudioTimer();
+      clearTurnTimer();
       if (speculative) {
         clearTimeout(speculative.timer);
         speculative = null;
       }
       dispatch({ type: 'socketClosed', reason });
       ended = true;
-      registry.end(session.voiceSessionId);
+      endingNow = false;
+      registry.end(session.voiceSessionId, reason);
       turnAbort?.abort();
       turnAbort = null;
       try {

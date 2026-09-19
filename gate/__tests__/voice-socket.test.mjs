@@ -254,3 +254,206 @@ test('an engine that will not open ends the call with a logged fatal error', asy
     wss.close(() => server.close(done));
   });
 });
+
+// A controllable engine: the test decides when speech starts and ends, what a
+// final says, and how speak answers — the barge-in and hang-up paths Scripted
+// (which fires finals on audio alone) cannot model.
+function makeControllableEngine() {
+  const listeners = new Map();
+  const engine = {
+    open: async () => {},
+    pushAudio: () => {},
+    close: async () => {},
+    cancelled: [],
+    spoken: [],
+    muted: false,
+    on: (event, fn) => {
+      listeners.set(event, fn);
+      return engine;
+    },
+    emit: (event, payload) => listeners.get(event)?.(payload),
+    speak: (text, { gen } = {}) => {
+      engine.spoken.push({ text, gen });
+    },
+    cancelSpeech: (gen) => {
+      engine.cancelled.push(gen);
+    },
+    setMuted: (muted) => {
+      engine.muted = muted;
+    },
+  };
+  return engine;
+}
+
+async function startControllableCall({
+  engine,
+  runTurn,
+  resumeTimeoutMs = 20_000,
+  turnTimeoutMs = 120_000,
+} = {}) {
+  const registry = new VoiceSessionRegistry();
+  registry.create(SESSION);
+  const deviceTokens = {
+    verify: async (authorization) => (authorization === 'Bearer tok-1' ? { deviceId: 'dev-1' } : null),
+  };
+  const server = createServer((_req, res) => {
+    res.writeHead(404);
+    res.end();
+  });
+  const wss = attachVoiceMediaSocket({
+    server,
+    deviceTokens,
+    registry,
+    createEngine: () => engine,
+    runTurn,
+    resumeTimeoutMs,
+    turnTimeoutMs,
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const port = server.address().port;
+  const frames = [];
+  const openSocket = () => {
+    const ws = new WebSocket(urlFor(port), { headers: { Authorization: 'Bearer tok-1' } });
+    ws.on('message', (data, isBinary) => {
+      if (!isBinary) frames.push(JSON.parse(data.toString()));
+    });
+    return ws;
+  };
+  const first = openSocket();
+  await once(first, 'open');
+  await waitUntil(() => frames.some((frame) => frame.t === 'ready'));
+  return {
+    frames,
+    first,
+    openSocket,
+    registry,
+    close: () =>
+      new Promise((done) => {
+        wss.close(() => server.close(done));
+      }),
+  };
+}
+
+test('barge-in cancels the spoken reply and reopens listening', async () => {
+  const engine = makeControllableEngine();
+  const call = await startControllableCall({
+    engine,
+    runTurn: async (_session, _text, handlers) => {
+      handlers.onDelta('a long reply');
+      return { hasContent: true };
+    },
+  });
+  engine.emit('final', { text: 'turn one' });
+  await waitUntil(() => call.frames.some((frame) => frame.t === 'reply'));
+  assert.ok(engine.spoken.length > 0, 'the reply started speaking');
+  const spokenGen = engine.spoken[0].gen;
+
+  engine.emit('userSpeechStart', {});
+  await waitUntil(() => call.frames.some((frame) => frame.t === 'phase' && frame.phase === 'listening'));
+  assert.deepEqual(engine.cancelled, [spokenGen]);
+
+  // A second turn still runs after the interruption.
+  engine.emit('final', { text: 'turn two' });
+  await waitUntil(() => call.frames.filter((frame) => frame.t === 'final').length >= 2);
+  call.first.close();
+  await once(call.first, 'close');
+  await call.close();
+});
+
+test('hanging up during a reply aborts the turn and ends the call', async () => {
+  const engine = makeControllableEngine();
+  let abortSeen = false;
+  const call = await startControllableCall({
+    engine,
+    runTurn: (_session, _text, handlers) =>
+      new Promise((_resolve, reject) => {
+        handlers.signal.addEventListener('abort', () => {
+          abortSeen = true;
+          reject(new Error('aborted'));
+        });
+      }),
+  });
+  engine.emit('final', { text: 'turn one' });
+  await waitUntil(() => call.frames.some((frame) => frame.t === 'phase' && frame.phase === 'thinking'));
+  // Attach before sending: the server answers ended + close in one breath, and
+  // the close event can fire before a later once() would attach.
+  const closed = once(call.first, 'close');
+  call.first.send(JSON.stringify({ t: 'end' }));
+  const ended = await waitUntil(() => call.frames.find((frame) => frame.t === 'ended'));
+  assert.equal(ended.reason, 'user');
+  await waitUntil(() => abortSeen);
+  await closed;
+  await call.close();
+});
+
+test('a dropped socket detaches, re-attaches within the window, and resumes', async () => {
+  const engine = makeControllableEngine();
+  const call = await startControllableCall({
+    engine,
+    runTurn: async () => ({ hasContent: true }),
+    resumeTimeoutMs: 600,
+  });
+  // The drop: the first socket goes away mid-call.
+  call.first.close();
+  await once(call.first, 'close');
+
+  // The Gate must not end the call while the window holds.
+  await new Promise((done) => setTimeout(done, 100));
+  assert.ok(!call.frames.some((frame) => frame.t === 'ended'));
+
+  // The phone rejoins with the same session id and gets the live phase back.
+  const second = call.openSocket();
+  await once(second, 'open');
+  await waitUntil(() => framesInclude(call.frames, (frame) => frame.t === 'ready' && frame.engine === 'local'));
+  await waitUntil(() => call.frames.some((frame) => frame.t === 'phase' && frame.phase === 'listening'));
+  second.close();
+  await once(second, 'close');
+  await call.close();
+});
+
+test('a call nobody rejoins ends with reason network when the window expires', async () => {
+  const engine = makeControllableEngine();
+  const call = await startControllableCall({
+    engine,
+    runTurn: async () => ({ hasContent: true }),
+    resumeTimeoutMs: 200,
+  });
+  const closed = once(call.first, 'close');
+  call.first.close();
+  await closed;
+  // The socket is gone, so the ended frame cannot reach the phone; the
+  // registry is the observable side: the session ends with reason network.
+  await waitUntil(
+    () => {
+      const session = call.registry.get(SESSION.voiceSessionId);
+      return session?.ended ? session.endedReason : null;
+    },
+    3000,
+  );
+  assert.equal(call.registry.get(SESSION.voiceSessionId).endedReason, 'network');
+  await call.close();
+});
+
+test('a turn that never answers is failed and listening reopens', async () => {
+  const engine = makeControllableEngine();
+  const call = await startControllableCall({
+    engine,
+    runTurn: () => new Promise(() => {}),
+    turnTimeoutMs: 100,
+  });
+  engine.emit('final', { text: 'turn one' });
+  await waitUntil(() => call.frames.some((frame) => frame.t === 'phase' && frame.phase === 'thinking'));
+  const failed = await waitUntil(() =>
+    call.frames.find((frame) => frame.t === 'turn' && frame.state === 'failed'),
+  );
+  assert.match(failed.error, /timed out/);
+  await waitUntil(() => call.frames.some((frame) => frame.t === 'phase' && frame.phase === 'listening'));
+  call.first.close();
+  await once(call.first, 'close');
+  await call.close();
+});
+
+function framesInclude(frames, predicate) {
+  return frames.some(predicate);
+}

@@ -316,11 +316,14 @@ test('end from any path converges on exactly one ended frame', async () => {
   await once(ws, 'open');
   await waitUntil(() => frames.some((frame) => frame.t === 'ready'));
 
+  // Attach first: the server answers an end control with the ended frame and
+  // a socket close in one breath, and close can fire before a later once().
+  const closed = once(ws, 'close');
   ws.send(JSON.stringify({ t: 'end' }));
   await waitUntil(() => frames.some((frame) => frame.t === 'ended'));
   media.engine.emit('error', { fatal: true, code: 'engine_error', message: 'boom' });
   ws.close();
-  await once(ws, 'close');
+  await closed;
 
   assert.equal(frames.filter((frame) => frame.t === 'ended').length, 1);
   await media.close();
