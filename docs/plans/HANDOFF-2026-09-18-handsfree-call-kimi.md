@@ -51,3 +51,35 @@ Grok fixed **starting** a call. Ethan asked for **full end-to-end coverage and f
 - `npm run verify` must be green on every commit, and must not be weakened.
 - When done, append a `## Round 2 (Kimi)` section to the bottom of **this file** with the commits,
   what you verified, and what still needs a phone to confirm.
+
+## Round 2 (Kimi, finished by Claude)
+
+Kimi ran out of its usage window after 5 commits and one uncommitted Kotlin change. Claude
+committed the Kotlin change, fixed the host harness and ran the final gate. Branch
+`fix/handsfree-call-start` now has 8 commits on master `173b780` (25 files, +1865/−196).
+
+| Commit | What |
+|---|---|
+| `a37afb5` | Grok: a PC-powered call names why it cannot start and does not wait on the phone recognizer |
+| `d120a20` | Grok: a voice session start or failure is written to the Gate log |
+| `0fbead7` | Kimi: a failed availability read no longer blocks a PC-powered call |
+| `68b2c5f` | Kimi: a dropped media socket rejoins the call inside the Gate resume window |
+| `08f6272` | Kimi: a grant that never attaches stops blocking new starts |
+| `4eb0c31` | Kimi: the Gate call loop survives the turns the start fix never reached (turn watchdog, one terminal end) |
+| `f228415` | Kimi: a hang-up the operator asked for is not a voice error |
+| `092c17e` | Kimi's code, committed by Claude: a Gate call with no audio device, or a link closed without an `ended` frame, ends instead of hanging |
+
+**Verified on the host (2026-09-19):**
+- `npm run verify` green on `092c17e` (1085 Gate tests, 0 failures, no ratchet drift).
+- The Android Kotlin compiles (Kimi, on a scratch copy of the main repo's android project, restored).
+- A real voice-worker harness (`temp/worker-harness-round2.mjs`, not in verify) ran against the
+  installed venv and models. Whisper loaded on CUDA. Kokoro spoke a sentence (90 KB PCM in 1.3 s),
+  that PCM was fed back as mic audio, and `voice.final` returned the exact sentence.
+  Kimi's first run reported "0 bytes of PCM". That was a harness bug (it parsed stdout per chunk
+  without line buffering, dropping the large audio lines). The Gate's `jsonrpc-stdio` buffers
+  correctly.
+
+**Still needs the phone:** the real tap, the mic prompt and the foreground notification, audio
+over the live Gate, barge-in by voice, backgrounding mid-call. **Deploy note:** the Gate-side
+fixes (logging, watchdog, grant TTL) only take effect once the Gate runs this code, which means
+merging to master and then `service stop` + `service start`.
