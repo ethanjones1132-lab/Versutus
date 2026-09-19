@@ -24,8 +24,10 @@ export function HandsfreeCallSheet({
   visible,
   label,
   busy,
+  startDisabled,
   error,
   engineLabel,
+  engineWarning,
   disclosure,
   onChangeEngine,
   onCancel,
@@ -34,8 +36,12 @@ export function HandsfreeCallSheet({
   visible: boolean;
   label?: string;
   busy?: boolean;
+  /** Start is offered but not tappable: host unreadiness, no session, still loading. */
+  startDisabled?: boolean;
   error?: string;
   engineLabel?: string;
+  /** Why the chosen engine is not the one the operator asked for, shown before Start. */
+  engineWarning?: string;
   disclosure?: string;
   onChangeEngine?: () => void;
   onCancel: () => void;
@@ -81,6 +87,12 @@ export function HandsfreeCallSheet({
           {HANDSFREE_RECOVERY_DISCLOSURE}
         </Text>
 
+        {engineWarning ? (
+          <Text variant="caption" color="secondary" style={styles.error}>
+            {engineWarning}
+          </Text>
+        ) : null}
+
         {error ? (
           <Text variant="caption" color="statusDisconnected" style={styles.error}>
             {error}
@@ -104,7 +116,7 @@ export function HandsfreeCallSheet({
               onStart();
             }}
             busy={busy}
-            disabled={busy}
+            disabled={Boolean(busy || startDisabled)}
             style={styles.footerPrimary}
           />
         </View>

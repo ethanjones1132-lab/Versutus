@@ -32,8 +32,15 @@ import {
 } from '@/lib/voice/gate-call';
 import { isDeviceIdentityError } from '@/lib/gateway/errors';
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
-import { mediaSocketUrl } from '@/lib/voice/gate-media-url';
 import { loadHandsfreeModule, type HandsfreeNativeModule } from '@/lib/voice/handsfree-device';
+import { openGateVoiceSession } from '@/lib/voice/handsfree-start-attempt';
+import {
+  evaluateHandsfreeStart,
+  handsfreeDeviceCanOfferCall,
+  logHandsfreeStart,
+  type HandsfreeStartAttempt,
+  type HandsfreeStartResult,
+} from '@/lib/voice/handsfree-start-reason';
 import {
   handsfreeReplyForTurn,
   isFailedReply,
@@ -92,8 +99,7 @@ export type HandsfreeCallTarget = {
   voiceEngine?: string;
 };
 
-/** `refused` is a provider precondition; the rest are the native outcome. */
-export type HandsfreeStartResult = HandsfreeStartOutcome | 'refused' | 'identity-unavailable';
+export type { HandsfreeStartAttempt, HandsfreeStartResult };
 
 export type HandsfreeVoiceContextValue = {
   phase: HandsfreePhase;
@@ -127,7 +133,7 @@ export type HandsfreeVoiceContextValue = {
   canStart: boolean;
   /** What blocks a start right now, or null. */
   startBlocker: HandsfreeStartBlocker | null;
-  start: (target: HandsfreeCallTarget) => Promise<HandsfreeStartResult>;
+  start: (target: HandsfreeCallTarget) => Promise<HandsfreeStartAttempt>;
   mute: () => void;
   unmute: () => void;
   skipReply: () => void;
@@ -361,12 +367,17 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     const module = moduleRef.current;
     moduleRef.current = null;
     if (wasGate) {
-      // The Gate owns capture, playback and the loop; releasing them and
-      // telling it the call is over is the whole teardown.
+      // The Gate owns capture, playback and the loop; the phone still owns the
+      // foreground session we opened so the notification can end the call.
       try {
         await module?.stopGateMedia();
       } catch {
         // best-effort: a socket that will not close still stops locally
+      }
+      try {
+        await module?.stopSession();
+      } catch {
+        // best-effort: the service's own teardown still runs
       }
       if (gateSessionId) {
         try {
@@ -662,21 +673,26 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     dispatch({ type: 'start-refused' });
   }, [dispatch, unsubscribe]);
 
-  // A Gate-powered call: the Gate runs `voice.session.start`, the phone opens
-  // the media socket for exactly that session, and every frame from then on is
-  // folded by `reduceGateCall`.
+  // A Gate-powered call: grant the session, take the microphone, open the
+  // media socket. Failures are named and a granted session is released so the
+  // next start is not `call_in_progress`.
   const startGateCall = useCallback(
     async (
       target: HandsfreeCallTarget,
       module: HandsfreeNativeModule,
-      read: HandsfreeAvailability,
-    ): Promise<HandsfreeStartResult> => {
+      read: HandsfreeAvailability | null,
+    ): Promise<HandsfreeStartAttempt> => {
       const gateway = latest.current.activeGateway;
-      if (!gateway?.url) return 'unavailable';
+      if (!gateway?.url) {
+        logHandsfreeStart({ result: 'no-gateway-url', transport: 'gate', engine: target.voiceEngine });
+        return { result: 'no-gateway-url' };
+      }
 
       moduleRef.current = module;
-      availabilityRef.current = read;
-      setAvailability(read);
+      if (read) {
+        availabilityRef.current = read;
+        setAvailability(read);
+      }
       targetRef.current = target;
       threadRef.current = callDraftThread(target);
       setLabel(target.label);
@@ -695,97 +711,108 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         device = await pushDeviceParams();
       } catch (err) {
         refuseGateStart();
-        return isDeviceIdentityError(err) ? 'identity-unavailable' : 'unavailable';
+        const result = isDeviceIdentityError(err) ? 'identity-unavailable' : 'device-params-failed';
+        logHandsfreeStart({ result, transport: 'gate', engine: target.voiceEngine });
+        return { result };
       }
 
-      let grant: {
-        voiceSessionId?: string;
-        streamPath?: string;
-        engine?: string;
-        fellBackFrom?: string;
-        reason?: string;
-      } | null = null;
-      try {
-        grant = await latest.current.gatewayRequest<{
-          voiceSessionId?: string;
-          streamPath?: string;
-          engine?: string;
-          fellBackFrom?: string;
-          reason?: string;
-        }>(
-          'voice.session.start',
-          {
-            engine: target.voiceEngine ?? 'auto',
-            thread: {
-              kind: target.surfaceKind,
-              sessionId: target.sessionId,
-              botId: target.botId,
-            },
-            disclosureAcceptedAt: new Date().toISOString(),
-            // A phone on the Gate's own token has no device grant; naming its
-            // device lets the Gate file the call as bootstrap:<id>.
-            ...device,
-          },
-        );
-      } catch {
-        grant = null;
-      }
-      if (!grant?.voiceSessionId || !grant?.streamPath) {
-        refuseGateStart();
-        return 'unavailable';
-      }
-      gateSessionIdRef.current = grant.voiceSessionId;
-      setEngineInfo({ engine: grant.engine ?? 'local', ...(grant.fellBackFrom ? { reason: grant.reason } : {}) });
+      const attempt = await openGateVoiceSession({
+        gatewayUrl: gateway.url,
+        gatewayToken: gateway.token ?? '',
+        target: {
+          label: target.label,
+          voiceEngine: target.voiceEngine,
+          surfaceKind: target.surfaceKind,
+          sessionId: target.sessionId,
+          botId: target.botId,
+        },
+        device,
+        gatewayRequest: (method, params) => latest.current.gatewayRequest(method, params),
+        startSession: (title) => module.startSession({ title }),
+        startGateMedia: (options) => module.startGateMedia(options),
+      });
 
-      let started = false;
-      try {
-        started = await module.startGateMedia({
-          url: mediaSocketUrl(gateway.url, grant.streamPath),
-          token: gateway.token ?? '',
-          voiceSessionId: grant.voiceSessionId,
-        });
-      } catch {
-        started = false;
-      }
-      if (!started) {
+      if (attempt.result !== 'started' || !attempt.grant) {
         refuseGateStart();
-        return 'unavailable';
+        return { result: attempt.result, detail: attempt.detail };
       }
+
+      gateSessionIdRef.current = attempt.grant.voiceSessionId;
+      setEngineInfo({
+        engine: attempt.grant.engine ?? 'local',
+        ...(attempt.grant.fellBackFrom ? { reason: attempt.grant.reason } : {}),
+      });
+
       if (sessionRef.current.phase !== 'starting') {
-        // A disconnect or thread change already tore this call down.
-        return 'unavailable';
+        refuseGateStart();
+        try {
+          await latest.current.gatewayRequest('voice.session.stop', {
+            voiceSessionId: attempt.grant.voiceSessionId,
+            reason: 'start-failed',
+          });
+        } catch {
+          // the session's own idle close ends it if this never lands
+        }
+        logHandsfreeStart({ result: 'call-torn-down-while-starting', transport: 'gate' });
+        return { result: 'call-torn-down-while-starting' };
       }
       dispatch({ type: 'started', startedAtMs: Date.now() });
-      return 'started';
+      return { result: 'started' };
     },
     [dispatch, refuseGateStart, subscribeGate],
   );
 
   const start = useCallback(
-    async (target: HandsfreeCallTarget): Promise<HandsfreeStartResult> => {
-      if (sessionRef.current.phase !== 'idle') return 'refused';
-      if (AppState.currentState !== 'active') return 'refused';
+    async (target: HandsfreeCallTarget): Promise<HandsfreeStartAttempt> => {
+      const transport = target.transport === 'gate' ? 'gate' : 'phone';
       const snapshot = latest.current;
-      if (snapshot.status !== 'connected' || !snapshot.activeGateway) return 'refused';
-      if (snapshot.activeGateway.id !== target.gatewayId) return 'refused';
-      if (snapshot.isSending || snapshot.isCommandRunning || snapshot.pendingRunApproval) {
-        return 'refused';
-      }
 
       const module = await loadHandsfreeModule();
-      if (!module) return 'unavailable';
-      let read: HandsfreeAvailability;
-      try {
-        read = await module.getAvailability();
-      } catch {
-        return 'unavailable';
-      }
-      if (!read.recognition || !read.synthesis || !(read.maxSpeechInputLength > 0)) {
-        return 'unavailable';
+      let read: HandsfreeAvailability | null = null;
+      let availabilityError = false;
+      if (module) {
+        try {
+          read = await module.getAvailability();
+        } catch {
+          availabilityError = true;
+        }
       }
 
-      if (target.transport === 'gate') {
+      const decision = evaluateHandsfreeStart({
+        phase: sessionRef.current.phase,
+        appState: AppState.currentState,
+        status: snapshot.status,
+        gatewayId: snapshot.activeGateway?.id,
+        targetGatewayId: target.gatewayId,
+        isSending: snapshot.isSending,
+        isCommandRunning: snapshot.isCommandRunning,
+        pendingRunApproval: Boolean(snapshot.pendingRunApproval),
+        moduleLoaded: Boolean(module),
+        availability: read,
+        availabilityError,
+        transport,
+        gatewayUrl: snapshot.activeGateway?.url,
+        sessionId: target.sessionId,
+      });
+      if (decision.kind === 'stop') {
+        logHandsfreeStart({
+          result: decision.result,
+          transport,
+          engine: target.voiceEngine,
+          detail: decision.detail,
+        });
+        return { result: decision.result, detail: decision.detail };
+      }
+      if (!module) {
+        logHandsfreeStart({ result: 'no-native-module', transport, engine: target.voiceEngine });
+        return { result: 'no-native-module' };
+      }
+      if (decision.kind === 'gate') {
         return startGateCall(target, module, read);
+      }
+      if (!read) {
+        logHandsfreeStart({ result: 'availability-unreadable', transport: 'phone' });
+        return { result: 'availability-unreadable' };
       }
 
       moduleRef.current = module;
@@ -814,17 +841,21 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         targetRef.current = null;
         threadRef.current = undefined;
         dispatch({ type: 'start-refused' });
-        return outcome;
+        const result = outcome === 'permission-denied' ? 'permission-denied' : 'native-session-unavailable';
+        logHandsfreeStart({ result, transport: 'phone' });
+        return { result };
       }
       if (sessionRef.current.phase !== 'starting') {
         // A fatal event arrived while the session was opening and has already
         // torn it down; reporting "started" would contradict the screen.
-        return 'unavailable';
+        logHandsfreeStart({ result: 'call-torn-down-while-starting', transport: 'phone' });
+        return { result: 'call-torn-down-while-starting' };
       }
       beginHandsfreeCall();
       setEngineInfo({ engine: 'phone' });
       dispatch({ type: 'started', startedAtMs: Date.now() });
-      return 'started';
+      logHandsfreeStart({ result: 'started', transport: 'phone', engine: 'phone' });
+      return { result: 'started' };
     },
     [dispatch, startGateCall, subscribe, unsubscribe],
   );
@@ -880,9 +911,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     session.phase === 'idle' &&
     status === 'connected' &&
     Boolean(activeGateway) &&
-    Boolean(availability?.recognition) &&
-    Boolean(availability?.synthesis) &&
-    (availability?.maxSpeechInputLength ?? 0) > 0;
+    handsfreeDeviceCanOfferCall(availability);
 
   const value: HandsfreeVoiceContextValue = {
     phase,

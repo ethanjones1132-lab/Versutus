@@ -225,27 +225,25 @@ describe('owning the audio and releasing it', () => {
 
 describe('start preconditions and captured target', () => {
   test('start takes the caller-built target and checks every precondition', () => {
-    expect(provider).toContain('async (target: HandsfreeCallTarget)');
-    expect(provider).toContain("AppState.currentState !== 'active'");
-    expect(provider).toContain("snapshot.status !== 'connected'");
-    expect(provider).toContain('snapshot.activeGateway.id !== target.gatewayId');
-    expect(provider).toContain('snapshot.isSending || snapshot.isCommandRunning || snapshot.pendingRunApproval');
+    expect(provider).toContain('async (target: HandsfreeCallTarget): Promise<HandsfreeStartAttempt>');
+    expect(provider).toContain('evaluateHandsfreeStart({');
+    expect(provider).toContain('appState: AppState.currentState');
+    expect(provider).toContain('targetGatewayId: target.gatewayId');
+    expect(provider).toContain('pendingRunApproval: Boolean(snapshot.pendingRunApproval)');
   });
 
-  test('availability must report recognition, synthesis and a positive bound', () => {
-    expect(provider).toContain('read.recognition');
-    expect(provider).toContain('read.synthesis');
-    expect(provider).toContain('read.maxSpeechInputLength > 0');
+  test('start names each failure through evaluateHandsfreeStart, and the phone engine still opens a native session', () => {
+    expect(provider).toContain('evaluateHandsfreeStart');
     expect(provider).toContain("startSession({ title: target.label })");
   });
 
   test('a refusal returns to idle and starts no service', () => {
     expect(provider).toContain("dispatch({ type: 'start-refused' })");
-    expect(provider).toContain("if (sessionRef.current.phase !== 'idle') return 'refused'");
+    expect(provider).toContain("if (decision.kind === 'stop')");
   });
 
   test('a missing device identity is named, not swallowed as a generic unavailable', () => {
-    expect(provider).toContain("return isDeviceIdentityError(err) ? 'identity-unavailable' : 'unavailable'");
+    expect(provider).toContain("isDeviceIdentityError(err) ? 'identity-unavailable' : 'device-params-failed'");
   });
 
   test('the captured gateway, session and Bot are watched, and any move ends the call', () => {
@@ -319,13 +317,10 @@ describe('the availability probe recovers on its own', () => {
 
 describe('a Gate-powered call is one transport away from the phone engine', () => {
   test('start branches on the transport, not on an engine or backend name', () => {
-    expect(provider).toContain("if (target.transport === 'gate')");
+    expect(provider).toContain("target.transport === 'gate' ? 'gate' : 'phone'");
     expect(provider).toContain('startGateCall');
-    expect(provider).toContain("'voice.session.start'");
+    expect(provider).toContain('openGateVoiceSession');
     expect(provider).toContain('startGateMedia');
-    expect(provider).toContain('mediaSocketUrl(gateway.url, grant.streamPath)');
-    expect(provider).toContain('token: gateway.token ??');
-    expect(provider).toContain('voiceSessionId: grant.voiceSessionId');
     expect(provider).toContain("addListener('gate'");
     expect(provider).toContain('reduceGateCall');
     expect(provider).toContain('sendGateControl');
@@ -349,7 +344,7 @@ describe('a Gate-powered call is one transport away from the phone engine', () =
 describe('a call names the engine it is using and never hides a fallback', () => {
   test('the provider carries the engine and the reason the Gate fell back', () => {
     expect(provider).toContain('engineReason: engineInfo?.reason');
-    expect(provider).toContain('setEngineInfo({ engine: grant.engine');
+    expect(provider).toContain('engine: attempt.grant.engine');
     expect(provider).toContain("setEngineInfo({ engine: 'phone' })");
     expect(provider).toContain('engine?: string;');
     expect(provider).toContain('engineReason?: string;');

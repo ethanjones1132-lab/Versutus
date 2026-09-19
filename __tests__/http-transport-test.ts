@@ -45,6 +45,22 @@ describe('HttpTransport', () => {
     expect(transport.lastContactAt).toBeGreaterThan(0);
   });
 
+  test('preserves the Gate’s machine-readable error code', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.resolve(
+        jsonResponse({ error: { message: 'The PC voice models are not installed.', code: 'no_engine' } }, 409),
+      ),
+    );
+
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+    await expect(transport.request('POST', '/v1/capabilities/rpc')).rejects.toMatchObject({
+      name: 'GatewayHttpError',
+      status: 409,
+      code: 'no_engine',
+      message: 'The PC voice models are not installed.',
+    });
+  });
+
   test('frames arriving on an SSE stream count as contact', async () => {
     const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
     expect(transport.lastContactAt).toBe(0);

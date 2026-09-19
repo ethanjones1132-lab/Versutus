@@ -1,6 +1,6 @@
 import { GatewayHttpError } from '@/lib/gateway/errors';
 import { hostnameOf, withHostLookupRetry } from '@/lib/gateway/host-lookup';
-import { messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
+import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 import { installStreamingFetchHostFallback } from '@/lib/net/streaming-fetch';
 
 export const DEFAULT_TIMEOUT_MS = 30000;
@@ -90,7 +90,11 @@ export class HttpTransport {
 
           if (!response.ok) {
             const errorText = await response.text().catch(() => '');
-            throw new GatewayHttpError(messageFromHttpErrorBody(errorText, response.status), response.status);
+            throw new GatewayHttpError(
+              messageFromHttpErrorBody(errorText, response.status),
+              response.status,
+              errorCodeFromHttpBody(errorText),
+            );
           }
 
           const text = await response.text();

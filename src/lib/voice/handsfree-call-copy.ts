@@ -11,6 +11,10 @@
 
 import { DEVICE_IDENTITY_FAILURE } from '@/lib/gateway/errors';
 import type { HandsfreePhase, HandsfreeTerminalReason } from '@/lib/voice/handsfree-session';
+import type {
+  HandsfreeStartCopyContext,
+  HandsfreeStartFailure,
+} from '@/lib/voice/handsfree-start-reason';
 
 /** The exact disclosure the sheet shows before the first call, and every one. */
 export const HANDSFREE_DISCLOSURE =
@@ -109,18 +113,66 @@ export function handsfreeEndReasonCopy(reason: HandsfreeTerminalReason): string 
   }
 }
 
-/** Why a start did not open a call. */
+function withDetail(base: string, detail: string | undefined): string {
+  if (!detail) return base;
+  const trimmed = detail.trim();
+  if (!trimmed || base.includes(trimmed)) return base;
+  return `${base} ${trimmed}`;
+}
+
+/** Why a start did not open a call. Named per exit, and never blames this phone's recognizer for a PC-engine failure. */
 export function handsfreeStartResultCopy(
-  result: 'permission-denied' | 'unavailable' | 'refused' | 'identity-unavailable',
+  result: HandsfreeStartFailure,
+  context: HandsfreeStartCopyContext = {},
 ): string {
+  const detail = context.detail;
   switch (result) {
     case 'permission-denied':
       return 'Versutus needs the microphone for a call. Allow it in Settings, then start again.';
-    case 'unavailable':
-      return 'This phone would not open a call session. Try again; if it keeps failing, check that a speech recognition service is installed and enabled.';
-    case 'refused':
-      return 'A call cannot start right now. Reconnect the chat and try again.';
     case 'identity-unavailable':
       return DEVICE_IDENTITY_FAILURE;
+    case 'refused':
+      return 'A call cannot start right now. Reconnect the chat and try again.';
+    case 'no-native-module':
+      return 'This build of Versutus cannot open a call on this phone.';
+    case 'availability-unreadable':
+      return 'This phone would not say whether it can take a call. Try again.';
+    case 'phone-recognition-unavailable':
+      return 'This phone would not open a call session. Try again; if it keeps failing, check that a speech recognition service is installed and enabled.';
+    case 'phone-synthesis-unavailable':
+      return 'This phone cannot speak a reply. Check that a text-to-speech engine is installed and enabled.';
+    case 'no-gateway-url':
+      return 'Versutus does not have this PC’s address, so it cannot start a call on the host.';
+    case 'device-params-failed':
+      return 'This phone could not name itself to the PC. Try reconnecting, then start again.';
+    case 'no-session':
+      return 'This thread does not have a chat session yet. Send a message first, then start the call.';
+    case 'not-paired':
+      return 'This phone is not paired with the PC, so the PC will not open a call. Reconnect and approve it, then start again.';
+    case 'call-in-progress':
+      return 'The PC still has a live call for this phone. End it, wait a moment, then start again.';
+    case 'no-engine':
+      return withDetail(
+        'The PC voice engine is not ready. Check Voice in Settings, or run voice install on the PC.',
+        detail,
+      );
+    case 'session-start-failed':
+      return withDetail('The PC would not open the call.', detail);
+    case 'session-grant-incomplete':
+      return 'The PC opened a call without a media path, so this phone could not join it.';
+    case 'media-start-failed':
+      return 'This phone could not open the audio link to the PC. Stay on the same network and try again.';
+    case 'call-torn-down-while-starting':
+      return 'The call ended before it finished opening. The connection dropped or the thread changed.';
+    case 'native-session-unavailable':
+      return 'This phone would not open its call session. Try again.';
+    case 'unavailable':
+      return context.transport === 'gate' || context.engine === 'local' || context.engine === 'codex'
+        ? 'The PC-powered call could not start. Try again; if it keeps failing, check that Versutus on the PC is running.'
+        : 'The call could not start. Try again.';
+    default: {
+      const _exhaustive: never = result;
+      return _exhaustive;
+    }
   }
 }

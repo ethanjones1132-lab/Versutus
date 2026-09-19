@@ -393,6 +393,7 @@ export function ChatScreen() {
   } = handsfree;
   const [callSheetVisible, setCallSheetVisible] = useState(false);
   const [callBusy, setCallBusy] = useState(false);
+  const [callCapsLoading, setCallCapsLoading] = useState(false);
   const [callError, setCallError] = useState<string | undefined>();
   const [callPreference, setCallPreference] = useState<VoiceEnginePreference>('auto');
   const [callCapabilities, setCallCapabilities] = useState<VoiceEngineCapabilities | null>(null);
@@ -1169,8 +1170,11 @@ export function ChatScreen() {
   }, [rosterRows, selectedBotId, sessionLabel, surface]);
 
   const openCallSheet = useCallback(() => {
-    setCallError(undefined);
+    setCallError(
+      draftThread?.sessionId ? undefined : handsfreeStartResultCopy('no-session'),
+    );
     setCallSheetVisible(true);
+    setCallCapsLoading(true);
     // The engine is chosen from the stored preference and the Gate's live
     // readiness, so the sheet can name where the audio will go before consent.
     void (async () => {
@@ -1181,9 +1185,11 @@ export function ChatScreen() {
       } catch {
         // A Gate that predates voice leaves the phone engine as the only choice.
         setCallCapabilities(null);
+      } finally {
+        setCallCapsLoading(false);
       }
     })();
-  }, [gatewayRequest]);
+  }, [draftThread?.sessionId, gatewayRequest]);
   const handleChangeEngine = useCallback(() => {
     setCallPreference((current) => {
       const index = CALL_ENGINE_ORDER.indexOf(current);
@@ -1198,6 +1204,11 @@ export function ChatScreen() {
     if (!callEngine) return undefined;
     return VOICE_ENGINE_ROWS.find((row) => row.id === callEngine.engine)?.label ?? callEngine.engine;
   }, [callEngine]);
+  const preferredEngineUnready =
+    (callPreference === 'local' || callPreference === 'codex') &&
+    callEngine?.fellBackFrom === callPreference;
+  const callStartBlocked =
+    callCapsLoading || !draftThread?.sessionId || preferredEngineUnready;
   const handleCancelCall = useCallback(() => {
     setCallSheetVisible(false);
     setCallError(undefined);
@@ -1205,30 +1216,41 @@ export function ChatScreen() {
   const handleStartCall = useCallback(async () => {
     if (!activeGateway || !draftThread) return;
     if (surface.kind !== 'configurable' && surface.kind !== 'bot') return;
+    if (!draftThread.sessionId) {
+      setCallError(handsfreeStartResultCopy('no-session'));
+      return;
+    }
     if (handsfree.startBlocker) {
       setCallError(handsfreeStartBlockerCopy(handsfree.startBlocker));
       return;
     }
     setCallBusy(true);
     setCallError(undefined);
+    const transport = callEngine && callEngine.engine !== 'phone' ? 'gate' : 'phone';
     try {
-      const result = await handsfree.start({
+      const attempt = await handsfree.start({
         gatewayId: activeGateway.id,
         sessionId: draftThread.sessionId,
         surfaceKind: surface.kind,
         botId: surface.kind === 'bot' ? surface.botId : undefined,
         label: callTargetLabel,
         voice: botVoice ?? {},
-        transport: callEngine && callEngine.engine !== 'phone' ? 'gate' : 'phone',
+        transport,
         voiceEngine: callPreference,
       });
-      if (result === 'started') {
+      if (attempt.result === 'started') {
         setCallSheetVisible(false);
         return;
       }
-      setCallError(handsfreeStartResultCopy(result));
+      setCallError(
+        handsfreeStartResultCopy(attempt.result, {
+          transport,
+          engine: callEngine?.engine ?? callPreference,
+          detail: attempt.detail,
+        }),
+      );
     } catch {
-      setCallError(handsfreeStartResultCopy('unavailable'));
+      setCallError(handsfreeStartResultCopy('unavailable', { transport, engine: callEngine?.engine ?? callPreference }));
     } finally {
       setCallBusy(false);
     }
@@ -2334,9 +2356,11 @@ export function ChatScreen() {
       <HandsfreeCallSheet
         visible={callSheetVisible}
         label={callTargetLabel}
-        busy={callBusy}
+        busy={callBusy || callCapsLoading}
+        startDisabled={callStartBlocked}
         error={callError}
         engineLabel={callEngineLabel}
+        engineWarning={callEngine?.reason}
         disclosure={callEngine ? voiceEngineDisclosure(callEngine.engine) : undefined}
         onChangeEngine={callEngine ? handleChangeEngine : undefined}
         onCancel={handleCancelCall}

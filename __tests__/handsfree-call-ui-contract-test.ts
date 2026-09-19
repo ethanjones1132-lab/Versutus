@@ -252,7 +252,7 @@ describe('an ended or refused call explains itself', () => {
   test('the chat screen reopens the sheet with the reason when a call ends on its own', () => {
     expect(screen).toContain('handsfreeEndReasonCopy(handsfreeLastEndReason)');
     expect(screen).toMatch(/\[handsfreeCallsEnded, handsfreeLastEndReason\]/);
-    expect(screen).toContain('setCallError(handsfreeStartResultCopy(result))');
+    expect(screen).toContain('handsfreeStartResultCopy(attempt.result');
   });
 });
 
@@ -285,6 +285,15 @@ describe('the sheet names the engine before consent', () => {
     expect(sheet).toContain('Change');
   });
 
+  test('names an unready host engine and withholds Start until the call can open', () => {
+    expect(sheet).toContain('engineWarning');
+    expect(sheet).toContain('startDisabled');
+    expect(sheet).toContain('disabled={Boolean(busy || startDisabled)}');
+    expect(screen).toContain('engineWarning={callEngine?.reason}');
+    expect(screen).toContain('preferredEngineUnready');
+    expect(screen).toContain("handsfreeStartResultCopy('no-session')");
+  });
+
   test('shows the chosen engine’s own disclosure over the default', () => {
     expect(sheet).toContain('disclosure ?? HANDSFREE_DISCLOSURE');
   });
@@ -293,7 +302,7 @@ describe('the sheet names the engine before consent', () => {
     expect(screen).toContain('chooseVoiceEngine(');
     expect(screen).toContain("gatewayRequest<VoiceEngineCapabilities>('voice.capabilities'");
     expect(screen).toContain('voiceEngineDisclosure(callEngine.engine)');
-    expect(screen).toContain("transport: callEngine && callEngine.engine !== 'phone' ? 'gate' : 'phone'");
+    expect(screen).toContain("const transport = callEngine && callEngine.engine !== 'phone' ? 'gate' : 'phone'");
   });
 });
 
