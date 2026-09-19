@@ -21,6 +21,30 @@ from .audio import (
 
 _METHODS = ("open", "pushAudio", "speak", "cancelSpeech", "setMuted", "close")
 _PARTIAL_WINDOW_MS = 600
+# Speech the VAD must hear before an utterance opens.
+SPEECH_START_MS = 250
+# The shortest held utterance that is transcribed as a turn at all.
+MIN_UTTERANCE_MS = 400
+# Audio kept from before an utterance opens, prepended when it does.
+PREROLL_MS = 400
+# Whisper's own per-segment doubt: a segment it thinks is silence, or one it
+# barely believes, is dropped rather than sent as something the operator said.
+NO_SPEECH_PROB_MAX = 0.6
+AVG_LOGPROB_MIN = -1.0
+
+
+def join_spoken_segments(segments):
+    """The text of the segments Whisper is confident were speech."""
+    kept = []
+    for segment in segments:
+        no_speech = getattr(segment, "no_speech_prob", 0.0) or 0.0
+        logprob = getattr(segment, "avg_logprob", 0.0) or 0.0
+        if no_speech > NO_SPEECH_PROB_MAX and logprob < AVG_LOGPROB_MIN:
+            continue
+        if no_speech > 0.9:
+            continue
+        kept.append(segment.text)
+    return "".join(kept).strip()
 
 
 def _error(request_id, code, message):
@@ -30,13 +54,19 @@ def _error(request_id, code, message):
 class VoicePipeline:
     """One call's pipeline. Every model call is injected, so tests never load one."""
 
-    def __init__(self, vad, transcriber, turn_judge, synthesizer, emit):
+    def __init__(self, vad, transcriber, turn_judge, synthesizer, emit, min_utterance_ms=0):
         self._vad = vad
+        self._min_utterance_bytes = int(INPUT_SAMPLE_RATE * 2 * min_utterance_ms / 1000)
         self._transcriber = transcriber
         self._turn = turn_judge
         self._synth = synthesizer
         self._emit = emit
         self._buffer = bytearray()
+        # Recent audio from before speech was recognised as speech: the VAD only
+        # opens an utterance after SPEECH_START_MS, so the first words would
+        # otherwise be cut off ("The host..." became "Host...").
+        self._preroll = bytearray()
+        self._preroll_bytes = int(INPUT_SAMPLE_RATE * 2 * PREROLL_MS / 1000)
         self._session = None
         self._muted = False
         self._speaking = False
@@ -58,6 +88,7 @@ class VoicePipeline:
         self._speech_gen = None
         self._pending = None
         self._buffer.clear()
+        self._preroll = bytearray()
         self._vad.reset()
         return {"ok": True}
 
@@ -78,6 +109,12 @@ class VoicePipeline:
             self._pending["silence_ms"] += chunk_ms
 
         events = self._vad.stream(pcm)
+        before = bytes(self._preroll)
+        if not self._speaking:
+            self._preroll.extend(pcm)
+            overflow = len(self._preroll) - self._preroll_bytes
+            if overflow > 0:
+                self._preroll = self._preroll[overflow:]
         if events or self._speaking:
             self._buffer.extend(pcm)
         for event in events:
@@ -95,7 +132,8 @@ class VoicePipeline:
                 self._pending = None
                 self._speaking = True
                 self._last_partial = 0
-                self._buffer = bytearray(held) + pcm
+                self._buffer = bytearray(held) + (b"" if held else before) + pcm
+                self._preroll = bytearray()
             elif event.kind == "speech_end":
                 self._speaking = False
                 if self._buffer:
@@ -105,6 +143,9 @@ class VoicePipeline:
                     if self._turn is None:
                         # No Smart Turn installed: a pause ends the turn.
                         self._finalize(utterance)
+                    elif len(utterance) < self._min_utterance_bytes:
+                        # A blip is not a turn, however confident the judge.
+                        pass
                     elif self._turn.confident(utterance):
                         # A confident verdict at the first pause is an early
                         # end: the Gate may start the Bot turn before the final.
@@ -146,6 +187,10 @@ class VoicePipeline:
         return {"ok": True}
 
     def _finalize(self, pcm):
+        # Too short to be a sentence: a cough or a door is not a turn, and
+        # sending it is what made calls "send prematurely".
+        if len(pcm) < self._min_utterance_bytes:
+            return
         text = self._transcriber.final(pcm)
         if text:
             self._emit("voice.final", {"text": text})
@@ -478,8 +523,14 @@ def build_default_pipeline(emit, models_dir, cpu=False):
     def transcribe(pcm, beam_size):
         from .audio import pcm16_to_float32
 
-        segments, _info = whisper.transcribe(pcm16_to_float32(pcm), beam_size=beam_size)
-        return "".join(segment.text for segment in segments).strip()
+        segments, _info = whisper.transcribe(
+            pcm16_to_float32(pcm),
+            beam_size=beam_size,
+            # Each utterance stands alone; carrying the last one's text in is
+            # how Whisper repeats itself on a quiet line.
+            condition_on_previous_text=False,
+        )
+        return join_spoken_segments(segments)
 
     kokoro = load_kokoro(models_dir)
     turn = load_smart_turn(models_dir)
@@ -490,11 +541,14 @@ def build_default_pipeline(emit, models_dir, cpu=False):
 
         turn = TurnJudge(is_complete=lambda _window: 1.0)
     return VoicePipeline(
-        vad=VadSegmenter(is_speech=SileroScorer()),
+        # 96 ms of "speech" opened an utterance on a click or a breath, and
+        # Whisper turned each one into "Thank you." on a live call (2026-09-19).
+        vad=VadSegmenter(is_speech=SileroScorer(), start_ms=SPEECH_START_MS),
         transcriber=PartialTranscriber(transcribe),
         turn_judge=turn,
         synthesizer=SpeechSynthesizer(KokoroSynthesizer(kokoro)),
         emit=emit,
+        min_utterance_ms=MIN_UTTERANCE_MS,
     )
 
 
