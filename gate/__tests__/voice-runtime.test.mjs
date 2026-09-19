@@ -136,12 +136,15 @@ test("voice usage comes from today's audit lines and never invents minutes", () 
     `${[
       JSON.stringify({ ts: '2026-09-13T01:00:00.000Z', engine: 'local', secondsListening: 60, secondsSpeaking: 60, error: null }),
       JSON.stringify({ ts: '2026-09-13T02:00:00.000Z', engine: 'codex', secondsListening: 30, secondsSpeaking: 30, error: 'network' }),
+      JSON.stringify({ ts: '2026-09-13T03:00:00.000Z', engine: 'local', secondsListening: 10, secondsSpeaking: 5, error: 'user' }),
       JSON.stringify({ ts: '2026-09-12T02:00:00.000Z', engine: 'local', secondsListening: 600, secondsSpeaking: 600 }),
     ].join('\n')}\n`,
   );
   const status = voiceStatus({ paths, now: () => new Date('2026-09-13T12:00:00.000Z') });
   assert.equal(status.usedToday.localMinutes, 2);
   assert.equal(status.usedToday.codexMinutes, 1);
+  // A hang-up the operator asked for is an end reason, not an error: the
+  // newest real error still wins.
   assert.equal(status.lastError, 'network');
 });
 

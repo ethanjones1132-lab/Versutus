@@ -165,7 +165,11 @@ export function readVoiceUsage({ paths, now = () => new Date() } = {}) {
     } catch {
       continue;
     }
-    if (typeof entry.error === 'string' && entry.error) lastError = entry.error;
+    if (typeof entry.error === 'string' && entry.error && entry.error !== 'user') {
+      // The audit's error field carries the end reason; a hang-up the
+      // operator asked for is not an error and must not read as one.
+      lastError = entry.error;
+    }
     if (typeof entry.ts !== 'string' || !entry.ts.startsWith(today)) continue;
     const seconds = (Number(entry.secondsListening) || 0) + (Number(entry.secondsSpeaking) || 0);
     if (entry.engine === 'local') localSeconds += seconds;
