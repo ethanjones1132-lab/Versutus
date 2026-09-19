@@ -54,6 +54,19 @@ describe('evaluateHandsfreeStart', () => {
     ).toEqual({ kind: 'gate' });
   });
 
+  test('a Gate call continues when the availability read itself fails', () => {
+    // The PC engine never asks this phone for speech; an unreadable
+    // availability must not take a PC-powered call down with it.
+    expect(
+      evaluateHandsfreeStart({
+        ...connected,
+        transport: 'gate',
+        availability: null,
+        availabilityError: true,
+      }),
+    ).toEqual({ kind: 'gate' });
+  });
+
   test('names each precondition instead of collapsing to unavailable', () => {
     expect(evaluateHandsfreeStart({ ...connected, phase: 'listening' })).toEqual({
       kind: 'stop',

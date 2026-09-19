@@ -137,14 +137,17 @@ export function evaluateHandsfreeStart(input: HandsfreeStartEvaluation): Handsfr
     return { kind: 'stop', result: 'refused' };
   }
   if (!input.moduleLoaded) return { kind: 'stop', result: 'no-native-module' };
-  if (input.availabilityError) return { kind: 'stop', result: 'availability-unreadable' };
 
   if (input.transport === 'gate') {
+    // The Gate runs STT/TTS: an unreadable on-device availability is irrelevant
+    // here and must not block a PC-powered call. The native module itself is
+    // still required — it owns the media socket and the foreground session.
     if (!input.gatewayUrl) return { kind: 'stop', result: 'no-gateway-url' };
     if (!input.sessionId) return { kind: 'stop', result: 'no-session' };
     return { kind: 'gate' };
   }
 
+  if (input.availabilityError) return { kind: 'stop', result: 'availability-unreadable' };
   const speech = phoneSpeechBlocker(input.availability);
   if (speech) return { kind: 'stop', result: speech };
   return { kind: 'phone' };
