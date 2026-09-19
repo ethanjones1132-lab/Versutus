@@ -207,3 +207,34 @@ test('a bootstrap caller without a device id, or an unpaired non-bootstrap calle
     /paired device/,
   );
 });
+
+test('a session start or failure is written to the Gate log', async () => {
+  const lines = [];
+  const { methods } = createVoiceRpc({
+    capabilities: capabilities(),
+    makeId: () => 'vs-log',
+    log: (line) => lines.push(line),
+  });
+  await methods['voice.session.start']({ engine: 'local', thread }, ctx);
+  assert.ok(lines.some((line) => /voice.session.start ok/.test(line) && /engine=local/.test(line) && /session=vs-log/.test(line)));
+  assert.ok(lines.every((line) => !/tok-|Bearer|token=/i.test(line)));
+
+  const failing = [];
+  const refused = createVoiceRpc({
+    capabilities: capabilities({ local: 'not-installed', codex: 'disabled' }),
+    log: (line) => failing.push(line),
+  });
+  await assert.rejects(() => refused.methods['voice.session.start']({ engine: 'auto', thread }, ctx));
+  assert.ok(failing.some((line) => /voice.session.start fail/.test(line) && /no_engine/.test(line)));
+});
+
+test('capabilities log the live engine states without a token', async () => {
+  const lines = [];
+  const { methods } = createVoiceRpc({
+    capabilities: capabilities(),
+    log: (line) => lines.push(line),
+  });
+  await methods['voice.capabilities']({}, ctx);
+  assert.ok(lines.some((line) => /voice.capabilities/.test(line) && /local=ready/.test(line)));
+  assert.ok(lines.every((line) => !/Bearer|token=/i.test(line)));
+});

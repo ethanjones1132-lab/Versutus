@@ -47,6 +47,7 @@ export function attachVoiceMediaSocket({
   createEngine,
   runTurn,
   audit = null,
+  log = () => {},
   now = () => Date.now(),
   noAudioTimeoutMs = NO_AUDIO_TIMEOUT_MS,
   resumeTimeoutMs = RESUME_TIMEOUT_MS,
@@ -75,6 +76,7 @@ export function attachVoiceMediaSocket({
       ? await Promise.resolve(tokenStore.verify(req.headers.authorization)).catch(() => false)
       : false;
     if (!grant && !bootstrap) {
+      log('voice.stream reject status=401 reason=unauthorized');
       rejectUpgrade(socket, 401, 'Unauthorized');
       return;
     }
@@ -82,6 +84,7 @@ export function attachVoiceMediaSocket({
     const voiceSessionId = url.searchParams.get('voiceSessionId');
     const session = voiceSessionId ? registry.get(voiceSessionId) : null;
     if (!session) {
+      log(`voice.stream reject status=404 session=${voiceSessionId ?? 'missing'}`);
       rejectUpgrade(socket, 404, 'Not Found');
       return;
     }
@@ -89,10 +92,12 @@ export function attachVoiceMediaSocket({
       ? session.deviceId === grant.deviceId
       : typeof session.deviceId === 'string' && session.deviceId.startsWith('bootstrap:');
     if (!owns) {
+      log(`voice.stream reject status=403 session=${session.voiceSessionId}`);
       rejectUpgrade(socket, 403, 'Forbidden');
       return;
     }
     if (session.ended) {
+      log(`voice.stream reject status=409 session=${session.voiceSessionId} reason=ended`);
       rejectUpgrade(socket, 409, 'Conflict');
       return;
     }
@@ -110,13 +115,7 @@ export function attachVoiceMediaSocket({
 
   function createCall(session, firstWs) {
     const engine = createEngine(session, firstWs);
-    // The engine must be opened before any audio can reach it: for the local
-    // engine `open` spawns the worker and sends `voice.open`. A call created
-    // without it pushed PCM into an engine that never loaded a model, so no
-    // transcription ever came back and every call idled out (M6 regression).
-    void Promise.resolve()
-      .then(() => engine.open?.(session))
-      .catch(() => undefined);
+    log(`voice.stream open session=${session.voiceSessionId} engine=${session.engine}`);
     const maxBufferedAudioBytes = (audioBufferMs / 1000) * OUTPUT_SAMPLE_RATE * 2 * OUTPUT_CHANNELS;
     let ws = null;
     let ended = false;
@@ -401,6 +400,26 @@ export function attachVoiceMediaSocket({
         fatal: Boolean(event.fatal),
       }),
     );
+
+    // The engine must be opened before any audio can reach it: for the local
+    // engine `open` spawns the worker and sends `voice.open`. A call created
+    // without it pushed PCM into an engine that never loaded a model, so no
+    // transcription ever came back and every call idled out (M6 regression).
+    // A failed open used to be swallowed, so the phone saw a live call that
+    // never transcribed.
+    void Promise.resolve()
+      .then(() => engine.open?.(session))
+      .catch((error) => {
+        const message = error?.message ?? 'The PC voice engine would not start.';
+        log(`voice.stream engine-open fail session=${session.voiceSessionId} ${message}`);
+        sendFrame({
+          t: 'error',
+          code: 'engine_open_failed',
+          message,
+          fatal: true,
+        });
+        end('engine');
+      });
 
     api.attach(firstWs, { first: true });
     return api;

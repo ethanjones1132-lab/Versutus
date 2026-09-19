@@ -6,7 +6,7 @@ import { once } from 'node:events';
 import { WebSocket } from 'ws';
 
 import { VOICE_STREAM_PATH, attachVoiceMediaSocket } from '../core/voice/media-socket.mjs';
-import { VoiceSessionRegistry } from '../core/voice/voice-rpc.mjs';
+import { VoiceSessionRegistry, createVoiceRpc } from '../core/voice/voice-rpc.mjs';
 import { ScriptedEngine } from '../core/voice/engines/scripted-engine.mjs';
 
 const TOKENS = { 'tok-1': { deviceId: 'dev-1' }, 'tok-2': { deviceId: 'dev-2' } };
@@ -148,4 +148,109 @@ test('a device token cannot open a bootstrap session', async () => {
   const [error] = await once(ws, 'error');
   assert.match(error.message, /403/);
   await media.close();
+});
+
+test('voice.session.start then audio in yields a scripted final and a reply', async () => {
+  const { methods, registry } = createVoiceRpc({
+    capabilities: () => ({
+      enabled: true,
+      engines: {
+        local: { state: 'ready' },
+        codex: { state: 'disabled', reason: 'no' },
+      },
+    }),
+    makeId: () => 'vs-e2e',
+  });
+  const grant = await methods['voice.session.start'](
+    { engine: 'local', thread: { kind: 'bot', sessionId: 's1', botId: 'b1' } },
+    { deviceId: 'dev-1' },
+  );
+  assert.equal(grant.voiceSessionId, 'vs-e2e');
+  assert.equal(grant.streamPath, '/v1/voice/stream');
+
+  const deviceTokens = {
+    verify: async (authorization) => (authorization === 'Bearer tok-1' ? { deviceId: 'dev-1' } : null),
+  };
+  const server = createServer((_req, res) => {
+    res.writeHead(404);
+    res.end();
+  });
+  const turns = [];
+  const wss = attachVoiceMediaSocket({
+    server,
+    deviceTokens,
+    registry,
+    createEngine: () => new ScriptedEngine({ text: 'hello from the operator', framesBeforeFinal: 1 }),
+    runTurn: async (_session, text, handlers) => {
+      turns.push(text);
+      handlers.onDelta('hello back');
+      return { hasContent: true };
+    },
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const port = server.address().port;
+  const ws = new WebSocket(`ws://127.0.0.1:${port}${grant.streamPath}?voiceSessionId=${grant.voiceSessionId}`, {
+    headers: { Authorization: 'Bearer tok-1' },
+  });
+  const frames = [];
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) frames.push(JSON.parse(data.toString()));
+  });
+  await once(ws, 'open');
+  await waitUntil(() => frames.some((frame) => frame.t === 'ready'));
+  ws.send(Buffer.from([0, 0]));
+  const final = await waitUntil(() => frames.find((frame) => frame.t === 'final'));
+  assert.equal(final.text, 'hello from the operator');
+  await waitUntil(() => turns.length > 0);
+  assert.equal(turns[0], 'hello from the operator');
+  await waitUntil(() => frames.some((frame) => frame.t === 'reply' && frame.delta === 'hello back'));
+  ws.close();
+  await once(ws, 'close');
+  await new Promise((done) => {
+    wss.close(() => server.close(done));
+  });
+});
+
+test('an engine that will not open ends the call with a logged fatal error', async () => {
+  const lines = [];
+  const registry = new VoiceSessionRegistry();
+  registry.create({ voiceSessionId: 'vs-1', deviceId: 'dev-1', engine: 'local' });
+  const deviceTokens = {
+    verify: async (authorization) => (authorization === 'Bearer tok-1' ? { deviceId: 'dev-1' } : null),
+  };
+  const server = createServer((_req, res) => {
+    res.writeHead(404);
+    res.end();
+  });
+  const wss = attachVoiceMediaSocket({
+    server,
+    deviceTokens,
+    registry,
+    log: (line) => lines.push(line),
+    createEngine: () => ({
+      open: async () => {
+        throw new Error('worker missing');
+      },
+      pushAudio() {},
+      close() {},
+      on() {},
+    }),
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const ws = new WebSocket(urlFor(server.address().port), { headers: { Authorization: 'Bearer tok-1' } });
+  const frames = [];
+  ws.on('message', (data, isBinary) => {
+    if (!isBinary) frames.push(JSON.parse(data.toString()));
+  });
+  await once(ws, 'open');
+  const fatal = await waitUntil(() => frames.find((frame) => frame.t === 'error' && frame.fatal));
+  assert.equal(fatal.code, 'engine_open_failed');
+  assert.match(fatal.message, /worker missing/);
+  assert.ok(lines.some((line) => /engine-open fail/.test(line) && /worker missing/.test(line)));
+  await once(ws, 'close');
+  await new Promise((done) => {
+    wss.close(() => server.close(done));
+  });
 });

@@ -470,6 +470,7 @@ export async function createGate(config = {}) {
   // `ready` only once the venv and models are on disk, so `auto` cannot pick an
   // engine that is not there.
   const voiceRpc = createVoiceRpc({
+    log: (line) => console.log(line),
     capabilities: () => voiceStatus({ paths: voicePaths() }),
     install: {
       // The phone starts the same install the CLI runs, over the same runtime.
@@ -2352,6 +2353,7 @@ export async function createGate(config = {}) {
     deviceTokens,
     tokenStore,
     registry: voiceRpc.registry,
+    log: (line) => console.log(line),
     audit: (summary) => voiceAudit.record(summary),
     createEngine: (session) => (
       session.engine === 'local' && !scriptedEngineEnabled()

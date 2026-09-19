@@ -101,6 +101,7 @@ export function createVoiceRpc({
   now = () => new Date().toISOString(),
   makeId = randomUUID,
   install = null,
+  log = () => {},
 } = {}) {
   // The install the operator started from the phone, if any. It outlives the
   // request that began it, so `voice.capabilities` and `voice.install.status`
@@ -131,8 +132,10 @@ export function createVoiceRpc({
 
   const methods = {
     'voice.capabilities': async (params = {}, ctx) => {
-      requireDevice(ctx, params);
-      return decorate(capabilities());
+      const deviceId = requireDevice(ctx, params);
+      const state = decorate(capabilities());
+      log(`voice.capabilities device=${deviceId} enabled=${state.enabled} local=${state.engines?.local?.state} codex=${state.engines?.codex?.state}`);
+      return state;
     },
 
     'voice.install.start': async (params = {}, ctx) => {
@@ -159,43 +162,50 @@ export function createVoiceRpc({
     },
 
     'voice.session.start': async (params = {}, ctx) => {
-      const deviceId = requireDevice(ctx, params);
-      if (!validThread(params.thread)) {
-        throw rpcError('thread must name a session', 400, 'invalid_request');
-      }
-      const existing = registry.liveForDevice(deviceId);
-      if (existing) {
-        throw rpcError('This device already has a live voice call', 409, 'call_in_progress');
-      }
-      const state = decorate(capabilities());
-      // `auto` means the Bot's own preference when it carries one (§4.9); an
-      // explicit request from the phone still wins.
-      const requested = params.engine ?? params.thread?.voiceEngine ?? 'auto';
-      const choice = chooseEngine(requested, state.engines);
-      if (!choice) {
-        const reason = params.engine && params.engine !== 'auto'
-          ? state.engines[params.engine]?.reason ?? `${params.engine} is not installed.`
-          : state.engines.local?.reason ?? 'No PC voice engine is installed.';
-        throw rpcError(reason, 409, 'no_engine');
-      }
+      let deviceId = 'unknown';
+      try {
+        deviceId = requireDevice(ctx, params);
+        if (!validThread(params.thread)) {
+          throw rpcError('thread must name a session', 400, 'invalid_request');
+        }
+        const existing = registry.liveForDevice(deviceId);
+        if (existing) {
+          throw rpcError('This device already has a live voice call', 409, 'call_in_progress');
+        }
+        const state = decorate(capabilities());
+        // `auto` means the Bot's own preference when it carries one (§4.9); an
+        // explicit request from the phone still wins.
+        const requested = params.engine ?? params.thread?.voiceEngine ?? 'auto';
+        const choice = chooseEngine(requested, state.engines);
+        if (!choice) {
+          const reason = params.engine && params.engine !== 'auto'
+            ? state.engines[params.engine]?.reason ?? `${params.engine} is not installed.`
+            : state.engines.local?.reason ?? 'No PC voice engine is installed.';
+          throw rpcError(reason, 409, 'no_engine');
+        }
 
-      const voiceSessionId = makeId();
-      registry.create({
-        voiceSessionId,
-        deviceId,
-        engine: choice.engine,
-        thread: params.thread,
-        startedAt: now(),
-      });
+        const voiceSessionId = makeId();
+        registry.create({
+          voiceSessionId,
+          deviceId,
+          engine: choice.engine,
+          thread: params.thread,
+          startedAt: now(),
+        });
 
-      return {
-        voiceSessionId,
-        engine: choice.engine,
-        ...(choice.fellBackFrom ? { fellBackFrom: choice.fellBackFrom, reason: choice.reason } : {}),
-        streamPath: '/v1/voice/stream',
-        input: { ...INPUT },
-        output: { ...OUTPUT },
-      };
+        log(`voice.session.start ok device=${deviceId} engine=${choice.engine} session=${voiceSessionId}`);
+        return {
+          voiceSessionId,
+          engine: choice.engine,
+          ...(choice.fellBackFrom ? { fellBackFrom: choice.fellBackFrom, reason: choice.reason } : {}),
+          streamPath: '/v1/voice/stream',
+          input: { ...INPUT },
+          output: { ...OUTPUT },
+        };
+      } catch (error) {
+        log(`voice.session.start fail device=${deviceId} code=${error.code ?? 'rpc_error'} ${error.message}`);
+        throw error;
+      }
     },
 
     'voice.session.stop': async (params = {}, ctx) => {
@@ -206,6 +216,7 @@ export function createVoiceRpc({
         throw rpcError('That voice session belongs to another device', 403, 'not_your_session');
       }
       registry.end(params.voiceSessionId);
+      log(`voice.session.stop ok device=${deviceId} session=${params.voiceSessionId} reason=${params.reason ?? 'unspecified'}`);
       return { stopped: true };
     },
   };
