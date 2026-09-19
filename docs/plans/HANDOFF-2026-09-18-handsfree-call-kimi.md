@@ -1,4 +1,4 @@
-# HANDOFF — Hands-free calling, round 2 (for Kimi, after Grok 4.6)
+﻿# HANDOFF — Hands-free calling, round 2 (for Kimi, after Grok 4.6)
 
 Written 2026-09-18 by Claude. Read the round-1 brief first:
 `C:\Projects\Versutus-pending\docs\plans\HANDOFF-2026-09-18-handsfree-call-grok.md` (the goal,
@@ -71,7 +71,7 @@ committed the Kotlin change, fixed the host harness and ran the final gate. Bran
 
 **Verified on the host (2026-09-19):**
 - `npm run verify` green on `092c17e` (1085 Gate tests, 0 failures, no ratchet drift).
-- The Android Kotlin compiles (Kimi, on a scratch copy of the main repo's android project, restored).
+- The Android Kotlin compiles (Kimi copied it into the main checkout's android project, compiled, then restored the file; the main checkout is clean).
 - A real voice-worker harness (`temp/worker-harness-round2.mjs`, not in verify) ran against the
   installed venv and models. Whisper loaded on CUDA. Kokoro spoke a sentence (90 KB PCM in 1.3 s),
   that PCM was fed back as mic audio, and `voice.final` returned the exact sentence.
