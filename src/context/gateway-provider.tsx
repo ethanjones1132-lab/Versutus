@@ -2409,6 +2409,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           { role: 'user', content: buildChatContent(trimmed, files) },
         ];
 
+        // A connect that could not read the session catalogue (Hermes still
+        // booting after a host restart) leaves the thread sessionless, and
+        // nothing retried it: chat still answered, statelessly, while a call
+        // refused to start with "no chat session". Resolve it here, the same
+        // way connect would have, so the first turn heals the thread.
+        if (!sessionIdRef.current) {
+          const outcome = await resolveResumeSession(
+            client,
+            effectiveModel(gateway, selectedBackendId, selectedBotId),
+          );
+          if (outcome.sessionId && !sessionIdRef.current) {
+            sessionIdRef.current = outcome.sessionId;
+            setCurrentSessionId(outcome.sessionId);
+          }
+        }
+
         await client.streamChat(
           conversationMessages,
           (delta) => {
