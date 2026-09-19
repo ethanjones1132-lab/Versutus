@@ -11,6 +11,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -256,6 +257,7 @@ class HandsfreeCallService : Service() {
   private fun requestAudioFocus() {
     if (focused) return
     audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+    routeToLoudspeaker()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
         .setAudioAttributes(
@@ -288,7 +290,35 @@ class HandsfreeCallService : Service() {
     }
     focused = false
     audioFocusRequest = null
+    releaseLoudspeaker()
     audioManager.mode = AudioManager.MODE_NORMAL
+  }
+
+  // A communication-mode call plays through the earpiece unless told
+  // otherwise, which made a hands-free call audible only at the ear even at
+  // full volume. It is hands-free, so it takes the loudspeaker, unless the
+  // operator has a headset or Bluetooth device on, which keeps its own route.
+  private fun routeToLoudspeaker() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      val devices = audioManager.availableCommunicationDevices
+      if (devices.any { it.type in PERSONAL_AUDIO_TYPES }) return
+      devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+        ?.let { audioManager.setCommunicationDevice(it) }
+    } else {
+      @Suppress("DEPRECATION")
+      if (audioManager.isWiredHeadsetOn || audioManager.isBluetoothScoOn) return
+      @Suppress("DEPRECATION")
+      audioManager.isSpeakerphoneOn = true
+    }
+  }
+
+  private fun releaseLoudspeaker() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      audioManager.clearCommunicationDevice()
+    } else {
+      @Suppress("DEPRECATION")
+      audioManager.isSpeakerphoneOn = false
+    }
   }
 
   private fun handleFocusLoss() {
@@ -881,6 +911,15 @@ class HandsfreeCallService : Service() {
     /** Flip after the device matrix if Samsung's default recognizer misbehaves. */
     private const val PREFER_ON_DEVICE_RECOGNIZER = false
     private const val NOTIFICATION_ID = 8401
+    // Routes the operator chose by plugging in or pairing; the loudspeaker never overrides them.
+    private val PERSONAL_AUDIO_TYPES = setOf(
+      AudioDeviceInfo.TYPE_WIRED_HEADSET,
+      AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+      AudioDeviceInfo.TYPE_USB_HEADSET,
+      AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+      AudioDeviceInfo.TYPE_BLE_HEADSET,
+      AudioDeviceInfo.TYPE_HEARING_AID,
+    )
     private const val TICK_MS = 200L
     private const val BUSY_RETRY_MS = 400L
     private const val VAD_SAMPLE_RATE = 16000
