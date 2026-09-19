@@ -32,15 +32,18 @@ import {
 } from '@/lib/voice/gate-call';
 import { isDeviceIdentityError } from '@/lib/gateway/errors';
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
+import { reconnectGateMedia } from '@/lib/voice/gate-reconnect';
 import { loadHandsfreeModule, type HandsfreeNativeModule } from '@/lib/voice/handsfree-device';
 import { openGateVoiceSession } from '@/lib/voice/handsfree-start-attempt';
 import {
   evaluateHandsfreeStart,
   handsfreeDeviceCanOfferCall,
   logHandsfreeStart,
+  type GateVoiceGrant,
   type HandsfreeStartAttempt,
   type HandsfreeStartResult,
 } from '@/lib/voice/handsfree-start-reason';
+import { parseGateFrame } from '@/lib/voice/voice-stream-protocol';
 import {
   handsfreeReplyForTurn,
   isFailedReply,
@@ -158,6 +161,21 @@ function clampLevel(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+/**
+ * Only a dead media socket is worth re-opening: the Gate holds the call for
+ * its resume window and re-attaches the same session. Every other fatal frame
+ * (engine open failed, ended) names a call that is actually over.
+ */
+function isRetryableSocketFailure(frame: unknown): frame is string {
+  if (typeof frame !== 'string') return false;
+  try {
+    const parsed = parseGateFrame(frame);
+    return parsed.t === 'error' && parsed.fatal && parsed.code === 'socket_failed';
+  } catch {
+    return false;
+  }
+}
+
 export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode }) {
   const {
     activeGateway,
@@ -201,6 +219,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const gateModeRef = useRef(false);
   const gateSessionIdRef = useRef<string | undefined>(undefined);
   const gateBannerRef = useRef<GateCallBanner>(INITIAL_GATE_CALL);
+  // The grant a live Gate call is joined with: the reconnect path re-opens the
+  // media socket with these exact ids inside the Gate's resume window.
+  const gateGrantRef = useRef<GateVoiceGrant | null>(null);
+  const gateReconnectingRef = useRef(false);
 
   // Everything a stable callback has to read at call time. Updated after every
   // render, so `start` and the reply watchers always see the current values
@@ -335,12 +357,44 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const subscribeGate = useCallback(
     (module: HandsfreeNativeModule) => {
       unsubscribe();
+      const fold = (frame: string) => {
+        const next = reduceGateCall(gateBannerRef.current, frame);
+        gateBannerRef.current = next.state;
+        setGateBanner(next.state);
+        for (const gateEffect of next.effects) runGateEffect(gateEffect);
+      };
+      // A failed socket is the one failure the Gate plans for: it holds the
+      // call open for its resume window and re-attaches a socket with the same
+      // voiceSessionId. Spend that window re-opening the media socket instead
+      // of ending an otherwise healthy call; only when the window runs out (or
+      // the call ended by another path) does the fatal frame fold normally.
+      const attemptReconnect = async (frame: string) => {
+        const grant = gateGrantRef.current;
+        const gateway = latest.current.activeGateway;
+        const rejoined = grant && gateway?.url
+          ? await reconnectGateMedia({
+              grant,
+              gatewayUrl: gateway.url,
+              gatewayToken: gateway.token ?? '',
+              startGateMedia: (options) => moduleRef.current?.startGateMedia(options) ?? Promise.resolve(false),
+              isAborted: () =>
+                endingRef.current || !gateModeRef.current || gateGrantRef.current !== grant,
+            })
+          : false;
+        gateReconnectingRef.current = false;
+        if (!rejoined) fold(frame);
+      };
       subscriptionsRef.current = [
         module.addListener('gate', (event) => {
-          const next = reduceGateCall(gateBannerRef.current, event.frame);
-          gateBannerRef.current = next.state;
-          setGateBanner(next.state);
-          for (const gateEffect of next.effects) runGateEffect(gateEffect);
+          if (isRetryableSocketFailure(event.frame)) {
+            // A reconnect attempt that fails emits the same frame again; only
+            // the first one starts a reconnect, the rest are swallowed.
+            if (gateReconnectingRef.current || endingRef.current || !gateGrantRef.current) return;
+            gateReconnectingRef.current = true;
+            void attemptReconnect(event.frame);
+            return;
+          }
+          fold(event.frame);
         }),
         // The amplitude sample is banner-only, exactly as on the phone engine.
         module.addListener('level', (event) => {
@@ -363,6 +417,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     gateModeRef.current = false;
     setGateMode(false);
     gateSessionIdRef.current = undefined;
+    gateGrantRef.current = null;
+    gateReconnectingRef.current = false;
     setEngineInfo(null);
     const module = moduleRef.current;
     moduleRef.current = null;
@@ -667,6 +723,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     setGateMode(false);
     setEngineInfo(null);
     gateSessionIdRef.current = undefined;
+    gateGrantRef.current = null;
+    gateReconnectingRef.current = false;
     moduleRef.current = null;
     targetRef.current = null;
     threadRef.current = undefined;
@@ -700,6 +758,8 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       gateModeRef.current = true;
       setGateMode(true);
       gateSessionIdRef.current = undefined;
+      gateGrantRef.current = null;
+      gateReconnectingRef.current = false;
       gateBannerRef.current = INITIAL_GATE_CALL;
       setGateBanner(INITIAL_GATE_CALL);
 
@@ -738,6 +798,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       }
 
       gateSessionIdRef.current = attempt.grant.voiceSessionId;
+      gateGrantRef.current = attempt.grant;
       setEngineInfo({
         engine: attempt.grant.engine ?? 'local',
         ...(attempt.grant.fellBackFrom ? { reason: attempt.grant.reason } : {}),
