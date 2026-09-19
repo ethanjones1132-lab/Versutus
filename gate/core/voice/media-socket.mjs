@@ -253,6 +253,11 @@ export function attachVoiceMediaSocket({
     };
 
     const dispatch = (event) => {
+      // The phone only hears "that turn could not be completed"; the host
+      // log has to say why, or a wrong backend looks like a flaky model.
+      if (event.type === 'replyFailed') {
+        log(`voice.turn fail session=${session.voiceSessionId} reason=${event.message}`);
+      }
       const out = reduceVoiceSession(call, event);
       const at = now();
       if (out.state.phase !== call.phase) {
