@@ -126,6 +126,15 @@ export function attachVoiceMediaSocket({
     let ended = false;
     let endingNow = false;
     let call = INITIAL_VOICE_SESSION;
+    const trace = {
+      startedAt: now(),
+      audioFrames: 0,
+      audioBytes: 0,
+      partials: 0,
+      finals: 0,
+      speechChunks: 0,
+      firstReplyAt: 0,
+    };
     let turnAbort = null;
     let turnTimer = null;
     let speculative = null;
@@ -258,6 +267,22 @@ export function attachVoiceMediaSocket({
       if (event.type === 'replyFailed') {
         log(`voice.turn fail session=${session.voiceSessionId} reason=${event.message}`);
       }
+      // One line per step a call takes, so "it never answered" can be placed:
+      // no audio, no transcript, a transcript but no turn, or a turn with no
+      // speech. Text is logged by length only; what was said stays off disk.
+      if (event.type === 'partial') trace.partials += 1;
+      else if (event.type === 'final') {
+        trace.finals += 1;
+        log(`voice.final session=${session.voiceSessionId} chars=${String(event.text ?? '').length} afterMs=${now() - trace.startedAt}`);
+      } else if (event.type === 'replyDelta' && !trace.firstReplyAt) {
+        trace.firstReplyAt = now();
+        log(`voice.reply first session=${session.voiceSessionId} afterMs=${trace.firstReplyAt - trace.startedAt}`);
+      } else if (event.type === 'speechAudio') trace.speechChunks += 1;
+      else if (['bargein', 'skip', 'end', 'error', 'mute', 'unmute'].includes(event.type)) {
+        log(`voice.event session=${session.voiceSessionId} type=${event.type}${event.code ? ` code=${event.code}` : ''}${event.message ? ` message=${event.message}` : ''}`);
+      } else if (event.type === 'socketClosed') {
+        log(`voice.end session=${session.voiceSessionId} reason=${event.reason} audioFrames=${trace.audioFrames} audioBytes=${trace.audioBytes} partials=${trace.partials} finals=${trace.finals} speechChunks=${trace.speechChunks} phase=${call.phase}`);
+      }
       const out = reduceVoiceSession(call, event);
       const at = now();
       if (out.state.phase !== call.phase) {
@@ -340,6 +365,8 @@ export function attachVoiceMediaSocket({
           return;
         }
         lastAudioAt = now();
+        trace.audioFrames += 1;
+        trace.audioBytes += frame.length;
         engine.pushAudio(frame);
         return;
       }

@@ -250,6 +250,9 @@ test('an engine that will not open ends the call with a logged fatal error', asy
   assert.match(fatal.message, /worker missing/);
   assert.ok(lines.some((line) => /engine-open fail/.test(line) && /worker missing/.test(line)));
   await once(ws, 'close');
+  // Every call leaves one summary line saying how far it got.
+  const summary = await waitUntil(() => lines.find((line) => /^voice\.end /.test(line)));
+  assert.match(summary, /audioFrames=0 audioBytes=0 partials=0 finals=0 speechChunks=0/);
   await new Promise((done) => {
     wss.close(() => server.close(done));
   });
