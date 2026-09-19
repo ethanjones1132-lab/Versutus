@@ -44,6 +44,7 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
     .build()
 
   @Volatile private var running = false
+  @Volatile private var sawEnded = false
   private var socket: WebSocket? = null
   private var captureThread: Thread? = null
   private var playbackThread: Thread? = null
@@ -61,6 +62,7 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
   fun start(context: Context, url: String, token: String, voiceSessionId: String) {
     stop()
     running = true
+    sawEnded = false
     currentGen = 0L
     buffer.flush()
 
@@ -72,8 +74,12 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
       .addHeader("Authorization", "Bearer ${cleanHeaderValue(token)}")
       .build()
     socket = client.newWebSocket(request, listener)
-    startCapture(context)
-    startPlayback()
+    // A call with no microphone or no speaker is failed at once instead of
+    // idling until the Gate's no-audio timeout closes the socket silently.
+    if (!startCapture(context) || !startPlayback()) {
+      onFrame("""{"t":"error","code":"media_failed","message":"This phone could not open call audio capture or playback.","fatal":true}""")
+      stop()
+    }
   }
 
   fun sendControl(json: String): Boolean = socket?.send(json) ?: false
@@ -104,19 +110,36 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
   }
 
   private val listener = object : WebSocketListener() {
+    // Every callback is identity-guarded: a replaced or stopped socket's
+    // late frames must not reach the call a new socket now serves.
     override fun onMessage(webSocket: WebSocket, text: String) {
+      if (webSocket != socket) return
       handleTextFrame(text)
     }
 
     override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+      if (webSocket != socket) return
       buffer.push(currentGen, bytes.toByteArray())
     }
 
     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+      if (webSocket != socket) return
       webSocket.close(1000, null)
     }
 
+    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+      if (webSocket != socket) return
+      // A clean close the Gate did not announce with an ended frame is still
+      // the end of the call from the phone's side: its idle timeout and its
+      // restart both close this way. Without a frame the banner would sit on
+      // a dead call forever.
+      if (running && !sawEnded) {
+        onFrame("""{"t":"error","code":"socket_closed","message":"The PC closed the call audio link.","fatal":true}""")
+      }
+    }
+
     override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) {
+      if (webSocket != socket) return
       onFrame("""{"t":"error","code":"socket_failed","message":"${error.message ?: "socket failed"}","fatal":true}""")
     }
   }
@@ -133,12 +156,15 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
         currentGen = frame.gen
         if (frame.state == "cancelled") buffer.cancel(frame.gen)
       }
-      is GateFrame.Ended -> running = false
+      is GateFrame.Ended -> {
+        sawEnded = true
+        running = false
+      }
       else -> Unit
     }
   }
 
-  private fun startCapture(context: Context) {
+  private fun startCapture(context: Context): Boolean {
     val minBytes = AudioRecord.getMinBufferSize(
       CAPTURE_SAMPLE_RATE,
       AudioFormat.CHANNEL_IN_MONO,
@@ -155,10 +181,10 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
       )
     } catch (_: Exception) {
       null
-    } ?: return
+    } ?: return false
     if (record.state != AudioRecord.STATE_INITIALIZED) {
       record.release()
-      return
+      return false
     }
     audioRecord = record
     if (AcousticEchoCanceler.isAvailable()) {
@@ -176,9 +202,10 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
         socket?.send(ByteString.of(*frame.copyOf(read)))
       }
     }.also { it.name = "gate-capture"; it.start() }
+    return true
   }
 
-  private fun startPlayback() {
+  private fun startPlayback(): Boolean {
     val minBytes = AudioTrack.getMinBufferSize(
       PLAYBACK_SAMPLE_RATE,
       AudioFormat.CHANNEL_OUT_MONO,
@@ -204,10 +231,10 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
         .build()
     } catch (_: Exception) {
       null
-    } ?: return
+    } ?: return false
     if (track.state != AudioTrack.STATE_INITIALIZED) {
       track.release()
-      return
+      return false
     }
     audioTrack = track
     track.play()
@@ -221,6 +248,7 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
         track.write(pcm, 0, pcm.size)
       }
     }.also { it.name = "gate-playback"; it.start() }
+    return true
   }
 
   private fun buildStreamUrl(url: String, voiceSessionId: String): String {
