@@ -322,6 +322,8 @@ export function attachVoiceMediaSocket({
       clearResumeTimer();
       lastAudioAt = now();
       startAudioTimer();
+      // The grant is real: a socket carrying this session actually arrived.
+      registry.markAttached(session.voiceSessionId);
 
       newWs.on('message', onMessage);
       newWs.on('close', () => {

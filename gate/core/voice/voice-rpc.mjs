@@ -11,14 +11,22 @@ import { requireDevice } from '../push-rpc.mjs';
 import { randomUUID } from 'node:crypto';
 import { codexRealtimeStatus } from './codex-status.mjs';
 
+/**
+ * How long a granted-but-never-attached session blocks new starts. Longer
+ * than the phone's whole start path (grant → session → media socket) needs;
+ * far shorter than "until the Gate restarts".
+ */
+export const GRANT_ATTACH_GRACE_MS = 60_000;
+
 /** The live-call registry the media socket also reads. */
 export class VoiceSessionRegistry {
-  constructor() {
+  constructor({ now = () => Date.now() } = {}) {
     this.sessions = new Map();
+    this._now = now;
   }
 
   create(record) {
-    const session = { ...record, ended: false };
+    const session = { ...record, ended: false, attached: false, grantedAt: this._now() };
     this.sessions.set(record.voiceSessionId, session);
     return session;
   }
@@ -27,9 +35,24 @@ export class VoiceSessionRegistry {
     return this.sessions.get(voiceSessionId) ?? null;
   }
 
+  /** The media socket calls this when a call's first socket actually attaches. */
+  markAttached(voiceSessionId) {
+    const session = this.sessions.get(voiceSessionId);
+    if (session) session.attached = true;
+  }
+
+  /**
+   * The one live call a device may have. A grant that never attached a socket
+   * (the phone died between `voice.session.start` and the media link) stops
+   * counting as live once its grace period passes, so a retry after a failed
+   * start is not `call_in_progress` forever when the compensating
+   * `voice.session.stop` never landed either.
+   */
   liveForDevice(deviceId) {
     for (const session of this.sessions.values()) {
-      if (session.deviceId === deviceId && !session.ended) return session;
+      if (session.deviceId !== deviceId || session.ended) continue;
+      if (!session.attached && this._now() - session.grantedAt > GRANT_ATTACH_GRACE_MS) continue;
+      return session;
     }
     return null;
   }

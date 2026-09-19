@@ -238,3 +238,35 @@ test('capabilities log the live engine states without a token', async () => {
   assert.ok(lines.some((line) => /voice.capabilities/.test(line) && /local=ready/.test(line)));
   assert.ok(lines.every((line) => !/Bearer|token=/i.test(line)));
 });
+
+test('a grant that never attaches stops blocking new starts after its grace period', async () => {
+  let clock = 1_000;
+  const registry = new VoiceSessionRegistry({ now: () => clock });
+  const { methods } = createVoiceRpc({
+    capabilities: capabilities(),
+    registry,
+    makeId: () => `vs-${clock}`,
+  });
+
+  await methods['voice.session.start']({ engine: 'local', thread }, ctx);
+  // The start failed on the phone, the compensating stop never landed, and the
+  // phone retries: while the grace period holds, the live grant still wins.
+  await assert.rejects(
+    () => methods['voice.session.start']({ engine: 'local', thread }, ctx),
+    (error) => error.code === 'call_in_progress',
+  );
+
+  // The media socket attached a different session: that one blocks until ended.
+  registry.create({ voiceSessionId: 'vs-live', deviceId: 'dev-1', engine: 'local', thread });
+  registry.markAttached('vs-live');
+  clock += 120_000;
+  await assert.rejects(
+    () => methods['voice.session.start']({ engine: 'local', thread }, ctx),
+    (error) => error.code === 'call_in_progress',
+  );
+
+  // The orphaned grant aged out; the attached one, once ended, frees the device.
+  registry.end('vs-live');
+  const grant = await methods['voice.session.start']({ engine: 'local', thread }, ctx);
+  assert.ok(grant.voiceSessionId);
+});
