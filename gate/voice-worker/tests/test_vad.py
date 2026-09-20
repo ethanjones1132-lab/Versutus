@@ -27,7 +27,8 @@ def _segmenter():
         samples = np.frombuffer(window, dtype="<i2").astype(np.float32)
         return float(np.sqrt(np.mean(samples ** 2))) > 1000
 
-    return VadSegmenter(is_speech=energy)
+    # These tests exercise boundary mechanics, not room calibration.
+    return VadSegmenter(is_speech=energy, warmup_ms=0)
 
 
 def test_a_tone_then_silence_marks_one_utterance():
@@ -91,3 +92,97 @@ def test_reset_drops_the_carry():
 
 def _silence_segments(seg):
     return sum(1 for _ in seg.stream(_silence(200)))
+
+
+def _prob_segmenter(probs, seg=None):
+    seg = seg or VadSegmenter(start_ms=250)
+    events = []
+    for prob in probs:
+        events.extend(seg.push(prob))
+    return events
+
+
+def _calibrated_quiet(seg=None):
+    """A quiet room's opening seconds: room tone the floor can learn from."""
+    seg = seg or VadSegmenter(start_ms=250)
+    _prob_segmenter([0.05] * 40, seg)
+    return seg
+
+
+def test_a_calibrated_quiet_room_keeps_the_fixed_threshold():
+    # With the floor learned from room tone the gate is the plain 0.5
+    # threshold: a probability just under it never opens, just over it does.
+    assert _prob_segmenter([0.4] * 40, _calibrated_quiet()) == []
+    events = _prob_segmenter([0.6] * 40, _calibrated_quiet())
+    assert [event.kind for event in events] == ["speech_start"]
+
+
+def test_speech_during_call_open_calibration_still_opens():
+    # Calibration absorbs room tone, but it must never swallow the operator.
+    # Holding speech-like windows for the first 500 ms cost the opening words
+    # of a sentence spoken immediately ("The host voice engine is alive."
+    # arrived as "voice engine is alive.").
+    seg = VadSegmenter(start_ms=250)
+    events = _prob_segmenter([0.9] * 16, seg)
+    assert "speech_start" in [event.kind for event in events]
+
+
+def test_room_tone_during_calibration_opens_nothing():
+    seg = VadSegmenter(start_ms=250)
+    assert _prob_segmenter([0.6] * 16, seg) == []
+
+
+def test_steady_noise_raises_the_gate_until_it_no_longer_opens():
+    # A loud room sits at a steady 0.55: with the fixed threshold alone this
+    # opens an utterance every time (the live call's "Thank you." every few
+    # seconds). Calibration lifts the gate above the noise from window one.
+    assert _prob_segmenter([0.55] * 200) == []
+
+
+def test_loud_room_tone_from_the_first_frame_never_opens():
+    # The bootstrap case: 0.7 room tone is above the initial gate, so without
+    # calibration it would open an utterance within 250 ms and sit in speech
+    # forever. The warmup absorbs it and the floor ends above the noise.
+    assert _prob_segmenter([0.7] * 200) == []
+
+
+def test_real_speech_still_opens_above_a_raised_floor():
+    # The room has been at 0.55 for a while (gate now ~0.8); speech at 0.9
+    # is still clearly above the gate.
+    seg = VadSegmenter(start_ms=250)
+    _prob_segmenter([0.55] * 200, seg)
+    events = _prob_segmenter([0.9] * 40, seg)
+    assert "speech_start" in [event.kind for event in events]
+
+
+def test_the_floor_only_tracks_windows_below_the_gate():
+    # Windows that open speech must not feed the floor, or speech would raise
+    # the gate on itself.
+    seg = _calibrated_quiet()
+    floor = seg._floor
+    _prob_segmenter([0.9] * 40, seg)  # opens; the floor stays frozen
+    assert seg._floor == floor
+
+
+def test_playback_raises_the_gate_against_leaked_echo():
+    # Echo that survives the phone's AEC can sit well above ordinary noise.
+    # A room at a sustained 0.7 lifts the floor to its cap: the gate reaches
+    # 0.85, so 0.87 echo opens while the PC speaks — except in playback mode,
+    # where the gate may rise to 0.9 and the same echo is refused.
+    seg = VadSegmenter(start_ms=250)
+    _prob_segmenter([0.7] * 300, seg)
+    seg.set_playback(True)
+    assert _prob_segmenter([0.87] * 60, seg) == []
+    seg.set_playback(False)
+    events = _prob_segmenter([0.87] * 60, seg)
+    assert "speech_start" in [event.kind for event in events]
+
+
+def test_reset_restores_the_quiet_room_gate():
+    seg = VadSegmenter(start_ms=250)
+    _prob_segmenter([0.55] * 200, seg)
+    seg.reset()
+    # Room tone again after the reset: the floor relearns the quiet room and
+    # ordinary speech opens.
+    events = _prob_segmenter([0.6] * 40, _calibrated_quiet(seg))
+    assert "speech_start" in [event.kind for event in events]

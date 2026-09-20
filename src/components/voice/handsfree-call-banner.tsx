@@ -24,10 +24,11 @@ import {
   HANDSFREE_UNMUTE_LABEL,
   handsfreeElapsedCopy,
   handsfreePhaseLabel,
+  handsfreeSlowTurnCopy,
 } from '@/lib/voice/handsfree-call-copy';
 
 export function HandsfreeCallBanner() {
-  const { active, phase, partial, label, level, engine, engineReason, mute, unmute, skipReply, end, startedAtMs } =
+  const { active, phase, partial, label, level, engine, engineReason, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs } =
     useHandsfreeVoice();
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
@@ -43,10 +44,17 @@ export function HandsfreeCallBanner() {
     subscribeElapsedSeconds,
     () => Math.floor(Date.now() / 1000),
   );
+  const nowMs = elapsedSeconds * 1000;
   const elapsedCopy =
     startedAtMs !== undefined
-      ? handsfreeElapsedCopy(startedAtMs, elapsedSeconds * 1000)
+      ? handsfreeElapsedCopy(startedAtMs, nowMs)
       : null;
+  // A slow turn is named, not silent: while the call waits on the PC past a
+  // fair window the banner says so. The provider stamps when the wait began
+  // (it folds call events; render may neither read a ref nor set state), and
+  // the per-second clock above is what re-runs this fold, so the wait ticks.
+  const slowTurnCopy =
+    sendingSinceMs !== null ? handsfreeSlowTurnCopy(sendingSinceMs, nowMs) : null;
 
   if (!active) return null;
 
@@ -90,6 +98,13 @@ export function HandsfreeCallBanner() {
               <Text variant="micro" color="tertiary" numberOfLines={1}>
                 Using {engine}
                 {engineReason ? ` — ${engineReason}` : ''}
+              </Text>
+            ) : null}
+            {slowTurnCopy ? (
+              // The turn has waited on the PC past a fair window: name the
+              // wait so silence does not read as a dead call.
+              <Text variant="micro" color="accentWarm" numberOfLines={1}>
+                {slowTurnCopy}
               </Text>
             ) : null}
             {partial ? (

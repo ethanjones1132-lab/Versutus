@@ -115,6 +115,8 @@ export type HandsfreeVoiceContextValue = {
    * `handsfreeElapsedCopy` to say how long the call has been running.
    */
   startedAtMs: number | undefined;
+  /** When the current wait on a turn began, or null when nothing is pending. */
+  sendingSinceMs: number | null;
   /** The live transcript of the current turn, for the banner. */
   partial: string;
   label: string | undefined;
@@ -260,10 +262,19 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     };
   });
 
+  // When the current wait on a turn began, so the banner can name a slow one.
+  // Stamped here and in the Gate fold — both are event callbacks — because the
+  // banner may neither read a ref nor set state from an effect during render.
+  const [sendingSinceMs, setSendingSinceMs] = useState<number | null>(null);
+  const noteWaiting = useCallback((waiting: boolean) => {
+    setSendingSinceMs((current) => (waiting ? (current ?? Date.now()) : null));
+  }, []);
+
   const dispatch = useCallback((event: HandsfreeEvent): HandsfreeSessionState => {
     const { state, effects } = reduceHandsfreeSession(sessionRef.current, event);
     sessionRef.current = state;
     setSession(state);
+    noteWaiting(state.phase === 'sending');
     for (const effect of effects) runEffectRef.current(effect);
     return state;
   }, []);
@@ -361,6 +372,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         const next = reduceGateCall(gateBannerRef.current, frame);
         gateBannerRef.current = next.state;
         setGateBanner(next.state);
+        noteWaiting(appPhaseForGate(next.state.phase) === 'sending');
         for (const gateEffect of next.effects) runGateEffect(gateEffect);
       };
       // A failed socket is the one failure the Gate plans for: it holds the
@@ -978,6 +990,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     phase,
     active,
     startedAtMs: session.startedAtMs,
+    sendingSinceMs,
     partial,
     label,
     reason: session.reason,

@@ -53,6 +53,8 @@ def _pipeline(events, min_utterance_ms):
         synthesizer=SpeechSynthesizer(lambda text: [text.encode("ascii")]),
         emit=lambda method, params: events.append((method, params)),
         min_utterance_ms=min_utterance_ms,
+        # Synthesis runs on a thread in production; the fake keeps it inline.
+        spawn=lambda fn: fn(),
     )
 
 
@@ -118,6 +120,7 @@ def test_the_audio_just_before_speech_opens_is_kept():
         turn_judge=None,
         synthesizer=SpeechSynthesizer(lambda text: [text.encode("ascii")]),
         emit=lambda method, params: events.append((method, params)),
+        spawn=lambda fn: fn(),
     )
     pipeline.pushAudio({"chunk": encode_chunk(_pcm(200), 16000)})
     pipeline.pushAudio({"chunk": encode_chunk(_pcm(300), 16000)})

@@ -66,6 +66,25 @@ export const HANDSFREE_END_LABEL = 'End hands-free call';
 export const HANDSFREE_MIC_LOCK_COPY = 'A hands-free call is using the microphone.';
 
 /**
+ * How long a turn may wait on the PC before the banner says so. Generous on
+ * purpose: most turns answer in seconds, and naming the wait too early reads
+ * as an error on a turn that is about to land.
+ */
+export const HANDSFREE_SLOW_TURN_THRESHOLD_MS = 10_000;
+
+/**
+ * The banner's escalation while a sent turn waits on the PC past a fair
+ * window: silence on a slow turn reads as a dead call, so the wait is named
+ * (with the seconds, live). Null while the wait is inside the threshold.
+ */
+export function handsfreeSlowTurnCopy(sinceMs: number, nowMs: number): string | null {
+  const waitedMs = Math.max(0, nowMs - sinceMs);
+  if (waitedMs < HANDSFREE_SLOW_TURN_THRESHOLD_MS) return null;
+  const seconds = Math.round(waitedMs / 1000);
+  return `Still waiting on the PC… ${seconds}s`;
+}
+
+/**
  * The banner's phase label. The internal `confirming` grace window is folded
  * into `Listening` — it is an implementation detail, not a state the operator
  * needs a new word for.

@@ -31,8 +31,12 @@ export const OUTPUT_CHANNELS = 1;
 export const SPECULATION_WINDOW_MS = 600;
 // How long one Bot turn may run before the call names it failed and reopens,
 // symmetric with the phone engine's reply watchdog: a backend that never
-// answers must not park the call in thinking forever.
-export const TURN_TIMEOUT_MS = 120_000;
+// answers must not park the call in thinking forever. Three minutes, not two:
+// the host's backend (Hermes) has proven it can stall for 2.5 minutes under
+// database contention and still answer (2026-09-19), and the banner now names
+// a slow wait instead of sitting silent — so a stall that recovers completes
+// the turn instead of failing it.
+export const TURN_TIMEOUT_MS = 180_000;
 
 function rejectUpgrade(socket, status, message) {
   try {

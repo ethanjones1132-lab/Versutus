@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from pathlib import Path
 
 from .audio import (
@@ -54,13 +55,28 @@ def _error(request_id, code, message):
 class VoicePipeline:
     """One call's pipeline. Every model call is injected, so tests never load one."""
 
-    def __init__(self, vad, transcriber, turn_judge, synthesizer, emit, min_utterance_ms=0):
+    def __init__(
+        self,
+        vad,
+        transcriber,
+        turn_judge,
+        synthesizer,
+        emit,
+        min_utterance_ms=0,
+        spawn=None,
+    ):
         self._vad = vad
         self._min_utterance_bytes = int(INPUT_SAMPLE_RATE * 2 * min_utterance_ms / 1000)
         self._transcriber = transcriber
         self._turn = turn_judge
         self._synth = synthesizer
         self._emit = emit
+        # Synthesis runs on its own thread so the mic keeps streaming while
+        # the PC speaks: barge-in hears the operator mid-sentence, and the
+        # echo of the loudspeaker is gated as playback instead of queueing up
+        # to be transcribed after the generation ends. Tests inject a
+        # synchronous runner so events stay deterministic.
+        self._spawn = spawn or (lambda fn: threading.Thread(target=fn, daemon=True).start())
         self._buffer = bytearray()
         # Recent audio from before speech was recognised as speech: the VAD only
         # opens an utterance after SPEECH_START_MS, so the first words would
@@ -146,7 +162,7 @@ class VoicePipeline:
                     elif len(utterance) < self._min_utterance_bytes:
                         # A blip is not a turn, however confident the judge.
                         pass
-                    elif self._turn.confident(utterance):
+                    elif self._turn.confident(utterance, silence_ms=self._vad.silence_ms):
                         # A confident verdict at the first pause is an early
                         # end: the Gate may start the Bot turn before the final.
                         text = self._transcriber.final(utterance)
@@ -201,17 +217,32 @@ class VoicePipeline:
         text = str(params.get("text", ""))
         self._synth_speaking = True
         self._speech_gen = gen
-        try:
-            for chunk_gen, pcm in self._synth.speak(text, gen):
-                self._emit(
-                    "voice.speechAudio",
-                    {"gen": chunk_gen, "chunk": encode_chunk(pcm, OUTPUT_SAMPLE_RATE)},
-                )
-            if not self._synth.is_cancelled(gen):
-                self._emit("voice.speechDone", {"gen": gen})
-        finally:
-            self._synth_speaking = False
-            self._speech_gen = None
+        # While the PC speaks, the mic hears the loudspeaker too: the phone's
+        # AEC eats most of it, but what leaks through must not open speech, or
+        # the Bot would barge in on itself. The VAD gates harder until the
+        # generation ends; a real operator talking still opens (and cancels).
+        set_playback = getattr(self._vad, "set_playback", None)
+        if callable(set_playback):
+            set_playback(True)
+
+        def run():
+            try:
+                for chunk_gen, pcm in self._synth.speak(text, gen):
+                    self._emit(
+                        "voice.speechAudio",
+                        {"gen": chunk_gen, "chunk": encode_chunk(pcm, OUTPUT_SAMPLE_RATE)},
+                    )
+                if not self._synth.is_cancelled(gen):
+                    self._emit("voice.speechDone", {"gen": gen})
+            finally:
+                # A newer generation owns the flags now; do not clear its state.
+                if self._speech_gen == gen:
+                    self._synth_speaking = False
+                    self._speech_gen = None
+                if callable(set_playback):
+                    set_playback(False)
+
+        self._spawn(run)
         return {"ok": True}
 
     def cancelSpeech(self, params):
@@ -244,13 +275,17 @@ class RpcServer:
         }
         self.written = []
         self._out = out
+        # Synthesis runs on its own thread (see VoicePipeline.speak); frames
+        # from that thread and the stdin loop must not interleave mid-line.
+        self._write_lock = threading.Lock()
 
     def _write(self, payload):
         line = json.dumps(payload)
         self.written.append(line)
         if self._out is not None:
-            self._out.write(line + "\n")
-            self._out.flush()
+            with self._write_lock:
+                self._out.write(line + "\n")
+                self._out.flush()
 
     def emit(self, method, params):
         """A notification the pipeline sends to the Gate."""
@@ -526,6 +561,12 @@ def build_default_pipeline(emit, models_dir, cpu=False):
         segments, _info = whisper.transcribe(
             pcm16_to_float32(pcm),
             beam_size=beam_size,
+            # English is pinned (the engine speaks English; Kokoro is en-us):
+            # auto-detection costs a full encoder pass per call, measured
+            # 880 ms -> 580 ms with the loopback sentence still word for
+            # word. Timestamps are never read; dropping them trims decode.
+            language="en",
+            without_timestamps=True,
             # Each utterance stands alone; carrying the last one's text in is
             # how Whisper repeats itself on a quiet line.
             condition_on_previous_text=False,

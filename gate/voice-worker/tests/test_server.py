@@ -37,6 +37,8 @@ def _pipeline(events):
         turn_judge=None,
         synthesizer=tts,
         emit=lambda method, params: events.append((method, params)),
+        # Synthesis runs on a thread in production; the fake keeps it inline.
+        spawn=lambda fn: fn(),
     )
 
 
