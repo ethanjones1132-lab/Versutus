@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 
 import { DeviceIdRow } from '@/components/device-id-row';
+import { NotificationsSection } from '@/components/gateway/notifications-section';
 import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
 import { TransportSecurityCard } from '@/components/gateway/transport-security-card';
 import { Badge, Card, Icon, Screen, Text } from '@/components/ui';
@@ -387,6 +388,8 @@ export default function GatewaySettingsScreen() {
             </Pressable>
           ) : null}
         </Card>
+
+        <NotificationsSection />
 
         <Card variant="surface" padding={Spacing.three} style={styles.card}>
           <View style={styles.sectionHeading}>

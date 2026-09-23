@@ -27,6 +27,12 @@ describe('settings notifications wiring', () => {
     expect(setup).toContain('NotificationsSection');
   });
 
+  test('gateway settings mounts the same section as a second door', () => {
+    const settings = readSource('src', 'app', 'gateway', 'settings.tsx');
+    expect(settings).toContain('NotificationsSection');
+    expect(settings).toMatch(/<NotificationsSection\s*\/>/);
+  });
+
   test('the section and its hook exist and speak the notifications RPCs', () => {
     expect(existsSource('src', 'components', 'gateway', 'notifications-section.tsx')).toBe(true);
     expect(existsSource('src', 'hooks', 'use-notification-preferences.ts')).toBe(true);
