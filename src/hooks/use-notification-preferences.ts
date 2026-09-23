@@ -49,7 +49,9 @@ function normalize(raw: unknown): NotificationPreferences {
 export function useNotificationPreferences() {
   const { activeGateway, gatewayRequest, status } = useGateway();
   const [prefs, setPrefs] = useState<NotificationPreferences>(DEFAULT_PREFS);
-  const [loading, setLoading] = useState(false);
+  // The first read has not landed yet: DEFAULT_PREFS is a placeholder, not
+  // the Gate's answer, so consumers must skeleton until load() settles it.
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
   const [permission, setPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown');
@@ -74,7 +76,11 @@ export function useNotificationPreferences() {
   }, []);
 
   const load = useCallback(async () => {
-    if (!connected) return;
+    if (!connected) {
+      // Nothing will be fetched, so no read is in flight — never spin.
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     let sentDeviceId = false;

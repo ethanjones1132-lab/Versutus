@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react';
 import { StyleSheet, Switch, View } from 'react-native';
 
-import { Button, Card, Text, TextField } from '@/components/ui';
+import { Button, Card, ErrorCard, Skeleton, Text, TextField } from '@/components/ui';
 import { useTokens } from '@/hooks/use-tokens';
 import { useNotificationPreferences } from '@/hooks/use-notification-preferences';
 import { useGateway } from '@/context/gateway-provider';
@@ -32,6 +32,7 @@ export function NotificationsSection() {
     setPatch,
     setEnabled,
     sendTest,
+    reload,
   } = useNotificationPreferences();
 
   const [quietStart, setQuietStart] = useState('');
@@ -100,6 +101,15 @@ export function NotificationsSection() {
 
   return (
     <View style={styles.container}>
+      {error ? (
+        <ErrorCard
+          cause={error}
+          affected="Push notification preferences on this device"
+          next="Retry — the switches below only reflect the Gate after a successful read."
+          onRetry={() => void reload()}
+        />
+      ) : null}
+
       <Card variant="hero" padding={Spacing.three} style={styles.card}>
         <View style={styles.row}>
           <View style={styles.title}>
@@ -108,15 +118,19 @@ export function NotificationsSection() {
             </Text>
             <Text variant="headline">Push notifications</Text>
           </View>
-          <Switch
-            value={prefs.enabled}
-            onValueChange={(value) => void setEnabled(value)}
-            trackColor={{ true: tokens.accent, false: tokens.border }}
-            thumbColor={tokens.textPrimary}
-            disabled={saving || loading}
-            accessibilityLabel="Push notifications from this Gate"
-            accessibilityState={{ checked: prefs.enabled }}
-          />
+          {loading ? (
+            <Skeleton width={51} height={31} radius={16} />
+          ) : (
+            <Switch
+              value={prefs.enabled}
+              onValueChange={(value) => void setEnabled(value)}
+              trackColor={{ true: tokens.accent, false: tokens.border }}
+              thumbColor={tokens.textPrimary}
+              disabled={saving}
+              accessibilityLabel="Push notifications from this Gate"
+              accessibilityState={{ checked: prefs.enabled }}
+            />
+          )}
         </View>
         <Text variant="caption" color="secondary">
           Runs, approvals, replies and routines arrive with the app backgrounded or killed. Permission is asked
@@ -125,114 +139,133 @@ export function NotificationsSection() {
         </Text>
       </Card>
 
-      <Card variant="inset" padding={Spacing.three} style={styles.card}>
-        <View style={styles.row}>
-          <Text variant="body">Rich message text</Text>
-          <Switch
-            value={prefs.richBody}
-            onValueChange={(value) => void setPatch({ richBody: value })}
-            trackColor={{ true: tokens.accent, false: tokens.border }}
-            thumbColor={tokens.textPrimary}
-            disabled={saving}
-            accessibilityLabel="Include message text in notifications"
-            accessibilityState={{ checked: prefs.richBody }}
-          />
-        </View>
-        <Text variant="caption" color="secondary">
-          Off means titles only — and the home-screen widget withholds the newest result too.
-        </Text>
-        <View style={styles.row}>
-          <Text variant="body">Home-screen widget updates</Text>
-          <Switch
-            value={prefs.widgetUpdates}
-            onValueChange={(value) => void setPatch({ widgetUpdates: value })}
-            trackColor={{ true: tokens.accent, false: tokens.border }}
-            thumbColor={tokens.textPrimary}
-            disabled={saving}
-            accessibilityLabel="Send data-only widget updates"
-            accessibilityState={{ checked: prefs.widgetUpdates }}
-          />
-        </View>
-      </Card>
-
-      <Card variant="inset" padding={Spacing.three} style={styles.card}>
-        <Text variant="headline">Quiet hours</Text>
-        <Text variant="caption" color="secondary">
-          No tray notices between these times, in this device&apos;s timezone. Empty clears the window.
-        </Text>
-        <View style={styles.timeRow}>
-          <View style={styles.timeField}>
+      {loading ? (
+        <>
+          <Card variant="inset" padding={Spacing.three} style={styles.card}>
+            <Skeleton width="90%" height={44} />
+            <Skeleton width="76%" height={44} style={styles.gap} />
+          </Card>
+          <Card variant="inset" padding={Spacing.three} style={styles.card}>
+            <Skeleton width="90%" height={44} />
+            <Skeleton width="76%" height={44} style={styles.gap} />
+          </Card>
+          <Card variant="inset" padding={Spacing.three} style={styles.card}>
+            <Skeleton width="90%" height={44} />
+            <Skeleton width="76%" height={44} style={styles.gap} />
+          </Card>
+        </>
+      ) : (
+        <>
+          <Card variant="inset" padding={Spacing.three} style={styles.card}>
+            <View style={styles.row}>
+              <Text variant="body">Rich message text</Text>
+              <Switch
+                value={prefs.richBody}
+                onValueChange={(value) => void setPatch({ richBody: value })}
+                trackColor={{ true: tokens.accent, false: tokens.border }}
+                thumbColor={tokens.textPrimary}
+                disabled={saving}
+                accessibilityLabel="Include message text in notifications"
+                accessibilityState={{ checked: prefs.richBody }}
+              />
+            </View>
             <Text variant="caption" color="secondary">
-              From
+              Off means titles only — and the home-screen widget withholds the newest result too.
             </Text>
-            <TextField
-              value={quietStart}
-              onChangeText={setQuietStart}
-              placeholder="22:00"
-              accessibilityLabel="Quiet hours start, HH:MM"
-            />
-          </View>
-          <View style={styles.timeField}>
-            <Text variant="caption" color="secondary">
-              To
-            </Text>
-            <TextField
-              value={quietEnd}
-              onChangeText={setQuietEnd}
-              placeholder="07:00"
-              accessibilityLabel="Quiet hours end, HH:MM"
-            />
-          </View>
-        </View>
-        {quietError ? <Text color="secondary">{quietError}</Text> : null}
-        <Button label={saving ? 'Saving…' : 'Save quiet hours'} onPress={saveQuietHours} disabled={saving} />
-        <View style={styles.row}>
-          <Text variant="body">Approvals pierce quiet hours</Text>
-          <Switch
-            value={prefs.quietHoursAllowApprovals}
-            onValueChange={(value) => void setPatch({ quietHoursAllowApprovals: value })}
-            trackColor={{ true: tokens.accent, false: tokens.border }}
-            thumbColor={tokens.textPrimary}
-            disabled={saving}
-            accessibilityLabel="Let approval notices through during quiet hours"
-            accessibilityState={{ checked: prefs.quietHoursAllowApprovals }}
-          />
-        </View>
-        <Text variant="caption" color="secondary">
-          An approval waits on you before a run may continue. With this on, only approvals ring during the window —
-          replies, runs and routines stay quiet. Off keeps quiet hours absolute.
-        </Text>
-      </Card>
+            <View style={styles.row}>
+              <Text variant="body">Home-screen widget updates</Text>
+              <Switch
+                value={prefs.widgetUpdates}
+                onValueChange={(value) => void setPatch({ widgetUpdates: value })}
+                trackColor={{ true: tokens.accent, false: tokens.border }}
+                thumbColor={tokens.textPrimary}
+                disabled={saving}
+                accessibilityLabel="Send data-only widget updates"
+                accessibilityState={{ checked: prefs.widgetUpdates }}
+              />
+            </View>
+          </Card>
 
-      <Card variant="inset" padding={Spacing.three} style={styles.card}>
-        <Text variant="headline">Bot filter</Text>
-        <Text variant="caption" color="secondary">
-          Switch a Bot on to let its replies and routines reach this device. With every switch off, every Bot may
-          notify. Approvals and run results always come through.
-        </Text>
-        {filterRows.map((row) => (
-          <View key={row.botId} style={styles.row}>
-            <Text variant="body" style={styles.filterName} numberOfLines={1}>
-              {row.kind === 'bot' ? row.displayName : row.botId}
-              {row.kind === 'unknown' ? (
+          <Card variant="inset" padding={Spacing.three} style={styles.card}>
+            <Text variant="headline">Quiet hours</Text>
+            <Text variant="caption" color="secondary">
+              No tray notices between these times, in this device&apos;s timezone. Empty clears the window.
+            </Text>
+            <View style={styles.timeRow}>
+              <View style={styles.timeField}>
                 <Text variant="caption" color="secondary">
-                  {' '}
-                  (unknown id)
+                  From
                 </Text>
-              ) : null}
+                <TextField
+                  value={quietStart}
+                  onChangeText={setQuietStart}
+                  placeholder="22:00"
+                  accessibilityLabel="Quiet hours start, HH:MM"
+                />
+              </View>
+              <View style={styles.timeField}>
+                <Text variant="caption" color="secondary">
+                  To
+                </Text>
+                <TextField
+                  value={quietEnd}
+                  onChangeText={setQuietEnd}
+                  placeholder="07:00"
+                  accessibilityLabel="Quiet hours end, HH:MM"
+                />
+              </View>
+            </View>
+            {quietError ? <Text color="secondary">{quietError}</Text> : null}
+            <Button label={saving ? 'Saving…' : 'Save quiet hours'} onPress={saveQuietHours} disabled={saving} />
+            <View style={styles.row}>
+              <Text variant="body">Approvals pierce quiet hours</Text>
+              <Switch
+                value={prefs.quietHoursAllowApprovals}
+                onValueChange={(value) => void setPatch({ quietHoursAllowApprovals: value })}
+                trackColor={{ true: tokens.accent, false: tokens.border }}
+                thumbColor={tokens.textPrimary}
+                disabled={saving}
+                accessibilityLabel="Let approval notices through during quiet hours"
+                accessibilityState={{ checked: prefs.quietHoursAllowApprovals }}
+              />
+            </View>
+            <Text variant="caption" color="secondary">
+              An approval waits on you before a run may continue. With this on, only approvals ring during the window —
+              replies, runs and routines stay quiet. Off keeps quiet hours absolute.
             </Text>
-            <Switch
-              value={row.enabled}
-              onValueChange={(value) => saveBotFilter(filterRows)(row.botId, value)}
-              trackColor={{ true: tokens.accent, false: tokens.border }}
-              thumbColor={tokens.textPrimary}
-              disabled={saving}
-              accessibilityLabel={`Allow ${row.kind === 'bot' ? row.displayName : row.botId} notifications`}
-              accessibilityState={{ checked: row.enabled }}
-            />
-          </View>
-        ))}
-      </Card>
+          </Card>
+
+          <Card variant="inset" padding={Spacing.three} style={styles.card}>
+            <Text variant="headline">Bot filter</Text>
+            <Text variant="caption" color="secondary">
+              Switch a Bot on to let its replies and routines reach this device. With every switch off, every Bot may
+              notify. Approvals and run results always come through.
+            </Text>
+            {filterRows.map((row) => (
+              <View key={row.botId} style={styles.row}>
+                <Text variant="body" style={styles.filterName} numberOfLines={1}>
+                  {row.kind === 'bot' ? row.displayName : row.botId}
+                  {row.kind === 'unknown' ? (
+                    <Text variant="caption" color="secondary">
+                      {' '}
+                      (unknown id)
+                    </Text>
+                  ) : null}
+                </Text>
+                <Switch
+                  value={row.enabled}
+                  onValueChange={(value) => saveBotFilter(filterRows)(row.botId, value)}
+                  trackColor={{ true: tokens.accent, false: tokens.border }}
+                  thumbColor={tokens.textPrimary}
+                  disabled={saving}
+                  accessibilityLabel={`Allow ${row.kind === 'bot' ? row.displayName : row.botId} notifications`}
+                  accessibilityState={{ checked: row.enabled }}
+                />
+              </View>
+            ))}
+          </Card>
+        </>
+      )}
 
       <Card variant="inset" padding={Spacing.three} style={styles.card}>
         <Text variant="headline">Test</Text>
@@ -248,13 +281,6 @@ export function NotificationsSection() {
         />
         {testResult ? <Text color="secondary">{testResult}</Text> : null}
       </Card>
-
-      {loading ? (
-        <Text variant="caption" color="secondary">
-          Loading preferences from the Gate…
-        </Text>
-      ) : null}
-      {error ? <Text color="secondary">{error}</Text> : null}
     </View>
   );
 }
@@ -268,4 +294,5 @@ const styles = StyleSheet.create({
   timeRow: { flexDirection: 'row', gap: Spacing.two },
   timeField: { flex: 1, gap: 4 },
   filterName: { flex: 1 },
+  gap: { marginTop: Spacing.two },
 });
