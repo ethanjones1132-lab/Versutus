@@ -49,6 +49,11 @@ describe('/help advertises the local /model family', () => {
     expect(result.text).not.toContain('/model set — Preview and update default model');
   });
 
+  test('/help lists /workflow even when the store is empty', async () => {
+    const result = await executeGatewaySlashCommand('/help', context());
+    expect(result.text).toMatch(/\/workflow — \S/);
+  });
+
   test('the unknown-command fallback still prints help, now with /model', async () => {
     const result = await executeGatewaySlashCommand('/definitely-not-real', context());
     expect(result.text).toMatch(/Unknown command/);

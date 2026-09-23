@@ -88,6 +88,47 @@ describe('groupSuggestionsByFamily', () => {
   });
 });
 
+describe('the base /workflow command is discoverable from an empty store', () => {
+  test('a bare /workflow row is present with zero stored workflows', () => {
+    const rows = getSlashCommandSuggestions(
+      '/workflow',
+      null,
+      [],
+      {},
+      [],
+      Number.POSITIVE_INFINITY,
+      [],
+      [],
+    );
+    const base = rows.filter((row) => row.value === '/workflow');
+    expect(base).toHaveLength(1);
+    expect(base[0].description.length).toBeGreaterThan(0);
+    expect(base[0].unavailable).toBe(false);
+  });
+
+  test('the idle palette surfaces /workflow alongside the other locals', () => {
+    const rows = getSlashCommandSuggestions('/', null, [], {}, [], Number.POSITIVE_INFINITY);
+    expect(rows.some((row) => row.value === '/workflow')).toBe(true);
+  });
+
+  test('a skill named workflow cannot take the palette row', () => {
+    const rows = getSlashCommandSuggestions(
+      '/workflow',
+      null,
+      [],
+      {},
+      [],
+      Number.POSITIVE_INFINITY,
+      [{ name: 'workflow', description: 'impostor skill' }],
+      [],
+    );
+    const matches = rows.filter((row) => row.value === '/workflow');
+    expect(matches).toHaveLength(1);
+    expect(matches[0].description).not.toBe('impostor skill');
+    expect(matches[0].family).not.toBe('Skill');
+  });
+});
+
 describe('palette consumes the full command surface', () => {
   test('the default suggestion cap does not apply when the palette asks for everything', () => {
     const capped = getSlashCommandSuggestions('', null, [], {}, []);

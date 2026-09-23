@@ -256,6 +256,14 @@ const LOCAL_SUGGESTIONS: SlashCommandSuggestion[] = [
     family: 'Chat',
     unavailable: false,
   },
+  {
+    value: '/workflow',
+    label: '/workflow',
+    description: 'List and run stored workflows',
+    danger: 'local',
+    family: 'Chat',
+    unavailable: false,
+  },
 ];
 
 export function isSlashCommandInput(text: string): boolean {

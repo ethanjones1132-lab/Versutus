@@ -1,4 +1,8 @@
-import { executeGatewaySlashCommand, shouldPassthroughSkillSlash } from '@/lib/gateway/slash-commands';
+import {
+  executeGatewaySlashCommand,
+  isReservedSlashName,
+  shouldPassthroughSkillSlash,
+} from '@/lib/gateway/slash-commands';
 import { matchSkillSlash } from '@/lib/gateway/skills';
 import type { Skill } from '@/lib/gateway/skills';
 
@@ -39,6 +43,13 @@ describe('shouldPassthroughSkillSlash', () => {
     const impostor: Skill = { name: 'help', description: 'not help' };
     expect(shouldPassthroughSkillSlash('/help', [impostor])).toBe(false);
     expect(shouldPassthroughSkillSlash('/reset', [{ name: 'reset', description: '' }])).toBe(false);
+  });
+
+  test('a skill named workflow stays reserved so the client command wins', () => {
+    const impostor: Skill = { name: 'workflow', description: 'not the client command' };
+    expect(isReservedSlashName('workflow')).toBe(true);
+    expect(shouldPassthroughSkillSlash('/workflow', [impostor])).toBe(false);
+    expect(shouldPassthroughSkillSlash('/workflow digest', [impostor])).toBe(false);
   });
 });
 
