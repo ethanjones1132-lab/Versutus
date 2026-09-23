@@ -1,4 +1,4 @@
-import { type Href, Link, useRouter } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
@@ -28,7 +28,6 @@ import { describeAutoRetry } from '@/lib/connection/retry-ladder';
 import { describeGatewayError, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import type { GatewayProfile } from '@/lib/gateway/types';
 import { describeHomeEmptyState } from '@/lib/home/home-empty-state';
-import { homeHeroPrimaryActions } from '@/lib/home/home-hero-actions';
 
 export function GatewayHomeDashboard() {
   const router = useRouter();
@@ -176,7 +175,7 @@ export function GatewayHomeDashboard() {
   }
 
   const activeLabel = activeGateway?.name ?? 'No active gateway';
-  const primaryActions = homeHeroPrimaryActions();
+  const shownConnectionError = connectionErrorShown(status, lastError);
   const orbColor = statusColor(tokens, status);
   const statusLabel = connected
     ? 'Connected'
@@ -267,8 +266,9 @@ export function GatewayHomeDashboard() {
         {/* A connection failure the live connection has disproved is not shown:
             the card names the gateway connection as affected and sends the
             operator to replace the token, which a gateway that is answering has
-            not refused (stale-error.ts). */}
-        {connectionErrorShown(status, lastError) ? (
+            not refused (stale-error.ts). One retry control per failure: while
+            this card offers its own Retry, the ghost retry below stays hidden. */}
+        {shownConnectionError ? (
           <ErrorCard
             {...humanizeGatewayError(lastError)}
             retryLabel="Retry"
@@ -276,24 +276,7 @@ export function GatewayHomeDashboard() {
           />
         ) : null}
 
-        {primaryActions.length > 0 ? (
-          <View style={styles.primaryActions}>
-            {primaryActions.map((action) => (
-              <Button
-                key={action.id}
-                label={action.label}
-                onPress={async () => {
-                  await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  router.push(action.href as Href);
-                }}
-                disabled={!connected}
-                variant="secondary"
-                style={styles.primaryAction}
-              />
-            ))}
-          </View>
-        ) : null}
-        {!connected ? (
+        {!connected && !shownConnectionError ? (
           <Button
             label="Retry connection"
             onPress={async () => {
@@ -305,26 +288,30 @@ export function GatewayHomeDashboard() {
             style={styles.retryAction}
           />
         ) : null}
-        <Button
-          label="Open fleet map"
-          onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            router.push('/fleet');
-          }}
-          variant="ghost"
-          size="sm"
-          style={styles.fleetAction}
-        />
-        <Button
-          label="Compare Bots"
-          onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            router.push('/council');
-          }}
-          variant="ghost"
-          size="sm"
-          style={styles.fleetAction}
-        />
+        <View style={styles.primaryActions}>
+          <Button
+            label="Open fleet map"
+            onPress={async () => {
+              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/fleet');
+            }}
+            disabled={!connected}
+            variant="ghost"
+            size="sm"
+            style={styles.primaryAction}
+          />
+          <Button
+            label="Compare Bots"
+            onPress={async () => {
+              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push('/council');
+            }}
+            disabled={!connected}
+            variant="ghost"
+            size="sm"
+            style={styles.primaryAction}
+          />
+        </View>
       </Card>
 
       {/* Channels stay on the first screen even when healthy — when a declaring
@@ -494,9 +481,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.two,
   },
   retryAction: {
-    alignSelf: 'flex-start',
-  },
-  fleetAction: {
     alignSelf: 'flex-start',
   },
   approvalCard: {

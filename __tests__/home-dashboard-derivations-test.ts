@@ -46,3 +46,45 @@ describe('home dashboard derived values are memoized', () => {
     expect(src).toMatch(/const runsSupported = useMemo\([\s\S]*?capabilitySnapshot\.groups/);
   });
 });
+
+describe('home hero action organization', () => {
+  test('the dead primaryActions branch is gone — the dashboard never calls homeHeroPrimaryActions', () => {
+    // home-hero-actions.ts returns [] unconditionally, so the primaryActions
+    // block rendered nothing while the real CTAs sat as stacked ghost links
+    // below it. The backlog sanctioned dropping the branch (the helper and its
+    // empty-result pin stay for the test that imports them).
+    const src = readSource();
+    expect(src).not.toContain('homeHeroPrimaryActions');
+    expect(src).not.toContain("from '@/lib/home/home-hero-actions'");
+    expect(src).not.toMatch(/primaryActions\.length/);
+    expect(src).not.toMatch(/primaryActions\.map/);
+  });
+
+  test('one hoisted verdict feeds both the ErrorCard and the ghost retry', () => {
+    // The ErrorCard (with its own Retry) and the ghost "Retry connection" both
+    // rendered whenever disconnected-with-lastError — two retry controls for
+    // one failure. A single connectionErrorShown verdict now gates both: the
+    // card when a failure is shown, the ghost only when none is.
+    const src = readSource();
+    expect(src).toMatch(/const shownConnectionError = connectionErrorShown\(status, lastError\)/);
+    expect(src).toMatch(/\{shownConnectionError \? \(\s*<ErrorCard/);
+    expect(src).toMatch(/\{!connected && !shownConnectionError \? \(/);
+    const retryBlock = src.match(/\{!connected && !shownConnectionError \? \([\s\S]*?\) : null\}/)?.[0];
+    expect(retryBlock).toBeDefined();
+    expect(retryBlock).toContain('label="Retry connection"');
+  });
+
+  test('fleet and council share one grouped action row with their targets, haptics, and disabled gating', () => {
+    const src = readSource();
+    const row = src.match(/<View style=\{styles\.primaryActions\}>[\s\S]*?<\/View>/)?.[0];
+    expect(row).toBeDefined();
+    expect(row).toContain("router.push('/fleet')");
+    expect(row).toContain("router.push('/council')");
+    expect(row).toContain('Haptics.impactAsync');
+    expect(row).toContain('disabled={!connected}');
+    // Neither target is a stacked ghost outside the row any more.
+    const withoutRow = src.replace(/<View style=\{styles\.primaryActions\}>[\s\S]*?<\/View>/, '');
+    expect(withoutRow).not.toContain("router.push('/fleet')");
+    expect(withoutRow).not.toContain("router.push('/council')");
+  });
+});
