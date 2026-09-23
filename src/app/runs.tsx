@@ -11,7 +11,7 @@ import { partitionRunsByState } from '@/lib/activity/run-partition';
 import { AgenticRunSheet } from '@/components/activity/agentic-run-sheet';
 import { RunCard } from '@/components/activity/run-card';
 import { ScorecardsSection } from '@/components/activity/scorecards-section';
-import { Badge, Button, Card, EmptyState, Screen, Text, TextField } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, ErrorCard, Screen, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
@@ -56,6 +56,9 @@ export default function RunsScreen() {
   const [runPrompt, setRunPrompt] = useState('');
   const [starting, setStarting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // A refused refresh read is named below the header instead of ending the
+  // spinner as if the pull succeeded; cleared by the next success.
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   // A pull-to-refresh re-reads capabilities + gateways and re-reads the two
   // per-Bot folds the scorecards carry (the gateway's jobs and P5's spend).
   // Bumping this signal reaches those reads without remounting the screen.
@@ -161,7 +164,12 @@ export default function RunsScreen() {
   const onRefresh = async () => {
     setRefreshing(true);
     const started = Date.now();
-    await Promise.all([refreshCapabilities(), refreshGateways()]).catch(() => undefined);
+    try {
+      await Promise.all([refreshCapabilities(), refreshGateways()]);
+      setRefreshError(null);
+    } catch (caught) {
+      setRefreshError(caught instanceof Error ? caught.message : String(caught));
+    }
     setRunsReloadSignal((n) => n + 1);
     // Hold the spinner briefly so recovery isn't a disorienting flash.
     const elapsed = Date.now() - started;
@@ -291,6 +299,16 @@ export default function RunsScreen() {
           tone={status === 'connected' ? 'success' : 'neutral'}
         />
       </View>
+
+      {refreshError ? (
+        <ErrorCard
+          cause={refreshError}
+          affected="Runs' gateway reads"
+          next="Retry the refresh."
+          onRetry={() => void onRefresh()}
+          onDismiss={() => setRefreshError(null)}
+        />
+      ) : null}
 
       {runsSupported
         ? (() => {

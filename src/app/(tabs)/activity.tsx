@@ -47,6 +47,9 @@ export default function ActivityScreen() {
   } = useGateway();
 
   const [refreshing, setRefreshing] = useState(false);
+  // A refused refresh read is named below the header instead of ending the
+  // spinner as if the pull succeeded; cleared by the next success.
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   // A pull-to-refresh re-reads capabilities + gateways but not cron jobs
   // (CronSection loads once per connection); bumping this signal reaches
   // the section's re-list without remounting the tab.
@@ -98,7 +101,12 @@ export default function ActivityScreen() {
   const onRefresh = async () => {
     setRefreshing(true);
     const started = Date.now();
-    await Promise.all([refreshCapabilities(), refreshGateways(), refreshPendingApprovals()]).catch(() => undefined);
+    try {
+      await Promise.all([refreshCapabilities(), refreshGateways(), refreshPendingApprovals()]);
+      setRefreshError(null);
+    } catch (caught) {
+      setRefreshError(caught instanceof Error ? caught.message : String(caught));
+    }
     await readAudit();
     setCronReloadSignal((n) => n + 1);
     // Hold the spinner briefly so recovery isn't a disorienting flash.
@@ -135,6 +143,16 @@ export default function ActivityScreen() {
               tone={status === 'connected' ? 'success' : 'neutral'}
             />
           </View>
+
+          {refreshError ? (
+            <ErrorCard
+              cause={refreshError}
+              affected="Activity's gateway reads"
+              next="Retry the refresh."
+              onRetry={() => void onRefresh()}
+              onDismiss={() => setRefreshError(null)}
+            />
+          ) : null}
 
           {/* Workflows slice 3b: runs have their own destination, so this is
               the scheduled-work view rather than a run list. */}

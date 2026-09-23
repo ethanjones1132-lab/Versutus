@@ -4,7 +4,7 @@ import { AppState, Platform, RefreshControl, ScrollView, StyleSheet } from 'reac
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GatewayHomeDashboard } from '@/components/gateway/gateway-home-dashboard';
-import { Screen, ScreenHeader } from '@/components/ui';
+import { ErrorCard, Screen, ScreenHeader } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
@@ -18,6 +18,9 @@ export default function HomeScreen() {
   const tokens = useTokens();
   const { gateways, refreshCapabilities, refreshGateways, reloadHistory } = useGateway();
   const [refreshing, setRefreshing] = useState(false);
+  // A refused refresh read is named below the header instead of ending the
+  // spinner as if the pull succeeded; cleared by the next success.
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
 
@@ -43,7 +46,12 @@ export default function HomeScreen() {
   const onRefresh = async () => {
     setRefreshing(true);
     const started = Date.now();
-    await Promise.all([refreshCapabilities(), refreshGateways(), reloadHistory()]).catch(() => undefined);
+    try {
+      await Promise.all([refreshCapabilities(), refreshGateways(), reloadHistory()]);
+      setRefreshError(null);
+    } catch (caught) {
+      setRefreshError(caught instanceof Error ? caught.message : String(caught));
+    }
     const elapsed = Date.now() - started;
     if (elapsed < 400) await new Promise((resolve) => setTimeout(resolve, 400 - elapsed));
     setRefreshing(false);
@@ -71,6 +79,15 @@ export default function HomeScreen() {
             progressBackgroundColor={tokens.backgroundElevated}
           />
         }>
+        {refreshError ? (
+          <ErrorCard
+            cause={refreshError}
+            affected="Home's gateway reads"
+            next="Retry the refresh."
+            onRetry={() => void onRefresh()}
+            onDismiss={() => setRefreshError(null)}
+          />
+        ) : null}
         {/* Single home surface: GatewayHomeDashboard owns both states. With no
             gateway saved, its hero slot IS the empty state (connect CTA) and
             pairing/troubleshooting hang off it instead of a forked body. */}
