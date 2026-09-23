@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { BotApprovalPolicyRow } from '@/components/chat/bot-approval-policy';
 import { BotMemoryPane } from '@/components/chat/bot-memory-pane';
-import { BaseSheet, Button, Divider, ListRow, Skeleton, Text } from '@/components/ui';
+import { BaseSheet, Button, Divider, ListRow, PressableScale, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { haptics } from '@/lib/haptics';
 import { describeBotDetail } from '@/lib/gateway/bot-detail';
@@ -43,6 +43,14 @@ export type BotDetailSheetProps = {
    * that cannot finish. A packet never carries memory or credentials.
    */
   onExport?: () => void;
+  /**
+   * The parent's line for the last refused export, or nothing after a
+   * successful share / a dismissal. Rendered under the Export row so a tap
+   * that opened no sheet says so instead of vanishing.
+   */
+  exportNotice?: string;
+  /** Clears `exportNotice` — the parent owns that state. */
+  onDismissExportNotice?: () => void;
 };
 
 /**
@@ -60,6 +68,8 @@ export function BotDetailSheet({
   onEdit,
   onRetry,
   onExport,
+  exportNotice,
+  onDismissExportNotice,
 }: BotDetailSheetProps) {
   if (!bot) return null;
   const detail = describeBotDetail(bot);
@@ -190,6 +200,18 @@ export function BotDetailSheet({
             onPress={onExport}
           />
         ) : null}
+        {onExport && exportNotice ? (
+          <PressableScale
+            onPress={onDismissExportNotice}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss export notice"
+            style={styles.exportNotice}>
+            <Text variant="caption" color="accentWarm">
+              {exportNotice}
+            </Text>
+          </PressableScale>
+        ) : null}
       </View>
       </ScrollView>
     </BaseSheet>
@@ -211,5 +233,8 @@ const styles = StyleSheet.create({
   },
   fact: {
     gap: 2,
+  },
+  exportNotice: {
+    paddingHorizontal: Spacing.one,
   },
 });

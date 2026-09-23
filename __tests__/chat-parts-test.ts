@@ -149,3 +149,48 @@ describe('a denied photo-library permission is never a silent no-op', () => {
     expect(screen).toContain('accessibilityLabel="Dismiss attach notice"');
   });
 });
+
+describe('a refused export handoff is never a silent no-op', () => {
+  it('the export awaits the share result instead of discarding it', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    expect(screen).not.toContain('void shareBotHandoff(');
+    expect(screen).toMatch(/await shareBotHandoff\(/);
+  });
+
+  it('a false answer records the refusal line and a new attempt clears the old one', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    expect(screen).toContain('setHandoffShareNotice(shareRefusalCopy())');
+    expect(screen).toMatch(
+      /const handleExportBot = useCallback\([\s\S]{0,200}?setHandoffShareNotice\(undefined\)/,
+    );
+  });
+
+  it('the notice is threaded to the detail sheet and rendered under the export row', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    expect(screen).toContain('exportNotice={handoffShareNotice}');
+    const sheet = readSource(['src', 'components', 'chat', 'bot-detail-sheet.tsx']);
+    expect(sheet).toMatch(/\{onExport && exportNotice \?/);
+    expect(sheet).toContain('accessibilityLabel="Dismiss export notice"');
+  });
+
+  it('closing the sheet clears the notice so a later Bot never inherits it', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    expect(screen).toMatch(
+      /onClose=\{\(\) => \{[\s\S]{0,120}?setDetailBot\(null\);[\s\S]{0,120}?setHandoffShareNotice\(undefined\)/,
+    );
+  });
+
+  it('keep-working: the payload and readiness gate are untouched', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    expect(screen).toContain(
+      'skills: skillsState.botId === bot.id ? skillsState.skills : []',
+    );
+    expect(screen).toContain(
+      'routines: routineState.botId === bot.id ? routineState.jobs : []',
+    );
+    expect(screen).toContain(
+      'onExport={detailBot && handoffShareReady ? handleExportBot : undefined}',
+    );
+    expect(screen).toContain('shareRefusalCopy()');
+  });
+});

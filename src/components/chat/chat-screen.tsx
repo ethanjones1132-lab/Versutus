@@ -61,6 +61,7 @@ import { botChromeCombined } from '@/lib/gateway/bot-chrome';
 import { composerFocusApplies } from '@/lib/gateway/composer-focus';
 import { applyRosterRead } from '@/lib/gateway/roster-read';
 import { handoffShareAvailable, shareBotHandoff } from '@/lib/gateway/handoff-share';
+import { shareRefusalCopy } from '@/lib/gateway/transcript-export';
 import {
   applyBotSoulRead,
   botSoulReadFromUnknown,
@@ -473,6 +474,9 @@ export function ChatScreen() {
   // D6: whether this device can share an exported Bot handoff. A platform
   // without a share sheet draws no Export row.
   const [handoffShareReady, setHandoffShareReady] = useState(false);
+  // A refused export is a line under the Export row, not a silent tap —
+  // same family as the attach notice, but keyed to this share attempt.
+  const [handoffShareNotice, setHandoffShareNotice] = useState<string | undefined>();
   useEffect(() => {
     let cancelled = false;
     void handoffShareAvailable().then((ready) => {
@@ -492,10 +496,15 @@ export function ChatScreen() {
   });
   // D6: export the open Bot's handoff packet. Routines and skills travel only
   // when they were read for this very Bot, so another Bot's never leaks in.
-  const handleExportBot = useCallback(() => {
+  // Every attempt states its own outcome: the line the last tap left is
+  // dropped as this one starts, and a refusal (no sheet, failed write) is
+  // recorded under the Export row instead of vanishing with the discarded
+  // boolean — the same contract the transcript share keeps.
+  const handleExportBot = useCallback(async () => {
     if (!detailBot) return;
     const bot = detailBot;
-    void shareBotHandoff({
+    setHandoffShareNotice(undefined);
+    const shared = await shareBotHandoff({
       bot: {
         id: bot.id,
         name: bot.displayName,
@@ -506,6 +515,8 @@ export function ChatScreen() {
       skills: skillsState.botId === bot.id ? skillsState.skills : [],
       routines: routineState.botId === bot.id ? routineState.jobs : [],
     });
+    if (shared) return;
+    setHandoffShareNotice(shareRefusalCopy());
   }, [detailBot, soulState, skillsState, routineState]);
   const [toolsetsState, setToolsetsState] = useState<ToolsetsState & { surfaceKey?: string }>({
     ...EMPTY_TOOLSETS,
@@ -1921,7 +1932,10 @@ export function ChatScreen() {
       <BotDetailSheet
         bot={detailBot}
         soul={detailBot && soulState.botId === detailBot.id ? soulState : undefined}
-        onClose={() => setDetailBot(null)}
+        onClose={() => {
+          setDetailBot(null);
+          setHandoffShareNotice(undefined);
+        }}
         onRetry={handleSoulRetry}
         onMessage={
           detailBot
@@ -1951,6 +1965,8 @@ export function ChatScreen() {
             : undefined
         }
         onExport={detailBot && handoffShareReady ? handleExportBot : undefined}
+        exportNotice={handoffShareNotice}
+        onDismissExportNotice={() => setHandoffShareNotice(undefined)}
       />
 
       <GroupRoomActionSheet
