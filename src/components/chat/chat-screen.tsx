@@ -404,6 +404,9 @@ export function ChatScreen() {
   // P1: images staged for the next send. Cleared on send, and the attach
   // control only appears when the selected model declares image input.
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  // A denied photo-library permission is a line beside the composer, not a
+  // silent return — the paperclip must say why nothing opened.
+  const [attachNotice, setAttachNotice] = useState<string | undefined>();
   const [dismissedPairingKey, setDismissedPairingKey] = useState<string | null>(null);
   const [overflowVisible, setOverflowVisible] = useState(false);
   const [backendPickerVisible, setBackendPickerVisible] = useState(false);
@@ -1127,7 +1130,18 @@ export function ChatScreen() {
   const handleAttach = useCallback(async () => {
     if (!canAttach) return;
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) return;
+    if (!permission.granted) {
+      // Two refusals, two fixes: a permission the platform will still re-ask
+      // is another tap away, one it will not is a trip to Settings. Either
+      // way the control answers instead of doing nothing.
+      setAttachNotice(
+        permission.canAskAgain
+          ? 'Photo access was declined. Tap the paperclip again to allow it.'
+          : 'Photos access is off. Enable it in Settings, then attach again.',
+      );
+      return;
+    }
+    setAttachNotice(undefined);
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       quality: 1,
@@ -2296,6 +2310,20 @@ export function ChatScreen() {
       )}
 
       {threadSurface ? (
+      <>
+      {attachNotice ? (
+        <PressableScale
+          onPress={() => setAttachNotice(undefined)}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Dismiss attach notice"
+          style={styles.attachNotice}>
+          <Icon name={{ ios: 'exclamationmark.triangle', android: 'warning', web: 'warning' }} size={13} color="accentWarm" />
+          <Text variant="caption" color="accentWarm" style={styles.attachNoticeText}>
+            {attachNotice}
+          </Text>
+        </PressableScale>
+      ) : null}
       <ChatComposer
         draft={draft}
         onChangeText={setDraft}
@@ -2325,6 +2353,7 @@ export function ChatScreen() {
         attachments={attachments}
         onRemoveAttachment={handleRemoveAttachment}
       />
+      </>
       ) : null}
 
       <SlashCommandPalette
@@ -2471,6 +2500,16 @@ const styles = StyleSheet.create({
   bannerWrap: {
     marginHorizontal: Spacing.four,
     marginBottom: Spacing.two,
+  },
+  attachNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginHorizontal: Spacing.four,
+    marginBottom: Spacing.one,
+  },
+  attachNoticeText: {
+    flex: 1,
   },
   pairingBanner: {
     gap: Spacing.two,

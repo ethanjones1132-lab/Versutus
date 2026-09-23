@@ -123,3 +123,29 @@ describe('the composer attach is capability-gated', () => {
     expect(composer).toContain('onRemoveAttachment');
   });
 });
+
+describe('a denied photo-library permission is never a silent no-op', () => {
+  it('the denial branch records a notice instead of returning with no state', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    expect(screen).not.toContain('if (!permission.granted) return;');
+    expect(screen).toMatch(/if \(!permission\.granted\) \{[\s\S]{0,400}?setAttachNotice\(/);
+  });
+
+  it('the notice is rendered beside the composer and cleared before the picker opens', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    expect(screen).toMatch(/\{attachNotice \?/);
+    expect(screen).toMatch(/setAttachNotice\(undefined\)/);
+  });
+
+  it('a permanent denial names Settings; an askable denial offers another tap', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    expect(screen).toMatch(/Photos access is off[^']*Settings/);
+    expect(screen).toMatch(/canAskAgain/);
+  });
+
+  it('the notice can be dismissed and the capability gate is untouched', () => {
+    const screen = readSource(['src', 'components', 'chat', 'chat-screen.tsx']);
+    expect(screen).toContain('onAttach={canAttach ? handleAttach : undefined}');
+    expect(screen).toContain('accessibilityLabel="Dismiss attach notice"');
+  });
+});
