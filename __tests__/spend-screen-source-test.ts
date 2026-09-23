@@ -76,17 +76,20 @@ describe('the Stack registers the Spend route as a modal, like gateway/settings'
 });
 
 describe('the screen never renders an unread catalogue as zero spend', () => {
-  test('a failed first read is the named sentence, not a total', () => {
+  test('a failed first read is the named sentence through the ErrorCard, not a total', () => {
+    // The mechanism moved from a plain Text to the ErrorCard's cause, with
+    // the caught message kept when there is one — the honesty claim (named
+    // after the loaded gate, never a zero) is the same needle, re-pinned.
     const src = spendScreen();
     expect(src).toContain("from '@/lib/gateway/spend-report'");
-    expect(src).toContain('{SPEND_UNREAD_COPY}');
+    expect(src).toContain('cause={readError ?? SPEND_UNREAD_COPY}');
   });
 
   test('the total and its header render only off a loaded read', () => {
     const src = spendScreen();
     const gate = src.indexOf('state.loaded ? (');
     const total = src.indexOf('{sessionSpendCopy(spend)}');
-    const unread = src.indexOf('{SPEND_UNREAD_COPY}');
+    const unread = src.indexOf('cause={readError ?? SPEND_UNREAD_COPY}');
     expect(gate).toBeGreaterThanOrEqual(0);
     expect(total).toBeGreaterThan(gate);
     expect(unread).toBeGreaterThan(total);

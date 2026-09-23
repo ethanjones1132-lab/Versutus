@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { SpendChart } from '@/components/gateway/spend-chart';
 import { SpendPerBotSection } from '@/components/gateway/spend-per-bot-section';
 import { SpendSessionTable } from '@/components/gateway/spend-session-table';
-import { Card, Screen, Text } from '@/components/ui';
+import { Card, EmptyState, ErrorCard, Screen, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
@@ -48,6 +48,13 @@ import {
  * header comes from the basis the sessions actually carry — `actual`,
  * `estimated`, or `none` when the gateway reports tokens only.
  *
+ * The read's own state is three surfaces, never one caption standing in for
+ * all of them: in flight is a Skeleton, a refusal is an ErrorCard that keeps
+ * the caught cause and offers a Retry (`retrySpendRead` re-reads while
+ * connected and reconnects otherwise), and a disconnected screen is an
+ * EmptyState naming the wait. A stale re-read keeps the last total above and
+ * announces itself through that same ErrorCard.
+ *
  * The per-Bot rows are a second, additional read (`readBotSpend`): one scoped
  * catalogue read per roster Bot, never a replacement for the total above. The
  * section is offered only when the connected client can scope a catalogue by
@@ -73,9 +80,17 @@ import {
  * The entry points are their own slice of P5.
  */
 export default function GatewaySpendScreen() {
-  const { gatewayRequest, status, listBots, readBotSessions, canReadBotSessions, activeGateway } =
-    useGateway();
+  const {
+    gatewayRequest,
+    status,
+    listBots,
+    readBotSessions,
+    canReadBotSessions,
+    activeGateway,
+    retryAutoConnect,
+  } = useGateway();
   const [state, setState] = useState<SessionSpendState>(EMPTY_SESSION_SPEND);
+  const [readError, setReadError] = useState<string | null>(null);
   const [botReport, setBotReport] = useState<BotSpendReport | null>(null);
   const [budgets, setBudgets] = useState<BotBudgets>({});
   const [now] = useState(() => Date.now());
@@ -101,24 +116,48 @@ export default function GatewaySpendScreen() {
     });
   };
 
+  // The one catalogue read, shared by the connection effect and the
+  // ErrorCard's Retry: a refusal keeps its caught message as the cause
+  // instead of discarding it, so recovery means re-running this read — not
+  // leaving the screen.
+  const loadSpend = useCallback(
+    (isCancelled: () => boolean) => {
+      void gatewayRequest('sessions.list', { limit: SESSION_SPEND_LIST_LIMIT })
+        .then((payload) => {
+          if (isCancelled()) return;
+          setReadError(null);
+          setState((previous) =>
+            applySessionSpendRead(previous, sessionSpendReadFromUnknown(payload)),
+          );
+        })
+        .catch((caught) => {
+          if (isCancelled()) return;
+          setReadError(caught instanceof Error ? caught.message : String(caught));
+          setState((previous) => applySessionSpendRead(previous, { ok: false }));
+        });
+    },
+    [gatewayRequest],
+  );
+
   useEffect(() => {
     if (status !== 'connected') return;
     let cancelled = false;
-    void gatewayRequest('sessions.list', { limit: SESSION_SPEND_LIST_LIMIT })
-      .then((payload) => {
-        if (cancelled) return;
-        setState((previous) =>
-          applySessionSpendRead(previous, sessionSpendReadFromUnknown(payload)),
-        );
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setState((previous) => applySessionSpendRead(previous, { ok: false }));
-      });
+    loadSpend(() => cancelled);
     return () => {
       cancelled = true;
     };
-  }, [gatewayRequest, status]);
+  }, [loadSpend, status]);
+
+  const retrySpendRead = () => {
+    // The disconnected card names the connect as the next step — retrying the
+    // read would never land — so Retry re-runs the connect cycle; the
+    // connected refusal retries the failing call itself.
+    if (status === 'connected') {
+      loadSpend(() => false);
+    } else {
+      void retryAutoConnect();
+    }
+  };
 
   useEffect(() => {
     if (status !== 'connected') return;
@@ -173,23 +212,35 @@ export default function GatewaySpendScreen() {
             <Text variant="mono" color="secondary" style={styles.total}>
               {sessionSpendCopy(spend)}
             </Text>
-            {state.failed ? (
-              <Text variant="caption" color="tertiary">
-                Could not re-read spend — showing the last total.
-              </Text>
-            ) : null}
           </Card>
-        ) : state.failed ? (
-          <Card variant="surface" padding={Spacing.three} style={styles.card}>
-            <Text variant="body" color="secondary">
-              {SPEND_UNREAD_COPY}
-            </Text>
-          </Card>
+        ) : state.failed ? null : status !== 'connected' ? (
+          <EmptyState
+            icon={{ ios: 'network', android: 'hub', web: 'hub' }}
+            title="Connect to read spend"
+            description="Spend is folded from the session catalogue this device reads over the live connection."
+            actionLabel="Reconnect"
+            onAction={() => void retryAutoConnect()}
+          />
         ) : (
-          <Text variant="caption" color="tertiary">
-            {status === 'connected' ? 'Reading spend…' : 'Connect a gateway to read its spend.'}
-          </Text>
+          <Card variant="surface" padding={Spacing.three} style={styles.card}>
+            <Skeleton height={16} width="55%" />
+            <Skeleton height={12} width="40%" />
+            <Skeleton height={28} width="65%" />
+          </Card>
         )}
+
+        {state.failed ? (
+          <ErrorCard
+            cause={readError ?? SPEND_UNREAD_COPY}
+            affected="spend totals for this gateway"
+            next={
+              status === 'connected'
+                ? 'Retry the session catalogue read.'
+                : 'Connect to the gateway, then retry.'
+            }
+            onRetry={retrySpendRead}
+          />
+        ) : null}
 
         {state.loaded ? <SpendChart buckets={buckets} rowCount={state.rowCount} /> : null}
 
