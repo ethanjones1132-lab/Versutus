@@ -262,11 +262,11 @@ export function CapabilitiesSection() {
                 <Skeleton width="90%" height={44} />
                 <Skeleton width="76%" height={44} style={styles.gap} />
               </>
-            ) : instances.length === 0 ? (
+            ) : instances.length === 0 && !error ? (
               <Text variant="caption" color="secondary">
                 No instances yet.
               </Text>
-            ) : (
+            ) : instances.length === 0 ? null : (
               instances.map((instance) => (
                 <View key={instance.id} style={styles.instanceRow}>
                   <Pressable onPress={() => startEdit(instance)} style={styles.instanceCopy}>
@@ -288,15 +288,20 @@ export function CapabilitiesSection() {
                 <Skeleton width="90%" height={44} />
                 <Skeleton width="76%" height={44} style={styles.gap} />
               </>
-            ) : null}
-            {kinds.map((kind) => (
-              <Button
-                key={kind.id}
-                label={`Add ${kind.label}`}
-                variant="secondary"
-                onPress={() => startCreate(kind)}
-              />
-            ))}
+            ) : kinds.length === 0 ? (
+              <Text variant="caption" color="secondary">
+                {error ? 'Capability kinds unavailable.' : 'No capability kinds to add.'}
+              </Text>
+            ) : (
+              kinds.map((kind) => (
+                <Button
+                  key={kind.id}
+                  label={`Add ${kind.label}`}
+                  variant="secondary"
+                  onPress={() => startCreate(kind)}
+                />
+              ))
+            )}
           </Card>
         </>
       )}

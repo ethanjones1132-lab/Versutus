@@ -27,12 +27,43 @@ describe('capabilities registry loading', () => {
     expect(skeletons).toHaveLength(2);
   });
 
-  test('the empty copy renders only after the read lands, byte-identical', () => {
+  test('the empty copy renders only after a clean read lands, byte-identical', () => {
     // A genuinely empty registry after the read must read exactly as
-    // before; the flag gates the branch, never the copy.
+    // before; the flag and a non-error state gate the branch, never the
+    // copy — a refused read sets error and loaded together, so an
+    // ungated empty branch would claim the registry is empty on failure.
     const src = readSectionSource();
-    expect(src).toMatch(/\) : instances\.length === 0 \? \(/);
+    expect(src).toMatch(/\) : instances\.length === 0 && !error \? \(/);
+    expect(src).not.toMatch(/\) : instances\.length === 0 \? \(/);
     expect(src).toMatch(/No instances yet\./);
+  });
+
+  test('a refused or disconnected read never claims the registry is empty', () => {
+    // catch and the disconnected path both set error and loaded=true, so
+    // the Configured card must not fall through to the empty copy when
+    // error is set — the refusal caption above is the only claim then.
+    const src = readSectionSource();
+    expect(src).toMatch(/setError\(/);
+    const emptyBranch = src.match(
+      /\) : instances\.length === 0 && !error \? \([\s\S]*?\) : /,
+    )?.[0];
+    expect(emptyBranch).toBeDefined();
+    expect(emptyBranch).toMatch(/No instances yet\./);
+    // no ungated path into the empty copy survives
+    expect(src).not.toMatch(/instances\.length === 0 \? \s*<Text[^>]*>\s*No instances yet/);
+  });
+
+  test('the Add card is never a heading-only card', () => {
+    // Under error (or a clean read with zero kinds) the Add card used to
+    // render only its "Add" headline — kinds stayed empty and no line
+    // explained why. It now names the unavailable/no-kinds state.
+    const src = readSectionSource();
+    expect(src).toMatch(/\) : kinds\.length === 0 \? \(/);
+    const noKinds = src.match(/\) : kinds\.length === 0 \? \([\s\S]*?\) : \(/)?.[0];
+    expect(noKinds).toBeDefined();
+    expect(noKinds).toMatch(/<Text variant="caption"/);
+    expect(noKinds).toMatch(/Capability kinds unavailable\./);
+    expect(noKinds).toMatch(/No capability kinds to add\./);
   });
 
   test('both read outcomes mark the first read landed, so errors never strand skeletons', () => {
