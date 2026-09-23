@@ -49,7 +49,7 @@ export default function GatewaySetupScreen() {
 
         {backends.length > 0 ? (
           <Card padding={Spacing.three} style={styles.card}>
-            <Text variant="title">Chat backend</Text>
+            <Text variant="headline">Chat backend</Text>
             <Text variant="caption">
               Conversations run inside this environment, using its own sessions, models and tools.
             </Text>
@@ -69,56 +69,55 @@ export default function GatewaySetupScreen() {
           options={SECTIONS}
           selectedKey={section}
           onSelect={setSection}
-          style={styles.tabs}
         />
 
         {section === 'providers' ? (
-          <>
-            <Text variant="caption">
+          <View style={styles.panel}>
+            <Text variant="caption" color="secondary">
               Model providers the Gate owns — it holds the key and the catalog.
             </Text>
             <ProvidersSection />
-          </>
+          </View>
         ) : null}
 
         {section === 'environments' ? (
-          <>
-            <Text variant="caption">
+          <View style={styles.panel}>
+            <Text variant="caption" color="secondary">
               CLI agents attached to this Gate. They never receive your provider keys.
             </Text>
             <EnvironmentsSection />
-          </>
+          </View>
         ) : null}
 
         {section === 'capabilities' ? (
-          <>
-            <Text variant="caption">
+          <View style={styles.panel}>
+            <Text variant="caption" color="secondary">
               Instances of non-provider capability kinds. Providers are managed on the Providers
               tab — the registry no longer creates them, so a provider has exactly one home.
             </Text>
             <CapabilitiesSection />
             <ToolsetsSection />
             <RpcMethodsSection />
-          </>
+          </View>
         ) : null}
 
         {section === 'management' ? (
-          <>
-            <Text variant="caption">
+          <View style={styles.panel}>
+            <Text variant="caption" color="secondary">
               Saved gateways, auto-connect, and local discovery.
             </Text>
             <GatewayManagementSection />
-          </>
+          </View>
         ) : null}
 
         {section === 'notifications' ? (
-          <>
-            <Text variant="caption">
+          <View style={styles.panel}>
+            <Text variant="caption" color="secondary">
               Push notifications from this Gate — runs, approvals, replies and routines, with the app
               backgrounded or killed.
             </Text>
             <NotificationsSection />
-          </>
+          </View>
         ) : null}
       </ScrollView>
     </Screen>
@@ -126,8 +125,8 @@ export default function GatewaySetupScreen() {
 }
 
 const styles = StyleSheet.create({
-  content: { gap: Spacing.two, paddingBottom: Spacing.six },
-  tabs: { marginBottom: Spacing.two },
+  content: { padding: Spacing.four, gap: Spacing.three, paddingBottom: Spacing.six },
+  panel: { gap: Spacing.one },
   card: { gap: Spacing.two },
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
 });
