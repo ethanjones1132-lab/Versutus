@@ -65,6 +65,47 @@ describe('the council view draws the shipped columns', () => {
   });
 });
 
+// A failed or silent column was wrapped in PressableScale with
+// accessibilityRole="button" while the host refused any non-answered press —
+// screen readers announced a button that no-ops — and the column's error drew
+// as caption tertiary, the dimmest style in the kit.
+describe('a failed or silent council column is content, not a dead button', () => {
+  test('the button press target is rendered only for an answered column', () => {
+    const src = compareView();
+    expect(src).toMatch(/const answered = column\.state === 'answered'/);
+    expect(src.split('accessibilityRole="button"').length - 1).toBe(1);
+    expect(src).toMatch(/if \(!answered\)/);
+    const branchAt = src.indexOf('if (!answered)');
+    const pressAt = src.indexOf('<PressableScale', branchAt);
+    expect(pressAt).toBeGreaterThan(branchAt);
+    // The non-answered branch draws a plain View column, never a pressable.
+    const branchBody = src.slice(branchAt, pressAt);
+    expect(branchBody).toContain('<View');
+    expect(branchBody).toContain('styles.column');
+    expect(branchBody).not.toContain('accessibilityRole="button"');
+    // The one button role lives on the answered PressableScale.
+    const roleAt = src.indexOf('accessibilityRole="button"');
+    expect(roleAt).toBeGreaterThan(pressAt);
+  });
+
+  test('a failed column names its error through an ErrorCard, not tertiary gray', () => {
+    const src = compareView();
+    expect(src).toContain('column.error');
+    const failedAt = src.indexOf("column.state === 'failed'");
+    expect(failedAt).toBeGreaterThanOrEqual(0);
+    const errorCardAt = src.indexOf('<ErrorCard', failedAt);
+    expect(errorCardAt).toBeGreaterThan(failedAt);
+    expect(src).not.toContain('color="tertiary"');
+  });
+
+  test('answered columns keep their tap-to-open affordance', () => {
+    const src = compareView();
+    expect(src).toContain('onPressColumn?.(column)');
+    expect(src).toContain("column.state === 'answered'");
+    expect(src).toContain('column.text');
+  });
+});
+
 describe('the council route sends through the existing group round', () => {
   test('it selects roster Bots, creates one transient room, and deletes it', () => {
     const src = councilRoute();

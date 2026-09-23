@@ -1,6 +1,6 @@
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { Card, PressableScale, Text } from '@/components/ui';
+import { Card, ErrorCard, PressableScale, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { councilSummaryCopy, type CouncilColumn } from '@/lib/gateway/council';
 
@@ -19,7 +19,9 @@ const COLUMN_WIDTH = 240;
  * summary — the whole point of per-column isolation.
  *
  * Presentational and transport-free: it draws the shipped `CouncilColumn[]` and
- * asks its host where a column tap goes.
+ * asks its host where a column tap goes. Only an answered column is a press
+ * target — a failed or silent one has nowhere to open, so it draws as content
+ * rather than a button that no-ops.
  */
 export function CouncilCompareView({ columns, onPressColumn }: CouncilCompareViewProps) {
   return (
@@ -31,27 +33,24 @@ export function CouncilCompareView({ columns, onPressColumn }: CouncilCompareVie
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.row}>
-        {columns.map((column) => (
-          <PressableScale
-            key={column.botId}
-            onPress={() => onPressColumn?.(column)}
-            accessibilityRole="button"
-            accessibilityLabel={`${column.label}, ${
-              column.state === 'answered'
-                ? 'answered'
-                : column.state === 'silent'
-                  ? 'had nothing to add'
-                  : 'failed'
-            }`}
-            style={styles.column}>
+        {columns.map((column) => {
+          const answered = column.state === 'answered';
+          const stateWord = answered
+            ? 'answered'
+            : column.state === 'silent'
+              ? 'had nothing to add'
+              : 'failed';
+          const card = (
             <Card variant="surface" padding={Spacing.three} style={styles.card}>
               <Text variant="micro" color="accentWarm" numberOfLines={1}>
                 {column.label}
               </Text>
               {column.state === 'failed' ? (
-                <Text variant="caption" color="tertiary">
-                  {column.error}
-                </Text>
+                <ErrorCard
+                  cause={column.error}
+                  affected={`${column.label}'s answer`}
+                  next="Retry the comparison when the gateway is reachable."
+                />
               ) : column.state === 'silent' ? (
                 <Text variant="caption" color="secondary">
                   Nothing to add
@@ -62,8 +61,25 @@ export function CouncilCompareView({ columns, onPressColumn }: CouncilCompareVie
                 </Text>
               )}
             </Card>
-          </PressableScale>
-        ))}
+          );
+          if (!answered) {
+            return (
+              <View key={column.botId} style={styles.column} accessibilityLabel={`${column.label}, ${stateWord}`}>
+                {card}
+              </View>
+            );
+          }
+          return (
+            <PressableScale
+              key={column.botId}
+              onPress={() => onPressColumn?.(column)}
+              accessibilityRole="button"
+              accessibilityLabel={`${column.label}, ${stateWord}`}
+              style={styles.column}>
+              {card}
+            </PressableScale>
+          );
+        })}
       </ScrollView>
     </View>
   );
