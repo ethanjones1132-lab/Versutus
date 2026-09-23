@@ -247,25 +247,29 @@ function NotificationRouter() {
     // Route on the payload's kind: a routine notice and a finished model reply
     // both open Chat — the roster for a routine, and the exact conversation for
     // a reply (the session id rides beside the destination, since Chat is one
-    // tab and there is no route to carry it). A run or a weekly report opens
-    // the Runs destination, where the run history and the scorecards live
-    // (Workflows slice 3b); approvals and anything unrecognized stay on
-    // Activity, where the approval card and the scheduled work are monitored.
+    // tab and there is no route to carry it). A run, an approval, or a weekly
+    // report opens the Runs destination, where the run history and the
+    // scorecards live (Workflows slice 3b) — an approval opens the run
+    // awaiting the decision, named beside the destination by the run focus
+    // below. Anything unrecognized stays on Activity, where the scheduled work
+    // is monitored.
     const destinationFor = (data: unknown): '/chat' | '/runs' | '/activity' => {
       const route = routeForTap(data);
       if (route?.kind === 'routine' || route?.kind === 'reply') return '/chat';
-      if (route?.kind === 'run' || route?.kind === 'weekly-report') return '/runs';
+      if (route?.kind === 'run' || route?.kind === 'approval' || route?.kind === 'weekly-report') return '/runs';
       return '/activity';
     };
 
     // The run a payload named, if it named one. The destination above drops the
-    // id — Activity is one tab, so there is no route to carry it — and the run
+    // id — Runs is one screen, so there is no route to carry it — and the run
     // rides beside it instead: the tab drops whatever Bot filter could be
-    // hiding it. A notice naming no run asks for no focus at all, and the id
-    // never selects a row: a run this device does not hold has no row to reach.
+    // hiding it. A run notice and an approval notice both name the run they are
+    // about (an approval names the run awaiting the decision); a notice naming
+    // no run asks for no focus at all, and the id never selects a row: a run
+    // this device does not hold has no row to reach.
     const runFocusFor = (data: unknown): RunFocus | null => {
       const route = routeForTap(data);
-      return route?.kind === 'run' ? { runId: route.runId } : null;
+      return route?.kind === 'run' || route?.kind === 'approval' ? { runId: route.runId } : null;
     };
 
     // The session a reply payload named, if it named one. The destination above
@@ -313,8 +317,8 @@ function NotificationRouter() {
         // tray until it is cleared, and the payload may name a run this app is
         // no longer driving — so only a payload naming the run this app IS
         // driving gets the unreachable copy. Either way the approval stays
-        // pending and the destination below brings the operator to the surface
-        // where they can still decide it.
+        // pending and the destination below opens the run still waiting on the
+        // operator.
         const reason = approvalRefusalReason(
           statusRef.current,
           response.notification.request.content.data,

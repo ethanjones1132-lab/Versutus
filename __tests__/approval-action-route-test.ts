@@ -41,7 +41,7 @@ describe('approvalDecisionFor (pure action decision)', () => {
 
   test('a plain tap is not a decision', () => {
     // expo's own DEFAULT_ACTION_IDENTIFIER: tapping the notice body delivers
-    // the default action, and a tap body must keep going to Activity.
+    // the default action, and a tap body must keep its ordinary routing.
     expect(approvalDecisionFor(Notifications.DEFAULT_ACTION_IDENTIFIER)).toBeNull();
   });
 

@@ -11,7 +11,7 @@
 // DEFAULT_ACTION_IDENTIFIER, which is not a decision — the payload must name the
 // approval pending right now, because only runs THIS app initiated can be
 // approved (CONTEXT.md, ADR 0001), and the connection must still be live.
-// Anything else refuses here and keeps the tap's existing Activity destination;
+// Anything else refuses here and keeps the tap's ordinary destination;
 // the caller posts an honest notice rather than pretending to have decided, and
 // `approvalRefusalReason` / `approvalRefusalCopy` below decide WHICH notice —
 // "nothing is waiting" and "the connection is gone" are different truths.

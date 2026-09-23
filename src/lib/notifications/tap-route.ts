@@ -9,6 +9,7 @@
 // payload's `kind`; a payload that is absent, half-shaped, or names a kind
 // this sprint does not route still lands on Activity, exactly as before.
 
+import { APPROVAL_NOTICE_DATA_KIND } from './categories';
 import { ROUTINE_NOTICE_DATA_KIND } from './routine-schedule';
 import { WEEKLY_REPORT_NOTICE_DATA_KIND } from './weekly-report-schedule';
 
@@ -23,14 +24,16 @@ export const REPLY_NOTICE_DATA_KIND = 'reply';
 
 /**
  * Where a notification payload asks a tap to go. The ids travel with the
- * route so the screen that opens can name the exact routine or run; they are
- * the same ids the relay must supply once true push ships (Solution A5).
- * A weekly report carries none: its destination takes no argument, because
- * the Scorecards section reads this device's runs when it opens.
+ * route so the screen that opens can name the exact routine, run, or
+ * approval-pending run; they are the same ids the relay must supply once true
+ * push ships (Solution A5). A weekly report carries none: its destination
+ * takes no argument, because the Scorecards section reads this device's runs
+ * when it opens.
  */
 export type TapRoute =
   | { kind: 'routine'; jobId: string; botId: string }
   | { kind: 'run'; runId: string }
+  | { kind: 'approval'; runId: string }
   | { kind: 'reply'; sessionId: string; botId?: string }
   | { kind: 'weekly-report' };
 
@@ -61,6 +64,16 @@ export function routeForTap(data: unknown): TapRoute | null {
     const runId = nonEmptyString(payload.runId);
     if (!runId) return null;
     return { kind: 'run', runId };
+  }
+
+  // An approval names the run awaiting the decision — the payload both the
+  // local notice (local.ts) and the Gate relay (push-notifier.mjs) post. The
+  // gateway key rides along unread; like a run notice, the route needs only
+  // the run, and an approval that names none is unrecognized, not a half-route.
+  if (payload.kind === APPROVAL_NOTICE_DATA_KIND) {
+    const runId = nonEmptyString(payload.runId);
+    if (!runId) return null;
+    return { kind: 'approval', runId };
   }
 
   if (payload.kind === REPLY_NOTICE_DATA_KIND) {

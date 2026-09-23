@@ -1,3 +1,4 @@
+import { APPROVAL_NOTICE_DATA_KIND } from '@/lib/notifications/categories';
 import {
   REPLY_NOTICE_DATA_KIND,
   RUN_NOTICE_DATA_KIND,
@@ -122,10 +123,21 @@ describe('routeForTap (pure notification tap routing)', () => {
     expect(routeForTap({ kind: 'gateway-down', gatewayKey: 'gw-1' })).toBeNull();
   });
 
-  test('an approval payload is unrecognized until the approval action ships', () => {
-    // Phase 0 only routes routine and run taps; approvals keep landing on
-    // Activity, which is where the operator decides them.
-    expect(routeForTap({ kind: 'approval', runId: 'run-7' })).toBeNull();
+  test('an approval payload routes to the run awaiting the decision', () => {
+    // The exact payload both producers post — the local notice (local.ts)
+    // and the Gate relay (push-notifier.mjs): kind + runId, with the gateway
+    // key riding along unread. The route needs only the run, like a run notice.
+    expect(
+      routeForTap({ kind: APPROVAL_NOTICE_DATA_KIND, runId: 'run-7', gatewayKey: 'gw-1' }),
+    ).toEqual({ kind: 'approval', runId: 'run-7' });
+  });
+
+  test('a half-shaped approval payload is not routed', () => {
+    // Same rule as every other kind: an approval that names no run cannot open
+    // the run awaiting it, so it is unrecognized rather than a half-route.
+    expect(routeForTap({ kind: APPROVAL_NOTICE_DATA_KIND })).toBeNull();
+    expect(routeForTap({ kind: APPROVAL_NOTICE_DATA_KIND, runId: '' })).toBeNull();
+    expect(routeForTap({ kind: APPROVAL_NOTICE_DATA_KIND, runId: 7 })).toBeNull();
     expect(routeForTap({ kind: 'nonsense', runId: 'run-7' })).toBeNull();
   });
 
@@ -147,7 +159,7 @@ describe('NotificationRouter', () => {
     expect(src).toContain('routeForTap');
   });
 
-  test('a routine tap opens Chat; an approval or unrecognized tap stays on Activity', () => {
+  test('a routine tap opens Chat; an unrecognized tap stays on Activity', () => {
     const src = between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
     expect(src).toContain("route?.kind === 'routine'");
     expect(src).toContain("'/chat'");
@@ -162,7 +174,21 @@ describe('NotificationRouter', () => {
     // that section to the Runs destination, so the weekly route lands there
     // beside the run notices.
     expect(src).toContain(
-      "if (route?.kind === 'run' || route?.kind === 'weekly-report') return '/runs';",
+      "if (route?.kind === 'run' || route?.kind === 'approval' || route?.kind === 'weekly-report') return '/runs';",
+    );
+  });
+
+  test('an approval tap opens the run awaiting the decision, with that run focused', () => {
+    const src = between(layout(), 'function NotificationRouter', 'function GatewayDeepLinkRouter');
+    // The approval payload names the run the same way a run notice does, so it
+    // joins run notices on the Runs destination and rides the run focus beside
+    // it — the tab drops a Bot filter that could hide the run and takes the
+    // eye to the card waiting for a decision, instead of the Activity fallback.
+    expect(src).toContain(
+      "if (route?.kind === 'run' || route?.kind === 'approval' || route?.kind === 'weekly-report') return '/runs';",
+    );
+    expect(src).toContain(
+      "route?.kind === 'run' || route?.kind === 'approval' ? { runId: route.runId } : null",
     );
   });
 
@@ -268,7 +294,7 @@ describe('a finished model reply opens the conversation it is about', () => {
     const src = routerSource();
 
     expect(src).toContain("route?.kind === 'routine'");
-    expect(src).toContain("route?.kind === 'run' ? { runId: route.runId } : null");
+    expect(src).toContain("route?.kind === 'run' || route?.kind === 'approval' ? { runId: route.runId } : null");
     expect(src).toContain('if (runFocus) runFocusRef.current?.(runFocus);');
   });
 });
