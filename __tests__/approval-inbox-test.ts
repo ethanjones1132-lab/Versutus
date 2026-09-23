@@ -114,6 +114,109 @@ describe('Activity mounts the inbox', () => {
   });
 });
 
+function readInbox(): string {
+  return readSource(['src', 'components', 'activity', 'approval-inbox.tsx']);
+}
+
+function readProvider(): string {
+  return readSource(['src', 'context', 'gateway-provider.tsx']);
+}
+
+// The pending list started [] and refreshPendingApprovals folded every
+// refusal back into [], so in-flight and failed both claimed "No approvals
+// are waiting." The provider must settle three phases and the card must
+// branch on them — the empty caption only from a completed, successful read.
+describe('Approvals card tells loading, failed, and empty apart', () => {
+  test('the provider tracks the pending read as loading, ready, or failed', () => {
+    const src = readProvider();
+    expect(src).toMatch(/useState<'loading' \| 'ready' \| 'failed'>\('loading'\)/);
+    expect(src).toMatch(/setPendingApprovalsState\('failed'\)/);
+    expect(src).toMatch(/setPendingApprovalsState\('ready'\)/);
+    // A refusal keeps its message instead of vanishing into a silent [].
+    expect(src).toContain('setPendingApprovalsError(');
+  });
+
+  test('while the read is in flight the card shows a Skeleton, never the empty caption', () => {
+    const src = readInbox();
+    const loadingAt = src.indexOf("pendingApprovalsState === 'loading'");
+    const skeletonAt = src.indexOf('<Skeleton');
+    const readyAt = src.indexOf("pendingApprovalsState === 'ready'");
+    const emptyAt = src.indexOf('No approvals are waiting.');
+    expect(loadingAt).toBeGreaterThanOrEqual(0);
+    expect(skeletonAt).toBeGreaterThan(loadingAt);
+    expect(readyAt).toBeGreaterThan(loadingAt);
+    // The empty caption is only reachable from the ready branch.
+    expect(emptyAt).toBeGreaterThan(readyAt);
+  });
+
+  test('a failed read renders an ErrorCard with a retry, not the empty caption', () => {
+    const src = readInbox();
+    const failedAt = src.indexOf("pendingApprovalsState === 'failed'");
+    expect(failedAt).toBeGreaterThanOrEqual(0);
+    const errorCardAt = src.indexOf('<ErrorCard', failedAt);
+    expect(errorCardAt).toBeGreaterThan(failedAt);
+    expect(src.slice(failedAt)).toMatch(/onRetry=\{[\s\S]*refreshPendingApprovals/);
+    const readyAt = src.indexOf("pendingApprovalsState === 'ready'");
+    expect(readyAt).toBeGreaterThan(failedAt);
+    const emptyAt = src.indexOf('No approvals are waiting.');
+    expect(emptyAt).toBeGreaterThan(readyAt);
+  });
+
+  test('the ready branch keeps the empty caption, the batch controls, and the rows', () => {
+    const src = readInbox();
+    // Fail-closed batch filter still feeds the branch (derived at the top).
+    expect(src).toContain('batchApprovableRows(pendingApprovals)');
+    const readyAt = src.indexOf("pendingApprovalsState === 'ready'");
+    expect(readyAt).toBeGreaterThanOrEqual(0);
+    const readyBody = src.slice(readyAt);
+    expect(readyBody).toContain('No approvals are waiting.');
+    expect(readyBody).toContain('approvable.length > 0');
+    expect(readyBody).toContain('Deny all');
+    expect(readyBody).toContain('approvalBusy === row.approvalId');
+  });
+});
+
+// decideApproval rejects with no catch at the provider (try/finally only)
+// and every call site was `void`, so a Gate refusal cleared busy and left
+// the row pending with zero feedback. The inbox catches and names it.
+describe('a refused Approve/Deny names the failure', () => {
+  test('single and batch decisions catch the refusal and record a message', () => {
+    const src = readInbox();
+    expect(src).toContain('setDecideError(');
+    // Both paths: the one-row wrapper and the batch loop.
+    const decideAt = src.indexOf('const decide =');
+    const decideAllAt = src.indexOf('const decideAll =');
+    expect(decideAt).toBeGreaterThanOrEqual(0);
+    expect(decideAllAt).toBeGreaterThan(decideAt);
+    expect(src.slice(decideAt, decideAllAt)).toMatch(/catch \(caught\)/);
+    expect(src.slice(decideAllAt)).toMatch(/catch \(caught\)/);
+    // The row buttons route through the wrapper, not the raw provider call.
+    expect(src).toContain("onPress={() => void decide(row.approvalId, 'approve')}");
+    expect(src).toContain("onPress={() => void decide(row.approvalId, 'deny')}");
+    expect(src).toContain('void decideAll(');
+  });
+
+  test('the refusal renders as an ErrorCard above the list, dismissible', () => {
+    const src = readInbox();
+    const decideErrAt = src.indexOf('{decideError ?');
+    expect(decideErrAt).toBeGreaterThanOrEqual(0);
+    const errorCardAt = src.indexOf('<ErrorCard', decideErrAt);
+    expect(errorCardAt).toBeGreaterThan(decideErrAt);
+    expect(src.slice(decideErrAt, decideErrAt + 600)).toMatch(/onDismiss=\{[\s\S]*setDecideError\(null\)/);
+    // It sits above the list branches so a failed tap is never scrolled past.
+    const loadingAt = src.indexOf("pendingApprovalsState === 'loading'");
+    expect(loadingAt).toBeGreaterThan(decideErrAt);
+  });
+
+  test('a successful decision clears the notice', () => {
+    const src = readInbox();
+    const decideAt = src.indexOf('const decide =');
+    const decideAllAt = src.indexOf('const decideAll =');
+    expect(src.slice(decideAt, decideAllAt)).toMatch(/setDecideError\(null\)/);
+    expect(src.slice(decideAllAt)).toMatch(/setDecideError\(null\)/);
+  });
+});
+
 describe('the Bot detail sheet carries the opt-in', () => {
   it('mounts the policy row', () => {
     const sheet = readSource(['src', 'components', 'chat', 'bot-detail-sheet.tsx']);

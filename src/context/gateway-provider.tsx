@@ -462,6 +462,10 @@ type GatewayContextValue = {
   resolveRunApproval: (approved: boolean, feedback?: string) => void;
   /** D1: the Gate's pending CLI-environment approvals, with their class. */
   pendingApprovals: ApprovalRow[];
+  /** Three phases of the pending read: never an in-flight/failed list claiming empty. */
+  pendingApprovalsState: 'loading' | 'ready' | 'failed';
+  /** Why the last pending read failed; null unless `pendingApprovalsState` is `failed`. */
+  pendingApprovalsError: string | null;
   refreshPendingApprovals: () => Promise<void>;
   decideApproval: (approvalId: string, decision: 'approve' | 'deny') => Promise<void>;
   approvalBusy: string | null;
@@ -910,6 +914,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
   const [pendingRunApproval, setPendingRunApproval] = useState<{ runId: string; prompt: string } | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRow[]>([]);
+  const [pendingApprovalsState, setPendingApprovalsState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [pendingApprovalsError, setPendingApprovalsError] = useState<string | null>(null);
   const [approvalBusy, setApprovalBusy] = useState<string | null>(null);
   const [tlsFingerprintChange, setTlsFingerprintChange] = useState<{
     gateway: GatewayProfile;
@@ -2583,16 +2589,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   /**
-   * D1: the Gate's inbox. A rejected or unsupported read is an empty list —
-   * never a stuck spinner — and an approval decided here is written to the
-   * durable audit before the list is re-read.
+   * D1: the Gate's inbox. The read settles three phases so the card can
+   * tell them apart: `loading` while in flight, `ready` when a completed
+   * read lands (rows or a genuinely empty list), `failed` with the caught
+   * message when the Gate refuses — never a silent empty list that claims
+   * nothing is waiting. An approval decided here is written to the durable
+   * audit before the list is re-read.
    */
   const refreshPendingApprovals = useCallback(async () => {
+    setPendingApprovalsState('loading');
+    setPendingApprovalsError(null);
     try {
       const payload = await gatewayRequest<unknown>('approvals.pending', {});
       setPendingApprovals(approvalRowsFromUnknown(payload));
-    } catch {
+      setPendingApprovalsState('ready');
+    } catch (caught) {
       setPendingApprovals([]);
+      setPendingApprovalsError(caught instanceof Error ? caught.message : String(caught));
+      setPendingApprovalsState('failed');
     }
   }, [gatewayRequest]);
 
@@ -2630,7 +2644,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // disconnect empties the list; a live connection re-reads it.
     queueMicrotask(() => {
       if (status !== 'connected') {
+        // Settled empty: there is no Gate to be waiting on, so the card
+        // answers ready+empty rather than spinning or claiming a failure.
         setPendingApprovals([]);
+        setPendingApprovalsError(null);
+        setPendingApprovalsState('ready');
         return;
       }
       void refreshPendingApprovals();
@@ -4583,6 +4601,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       pendingRunApproval,
       resolveRunApproval,
       pendingApprovals,
+      pendingApprovalsState,
+      pendingApprovalsError,
       refreshPendingApprovals,
       decideApproval,
       approvalBusy,
@@ -4635,7 +4655,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setAutoConnect, recentCommands, commandTranscripts, retryCommand, cancelCommand, capabilitySnapshot,
       refreshCapabilities, pendingConfirmation, confirmPendingAction, cancelPendingConfirmation,
       pendingRunApproval, resolveRunApproval,
-      pendingApprovals, refreshPendingApprovals, decideApproval, approvalBusy,
+      pendingApprovals, pendingApprovalsState, pendingApprovalsError, refreshPendingApprovals, decideApproval, approvalBusy,
       approveTlsFingerprintChange,
       rejectTlsFingerprintChange,
       runTask, activityRuns, activityRunsForActiveGateway, stopActivityRun, loadRunEvents, modelPicker, openModelPicker, closeModelPicker,
