@@ -12,6 +12,15 @@ for it. Original item numbers are retained: code comments cite them (e.g.
 `src/components/widget/glanceable-widget.tsx` cites "Item 4b … §4"), so
 renumbering would break those references.
 
+**Revised 2026-09-23.** Re-audited against the live tree. Newly verified shipped
+work joined the ledger above (item 3 push relay, P2, P3, D1, D2, D6, D7, D8, the
+slash-command regression fix, Workflows, the Activity cron view, push on model
+final response); P1, D5 and item 8 were re-scoped to the halves that remain.
+Capability claims corrected: `gate/core/capabilities/` defines only `agent` and
+`provider` kinds — the Gate fronts a backend's cron; it does not own a `cron`
+kind. §4 / the Android widget section are untouched (device-held). Original
+item numbers are still retained for the code comments that cite them.
+
 House rules that apply to every item:
 
 - Read the Expo v57 docs before writing code (AGENTS.md).
@@ -19,9 +28,9 @@ House rules that apply to every item:
   coverage ratchet, gate tests). The coverage gate counts only
   `src/lib/gateway/**`; new modules under `src/lib/notifications/` still ship
   with Jest tests in `__tests__/`, matching repo convention.
-- Nothing here may pretend to be push. All notification work below is local
-  notifications unless the item says otherwise; the README scope statement must
-  stay true.
+- Notification honesty: true push ships through the Gate relay (README scope
+  statement). Anything the relay does not carry is a local notification and
+  must not pretend to be push; the README scope statement must stay true.
 
 ---
 
@@ -33,50 +42,33 @@ House rules that apply to every item:
 | 1b "While you were away" digest | `components/home-briefing-card.tsx`, `src/lib/home/` |
 | 1c Notification tap deep-link | `notifications/tap-route.ts` |
 | 2 Actionable approval notifications | `notifications/approval-action.ts` |
+| 3 True push via a Gate relay | `notifications/push-registration.ts`, `gate/core/push-rpc.mjs` / `push-notifier.mjs` / `push-send.mjs` / `push-tokens.mjs`, tap listener in `src/app/_layout.tsx` |
 | 4 (iOS half) Glanceable widget | `components/widget/glanceable-widget.tsx`, `lib/widget/` |
 | 5 Share to Versutus | `gateway/share-intent.ts`, `share-intent-native.ts`, compose deep link |
 | 6 Quick reply from notification | `notifications/bot-reply.ts` |
 | 7 Live run progress | `notifications/run-progress.ts`, `components/widget/run-live-activity.tsx` |
+| P2 Memory pane per Bot | `components/chat/bot-memory-pane.tsx` (mounted in `bot-detail-sheet.tsx`), `lib/gateway/bot-memory.ts` |
+| P3 Session search, pin, rename | `lib/gateway/session-labels.ts`, search/pin/rename in `components/chat/thread-config-sheet.tsx` |
 | P4 Biometric app lock | `components/app-lock-gate.tsx`, `lib/settings/app-lock-device.ts` |
 | P5 Spend dashboard | `src/app/gateway/spend.tsx` |
 | P6 Transcript export & share | `gateway/transcript-share.ts` |
+| D1 Approval inbox, policies, audit | `components/activity/approval-inbox.tsx`, `lib/gateway/approval-policy.ts`, `approval-audit-view.ts` |
+| D2 Fleet constellation | `src/app/fleet.tsx`, `lib/fleet/constellation-model.ts`, entry at `gateway-home-dashboard.tsx` |
 | D3 Bot scorecards + weekly report | `lib/fleet/scorecard.ts`, `notifications/weekly-report.ts` |
 | D4 Routine template packs | `gateway/routine-templates.ts`, `chat/routines-pane.tsx` |
+| D6 Bot handoff packets | `lib/gateway/handoff.ts` + `handoff-import.ts` + `handoff-share.ts`, `src/app/gateway/import.tsx` |
+| D7 Council mode | `src/app/council.tsx`, `lib/gateway/council.ts`, `components/chat/council-compare-view.tsx` |
+| D8 Deferred-execution queue (runs) | run-shaped outbox rows (`session-persistence.ts` `isRunQueuedRow`) flushed through run dispatch on reconnect |
 | Solution B, B1–B3 Voice chat | `expo-speech-recognition` + `expo-speech`, shipped and in daily use |
+| 2026-09-11 slash-command regression | diagnosed and fixed — `docs/plans/2026-09-13-slash-command-dispatch.md` |
+| Runs become Workflows | `lib/gateway/workflows.ts`, `/workflow` dispatch in `slash-commands.ts` |
+| Activity tab → cron view | `app/(tabs)/activity.tsx` + `components/activity/cron-section.tsx`; run surface extracted to `src/app/runs.tsx` |
+| 2026-09-11 push on model final response | `gate/core/push-notifier.mjs` `final-response` trigger → `reply` / `routine` kinds |
 
-**Ambiguous, left in place rather than deleted:** D5 (budgets with hard stops) —
-`components/activity/scorecards-section.tsx` surfaces a spend cap, but whether
-the *enforcing* pre-run check exists was not confirmed. Verify before building.
-
----
-
-## 3. True push via a Phase D relay (the endgame)
-
-**Goal.** Routine results and approval requests arrive when the app is fully
-closed — the correct replacement for item 1's "due at the scheduled time"
-approximation. **Fully specced as Solution A below**; this entry stays so the
-priority ordering keeps making sense.
-
-**Shape.** The Versutus Gate (`gate/`, port 8760) is the relay — it is already
-the operator-run companion server and already owns a `cron` capability kind.
-
-1. App obtains an Expo push token (`Notifications.getExpoPushTokenAsync`; the
-   EAS `projectId` already exists in `app.json`) and registers it with the
-   Gate alongside its device identity (pairing already exists — reuse it).
-2. Gate watches its own job/run completions (it already dispatches cron) and
-   sends the result payload through the Expo Push Service.
-3. App side: the existing response listener routes the push the same way
-   `notifications/tap-route.ts` routes local taps — the `data` payload shapes
-   already shipped, so the relay can supply the identical shape with real
-   content.
-
-**Constraints.** Real backend work in `gate/` with its own `node:test` suite;
-requires credentials the operator controls (EAS project is theirs). Push is
-unavailable in Expo Go on Android; this repo already ships dev builds, so no new
-cost.
-
-**Verify.** Gate: `node:test` for token registration and send-on-completion.
-App: smoke against the Gate with a test push.
+**Resolved 2026-09-23 — D5:** the enforcing pre-run check exists
+(`src/lib/gateway/budgets.ts:104`, called before `executeRun` at
+`src/context/gateway-provider.tsx:2676-2693`). D5 below is re-scoped to the
+escalation half that remains.
 
 ---
 
@@ -95,6 +87,13 @@ which carries the full finding and the approved approach.
 
 **Goal.** "Hey Siri, talk to Scout" → Bot Chat, composer focused. Cheapest item
 on the list; compounds with everything above.
+
+**Status (2026-09-23).** The link half shipped: `versutus://chat?bot=<id>`
+opens Bot Chat with the composer focused (`src/lib/gateway/deep-link.ts`,
+`src/lib/gateway/composer-focus.ts`), and the static Android voice-call
+shortcut donates via `plugins/with-voice-shortcuts.js`. What remains is the
+per-Bot donation this item asks for: runtime Android recent-Bot shortcuts and
+the iOS App Intents half (tracked in the sprint backlog).
 
 **Build.**
 
@@ -139,9 +138,22 @@ entrances.
 alive. A killed app is a silent app, so approvals and routine results wait for
 the user to come back on their own.
 
+**Status (2026-09-23).** Shipped end to end: app registration
+(`src/lib/notifications/push-registration.ts`, synced from the provider), Gate
+registry + prefs RPC (`gate/core/push-rpc.mjs`, `push-tokens.mjs`), notifier
+with dedupe, quiet hours and Bot filter (`push-notifier.mjs`), Expo send with
+receipt pruning (`push-send.mjs`), and one tap path shared with local notices
+(`_layout.tsx` → `tap-route.ts`). Remaining from this spec: the `smoke:live`
+test-push dispatch (A5's verify step) and a gateway-Settings door for
+`NotificationsSection` (A4's pane — today it is mounted in Setup only); the A8
+rollout policy is not executed. The README scope statement already records the
+relay as shipped.
+
 **Approach.** The Versutus Gate (`gate/`, port 8760) becomes the notification
 relay. It is already the operator-run companion server, already paired with the
-device, and already owns the `cron` capability kind — no third party is
+device, and already fronts the attached backend's cron (`cron.*` in
+`gate/core/capabilities/gateway-methods.mjs`; `gate/core/capabilities/`
+itself defines only `agent` and `provider` kinds) — no third party is
 introduced into the trust path. Delivery rides the Expo Push Service
 (APNs/FCM underneath).
 
@@ -178,8 +190,10 @@ introduced into the trust path. Delivery rides the Expo Push Service
   `gate/core/server.mjs`). Subscribe to run lifecycle events: run completed,
   run errored, **approval required**, routine result ready.
 - Dedupe (one push per run state transition) and per-device preference filters
-  (which Bots, quiet hours) — preferences endpoint from A3, edited from a new
-  pane in the app's gateway settings (`src/app/gateway/settings.tsx`).
+  (which Bots, quiet hours) — preferences endpoint from A3, edited from the
+  Notifications pane (`src/components/gateway/notifications-section.tsx`,
+  mounted in Setup's Notifications tab today; the filed gap is a
+  gateway-Settings door).
 
 ### A5. Send path
 
@@ -187,10 +201,12 @@ introduced into the trust path. Delivery rides the Expo Push Service
   messages, with receipt collection: `DeviceNotRegistered` removes the token
   from the registry immediately — a dead token that keeps receiving sends is
   how relays get throttled.
-- **Payload shape is fixed by the shipped tap router**: `{ kind: 'run' |
-  'approval' | 'routine', runId?|jobId?, botId? }` — identical to the
-  local-notification payloads, so one response listener routes push and local
-  taps through one code path. Do not invent a second shape.
+- **Payload shape is fixed by the shipped tap router**: `TapRoute`
+  (`src/lib/notifications/tap-route.ts`) — `{ kind: 'run', runId }` |
+  `{ kind: 'approval', runId }` | `{ kind: 'routine', jobId, botId }` |
+  `{ kind: 'reply', sessionId, botId? }` | `{ kind: 'weekly-report' }` —
+  identical to the local-notification payloads, so one response listener routes
+  push and local taps through one code path. Do not invent a second shape.
 - Gate tests with `node:test`: registry CRUD, notifier dedupe, send/receipt
   handling against a stubbed Expo endpoint. Extend `smoke:live` with a
   send-test-push dispatch.
@@ -258,76 +274,37 @@ loop shipped and are in daily use. What remains:
 
 Candidates, not commitments — promote one to a full spec before building.
 
-### P1. Multimodal composer (photos, camera, files)
+### P1. Multimodal composer — library images shipped; camera and files remain
 
-ChatGPT/Gemini treat attaching an image or PDF as table stakes. Versutus's
-composer (`src/components/chat/chat-composer.tsx`) is text-only.
-Hook: attachment tray in the composer, sent as data-URL content parts on the
-existing chat pipeline. **Capability-gated, the established pattern** — the
-attach button appears only when the selected model advertises vision/files.
-Effort: M. Image *generation* stays out of scope — a provider feature, not a
-client one.
+ChatGPT/Gemini treat attaching an image or PDF as table stakes.
 
-### P2. Memory manager per Bot
+**Shipped.** Image attach from the photo library, capability-gated: the
+paperclip appears only when the selected model declares image/vision input
+(`supportsImageInput`, `src/lib/gateway/chat-parts.ts:92`; offered at
+`src/components/chat/chat-screen.tsx:1125,2324` and drawn in
+`src/components/chat/chat-composer.tsx:461-476`), and the picked image rides
+the existing chat pipeline as a data-URL content part.
 
-Hermes Bots *have* memory (soul, memory, model pin per Bot) with no first-class
-surface. Hook: a Memory pane beside the Routines pane — read, search, edit and
-prune, riding the existing `/memory` registry entry
-(`src/lib/gateway/dashboard.ts`). Read-first, then edits behind confirmation.
-Effort: M. Better than ChatGPT's version: the operator sees the raw files.
+**Remaining.** Camera capture and non-image document attachments, through the
+same gate and the same content-part path — the attach control must stay
+fail-closed when the model does not advertise the capability. Hook: extend the
+picker (`handleAttach`) and the parts fold. Image *generation* stays out of
+scope — a provider feature, not a client one. Effort: S.
 
-### P3. Session search, pinning, rename
+### D5. Budgets with hard stops — pre-run refusal shipped; approval escalation remains
 
-Hook: `src/lib/gateway/session-list.ts` + the sessions sheet — client-side
-filter first (titles are local), server search only if the gateway offers it.
-Pin/rename state in key-value storage, keyed by gateway + session.
+**State verified 2026-09-23.** The enforcing pre-run check exists:
+`checkBotBudget` (`src/lib/gateway/budgets.ts:104`) runs before every run
+started from this app (`src/context/gateway-provider.tsx:2676-2693`) and
+refuses a start when the Bot is over its cap, naming the cap and the overage;
+`scorecards-section.tsx` surfaces the cap. Honest limit: enforcement is
+client-side — it governs runs started from this app, not a server quota; say
+so, don't imply a server quota.
+
+**Remaining.** The original goal also promised escalation — over the cap, open
+an approval rather than only refusing the start. Hook: feed the
+`BudgetVerdict` into the existing approval path; auto-approve never applies.
 Effort: S.
-
-### D1. Approval inbox with policies and audit
-
-No consumer competitor has agent approvals at all. Take it from feature to
-command center: inbox-style triage (batch approve/deny), **approval policies**
-("auto-approve read-only commands from Bots I trust"), and a durable audit log.
-Hook: extends the `approval.approve` path and the Activity approvals presence;
-policy engine client-side in `src/lib/gateway/`, audit in key-value storage.
-Auto-approve stays opt-in per Bot and never covers destructive classes — the
-fail-closed discipline (ADR 0008) applied to consent.
-Effort: M–L. The flagship differentiator.
-
-### D5. Budgets with hard stops — VERIFY STATE FIRST
-
-Per-Bot spend caps that pause runs and escalate to an approval when hit.
-`scorecards-section.tsx` already surfaces a cap; confirm whether the enforcing
-pre-run check exists before specifying work.
-Hook: client-side ledger over `session.usage` + the run-start path; the cap
-check happens before `executeRun`. Honest limit: enforcement is client-side, so
-it governs runs started from this app — say so, don't imply a server quota.
-Effort: M.
-
-### D6. Bot handoff packets
-
-Export a Bot as a portable file — soul, routines, skills list, chrome —
-importable on another Hermes host. Hook: export bundles what's readable via
-existing surfaces; **memory and credentials excluded by default** — that's the
-trust line, and the manifest should say so. Import validates against the
-receiving gateway's capabilities first.
-Effort: M.
-
-### D7. Council mode — broadcast and compare
-
-Send one prompt to several Bots (or one Bot on different model pins) and render
-answers side by side. Hook: fan-out over the existing per-Bot send path, results
-in a comparison view; builds on `src/lib/gateway/groups.ts` without shipping
-full group chats first.
-Effort: M.
-
-### D8. Deferred-execution queue ("when my PC wakes, run this")
-
-Extend the durable offline outbox from chat to runs: queue a run while the
-gateway is down; it fires on reconnect and the result arrives via the
-notification path. Hook: outbox persistence keyed per gateway, drained by the
-reconnect path in the provider.
-Effort: M. Makes "the gateway is asleep" a non-event.
 
 ## What we deliberately do NOT copy
 
@@ -338,68 +315,14 @@ Effort: M. Makes "the gateway is asleep" a non-event.
 
 ---
 
-## D2. Fleet constellation (mission control)
-
-**Goal.** A Skia-rendered live map of the operator's fleet — gateways, their
-Bots, routines, live runs, pending approvals — the screenshot that sells the
-app.
-
-**The honesty constraint that shapes everything.** Versutus holds **one live
-gateway connection**. So the constellation renders two truth classes, visually
-distinct:
-
-- **Connected gateway** — fully live: capability snapshot, roster, cron list
-  (`CronJob` + `describeCronHealth`, `src/lib/gateway/cron.ts`), run state,
-  pending approvals.
-- **Saved-but-not-connected gateways** — last-known reachability from the probe
-  wave (`src/lib/gateway/reachability-wave.ts`,
-  `src/hooks/use-gateway-reachability.ts` already stamps `lastProbeAt`) and the
-  profile's cached metadata. Rendered dimmed, labeled "last seen …", never
-  rendered as live. Tapping one offers "connect" — the action the map exists to
-  drive.
-
-**Build.**
-
-1. **Route**: `src/app/fleet.tsx`, full-screen (not modal — a destination),
-   Stack-registered. Entry: a button on Home's connection hero.
-2. **Model**: `src/lib/fleet/constellation-model.ts` — a pure function from
-   `{ profiles, reachability, connectedSnapshot, roster, cronJobs,
-   activityRuns, pendingApprovals }` to a positioned node/edge graph. Pure and
-   fully unit-testable; the Skia layer draws only what the model emits. Gateway
-   nodes outer ring, Bots clustered beneath their gateway, routine arcs,
-   live-run pulse, approval badge. Note `src/lib/fleet/scorecard.ts` already
-   exists — this joins it in that folder.
-3. **Render**: Skia `Canvas` on native, following `AmbientCanvas.native`; web
-   gets a simplified static fallback. Animations via Reanimated shared values,
-   not per-frame JS.
-4. **Interaction**: tap a Bot → Bot Chat (ADR 0012); tap a gateway → connect
-   sheet; tap an approval badge → Activity. Long-press → detail sheet. No
-   editing on the map in v1 — it is a lens, not a control surface.
-5. **Live updates**: subscribes to provider state; no polling of its own.
-   Disconnected gateways re-check via the existing probe wave only — the
-   constellation must not add network traffic.
-
-**Constraints.** Read-only projection — zero new protocol, zero new fetches.
-Empty fleet must still render something dignified.
-
-**Verify.** Jest: `constellation-model.ts` exhaustively. Manual: two saved
-profiles, one connected, one down — the down one dimmed and dated, never green.
-
----
-
 # Added 2026-09-11
 
-Six items raised in one session. They are not independent: the slash-command
-regression blocks Workflows, and Workflows determines what the Activity tab
-sheds. Each gets its own spec and implementation cycle — they must not be
-designed as one change.
-
-```
-slash-command regression ──blocks──> Workflows ──defines──> Activity/cron
-push on final response   (independent; Solution A is the real fix)
-hands-free voice         (independent; compare against Solution B4)
-Android widget           (independent; approach approved, below)
-```
+Six items raised in one session. Four have shipped and moved to the ledger
+above: the slash-command regression (diagnosed and fixed 2026-09-13),
+Workflows, the Activity tab's cron view, and push on model final response
+(inside the Gate relay). What remains from this batch is the Android
+home-screen widget (approach approved below — device-held) and hands-free
+voice (built, physical-device acceptance pending below).
 
 ---
 
@@ -477,88 +400,6 @@ debug-signed 153 MB universal APK (`com.versutus.app`, targetSdk 36).
 `res/xml` widget info before building. Manual: widget appears in the Android
 picker, places on the home screen, and updates on run-state change. Jest cover
 stays on the fold, which is unchanged.
-
----
-
-## Runs are broken — slash commands not recognized (BUG, blocks Workflows)
-
-**Symptom.** Runs do not work, and the app does not appear to recognize slash
-commands at all.
-
-**Why this is logged as a bug, not a feature.** Slash-command handling is
-already implemented — `src/lib/gateway/slash-commands.ts`,
-`slash-palette.ts`, `busy-slash.ts`. So this is a regression in an existing
-system, which is a much cheaper problem than it sounds.
-
-**Why it must be fixed before Workflows.** Runs themselves are being replaced
-(below), so repairing *run* execution is likely wasted work. The **slash-command
-dispatch layer survives the rename**, and Workflows will be invoked through it.
-Diagnose the dispatcher; do not invest in run execution.
-
-**Not yet diagnosed.** Start at the dispatch path and establish whether commands
-fail to parse, fail to match the registry, or match and fail to execute — the
-three have different fixes.
-
----
-
-## Runs become Workflows
-
-**Goal.** Replace one-shot runs with reusable, named **Workflows** — task
-sequences a slash command can reference and re-invoke.
-
-**Shape (to be designed).** The slash command for a run becomes a reference to a
-stored workflow or task sequence rather than an ad-hoc invocation. This is the
-conceptual core of the 2026-09-11 batch: its shape determines what the Activity
-tab sheds, so it is designed before the Activity work.
-
-**Dependencies.** Blocked by the slash-command regression above.
-
-**Open questions for the design session.** Where workflows are stored (app,
-Gate, or Hermes-side); whether they are per-Bot or fleet-wide; how parameters
-are passed; what happens to the persisted `ActivityRun` history and the
-`botId` attribution that `lib/fleet/scorecard.ts` depends on.
-
----
-
-## Activity tab becomes cron view, reporting and management
-
-**Goal.** Remove run information from the Activity tab and make it a dedicated
-surface for cron: viewing scheduled work, reporting on it, and managing it.
-
-**What already exists to build on.** More than it first appears —
-`notifications/routine-schedule.ts`, `routine-sync.ts`, `weekly-report.ts`,
-`weekly-report-schedule.ts`, `gateway/routine-templates.ts`,
-`gateway/cron.ts` (`CronJob`, `describeCronHealth`), and
-`components/activity/scorecards-section.tsx`. This may be closer to *surfacing
-and consolidating* what exists than to building scheduling from scratch.
-
-**Dependencies.** Follows Workflows — what Activity removes depends on what runs
-become.
-
-**Care required.** `lib/fleet/scorecard.ts` and the shipped D3 weekly report
-both read persisted run history. Removing runs from the Activity *surface* must
-not silently break the scorecard's data source.
-
----
-
-## Push notifications on model final response
-
-**Goal.** Every session and profile raises a true push notification when the
-model delivers its final response.
-
-**This is Solution A, not a new mechanism.** Local notifications fire only while
-the gateway connection is alive, so a closed app stays silent — exactly the
-limitation Solution A exists to remove. The `bot-reply.ts` notification already
-exists for the local case; the missing piece is the relay
-(`push-registration.ts` is still absent) and the Gate-side notifier.
-
-**Scope note.** "Model final response" is a new trigger class alongside A4's run
-completed / errored / approval required / routine result. Add it to the
-notifier's event subscription rather than building a parallel path, and keep the
-A5 payload shape.
-
-**Honesty constraint carried forward.** Until the relay ships, nothing may be
-described as push (house rule, and the README scope statement).
 
 ---
 
