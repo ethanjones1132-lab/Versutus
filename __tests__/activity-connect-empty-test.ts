@@ -82,3 +82,28 @@ describe('runs connect-to-start-runs empty state', () => {
     expect(src).toMatch(/onSelect=\{\(gateway\) => \{\s*void connectGateway\(gateway\);/);
   });
 });
+
+// With zero runs the FlatList body contributes no rows, so the footer is the
+// whole screen below the Start-a-run card. The zero-runs EmptyState is that
+// screen's primary message and must lead the footer — the Scorecards card
+// (weekly opt-in, empty window copy) follows it, never buries it.
+describe('runs footer places the zero-runs EmptyState first', () => {
+  test('the EmptyState renders above ScorecardsSection inside listFooter', () => {
+    const src = readRuns();
+    const footerAt = src.indexOf('const listFooter = (');
+    const emptyAt = src.indexOf('<EmptyState');
+    const scorecardsAt = src.indexOf('<ScorecardsSection');
+
+    expect(footerAt).toBeGreaterThanOrEqual(0);
+    expect(emptyAt).toBeGreaterThan(footerAt);
+    expect(scorecardsAt).toBeGreaterThan(footerAt);
+    expect(emptyAt).toBeLessThan(scorecardsAt);
+  });
+
+  test('ScorecardsSection still renders in the footer so the weekly opt-in stays reachable', () => {
+    const src = readRuns();
+    expect(src).toMatch(
+      /const listFooter = \([\s\S]*<ScorecardsSection runs=\{activityRunsForActiveGateway\}/,
+    );
+  });
+});

@@ -338,12 +338,10 @@ export default function RunsScreen() {
 
   const listFooter = (
     <View style={styles.footer}>
-      {/* Per-Bot track records, folded from the same persisted runs the list
-          above renders, with the gateway's own routine health and P5's spend
-          beside them. A tapped card filters that list; it folds the whole
-          read, so the cards stay whole while the list narrows. */}
-      <ScorecardsSection runs={activityRunsForActiveGateway} jobs={routineJobs} spendRows={spendRows} filter={scorecardFilter} onSelect={setScorecardFilter} />
-
+      {/* With zero runs the list body is empty, so this footer is the whole
+          surface below the Start-a-run card — the EmptyState is the screen's
+          primary message and leads; the Scorecards section (weekly opt-in,
+          empty window copy) follows it rather than burying it. */}
       {activityRunsForActiveGateway.length === 0 ? (
         <EmptyState
           icon={{ ios: 'bolt', android: 'bolt', web: 'bolt' }}
@@ -375,6 +373,12 @@ export default function RunsScreen() {
           }
         />
       ) : null}
+
+      {/* Per-Bot track records, folded from the same persisted runs the list
+          above renders, with the gateway's own routine health and P5's spend
+          beside them. A tapped card filters that list; it folds the whole
+          read, so the cards stay whole while the list narrows. */}
+      <ScorecardsSection runs={activityRunsForActiveGateway} jobs={routineJobs} spendRows={spendRows} filter={scorecardFilter} onSelect={setScorecardFilter} />
     </View>
   );
 
