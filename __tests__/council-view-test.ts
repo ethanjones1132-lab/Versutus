@@ -107,3 +107,71 @@ describe('the council is a Stack destination with one entry on Home', () => {
     expect(homeDashboard()).toContain("router.push('/council')");
   });
 });
+
+/** The roster/prompt card, from its count heading to the prompt field. */
+function pickerCard(): string {
+  const src = councilRoute();
+  const start = src.indexOf('Bots to compare');
+  const end = src.indexOf('<TextField', start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return src.slice(start, end);
+}
+
+// The roster read starts [] and its catch folded a refusal back into [], so
+// loading, failed, and genuinely-empty all rendered the same dead chip box —
+// and the compare round's failure was a faint tertiary caption where every
+// other surface names it with an ErrorCard.
+describe('the council roster tells loading, failed, and empty apart', () => {
+  test('the roster read is tracked as loading, ready, or failed', () => {
+    const src = councilRoute();
+    expect(src).toMatch(/useState<'loading' \| 'ready' \| 'failed'>/);
+    expect(src).toMatch(/setRosterState\('failed'\)/);
+    expect(src).toMatch(/setRosterState\('ready'\)/);
+    // A refusal no longer answers by silently claiming an empty roster.
+    expect(src).not.toMatch(/catch\(\(\) => \{\s*if \(!cancelled\) setRoster\(\[\]\)/);
+  });
+
+  test('while the roster read is in flight the chips slot shows skeletons, not an empty chip row', () => {
+    const card = pickerCard();
+    const loadingAt = card.indexOf("rosterState === 'loading'");
+    expect(loadingAt).toBeGreaterThanOrEqual(0);
+    const skeletonAt = card.indexOf('<Skeleton', loadingAt);
+    expect(skeletonAt).toBeGreaterThan(loadingAt);
+    const chipsAt = card.indexOf('roster.map', skeletonAt);
+    // The chip map sits behind the ready guard, never reachable while in flight.
+    const readyAt = card.indexOf("rosterState === 'ready'");
+    if (chipsAt >= 0) {
+      expect(readyAt).toBeGreaterThanOrEqual(0);
+      expect(chipsAt).toBeGreaterThan(readyAt);
+    }
+  });
+
+  test('a failed roster read is an ErrorCard with a retry, not a dead chip box', () => {
+    const card = pickerCard();
+    const failedAt = card.indexOf("rosterState === 'failed'");
+    expect(failedAt).toBeGreaterThanOrEqual(0);
+    const errorCardAt = card.indexOf('<ErrorCard', failedAt);
+    expect(errorCardAt).toBeGreaterThan(failedAt);
+    expect(card).toMatch(/onRetry=\{[\s\S]*loadRoster/);
+    // The empty-roster claim is gated behind a completed, successful read.
+    const emptyAt = card.indexOf('<EmptyState');
+    if (emptyAt >= 0) expect(emptyAt).toBeGreaterThan(failedAt);
+  });
+
+  test('a genuinely empty ready roster is an EmptyState naming the missing Bots', () => {
+    const card = pickerCard();
+    const readyAt = card.indexOf("rosterState === 'ready'");
+    expect(readyAt).toBeGreaterThanOrEqual(0);
+    const emptyAt = card.indexOf('<EmptyState', readyAt);
+    expect(emptyAt).toBeGreaterThan(readyAt);
+    expect(card.slice(emptyAt, emptyAt + 400)).toMatch(/No bots on this gateway/i);
+  });
+
+  test('a failed compare round surfaces as an ErrorCard, never a faint caption', () => {
+    const src = councilRoute();
+    expect(src).toContain('<ErrorCard');
+    expect(src).not.toMatch(/color="tertiary">\s*\{\s*error \?\? promptIssue/);
+    expect(src).not.toMatch(/error \?\? promptIssue\s*\}/);
+  });
+});

@@ -1,10 +1,10 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { CouncilCompareView } from '@/components/chat/council-compare-view';
-import { Button, Card, Chip, Screen, Text, TextField } from '@/components/ui';
-import { Spacing } from '@/constants/tokens';
+import { Button, Card, Chip, EmptyState, ErrorCard, Screen, Skeleton, Text, TextField } from '@/components/ui';
+import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import type { PublicBot } from '@/lib/gateway/bots';
 import {
@@ -31,26 +31,49 @@ export default function CouncilScreen() {
   const router = useRouter();
   const { status, hasGroupRooms, botGroups, listBots, openBot, requestSurface } = useGateway();
   const [roster, setRoster] = useState<PublicBot[]>([]);
+  // The roster read starts empty, so in-flight, refused, and genuinely-empty
+  // all used to render the same dead chip box. Three phases keep them apart;
+  // only `ready` may claim the roster is empty.
+  const [rosterState, setRosterState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [rosterError, setRosterError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [prompt, setPrompt] = useState('');
   const [sending, setSending] = useState(false);
   const [columns, setColumns] = useState<CouncilColumn[]>([]);
   const [error, setError] = useState<string | undefined>(undefined);
 
+  const loadRoster = useCallback(
+    async (isLive?: () => boolean): Promise<void> => {
+      setRosterState('loading');
+      setRosterError(null);
+      try {
+        const bots = await listBots();
+        if (isLive && !isLive()) return;
+        setRoster(bots);
+        setRosterState('ready');
+      } catch (cause) {
+        if (isLive && !isLive()) return;
+        setRoster([]);
+        setRosterError(cause instanceof Error ? cause.message : String(cause));
+        setRosterState('failed');
+      }
+    },
+    [listBots],
+  );
+
+  // Deferred one tick so the loading flip is not a setState in the effect
+  // body (react-hooks/set-state-in-effect), matching CronSection's mount read.
   useEffect(() => {
     if (status !== 'connected') return undefined;
-    let cancelled = false;
-    void listBots()
-      .then((bots) => {
-        if (!cancelled) setRoster(bots);
-      })
-      .catch(() => {
-        if (!cancelled) setRoster([]);
-      });
+    let live = true;
+    const timer = setTimeout(() => {
+      void loadRoster(() => live);
+    }, 0);
     return () => {
-      cancelled = true;
+      live = false;
+      clearTimeout(timer);
     };
-  }, [status, listBots]);
+  }, [status, loadRoster]);
 
   // The selected Bots, in the roster's own order, capped like any council.
   const targets = useMemo(() => {
@@ -146,31 +169,64 @@ export default function CouncilScreen() {
               <Text variant="micro" color="tertiary">
                 Bots to compare ({targets.length}/3)
               </Text>
-              <View style={styles.chips}>
-                {roster.map((bot) => (
-                  <Chip
-                    key={bot.id}
-                    label={bot.displayName || bot.id}
-                    selected={selected.includes(bot.id)}
-                    onPress={() => toggleBot(bot.id)}
-                  />
-                ))}
-              </View>
+              {rosterState === 'failed' ? (
+                <ErrorCard
+                  cause={rosterError ?? 'The Bot list could not be read.'}
+                  affected="Choosing Bots for this council"
+                  next="Retry the read, or reconnect to the gateway."
+                  onRetry={() => void loadRoster()}
+                />
+              ) : rosterState === 'loading' ? (
+                <View style={styles.chips} accessibilityLabel="Loading bots">
+                  <Skeleton width={96} height={34} radius={Radius.full} />
+                  <Skeleton width={78} height={34} radius={Radius.full} />
+                  <Skeleton width={110} height={34} radius={Radius.full} />
+                </View>
+              ) : rosterState === 'ready' && roster.length === 0 ? (
+                <EmptyState
+                  icon={{ ios: 'person.2', android: 'group', web: 'group' }}
+                  title="No bots on this gateway"
+                  description="A council compares answers from Bots on this gateway — none are available yet."
+                />
+              ) : (
+                <View style={styles.chips}>
+                  {roster.map((bot) => (
+                    <Chip
+                      key={bot.id}
+                      label={bot.displayName || bot.id}
+                      selected={selected.includes(bot.id)}
+                      onPress={() => toggleBot(bot.id)}
+                    />
+                  ))}
+                </View>
+              )}
               <TextField
                 value={prompt}
                 onChangeText={setPrompt}
                 placeholder="One prompt for every Bot"
                 multiline
                 accessibilityLabel="Council prompt"
+                validationState={error || promptIssue ? 'invalid' : 'default'}
               />
               <Button
                 label={sending ? 'Asking…' : 'Compare'}
                 onPress={() => void handleCompare()}
                 disabled={!canCompare}
               />
-              {error || promptIssue ? (
-                <Text variant="caption" color="tertiary">
-                  {error ?? promptIssue}
+              {error ? (
+                <ErrorCard
+                  cause={error}
+                  affected="This comparison"
+                  next={
+                    promptIssue
+                      ? 'Drop the leading slash, then compare again.'
+                      : 'Retry, or adjust the prompt and compare again.'
+                  }
+                  onRetry={() => void handleCompare()}
+                />
+              ) : promptIssue ? (
+                <Text variant="caption" color="secondary">
+                  {promptIssue}
                 </Text>
               ) : null}
             </Card>
