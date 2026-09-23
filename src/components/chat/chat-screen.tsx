@@ -332,6 +332,7 @@ export function ChatScreen() {
     clearModelLock,
     modelCatalog,
     modelCatalogError,
+    modelCatalogLoaded,
     sessionSelector,
     openSessionSelector,
     closeSessionSelector,
@@ -2478,6 +2479,7 @@ export function ChatScreen() {
         onOpenSessionById={handleOpenSessionById}
         models={modelRows}
         modelsError={modelCatalogError}
+        modelsLoaded={modelCatalogLoaded}
         currentModel={activeGateway.model}
         backendLabel={backends.length > 1 ? activeBackend?.label : undefined}
         modelMode={modelPicker.mode}

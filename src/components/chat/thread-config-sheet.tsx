@@ -155,6 +155,12 @@ export type ThreadConfigSheetProps = {
   onRefreshModels?: () => void;
   /** Set when the last model-catalog read failed. Empty is not "no catalog". */
   modelsError?: string;
+  /**
+   * True once a catalog read has settled. The sheet opens BEFORE its read
+   * answers, so an empty list with this false is "still reading", not "none" —
+   * the same gate the sessions section above already uses.
+   */
+  modelsLoaded?: boolean;
   /** Names the backend the Models list is scoped to; absent when there is nothing to lock against. */
   backendLabel?: string;
   // Backends section
@@ -641,6 +647,7 @@ function SessionsSection({
 function ModelsSection({
   models = [],
   modelsError,
+  modelsLoaded,
   currentDefault,
   backendLabel,
   onSelect,
@@ -650,6 +657,8 @@ function ModelsSection({
   models?: ModelItem[];
   /** Set when the last catalog read failed. Empty is not "no catalog". */
   modelsError?: string;
+  /** True once a catalog read has settled. Empty before it is not "no models". */
+  modelsLoaded?: boolean;
   currentDefault?: string;
   /** Names the backend the list is locked to; absent when there is nothing to lock against. */
   backendLabel?: string;
@@ -836,7 +845,13 @@ function ModelsSection({
         </Text>
       ) : null}
 
-      {models.length === 0 ? (
+      {models.length === 0 && !modelsLoaded && !modelsError ? (
+        <EmptyState
+          icon={{ ios: 'cpu', android: 'memory', web: 'memory' }}
+          title="Reading models…"
+          description="The gateway is answering."
+        />
+      ) : models.length === 0 ? (
         <EmptyState
           icon={{ ios: 'cpu', android: 'memory', web: 'memory' }}
           title={modelsError ?? 'No models found'}
@@ -985,6 +1000,7 @@ export function ThreadConfigSheet({
   onClearModelLock,
   onRefreshModels,
   modelsError,
+  modelsLoaded,
   backendLabel,
   backends,
   selectedBackendId,
@@ -1035,6 +1051,7 @@ export function ThreadConfigSheet({
         <ModelsSection
           models={models}
           modelsError={modelsError}
+          modelsLoaded={modelsLoaded}
           currentDefault={currentModel}
           backendLabel={backendLabel}
           onSelect={onSelectModel}

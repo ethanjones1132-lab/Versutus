@@ -505,6 +505,8 @@ type GatewayContextValue = {
   modelCatalog: any[];
   /** Set when the last model-catalog read failed. A cached catalog stays usable. */
   modelCatalogError?: string;
+  /** True once a catalog read has settled. Empty before it is not "no models". */
+  modelCatalogLoaded: boolean;
   sessionSelector: { visible: boolean };
   openSessionSelector: () => void;
   closeSessionSelector: () => void;
@@ -878,6 +880,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }>({ visible: false, mode: 'default' });
   const [modelCatalog, setModelCatalog] = useState<any[]>([]);
   const [modelCatalogError, setModelCatalogError] = useState<string | undefined>(undefined);
+  const [modelCatalogLoaded, setModelCatalogLoaded] = useState(false);
   const [sessionListState, setSessionListState] = useState<SessionListState<HermesSession>>(
     emptySessionList<HermesSession>(),
   );
@@ -3215,17 +3218,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // catalog stays on screen while the re-read runs.
     setModelCatalogError(undefined);
     const client = clientRef.current;
-    if (!client) return;
+    if (!client) {
+      setModelCatalogLoaded(true);
+      return;
+    }
     try {
       const models = await client.getModels();
       if (seq !== modelReadSeqRef.current || !isCurrent()) return;
       setModelCatalog(models);
       setModelCatalogError(undefined);
+      setModelCatalogLoaded(true);
     } catch (error) {
       if (seq !== modelReadSeqRef.current || !isCurrent()) return;
       // The sheet used to read a refused catalog as "never reported".
       const message = error instanceof Error ? error.message : String(error);
       setModelCatalogError(message || 'Model catalog could not be read.');
+      setModelCatalogLoaded(true);
     }
   }, []);
 
@@ -4627,6 +4635,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       clearModelLock: clearDeviceModelLock,
       modelCatalog,
       modelCatalogError,
+      modelCatalogLoaded,
       sessionSelector,
       openSessionSelector,
       closeSessionSelector,
@@ -4659,7 +4668,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       approveTlsFingerprintChange,
       rejectTlsFingerprintChange,
       runTask, activityRuns, activityRunsForActiveGateway, stopActivityRun, loadRunEvents, modelPicker, openModelPicker, closeModelPicker,
-      selectModel, modelCatalog, modelCatalogError, sessionSelector, clearDeviceModelLock,
+      selectModel, modelCatalog, modelCatalogError, modelCatalogLoaded, sessionSelector, clearDeviceModelLock,
       openSessionSelector, closeSessionSelector, selectSession, sessionListState, currentSessionId,
       sessionListHasOlder, loadingOlderSessions, loadOlderSessions,
       historyLoading, createNewSession, deleteSessionById, deleteLocalMessage,
