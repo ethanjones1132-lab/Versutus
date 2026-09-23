@@ -195,11 +195,22 @@ export function appendApprovalAudit(
   return [entry, ...log].slice(0, APPROVAL_AUDIT_CAP);
 }
 
+/**
+ * The audit read that can refuse: a storage failure or corrupt stored JSON
+ * rejects, so a UI can tell "failed" from "genuinely empty" (which answers
+ * `[]` for a missing key). `loadApprovalAudit` is the lenient wrapper over
+ * this for best-effort callers that must never be blocked.
+ */
+export async function loadApprovalAuditStrict(): Promise<ApprovalAuditEntry[]> {
+  const raw = await keyValueStorage.getItem(APPROVAL_AUDIT_STORAGE_KEY);
+  if (!raw) return [];
+  return approvalAuditFromUnknown(JSON.parse(raw) as unknown);
+}
+
+/** Best-effort read: every storage refusal folds into a genuinely-empty log. */
 export async function loadApprovalAudit(): Promise<ApprovalAuditEntry[]> {
   try {
-    const raw = await keyValueStorage.getItem(APPROVAL_AUDIT_STORAGE_KEY);
-    if (!raw) return [];
-    return approvalAuditFromUnknown(JSON.parse(raw) as unknown);
+    return await loadApprovalAuditStrict();
   } catch {
     return [];
   }

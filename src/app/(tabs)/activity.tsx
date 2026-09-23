@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -8,7 +8,7 @@ import { ApprovalDecisionCard } from '@/components/activity/approval-decision-ca
 import { ApprovalInbox } from '@/components/activity/approval-inbox';
 import { CronSection } from '@/components/activity/cron-section';
 import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
-import { Badge, Button, Card, Screen, Text } from '@/components/ui';
+import { Badge, Button, Card, ErrorCard, Screen, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
@@ -17,7 +17,7 @@ import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { tabContentPaddingBottom } from '@/lib/motion/tab-insets';
 import {
   approvalAuditCopy,
-  loadApprovalAudit,
+  loadApprovalAuditStrict,
   type ApprovalAuditEntry,
 } from '@/lib/gateway/approval-policy';
 import {
@@ -53,28 +53,53 @@ export default function ActivityScreen() {
   const [cronReloadSignal, setCronReloadSignal] = useState(0);
   // Decision history is this device's key-value audit, not a Gateway read:
   // loaded once, and re-read alongside the pulls so a fresh decision shows.
+  // Three phases, because the lenient loader folds a storage refusal into []
+  // and an in-flight read also starts empty — both would otherwise print
+  // "No approval decisions recorded…" as if the log were genuinely empty.
   const [audit, setAudit] = useState<ApprovalAuditEntry[]>([]);
+  const [auditState, setAuditState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [auditError, setAuditError] = useState<string | null>(null);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
 
-  // Decision history is this device's key-value audit, not a Gateway read:
-  // loaded once on mount, and re-read alongside each pull-to-refresh so a
-  // fresh decision shows without waiting for the next visit.
+  // One reader for mount, retry, and pull-to-refresh: the strict loader
+  // rejects on a storage refusal so `failed` is reachable, and `isLive`
+  // keeps an unmounted tab from taking the late answer.
+  const readAudit = useCallback(async (isLive?: () => boolean): Promise<void> => {
+    setAuditState('loading');
+    setAuditError(null);
+    try {
+      const entries = await loadApprovalAuditStrict();
+      if (isLive && !isLive()) return;
+      setAudit(entries);
+      setAuditState('ready');
+    } catch (caught) {
+      if (isLive && !isLive()) return;
+      setAuditError(caught instanceof Error ? caught.message : String(caught));
+      setAuditState('failed');
+    }
+  }, []);
+
+  // Loaded once on mount, and re-read alongside each pull-to-refresh so a
+  // fresh decision shows without waiting for the next visit. Deferred one
+  // tick like CronSection's mount read, so the loading flip is not a
+  // synchronous setState in the effect body.
   useEffect(() => {
     let live = true;
-    void loadApprovalAudit().then((entries) => {
-      if (live) setAudit(entries);
-    }).catch(() => undefined);
+    const timer = setTimeout(() => {
+      void readAudit(() => live);
+    }, 0);
     return () => {
       live = false;
+      clearTimeout(timer);
     };
-  }, []);
+  }, [readAudit]);
 
   const onRefresh = async () => {
     setRefreshing(true);
     const started = Date.now();
     await Promise.all([refreshCapabilities(), refreshGateways(), refreshPendingApprovals()]).catch(() => undefined);
-    void loadApprovalAudit().then(setAudit).catch(() => undefined);
+    await readAudit();
     setCronReloadSignal((n) => n + 1);
     // Hold the spinner briefly so recovery isn't a disorienting flash.
     const elapsed = Date.now() - started;
@@ -129,17 +154,38 @@ export default function ActivityScreen() {
           <ApprovalInbox />
 
           {/* D1: what this device has already decided — the tally plus the
-              newest lines. Settings keeps the full history. */}
+              newest lines. Settings keeps the full history. Loading shows
+              placeholders (never the empty tally); a refused read shows an
+              inline retry instead of inventing an empty log. */}
           <Card padding={Spacing.three} style={styles.card}>
             <Text variant="body">Approval decisions</Text>
-            <Text variant="caption" color="secondary">
-              {approvalAuditTallyCopy(audit)}
-            </Text>
-            {approvalAuditRecent(audit, 4).map((record) => (
-              <Text key={`${record.approvalId}-${record.at}`} variant="micro" color="tertiary">
-                {approvalAuditCopy(record)}
-              </Text>
-            ))}
+            {auditState === 'loading' ? (
+              <>
+                <Skeleton width="72%" height={14} />
+                <Skeleton width="90%" height={12} />
+                <Skeleton width="64%" height={12} />
+              </>
+            ) : null}
+            {auditState === 'failed' ? (
+              <ErrorCard
+                cause={auditError ?? 'Decision history could not be read.'}
+                affected="Approval decisions on this device"
+                next="Retry the read."
+                onRetry={() => void readAudit()}
+              />
+            ) : null}
+            {auditState === 'ready' ? (
+              <>
+                <Text variant="caption" color="secondary">
+                  {approvalAuditTallyCopy(audit)}
+                </Text>
+                {approvalAuditRecent(audit, 4).map((record) => (
+                  <Text key={`${record.approvalId}-${record.at}`} variant="micro" color="tertiary">
+                    {approvalAuditCopy(record)}
+                  </Text>
+                ))}
+              </>
+            ) : null}
           </Card>
 
           {pendingRunApproval ? (

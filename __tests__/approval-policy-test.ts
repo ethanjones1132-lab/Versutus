@@ -8,10 +8,13 @@ import {
   approvalPolicyCopy,
   approvalPolicyDecision,
   approvalPolicyKey,
+  loadApprovalAudit,
+  loadApprovalAuditStrict,
   normalizeApprovalClass,
   setApprovalPolicy,
   type ApprovalAuditEntry,
 } from '@/lib/gateway/approval-policy';
+import { keyValueStorage } from '@/lib/storage/key-value';
 import {
   approvalAuditTallyCopy,
   approvalAuditRecent,
@@ -24,6 +27,8 @@ jest.mock('@/lib/storage/key-value', () => ({
     removeItem: jest.fn(),
   },
 }));
+
+const mockGet = keyValueStorage.getItem as jest.Mock;
 
 describe('normalizeApprovalClass', () => {
   it('keeps the Gate classes it knows', () => {
@@ -170,5 +175,46 @@ describe('audit activity view', () => {
   it('takes the newest decisions, newest first', () => {
     const log = [approve('a', 1), deny('b', 2), approve('c', 3), deny('d', 4), approve('e', 5)];
     expect(approvalAuditRecent(log, 3).map((record) => record.approvalId)).toEqual(['e', 'd', 'c']);
+  });
+});
+
+// The lenient loader folds every storage refusal into [] so a best-effort
+// writer can never be blocked; a UI that must tell "failed" from "genuinely
+// empty" reads through the strict variant instead.
+describe('loadApprovalAuditStrict', () => {
+  beforeEach(() => {
+    mockGet.mockReset();
+  });
+
+  it('rejects when storage itself fails, while the lenient loader answers []', async () => {
+    mockGet.mockRejectedValueOnce(new Error('storage unavailable'));
+    await expect(loadApprovalAuditStrict()).rejects.toThrow('storage unavailable');
+
+    mockGet.mockRejectedValueOnce(new Error('storage unavailable'));
+    await expect(loadApprovalAudit()).resolves.toEqual([]);
+  });
+
+  it('rejects on corrupt stored json instead of claiming an empty log', async () => {
+    mockGet.mockResolvedValueOnce('{not json');
+    await expect(loadApprovalAuditStrict()).rejects.toThrow();
+  });
+
+  it('answers [] for a missing key — the genuinely-empty read', async () => {
+    mockGet.mockResolvedValueOnce(null);
+    await expect(loadApprovalAuditStrict()).resolves.toEqual([]);
+  });
+
+  it('keeps the entries a healthy read holds', async () => {
+    const stored = [
+      {
+        approvalId: 'a',
+        cls: 'read',
+        decision: 'approve',
+        source: 'operator',
+        at: 1,
+      },
+    ];
+    mockGet.mockResolvedValueOnce(JSON.stringify(stored));
+    await expect(loadApprovalAuditStrict()).resolves.toEqual(stored);
   });
 });
