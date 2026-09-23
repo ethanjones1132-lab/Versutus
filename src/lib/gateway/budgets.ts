@@ -68,6 +68,21 @@ export function parseSpendCapInput(text: string): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+/**
+ * The cap editor's Save, decided before it can touch the store. An empty
+ * draft is the deliberate clear; a draft that parses is a store; anything
+ * else — junk, a negative, zero — is a refusal, never a silent delete of an
+ * existing cap. `parseSpendCapInput` answers `undefined` for both the empty
+ * draft and junk, so the caller must not treat that one answer as "clear".
+ */
+export type SpendCapDraft = { accepted: true; cap: number | undefined } | { accepted: false };
+
+export function applySpendCapInput(text: string): SpendCapDraft {
+  if (text.trim() === '') return { accepted: true, cap: undefined };
+  const cap = parseSpendCapInput(text);
+  return cap === undefined ? { accepted: false } : { accepted: true, cap };
+}
+
 export type BudgetVerdict =
   | { allowed: true; cap?: number; spent?: number }
   | { allowed: false; cap: number; spent: number; overBy: number; reason: string };

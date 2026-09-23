@@ -1,6 +1,7 @@
 import { keyValueStorage } from '@/lib/storage/key-value';
 import {
   BUDGETS_STORAGE_KEY,
+  applySpendCapInput,
   botBudget,
   botSpendFromSessions,
   budgetKey,
@@ -70,6 +71,25 @@ describe('budget keys and storage', () => {
   test('the row copy names the cap or says there is none', () => {
     expect(budgetRowCopy(5)).toBe('Budget $5.00');
     expect(budgetRowCopy(undefined)).toBe('No budget');
+  });
+
+  test('the Save-cap draft refuses junk instead of reading it as a clear', () => {
+    expect(applySpendCapInput('50.0.0')).toEqual({ accepted: false });
+    expect(applySpendCapInput('abc')).toEqual({ accepted: false });
+    expect(applySpendCapInput('-3')).toEqual({ accepted: false });
+    expect(applySpendCapInput('0')).toEqual({ accepted: false });
+    expect(applySpendCapInput('$')).toEqual({ accepted: false });
+  });
+
+  test('an empty Save-cap draft is still the deliberate clear', () => {
+    expect(applySpendCapInput('')).toEqual({ accepted: true, cap: undefined });
+    expect(applySpendCapInput('   ')).toEqual({ accepted: true, cap: undefined });
+  });
+
+  test('a Save-cap draft that parses accepts with the parsed cap', () => {
+    expect(applySpendCapInput('5')).toEqual({ accepted: true, cap: 5 });
+    expect(applySpendCapInput('$1,500.00')).toEqual({ accepted: true, cap: 1500 });
+    expect(applySpendCapInput(' 7.25 ')).toEqual({ accepted: true, cap: 7.25 });
   });
 
   test('a scoped sessions payload folds to the Bot cost the Spend surface prints', () => {
@@ -163,6 +183,33 @@ describe('the cap editor and the pre-run hard stop are wired', () => {
     const section = readSource('src', 'components', 'gateway', 'spend-per-bot-section.tsx');
     expect(section).toContain('budgetRowCopy(cap)');
     expect(section).toContain('onSetBudget');
+  });
+
+  test('the Save path routes the draft through applySpendCapInput, never straight to onSetBudget', () => {
+    const section = readSource('src', 'components', 'gateway', 'spend-per-bot-section.tsx');
+    expect(section).not.toContain('onSetBudget?.(row.botId, parseSpendCapInput(draft))');
+    expect(section).toContain('applySpendCapInput(draft)');
+    const refusal = section.indexOf('!outcome.accepted');
+    const store = section.indexOf('onSetBudget?.(row.botId, outcome.cap)');
+    expect(refusal).toBeGreaterThan(-1);
+    expect(store).toBeGreaterThan(refusal);
+  });
+
+  test('a refused save names the problem and keeps the editor open', () => {
+    const section = readSource('src', 'components', 'gateway', 'spend-per-bot-section.tsx');
+    expect(section).toContain('setCapNotice(');
+    const refusal = section.indexOf('!outcome.accepted');
+    const close = section.indexOf('setEditing(null)');
+    expect(refusal).toBeGreaterThan(-1);
+    // The refusal returns before the editor closes: setEditing(null) on the
+    // save path must come after the accepted-store call, not before the guard.
+    expect(close).toBeGreaterThan(section.indexOf('onSetBudget?.(row.botId, outcome.cap)'));
+    expect(section).toContain('{capNotice ?');
+  });
+
+  test('the deliberate Clear path still calls onSetBudget with undefined', () => {
+    const section = readSource('src', 'components', 'gateway', 'spend-per-bot-section.tsx');
+    expect(section).toContain('onSetBudget?.(row.botId, undefined)');
   });
 
   test('the Spend screen owns the cap store', () => {

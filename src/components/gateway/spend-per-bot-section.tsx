@@ -4,7 +4,7 @@ import { StyleSheet, View } from 'react-native';
 import { Button, Card, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { SESSION_SPEND_LIST_LIMIT } from '@/lib/gateway/session-analytics';
-import { botBudget, budgetRowCopy, parseSpendCapInput, type BotBudgets } from '@/lib/gateway/budgets';
+import { applySpendCapInput, botBudget, budgetRowCopy, type BotBudgets } from '@/lib/gateway/budgets';
 import {
   botSpendCapCopy,
   botSpendRowCopy,
@@ -50,6 +50,7 @@ export function SpendPerBotSection({
 }) {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [capNotice, setCapNotice] = useState<string | null>(null);
 
   if (report.degraded) {
     return (
@@ -84,25 +85,41 @@ export function SpendPerBotSection({
             </Text>
             {canEdit ? (
               editing === row.botId ? (
-                <View style={styles.editor}>
-                  <TextField value={draft} onChangeText={setDraft} placeholder="5" />
-                  <Button
-                    label="Save cap"
-                    size="sm"
-                    onPress={() => {
-                      onSetBudget?.(row.botId, parseSpendCapInput(draft));
-                      setEditing(null);
-                    }}
-                  />
-                  <Button
-                    label="Clear"
-                    variant="ghost"
-                    size="sm"
-                    onPress={() => {
-                      onSetBudget?.(row.botId, undefined);
-                      setEditing(null);
-                    }}
-                  />
+                <View style={styles.editorGroup}>
+                  {capNotice ? (
+                    <Text variant="caption" color="statusDisconnected">
+                      {capNotice}
+                    </Text>
+                  ) : null}
+                  <View style={styles.editor}>
+                    <TextField value={draft} onChangeText={setDraft} placeholder="5" />
+                    <Button
+                      label="Save cap"
+                      size="sm"
+                      onPress={() => {
+                        const outcome = applySpendCapInput(draft);
+                        if (!outcome.accepted) {
+                          setCapNotice(
+                            'Enter a positive amount, like 5 or $1,500.00 — or use Clear to remove the cap.',
+                          );
+                          return;
+                        }
+                        setCapNotice(null);
+                        onSetBudget?.(row.botId, outcome.cap);
+                        setEditing(null);
+                      }}
+                    />
+                    <Button
+                      label="Clear"
+                      variant="ghost"
+                      size="sm"
+                      onPress={() => {
+                        setCapNotice(null);
+                        onSetBudget?.(row.botId, undefined);
+                        setEditing(null);
+                      }}
+                    />
+                  </View>
                 </View>
               ) : (
                 <View style={styles.editor}>
@@ -114,6 +131,7 @@ export function SpendPerBotSection({
                     variant="ghost"
                     size="sm"
                     onPress={() => {
+                      setCapNotice(null);
                       setDraft(cap === undefined ? '' : String(cap));
                       setEditing(row.botId);
                     }}
@@ -141,6 +159,9 @@ const styles = StyleSheet.create({
   editor: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: Spacing.one,
+  },
+  editorGroup: {
     gap: Spacing.one,
   },
 });
