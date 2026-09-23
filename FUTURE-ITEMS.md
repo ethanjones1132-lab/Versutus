@@ -143,11 +143,12 @@ the user to come back on their own.
 registry + prefs RPC (`gate/core/push-rpc.mjs`, `push-tokens.mjs`), notifier
 with dedupe, quiet hours and Bot filter (`push-notifier.mjs`), Expo send with
 receipt pruning (`push-send.mjs`), and one tap path shared with local notices
-(`_layout.tsx` → `tap-route.ts`). Remaining from this spec: the `smoke:live`
-test-push dispatch (A5's verify step) and a gateway-Settings door for
-`NotificationsSection` (A4's pane — today it is mounted in Setup only); the A8
-rollout policy is not executed. The README scope statement already records the
-relay as shipped.
+(`_layout.tsx` → `tap-route.ts`). The `smoke:live` test-push dispatch (A5's
+verify step, shipped 2026-09-23 in `scripts/smoke-live-gateway.mts` +
+`scripts/smoke-live-push-check.mjs`) and the gateway-Settings door for
+`NotificationsSection` (A4's pane, mounted in `settings.tsx`) both shipped;
+only the A8 rollout policy is not executed. The README scope statement already
+records the relay as shipped.
 
 **Approach.** The Versutus Gate (`gate/`, port 8760) becomes the notification
 relay. It is already the operator-run companion server, already paired with the
@@ -192,8 +193,8 @@ introduced into the trust path. Delivery rides the Expo Push Service
 - Dedupe (one push per run state transition) and per-device preference filters
   (which Bots, quiet hours) — preferences endpoint from A3, edited from the
   Notifications pane (`src/components/gateway/notifications-section.tsx`,
-  mounted in Setup's Notifications tab today; the filed gap is a
-  gateway-Settings door).
+  mounted in Setup's Notifications tab and in gateway Settings — both doors
+  shipped 2026-09-23).
 
 ### A5. Send path
 

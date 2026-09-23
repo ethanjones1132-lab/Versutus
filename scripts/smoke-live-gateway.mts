@@ -15,11 +15,13 @@ import { join } from 'node:path';
 
 import { buildCapabilitySnapshot } from '../src/lib/gateway/dashboard';
 import type { ConnectionStatus, GatewayCapabilities, GatewayKind, GatewayProfile } from '../src/lib/gateway/types';
+import { advertisesTestPush, classifyTestPushResult } from './smoke-live-push-check.mjs';
 
 // adapters → OpenClawAdapterClient → openclaw-client imports react-native.
 // Under tsx/esbuild that module cannot be transformed; install a minimal
 // Platform shim before the dynamic import of createClientForKind.
 const nodeRequire = createRequire(import.meta.url);
+const { randomBytes } = nodeRequire('node:crypto') as typeof import('node:crypto');
 const Module = nodeRequire('module') as {
   _load: (request: string, parent: unknown, isMain: boolean) => unknown;
 };
@@ -33,14 +35,43 @@ Module._load = (request: string, parent: unknown, isMain: boolean) => {
       },
     };
   }
+  if (request === 'expo-constants') {
+    // adapters.ts only reads `Constants.expoConfig?.extra` (alternate IPv4
+    // candidates from app.json). The real module bootstraps
+    // expo-modules-core, which needs Metro's `__DEV__` and the native
+    // `globalThis.expo` runtime — neither exists under tsx/node, and the
+    // import chain died before smoke:live could start (baseline break
+    // found 2026-09-23). No expoConfig under node is the truthful answer.
+    return { expoConfig: undefined, easConfig: undefined };
+  }
+  if (request === 'expo-crypto') {
+    // device-identity.ts (via openclaw-client) imports getRandomBytes — the
+    // real module calls requireNativeModule('ExpoCrypto'), which does not
+    // exist under node. Node's CSPRNG is the same contract: 32 seed bytes
+    // for noble's ed25519 key. Never called on Gate/Hermes smoke paths, but
+    // the import itself must resolve.
+    return { getRandomBytes: (byteCount: number) => new Uint8Array(randomBytes(byteCount)) };
+  }
   return originalLoad(request, parent, isMain);
 };
+
+// Belt and braces for any other expo module that reads Metro's injected
+// `__DEV__` global at import time: node is not a dev client, so the release
+// value is the honest one.
+globalThis.__DEV__ = false;
 
 const { createClientForKind } = await import('../src/lib/portal/adapters');
 const { identifyGateway } = await import('../src/lib/portal/identify');
 
 const BASE_URL = process.argv[2] ?? 'http://127.0.0.1:8642';
 let failures = 0;
+
+// Stable caller id for `notifications.test`: with the Gate's bootstrap token
+// (gate/.tokens.json) push-rpc's requireDevice files the row under
+// `bootstrap:<deviceId>`, so the same harness id keeps it addressable across
+// runs. The shape must satisfy BOOTSTRAP_DEVICE_ID in gate/core/push-rpc.mjs
+// (`[A-Za-z0-9._:-]{8,128}`) or the dispatch is refused 403 pairing_required.
+const SMOKE_PUSH_DEVICE_ID = 'smoke-live-harness';
 
 function check(label: string, condition: boolean, detail = '') {
   const mark = condition ? 'PASS' : 'FAIL';
@@ -175,6 +206,38 @@ async function exerciseReadySurfaces(
   }
 }
 
+/**
+ * Solution A5's verify step: dispatch the Gate's own test-push RPC when the
+ * target advertises it (the manifest's `rpcMethods` table — Hermes reports
+ * none and skips). The Gate answers with a ticket when the calling device has
+ * a registered Expo token, or the structured `{ skipped: 'no-token' }` that an
+ * operator laptop with no phone must see as a clean skip, never a failure
+ * (plan 2026-09-11 G6). A failed or unrecognised answer fails the suite.
+ */
+async function exerciseTestPush(
+  client: ReturnType<typeof createClientForKind>,
+  snapshot: ReturnType<typeof buildCapabilitySnapshot>,
+) {
+  if (!advertisesTestPush(snapshot)) {
+    console.log('  [SKIP] notifications.test — not advertised by this gateway');
+    return;
+  }
+
+  const result = await withTimeout('POST notifications.test', 8000, () =>
+    client.rpcRequest<Record<string, unknown>>('notifications.test', {
+      deviceId: SMOKE_PUSH_DEVICE_ID,
+    }),
+  );
+  if (result === null) return; // withTimeout already logged FAIL
+
+  const verdict = classifyTestPushResult(result);
+  if (verdict.status === 'skip') {
+    console.log(`  [SKIP] notifications.test — ${verdict.detail}`);
+    return;
+  }
+  check('notifications.test dispatch', verdict.status === 'pass', verdict.detail);
+}
+
 async function main() {
   const identity = await identifyGateway({ baseUrl: BASE_URL });
   // Kind-specific first; fall back so a Hermes that fingerprints as unknown
@@ -240,6 +303,10 @@ async function main() {
       // chat-only Gate doesn't fail for missing Hermes REST.
       console.log('\n  Surface checks (capability-gated):');
       await exerciseReadySurfaces(client, snapshot);
+
+      // Test-push dispatch: gated on the gateway's own rpcMethods table, so a
+      // Hermes target skips with a note instead of failing on a Gate-only RPC.
+      await exerciseTestPush(client, snapshot);
     }
     client.disconnect();
   }
