@@ -57,6 +57,27 @@ describe('roster load failure', () => {
     expect(emptyViewCall).not.toMatch(/groupsError/);
   });
 
+  test('the load-failed empty state leads the footer above the creation rows', () => {
+    // With a failed read the list body is empty, so the footer is the whole
+    // surface below the header reason. Leading with "Couldn't load agents"
+    // makes the failure the first thing read — New Agent / Import / New Group
+    // and the capability notes come after it, not before.
+    const src = readChatRosterSource();
+    const footer = src.match(/ListFooterComponent=\{[\s\S]*?\n {6}\}/)?.[0];
+    expect(footer).toBeDefined();
+    const failedIdx = footer!.indexOf("emptyView.kind === 'load-failed'");
+    const newAgentIdx = footer!.indexOf('title="New Agent"');
+    const importIdx = footer!.indexOf('title="Import handoff"');
+    const newGroupIdx = footer!.indexOf('title="New Group Room"');
+    expect(failedIdx).toBeGreaterThan(-1);
+    expect(newAgentIdx).toBeGreaterThan(-1);
+    expect(importIdx).toBeGreaterThan(-1);
+    expect(newGroupIdx).toBeGreaterThan(-1);
+    expect(failedIdx).toBeLessThan(newAgentIdx);
+    expect(failedIdx).toBeLessThan(importIdx);
+    expect(failedIdx).toBeLessThan(newGroupIdx);
+  });
+
   test('pull-to-refresh still offers the same gesture on the list itself', () => {
     const src = readChatRosterSource();
     expect(src).toMatch(/refreshControl=\{/);

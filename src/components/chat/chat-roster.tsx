@@ -266,6 +266,17 @@ function ChatRosterImpl({
       }
       ListFooterComponent={
         <View>
+          {/* A failed read leads: with an empty list body this block is the
+              first thing below the header reason, before any creation row. */}
+          {emptyView.kind === 'load-failed' ? (
+            <EmptyState
+              icon={{ ios: 'exclamationmark.triangle', android: 'warning', web: 'warning' }}
+              title="Couldn't load agents"
+              description="The roster could not read this gateway's agent inventory — the reason is named above."
+              actionLabel="Retry"
+              onAction={handleRefresh}
+            />
+          ) : null}
           {onNewAgent ? (
             <ListRow
               title="New Agent"
@@ -307,15 +318,6 @@ function ChatRosterImpl({
               icon={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}
               title="No bots on this gateway"
               description="Named Hermes profiles appear here once the Gate can inventory them."
-            />
-          ) : null}
-          {emptyView.kind === 'load-failed' ? (
-            <EmptyState
-              icon={{ ios: 'exclamationmark.triangle', android: 'warning', web: 'warning' }}
-              title="Couldn't load agents"
-              description="The roster could not read this gateway's agent inventory — the reason is named above."
-              actionLabel="Retry"
-              onAction={handleRefresh}
             />
           ) : null}
           {emptyView.kind === 'no-match' ? (
