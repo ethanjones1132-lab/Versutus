@@ -8,7 +8,7 @@ import { DeviceIdRow } from '@/components/device-id-row';
 import { NotificationsSection } from '@/components/gateway/notifications-section';
 import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
 import { TransportSecurityCard } from '@/components/gateway/transport-security-card';
-import { Badge, Card, Icon, Screen, Text } from '@/components/ui';
+import { Badge, Card, ErrorCard, Icon, Screen, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
@@ -47,8 +47,18 @@ import {
 function voiceReadiness(
   id: VoiceEnginePreference,
   capabilities: VoiceEngineCapabilities | null,
+  state: 'checking' | 'ready' | 'failed',
+  voiceCheckError: string | null,
 ): string {
   if (id === 'phone') return 'Always available on this phone.';
+  // A refused read never masquerades as an in-progress one: name the
+  // refusal (the inline catch comment's promise) instead of spinning on
+  // "Checking this PC…" for the rest of the session.
+  if (state === 'failed') {
+    return voiceCheckError
+      ? `Couldn't check this PC: ${voiceCheckError}`
+      : "Couldn't check this PC's voice engines.";
+  }
   if (id === 'auto') return 'Follows whichever engine below is ready.';
   if (!capabilities) return 'Checking this PC…';
   if (!capabilities.enabled) return 'Gate voice is turned off on this PC.';
@@ -64,6 +74,10 @@ export default function GatewaySettingsScreen() {
   const [appLockReason, setAppLockReason] = useState<AppLockUnavailableReason | null>(null);
   const [voiceEngine, setVoiceEngine] = useState<VoiceEnginePreference>(settings.voiceEngine);
   const [voiceCapabilities, setVoiceCapabilities] = useState<VoiceEngineCapabilities | null>(null);
+  // Distinguish the first in-flight read from a refusal: null capabilities
+  // alone can no longer mean both "still checking" and "the Gate said no".
+  const [voiceCheckState, setVoiceCheckState] = useState<'checking' | 'ready' | 'failed'>('checking');
+  const [voiceCheckError, setVoiceCheckError] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installNote, setInstallNote] = useState<string | null>(null);
   // D1: this device's durable approval decisions (newest first).
@@ -101,24 +115,55 @@ export default function GatewaySettingsScreen() {
     void saveAppLock(next);
   }, []);
 
+  const readVoiceCapabilities = useCallback(async (): Promise<
+    { ok: true; capabilities: VoiceEngineCapabilities } | { ok: false; error: string }
+  > => {
+    try {
+      const capabilities = await gatewayRequest<VoiceEngineCapabilities>(
+        'voice.capabilities',
+        await pushDeviceParams(),
+      );
+      return { ok: true, capabilities };
+    } catch (caught) {
+      // Offline or a Gate that predates voice: the caller names the refusal
+      // on the rows rather than leaving them on "Checking this PC…" forever.
+      return { ok: false, error: caught instanceof Error ? caught.message : String(caught) };
+    }
+  }, [gatewayRequest]);
+
+  const applyVoiceRead = useCallback(
+    (result: { ok: true; capabilities: VoiceEngineCapabilities } | { ok: false; error: string }) => {
+      if (result.ok) {
+        setVoiceCapabilities(result.capabilities);
+        setVoiceCheckState('ready');
+        setVoiceCheckError(null);
+      } else {
+        setVoiceCapabilities(null);
+        setVoiceCheckState('failed');
+        setVoiceCheckError(result.error);
+      }
+    },
+    [],
+  );
+
+  const retryVoiceCapabilities = useCallback(() => {
+    setVoiceCheckState('checking');
+    setVoiceCheckError(null);
+    void readVoiceCapabilities().then(applyVoiceRead);
+  }, [readVoiceCapabilities, applyVoiceRead]);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const stored = await loadAppSettings();
       if (!cancelled) setVoiceEngine(stored.voiceEngine);
-      try {
-        const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', await pushDeviceParams());
-        if (!cancelled) setVoiceCapabilities(read);
-      } catch {
-        // Offline or a Gate that predates voice: the rows still name the
-        // stored choice and why nothing on the PC can be checked.
-        if (!cancelled) setVoiceCapabilities(null);
-      }
+      const result = await readVoiceCapabilities();
+      if (!cancelled) applyVoiceRead(result);
     })();
     return () => {
       cancelled = true;
     };
-  }, [gatewayRequest]);
+  }, [readVoiceCapabilities, applyVoiceRead]);
 
   useEffect(() => {
     let cancelled = false;
@@ -314,6 +359,14 @@ export default function GatewaySettingsScreen() {
           <Text color="secondary">
             Where a call&apos;s audio goes, and which machine runs the speech models.
           </Text>
+          {voiceCheckState === 'failed' ? (
+            <ErrorCard
+              cause={voiceCheckError ?? "The Gate did not answer this PC's voice check."}
+              affected="Voice engine readiness on this PC"
+              next="Retry — the rows below only reflect the Gate after a successful read."
+              onRetry={retryVoiceCapabilities}
+            />
+          ) : null}
           {VOICE_ENGINE_ROWS.map((row) => {
             const selected = voiceEngine === row.id;
             return (
@@ -332,7 +385,7 @@ export default function GatewaySettingsScreen() {
                     {row.summary}
                   </Text>
                   <Text variant="micro" color="tertiary">
-                    {voiceReadiness(row.id, voiceCapabilities)}
+                    {voiceReadiness(row.id, voiceCapabilities, voiceCheckState, voiceCheckError)}
                   </Text>
                 </View>
                 {selected ? <Badge label="Using" tone="success" dot={false} /> : null}
