@@ -69,19 +69,25 @@ describe('paired-devices revoke hint', () => {
     );
   });
 
-  test('the failed-first-read Retry button never carries accessibilityHint', () => {
+  test('the failed-read retry rides the ErrorCard and never carries accessibilityHint', () => {
     // Retry is reversible: it re-runs the existing device.list read the
-    // mount effect runs. A hint on it would be noise ("Opens the same
-    // read again") and would mislead a screen-reader user into
-    // expecting consequence where there is none. Pin its absence so a
-    // future "hint on every ghost button" regression fails loudly.
+    // mount effect runs. The retry moved from a ghost Button to the
+    // ErrorCard's onRetry when the pane started keeping the thrown message;
+    // a hint on it would be noise and would mislead a screen-reader user
+    // into expecting consequence where there is none. Pin its absence so a
+    // future "hint on every control" regression fails loudly.
     const src = readPaneSource();
-    // The Retry Button block stays exactly as iter-113 left it.
-    expect(src).toMatch(/label="Retry"[\s\S]*?onPress=\{\(\) => void load\(\)\}/);
-    // The Retry block does NOT mention accessibilityHint.
-    const retryBlock = src.match(/<Button\s+label="Retry"[\s\S]*?\/>/)?.[0];
-    expect(retryBlock).toBeDefined();
-    expect(retryBlock!).not.toMatch(/accessibilityHint/);
+    const retryAt = src.indexOf('onRetry={() => void load()}');
+    expect(retryAt).toBeGreaterThan(-1);
+    const start = src.lastIndexOf('<ErrorCard', retryAt);
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf('/>', retryAt);
+    expect(end).toBeGreaterThan(retryAt);
+    const retryBlock = src.slice(start, end + 2);
+    expect(retryBlock).toContain('onRetry={() => void load()}');
+    expect(retryBlock).not.toMatch(/accessibilityHint/);
+    // No standalone ghost Retry Button is left on the pane at all.
+    expect(src).not.toMatch(/<Button\s+label="Retry"/);
   });
 
   test('the !row.revoked branch gate stays byte-identical', () => {

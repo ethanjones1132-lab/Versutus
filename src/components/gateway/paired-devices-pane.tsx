@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Badge, Button, Card, ConfirmSheet, ListRow, Skeleton, Text } from '@/components/ui';
+import { Badge, Button, Card, ConfirmSheet, ErrorCard, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
@@ -25,6 +25,10 @@ import {
 export function PairedDevicesPane() {
   const { status, gatewayRequest, activeGateway } = useGateway();
   const [state, setState] = useState<PairedDevicesState & { gatewayId?: string }>(EMPTY_PAIRED_DEVICES);
+  // The thrown message from the device.list read, kept for the ErrorCard
+  // cause — a junk envelope parses as a failed read with no throw and falls
+  // back to the lib's honest copy (same contract toolsets-section uses).
+  const [error, setError] = useState<string | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const gatewayId = activeGateway?.id;
@@ -41,9 +45,12 @@ export function PairedDevicesPane() {
     };
     try {
       const payload = await gatewayRequest('device.list');
-      fold(pairedDevicesReadFromUnknown(payload));
-    } catch {
+      const read = pairedDevicesReadFromUnknown(payload);
+      fold(read);
+      if (read.ok) setError(null);
+    } catch (caught) {
       fold({ ok: false });
+      setError(caught instanceof Error ? caught.message : String(caught));
     }
   }, [gatewayId, gatewayRequest, visible]);
 
@@ -85,13 +92,25 @@ export function PairedDevicesPane() {
           <Skeleton width="76%" height={44} style={styles.gap} />
         </>
       ) : null}
-      {copy ? (
+      {/* Any failure — first-read or stale re-read — surfaces through the
+          ErrorCard with the kept message (or the lib copy when the envelope
+          failed without a throw); the standalone copy is for the empty claim. */}
+      {shown.failed ? (
+        <ErrorCard
+          cause={error ?? copy ?? 'Paired devices could not be read.'}
+          affected="Paired devices on this Gate"
+          next={
+            shown.loaded
+              ? 'Retry to refresh — the list below is the last good read.'
+              : 'Retry, or check the Gate log for the failing call.'
+          }
+          onRetry={() => void load()}
+        />
+      ) : null}
+      {!shown.failed && copy ? (
         <Text variant="micro" color="secondary">
           {copy}
         </Text>
-      ) : null}
-      {!shown.loaded && shown.failed ? (
-        <Button label="Retry" variant="ghost" size="sm" onPress={() => void load()} />
       ) : null}
       {shown.devices.map((device) => {
         const row = pairedDeviceRowCopy(device);

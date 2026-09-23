@@ -15,30 +15,36 @@ function readPaneSource(): string {
 }
 
 describe('health-checks retry', () => {
-  test('the failed first read offers a Retry action wired to the load handler', () => {
-    // A failed first read left the operator with the micro copy and no way
-    // forward except remounting the screen. The pane now renders a retry
-    // button bound to the same re-read the mount effect runs.
+  test('a failed read offers a Retry through the ErrorCard wired to the load handler', () => {
+    // A failed read used to leave the operator with micro copy plus a ghost
+    // Retry button, and destroyed the thrown message at the catch. The pane
+    // now keeps the message in `error` and renders the repo's ErrorCard —
+    // cause/affected/next + Retry — bound to the same re-read.
     const src = readPaneSource();
-    expect(src).toMatch(/!shown\.loaded && shown\.failed \? \(/);
-    const failed = src.match(/!shown\.loaded && shown\.failed \? \([\s\S]*?\) : null/)?.[0];
+    expect(src).toMatch(/\{shown\.failed \? \(\s*<ErrorCard/);
+    const failed = src.match(/\{shown\.failed \? \(\s*<ErrorCard[\s\S]*?\) : null/)?.[0];
     expect(failed).toBeDefined();
-    expect(failed).toMatch(/label="Retry"/);
-    expect(failed).toMatch(/onPress=\{\(\) => void load\(\)\}/);
+    expect(failed).toMatch(/onRetry=\{\(\) => void load\(\)\}/);
+    expect(src).not.toMatch(/label="Retry"/);
   });
 
-  test('the retry is offered only on the failed-first-read path, never over a list', () => {
-    // A failed re-read keeps the last good list with its own stale copy —
-    // the retry must not render there, and a loaded pane must show no
-    // button at all.
+  test('the ErrorCard gate is the failure alone, and a healthy read shows none', () => {
+    // Both failure modes — a failed first read and a stale re-read — set
+    // `shown.failed`, so both surface through the one ErrorCard (stale keeps
+    // its list below the card). A completed successful read renders neither.
     const src = readPaneSource();
-    expect(src).not.toMatch(/state\.failed && shown\.loaded/);
-    expect(src).not.toMatch(/shown\.failed && shown\.loaded/);
+    expect(src).toMatch(/\{shown\.failed \? \(\s*<ErrorCard/);
+    expect(src).not.toMatch(/!shown\.loaded && shown\.failed \? \(/);
+    expect(src).not.toMatch(/\{shown\.loaded && !shown\.failed \? \(\s*<ErrorCard/);
   });
 
-  test('the failed-first-read micro copy still names the failure', () => {
+  test('the failure is named through the ErrorCard cause, falling back to the lib copy', () => {
+    // The kept message wins; a junk envelope that failed without a throw
+    // falls back to the lib's honest failure line. The standalone micro copy
+    // renders only outside failures (the empty claim), never beside the card.
     const src = readPaneSource();
-    expect(src).toMatch(/\{copy \? \(/);
+    expect(src).toMatch(/cause=\{error \?\? copy \?\? 'Health checks could not be read\.'\}/);
+    expect(src).toMatch(/\{!shown\.failed && copy \? \(/);
   });
 
   test('a failed first read never renders as "No health checks."', () => {

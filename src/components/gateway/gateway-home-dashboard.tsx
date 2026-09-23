@@ -25,7 +25,7 @@ import { useGatewayDiscovery } from '@/hooks/use-gateway-discovery';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
 import { useTokens } from '@/hooks/use-tokens';
 import { describeAutoRetry } from '@/lib/connection/retry-ladder';
-import { describeGatewayError, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
+import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import type { GatewayProfile } from '@/lib/gateway/types';
 import { describeHomeEmptyState } from '@/lib/home/home-empty-state';
 
@@ -135,15 +135,20 @@ export function GatewayHomeDashboard() {
           <PairingPanel deviceId={deviceId} pairingDetails={pairingDetails} />
         ) : null}
 
+        {/* The refusal names itself above the checklist as the repo's
+            ErrorCard (humanized cause/affected/next) — not the dimmest
+            caption nested inside it. The hero's "Try again" stays the one
+            retry control for this failure (one retry per failure). */}
+        {model.showTroubleshooting ? (
+          <ErrorCard {...humanizeGatewayError(lastError)} />
+        ) : null}
+
         {model.showTroubleshooting ? (
           <GlassCollapsible title="Troubleshooting">
             <Text color="secondary">
               - Hermes (or Gate) listening on the PC{'\n'}- API key matches API_SERVER_KEY (or Gate token)
               {'\n'}- Phone and PC on the same Tailscale tailnet{'\n'}- Tailscale Serve / LAN URL reachable from
               the phone{'\n'}- If Hermes reports running but nothing answers: restart the gateway on the PC
-            </Text>
-            <Text variant="caption" color="tertiary">
-              {describeGatewayError(lastError)}
             </Text>
           </GlassCollapsible>
         ) : null}

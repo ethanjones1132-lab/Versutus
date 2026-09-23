@@ -167,14 +167,15 @@ describe('paired-devices revoke', () => {
     expect(execute.slice(0, tryAt)).toContain('setRevokeError(null);');
   });
 
-  test('the failed-first-read retry button stays byte-identical', () => {
-    // The Retry affordance added in an earlier iteration must not move.
-    // A revoke change that nudges the retry branch is a regression —
-    // this test pins the byte-identical Retry wiring as it stands.
+  test('the failed-read retry rides the ErrorCard, wired to the same load handler', () => {
+    // The Retry affordance moved from a ghost Button to the ErrorCard's
+    // onRetry when the pane started keeping the thrown message. A revoke
+    // change that nudges that wiring is a regression — pin the card gate
+    // and the load binding as they stand.
     const src = readPaneSource();
-    expect(src).toMatch(/!shown\.loaded && shown\.failed \? \(/);
-    expect(src).toMatch(/label="Retry"/);
-    expect(src).toMatch(/onPress=\{\(\) => void load\(\)\}/);
+    expect(src).toMatch(/\{shown\.failed \? \(\s*<ErrorCard/);
+    expect(src).toMatch(/onRetry=\{\(\) => void load\(\)\}/);
+    expect(src).not.toMatch(/label="Retry"/);
   });
 
   test('a row never carries a token, even after a revoke flow', () => {

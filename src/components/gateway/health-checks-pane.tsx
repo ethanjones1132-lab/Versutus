@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Badge, Button, Card, ListRow, Skeleton, Text } from '@/components/ui';
+import { Badge, Card, ErrorCard, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
@@ -30,6 +30,10 @@ import {
 export function HealthChecksPane() {
   const { status, gatewayRequest, activeGateway } = useGateway();
   const [state, setState] = useState<DiagnosticsState & { gatewayId?: string }>(EMPTY_DIAGNOSTICS);
+  // The thrown message from the checks read, kept for the ErrorCard cause —
+  // a junk envelope parses as a failed read with no throw and falls back to
+  // the lib's honest copy (same contract toolsets-section uses).
+  const [error, setError] = useState<string | null>(null);
   // The memory doctor rides the same read as the checks: one on-demand
   // call when the pane loads, folded to one line below. Host-wide — it
   // describes the gateway host's memory, not a single Bot.
@@ -51,9 +55,12 @@ export function HealthChecksPane() {
     };
     try {
       const payload = await gatewayRequest('diagnostics.full');
-      fold(diagnosticsReadFromUnknown(payload));
-    } catch {
+      const read = diagnosticsReadFromUnknown(payload);
+      fold(read);
+      if (read.ok) setError(null);
+    } catch (caught) {
       fold({ ok: false });
+      setError(caught instanceof Error ? caught.message : String(caught));
     }
     // The doctor read rides on its own success/failure — a gateway that
     // does not serve the method renders the unknown line, never silence
@@ -92,13 +99,25 @@ export function HealthChecksPane() {
           <Skeleton width="76%" height={44} style={styles.gap} />
         </>
       ) : null}
-      {copy ? (
+      {/* Any failure — first-read or stale re-read — surfaces through the
+          ErrorCard with the kept message (or the lib copy when the envelope
+          failed without a throw); the standalone copy is for the empty claim. */}
+      {shown.failed ? (
+        <ErrorCard
+          cause={error ?? copy ?? 'Health checks could not be read.'}
+          affected="Health checks on this gateway"
+          next={
+            shown.loaded
+              ? 'Retry to refresh — the list below is the last good read.'
+              : 'Retry, or check the Gate log for the failing call.'
+          }
+          onRetry={() => void load()}
+        />
+      ) : null}
+      {!shown.failed && copy ? (
         <Text variant="micro" color="secondary">
           {copy}
         </Text>
-      ) : null}
-      {!shown.loaded && shown.failed ? (
-        <Button label="Retry" variant="ghost" size="sm" onPress={() => void load()} />
       ) : null}
       {(() => {
         const memoryState = memory.gatewayId === gatewayId ? memory.state : undefined;
