@@ -74,6 +74,7 @@ export function TerminalScreen() {
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [terminalError, setTerminalError] = useState<string | null>(null);
+  const [lastFailedCommand, setLastFailedCommand] = useState<GatewayCommand | null>(null);
   const [terminalConnected, setTerminalConnected] = useState(false);
   const [runningCommandId, setRunningCommandId] = useState<string | null>(null);
   const [commandLog, setCommandLog] = useState('');
@@ -208,6 +209,7 @@ export function TerminalScreen() {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setTerminalError(message);
+        setLastFailedCommand(command);
         setCommandOutput(`Command failed: ${message}`);
         setCommandLog(message);
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -259,15 +261,29 @@ export function TerminalScreen() {
         <TerminalModePicker mode={mode} onModeChange={setMode} />
       </View>
 
-      {terminalError && shellReady && mode === 'shell' ? (
+      {/* One ErrorCard per failure in every mode: shell keeps its session
+          retry, RPC/Agent re-runs the command that failed — the old
+          shell-only gate left the default modes with caption text and no
+          guidance. */}
+      {terminalError ? (
         <View style={styles.bannerWrap}>
-          <ErrorCard
-            cause={terminalError}
-            affected={`${modeLabel.toLowerCase()} session`}
-            next="Retry the session or ensure the gateway is connected."
-            retryLabel="Retry terminal"
-            onRetry={() => void startTerminal()}
-          />
+          {mode === 'shell' ? (
+            <ErrorCard
+              cause={terminalError}
+              affected={`${modeLabel.toLowerCase()} session`}
+              next="Retry the session or ensure the gateway is connected."
+              retryLabel="Retry terminal"
+              onRetry={() => void startTerminal()}
+            />
+          ) : (
+            <ErrorCard
+              cause={terminalError}
+              affected={`${modeLabel.toLowerCase()} command`}
+              next="Check the gateway, then run the command again."
+              retryLabel="Retry command"
+              onRetry={lastFailedCommand ? () => void runGatewayCommand(lastFailedCommand) : undefined}
+            />
+          )}
         </View>
       ) : null}
 
@@ -401,9 +417,11 @@ export function TerminalScreen() {
           )}
           ListEmptyComponent={
             status === 'connected' ? (
-              <Text color="tertiary" variant="caption">
-                Run a command to inspect or control the live gateway.
-              </Text>
+              <EmptyState
+                icon={{ ios: 'terminal', android: 'terminal', web: 'terminal' }}
+                title="No commands yet"
+                description="Run a command to inspect or control the live gateway."
+              />
             ) : (
               // Same shape as the Activity 'Connect to start runs' empty: the
               // saved-gateway-but-disconnected case names the wait and offers

@@ -56,6 +56,23 @@ describe('terminal disconnected empty state', () => {
     expect(src).toContain('actionLabel="Use Gateway RPC"');
   });
 
+  // The connected-idle branch was a bare tertiary Text — less structure than
+  // its own disconnected twin at :411-417. It now uses the same EmptyState
+  // idiom (icon, headline, guidance), carrying the old copy as its
+  // description so the sentence the pins rely on stays byte-identical.
+  test('the connected idle branch is an EmptyState, not a bare caption', () => {
+    const src = readScreen();
+    const connectedIdx = src.indexOf("status === 'connected' ? (");
+    const reconnectIdx = src.indexOf('actionLabel="Reconnect"', connectedIdx);
+    expect(connectedIdx).toBeGreaterThan(-1);
+    expect(reconnectIdx).toBeGreaterThan(connectedIdx);
+    const connectedBranch = src.slice(connectedIdx, reconnectIdx);
+    expect(connectedBranch).toContain('<EmptyState');
+    expect(connectedBranch).toContain('description="Run a command to inspect or control the live gateway."');
+    expect(connectedBranch).not.toContain('color="tertiary"');
+    expect(connectedBranch).not.toContain('actionLabel=');
+  });
+
   test('the no-gateway ChatEmptyState wiring is untouched', () => {
     const src = readScreen();
     expect(src).toContain('onConnect={() => void retryAutoConnect()}');

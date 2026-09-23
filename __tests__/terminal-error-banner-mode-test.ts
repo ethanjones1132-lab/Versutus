@@ -13,17 +13,19 @@ function readScreen(): string {
   return readSource(['src', 'components', 'terminal', 'terminal-screen.tsx']);
 }
 
-// In RPC/Agent mode a refused gateway command set terminalError, and the
-// banner rendered on terminalError && shellReady with no mode check — so a
-// failed RPC/Agent command on a shell-capable gateway offered
-// "Retry terminal", which opens a background shell session instead of
-// retrying the command and clears the banner as if recovered. The banner now
-// renders in shell mode only; the RPC/Agent failure still lands in the
-// command summary the panel already shows.
-describe('terminal error banner mode gate', () => {
-  test('the banner renders in shell mode only', () => {
+// The ErrorCard used to render only on `terminalError && shellReady &&
+// mode === 'shell'`, so the default RPC/Agent modes surfaced a refused
+// command as `Command failed: …` caption text with no affected/next
+// guidance — while the shell-only gate existed because "Retry terminal"
+// opens a background shell instead of retrying the command. The card now
+// renders whenever terminalError is set; mode only picks the copy and the
+// retry (shell keeps its session retry, RPC/Agent re-runs the failed
+// command), so command modes never offer a shell retry.
+describe('terminal error card mode coverage', () => {
+  test('the ErrorCard renders whenever terminalError is set, not shell-gated', () => {
     const src = readScreen();
-    expect(src).toContain("{terminalError && shellReady && mode === 'shell' ? (");
+    expect(src).toContain('{terminalError ? (');
+    expect(src).not.toContain("terminalError && shellReady && mode === 'shell'");
   });
 
   test('the runGatewayCommand catch still sets the command-failed summary', () => {
@@ -31,6 +33,14 @@ describe('terminal error banner mode gate', () => {
     expect(src).toContain('setTerminalError(message);');
     expect(src).toContain('setCommandOutput(`Command failed: ${message}`);');
     expect(src).toContain('setCommandLog(message);');
+  });
+
+  test('the runGatewayCommand catch records the failed command for a retry', () => {
+    const src = readScreen();
+    expect(src).toContain('setLastFailedCommand(command);');
+    expect(src.indexOf('setLastFailedCommand(command);')).toBeGreaterThan(
+      src.indexOf('const message = error instanceof Error ? error.message : String(error);'),
+    );
   });
 
   test('the panel still receives the summary as lastSummary', () => {
@@ -41,8 +51,18 @@ describe('terminal error banner mode gate', () => {
   test('the shell-mode banner copy and retry stay byte-identical', () => {
     const src = readScreen();
     expect(src).toContain('retryLabel="Retry terminal"');
-    expect(src).toContain('onRetry={() => void startTerminal()}');
+    expect(src).toContain('() => void startTerminal()');
     expect(src).toContain('next="Retry the session or ensure the gateway is connected."');
+    expect(src).toContain('affected={`${modeLabel.toLowerCase()} session`}');
+  });
+
+  test('command modes get a command retry wired to the failed command, not a shell retry', () => {
+    const src = readScreen();
+    expect(src).toContain('retryLabel="Retry command"');
+    expect(src).toContain('onRetry={lastFailedCommand ? () => void runGatewayCommand(lastFailedCommand) : undefined}');
+    // Exactly one shell retry in the whole screen — the shell branch's.
+    expect(src.match(/retryLabel="Retry terminal"/g)).toHaveLength(1);
+    expect(src.match(/retryLabel="Retry command"/g)).toHaveLength(1);
   });
 
   test('the shell error setters stay byte-identical', () => {
