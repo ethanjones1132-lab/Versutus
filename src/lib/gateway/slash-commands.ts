@@ -436,7 +436,9 @@ export function getSlashCommandSuggestions(
     .filter((item) => !builtInSlashes.has(item.value));
 
   // One row per stored workflow: `/workflow <name>` completes the exact name,
-  // so the operator taps instead of remembering it.
+  // so the operator taps instead of remembering it. CONTEXT.md reserves
+  // "Routine" for scheduled Bot jobs, so these step sequences file under
+  // their own Workflow family.
   const workflowSuggestions: SlashCommandSuggestion[] = storedWorkflows.map((workflow) => {
     const tally = workflowRunTallyCopy(workflow);
     return {
@@ -444,7 +446,7 @@ export function getSlashCommandSuggestions(
       label: `/workflow ${workflow.name}`,
       description: workflowSummaryCopy(workflow) + (tally ? ` · ${tally.toLowerCase()}` : ''),
       danger: 'write' as const,
-      family: 'Routine',
+      family: 'Workflow',
       unavailable: false,
     };
   });

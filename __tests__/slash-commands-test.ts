@@ -743,7 +743,7 @@ describe('the palette completes stored workflow names', () => {
     );
     const digest = rows.find((row) => row.value === '/workflow Digest ');
     expect(digest).toBeDefined();
-    expect(digest?.family).toBe('Routine');
+    expect(digest?.family).toBe('Workflow');
     expect(digest?.description).toContain('run 2 times');
     const triage = rows.find((row) => row.value === '/workflow Triage bugs ');
     expect(triage?.description).toContain('1 step');

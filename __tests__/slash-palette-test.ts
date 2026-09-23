@@ -129,6 +129,40 @@ describe('the base /workflow command is discoverable from an empty store', () =>
   });
 });
 
+describe('stored workflows group under Workflow, not Routine', () => {
+  const workflows = [
+    { id: 'w1', name: 'Digest', steps: [{ id: 's1', prompt: 'p' }] },
+    { id: 'w2', name: 'Triage', steps: [{ id: 's2', prompt: 'q' }] },
+  ];
+
+  test('workflow rows carry the Workflow family so the palette heading matches CONTEXT.md', () => {
+    const rows = getSlashCommandSuggestions('/workflow ', null, [], {}, [], Number.POSITIVE_INFINITY, [], workflows);
+    const stored = rows.filter((row) => row.value.startsWith('/workflow ') && row.value !== '/workflow');
+    expect(stored).toHaveLength(2);
+    expect(stored.every((row) => row.family === 'Workflow')).toBe(true);
+    expect(stored.some((row) => row.family === 'Routine')).toBe(false);
+  });
+
+  test('the grouped palette renders a Workflow heading and never a Routine one for these rows', () => {
+    const rows = getSlashCommandSuggestions('', null, [], {}, [], Number.POSITIVE_INFINITY, [], workflows);
+    const groups = groupSuggestionsByFamily(rows);
+    const workflowGroup = groups.find((group) => group.family === 'Workflow');
+    expect(workflowGroup?.items.map((item) => item.label)).toEqual(
+      expect.arrayContaining(['/workflow Digest', '/workflow Triage']),
+    );
+    const routineGroup = groups.find((group) => group.family === 'Routine');
+    expect(routineGroup?.items.some((item) => item.value.startsWith('/workflow '))).not.toBe(true);
+  });
+
+  test('cron registry commands keep their own System grouping, untouched by the workflow family', () => {
+    const rows = getSlashCommandSuggestions('/cron', null, [], {}, [], Number.POSITIVE_INFINITY);
+    const cronRows = rows.filter((row) => row.value.startsWith('/cron'));
+    expect(cronRows.length).toBeGreaterThan(0);
+    expect(cronRows.every((row) => row.family !== 'Workflow')).toBe(true);
+    expect(cronRows.every((row) => row.family !== 'Routine')).toBe(true);
+  });
+});
+
 describe('palette consumes the full command surface', () => {
   test('the default suggestion cap does not apply when the palette asks for everything', () => {
     const capped = getSlashCommandSuggestions('', null, [], {}, []);
