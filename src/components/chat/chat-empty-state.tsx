@@ -46,8 +46,7 @@ const styles = StyleSheet.create({
   },
   rule: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: Palette.accentWarm,
-    opacity: 0.54,
+    backgroundColor: Palette.accent,
   },
   description: {
     lineHeight: 22,

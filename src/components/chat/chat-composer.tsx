@@ -255,8 +255,8 @@ export const ChatComposer = memo(function ChatComposer({
                       styles.quickChip,
                       { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
                     ]}>
-                    <Icon name={action.icon} size={11} color="accentWarm" />
-                    <Text variant="micro" color="accentWarm">
+                    <Icon name={action.icon} size={11} color="accent" />
+                    <Text variant="micro" color="accent">
                       {action.label}
                     </Text>
                   </PressableScale>

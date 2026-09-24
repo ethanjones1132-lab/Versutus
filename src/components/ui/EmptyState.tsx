@@ -21,7 +21,7 @@ export function EmptyState({ icon, title, description, actionLabel, onAction, st
   return (
     <View style={[styles.root, style]}>
       <GlassSurface variant="chip" radius={Radius.full} padding={0} style={styles.iconHalo}>
-        <Icon name={icon} size={26} color="accentWarm" />
+        <Icon name={icon} size={26} color="accent" />
       </GlassSurface>
       <Text variant="headline" style={styles.title}>
         {title}
@@ -32,7 +32,7 @@ export function EmptyState({ icon, title, description, actionLabel, onAction, st
         </Text>
       ) : null}
       {actionLabel && onAction ? (
-        <Button label={actionLabel} variant="secondary" size="sm" onPress={onAction} style={styles.action} />
+        <Button label={actionLabel} variant="primary" size="sm" onPress={onAction} style={styles.action} />
       ) : null}
     </View>
   );
