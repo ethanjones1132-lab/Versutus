@@ -146,3 +146,67 @@ describe('the import screen and its entry', () => {
     expect(rootLayout()).toContain('name="gateway/import"');
   });
 });
+
+// Every refusal on this screen — clipboard, file, create — lands in one
+// failure record and surfaces through the repo's ErrorCard above the cards,
+// never the dimmest caption under them. Retry re-attempts the exact action
+// that failed; a later success clears the stale record.
+describe('the import screen surfaces a refusal as an ErrorCard', () => {
+  const importScreen = () => readSource('src', 'app', 'gateway', 'import.tsx');
+
+  test('the refusal renders the repo ErrorCard above the cards, not a tertiary caption', () => {
+    const src = importScreen();
+    expect(src).toMatch(/\{failure \? \(\s*<ErrorCard/);
+    expect(src).toContain('cause={failure.message}');
+    expect(src.indexOf('<ErrorCard')).toBeLessThan(src.indexOf('<Card'));
+    expect(src).not.toMatch(/\{error \? \(\s*<Text/);
+    expect(src).not.toMatch(/variant="caption" color="tertiary">\s*\{error\}/);
+  });
+
+  test('one failure record carries the source of the failed action and the kept message', () => {
+    const src = importScreen();
+    expect(src).toMatch(
+      /type ImportFailure = \{ source: 'clipboard' \| 'file' \| 'import'; message: string \}/,
+    );
+    expect(src).toContain("setFailure({ source: 'clipboard', message: 'The clipboard could not be read.' })");
+    expect(src).toContain('setFailure({ source: \'file\', message: picked.error })');
+    expect(src).toContain("setFailure({ source: 'file', message: 'The file could not be read.' })");
+    expect(src).toContain(
+      'setFailure({ source: \'import\', message: cause instanceof Error ? cause.message : String(cause) })',
+    );
+  });
+
+  test('the ErrorCard names cause, affected, and next, and Retry re-runs the failed action', () => {
+    const src = importScreen();
+    expect(src).toContain('affected=');
+    expect(src).toContain('next=');
+    expect(src).toContain('onRetry={retryFailure}');
+    const start = src.indexOf('const retryFailure');
+    expect(start).toBeGreaterThan(-1);
+    const retry = src.slice(start, src.indexOf('return ('));
+    expect(retry).toContain("failure?.source === 'clipboard'");
+    expect(retry).toContain('readClipboard()');
+    expect(retry).toContain('pickFile()');
+    expect(retry).toContain('handleImport()');
+  });
+
+  test('a later success clears the stale failure so it never outlives its own fix', () => {
+    const src = importScreen();
+    expect(src).toContain('clearFailure()');
+    expect(src).toMatch(/setText\(value \?\? ''\);\s*clearFailure\(\)/);
+    expect(src).toMatch(/setText\(picked\.content\);\s*clearFailure\(\)/);
+    expect(src).toMatch(/const handleImport[\s\S]{0,200}clearFailure\(\)/);
+  });
+
+  test('the plan card, file note, both source buttons, and the busy Import gate keep working', () => {
+    const src = importScreen();
+    expect(src).toContain('botHandoffImportPlan(');
+    expect(src).toContain('botHandoffImportCopy(');
+    expect(src).toContain('label="Read clipboard"');
+    expect(src).toContain('label="Pick file"');
+    expect(src).toContain('<Button label="Import" onPress={handleImport} disabled={busy} />');
+    expect(src).toContain('{fileNote ? (');
+    expect(src).toContain('createBot(');
+    expect(src).toContain("router.navigate('/chat')");
+  });
+});

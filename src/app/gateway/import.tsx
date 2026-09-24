@@ -4,7 +4,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { Button, Card, Screen, Text, TextField } from '@/components/ui';
+import { Button, Card, ErrorCard, Screen, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
@@ -15,6 +15,9 @@ import {
 
 /** A file the operator picked, or why its content could not be read. */
 type PickedHandoffFile = { name: string; content: string; error?: string };
+
+/** Which source refused, and why — so Retry re-runs that exact action. */
+type ImportFailure = { source: 'clipboard' | 'file' | 'import'; message: string };
 
 /**
  * Open the document picker for the packet file and read it as text. A
@@ -54,8 +57,10 @@ export default function ImportBotScreen() {
   const { hasBotManagement, createBot, requestSurface } = useGateway();
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
+  const [failure, setFailure] = useState<ImportFailure | undefined>(undefined);
   const [fileNote, setFileNote] = useState<string | undefined>(undefined);
+
+  const clearFailure = () => setFailure(undefined);
 
   const plan = useMemo(
     () => botHandoffImportPlan(parseBotHandoffText(text), { canCreateBots: hasBotManagement }),
@@ -64,8 +69,11 @@ export default function ImportBotScreen() {
 
   const readClipboard = () => {
     void Clipboard.getStringAsync()
-      .then((value) => setText(value ?? ''))
-      .catch(() => setError('The clipboard could not be read.'));
+      .then((value) => {
+        setText(value ?? '');
+        clearFailure();
+      })
+      .catch(() => setFailure({ source: 'clipboard', message: 'The clipboard could not be read.' }));
   };
 
   const pickFile = () => {
@@ -73,20 +81,21 @@ export default function ImportBotScreen() {
       .then((picked) => {
         if (picked === undefined) return; // picker cancelled: leave the field alone
         setText(picked.content);
+        clearFailure();
         if (picked.error) {
-          setError(picked.error);
+          setFailure({ source: 'file', message: picked.error });
           setFileNote(undefined);
         } else {
-          setFileNote(`Read ${picked.name}: ${picked.content.length.toLocaleString()} characters.`);
+          setFileNote(`Read ${picked.name}: ${picked.content.toLocaleString()} characters.`);
         }
       })
-      .catch(() => setError('The file could not be read.'));
+      .catch(() => setFailure({ source: 'file', message: 'The file could not be read.' }));
   };
 
   const handleImport = () => {
     if (!plan.ok || busy) return;
     setBusy(true);
-    setError(undefined);
+    clearFailure();
     const bot = plan.bot;
     void createBot({
       name: bot.name ?? bot.id,
@@ -103,14 +112,37 @@ export default function ImportBotScreen() {
         router.navigate('/chat');
       })
       .catch((cause: unknown) => {
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setFailure({ source: 'import', message: cause instanceof Error ? cause.message : String(cause) });
       })
       .finally(() => setBusy(false));
+  };
+
+  const retryFailure = () => {
+    if (failure?.source === 'clipboard') readClipboard();
+    else if (failure?.source === 'file') pickFile();
+    else if (failure?.source === 'import') handleImport();
   };
 
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.content}>
+        {failure ? (
+          <ErrorCard
+            cause={failure.message}
+            affected={
+              failure.source === 'import' ? 'creating this Bot on this gateway' : 'reading the handoff packet'
+            }
+            next={
+              failure.source === 'clipboard'
+                ? 'Tap Read clipboard again, or paste the packet by hand.'
+                : failure.source === 'file'
+                  ? 'Tap Pick file again, or paste the packet by hand.'
+                  : 'Fix the gateway issue, then tap Import again.'
+            }
+            onRetry={retryFailure}
+            onDismiss={clearFailure}
+          />
+        ) : null}
         <Card variant="surface" padding={Spacing.three} style={styles.card}>
           <Text variant="body" color="secondary">
             Paste a Bot handoff packet, pick its file, or read one from the clipboard, then import
@@ -151,12 +183,6 @@ export default function ImportBotScreen() {
               </>
             ) : null}
           </Card>
-        ) : null}
-
-        {error ? (
-          <Text variant="caption" color="tertiary">
-            {error}
-          </Text>
         ) : null}
       </ScrollView>
     </Screen>
