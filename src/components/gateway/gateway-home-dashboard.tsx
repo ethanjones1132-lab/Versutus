@@ -17,7 +17,7 @@ import { GlassCollapsible } from '@/components/glass-collapsible';
 import { HomeBriefingCard } from '@/components/home-briefing-card';
 import { HomeStatusCard } from '@/components/home-status-card';
 import { PairingPanel } from '@/components/pairing-panel';
-import { Badge, Button, Card, ConfirmSheet, ErrorCard, Icon, PressableScale, StatTile, Text } from '@/components/ui';
+import { Badge, Button, Card, ConfirmSheet, ErrorCard, Icon, PressableScale, Text } from '@/components/ui';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { useGateway } from '@/context/gateway-provider';
@@ -366,24 +366,17 @@ export function GatewayHomeDashboard() {
         </Card>
       ) : null}
 
-      <View style={styles.statsGrid}>
-        <StatTile
-          label="Gateways"
-          value={String(gateways.length)}
-          icon={{ ios: 'network', android: 'hub', web: 'hub' }}
-        />
-        <StatTile
-          label="Runs"
-          value={String(activityRuns.length)}
-          sub={activeRuns.length > 0 ? `${activeRuns.length} in flight` : undefined}
-          icon={{ ios: 'bolt', android: 'bolt', web: 'bolt' }}
-        />
-        <StatTile
-          label="Capabilities"
-          value={String(capabilityCount)}
-          sub={capabilitySnapshot.status}
-          icon={{ ios: 'square.grid.2x2', android: 'apps', web: 'apps' }}
-        />
+      {/* Thin residual status strip: the counts the old metric-tile grid used
+          to shout, collapsed onto one hairline row so Home reads as status. */}
+      <View style={styles.statusStrip}>
+        <Text variant="caption" color="secondary">
+          {gateways.length} gateway{gateways.length === 1 ? '' : 's'}
+          {' · '}
+          {activityRuns.length} run{activityRuns.length === 1 ? '' : 's'}
+          {activeRuns.length > 0 ? ` (${activeRuns.length} in flight)` : ''}
+          {' · '}
+          {capabilityCount} capabilities
+        </Text>
       </View>
 
       <HomeBriefingCard />
@@ -407,20 +400,24 @@ export function GatewayHomeDashboard() {
         onDelete={confirmDelete}
       />
 
-      <HealthChecksPane />
-      <PairedDevicesPane />
+      {/* Power-user panes stack behind one overflow so the residual Home
+          reads as status + entry points, not a co-equal command center. */}
+      <GlassCollapsible title="Diagnostics">
+        <HealthChecksPane />
+        <PairedDevicesPane />
 
-      <CapabilityHive groups={capabilitySnapshot.groups} status={capabilitySnapshot.status} />
-      <GatewayCapabilities snapshot={capabilitySnapshot} />
-      <Button
-        label="Refresh capabilities"
-        variant="ghost"
-        onPress={async () => {
-          await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          void refreshCapabilities();
-        }}
-        style={{ alignSelf: 'flex-end', marginTop: -Spacing.one }}
-      />
+        <CapabilityHive groups={capabilitySnapshot.groups} status={capabilitySnapshot.status} />
+        <GatewayCapabilities snapshot={capabilitySnapshot} />
+        <Button
+          label="Refresh capabilities"
+          variant="ghost"
+          onPress={async () => {
+            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            void refreshCapabilities();
+          }}
+          style={{ alignSelf: 'flex-end', marginTop: -Spacing.one }}
+        />
+      </GlassCollapsible>
 
       <ConfirmSheet
         visible={deleteCandidate !== null}
@@ -505,9 +502,15 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
-  statsGrid: {
+  statusStrip: {
     flexDirection: 'row',
-    gap: Spacing.two,
+    alignItems: 'center',
+    backgroundColor: Palette.backgroundElevated,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Palette.border,
+    borderRadius: Radius.lg,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
   },
   sectionHeader: {
     flexDirection: 'row',

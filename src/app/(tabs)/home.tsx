@@ -16,7 +16,7 @@ import { stampAllLastSeen } from '@/lib/home/last-seen';
 export default function HomeScreen() {
   const router = useRouter();
   const tokens = useTokens();
-  const { gateways, refreshCapabilities, refreshGateways, reloadHistory } = useGateway();
+  const { gateways, status, refreshCapabilities, refreshGateways, reloadHistory } = useGateway();
   const [refreshing, setRefreshing] = useState(false);
   // A refused refresh read is named below the header instead of ending the
   // spinner as if the pull succeeded; cleared by the next success.
@@ -63,7 +63,17 @@ export default function HomeScreen() {
       parallaxY={parallaxY}>
       <ScreenHeader
         title="Versutus"
-        subtitle={gateways.length > 0 ? 'Command center' : 'Connect your gateway'}
+        subtitle={
+          gateways.length === 0
+            ? 'Connect your gateway'
+            : status === 'connected'
+              ? 'Connected'
+              : status === 'connecting' || status === 'reconnecting'
+                ? 'Connecting'
+                : status === 'pairing'
+                  ? 'Needs approval'
+                  : 'Disconnected'
+        }
         onTrailingPress={() => router.push('/gateway/settings')}
       />
       <ScrollView
@@ -88,9 +98,10 @@ export default function HomeScreen() {
             onDismiss={() => setRefreshError(null)}
           />
         ) : null}
-        {/* Single home surface: GatewayHomeDashboard owns both states. With no
-            gateway saved, its hero slot IS the empty state (connect CTA) and
-            pairing/troubleshooting hang off it instead of a forked body. */}
+        {/* Residual surface: GatewayHomeDashboard owns the thin status strip
+            and overflow entries. With no gateway saved, its hero slot IS the
+            empty state (connect CTA) and pairing/troubleshooting hang off it
+            instead of a forked body. */}
         <GatewayHomeDashboard />
       </ScrollView>
     </Screen>
