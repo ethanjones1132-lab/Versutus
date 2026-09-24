@@ -81,7 +81,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
             styles.monogram,
             { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
           ]}>
-          <Text variant="micro" color="accentWarm" style={styles.monogramLetter}>
+          <Text variant="micro" color="accent" style={styles.monogramLetter}>
             {identity.slice(0, 1).toUpperCase()}
           </Text>
         </View>
@@ -102,11 +102,11 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
             styles.bubble,
             isCommand && styles.commandBubble,
             isUser
-              ? { backgroundColor: tokens.accentMuted, borderColor: tokens.accentWarm }
+              ? { backgroundColor: tokens.accentMuted, borderColor: tokens.accent }
               : isInterrupted
                 ? { borderColor: tokens.statusDisconnected }
                 : message.streaming || commandStatus === 'running'
-                  ? { borderColor: tokens.accentWarmMuted }
+                  ? { borderColor: tokens.accentMuted }
                   : commandStatus === 'error'
                     ? { borderColor: tokens.statusDisconnected }
                     : { borderColor: tokens.border },

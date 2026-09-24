@@ -37,7 +37,7 @@ function Dot({ delay }: { delay: number }) {
     transform: [{ translateY: offset.value }],
   }));
 
-  return <Animated.View style={[styles.dot, { backgroundColor: tokens.textSecondary }, style]} />;
+  return <Animated.View style={[styles.dot, { backgroundColor: tokens.accent }, style]} />;
 }
 
 export function StreamingIndicator() {
