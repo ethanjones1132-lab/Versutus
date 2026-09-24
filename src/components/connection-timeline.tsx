@@ -122,7 +122,7 @@ export function ConnectionTimeline({
             </View>
             <Text
               variant="caption"
-              color={isActive ? (failed ? 'accentWarm' : 'accent') : isComplete ? 'secondary' : 'tertiary'}
+              color={isActive ? (failed ? 'statusDisconnected' : 'accent') : isComplete ? 'secondary' : 'tertiary'}
               style={styles.label}>
               {label}
             </Text>

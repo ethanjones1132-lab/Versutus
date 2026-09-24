@@ -94,7 +94,7 @@ export function ConnectionBadge({
         styles.pill,
         { borderColor: tokens.border },
         isPairing && {
-          borderColor: tokens.accentWarm,
+          borderColor: tokens.accent,
           borderWidth: StyleSheet.hairlineWidth * 2,
         },
       ]}>
@@ -103,7 +103,7 @@ export function ConnectionBadge({
         <Text
           variant="caption"
           numberOfLines={1}
-          style={{ color: isPairing ? tokens.accentWarm : tokens.textSecondary }}>
+          style={{ color: isPairing ? tokens.accent : tokens.textSecondary }}>
           {STATUS_LABELS[status]}
           {detail && status !== 'pairing' ? ` - ${detail}` : ''}
         </Text>

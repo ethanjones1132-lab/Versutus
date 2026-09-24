@@ -81,13 +81,13 @@ export function OnboardingScreen() {
               <Animated.View entering={entering.fadeIn.delay(80)}>
                 <VersutusLogotype tagline="A precise mobile console for your AI gateway." />
               </Animated.View>
-              <View style={[styles.rule, { backgroundColor: tokens.accentWarmMuted }]} />
-              <Text variant="micro" color="accentWarm" style={styles.eyebrow}>
+              <View style={[styles.rule, { backgroundColor: tokens.accentMuted }]} />
+              <Text variant="micro" color="accent" style={styles.eyebrow}>
                 {busy ? 'DISCOVERING YOUR GATEWAY · 02' : 'FIRST CONNECTION · 01'}
               </Text>
 
               <View style={styles.scanSection}>
-                <ScanningStrip active={busy} color={tokens.accentWarm} track={tokens.border} />
+                <ScanningStrip active={busy} color={tokens.accent} track={tokens.border} />
                 <ConnectionTimeline
                   activeStep={activeTimelineStep}
                   busy={busy}
@@ -221,7 +221,7 @@ export function OnboardingScreen() {
   );
 }
 
-/** Discovery-theater scan line: a gold pulse sweeping a thin track. */
+/** Discovery-theater scan line: a violet pulse sweeping a thin track. */
 function ScanningStrip({ active, color, track }: { active: boolean; color: string; track: string }) {
   const x = useSharedValue(-40);
 
