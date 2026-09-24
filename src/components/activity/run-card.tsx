@@ -93,11 +93,11 @@ export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript, on
             // The focus edge wins only where the card would not already ring
             // in the warm accent (a waiting-approval card already does).
             highlighted && run.status !== 'waiting-approval'
-              ? tokens.accentWarm
+              ? tokens.accent
               : run.status === 'failed'
                 ? tokens.statusDisconnected
                 : live
-                  ? tokens.accentWarmMuted
+                  ? tokens.accentMuted
                   : tokens.borderSubtle,
         },
       ]}>

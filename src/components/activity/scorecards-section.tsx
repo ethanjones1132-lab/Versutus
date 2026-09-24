@@ -386,7 +386,7 @@ export function ScorecardsSection({
           asked. It clears with every attempt, so it never outlives the try
           that met it. */}
       {weeklyReportRefusal ? (
-        <Text variant="caption" color="accentWarm">
+        <Text variant="caption" color="statusDisconnected">
           {weeklyReportRefusalCopy(weeklyReportRefusal)}
         </Text>
       ) : null}

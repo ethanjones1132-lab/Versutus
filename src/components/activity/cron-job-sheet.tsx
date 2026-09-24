@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { BaseSheet, Button, ConfirmSheet, Divider, ListRow, Skeleton, Text } from '@/components/ui';
-import { Spacing } from '@/constants/tokens';
+import { Palette, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { haptics } from '@/lib/haptics';
 import {
@@ -329,7 +329,7 @@ const styles = StyleSheet.create({
   mono: { fontFamily: 'monospace' },
   rawCard: {
     borderWidth: 1,
-    borderColor: 'rgba(229, 198, 126, 0.18)',
+    borderColor: Palette.border,
     borderRadius: 8,
     padding: Spacing.two,
   },

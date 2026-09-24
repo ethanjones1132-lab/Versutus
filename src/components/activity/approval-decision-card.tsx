@@ -38,7 +38,7 @@ export function ApprovalDecisionCard({
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
     opacity: opacity.value,
-    borderColor: borderProgress.value > 0.5 ? tokens.statusDisconnected : tokens.accentWarm,
+    borderColor: borderProgress.value > 0.5 ? tokens.statusDisconnected : tokens.accent,
   }));
 
   const decide = (approved: boolean) => {
@@ -81,9 +81,9 @@ export function ApprovalDecisionCard({
           <Icon
             name={{ ios: 'hand.raised.fill', android: 'pan_tool', web: 'pan_tool' }}
             size={16}
-            color="accentWarm"
+            color="accent"
           />
-          <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+          <Text variant="caption" color="accent" style={styles.eyebrow}>
             Approval requested
           </Text>
         </View>

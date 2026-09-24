@@ -156,7 +156,7 @@ export default function ActivityScreen() {
 
           {/* Workflows slice 3b: runs have their own destination, so this is
               the scheduled-work view rather than a run list. */}
-          <Card padding={Spacing.three} style={styles.runsEntryCard}>
+          <Card variant="inset" padding={Spacing.three} style={styles.runsEntryCard}>
             <Text variant="body" color="secondary">
               Scheduled work is here. Individual runs have their own screen.
             </Text>
@@ -175,7 +175,7 @@ export default function ActivityScreen() {
               newest lines. Settings keeps the full history. Loading shows
               placeholders (never the empty tally); a refused read shows an
               inline retry instead of inventing an empty log. */}
-          <Card padding={Spacing.three} style={styles.card}>
+          <Card variant="inset" padding={Spacing.three} style={styles.card}>
             <Text variant="headline">Approval decisions</Text>
             {auditState === 'loading' ? (
               <>

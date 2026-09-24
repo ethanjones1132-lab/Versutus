@@ -25,7 +25,7 @@ import type { TextColor } from '@/components/ui/types';
 
 const TONE_COLOR: Record<ReturnType<typeof describeCronHealth>['tone'], TextColor> = {
   ok: 'statusConnected',
-  warn: 'accentWarm',
+  warn: 'statusConnecting',
   error: 'statusDisconnected',
   off: 'tertiary',
   unknown: 'secondary',
@@ -244,7 +244,7 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
         New scheduled job
       </Text>
       {createError ? (
-        <Text variant="caption" color="accentWarm">
+        <Text variant="caption" color="statusDisconnected">
           {createError}
         </Text>
       ) : null}

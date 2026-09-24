@@ -28,7 +28,7 @@ export function SpendEntryRow() {
         <Card variant="surface" padding={Spacing.three} style={styles.card}>
           <View style={styles.heading}>
             <View style={styles.title}>
-              <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+              <Text variant="caption" color="accent" style={styles.eyebrow}>
                 Spend
               </Text>
               <Text variant="headline">What this gateway has cost</Text>

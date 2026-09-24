@@ -24,7 +24,7 @@ export function AgentTargets({ gateways, activeGatewayId, status, onSelect }: Ag
     <Card variant="inset" padding={Spacing.two} style={styles.card}>
       <View style={styles.header}>
         <View style={styles.titleGroup}>
-          <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+          <Text variant="caption" color="accent" style={styles.eyebrow}>
             Gateway targets
           </Text>
           <Text variant="headline">Configured profiles</Text>
