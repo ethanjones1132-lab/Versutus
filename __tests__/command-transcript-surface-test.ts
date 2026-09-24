@@ -221,6 +221,30 @@ test('a share the platform refuses says so instead of nothing', () => {
   expect(src).toContain('{shareRefusal}');
 });
 
+test('the section heading is a headline under the sheet title, never a second title', () => {
+  const src = section();
+  expect(src).toContain('<Text variant="headline">Command history</Text>');
+  expect(src).not.toContain('variant="title"');
+});
+
+test('the empty note reads at secondary, not the dimmest gray', () => {
+  const src = section();
+  const emptyBlock = src.slice(
+    src.indexOf('rows.length === 0'),
+    src.indexOf('commandHistoryEmptyCopy()') + 60,
+  );
+  expect(emptyBlock).toContain('color="secondary"');
+  expect(emptyBlock).not.toContain('color="tertiary"');
+});
+
+test('a share refusal is an accentWarm notice, not a tertiary micro line', () => {
+  const src = section();
+  const refusalBlock = src.slice(src.indexOf('{shareRefusal ?'), src.indexOf('{shareRefusal}'));
+  expect(refusalBlock).toContain('color="accentWarm"');
+  expect(refusalBlock).not.toContain('color="tertiary"');
+  expect(refusalBlock).not.toContain('variant="micro"');
+});
+
 test('recording, keying, and reload-rehydrate stay untouched', () => {
   const provider = readSource('src', 'context', 'gateway-provider.tsx');
   expect(provider).toContain('appendTranscript(activeGateway.id, sessionKey, entry)');

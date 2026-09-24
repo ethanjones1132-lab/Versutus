@@ -110,7 +110,7 @@ export function CommandHistorySection() {
 
   return (
     <View style={styles.block}>
-      <Text variant="title">Command history</Text>
+      <Text variant="headline">Command history</Text>
       <Text variant="caption" color="secondary">
         Slash commands run in this session, newest first.
       </Text>
@@ -121,7 +121,7 @@ export function CommandHistorySection() {
       />
       {open ? (
         rows.length === 0 ? (
-          <Text variant="caption" color="tertiary" style={styles.empty}>
+          <Text variant="caption" color="secondary" style={styles.empty}>
             {commandHistoryEmptyCopy()}
           </Text>
         ) : (
@@ -165,7 +165,7 @@ export function CommandHistorySection() {
               onPress={() => void copyMarkdown()}
             />
             {shareRefusal ? (
-              <Text variant="micro" color="tertiary">
+              <Text variant="caption" color="accentWarm">
                 {shareRefusal}
               </Text>
             ) : null}
