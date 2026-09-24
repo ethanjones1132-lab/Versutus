@@ -14,14 +14,13 @@ import { PressableScale } from './PressableScale';
 import { Text } from './Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Motion, Radius } from '@/constants/tokens';
+import { Motion, Palette, Radius } from '@/constants/tokens';
 import {
   sheetAnchoredEdgeMargin,
   sheetContentPaddingBottom,
   sheetMaxHeight,
   sheetMaxWidth,
 } from '@/lib/motion/sheet-height';
-import { useTokens } from '@/hooks/use-tokens';
 
 function subscribeKeyboardHeight(onChange: () => void) {
   const show = Keyboard.addListener('keyboardDidShow', onChange);
@@ -49,6 +48,13 @@ interface BaseSheetProps {
   children: ReactNode;
   position?: 'top' | 'bottom';
   zIndex?: number;
+  /**
+   * Opt into the real glass material (iOS liquid glass, web backdrop blur).
+   * Default false: the sheet is a flat raised panel with a cool hairline,
+   * per docs/visual-direction-2026-09.md. Glass stays available for modals
+   * that explicitly ask for it; nothing enables it by default.
+   */
+  glass?: boolean;
 }
 
 export function BaseSheet({
@@ -59,8 +65,8 @@ export function BaseSheet({
   closeLabel,
   children,
   position = 'bottom',
+  glass = false,
 }: BaseSheetProps) {
-  const tokens = useTokens();
   const insets = useSafeAreaInsets();
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const keyboardHeight = useSyncExternalStore(
@@ -146,12 +152,9 @@ export function BaseSheet({
             },
             animatedStyle,
           ]}>
-          <GlassSurface
-            variant="hero"
-            padding={0}
-            style={[styles.sheetSurface, { borderColor: tokens.accentWarmMuted }]}>
+          <GlassSurface variant="hero" glass={glass} padding={0} style={styles.sheetSurface}>
             <View style={styles.header}>
-              <Text variant="mono" color="accentWarm" style={styles.eyebrow}>
+              <Text variant="mono" color="accent" style={styles.eyebrow}>
                 {eyebrow}
               </Text>
               {onClose ? (
@@ -206,7 +209,7 @@ const styles = StyleSheet.create({
   },
   backdrop: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: Palette.overlay,
   },
   // marginBottom / marginTop are applied inline so they can carry the safe-area
   // inset; these remain for anything reading the base style.
