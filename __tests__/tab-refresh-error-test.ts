@@ -20,7 +20,7 @@ function readRuns(): string {
 }
 
 function readHome(): string {
-  return readSource(['src', 'app', '(tabs)', 'index.tsx']);
+  return readSource(['src', 'app', '(tabs)', 'home.tsx']);
 }
 
 function onRefreshBody(src: string): string {

@@ -235,7 +235,7 @@ export function TerminalScreen() {
           title="Tools"
           description="Connect to your PC first — terminal and commands unlock automatically."
           onConnect={() => void retryAutoConnect()}
-          onGoHome={() => router.replace('/')}
+          onGoHome={() => router.replace('/home')}
         />
       </Screen>
     );

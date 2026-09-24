@@ -2,6 +2,17 @@ import { NativeTabs } from 'expo-router/unstable-native-tabs';
 
 import { FontFamily, Palette } from '@/constants/tokens';
 
+/**
+ * Tab IA per docs/visual-direction-2026-09.md (ACCEPTED): Chat is the hero
+ * and holds the first (leftmost) trigger; Home is demoted to the trailing
+ * slot — still one tap away, no longer a co-equal pillar. `/` itself redirects
+ * to `/chat` (see `index.tsx`), so the cold start lands on the roster.
+ *
+ * Selected chrome wears the violet pair the tokens define for selection:
+ * `accentWarm` (brighter violet selected/focus) on tint and icon, `accentMuted`
+ * on the Android indicator. Defaults stay quiet cool-gray so Activity/Tools
+ * keep lower visual weight against Chat.
+ */
 export default function TabsLayout() {
   return (
     <NativeTabs
@@ -31,15 +42,6 @@ export default function TabsLayout() {
           fontWeight: '600',
         },
       }}>
-      <NativeTabs.Trigger name="index">
-        <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          sf={{ default: 'house', selected: 'house.fill' }}
-          md={{ default: 'home', selected: 'home' }}
-          renderingMode="template"
-        />
-      </NativeTabs.Trigger>
-
       <NativeTabs.Trigger name="chat">
         <NativeTabs.Trigger.Label>Chat</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
@@ -66,6 +68,15 @@ export default function TabsLayout() {
         <NativeTabs.Trigger.Icon
           sf={{ default: 'terminal', selected: 'terminal.fill' }}
           md={{ default: 'terminal', selected: 'terminal' }}
+          renderingMode="template"
+        />
+      </NativeTabs.Trigger>
+
+      <NativeTabs.Trigger name="home">
+        <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon
+          sf={{ default: 'house', selected: 'house.fill' }}
+          md={{ default: 'home', selected: 'home' }}
           renderingMode="template"
         />
       </NativeTabs.Trigger>

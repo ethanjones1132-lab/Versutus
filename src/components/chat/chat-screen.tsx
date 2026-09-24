@@ -1849,7 +1849,7 @@ export function ChatScreen() {
                 : 'Versutus will connect to your PC automatically. You can also tap below.'
           }
           onConnect={() => void retryAutoConnect()}
-          onGoHome={() => router.replace('/')}
+          onGoHome={() => router.replace('/home')}
         />
       </Screen>
     );

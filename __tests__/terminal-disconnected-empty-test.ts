@@ -76,7 +76,7 @@ describe('terminal disconnected empty state', () => {
   test('the no-gateway ChatEmptyState wiring is untouched', () => {
     const src = readScreen();
     expect(src).toContain('onConnect={() => void retryAutoConnect()}');
-    expect(src).toContain("onGoHome={() => router.replace('/')}");
+    expect(src).toContain("onGoHome={() => router.replace('/home')}");
   });
 
   test('EmptyState renders its button only when both action props are set', () => {
