@@ -84,8 +84,8 @@ export default function HomeScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={() => void onRefresh()}
-            tintColor={tokens.accentWarm}
-            colors={[tokens.accentWarm]}
+            tintColor={tokens.accent}
+            colors={[tokens.accent]}
             progressBackgroundColor={tokens.backgroundElevated}
           />
         }>
