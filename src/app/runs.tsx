@@ -314,7 +314,7 @@ export default function RunsScreen() {
         ? (() => {
             const startCard = (
               <Card padding={Spacing.three} style={styles.startCard}>
-                <Text variant="caption" color="accentWarm" style={styles.approvalEyebrow}>
+                <Text variant="caption" color="accent" style={styles.approvalEyebrow}>
                   Start a run
                 </Text>
                 <Text variant="body" color="secondary">
@@ -421,8 +421,8 @@ export default function RunsScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={() => void onRefresh()}
-            tintColor={tokens.accentWarm}
-            colors={[tokens.accentWarm]}
+            tintColor={tokens.accent}
+            colors={[tokens.accent]}
             progressBackgroundColor={tokens.backgroundElevated}
           />
         }

@@ -42,7 +42,7 @@ export function CouncilCompareView({ columns, onPressColumn }: CouncilCompareVie
               : 'failed';
           const card = (
             <Card variant="surface" padding={Spacing.three} style={styles.card}>
-              <Text variant="micro" color="accentWarm" numberOfLines={1}>
+              <Text variant="micro" color="accent" numberOfLines={1}>
                 {column.label}
               </Text>
               {column.state === 'failed' ? (

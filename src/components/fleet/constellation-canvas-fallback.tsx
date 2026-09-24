@@ -58,7 +58,7 @@ export function ConstellationCanvasFallback({ model, size, height }: Constellati
               y1={edge.y1}
               x2={edge.x2}
               y2={edge.y2}
-              stroke={tokens.accentWarm as string}
+              stroke={tokens.accent as string}
               strokeWidth={2.5}
               opacity={0.08}
             />
@@ -67,7 +67,7 @@ export function ConstellationCanvasFallback({ model, size, height }: Constellati
               y1={edge.y1}
               x2={edge.x2}
               y2={edge.y2}
-              stroke={tokens.accentWarm as string}
+              stroke={tokens.accent as string}
               strokeWidth={StyleSheet.hairlineWidth}
               opacity={0.5}
             />
