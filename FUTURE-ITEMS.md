@@ -282,7 +282,7 @@ ChatGPT/Gemini treat attaching an image or PDF as table stakes.
 **Shipped.** Image attach from the photo library, capability-gated: the
 paperclip appears only when the selected model declares image/vision input
 (`supportsImageInput`, `src/lib/gateway/chat-parts.ts:92`; offered at
-`src/components/chat/chat-screen.tsx:1125,2324` and drawn in
+`src/components/chat/chat-screen.tsx:1140,2381` and drawn in
 `src/components/chat/chat-composer.tsx:461-476`), and the picked image rides
 the existing chat pipeline as a data-URL content part.
 
@@ -298,7 +298,9 @@ scope — a provider feature, not a client one. Effort: S.
 `checkBotBudget` (`src/lib/gateway/budgets.ts:104`) runs before every run
 started from this app (`src/context/gateway-provider.tsx:2676-2693`) and
 refuses a start when the Bot is over its cap, naming the cap and the overage;
-`scorecards-section.tsx` surfaces the cap. Honest limit: enforcement is
+the per-Bot budget cap surfaces in `spend-per-bot-section.tsx` (`botBudget`,
+`budgetRowCopy`) — `scorecards-section.tsx`'s `botSpendCapCopy` is the
+session-list bound, a different cap. Honest limit: enforcement is
 client-side — it governs runs started from this app, not a server quota; say
 so, don't imply a server quota.
 
