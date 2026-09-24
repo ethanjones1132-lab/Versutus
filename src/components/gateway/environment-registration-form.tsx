@@ -25,7 +25,6 @@ export function EnvironmentRegistrationForm({
   onSubmit,
   onCancel,
   busy,
-  error,
   initial,
 }: {
   adapters: EnvironmentAdapter[];
@@ -33,7 +32,6 @@ export function EnvironmentRegistrationForm({
   onSubmit: (input: CreateEnvironmentInput) => void;
   onCancel: () => void;
   busy?: boolean;
-  error?: string | null;
   /** Present → edit mode; prefilled from the environment being edited. */
   initial?: CreateEnvironmentInput;
 }) {
@@ -277,8 +275,6 @@ export function EnvironmentRegistrationForm({
           </Text>
         </>
       ) : null}
-
-      {error ? <Text variant="caption">{error}</Text> : null}
 
       <View style={styles.actions}>
         <Button

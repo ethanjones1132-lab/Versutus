@@ -146,7 +146,6 @@ export function EnvironmentsSection() {
           providers={providers}
           initial={editing ? snapshotToEditInput(editing) : undefined}
           busy={busy}
-          error={error}
           onSubmit={(input) => void (editing ? saveEdit(input) : register(input))}
           onCancel={() => { setRegistering(false); setEditing(null); setError(null); }}
         />

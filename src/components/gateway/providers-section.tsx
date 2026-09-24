@@ -240,7 +240,6 @@ export function ProvidersSection() {
         <ProviderRegistrationForm
           profiles={profiles}
           busy={busy}
-          error={error}
           onSubmit={(input) => void register(input)}
           onCancel={() => { setRegistering(false); setError(null); }}
         />

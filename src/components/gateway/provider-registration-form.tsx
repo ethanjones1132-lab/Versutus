@@ -17,13 +17,11 @@ export function ProviderRegistrationForm({
   onSubmit,
   onCancel,
   busy,
-  error,
 }: {
   profiles: ProviderProfile[];
   onSubmit: (input: CreateProviderInput) => void;
   onCancel: () => void;
   busy?: boolean;
-  error?: string | null;
 }) {
   const [profileId, setProfileId] = useState<string | null>(null);
   const [id, setId] = useState('');
@@ -84,8 +82,6 @@ export function ProviderRegistrationForm({
           ) : null}
         </>
       )}
-
-      {error ? <Text variant="caption">{error}</Text> : null}
 
       <View style={styles.actions}>
         <Button
