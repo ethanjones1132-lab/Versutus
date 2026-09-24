@@ -247,7 +247,7 @@ export function TerminalScreen() {
     <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: false })} parallaxY={parallaxY}>
       <View style={styles.header}>
         <View style={styles.headerText}>
-          <Text variant="caption" color="accentWarm" style={styles.headerKicker}>
+          <Text variant="caption" color="accent" style={styles.headerKicker}>
             {settings.pcName ?? activeGateway.name}
           </Text>
           <Text color="secondary" variant="caption">
@@ -303,10 +303,10 @@ export function TerminalScreen() {
               styles.terminalPane,
               {
                 backgroundColor: tokens.backgroundInset,
-                borderColor: tokens.glassBorder,
+                borderColor: tokens.border,
               },
             ]}>
-            <View style={[styles.terminalBanner, { borderBottomColor: tokens.glassBorder }]}>
+            <View style={[styles.terminalBanner, { borderBottomColor: tokens.border }]}>
               <View
                 style={[
                   styles.terminalBannerDot,
@@ -327,7 +327,7 @@ export function TerminalScreen() {
                 hitSlop={12}
                 accessibilityRole="button"
                 accessibilityLabel={outputCopied ? 'Output copied' : 'Copy terminal output'}>
-                <Text variant="caption" color="accentWarm">
+                <Text variant="caption" color="accent">
                   {outputCopied ? 'Copied' : 'Copy'}
                 </Text>
               </Pressable>
@@ -357,7 +357,7 @@ export function TerminalScreen() {
                 ) : null}
                 <Card
                   padding={Spacing.two}
-                  style={[styles.inputCard, { borderColor: tokens.accentWarmMuted }]}
+                  style={[styles.inputCard, { borderColor: tokens.border }]}
                 >
                   <TextField
                     value={input}
@@ -406,7 +406,7 @@ export function TerminalScreen() {
             />
           }
           renderItem={({ item }) => (
-            <Card padding={Spacing.two} style={[styles.resultCard, { borderColor: tokens.glassBorder }]}>
+            <Card padding={Spacing.two} style={[styles.resultCard, { borderColor: tokens.border }]}>
               {commandOutput && commandOutput !== item ? (
                 <Text variant="caption" color="secondary" style={styles.resultSummary}>
                   {commandOutput}

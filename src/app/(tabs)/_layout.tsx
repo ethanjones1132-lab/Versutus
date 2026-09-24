@@ -2,6 +2,14 @@ import { NativeTabs } from 'expo-router/unstable-native-tabs';
 
 import { FontFamily, Palette } from '@/constants/tokens';
 
+// Quiet selected label for the non-hero tabs: cool white at the resting
+// medium weight, never the brand-violet lift Chat earns on the bar.
+const quietSelectedLabel = {
+  color: Palette.textPrimary,
+  fontFamily: FontFamily.sans,
+  fontWeight: '500' as const,
+};
+
 /**
  * Tab IA per docs/visual-direction-2026-09.md (ACCEPTED): Chat is the hero
  * and holds the first (leftmost) trigger; Home is demoted to the trailing
@@ -10,8 +18,9 @@ import { FontFamily, Palette } from '@/constants/tokens';
  *
  * Selected chrome wears the violet pair the tokens define for selection:
  * `accentWarm` (brighter violet selected/focus) on tint and icon, `accentMuted`
- * on the Android indicator. Defaults stay quiet cool-gray so Activity/Tools
- * keep lower visual weight against Chat.
+ * on the Android indicator. Chat inherits that full brand lift as the hero;
+ * Activity and Tools opt their triggers down to a quiet cool-white selected
+ * icon + medium-weight label so only Chat lights up violet on the bar.
  */
 export default function TabsLayout() {
   return (
@@ -55,19 +64,25 @@ export default function TabsLayout() {
       </NativeTabs.Trigger>
 
       <NativeTabs.Trigger name="activity">
-        <NativeTabs.Trigger.Label>Activity</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Label selectedStyle={quietSelectedLabel}>
+          Activity
+        </NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
           sf={{ default: 'bolt', selected: 'bolt.fill' }}
           md={{ default: 'bolt', selected: 'bolt' }}
+          selectedColor={Palette.textPrimary}
           renderingMode="template"
         />
       </NativeTabs.Trigger>
 
       <NativeTabs.Trigger name="terminal">
-        <NativeTabs.Trigger.Label>Tools</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Label selectedStyle={quietSelectedLabel}>
+          Tools
+        </NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
           sf={{ default: 'terminal', selected: 'terminal.fill' }}
           md={{ default: 'terminal', selected: 'terminal' }}
+          selectedColor={Palette.textPrimary}
           renderingMode="template"
         />
       </NativeTabs.Trigger>

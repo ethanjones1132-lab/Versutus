@@ -10,7 +10,7 @@ export function CommandChip({ label, onPress }: { label: string; onPress: () => 
 
   return (
     <Pressable
-      style={[styles.chip, { borderColor: tokens.glassBorder, backgroundColor: tokens.glass }]}
+      style={[styles.chip, { borderColor: tokens.border, backgroundColor: tokens.backgroundElevated }]}
       onPress={async () => {
         await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         onPress();
