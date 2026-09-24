@@ -253,7 +253,7 @@ export const ChatComposer = memo(function ChatComposer({
                     accessibilityLabel={`Quick action ${action.label}`}
                     style={[
                       styles.quickChip,
-                      { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+                      { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
                     ]}>
                     <Icon name={action.icon} size={11} color="accentWarm" />
                     <Text variant="micro" color="accentWarm">
@@ -288,7 +288,7 @@ export const ChatComposer = memo(function ChatComposer({
           <View
             style={[
               styles.palette,
-              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.glassBorder, maxHeight: paletteMaxHeight },
+              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.border, maxHeight: paletteMaxHeight },
             ]}>
             <Text variant="micro" color="tertiary" style={styles.paletteTitle}>
               Mention
@@ -338,7 +338,7 @@ export const ChatComposer = memo(function ChatComposer({
           <View
             style={[
               styles.palette,
-              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.glassBorder, maxHeight: paletteMaxHeight },
+              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.border, maxHeight: paletteMaxHeight },
             ]}>
             <Text variant="micro" color="tertiary" style={styles.paletteTitle}>
               Commands
@@ -437,7 +437,7 @@ export const ChatComposer = memo(function ChatComposer({
                 key={attachment.uri}
                 style={[
                   styles.attachmentChip,
-                  { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+                  { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
                 ]}
                 accessibilityRole="button"
                 accessibilityLabel={`Remove ${attachment.name ?? 'image'}`}
@@ -456,13 +456,13 @@ export const ChatComposer = memo(function ChatComposer({
           padding={Spacing.two}
           style={[
             styles.composer,
-            { borderColor: focused ? tokens.borderStrong : tokens.glassBorder },
+            { borderColor: focused ? tokens.accentWarm : tokens.border },
           ]}>
           {onAttach && !callActive && !isStreaming ? (
             <PressableScale
               style={[
                 styles.micButton,
-                { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+                { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
               ]}
               onPress={onAttach}
               accessibilityRole="button"
@@ -497,7 +497,7 @@ export const ChatComposer = memo(function ChatComposer({
             <PressableScale
               style={[
                 styles.micButton,
-                { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+                { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
               ]}
               onPress={onStartCall}
               accessibilityRole="button"
@@ -516,7 +516,7 @@ export const ChatComposer = memo(function ChatComposer({
             <PressableScale
               style={[
                 styles.micButton,
-                { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+                { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
                 micDisabled && styles.micDisabled,
               ]}
               disabled={micDisabled}

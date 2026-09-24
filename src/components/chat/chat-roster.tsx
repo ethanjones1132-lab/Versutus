@@ -227,8 +227,8 @@ function ChatRosterImpl({
           <RefreshControl
             refreshing={refreshing}
             onRefresh={handleRefresh}
-            tintColor={tokens.accentWarm}
-            colors={[tokens.accentWarm]}
+            tintColor={tokens.accent}
+            colors={[tokens.accent]}
             progressBackgroundColor={tokens.backgroundElevated}
           />
         ) : undefined

@@ -89,12 +89,12 @@ export function TextField({
       ? tokens.statusConnected
       : validationState === 'invalid'
         ? tokens.statusDisconnected
-        : tokens.glassBorder;
+        : tokens.border;
 
   const modifiers = [
     padding({ all: 14 }),
     cornerRadius(Radius.md),
-    background(Palette.glass),
+    background(Palette.backgroundInset),
     frame({ maxWidth: Infinity }),
     textInputAutocapitalization(autocapitalizationFor(autoCapitalize)),
     autocorrectionDisabled(autocorrectionDisabledFor(autoCorrect)),

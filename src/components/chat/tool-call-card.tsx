@@ -75,7 +75,7 @@ export function ToolCallCard({ toolCall }: { toolCall: ChatToolCall }) {
                 styles.detailCard,
                 {
                   backgroundColor: tokens.backgroundInset,
-                  borderColor: tokens.glassBorder,
+                  borderColor: tokens.border,
                 },
               ]}>
               <ScrollView style={styles.detailScroll} nestedScrollEnabled>

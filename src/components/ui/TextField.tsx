@@ -51,7 +51,7 @@ export function TextField({
       ? tokens.statusConnected
       : validationState === 'invalid'
         ? tokens.statusDisconnected
-        : tokens.glassBorder;
+        : tokens.border;
   const borderWidth = validationState === 'default' ? StyleSheet.hairlineWidth : 1.5;
 
   return (
@@ -61,7 +61,7 @@ export function TextField({
         styles.input,
         {
           color: tokens.textPrimary,
-          backgroundColor: tokens.glass,
+          backgroundColor: tokens.backgroundInset,
           borderColor,
           borderWidth,
         },

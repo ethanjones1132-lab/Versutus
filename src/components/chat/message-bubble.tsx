@@ -8,7 +8,7 @@ import { MarkdownText } from '@/components/chat/markdown/markdown-text';
 import { StreamingIndicator } from '@/components/chat/streaming-indicator';
 import { ToolCallCard } from '@/components/chat/tool-call-card';
 import { Badge, Card, PressableScale, Text } from '@/components/ui';
-import { FontFamily, Radius, Spacing } from '@/constants/tokens';
+import { FontFamily, Palette, Radius, Spacing } from '@/constants/tokens';
 import { bubbleMaxWidth } from '@/lib/motion/bubble-width';
 import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { entering } from '@/lib/motion/presets';
@@ -79,7 +79,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
         <View
           style={[
             styles.monogram,
-            { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+            { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
           ]}>
           <Text variant="micro" color="accentWarm" style={styles.monogramLetter}>
             {identity.slice(0, 1).toUpperCase()}
@@ -109,7 +109,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
                   ? { borderColor: tokens.accentWarmMuted }
                   : commandStatus === 'error'
                     ? { borderColor: tokens.statusDisconnected }
-                    : { borderColor: tokens.glassBorder },
+                    : { borderColor: tokens.border },
           ]}>
           {message.queued ? (
             <Badge label="Queued" tone="warning" dot={false} />
@@ -160,7 +160,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
                     styles.reasoningCard,
                     {
                       backgroundColor: tokens.backgroundInset,
-                      borderColor: tokens.glassBorder,
+                      borderColor: tokens.border,
                     },
                   ]}>
                   <ScrollView style={styles.reasoningScroll} nestedScrollEnabled>
@@ -253,7 +253,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
                     styles.rawCard,
                     {
                       backgroundColor: tokens.backgroundInset,
-                      borderColor: tokens.glassBorder,
+                      borderColor: tokens.border,
                     },
                   ]}>
                   <ScrollView style={styles.rawScroll} nestedScrollEnabled>
@@ -375,7 +375,7 @@ const styles = StyleSheet.create({
   },
   commandBubble: {
     maxWidth: '100%',
-    borderColor: 'rgba(240, 214, 144, 0.22)',
+    borderColor: Palette.border,
     padding: Spacing.two,
   },
   commandHeader: {

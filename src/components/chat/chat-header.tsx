@@ -80,7 +80,7 @@ function ChatHeaderImpl({
   const chipMaxWidth = chatHeaderChipMaxWidth(fontScale);
 
   const orb = (
-    <View style={[styles.orbHalo, { borderColor: tokens.glassBorder }]}>
+    <View style={[styles.orbHalo, { borderColor: tokens.border }]}>
       <PulsingDot color={color} active={pulsing} />
     </View>
   );

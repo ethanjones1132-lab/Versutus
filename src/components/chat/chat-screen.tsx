@@ -2341,8 +2341,8 @@ export function ChatScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={() => void onRefresh()}
-              tintColor={tokens.accentWarm}
-              colors={[tokens.accentWarm]}
+              tintColor={tokens.accent}
+              colors={[tokens.accent]}
               progressBackgroundColor={tokens.backgroundElevated}
             />
           }
@@ -2358,10 +2358,10 @@ export function ChatScreen() {
               accessibilityLabel="Scroll to latest message"
               style={[
                 styles.jumpPill,
-                { backgroundColor: tokens.backgroundRaised, borderColor: tokens.glassBorder },
+                { backgroundColor: tokens.backgroundRaised, borderColor: tokens.border },
               ]}>
-              <Icon name={{ ios: 'arrow.down', android: 'arrow_downward', web: 'arrow_downward' }} size={13} color="accentWarm" />
-              <Text variant="micro" color="accentWarm">
+              <Icon name={{ ios: 'arrow.down', android: 'arrow_downward', web: 'arrow_downward' }} size={13} color="accent" />
+              <Text variant="micro" color="accent">
                 Latest
               </Text>
             </PressableScale>
@@ -2380,8 +2380,8 @@ export function ChatScreen() {
           accessibilityRole="button"
           accessibilityLabel="Dismiss attach notice"
           style={styles.attachNotice}>
-          <Icon name={{ ios: 'exclamationmark.triangle', android: 'warning', web: 'warning' }} size={13} color="accentWarm" />
-          <Text variant="caption" color="accentWarm" style={styles.attachNoticeText}>
+          <Icon name={{ ios: 'exclamationmark.triangle', android: 'warning', web: 'warning' }} size={13} color="accent" />
+          <Text variant="caption" color="accent" style={styles.attachNoticeText}>
             {attachNotice}
           </Text>
         </PressableScale>
