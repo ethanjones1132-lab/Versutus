@@ -40,16 +40,16 @@ export function Chip({ label, onPress, selected = false, icon, disabled, style, 
       style={[
         styles.chip,
         {
-          backgroundColor: selected ? tokens.accentMuted : tokens.glassHighlight,
-          borderColor: selected ? tokens.accentWarm : tokens.border,
+          backgroundColor: selected ? tokens.accentMuted : tokens.backgroundElevated,
+          borderColor: selected ? tokens.accent : tokens.border,
           opacity: disabled ? 0.5 : 1,
         },
         style,
       ]}>
       {icon ? (
-        <Icon name={icon} size={14} color={selected ? 'accentWarm' : 'textSecondary'} />
+        <Icon name={icon} size={14} color={selected ? 'accent' : 'textSecondary'} />
       ) : null}
-      <Text variant="caption" color={selected ? 'accentWarm' : 'secondary'} numberOfLines={1}>
+      <Text variant="caption" color={selected ? 'accent' : 'secondary'} numberOfLines={1}>
         {label}
       </Text>
     </PressableScale>

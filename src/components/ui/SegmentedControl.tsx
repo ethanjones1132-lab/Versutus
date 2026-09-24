@@ -55,7 +55,7 @@ export function SegmentedControl<T extends string>({
           <Animated.View
             style={[
               styles.indicator,
-              { backgroundColor: tokens.accentMuted, borderColor: tokens.accentWarmMuted },
+              { backgroundColor: tokens.accentMuted, borderColor: tokens.border },
               indicatorStyle,
             ]}
           />
@@ -74,7 +74,7 @@ export function SegmentedControl<T extends string>({
               accessibilityState={{ selected }}
               accessibilityLabel={option.label}
               style={styles.segment}>
-              <Text variant="caption" color={selected ? 'accentWarm' : 'secondary'} numberOfLines={1}>
+              <Text variant="caption" color={selected ? 'accent' : 'secondary'} numberOfLines={1}>
                 {option.label}
               </Text>
             </Pressable>

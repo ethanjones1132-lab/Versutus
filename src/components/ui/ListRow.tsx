@@ -91,8 +91,8 @@ export function ListRow({
       ) : statusColor ? (
         <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
       ) : icon ? (
-        <GlassSurface variant="chip" radius={Radius.full} padding={0} style={styles.iconHalo}>
-          <Icon name={icon} size={16} color="accentWarm" />
+        <GlassSurface variant="inset" radius={Radius.full} padding={0} style={styles.iconHalo}>
+          <Icon name={icon} size={16} color="accent" />
         </GlassSurface>
       ) : null}
       <View style={styles.titles}>

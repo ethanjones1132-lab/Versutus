@@ -16,14 +16,14 @@ export type BadgeProps = {
 
 const toneStyles: Record<BadgeTone, { backgroundColor: string; borderColor: string; color: string }> = {
   neutral: {
-    backgroundColor: Palette.glassHighlight,
+    backgroundColor: Palette.backgroundElevated,
     borderColor: Palette.border,
     color: Palette.textSecondary,
   },
   accent: {
-    backgroundColor: Palette.accentWarmMuted,
-    borderColor: Palette.accentWarmMuted,
-    color: Palette.accentWarm,
+    backgroundColor: Palette.accentMuted,
+    borderColor: Palette.accentMuted,
+    color: Palette.accent,
   },
   success: {
     backgroundColor: Palette.statusConnectedMuted,
