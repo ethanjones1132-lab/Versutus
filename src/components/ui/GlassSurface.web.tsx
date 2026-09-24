@@ -7,7 +7,7 @@ import type { GlassSurfaceProps } from './types';
 
 const webGlass = {
   backdropFilter: 'blur(28px) saturate(145%)',
-  boxShadow: 'inset 0 1px 0 rgba(255, 236, 190, 0.08), 0 18px 48px rgba(0, 0, 0, 0.52)',
+  boxShadow: 'inset 0 1px 0 rgba(245, 247, 250, 0.06), 0 18px 48px rgba(0, 0, 0, 0.52)',
 } as ViewStyle;
 
 export function GlassSurface({

@@ -1,0 +1,106 @@
+// tokens.ts only needs Easing for Motion curves; reanimated's native
+// worklet unpackers cannot load under jest-expo.
+jest.mock('react-native-reanimated', () => ({
+  Easing: { bezier: () => (value: number) => value, elastic: () => (value: number) => value },
+}));
+
+declare const __dirname: string;
+
+import { Palette } from '@/constants/tokens';
+import { glassVariantStyles } from '@/components/ui/glass-variants';
+
+const SEP = __dirname.includes('\\') ? '\\' : '/';
+
+/**
+ * Contract test for the flatten-glass pass (visual-direction-2026-09): the
+ * shared surface variants resolve to solid cool near-black stage panels with
+ * cool hairline borders — not translucent champagne glass, not gold. Variant
+ * name API (hero/surface/inset/chip) must not change.
+ */
+
+type Rgba = { r: number; g: number; b: number; a: number };
+
+function parseColor(value: string): Rgba {
+  const hex = /^#([0-9a-f]{6})$/i.exec(value);
+  if (hex) {
+    const n = parseInt(hex[1], 16);
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, a: 1 };
+  }
+  const rgba = /^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)$/.exec(value);
+  if (rgba) {
+    return { r: Number(rgba[1]), g: Number(rgba[2]), b: Number(rgba[3]), a: Number(rgba[4]) };
+  }
+  throw new Error(`unparseable color: ${value}`);
+}
+
+const VARIANTS = ['hero', 'surface', 'inset', 'chip'] as const;
+
+describe('glassVariantStyles flatten contract', () => {
+  it('keeps the variant name API', () => {
+    expect(Object.keys(glassVariantStyles).sort()).toEqual([...VARIANTS].sort());
+  });
+
+  it('hero/surface/inset are opaque stage panels, not translucent glass tiers', () => {
+    const expected: Record<'hero' | 'surface' | 'inset', string> = {
+      hero: Palette.backgroundRaised,
+      surface: Palette.backgroundElevated,
+      inset: Palette.backgroundInset,
+    };
+    for (const variant of ['hero', 'surface', 'inset'] as const) {
+      const { backgroundColor, borderColor } = glassVariantStyles[variant];
+      expect(backgroundColor).toBe(expected[variant]);
+      expect(parseColor(backgroundColor).a).toBe(1);
+      expect(backgroundColor).not.toBe(Palette.glass);
+      expect(backgroundColor).not.toBe(Palette.glassHero);
+      expect(borderColor).not.toBe(Palette.glassHeroBorder);
+      // Palette.border currently shares its value with glassBorder, so
+      // value checks can't tell them apart — the source-level test below
+      // pins that the map never names a glass tier.
+      expect([Palette.border, Palette.borderStrong, Palette.borderSubtle]).toContain(
+        borderColor,
+      );
+    }
+  });
+
+  it('never names a glass tier in the variant source', () => {
+    const src = (jest.requireActual('fs') as { readFileSync(p: string, e: string): string })
+      .readFileSync(
+        [__dirname, '..', 'src', 'components', 'ui', 'glass-variants.ts'].join(SEP),
+        'utf8',
+      )
+      .replace(/\r\n/g, '\n');
+    const mapping = src.slice(src.indexOf('export const glassVariantStyles'));
+    expect(mapping).not.toMatch(/Palette\.glass/);
+    expect(mapping).not.toMatch(/Palette\.gold/);
+  });
+
+  it('every variant border is a cool hairline (blue channel not below red)', () => {
+    for (const variant of VARIANTS) {
+      const { r, b, a } = parseColor(glassVariantStyles[variant].borderColor);
+      expect(b).toBeGreaterThanOrEqual(r);
+      expect(a).toBeGreaterThan(0);
+      expect(a).toBeLessThan(1);
+    }
+  });
+
+  it('no default surface or border is gold or warm champagne', () => {
+    for (const variant of VARIANTS) {
+      for (const value of [
+        glassVariantStyles[variant].backgroundColor,
+        glassVariantStyles[variant].borderColor,
+      ]) {
+        expect(value).not.toBe(Palette.gold);
+        expect(value).not.toBe(Palette.goldMuted);
+        const { r, g, b } = parseColor(value);
+        // Gold/champagne signature: red > green > blue.
+        const warmGold = r > g && g > b;
+        expect(warmGold).toBe(false);
+      }
+    }
+  });
+
+  it('chip stays on the violet accent pair', () => {
+    expect(glassVariantStyles.chip.backgroundColor).toBe(Palette.accentMuted);
+    expect(glassVariantStyles.chip.borderColor).toBe(Palette.accentWarmMuted);
+  });
+});
