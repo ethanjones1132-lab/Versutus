@@ -245,7 +245,7 @@ export default function GatewaySettingsScreen() {
             <Card variant="hero" padding={Spacing.three} style={styles.card}>
               <View style={styles.sectionHeading}>
                 <View style={styles.sectionTitle}>
-                  <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+                  <Text variant="caption" color="accent" style={styles.eyebrow}>
                     Gate setup
                   </Text>
                   <Text variant="headline">Manage providers & gateways</Text>
@@ -265,7 +265,7 @@ export default function GatewaySettingsScreen() {
           <Card variant="surface" padding={Spacing.three} style={styles.card}>
             <View style={styles.sectionHeading}>
               <View style={styles.sectionTitle}>
-                <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+                <Text variant="caption" color="accent" style={styles.eyebrow}>
                   Primary route
                 </Text>
                 <Text variant="headline">Your PC</Text>
@@ -289,7 +289,7 @@ export default function GatewaySettingsScreen() {
         <Card variant="surface" padding={Spacing.three} style={styles.card}>
           <View style={styles.sectionHeading}>
             <View style={styles.sectionTitle}>
-              <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+              <Text variant="caption" color="accent" style={styles.eyebrow}>
                 This build
               </Text>
               <Text variant="headline">Runtime environment</Text>
@@ -311,7 +311,7 @@ export default function GatewaySettingsScreen() {
         <Card variant="surface" padding={Spacing.three} style={styles.card}>
           <View style={styles.sectionHeading}>
             <View style={styles.sectionTitle}>
-              <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+              <Text variant="caption" color="accent" style={styles.eyebrow}>
                 Privacy
               </Text>
               <Text variant="headline">{APP_LOCK_LABEL}</Text>
@@ -336,7 +336,7 @@ export default function GatewaySettingsScreen() {
           )}
           <View style={styles.sectionHeading}>
             <View style={styles.sectionTitle}>
-              <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+              <Text variant="caption" color="accent" style={styles.eyebrow}>
                 Home screen
               </Text>
               <Text variant="headline">{WIDGET_PRIVACY_LABEL}</Text>
@@ -356,7 +356,7 @@ export default function GatewaySettingsScreen() {
         <Card variant="surface" padding={Spacing.three} style={styles.card}>
           <View style={styles.sectionHeading}>
             <View style={styles.sectionTitle}>
-              <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+              <Text variant="caption" color="accent" style={styles.eyebrow}>
                 Voice
               </Text>
               <Text variant="headline">Power hands-free with</Text>
@@ -453,7 +453,7 @@ export default function GatewaySettingsScreen() {
         <Card variant="surface" padding={Spacing.three} style={styles.card}>
           <View style={styles.sectionHeading}>
             <View style={styles.sectionTitle}>
-              <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+              <Text variant="caption" color="accent" style={styles.eyebrow}>
                 Approvals
               </Text>
               <Text variant="headline">Decision history</Text>
@@ -490,12 +490,12 @@ export default function GatewaySettingsScreen() {
             <Card variant="inset" padding={Spacing.three} style={styles.card}>
               <View style={styles.sectionHeading}>
                 <View style={styles.sectionTitle}>
-                  <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+                  <Text variant="caption" color="accent" style={styles.eyebrow}>
                     Device identity
                   </Text>
                   <Text variant="headline">This device</Text>
                 </View>
-                <Icon name={{ ios: 'iphone', android: 'smartphone', web: 'smartphone' }} size={18} color="accentWarm" />
+                <Icon name={{ ios: 'iphone', android: 'smartphone', web: 'smartphone' }} size={18} color="accent" />
               </View>
               {deviceId ? (
                 <DeviceIdRow deviceId={deviceId} copied={copied} onCopy={copyText} />
