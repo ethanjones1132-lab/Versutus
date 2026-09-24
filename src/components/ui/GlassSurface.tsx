@@ -9,8 +9,10 @@ import type { GlassSurfaceProps } from './types';
 export { glassVariantStyles } from './glass-variants';
 
 /**
- * Shared frosted-surface implementation (Android + default). Web adds a real
- * backdrop blur (GlassSurface.web); iOS adds liquid glass (GlassSurface.ios).
+ * Shared flat-surface implementation (Android + default): elevated panel +
+ * hairline from the variant map, no blur primitive. Web and iOS can layer a
+ * real glass material (backdrop blur / liquid glass) behind the `glass` opt-in;
+ * Android has no blur here, so the prop is a no-op and stays flat either way.
  */
 export function GlassSurface({
   children,

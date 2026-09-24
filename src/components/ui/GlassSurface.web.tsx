@@ -5,6 +5,8 @@ import { Radius } from '@/constants/tokens';
 import { glassVariantStyles } from './glass-variants';
 import type { GlassSurfaceProps } from './types';
 
+// Backdrop blur + lift, applied only when a consumer opts into glass —
+// flat panels + hairline carry the default (visual-direction lock).
 const webGlass = {
   backdropFilter: 'blur(28px) saturate(145%)',
   boxShadow: 'inset 0 1px 0 rgba(245, 247, 250, 0.06), 0 18px 48px rgba(0, 0, 0, 0.52)',
@@ -13,6 +15,7 @@ const webGlass = {
 export function GlassSurface({
   children,
   style,
+  glass = false,
   variant = 'surface',
   radius = Radius.lg,
   padding = 0,
@@ -23,7 +26,7 @@ export function GlassSurface({
     <View
       style={[
         styles.surface,
-        webGlass,
+        glass ? webGlass : null,
         {
           backgroundColor: variantStyle.backgroundColor,
           borderColor: variantStyle.borderColor,

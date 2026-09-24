@@ -26,6 +26,13 @@ export type GlassSurfaceProps = {
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
   interactive?: boolean;
+  /**
+   * Opt into the real glass material (iOS liquid glass, web backdrop blur).
+   * Default false: every surface renders as a flat elevated panel with a
+   * cool hairline, per docs/visual-direction-2026-09.md. Sheets/modals may
+   * opt in; ordinary cards never should.
+   */
+  glass?: boolean;
   variant?: GlassVariant;
   radius?: number;
   padding?: number;

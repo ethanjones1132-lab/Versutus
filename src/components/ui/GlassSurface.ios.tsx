@@ -10,11 +10,32 @@ export function GlassSurface({
   children,
   style,
   interactive = false,
+  glass = false,
   variant = 'surface',
   radius = Radius.lg,
   padding = 0,
 }: GlassSurfaceProps) {
   const variantStyle = glassVariantStyles[variant];
+
+  // Flat elevated panel + hairline is the default material; liquid glass is
+  // an explicit opt-in (sheets/modals), never what a card lands on.
+  if (!glass) {
+    return (
+      <View
+        style={[
+          styles.surface,
+          {
+            backgroundColor: variantStyle.backgroundColor,
+            borderColor: variantStyle.borderColor,
+            borderRadius: radius,
+            padding: padding > 0 ? padding : undefined,
+          },
+          style,
+        ]}>
+        {children}
+      </View>
+    );
+  }
 
   return (
     <GlassView
