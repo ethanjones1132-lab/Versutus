@@ -2,7 +2,7 @@ import { StyleSheet, View } from 'react-native';
 import { useState } from 'react';
 
 import { ConnectionBadge } from '@/components/connection-badge';
-import { Button, Card, PressableScale, Text } from '@/components/ui';
+import { Button, Card, EmptyState, PressableScale, Text } from '@/components/ui';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
@@ -28,12 +28,11 @@ export function CompactGatewayList({
 }) {
   if (gateways.length === 0) {
     return (
-      <Card padding={Spacing.three} style={styles.emptyCard}>
-        <Text variant="caption" style={styles.onGlassPrimary}>No gateways saved</Text>
-        <Text variant="caption" style={styles.onGlassSecondary}>
-          Add your first gateway (Hermes, Gate, or OpenClaw) to unlock chat, tools, and commands.
-        </Text>
-      </Card>
+      <EmptyState
+        icon={{ ios: 'network', android: 'hub', web: 'hub' }}
+        title="No gateways saved"
+        description="Add your first gateway (Hermes, Gate, or OpenClaw) to unlock chat, tools, and commands."
+      />
     );
   }
 
@@ -97,7 +96,7 @@ function GatewayRow({
       <View style={styles.rowTop}>
         <View style={styles.titleBlock}>
           <View style={styles.titleRow}>
-            <Text variant="caption" numberOfLines={1} style={styles.onGlassPrimary}>
+            <Text variant="headline" numberOfLines={1} style={styles.onGlassPrimary}>
               {gateway.name}
             </Text>
             {isActive ? (
@@ -183,10 +182,6 @@ function ReachabilityPill({
 const styles = StyleSheet.create({
   list: {
     gap: Spacing.two,
-  },
-  emptyCard: {
-    borderRadius: Radius.md,
-    gap: Spacing.one,
   },
   rowCard: {
     borderRadius: Radius.md,
