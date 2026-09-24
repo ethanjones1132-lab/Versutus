@@ -176,7 +176,7 @@ export default function ActivityScreen() {
               placeholders (never the empty tally); a refused read shows an
               inline retry instead of inventing an empty log. */}
           <Card padding={Spacing.three} style={styles.card}>
-            <Text variant="body">Approval decisions</Text>
+            <Text variant="headline">Approval decisions</Text>
             {auditState === 'loading' ? (
               <>
                 <Skeleton width="72%" height={14} />

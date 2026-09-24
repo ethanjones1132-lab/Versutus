@@ -46,7 +46,7 @@ export function RpcMethodsSection() {
 
   return (
     <Card padding={Spacing.three} style={styles.card}>
-      <Text variant="title">Answered RPC methods</Text>
+      <Text variant="headline">Answered RPC methods</Text>
       <Text variant="caption" color="secondary">
         The live dispatch table this gateway judges slash commands by.
       </Text>

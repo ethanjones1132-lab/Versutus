@@ -54,7 +54,7 @@ export function ApprovalInbox() {
   return (
     <Card padding={Spacing.three} style={styles.card}>
       <View style={styles.header}>
-        <Text variant="body">Approvals</Text>
+        <Text variant="headline">Approvals</Text>
         <Badge
           label={String(pendingApprovals.length)}
           tone={pendingApprovals.length > 0 ? 'accent' : 'neutral'}

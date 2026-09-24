@@ -268,7 +268,7 @@ export function ScorecardsSection({
 
   return (
     <Card padding={Spacing.three} style={styles.card}>
-      <Text variant="title">Scorecards</Text>
+      <Text variant="headline">Scorecards</Text>
 
       {/* The window is the read's, so it is named once for the cards below
           rather than repeated identically on each one. It names an empty read

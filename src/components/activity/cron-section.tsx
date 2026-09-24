@@ -142,7 +142,7 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
   return (
     <Card padding={Spacing.three} style={styles.card}>
       <View style={styles.header}>
-        <Text variant="title">Cron ({jobs.length})</Text>
+        <Text variant="headline">Cron ({jobs.length})</Text>
         {live > 0 ? <Badge label={`${live} running`} tone="accent" /> : null}
       </View>
 

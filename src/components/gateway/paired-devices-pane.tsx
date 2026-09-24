@@ -85,7 +85,7 @@ export function PairedDevicesPane() {
 
   return (
     <Card padding={Spacing.three} style={styles.card}>
-      <Text variant="title">{pairedDevicesToggleLabel(shown, false)}</Text>
+      <Text variant="headline">{pairedDevicesToggleLabel(shown, false)}</Text>
       {!shown.loaded && !shown.failed ? (
         <>
           <Skeleton width="90%" height={44} />

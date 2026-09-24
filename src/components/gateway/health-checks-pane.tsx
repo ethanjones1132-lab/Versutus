@@ -88,7 +88,7 @@ export function HealthChecksPane() {
   return (
     <Card padding={Spacing.three} style={styles.card}>
       <View style={styles.header}>
-        <Text variant="title">{healthChecksTitle(shown)}</Text>
+        <Text variant="headline">{healthChecksTitle(shown)}</Text>
         {shown.loaded && shown.status ? (
           <Badge label={shown.status} tone={healthCheckTone(shown.status)} />
         ) : null}

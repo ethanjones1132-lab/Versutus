@@ -63,7 +63,7 @@ export function ToolsetsSection() {
 
   return (
     <Card padding={Spacing.three} style={styles.card}>
-      <Text variant="title">Toolsets</Text>
+      <Text variant="headline">Toolsets</Text>
       {!shown.loaded && !shown.failed ? (
         <>
           <Skeleton width="90%" height={44} />

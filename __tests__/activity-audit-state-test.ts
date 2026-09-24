@@ -18,7 +18,7 @@ function readActivity(): string {
 /** The Approval-decisions card, from its heading to the next sibling card. */
 function readAuditCard(): string {
   const src = readActivity();
-  const start = src.indexOf('<Text variant="body">Approval decisions</Text>');
+  const start = src.indexOf('<Text variant="headline">Approval decisions</Text>');
   expect(start).toBeGreaterThanOrEqual(0);
   const end = src.indexOf('<ApprovalDecisionCard', start);
   expect(end).toBeGreaterThan(start);
