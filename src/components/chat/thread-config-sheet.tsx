@@ -365,8 +365,8 @@ function SessionsSection({
             style={[
               styles.sessionCard,
               {
-                backgroundColor: tokens.backgroundInset,
-                borderColor: isCurrent ? tokens.accentWarm : tokens.borderSubtle,
+                backgroundColor: isCurrent ? tokens.accentMuted : tokens.backgroundInset,
+                borderColor: isCurrent ? tokens.accent : tokens.border,
               },
             ]}
             accessibilityRole="button"
@@ -406,7 +406,7 @@ function SessionsSection({
                   <Icon
                     name={{ ios: pinned ? 'pin.fill' : 'pin', android: 'push_pin', web: 'push_pin' }}
                     size={14}
-                    color={pinned ? 'accentWarm' : 'textTertiary'}
+                    color={pinned ? 'accent' : 'textTertiary'}
                   />
                 </PressableScale>
               ) : null}
@@ -479,9 +479,10 @@ function SessionsSection({
       startRename,
       submitRename,
       togglePin,
-      tokens.accentWarm,
+      tokens.accent,
+      tokens.accentMuted,
       tokens.backgroundInset,
-      tokens.borderSubtle,
+      tokens.border,
     ],
   );
 
@@ -730,8 +731,8 @@ function ModelsSection({
             style={[
               styles.modelCard,
               {
-                backgroundColor: tokens.backgroundInset,
-                borderColor: isCurrent ? tokens.accentWarm : tokens.borderSubtle,
+                backgroundColor: isCurrent ? tokens.accentMuted : tokens.backgroundInset,
+                borderColor: isCurrent ? tokens.accent : tokens.border,
                 opacity: item.available === false || locked ? 0.6 : 1,
               },
             ]}
@@ -788,7 +789,7 @@ function ModelsSection({
         </Animated.View>
       );
     },
-    [currentDefault, onSelect, tokens.backgroundInset, tokens.borderSubtle, tokens.accentWarm],
+    [currentDefault, onSelect, tokens.accent, tokens.accentMuted, tokens.backgroundInset, tokens.border],
   );
 
   const renderSectionHeader = useCallback(
@@ -944,11 +945,11 @@ function BackendsSection({
           statusColor={healthy ? tokens.statusConnected : tokens.textTertiary}
           trailing={<Badge label={item.state ?? 'unknown'} tone={healthy ? 'success' : 'neutral'} dot={false} />}
           selected={item.id === selectedBackendId}
-          style={
-            item.id === selectedBackendId
-              ? { borderColor: tokens.accentWarm, borderWidth: StyleSheet.hairlineWidth * 2, borderRadius: Radius.lg }
-              : undefined
-          }
+           style={
+             item.id === selectedBackendId
+               ? { backgroundColor: tokens.accentMuted, borderColor: tokens.accent, borderWidth: StyleSheet.hairlineWidth * 2, borderRadius: Radius.lg }
+               : undefined
+           }
           onPress={() => onSelect?.(item.id)}
         />
       );

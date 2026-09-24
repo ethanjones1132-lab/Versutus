@@ -60,7 +60,7 @@ export function ConfirmationSheet({
           variant="mono"
           style={[
             styles.command,
-            { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+            { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
           ]}>
           {preview.applyCommand}
         </Text>
@@ -76,9 +76,9 @@ export function ConfirmationSheet({
               key={i}
               style={[
                 styles.diff,
-                { backgroundColor: tokens.backgroundInset, borderColor: tokens.glassBorder },
+                { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
               ]}>
-              <Text variant="caption" color="accentWarm">
+              <Text variant="caption" color="accent">
                 {d.label}
               </Text>
               <Text variant="mono" color="tertiary" style={styles.diffText}>

@@ -98,11 +98,11 @@ describe('ListRow selected state screen-reader wiring', () => {
     expect(src).toContain('selected={item.id === selectedBackendId}');
   });
 
-  test('the backend selected border styling stays byte-identical', () => {
+  test('the backend selected border styling uses the brand accent on a muted fill', () => {
     const src = readBackendsSource();
     // The sighted treatment is what the new state mirrors; it must not move.
     expect(src).toContain(
-      '? { borderColor: tokens.accentWarm, borderWidth: StyleSheet.hairlineWidth * 2, borderRadius: Radius.lg }',
+      '? { backgroundColor: tokens.accentMuted, borderColor: tokens.accent, borderWidth: StyleSheet.hairlineWidth * 2, borderRadius: Radius.lg }',
     );
   });
 
