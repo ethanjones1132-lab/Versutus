@@ -170,7 +170,7 @@ function ReachabilityPill({
           : tokens.textTertiary;
 
   return (
-    <View style={[styles.pill, { borderColor: tokens.glassBorder, backgroundColor: tokens.backgroundInset }]}>
+    <View style={[styles.pill, { borderColor: tokens.border, backgroundColor: tokens.backgroundInset }]}>
       <View style={[styles.dot, { backgroundColor: color }]} />
       <Text variant="caption" numberOfLines={1} style={styles.onGlassSecondary}>
         {label}

@@ -146,7 +146,7 @@ export default function DevPreviewScreen() {
           />
         </View>
 
-        <View style={[styles.meta, { borderColor: tokens.glassBorder }]}>
+        <View style={[styles.meta, { borderColor: tokens.border }]}>
           <Text variant="mono" color="tertiary">
             {scenario.phase.toUpperCase()} · {scenario.status.toUpperCase()}
           </Text>

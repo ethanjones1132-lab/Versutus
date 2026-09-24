@@ -124,7 +124,7 @@ export function HandsfreeCallBanner() {
             accessibilityRole="button"
             accessibilityLabel={muted ? HANDSFREE_UNMUTE_LABEL : HANDSFREE_MUTE_LABEL}
             onPress={muted ? unmute : mute}
-            style={[styles.control, { borderColor: tokens.glassBorder }]}>
+            style={[styles.control, { borderColor: tokens.border }]}>
             <Text variant="caption" color="primary">
               {muted ? 'Unmute' : 'Mute'}
             </Text>
@@ -135,7 +135,7 @@ export function HandsfreeCallBanner() {
               accessibilityRole="button"
               accessibilityLabel={HANDSFREE_SKIP_LABEL}
               onPress={skipReply}
-              style={[styles.control, { borderColor: tokens.glassBorder }]}>
+              style={[styles.control, { borderColor: tokens.border }]}>
               <Text variant="caption" color="primary">
                 Skip reply
               </Text>

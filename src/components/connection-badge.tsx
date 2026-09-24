@@ -92,7 +92,7 @@ export function ConnectionBadge({
       padding={Spacing.two}
       style={[
         styles.pill,
-        { borderColor: tokens.glassBorder },
+        { borderColor: tokens.border },
         isPairing && {
           borderColor: tokens.accentWarm,
           borderWidth: StyleSheet.hairlineWidth * 2,

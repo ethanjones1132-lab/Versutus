@@ -98,7 +98,7 @@ function CapabilityPill({ group }: { group: GatewayCapabilityGroup }) {
       : group.note || status.replace('-', ' ');
 
   return (
-    <View style={[styles.pill, { borderColor: tokens.glassBorder, backgroundColor: tokens.backgroundInset }]}>
+    <View style={[styles.pill, { borderColor: tokens.border, backgroundColor: tokens.backgroundInset }]}>
       <View style={[styles.dot, { backgroundColor: color }]} />
       <View style={styles.pillText}>
         <Text variant="caption" numberOfLines={1}>

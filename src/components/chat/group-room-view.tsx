@@ -470,7 +470,7 @@ export function GroupRoomView({
         ListHeaderComponent={
           <View style={styles.listHeader}>
           <View
-            style={[styles.roomCard, { backgroundColor: tokens.backgroundRaised, borderColor: tokens.glassBorder }]}>
+            style={[styles.roomCard, { backgroundColor: tokens.backgroundRaised, borderColor: tokens.border }]}>
             <View style={styles.roomCardHead}>
               <PressableScale
                 onPress={() => setPlanExpanded((prev) => !prev)}

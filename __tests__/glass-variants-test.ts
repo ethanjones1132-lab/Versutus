@@ -10,6 +10,20 @@ import { Palette } from '@/constants/tokens';
 import { glassVariantStyles } from '@/components/ui/glass-variants';
 
 const SEP = __dirname.includes('\\') ? '\\' : '/';
+const nodeFs = jest.requireActual('fs') as {
+  readFileSync(path: string, encoding: string): string;
+  readdirSync(
+    path: string,
+    options: { encoding: 'utf8'; recursive: true },
+  ): string[];
+};
+const ROOT = [__dirname, '..'].join(SEP);
+
+function readSource(...parts: string[]): string {
+  return nodeFs
+    .readFileSync([ROOT, ...parts].join(SEP), 'utf8')
+    .replace(/\r\n/g, '\n');
+}
 
 /**
  * Contract test for the flatten-glass pass (visual-direction-2026-09): the
@@ -63,15 +77,21 @@ describe('glassVariantStyles flatten contract', () => {
   });
 
   it('never names a glass tier in the variant source', () => {
-    const src = (jest.requireActual('fs') as { readFileSync(p: string, e: string): string })
-      .readFileSync(
-        [__dirname, '..', 'src', 'components', 'ui', 'glass-variants.ts'].join(SEP),
-        'utf8',
-      )
-      .replace(/\r\n/g, '\n');
+    const src = readSource('src', 'components', 'ui', 'glass-variants.ts');
     const mapping = src.slice(src.indexOf('export const glassVariantStyles'));
     expect(mapping).not.toMatch(/Palette\.glass/);
     expect(mapping).not.toMatch(/Palette\.gold/);
+  });
+
+  it('reserves glassBorder for the token and deliberate glass sheets', () => {
+    const violations = nodeFs
+      .readdirSync([ROOT, 'src'].join(SEP), { encoding: 'utf8', recursive: true })
+      .map((path) => path.replace(/\\/g, '/'))
+      .filter((path) => /\.(?:ts|tsx)$/.test(path))
+      .filter((path) => path !== 'constants/tokens.ts')
+      .filter((path) => !/(?:^|\/)[^/]*sheet[^/]*$/i.test(path))
+      .filter((path) => readSource('src', ...path.split('/')).includes('glassBorder'));
+    expect(violations).toEqual([]);
   });
 
   it('every variant border is a cool hairline (blue channel not below red)', () => {

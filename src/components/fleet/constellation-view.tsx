@@ -152,7 +152,7 @@ export function ConstellationView({
           </Text>
         ))}
         {/* The HUD: one honest line from the model's own summary. */}
-        <View style={[styles.hud, { borderTopColor: tokens.glassBorder }]}>
+        <View style={[styles.hud, { borderTopColor: tokens.border }]}>
           <Icon
             name={{ ios: 'circle.grid.2x2.fill', android: 'hub', web: 'hub' }}
             size={13}
