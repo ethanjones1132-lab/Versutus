@@ -8,7 +8,7 @@ import { DeviceIdRow } from '@/components/device-id-row';
 import { NotificationsSection } from '@/components/gateway/notifications-section';
 import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
 import { TransportSecurityCard } from '@/components/gateway/transport-security-card';
-import { Badge, Card, ErrorCard, Icon, Screen, Text } from '@/components/ui';
+import { Badge, Card, ErrorCard, Icon, Screen, Skeleton, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
@@ -80,8 +80,11 @@ export default function GatewaySettingsScreen() {
   const [voiceCheckError, setVoiceCheckError] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installNote, setInstallNote] = useState<string | null>(null);
-  // D1: this device's durable approval decisions (newest first).
+  // D1: this device's durable approval decisions (newest first). The loaded
+  // gate keeps first paint from asserting the empty claim before the deferred
+  // read lands (the lie Activity's card closed with auditState in iter-322).
   const [audit, setAudit] = useState<ApprovalAuditEntry[]>([]);
+  const [auditLoaded, setAuditLoaded] = useState(false);
   const [hideWidgetResult, setHideWidgetResult] = useState(false);
 
   useEffect(() => {
@@ -168,7 +171,9 @@ export default function GatewaySettingsScreen() {
   useEffect(() => {
     let cancelled = false;
     void loadApprovalAudit().then((entries) => {
-      if (!cancelled) setAudit(entries);
+      if (cancelled) return;
+      setAudit(entries);
+      setAuditLoaded(true);
     });
     return () => {
       cancelled = true;
@@ -452,14 +457,30 @@ export default function GatewaySettingsScreen() {
               </Text>
               <Text variant="headline">Decision history</Text>
             </View>
-            <Badge label={String(audit.length)} tone={audit.length > 0 ? 'accent' : 'neutral'} dot={false} />
+            {auditLoaded ? (
+              <Badge
+                label={String(audit.length)}
+                tone={audit.length > 0 ? 'accent' : 'neutral'}
+                dot={false}
+              />
+            ) : null}
           </View>
-          <Text color="secondary">{approvalAuditSummaryCopy(audit.length)}</Text>
-          {audit.slice(0, 5).map((record) => (
-            <Text key={`${record.approvalId}-${record.at}`} variant="caption" color="tertiary">
-              {approvalAuditCopy(record)}
-            </Text>
-          ))}
+          {!auditLoaded ? (
+            <>
+              <Skeleton width="72%" height={14} />
+              <Skeleton width="90%" height={12} />
+              <Skeleton width="64%" height={12} />
+            </>
+          ) : (
+            <>
+              <Text color="secondary">{approvalAuditSummaryCopy(audit.length)}</Text>
+              {audit.slice(0, 5).map((record) => (
+                <Text key={`${record.approvalId}-${record.at}`} variant="caption" color="tertiary">
+                  {approvalAuditCopy(record)}
+                </Text>
+              ))}
+            </>
+          )}
         </Card>
 
         {activeGateway ? (
