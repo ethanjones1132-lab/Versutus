@@ -1438,10 +1438,16 @@ export function ChatScreen() {
           return { botId: target, ...applyRoutineRead(previous, { ok: true, jobs: routineJobsFromList(jobs) }) };
         }),
       )
-      .catch(() =>
+      .catch((caught) =>
         setRoutineState((prev) => {
           const previous = prev.botId === target ? prev : { ...EMPTY_ROUTINES, botId: target };
-          return { botId: target, ...applyRoutineRead(previous, { ok: false }) };
+          return {
+            botId: target,
+            ...applyRoutineRead(previous, {
+              ok: false,
+              error: caught instanceof Error ? caught.message : String(caught),
+            }),
+          };
         }),
       );
   }, [botSurfaceId, status, botJobs]);
@@ -1481,7 +1487,12 @@ export function ChatScreen() {
         .then((jobs) =>
           foldRoutineRead(target, { ok: true, jobs: routineJobsFromList(jobs) }),
         )
-        .catch(() => foldRoutineRead(target, { ok: false }));
+        .catch((caught) =>
+          foldRoutineRead(target, {
+            ok: false,
+            error: caught instanceof Error ? caught.message : String(caught),
+          }),
+        );
     },
     [botSurfaceId, botJobs, foldRoutineRead, routineJobsFromList],
   );
@@ -1502,7 +1513,12 @@ export function ChatScreen() {
         .then((jobs) =>
           foldRoutineRead(botSurfaceId ?? '', { ok: true, jobs: routineJobsFromList(jobs) }),
         )
-        .catch(() => foldRoutineRead(botSurfaceId ?? '', { ok: false }));
+        .catch((caught) =>
+          foldRoutineRead(botSurfaceId ?? '', {
+            ok: false,
+            error: caught instanceof Error ? caught.message : String(caught),
+          }),
+        );
     },
     [botSurfaceId, botJobs, foldRoutineRead, routineJobsFromList],
   );
@@ -1522,9 +1538,12 @@ export function ChatScreen() {
         // helper and same must-still as the provider's connected re-arm.
         void rearmRoutineNotifications(read);
       })
-      .catch(() => {
+      .catch((caught) => {
         if (cancelled) return;
-        foldRoutineRead(botSurfaceId, { ok: false });
+        foldRoutineRead(botSurfaceId, {
+          ok: false,
+          error: caught instanceof Error ? caught.message : String(caught),
+        });
       });
     return () => {
       cancelled = true;
@@ -2132,6 +2151,7 @@ export function ChatScreen() {
             jobs={routineState.botId === surface.botId ? routineState.jobs : []}
             loaded={routineState.botId === surface.botId ? routineState.loaded : false}
             failed={routineState.botId === surface.botId ? routineState.failed : false}
+            readError={routineState.botId === surface.botId ? routineState.error : undefined}
             onRetry={handleRoutinesRetry}
             onCreate={handleRoutineCreate}
             onTogglePause={handleRoutineTogglePause}

@@ -41,9 +41,10 @@ describe('routine sheet actions re-list the roster', () => {
     expect(retry).toContain('botJobs');
     expect(retry).toMatch(/\.list\(\)/);
     expect(retry).toMatch(/applyRoutineRead\(previous,\s*\{\s*ok:\s*true,\s*jobs:\s*routineJobsFromList\(jobs\)/);
-    // The re-read failure folds { ok: false } — which keeps the last good
-    // list once loaded — and never names a refusal.
-    expect(retry).toMatch(/applyRoutineRead\(previous,\s*\{\s*ok:\s*false\s*\}/);
+    // The re-read failure folds the caught message alongside { ok: false } —
+    // which keeps the last good list once loaded and names the refusal.
+    expect(retry).toMatch(/applyRoutineRead\(previous,\s*\{\s*ok:\s*false,\s*error:/);
+    expect(retry).not.toMatch(/\{ ok: false \}\)/);
   });
 
   test('the pane forwards the sheet refresh to the same re-read callback, and only after a landed action', () => {
@@ -87,13 +88,21 @@ describe('routine sheet actions re-list the roster', () => {
     expect(create).toContain(
       'foldRoutineRead(target, { ok: true, jobs: routineJobsFromList(jobs) })',
     );
-    expect(create).toContain('.catch(() => foldRoutineRead(target, { ok: false }));');
+    expect(create).toMatch(
+      /\.catch\(\(caught\) =>\s*foldRoutineRead\(target,\s*\{\s*ok:\s*false,\s*error: caught instanceof Error \? caught\.message : String\(caught\),\s*\}\)/,
+    );
+    expect(create).not.toContain('.catch(() => foldRoutineRead(target, { ok: false }));');
     const pause = routineCallback(src, 'handleRoutineTogglePause');
     expect(pause).toContain('await botJobs.pause(jobId, paused);');
     expect(pause).toContain(
       'foldRoutineRead(botSurfaceId ?? \'\', { ok: true, jobs: routineJobsFromList(jobs) })',
     );
-    expect(pause).toContain('.catch(() => foldRoutineRead(botSurfaceId ?? \'\', { ok: false }));');
+    expect(pause).toMatch(
+      /\.catch\(\(caught\) =>\s*foldRoutineRead\(botSurfaceId \?\? '',\s*\{\s*ok:\s*false,\s*error: caught instanceof Error \? caught\.message : String\(caught\),\s*\}\)/,
+    );
+    expect(pause).not.toContain(
+      '.catch(() => foldRoutineRead(botSurfaceId ?? \'\', { ok: false }));',
+    );
   });
 
   test('the remaining routine callbacks stay memo-safe with stable identities', () => {

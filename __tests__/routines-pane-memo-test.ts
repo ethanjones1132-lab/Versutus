@@ -49,18 +49,16 @@ describe('routines pane memo', () => {
     expect(loading).toMatch(/<Skeleton width="76%" height=\{44\} style=\{styles\.gap\} \/>/);
   });
 
-  test('the failed-first Retry branch and its micro copy are byte-identical', () => {
+  test('the failed-first ErrorCard branch keeps exactly one retry affordance', () => {
     // Same shape as `routines-pane-loading-test.ts` and
     // `routines-pane-retry-test.ts` — memo must not touch the failure
-    // surface.
+    // surface. The kept-cause ErrorCard replaced the ghost Retry button.
     const src = readSource('src', 'components', 'chat', 'routines-pane.tsx');
-    const failed = src.match(
-      /!loaded && failed && onRetry \? \([\s\S]*?\) : null/,
-    )?.[0];
+    const failed = src.match(/!loaded && failed \? \([\s\S]*?\) : null/)?.[0];
     expect(failed).toBeDefined();
-    expect(failed).toMatch(/label="Retry"/);
-    expect(failed).toMatch(/onPress=\{onRetry\}/);
-    expect(src.match(/label="Retry"/g)).toHaveLength(1);
+    expect(failed).toMatch(/<ErrorCard/);
+    expect(failed).toMatch(/onRetry=\{onRetry\}/);
+    expect(src.match(/label="Retry"/g) ?? []).toHaveLength(0);
     expect(routinesListCopy({ jobs: [], loaded: false, failed: true })).toBe(
       'Routines could not be read.',
     );

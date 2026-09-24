@@ -166,8 +166,8 @@ export function cronJobViewFromRoutine(job: RoutineJob): CronJob {
   };
 }
 
-/** What one routine-list read produced. */
-export type RoutineRead = { ok: true; jobs: RoutineJob[] } | { ok: false };
+/** What one routine-list read produced. A refusal may carry the caught cause. */
+export type RoutineRead = { ok: true; jobs: RoutineJob[] } | { ok: false; error?: string };
 
 /**
  * Visible routines after folding a read. Two failures are not the same
@@ -181,14 +181,18 @@ export type RoutinesState = {
   /** True once a successful read has landed. */
   loaded: boolean;
   failed: boolean;
+  /** Kept cause of the last failed read; cleared only by a successful one. */
+  error?: string;
 };
 
 export const EMPTY_ROUTINES: RoutinesState = { jobs: [], loaded: false, failed: false };
 
 export function applyRoutineRead(previous: RoutinesState, read: RoutineRead): RoutinesState {
   if (read.ok) return { jobs: read.jobs, loaded: true, failed: false };
-  if (previous.loaded) return { jobs: previous.jobs, loaded: true, failed: true };
-  return { jobs: [], loaded: false, failed: true };
+  if (previous.loaded) {
+    return { jobs: previous.jobs, loaded: true, failed: true, error: read.error };
+  }
+  return { jobs: [], loaded: false, failed: true, error: read.error };
 }
 
 export function routinesToggleLabel(state: RoutinesState, open: boolean): string {

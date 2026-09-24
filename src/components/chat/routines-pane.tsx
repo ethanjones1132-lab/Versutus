@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { CronJobSheet } from '@/components/activity/cron-job-sheet';
 import { CronRunSheet } from '@/components/activity/cron-run-sheet';
-import { Button, ListRow, Skeleton, Text, TextField } from '@/components/ui';
+import { Button, ErrorCard, ListRow, Skeleton, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { ROUTINE_TEMPLATES, applyRoutineTemplate } from '@/lib/gateway/routine-templates';
 import {
@@ -23,9 +23,9 @@ import {
 export type { RoutineJob };
 
 /** Bot Chat routines pane — wrapped in `memo` so a chat-screen tick that does
- *  not change `jobs`, `loaded`, `failed`, `onCreate`, `onTogglePause`,
- *  `onRetry`, or `onChanged` stops re-rendering this subtree (its
- *  `useState` hooks and the `<ListRow>` rows it maps from `jobs`). Matches
+ *  not change `jobs`, `loaded`, `failed`, `readError`, `onCreate`,
+ *  `onTogglePause`, `onRetry`, or `onChanged` stops re-rendering this subtree
+ *  (its `useState` hooks and the `<ListRow>` rows it maps from `jobs`). Matches
  *  the pattern already shipped on `ChatHeader` (chat-header.tsx:35,176),
  *  `ChatRoster` (chat-roster.tsx:320), `SkillsPane` (skills-pane.tsx:14,81)
  *  and `ToolsPane` (tools-pane.tsx:14,81). Holding this requires the parent
@@ -36,6 +36,7 @@ function RoutinesPaneImpl({
   jobs,
   loaded,
   failed,
+  readError,
   onCreate,
   onTogglePause,
   onRetry,
@@ -44,6 +45,10 @@ function RoutinesPaneImpl({
   jobs: RoutineJob[];
   loaded: boolean;
   failed: boolean;
+  /** Kept cause of the last failed read, when the refusal carried one.
+   *  Named `readError` because the pane's local create/pause failure
+   *  channel already owns the `error` state below. */
+  readError?: string;
   onCreate: (input: { title: string; prompt: string; schedule: string }) => Promise<unknown>;
   onTogglePause: (jobId: string, paused: boolean) => Promise<unknown>;
   /** Re-run the same `botJobs.list` read the surface effect runs. */
@@ -146,10 +151,15 @@ function RoutinesPaneImpl({
               <Skeleton width="76%" height={44} style={styles.gap} />
             </>
           ) : null}
-          {!loaded && failed && onRetry ? (
-            <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
+          {!loaded && failed ? (
+            <ErrorCard
+              cause={readError ?? 'Routines could not be read.'}
+              affected="Routines on this Bot"
+              next="Retry, or check the Gate log for the failing call."
+              onRetry={onRetry}
+            />
           ) : null}
-          {listCopy ? (
+          {loaded && listCopy ? (
             <Text variant="micro" color="secondary">
               {listCopy}
             </Text>

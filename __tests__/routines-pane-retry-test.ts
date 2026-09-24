@@ -14,32 +14,33 @@ function readSource(...parts: string[]): string {
 }
 
 describe('routines pane retry', () => {
-  test('the failed first read offers a Retry action wired to the retry callback', () => {
+  test('the failed first read offers a Retry wired through the ErrorCard', () => {
     // A failed first read left the operator with the micro copy and no way
-    // forward except switching Bot or reconnecting. The pane now renders a
-    // retry button bound to the re-read callback the surface owns.
+    // forward except switching Bot or reconnecting. The pane now renders the
+    // repo's ErrorCard (kept cause + Retry) bound to the re-read callback
+    // the surface owns — same contract as the skills/tools panes.
     const src = readSource('src', 'components', 'chat', 'routines-pane.tsx');
     expect(src).toContain('onRetry');
-    const failed = src.match(
-      /!loaded && failed && onRetry \?\s*\([\s\S]*?\) : null/,
-    )?.[0];
+    const failed = src.match(/!loaded && failed \? \([\s\S]*?\) : null/)?.[0];
     expect(failed).toBeDefined();
-    expect(failed).toMatch(/label="Retry"/);
-    expect(failed).toMatch(/onPress=\{onRetry\}/);
+    expect(failed).toMatch(/<ErrorCard/);
+    expect(failed).toMatch(/onRetry=\{onRetry\}/);
   });
 
   test('the retry is offered only on the failed-first-read path, never over a list', () => {
     // A failed re-read keeps the last good list with its own stale copy —
-    // the retry must not render there, and without a retry callback the
-    // pane renders no button at all.
+    // the ErrorCard must not render there, and without a retry callback the
+    // card renders no retry button at all.
     const src = readSource('src', 'components', 'chat', 'routines-pane.tsx');
-    // Exactly one Retry affordance exists, and it lives on the failed-first
-    // branch — no retry renders over a loaded list or its stale copy.
-    expect(src.match(/label="Retry"/g)).toHaveLength(1);
+    // The ErrorCard (the one retry affordance) lives on the failed-first
+    // branch only — no retry renders over a loaded list or its stale copy,
+    // and the old ghost Retry button is gone.
+    expect(src.match(/label="Retry"/g) ?? []).toHaveLength(0);
+    expect(src.match(/<ErrorCard/g) ?? []).toHaveLength(1);
     expect(src).toContain('onRetry?: () => void;');
   });
 
-  test('the failed-first-read micro copy still names the failure', () => {
+  test('the failed-first-read copy still names the failure', () => {
     const src = readSource('src', 'components', 'chat', 'routines-pane.tsx');
     expect(src).toContain('routinesListCopy(state)');
     expect(routinesListCopy({ jobs: [], loaded: false, failed: true })).toBe(

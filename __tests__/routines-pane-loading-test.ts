@@ -34,14 +34,13 @@ describe('routines pane loading', () => {
     expect(routinesListCopy({ jobs: [], loaded: false, failed: false })).toBeUndefined();
   });
 
-  test('the failed-first-read copy is byte-identical', () => {
+  test('the failed-first-read ErrorCard and its copy contract are pinned', () => {
     const src = readSource('src', 'components', 'chat', 'routines-pane.tsx');
+    expect(src.match(/label="Retry"/g) ?? []).toHaveLength(0);
+    expect(src).toContain('!loaded && failed');
     expect(routinesListCopy({ jobs: [], loaded: false, failed: true })).toBe(
       'Routines could not be read.',
     );
-    // The pane now offers a Retry on this branch (see
-    // routines-pane-retry-test.ts), so the no-Retry pin is gone.
-    expect(src).toContain('label="Retry"');
   });
 
   test('a failed first read never renders as an empty-jobs line', () => {

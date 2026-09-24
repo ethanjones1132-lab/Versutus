@@ -103,15 +103,13 @@ describe('routines pane row opens the scheduled-job sheet', () => {
     expect(src).toMatch(/setError\(next\.error\);/);
   });
 
-  test('the failed-first-read Retry branch is byte-identical', () => {
+  test('the failed-first-read branch is an ErrorCard with exactly one Retry', () => {
     const src = pane();
-    const failed = src.match(
-      /!loaded && failed && onRetry \? \([\s\S]*?\) : null/,
-    )?.[0];
+    const failed = src.match(/!loaded && failed \? \([\s\S]*?\) : null/)?.[0];
     expect(failed).toBeDefined();
-    expect(failed).toMatch(/label="Retry"/);
-    expect(failed).toMatch(/onPress=\{onRetry\}/);
-    expect(src.match(/label="Retry"/g)).toHaveLength(1);
+    expect(failed).toMatch(/<ErrorCard/);
+    expect(failed).toMatch(/onRetry=\{onRetry\}/);
+    expect(src.match(/label="Retry"/g) ?? []).toHaveLength(0);
   });
 
   test("Activity's CronJobSheet wiring is untouched", () => {
