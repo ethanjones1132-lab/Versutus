@@ -1600,7 +1600,12 @@ export function ChatScreen() {
       backendId: backend,
     }))
       .then((payload) => fold(toolsetsReadFromUnknown(payload)))
-      .catch(() => fold({ ok: false }));
+      .catch((caught) =>
+        fold({
+          ok: false,
+          error: caught instanceof Error ? caught.message : String(caught),
+        }),
+      );
   }, [toolsSurfaceKey, status, surface.kind, selectedBackendId, gatewayRequest]);
 
   useEffect(() => {
@@ -1621,14 +1626,20 @@ export function ChatScreen() {
           return { surfaceKey: toolsSurfaceKey, ...applyToolsetsRead(previous, read) };
         });
       })
-      .catch(() => {
+      .catch((caught) => {
         if (cancelled) return;
         setToolsetsState((prev) => {
           const previous =
             prev.surfaceKey === toolsSurfaceKey
               ? prev
               : { ...EMPTY_TOOLSETS, surfaceKey: toolsSurfaceKey };
-          return { surfaceKey: toolsSurfaceKey, ...applyToolsetsRead(previous, { ok: false }) };
+          return {
+            surfaceKey: toolsSurfaceKey,
+            ...applyToolsetsRead(previous, {
+              ok: false,
+              error: caught instanceof Error ? caught.message : String(caught),
+            }),
+          };
         });
       });
     return () => {
@@ -2113,6 +2124,7 @@ export function ChatScreen() {
               toolsets={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.toolsets : []}
               loaded={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.loaded : false}
               failed={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.failed : false}
+              error={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.error : undefined}
               onRetry={handleToolsetsRetry}
             />
           ) : null}
@@ -2131,6 +2143,7 @@ export function ChatScreen() {
           toolsets={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.toolsets : []}
           loaded={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.loaded : false}
           failed={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.failed : false}
+          error={toolsetsState.surfaceKey === toolsSurfaceKey ? toolsetsState.error : undefined}
           onRetry={handleToolsetsRetry}
         />
       ) : null}

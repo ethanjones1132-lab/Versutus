@@ -4,8 +4,8 @@ export type Toolset = {
   description: string;
 };
 
-/** What one toolsets list read produced. */
-export type ToolsetsRead = { ok: true; toolsets: Toolset[] } | { ok: false };
+/** What one toolsets list read produced. A refusal may carry the caught cause. */
+export type ToolsetsRead = { ok: true; toolsets: Toolset[] } | { ok: false; error?: string };
 
 /**
  * Visible toolsets after folding a read. Two failures are not the same
@@ -19,6 +19,8 @@ export type ToolsetsState = {
   /** True once a successful read has landed. */
   loaded: boolean;
   failed: boolean;
+  /** Kept cause of the last failed read; cleared only by a successful one. */
+  error?: string;
 };
 
 export const EMPTY_TOOLSETS: ToolsetsState = { toolsets: [], loaded: false, failed: false };
@@ -75,8 +77,10 @@ export function toolsetsReadFromUnknown(raw: unknown): ToolsetsRead {
 
 export function applyToolsetsRead(previous: ToolsetsState, read: ToolsetsRead): ToolsetsState {
   if (read.ok) return { toolsets: read.toolsets, loaded: true, failed: false };
-  if (previous.loaded) return { toolsets: previous.toolsets, loaded: true, failed: true };
-  return { toolsets: [], loaded: false, failed: true };
+  if (previous.loaded) {
+    return { toolsets: previous.toolsets, loaded: true, failed: true, error: read.error };
+  }
+  return { toolsets: [], loaded: false, failed: true, error: read.error };
 }
 
 export function toolsetsToggleLabel(state: ToolsetsState, open: boolean): string {

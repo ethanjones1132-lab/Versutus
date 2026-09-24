@@ -34,10 +34,10 @@ describe('tools pane loading', () => {
     expect(toolsetsListCopy({ toolsets: [], loaded: false, failed: false })).toBeUndefined();
   });
 
-  test('the failed-first-read Retry and its micro copy are byte-identical', () => {
+  test('the failed-first-read ErrorCard and its copy contract are pinned', () => {
     const src = readSource('src', 'components', 'chat', 'tools-pane.tsx');
-    expect(src.match(/label="Retry"/g)).toHaveLength(1);
-    expect(src).toContain('!loaded && failed && onRetry');
+    expect(src.match(/label="Retry"/g) ?? []).toHaveLength(0);
+    expect(src).toContain('!loaded && failed');
     expect(toolsetsListCopy({ toolsets: [], loaded: false, failed: true })).toBe(
       'Tools could not be read.',
     );

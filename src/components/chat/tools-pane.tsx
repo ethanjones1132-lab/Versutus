@@ -1,7 +1,7 @@
 import { memo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { Button, ListRow, Skeleton, Text } from '@/components/ui';
+import { Button, ErrorCard, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import {
   TOOLSETS_PANE_MAX_HEIGHT,
@@ -12,18 +12,21 @@ import {
 } from '@/lib/gateway/toolsets';
 
 /** Bot Chat tools pane — wrapped in `memo` so a chat-screen tick that does not
- * change `toolsets`, `loaded`, `failed`, or `onRetry` does not re-render this
- * subtree (the `open` `useState`, the fresh `state`/`copy` allocations, and
- * the `<ListRow>` rows all stay still). */
+ * change `toolsets`, `loaded`, `failed`, `error`, or `onRetry` does not
+ * re-render this subtree (the `open` `useState`, the fresh `state`/`copy`
+ * allocations, and the `<ListRow>` rows all stay still). */
 function ToolsPaneImpl({
   toolsets,
   loaded,
   failed,
+  error,
   onRetry,
 }: {
   toolsets: Toolset[];
   loaded: boolean;
   failed: boolean;
+  /** Kept cause of the last failed read, when the refusal carried one. */
+  error?: string;
   /** Re-run the same `tools.list` read the surface effect runs. */
   onRetry?: () => void;
 }) {
@@ -53,13 +56,18 @@ function ToolsPaneImpl({
               <Skeleton width="76%" height={44} style={styles.gap} />
             </>
           ) : null}
-          {copy ? (
+          {!loaded && failed ? (
+            <ErrorCard
+              cause={error ?? 'Tools could not be read.'}
+              affected="Tools on this gateway"
+              next="Retry, or check the Gate log for the failing call."
+              onRetry={onRetry}
+            />
+          ) : null}
+          {loaded && copy ? (
             <Text variant="micro" color="secondary">
               {copy}
             </Text>
-          ) : null}
-          {!loaded && failed && onRetry ? (
-            <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
           ) : null}
           {toolsets.map((toolset) => (
             <ListRow
