@@ -253,6 +253,16 @@ type GatewayContextValue = {
   /** Clear the banner. The surface showing an error owns dismissing it. */
   clearLastError: () => void;
   deviceId: string | null;
+  /**
+   * The deferred identity read: `loading` until it lands, `failed` with the
+   * kept cause when secure storage refuses — so a null `deviceId` never has
+   * to mean both an in-flight read and a settled failure.
+   */
+  deviceIdState: 'loading' | 'ready' | 'failed';
+  /** Why the last identity read failed; null unless `deviceIdState` is `failed`. */
+  deviceIdError: string | null;
+  /** Re-issue the identity read — the This-device card's Retry. */
+  reloadDeviceId: () => void;
   pairingDetails: PairingDetails | null;
   settings: AppSettings;
   isBootstrapped: boolean;
@@ -795,6 +805,41 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [lastError, setLastError] = useState<string | null>(null);
   const clearLastError = useCallback(() => setLastError(null), []);
   const [deviceId, setDeviceId] = useState<string | null>(null);
+  // Distinguish the first in-flight identity read from a refusal: a null
+  // deviceId alone can no longer mean both "still loading" and "secure
+  // storage said no" — the This-device card names the refusal and retries.
+  const [deviceIdState, setDeviceIdState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [deviceIdError, setDeviceIdError] = useState<string | null>(null);
+  const applyDeviceIdentityRead = useCallback(
+    (result: { ok: true; deviceId: string } | { ok: false; error: string }) => {
+      if (result.ok) {
+        setDeviceId(result.deviceId);
+        setDeviceIdState('ready');
+        setDeviceIdError(null);
+      } else {
+        setDeviceIdState('failed');
+        setDeviceIdError(result.error);
+      }
+    },
+    [],
+  );
+  const readDeviceIdentity = useCallback(async (): Promise<
+    { ok: true; deviceId: string } | { ok: false; error: string }
+  > => {
+    try {
+      const identity = await loadOrCreateDeviceIdentity();
+      return { ok: true, deviceId: identity.deviceId };
+    } catch (caught) {
+      // Keystore/SecureStore refusal: the caller names it instead of leaving
+      // the card on "Loading device identity…" for the rest of the session.
+      return { ok: false, error: caught instanceof Error ? caught.message : String(caught) };
+    }
+  }, []);
+  const reloadDeviceId = useCallback(() => {
+    setDeviceIdState('loading');
+    setDeviceIdError(null);
+    void readDeviceIdentity().then(applyDeviceIdentityRead);
+  }, [readDeviceIdentity, applyDeviceIdentityRead]);
   const [selectedBackendId, setSelectedBackendId] = useState<string | undefined>(undefined);
   const [selectedBotId, setSelectedBotId] = useState<string | undefined>(undefined);
   // Mirrored so long-lived callbacks (reloadHistoryFor and friends) can read
@@ -1884,10 +1929,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       offlineQueueRef.current = restoredQueue;
       setActivityRuns(restoredRuns);
 
-      // Device identity powers pairing/access requests — surface it once.
-      void loadOrCreateDeviceIdentity()
-        .then((identity) => setDeviceId(identity.deviceId))
-        .catch(() => undefined);
+      // Device identity powers pairing/access requests — surface it once. A
+      // refusal settles failed with its cause so the card can name it and retry.
+      void readDeviceIdentity().then(applyDeviceIdentityRead);
 
       const active = activeId ? (loadedGateways.find((item) => item.id === activeId) ?? null) : null;
       setActiveGateway(active);
@@ -1922,7 +1966,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLastError(error instanceof Error ? error.message : String(error));
       scheduleAutoRetryRef.current(30000);
     }
-  }, [runAutoConnect, applyConnectionPhase]);
+  }, [runAutoConnect, applyConnectionPhase, readDeviceIdentity, applyDeviceIdentityRead]);
 
   useEffect(() => {
     if (bootstrapStartedRef.current) return;
@@ -4545,6 +4589,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       lastError,
       clearLastError,
       deviceId,
+      deviceIdState,
+      deviceIdError,
+      reloadDeviceId,
       pairingDetails,
       settings,
       isBootstrapped,
@@ -4657,7 +4704,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     }),
     [
       gateways, activeGateway, activeHello, status, statusDetail, connectionPhase, probeMessage,
-      lastError, clearLastError, deviceId, pairingDetails,
+      lastError, clearLastError, deviceId, deviceIdState, deviceIdError, reloadDeviceId,
+      pairingDetails,
       settings, isBootstrapped, needsOnboarding, refreshGateways, addGateway, deleteGateway,
       connectGateway, disconnectGateway, sendChatInput, stopStreaming, reloadHistory,
       cron, gatewayRequest, gatewayFetch, backends, activeManifest, selectedBackendId, selectBackend, selectedBotId, listBots, canReadBotSessions, readBotSessions, createBot, updateBot, hasBotManagement, hasGroupRooms, openBot, clearBot, requestedSurface, requestSurface, clearRequestedSurface, requestedComposerFocus, requestComposerFocus, clearRequestedComposerFocus, requestedComposeRequest, requestComposeRequest, clearRequestedComposeRequest, requestedRunFocus, requestRunFocus, clearRequestedRunFocus, botJobs, routineJobs, routineRead, botGroups, runAgentCommand, setupFromPcAddress, retryAutoConnect, autoRetry,

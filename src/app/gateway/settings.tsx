@@ -67,7 +67,8 @@ function voiceReadiness(
 }
 
 export default function GatewaySettingsScreen() {
-  const { activeGateway, settings, deviceId, gatewayRequest } = useGateway();
+  const { activeGateway, settings, deviceId, deviceIdState, deviceIdError, reloadDeviceId, gatewayRequest } =
+    useGateway();
   const tokens = useTokens();
   const [copied, setCopied] = useState<'id' | null>(null);
   const [appLock, setAppLock] = useState(false);
@@ -498,6 +499,13 @@ export default function GatewaySettingsScreen() {
               </View>
               {deviceId ? (
                 <DeviceIdRow deviceId={deviceId} copied={copied} onCopy={copyText} />
+              ) : deviceIdState === 'failed' ? (
+                <ErrorCard
+                  cause={deviceIdError ?? 'This phone could not make its device identity.'}
+                  affected="this device's identity for pairing and access requests"
+                  next="Retry — pairing and access requests name this phone by that identity."
+                  onRetry={reloadDeviceId}
+                />
               ) : (
                 <Text variant="caption" color="tertiary">
                   Loading device identity…
