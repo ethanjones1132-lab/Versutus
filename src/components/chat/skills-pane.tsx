@@ -1,7 +1,7 @@
 import { memo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { Button, ListRow, Skeleton, Text } from '@/components/ui';
+import { Button, ErrorCard, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import {
   SKILLS_PANE_MAX_HEIGHT,
@@ -12,19 +12,22 @@ import {
 } from '@/lib/gateway/skills';
 
 /** Bot Chat skills pane — wrapped in `memo` so a chat-screen tick that does not
- * change `skills`, `loaded`, `failed`, `onInvoke`, or `onRetry` does not
- * re-render this subtree (the `open` `useState`, the fresh `state`/`copy`
+ * change `skills`, `loaded`, `failed`, `error`, `onInvoke`, or `onRetry` does
+ * not re-render this subtree (the `open` `useState`, the fresh `state`/`copy`
  * allocations, and the `<ListRow>` rows all stay still). */
 function SkillsPaneImpl({
   skills,
   loaded,
   failed,
+  error,
   onInvoke,
   onRetry,
 }: {
   skills: Skill[];
   loaded: boolean;
   failed: boolean;
+  /** Kept cause of the last failed read, when the refusal carried one. */
+  error?: string;
   /** Tap a row to start the same `/<skill-name>` turn typing it dispatches. */
   onInvoke?: (skillName: string) => void;
   /** Re-run the same `skills.list` read the surface effect runs. */
@@ -57,13 +60,18 @@ function SkillsPaneImpl({
               <Skeleton width="76%" height={44} style={styles.gap} />
             </>
           ) : null}
-          {copy ? (
+          {!loaded && failed ? (
+            <ErrorCard
+              cause={error ?? 'Skills could not be read.'}
+              affected="Skills on this Bot"
+              next="Retry, or check the Gate log for the failing call."
+              onRetry={onRetry}
+            />
+          ) : null}
+          {loaded && copy ? (
             <Text variant="micro" color="secondary">
               {copy}
             </Text>
-          ) : null}
-          {!loaded && failed && onRetry ? (
-            <Button label="Retry" variant="ghost" size="sm" onPress={onRetry} />
           ) : null}
           {skills.map((skill) => (
             <ListRow

@@ -4,8 +4,8 @@ export type Skill = {
   description: string;
 };
 
-/** What one skills list read produced. */
-export type SkillsRead = { ok: true; skills: Skill[] } | { ok: false };
+/** What one skills list read produced. A refusal may carry the caught cause. */
+export type SkillsRead = { ok: true; skills: Skill[] } | { ok: false; error?: string };
 
 /**
  * Visible skills list after folding a read. Two failures are not the same
@@ -19,6 +19,8 @@ export type SkillsState = {
   /** True once a successful read has landed. */
   loaded: boolean;
   failed: boolean;
+  /** Kept cause of the last failed read; cleared only by a successful one. */
+  error?: string;
 };
 
 export const EMPTY_SKILLS: SkillsState = { skills: [], loaded: false, failed: false };
@@ -66,8 +68,10 @@ export function skillsReadFromUnknown(raw: unknown): SkillsRead {
 
 export function applySkillsRead(previous: SkillsState, read: SkillsRead): SkillsState {
   if (read.ok) return { skills: read.skills, loaded: true, failed: false };
-  if (previous.loaded) return { skills: previous.skills, loaded: true, failed: true };
-  return { skills: [], loaded: false, failed: true };
+  if (previous.loaded) {
+    return { skills: previous.skills, loaded: true, failed: true, error: read.error };
+  }
+  return { skills: [], loaded: false, failed: true, error: read.error };
 }
 
 export function skillsToggleLabel(state: SkillsState, open: boolean): string {

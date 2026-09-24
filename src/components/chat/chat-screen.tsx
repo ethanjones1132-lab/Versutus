@@ -1543,7 +1543,12 @@ export function ChatScreen() {
     };
     void gatewayRequest('skills.list')
       .then((payload) => fold(skillsReadFromUnknown(payload)))
-      .catch(() => fold({ ok: false }));
+      .catch((caught) =>
+        fold({
+          ok: false,
+          error: caught instanceof Error ? caught.message : String(caught),
+        }),
+      );
   }, [botSurfaceId, status, gatewayRequest]);
 
   useEffect(() => {
@@ -1559,12 +1564,18 @@ export function ChatScreen() {
           return { botId: botSurfaceId, ...applySkillsRead(previous, read) };
         });
       })
-      .catch(() => {
+      .catch((caught) => {
         if (cancelled) return;
         setSkillsState((prev) => {
           const previous =
             prev.botId === botSurfaceId ? prev : { ...EMPTY_SKILLS, botId: botSurfaceId };
-          return { botId: botSurfaceId, ...applySkillsRead(previous, { ok: false }) };
+          return {
+            botId: botSurfaceId,
+            ...applySkillsRead(previous, {
+              ok: false,
+              error: caught instanceof Error ? caught.message : String(caught),
+            }),
+          };
         });
       });
     return () => {
@@ -2093,6 +2104,7 @@ export function ChatScreen() {
             skills={skillsState.botId === surface.botId ? skillsState.skills : []}
             loaded={skillsState.botId === surface.botId ? skillsState.loaded : false}
             failed={skillsState.botId === surface.botId ? skillsState.failed : false}
+            error={skillsState.botId === surface.botId ? skillsState.error : undefined}
             onInvoke={handleSkillInvoke}
             onRetry={handleSkillsRetry}
           />
