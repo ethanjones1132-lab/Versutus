@@ -37,6 +37,11 @@ export type ChatHeaderProps = {
   speakerOn?: boolean;
   /** Present only when this device has a voice to read replies in. */
   onSpeakerPress?: () => void;
+  /**
+   * Settings entry from Chat chrome. Present on every Chat surface so the
+   * ≤3-taps test reaches settings without routing through the Home tab.
+   */
+  onSettingsPress?: () => void;
 };
 
 /** Slim contextual chat header: orb, gateway, quick model/session chips, overflow. */
@@ -58,6 +63,7 @@ function ChatHeaderImpl({
   overflowExpanded,
   speakerOn = false,
   onSpeakerPress,
+  onSettingsPress,
 }: ChatHeaderProps) {
   const tokens = useTokens();
   const { width: windowWidth, fontScale } = useWindowDimensions();
@@ -176,6 +182,22 @@ function ChatHeaderImpl({
       />
     </PressableScale>
   ) : null;
+  // Trailing settings gear: the same resting brand-violet glyph the screen
+  // headers wear, kept in the 32px control family this header already uses.
+  const settings = onSettingsPress ? (
+    <PressableScale
+      onPress={onSettingsPress}
+      hitSlop={10}
+      accessibilityRole="button"
+      accessibilityLabel="Settings"
+      style={styles.overflow}>
+      <Icon
+        name={{ ios: 'gearshape', android: 'settings', web: 'settings' }}
+        size={18}
+        color="accent"
+      />
+    </PressableScale>
+  ) : null;
 
   return (
     <View style={styles.wrap}>
@@ -192,6 +214,7 @@ function ChatHeaderImpl({
               {titles}
               {speaker}
               {overflow}
+              {settings}
             </View>
             <View style={styles.chipRow}>
               {modelChip}
@@ -207,6 +230,7 @@ function ChatHeaderImpl({
             {sessionChip}
             {speaker}
             {overflow}
+            {settings}
           </>
         )}
       </GlassSurface>

@@ -954,6 +954,11 @@ export function ChatScreen() {
     clearBot();
     showSurface({ kind: 'roster' });
   }, [clearBot, showSurface]);
+  // Settings entry on the Chat chrome itself: the ≤3-taps test reaches it
+  // straight from any Chat surface instead of detouring through Home's gear.
+  const handleHeaderSettingsPress = useCallback(() => {
+    router.push('/gateway/settings');
+  }, [router]);
 
   const pairingKey = `${deviceId ?? ''}:${pairingDetails?.requestId ?? ''}`;
   const isStreaming = isSending || messages.some((message) => message.streaming);
@@ -1850,6 +1855,7 @@ export function ChatScreen() {
           }
           onConnect={() => void retryAutoConnect()}
           onGoHome={() => router.replace('/home')}
+          onSettings={() => router.push('/gateway/settings')}
         />
       </Screen>
     );
@@ -1887,6 +1893,7 @@ export function ChatScreen() {
         onSpeakerPress={
           threadSurface && speakerKey && speechReady ? handleSpeakerPress : undefined
         }
+        onSettingsPress={handleHeaderSettingsPress}
       />
 
       {silentHintShown ? (

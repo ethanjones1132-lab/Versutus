@@ -9,11 +9,14 @@ export function ChatEmptyState({
   description,
   onConnect,
   onGoHome,
+  onSettings,
 }: {
   title: string;
   description: string;
   onConnect: () => void;
   onGoHome: () => void;
+  /** Optional settings door so this empty never forces a Home detour. */
+  onSettings?: () => void;
 }) {
   return (
     <View style={styles.fallback}>
@@ -22,6 +25,7 @@ export function ChatEmptyState({
       </Host>
       <Button label="Connect to gateway" onPress={onConnect} />
       <SwiftButton label="Go to Home" onPress={onGoHome} />
+      {onSettings ? <Button label="Settings" variant="ghost" onPress={onSettings} /> : null}
     </View>
   );
 }
