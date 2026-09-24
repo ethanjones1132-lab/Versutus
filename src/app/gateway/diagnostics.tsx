@@ -98,7 +98,7 @@ export default function GatewayDiagnosticsScreen() {
 }
 
 const styles = StyleSheet.create({
-  content: { padding: Spacing.three, gap: Spacing.two },
+  content: { padding: Spacing.four, gap: Spacing.three },
   card: { gap: Spacing.one },
   blurb: { marginTop: Spacing.one },
   summary: { flexDirection: 'row', marginTop: Spacing.two },
