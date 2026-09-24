@@ -6,34 +6,44 @@ import { Easing } from 'react-native-reanimated';
  * docs/roadmap-capability-ui-overhaul.md). `Palette` is the single source of
  * truth. Feature components should consume it via `useTokens()`; primitives
  * under components/ui may import `Palette` directly.
+ *
+ * Visual language per docs/visual-direction-2026-09.md (ACCEPTED): cool
+ * near-black stage, bright cool-white type, soft electric violet brand accent,
+ * metallic gold as a rare highlight only (never the brand accent).
  */
 export const Palette = {
   // Elevation ramp: base → inset (recessed) → elevated (cards) → raised (sheets/heroes)
-  background: '#030304',
-  backgroundInset: '#070607',
-  backgroundElevated: '#0A0908',
-  backgroundRaised: '#100E0B',
+  // Cool near-black stage, not brown-black (visual-direction lock).
+  background: '#0A0A0B',
+  backgroundInset: '#0D0D0F',
+  backgroundElevated: '#111113',
+  backgroundRaised: '#16161A',
 
-  // Glass tiers
-  glass: 'rgba(14, 12, 10, 0.78)',
-  glassBorder: 'rgba(229, 198, 126, 0.18)',
-  glassHighlight: 'rgba(255, 236, 190, 0.075)',
-  glassHero: 'rgba(22, 18, 14, 0.88)',
-  glassHeroBorder: 'rgba(240, 214, 144, 0.32)',
+  // Glass tiers (cool translucent; flat-panel + hairline first)
+  glass: 'rgba(17, 17, 19, 0.82)',
+  glassBorder: 'rgba(245, 247, 250, 0.08)',
+  glassHighlight: 'rgba(245, 247, 250, 0.04)',
+  glassHero: 'rgba(22, 22, 26, 0.92)',
+  glassHeroBorder: 'rgba(245, 247, 250, 0.12)',
 
-  // Text
-  textPrimary: '#F7F1E3',
-  textSecondary: '#B8AE9A',
-  textTertiary: '#7F7668',
-  textInverse: '#070503',
+  // Text — bright cool white / cool gray
+  textPrimary: '#F5F7FA',
+  textSecondary: '#9CA3AF',
+  textTertiary: '#6B7280',
+  textInverse: '#0A0A0B',
 
-  // Accent
-  accent: '#D6B76A',
-  accentMuted: 'rgba(214, 183, 106, 0.18)',
-  accentWarm: '#F0D690',
-  accentWarmMuted: 'rgba(240, 214, 144, 0.16)',
+  // Accent — soft electric violet is the brand; `accentWarm` is the brighter
+  // violet for selected/focus states (was gold-as-primary).
+  accent: '#8B7CFF',
+  accentMuted: 'rgba(139, 124, 255, 0.18)',
+  accentWarm: '#A79BFF',
+  accentWarmMuted: 'rgba(167, 155, 255, 0.16)',
 
-  // Status
+  // Metallic gold — luxury punch only. Rare highlight roles, never `accent`.
+  gold: '#D4AF37',
+  goldMuted: 'rgba(212, 175, 55, 0.16)',
+
+  // Status (semantic — greens/ambers/reds, not brand)
   statusConnected: '#63D7A6',
   statusConnectedMuted: 'rgba(99, 215, 166, 0.16)',
   statusConnecting: '#D6B76A',
@@ -41,10 +51,10 @@ export const Palette = {
   statusDisconnectedMuted: 'rgba(229, 109, 109, 0.16)',
   statusPairing: '#F0D690',
 
-  // Borders & scrim
-  border: 'rgba(229, 198, 126, 0.12)',
-  borderSubtle: 'rgba(229, 198, 126, 0.08)',
-  borderStrong: 'rgba(240, 214, 144, 0.28)',
+  // Borders & scrim (cool hairlines)
+  border: 'rgba(245, 247, 250, 0.08)',
+  borderSubtle: 'rgba(245, 247, 250, 0.05)',
+  borderStrong: 'rgba(245, 247, 250, 0.18)',
   overlay: 'rgba(0, 0, 0, 0.62)',
 } as const;
 
