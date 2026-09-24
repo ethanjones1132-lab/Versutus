@@ -129,7 +129,7 @@ export function EnvironmentRegistrationForm({
 
   return (
     <Card padding={Spacing.three} style={styles.card}>
-      <Text variant="title">{editing ? 'Edit CLI environment' : 'Add a CLI environment'}</Text>
+      <Text variant="headline">{editing ? 'Edit CLI environment' : 'Add a CLI environment'}</Text>
       {editing ? (
         <Text variant="caption">
           Id “{initial.id}” is fixed — rename by removing and re-adding the environment.

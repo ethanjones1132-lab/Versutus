@@ -29,6 +29,12 @@ const toolsetsSection = () => readSource('src', 'components', 'gateway', 'toolse
 const rpcMethodsSection = () => readSource('src', 'components', 'gateway', 'rpc-methods-section.tsx');
 const healthChecksPane = () => readSource('src', 'components', 'gateway', 'health-checks-pane.tsx');
 const pairedDevicesPane = () => readSource('src', 'components', 'gateway', 'paired-devices-pane.tsx');
+const setupIdentity = () =>
+  readSource('src', 'components', 'gateway', 'gateway-identity-section.tsx');
+const providerForm = () =>
+  readSource('src', 'components', 'gateway', 'provider-registration-form.tsx');
+const environmentForm = () =>
+  readSource('src', 'components', 'gateway', 'environment-registration-form.tsx');
 
 function countTitles(src: string): number {
   return (src.match(/variant="title"/g) ?? []).length;
@@ -104,6 +110,47 @@ describe('Activity section headers converge on one level', () => {
     const src = agentTargets();
     expect(src).toContain('<Text variant="headline">Configured profiles</Text>');
     expect(countTitles(src)).toBe(0);
+  });
+});
+
+describe('Gate setup child card headings sit at headline under the one screen title', () => {
+  test('Gateway identity is a headline, not a second title on Gate setup', () => {
+    const src = setupIdentity();
+    expect(src).toContain('<Text variant="headline">Gateway identity</Text>');
+    expect(countTitles(src)).toBe(0);
+  });
+
+  test('Add a provider is a headline, not a second title on Gate setup', () => {
+    const src = providerForm();
+    expect(src).toContain('<Text variant="headline">Add a provider</Text>');
+    expect(countTitles(src)).toBe(0);
+  });
+
+  test('Add/Edit CLI environment headings are headlines, not second titles on Gate setup', () => {
+    const src = environmentForm();
+    expect(src).toContain(
+      '<Text variant="headline">{editing ? \'Edit CLI environment\' : \'Add a CLI environment\'}</Text>',
+    );
+    expect(countTitles(src)).toBe(0);
+  });
+
+  test('setup keeps one screen title and still mounts its three child cards', () => {
+    const setup = readSource('src', 'app', 'gateway', 'setup.tsx');
+    expect(countTitles(setup)).toBe(1);
+    expect(setup).toContain('<Text variant="title">Gate setup</Text>');
+    expect(setup).toContain('<GatewayIdentitySection />');
+    expect(setup).toContain('<ProvidersSection />');
+    expect(setup).toContain('<EnvironmentsSection />');
+  });
+
+  test('the demoted headings keep their copy and form fields stay wired', () => {
+    expect(setupIdentity()).toContain('Gateway identity');
+    expect(providerForm()).toContain('Add a provider');
+    expect(environmentForm()).toContain('Edit CLI environment');
+    expect(environmentForm()).toContain('Add a CLI environment');
+    expect(providerForm()).toContain('onSubmit({ id, label, profile, baseUrl })');
+    expect(environmentForm()).toContain('bindingsProblem');
+    expect(setupIdentity()).toContain('gatewayIdentityRows(activeManifest)');
   });
 });
 

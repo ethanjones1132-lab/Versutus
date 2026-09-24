@@ -45,7 +45,7 @@ export function ProviderRegistrationForm({
 
   return (
     <Card padding={Spacing.three} style={styles.card}>
-      <Text variant="title">Add a provider</Text>
+      <Text variant="headline">Add a provider</Text>
       {profiles.length === 0 ? (
         <Text variant="caption">
           This Gate advertises no provider profiles. Update the Gate to register providers from here.

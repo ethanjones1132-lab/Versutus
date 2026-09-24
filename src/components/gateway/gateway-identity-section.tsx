@@ -26,7 +26,7 @@ export function GatewayIdentitySection() {
 
   return (
     <Card padding={Spacing.three} style={styles.card}>
-      <Text variant="title">Gateway identity</Text>
+      <Text variant="headline">Gateway identity</Text>
       <Text variant="caption" color="secondary">
         The Gate build this screen is reading.
       </Text>
