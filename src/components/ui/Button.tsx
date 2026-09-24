@@ -23,12 +23,12 @@ export function Button({
 
   const variantStyles =
     variant === 'primary'
-      ? { backgroundColor: tokens.accentWarm, color: 'inverse' as const, borderColor: tokens.accentWarm }
+      ? { backgroundColor: tokens.accent, color: 'inverse' as const, borderColor: tokens.accent }
       : variant === 'destructive'
         ? { backgroundColor: tokens.statusDisconnected, color: 'inverse' as const, borderColor: tokens.statusDisconnected }
         : variant === 'secondary'
-          ? { backgroundColor: tokens.glass, color: 'primary' as const, borderColor: tokens.glassBorder }
-          : { backgroundColor: 'transparent', color: 'accentWarm' as const, borderColor: 'transparent' };
+          ? { backgroundColor: tokens.backgroundElevated, color: 'primary' as const, borderColor: tokens.border }
+          : { backgroundColor: 'transparent', color: 'accent' as const, borderColor: 'transparent' };
 
   return (
     <PressableScale
@@ -78,7 +78,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
   },
   primary: {
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.28), 0 10px 24px rgba(214,183,106,0.18)',
+    // Violet brand lift on the near-black stage — never the old champagne gold.
+    boxShadow: 'inset 0 1px 0 rgba(245,247,250,0.14), 0 12px 32px rgba(139,124,255,0.22)',
   },
   label: {
     fontFamily: FontFamily.sansSemiBold,
