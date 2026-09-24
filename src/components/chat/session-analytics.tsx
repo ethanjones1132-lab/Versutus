@@ -54,7 +54,7 @@ export function SessionAnalytics({
         value={formatTokenCount(usage.tokens)}
         ratio={tokenMeter.ratio}
         track={tokens.backgroundInset}
-        fill={tokens.accentWarm}
+        fill={tokens.accent}
       />
       <Meter
         label="Cost"
@@ -69,7 +69,7 @@ export function SessionAnalytics({
             <Polyline
               points={sparkPoints}
               fill="none"
-              stroke={tokens.accentWarm}
+              stroke={tokens.accent}
               strokeWidth={1.5}
               strokeLinejoin="round"
               strokeLinecap="round"

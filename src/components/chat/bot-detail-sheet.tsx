@@ -113,7 +113,7 @@ export function BotDetailSheet({
             </Text>
           ) : null}
           {soulNote ? (
-            <Text variant="caption" color={soulState.failed ? 'accentWarm' : 'tertiary'}>
+            <Text variant="caption" color={soulState.failed ? 'accent' : 'tertiary'}>
               {soulNote}
             </Text>
           ) : null}
@@ -148,7 +148,7 @@ export function BotDetailSheet({
           <Text variant="micro" color="tertiary">
             ROUTING
           </Text>
-          <Text variant="body" color={detail.routingNext ? 'accentWarm' : undefined}>
+          <Text variant="body" color={detail.routingNext ? 'accent' : undefined}>
             {detail.routingTitle}
           </Text>
           {detail.routingNext ? (
@@ -207,7 +207,7 @@ export function BotDetailSheet({
             accessibilityRole="button"
             accessibilityLabel="Dismiss export notice"
             style={styles.exportNotice}>
-            <Text variant="caption" color="accentWarm">
+            <Text variant="caption" color="accent">
               {exportNotice}
             </Text>
           </PressableScale>

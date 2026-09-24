@@ -119,9 +119,9 @@ describe('routines failure keeps its cause', () => {
       }),
     ).toBe('Could not re-read routines — showing the last list.');
     // The pane's local create/pause failure channel is untouched: its own
-    // `error` state still renders as the accentWarm caption.
+    // `error` state still renders as the brand accent caption.
     expect(src).toMatch(/const \[error, setError\] = useState<string \| undefined>\(\);/);
-    expect(src).toMatch(/\{error \? \(\s*<Text variant="caption" color="accentWarm">/);
+    expect(src).toMatch(/\{error \? \(\s*<Text variant="caption" color="accent">/);
     const screen = readSource('src', 'components', 'chat', 'chat-screen.tsx');
     expect(screen).toContain('onRetry={handleRoutinesRetry}');
     expect(screen).toContain('onChanged={handleRoutinesRetry}');

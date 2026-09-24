@@ -77,7 +77,7 @@ export function BotMemoryPane({ botId }: { botId: string }) {
         <Skeleton width="90%" height={40} />
       ) : settled.failed ? (
         <View style={styles.block}>
-          <Text variant="caption" color="accentWarm">
+          <Text variant="caption" color="accent">
             Memory could not be read from the Gate host.
           </Text>
           <Button label="Retry" variant="ghost" size="sm" onPress={() => setReloadKey((n) => n + 1)} />
@@ -132,7 +132,7 @@ export function BotMemoryPane({ botId }: { botId: string }) {
                   />
                   {confirming ? (
                     <View style={styles.confirmBlock}>
-                      <Text variant="caption" color="accentWarm">
+                      <Text variant="caption" color="accent">
                         {memorySaveConfirmationCopy(file.name)}
                       </Text>
                       <View style={styles.editActions}>
@@ -162,7 +162,7 @@ export function BotMemoryPane({ botId }: { botId: string }) {
                     </View>
                   )}
                   {editError ? (
-                    <Text variant="caption" color="accentWarm">
+                    <Text variant="caption" color="accent">
                       {editError}
                     </Text>
                   ) : null}

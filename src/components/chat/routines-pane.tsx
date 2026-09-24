@@ -141,7 +141,7 @@ function RoutinesPaneImpl({
           showsVerticalScrollIndicator={false}
         >
           {error ? (
-            <Text variant="caption" color="accentWarm">
+            <Text variant="caption" color="accent">
               {error}
             </Text>
           ) : null}
