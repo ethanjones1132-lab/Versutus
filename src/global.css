@@ -9,12 +9,12 @@
     'MS PGothic', sans-serif;
   --font-serif: Georgia, 'Times New Roman', serif;
 
-  --color-background: #030304;
-  --color-background-elevated: #0a0908;
-  --color-accent: #d6b76a;
-  --color-accent-warm: #f0d690;
-  --color-text-primary: #f7f1e3;
-  --color-text-secondary: #b8ae9a;
-  --color-glass: rgba(14, 12, 10, 0.78);
-  --color-glass-border: rgba(229, 198, 126, 0.18);
+  --color-background: #0a0a0b;
+  --color-background-elevated: #111113;
+  --color-accent: #8b7cff;
+  --color-accent-warm: #a79bff;
+  --color-text-primary: #f5f7fa;
+  --color-text-secondary: #9ca3af;
+  --color-glass: rgba(17, 17, 19, 0.82);
+  --color-glass-border: rgba(245, 247, 250, 0.08);
 }

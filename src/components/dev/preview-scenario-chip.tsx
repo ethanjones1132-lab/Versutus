@@ -3,7 +3,7 @@ import { Pressable, StyleSheet } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
 import { GlassSurface, Text } from '@/components/ui';
-import { Spacing } from '@/constants/tokens';
+import { Palette, Spacing } from '@/constants/tokens';
 import { springSnappy } from '@/lib/motion/presets';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -57,7 +57,7 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
   },
   chipActive: {
-    borderColor: 'rgba(240, 214, 144, 0.35)',
+    borderColor: Palette.accentMuted,
   },
   label: {
     paddingHorizontal: Spacing.three,

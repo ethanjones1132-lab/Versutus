@@ -69,14 +69,14 @@ export default function DevPreviewScreen() {
     <Screen>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <Text variant="mono" color="accentWarm" style={styles.eyebrow}>
+          <Text variant="mono" color="accent" style={styles.eyebrow}>
             PHASE 0 · ANDROID PRIMARY
           </Text>
           <Text variant="title">Visual baseline lab</Text>
           <Text color="secondary" style={styles.lede}>
             Mock gateway states for Compose glass, elevation tiers, and motion — no live connection.
           </Text>
-          <View style={[styles.rule, { backgroundColor: tokens.accentWarmMuted }]} />
+          <View style={[styles.rule, { backgroundColor: tokens.accentMuted }]} />
         </View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rail}>
@@ -123,7 +123,7 @@ export default function DevPreviewScreen() {
         </Animated.View>
 
         <View style={styles.sheetLab}>
-          <Text variant="mono" color="accentWarm" style={styles.eyebrow}>
+          <Text variant="mono" color="accent" style={styles.eyebrow}>
             SHEET LAB
           </Text>
           <Text color="secondary">
