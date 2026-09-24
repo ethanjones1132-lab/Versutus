@@ -18,7 +18,7 @@ export type StatTileProps = {
 export function StatTile({ label, value, sub, icon, style }: StatTileProps) {
   return (
     <Card variant="inset" padding={Spacing.three} style={[styles.tile, style]}>
-      {icon ? <Icon name={icon} size={16} color="accentWarm" /> : null}
+      {icon ? <Icon name={icon} size={16} color="textSecondary" /> : null}
       <Text variant="headline" numberOfLines={1}>
         {value}
       </Text>

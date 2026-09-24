@@ -34,7 +34,7 @@ export function AmbientFallback({ parallaxX = 0, parallaxY = 0 }: AmbientCanvasP
             styles.plateTop,
             {
               backgroundColor: tokens.backgroundElevated,
-              borderColor: tokens.glassBorder,
+              borderColor: tokens.border,
             },
           ]}
         />
@@ -48,8 +48,8 @@ export function AmbientFallback({ parallaxX = 0, parallaxY = 0 }: AmbientCanvasP
             },
           ]}
         />
-        <View style={[styles.goldRule, styles.goldRuleTop, { backgroundColor: tokens.accentMuted }]} />
-        <View style={[styles.goldRule, styles.goldRuleSide, { backgroundColor: tokens.accentWarmMuted }]} />
+        <View style={[styles.rule, styles.ruleTop, { backgroundColor: tokens.accentMuted }]} />
+        <View style={[styles.rule, styles.ruleSide, { backgroundColor: tokens.accentWarmMuted }]} />
         <GlowOrb
           size={420}
           color={tokens.accentWarmMuted}
@@ -69,7 +69,7 @@ export function AmbientFallback({ parallaxX = 0, parallaxY = 0 }: AmbientCanvasP
       </View>
       <View style={[styles.vignette, styles.vignetteTop, { backgroundColor: tokens.background }]} />
       <View style={[styles.vignette, styles.vignetteBottom, { backgroundColor: tokens.background }]} />
-      <View style={[styles.centerLine, { backgroundColor: tokens.glassBorder }]} />
+      <View style={[styles.centerLine, { backgroundColor: tokens.border }]} />
       <Image
         source={require('../../../assets/images/grain.png')}
         resizeMode="repeat"
@@ -156,17 +156,17 @@ const styles = StyleSheet.create({
     opacity: 0.62,
     transform: [{ rotate: '7deg' }],
   },
-  goldRule: {
+  rule: {
     position: 'absolute',
     opacity: 0.9,
   },
-  goldRuleTop: {
+  ruleTop: {
     top: 126,
     left: '9%',
     right: '18%',
     height: StyleSheet.hairlineWidth,
   },
-  goldRuleSide: {
+  ruleSide: {
     top: '18%',
     right: 28,
     width: StyleSheet.hairlineWidth,

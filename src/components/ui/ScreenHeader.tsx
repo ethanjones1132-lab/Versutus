@@ -39,9 +39,9 @@ export function ScreenHeader({
       {trailing ??
         (onTrailingPress ? (
           <PressableScale onPress={onTrailingPress} hitSlop={12}>
-            <GlassSurface variant="chip" padding={0} style={styles.trailing}>
+            <GlassSurface variant="inset" padding={0} style={styles.trailing}>
               {Platform.OS === 'web' ? (
-                <WebSymbol name={trailingIcon.web} size={22} color={tokens.accentWarm} />
+                <WebSymbol name={trailingIcon.web} size={22} color={tokens.accent} />
               ) : (
                 <SymbolView
                   name={
@@ -52,7 +52,7 @@ export function ScreenHeader({
                     } as React.ComponentProps<typeof SymbolView>['name']
                   }
                   size={22}
-                  tintColor={tokens.accentWarm}
+                  tintColor={tokens.accent}
                   weight="medium"
                 />
               )}

@@ -23,8 +23,8 @@ import { useTokens } from '@/hooks/use-tokens';
 
 import { AmbientFallback, type AmbientCanvasProps } from './ambient-fallback';
 
-const GOLD = 'rgba(240, 214, 144, 0.12)';
-const SAPPHIRE = 'rgba(59, 111, 217, 0.12)';
+const VIOLET = 'rgba(139, 124, 255, 0.12)';
+const VIOLET_BRIGHT = 'rgba(167, 155, 255, 0.12)';
 const DRIFT = Easing.inOut(Easing.sin);
 
 class SkiaAmbientBoundary extends Component<
@@ -66,11 +66,11 @@ export function AmbientCanvas({ parallaxX = 0, parallaxY = 0 }: AmbientCanvasPro
     };
   }, [driftA, driftB]);
 
-  const goldTransform = useDerivedValue(() => [
+  const violetTransform = useDerivedValue(() => [
     { translateX: -0.15 * width + driftA.value * 40 + parallaxXSv.value * 8 },
     { translateY: -0.22 * height + driftA.value * 60 + parallaxYSv.value * 8 },
   ]);
-  const sapphireTransform = useDerivedValue(() => [
+  const violetBrightTransform = useDerivedValue(() => [
     { translateX: 0.58 * width + driftB.value * -48 + parallaxXSv.value * 8 },
     { translateY: 0.62 * height + driftB.value * -34 + parallaxYSv.value * 8 },
   ]);
@@ -81,14 +81,14 @@ export function AmbientCanvas({ parallaxX = 0, parallaxY = 0 }: AmbientCanvasPro
     <SkiaAmbientBoundary fallback={fallback}>
       <View pointerEvents="none" style={StyleSheet.absoluteFill}>
         <Canvas style={StyleSheet.absoluteFill}>
-          <Group transform={goldTransform}>
+          <Group transform={violetTransform}>
             <Rect x={0} y={0} width={420} height={420}>
-              <RadialGradient c={vec(210, 210)} r={210} colors={[GOLD, 'transparent']} />
+              <RadialGradient c={vec(210, 210)} r={210} colors={[VIOLET, 'transparent']} />
             </Rect>
           </Group>
-          <Group transform={sapphireTransform}>
+          <Group transform={violetBrightTransform}>
             <Rect x={0} y={0} width={300} height={300}>
-              <RadialGradient c={vec(150, 150)} r={150} colors={[SAPPHIRE, 'transparent']} />
+              <RadialGradient c={vec(150, 150)} r={150} colors={[VIOLET_BRIGHT, 'transparent']} />
             </Rect>
           </Group>
           {grain ? (
@@ -101,7 +101,7 @@ export function AmbientCanvas({ parallaxX = 0, parallaxY = 0 }: AmbientCanvasPro
           style={[
             styles.plate,
             styles.plateTop,
-            { backgroundColor: tokens.backgroundElevated, borderColor: tokens.glassBorder },
+            { backgroundColor: tokens.backgroundElevated, borderColor: tokens.border },
           ]}
         />
         <View
@@ -111,11 +111,11 @@ export function AmbientCanvas({ parallaxX = 0, parallaxY = 0 }: AmbientCanvasPro
             { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
           ]}
         />
-        <View style={[styles.goldRule, styles.goldRuleTop, { backgroundColor: tokens.accentMuted }]} />
-        <View style={[styles.goldRule, styles.goldRuleSide, { backgroundColor: tokens.accentWarmMuted }]} />
+        <View style={[styles.rule, styles.ruleTop, { backgroundColor: tokens.accentMuted }]} />
+        <View style={[styles.rule, styles.ruleSide, { backgroundColor: tokens.accentWarmMuted }]} />
         <View style={[styles.vignette, styles.vignetteTop, { backgroundColor: tokens.background }]} />
         <View style={[styles.vignette, styles.vignetteBottom, { backgroundColor: tokens.background }]} />
-        <View style={[styles.centerLine, { backgroundColor: tokens.glassBorder }]} />
+        <View style={[styles.centerLine, { backgroundColor: tokens.border }]} />
       </View>
     </SkiaAmbientBoundary>
   );
@@ -142,17 +142,17 @@ const styles = StyleSheet.create({
     opacity: 0.62,
     transform: [{ rotate: '7deg' }],
   },
-  goldRule: {
+  rule: {
     position: 'absolute',
     opacity: 0.9,
   },
-  goldRuleTop: {
+  ruleTop: {
     top: 126,
     left: '9%',
     right: '18%',
     height: StyleSheet.hairlineWidth,
   },
-  goldRuleSide: {
+  ruleSide: {
     top: '18%',
     right: 28,
     width: StyleSheet.hairlineWidth,
