@@ -10,6 +10,8 @@ Palette landing was necessary and is largely done. **Recolour is not the mission
 
 North star: dark quiet stage; **assistant text is the hero**; chrome disappears; ≤3 taps from Chat.
 
+**Navigation (locked):** side drawer; **zero** bottom tabs. Home is not a destination.
+
 ## Priority order (each turn — top Ready item that fits)
 
 1. **Message layout** — assistant unboxed on stage; user soft grey no border; tools/thinking → one quiet expandable line
@@ -17,7 +19,7 @@ North star: dark quiet stage; **assistant text is the hero**; chrome disappears;
 3. **One-row header** — back · title+model subtitle · one menu
 4. **Strip background + borders** — flat stage; widen surface steps; delete drifting art; drop hairline-everywhere
 5. **Swipeable sheets** — grab handle + dismiss gesture on BaseSheet
-6. **Only after human decides** — drawer / kill bottom tabs
+6. **Side drawer — kill bottom tabs** (LOCKED 2026-09-24: conversation screen + drawer for chats/bots/Activity/Tools/Gate; Home is not a tab)
 7. Residuals: plain-language copy, secondary text AA (`#8A8F98`), avatar≠status mint, Regular 400 body, 150–250ms fade+rise motion
 
 ## Explicit non-goals / forbidden

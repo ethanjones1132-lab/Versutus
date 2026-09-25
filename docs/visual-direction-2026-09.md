@@ -64,10 +64,18 @@ A dark, quiet stage where the **assistant’s words** are the hero. Chrome disap
 - Honesty-only / ErrorCard-only unless ship-blocker
 - Weakening the verify gate
 - Using gold until it is visually distinct from warning amber
-- Four equal dashboard tabs as the end state (tabs may remain temporarily; drawer is the open product call)
+- Bottom tabs as the end state (migration shim only; drawer is locked)
+
+## Navigation (LOCKED 2026-09-24 ~21:51 ET)
+
+**Kill bottom tabs. Side drawer only** (Claude / ChatGPT style).
+
+- One conversation screen is the product surface.
+- Drawer holds chats, agents/bots, Activity, Tools/settings entry, Gate/connect status.
+- Home is not a tab and not a co-equal product — thin Gate/status lives in the drawer (or Chat chrome), never a bottom destination.
+- Tab bar code may remain temporarily only as a migration shim; shipping end-state is **zero bottom tabs**.
 
 ## Still open (human)
 
-- Side drawer vs keep thin tabs (audit item 15) — biggest single step toward peer feel
 - Exact violet hex saturation
-- Whether Home disappears entirely vs thin Gate status
+- Drawer IA details (section order: chats vs bots vs tools) — refine in backlog, not a reopen of tabs

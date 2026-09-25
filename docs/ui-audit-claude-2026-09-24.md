@@ -52,6 +52,8 @@ ChatGPT, Claude, and Grok look expensive because they **remove** things: assista
 
 Then decide drawer / kill tabs (item 15).
 
+**Operator decision 2026-09-24 ~21:51 ET:** Drawer — kill bottom tabs. Locked in visual-direction + charter.
+
 ## Operator notes
 
 - Sprint paused 2026-09-24 ~21:50 ET at `2f7ab2c` so direction can absorb this audit before more violet residual commits.
