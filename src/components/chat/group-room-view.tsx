@@ -615,18 +615,16 @@ export function GroupRoomView({
         }
         ListFooterComponent={
           sending ? (
-            <View style={styles.botRow}>
-              <View style={[styles.botBubble, { backgroundColor: tokens.backgroundElevated }]}>
-                <Text variant="caption" color="secondary">Bots are answering…</Text>
-                <StreamingIndicator />
-              </View>
+            <View style={styles.sendingRow}>
+              <Text variant="caption" color="secondary">Bots are answering…</Text>
+              <StreamingIndicator />
             </View>
           ) : null
         }
         renderItem={({ item }) =>
           item.role === 'user' ? (
             <View style={styles.userRow}>
-              <View style={[styles.userBubble, { backgroundColor: tokens.accentMuted }]}>
+              <View style={[styles.userBubble, { backgroundColor: tokens.backgroundRaised }]}>
                 <Text variant="body" color="primary">{item.text}</Text>
                 {typeof item.at === 'number' || typeof item.replyCount === 'number' ? (
                   <Text variant="micro" color="secondary" style={styles.metaLine}>
@@ -636,12 +634,9 @@ export function GroupRoomView({
               </View>
             </View>
           ) : (
-            <View style={styles.botRow}>
-              <BotAvatar botId={item.botId} size={26} />
-              <View style={[styles.botBubble, { backgroundColor: tokens.backgroundElevated }]}>
-                <Text variant="micro" color="tertiary">{botByline(displayNameOf(item.botId), item.at)}</Text>
-                <MarkdownText text={item.text} />
-              </View>
+            <View style={styles.botEntry}>
+              <Text variant="micro" color="tertiary">{botByline(displayNameOf(item.botId), item.at)}</Text>
+              <MarkdownText text={item.text} />
             </View>
           )
         }
@@ -895,16 +890,19 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   metaLine: {},
-  botRow: { flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.one },
-  botBubble: {
-    maxWidth: '82%',
-    borderTopRightRadius: Radius.md,
-    borderBottomRightRadius: Radius.md,
-    borderTopLeftRadius: Radius.full,
-    borderBottomLeftRadius: Radius.md,
-    paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.one + 2,
-    gap: 2,
+  // Bot replies sit full-width on the stage — the byline carries who spoke,
+  // so there is no card fill, border, radius tail or avatar rail (locked
+  // message layout: the answer is the hero, chrome disappears).
+  botEntry: {
+    flexGrow: 1,
+    flexShrink: 1,
+    minWidth: 0,
+    gap: Spacing.one,
+  },
+  sendingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one,
   },
   error: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.one },
   hint: { marginBottom: Spacing.two },

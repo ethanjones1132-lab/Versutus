@@ -14,7 +14,17 @@ function readBubbleSource(): string {
     .replace(/\r\n/g, '\n');
 }
 
+function readRoomSource(): string {
+  return nodeFs
+    .readFileSync(
+      [__dirname, '..', 'src', 'components', 'chat', 'group-room-view.tsx'].join(SEP),
+      'utf8',
+    )
+    .replace(/\r\n/g, '\n');
+}
+
 const bubble = readBubbleSource();
+const room = readRoomSource();
 
 /**
  * CHARTER priority 1 (message layout) against docs/visual-direction-2026-09
@@ -70,5 +80,42 @@ describe('message layout: assistant unboxed, user soft grey, activity collapsed'
     expect(bubble).toMatch(
       /\) : isUser \? \([\s\S]*?<Text color="primary" variant="body">[\s\S]*?\) : \(\s*<MarkdownText text=\{body\} streaming=\{!!message\.streaming\} \/>\s*\)\}/,
     );
+  });
+});
+
+/**
+ * The group room is the second transcript surface. If the locked layout only
+ * lands in Bot Chat, one screen away the assistant is boxed again and the
+ * user turns violet — the hero rule has to hold on both.
+ */
+describe('group room transcript carries the same message layout', () => {
+  test('the user pill is the same soft grey as Bot Chat, never the violet tint', () => {
+    expect(room).toContain('{ backgroundColor: tokens.backgroundRaised }');
+    expect(room).not.toContain('tokens.accentMuted');
+    const at = room.indexOf('userBubble: {');
+    expect(at).toBeGreaterThan(-1);
+    expect(room.slice(at, room.indexOf('},', at))).not.toMatch(/border(?:Width|Color)/);
+  });
+
+  test('bot replies sit full-width on the stage and the byline carries who spoke', () => {
+    expect(room).toContain('<View style={styles.botEntry}>');
+    expect(room).toContain('{botByline(displayNameOf(item.botId), item.at)}');
+    expect(room).toContain('<MarkdownText text={item.text} />');
+    // No avatar rail and no card fill: the reply is text on the stage.
+    expect(room).not.toContain('BotAvatar botId={item.botId}');
+    expect(room).not.toContain('botBubble');
+    expect(room).not.toMatch(/backgroundColor: tokens\.backgroundElevated\s*\]/);
+    expect(room).toContain('progressBackgroundColor={tokens.backgroundElevated}');
+    const at = room.indexOf('botEntry: {');
+    expect(at).toBeGreaterThan(-1);
+    const block = room.slice(at, room.indexOf('},', at));
+    expect(block).not.toMatch(/background|border|Radius|padding/);
+  });
+
+  test('the answering footer is a quiet line, not a second card', () => {
+    expect(room).toContain('<View style={styles.sendingRow}>');
+    const at = room.indexOf('sendingRow: {');
+    expect(at).toBeGreaterThan(-1);
+    expect(room.slice(at, room.indexOf('},', at))).not.toMatch(/background|border/);
   });
 });
