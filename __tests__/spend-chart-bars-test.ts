@@ -1,3 +1,8 @@
+jest.mock('react-native-reanimated', () => ({
+  Easing: { bezier: () => (value: number) => value, elastic: () => (value: number) => value },
+}));
+
+import { Palette } from '@/constants/tokens';
 import {
   SESSION_SPEND_LIST_LIMIT,
   spendWindowCopy,
@@ -21,6 +26,13 @@ function readSource(...parts: string[]): string {
   return nodeFs
     .readFileSync([__dirname, '..', ...parts].join(SEP), 'utf8')
     .replace(/\r\n/g, '\n');
+}
+
+function hex(value: string): [number, number, number] {
+  const match = /^#([0-9a-f]{6})$/i.exec(value);
+  if (!match) throw new Error(`expected 6-digit hex, got ${value}`);
+  const number = parseInt(match[1], 16);
+  return [(number >> 16) & 255, (number >> 8) & 255, number & 255];
 }
 
 const gatewayComponents = (...parts: string[]) =>
@@ -245,5 +257,39 @@ describe('what must keep working', () => {
   test('the sparkline keeps its own window line and the total keeps its bound line', () => {
     expect(sparkline()).toContain('{spendWindowCopy(rowCount)}');
     expect(spendScreen()).toContain('spendTotalBoundCopy(state.rowCount)');
+  });
+});
+
+// The brand pass: both render paths fill the bars from the soft electric
+// violet brand, never the brighter focus tint — the week chart has to read as
+// the same quiet stage whether Skia mounted or it fell back to plain views.
+describe('both renderers fill the bars with the brand violet', () => {
+  test('the Skia bars and the fallback bars resolve tokens.accent', () => {
+    expect(nativePlot()).toContain('color={tokens.accent}');
+    expect(fallbackPlot()).toContain('backgroundColor: tokens.accent');
+    for (const src of [nativePlot(), fallbackPlot()]) {
+      expect(src).not.toMatch(/accentWarm/);
+      expect(src).not.toContain('Palette.gold');
+    }
+  });
+
+  test('the fill change is tone only: frame, baseline hairline and empty days stand', () => {
+    for (const src of [nativePlot(), fallbackPlot()]) {
+      expect(src).toContain('SPEND_CHART_FRAME');
+      expect(src).toContain('tokens.border');
+      expect(src).toContain('spendChartBars(');
+    }
+    expect(fallbackPlot()).toContain('height: bar.height');
+    expect(fallbackPlot()).toContain('bottom: 0');
+    const empty = spendChartBars(bucketsOf([0, 0, 0, 0, 0, 0, 0]), SMALL);
+    expect(empty.map((bar) => bar.height)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+  });
+
+  test('the brand fill is soft electric violet, not gold and not a status colour', () => {
+    const [red, green, blue] = hex(Palette.accent);
+    expect(blue).toBeGreaterThan(green);
+    expect(red).toBeGreaterThan(green);
+    expect(Palette.accent).not.toBe(Palette.gold);
+    expect(Palette.accent).not.toBe(Palette.statusDisconnected);
   });
 });

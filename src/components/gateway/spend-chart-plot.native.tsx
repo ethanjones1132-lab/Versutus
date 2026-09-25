@@ -55,7 +55,7 @@ function SkiaPlot({ buckets }: SpendChartPlotProps) {
             y={bar.y}
             width={bar.width}
             height={bar.height}
-            color={tokens.accentWarm}
+            color={tokens.accent}
           />
         ))}
       </Canvas>

@@ -39,7 +39,7 @@ export function SpendChartPlotFallback({ buckets }: SpendChartPlotProps) {
           key={bar.startMs}
           style={[
             styles.bar,
-            { left: bar.x, width: bar.width, height: bar.height, backgroundColor: tokens.accentWarm },
+            { left: bar.x, width: bar.width, height: bar.height, backgroundColor: tokens.accent },
           ]}
         />
       ))}
