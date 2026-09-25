@@ -66,7 +66,7 @@ export function PairingPanel({
       style={[
         styles.panel,
         {
-          borderColor: tokens.accentWarm,
+          borderColor: tokens.accent,
           borderWidth: StyleSheet.hairlineWidth * 2,
           borderRadius: Radius.lg,
         },
@@ -83,7 +83,7 @@ export function PairingPanel({
 
       <View style={styles.steps}>
         <View style={styles.step}>
-          <Text variant="caption" color="accentWarm">
+          <Text variant="caption" color="accent">
             1
           </Text>
           <CopyRow
@@ -96,7 +96,7 @@ export function PairingPanel({
         </View>
 
         <View style={styles.step}>
-          <Text variant="caption" color="accentWarm">
+          <Text variant="caption" color="accent">
             2
           </Text>
           <CopyRow
@@ -114,7 +114,7 @@ export function PairingPanel({
         </View>
 
         <View style={styles.step}>
-          <Text variant="caption" color="accentWarm">
+          <Text variant="caption" color="accent">
             3
           </Text>
           <DeviceIdRow deviceId={deviceId} copied={copied} onCopy={copyText} />
