@@ -23,6 +23,11 @@ const STATUS_LABELS: Record<ConnectionStatus, string> = {
   disconnected: 'Disconnected',
 };
 
+/** Plain-language name for a connection state, for status lines in chrome. */
+export function statusLabel(status: ConnectionStatus): string {
+  return STATUS_LABELS[status];
+}
+
 export function statusColor(tokens: Tokens, status: ConnectionStatus): string {
   switch (status) {
     case 'connected':

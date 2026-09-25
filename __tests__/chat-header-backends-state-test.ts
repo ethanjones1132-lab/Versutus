@@ -60,9 +60,12 @@ describe('Chat header backend picker expanded state', () => {
   test('both headline Text lines stay byte-identical', () => {
     const src = readChatHeaderSource();
     expect(src).toContain('<Text variant="headline" numberOfLines={1} style={styles.name}>');
-    expect(src).toContain(
-      "streaming\n          ? 'Streaming response…'\n          : backendLabel || groupName?.trim()\n            ? `via ${gatewayName}${statusDetail ? ` · ${statusDetail}` : ''}`\n            : statusDetail || 'Ready for chat and slash commands'",
-    );
+    expect(src).toContain('<Text variant="micro" color="secondary" numberOfLines={1}>');
+    expect(src).toContain('{subtitle}');
+    // The model is the subtitle of the one-row header, drawn by the layout
+    // rule; the header itself prints no streaming line.
+    expect(src).toContain('chatHeaderSubtitle({');
+    expect(src).not.toContain('Streaming response');
   });
 
   test('the chat-screen call site threads backendPickerVisible into backendsExpanded', () => {
@@ -72,12 +75,16 @@ describe('Chat header backend picker expanded state', () => {
 
   test('the expanded state lives on the backend title and the overflow, never on the back button', () => {
     const src = readChatHeaderSource();
-    const allPressables = src.match(/<PressableScale[\s\S]*?\/>/g) ?? [];
+    // Split on the opening tag rather than matching to a self-closing `/>`:
+    // the one-row header's title/subtitle pair has no self-closing tag between
+    // them, so a `/>`-terminated match would merge several pressables.
+    const allPressables = src.split('<PressableScale').slice(1);
     const stateCarriers = allPressables.filter((p) =>
       /accessibilityState=\{\{/.test(p),
     );
-    // Backend title + Chat-options overflow: Back-to-roster (:78-91) is a
-    // flat navigation button with no sheet to announce.
+    // Backend title + Chat-options overflow: Back-to-roster is a flat
+    // navigation button with no sheet to announce, and the model subtitle is a
+    // plain jump to the model picker.
     expect(stateCarriers).toHaveLength(2);
     expect(stateCarriers[0]).toMatch(/onPress=\{onBackendPress\}/);
     expect(stateCarriers[1]).toMatch(/onPress=\{onOverflowPress\}/);

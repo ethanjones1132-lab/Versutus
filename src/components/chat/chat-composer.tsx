@@ -233,10 +233,9 @@ export const ChatComposer = memo(function ChatComposer({
       : 'Hold to talk';
 
   const insets = useSafeAreaInsets();
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const { height: windowHeight } = useWindowDimensions();
   const kavOffset = chatComposerKeyboardOffset({
     platform: Platform.OS,
-    windowWidth,
     topInset: insets.top,
   });
   const keyboardHeight = useSyncExternalStore(subscribeKeyboardHeight, getKeyboardHeight, () => 0);

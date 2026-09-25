@@ -1863,14 +1863,10 @@ export function ChatScreen() {
     <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: false })} parallaxY={parallaxY}>
       <ChatHeader
         gatewayName={settings.pcName ?? activeGateway.name}
-        status={status}
         statusDetail={status === 'connected' ? undefined : statusDetail || probeMessage}
-        streaming={isStreaming}
-        sessionLabel={threadSurface ? sessionLabel : undefined}
         modelLabel={threadSurface ? modelLabel : undefined}
-        onSessionPress={threadSurface ? handleHeaderSessionPress : undefined}
         onModelPress={threadSurface ? handleHeaderModelPress : undefined}
-        onOverflowPress={threadSurface ? handleHeaderOverflowPress : undefined}
+        onOverflowPress={handleHeaderOverflowPress}
         backendLabel={
           surface.kind === 'bot'
             ? rosterRows.find((row): row is Extract<RosterRow, { kind: 'bot' }> => row.kind === 'bot' && row.bot.id === surface.botId)?.bot.displayName
@@ -1884,20 +1880,13 @@ export function ChatScreen() {
         onRosterPress={surface.kind === 'roster' ? undefined : handleHeaderRosterPress}
         backendsExpanded={backendPickerVisible}
         overflowExpanded={overflowVisible}
-        // The speaker is this thread's own, and it is offered only where this
-        // device has a voice: a conversation that cannot be read aloud shows
-        // no control at all.
-        speakerOn={threadSurface ? speakerOn : undefined}
-        onSpeakerPress={
-          threadSurface && speakerKey && speechReady ? handleSpeakerPress : undefined
-        }
-        onSettingsPress={handleHeaderSettingsPress}
       />
 
       {silentHintShown ? (
-        // The one-time silent-mode hint (B2): drawn under the header that
-        // carries the speaker control, and only on the edge the speaker came
-        // on — the store has already been told, so it is never owed again.
+        // The one-time silent-mode hint (B2): drawn under the one-row header
+        // whose menu now carries the speaker toggle, and only on the edge the
+        // speaker came on — the store has already been told, so it is never
+        // owed again.
         <Text variant="micro" color="secondary" style={styles.silentHint}>
           {SILENT_MODE_HINT_COPY}
         </Text>
@@ -2466,6 +2455,17 @@ export function ChatScreen() {
       <ChatOverflowSheet
         visible={overflowVisible}
         onClose={() => setOverflowVisible(false)}
+        // The one-row header hands its chrome to this menu: connection status,
+        // the session row, the speaker toggle, and settings.
+        status={status}
+        statusDetail={status === 'connected' ? undefined : statusDetail || probeMessage}
+        sessionLabel={threadSurface ? sessionLabel : undefined}
+        onSessionsPress={threadSurface ? handleHeaderSessionPress : undefined}
+        speakerOn={threadSurface ? speakerOn : undefined}
+        onSpeakerPress={
+          threadSurface && speakerKey && speechReady ? handleSpeakerPress : undefined
+        }
+        onSettingsPress={handleHeaderSettingsPress}
         session={sessionStats}
         spendCopy={
           spendState.surfaceKey === spendSurfaceKey

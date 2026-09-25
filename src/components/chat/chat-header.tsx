@@ -1,31 +1,21 @@
 import { memo } from 'react';
-import { StyleSheet, useWindowDimensions, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
-import { PulsingDot, statusColor } from '@/components/connection-badge';
-import { Chip, GlassSurface, Icon, PressableScale, Text } from '@/components/ui';
+import { GlassSurface, Icon, PressableScale, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
-import { useTokens } from '@/hooks/use-tokens';
-import type { ConnectionStatus } from '@/lib/gateway/types';
-import {
-  chatHeaderChipLayout,
-  chatHeaderChipMaxWidth,
-  chatHeaderSessionChip,
-  chatHeaderTitle,
-} from '@/lib/motion/chat-header-layout';
+import { chatHeaderSubtitle, chatHeaderTitle } from '@/lib/motion/chat-header-layout';
 
 export type ChatHeaderProps = {
   gatewayName: string;
-  status: ConnectionStatus;
+  /** Connection detail line, shown only while the gateway is not connected. */
   statusDetail?: string;
-  streaming?: boolean;
-  sessionLabel?: string;
+  /** Model name for this thread. Drawn as the tappable subtitle. */
   modelLabel?: string;
-  onSessionPress?: () => void;
   onModelPress?: () => void;
   onOverflowPress?: () => void;
   /** Present only when the gateway advertises chat backends. */
   backendLabel?: string;
-  /** Group room name. Titles the header; rooms have no session chip. */
+  /** Group room name. Titles the header; rooms have no model subtitle. */
   groupName?: string;
   onBackendPress?: () => void;
   onRosterPress?: () => void;
@@ -33,26 +23,18 @@ export type ChatHeaderProps = {
   backendsExpanded?: boolean;
   /** True while the chat overflow sheet is open. */
   overflowExpanded?: boolean;
-  /** True while this conversation reads each completed reply aloud. */
-  speakerOn?: boolean;
-  /** Present only when this device has a voice to read replies in. */
-  onSpeakerPress?: () => void;
-  /**
-   * Settings entry from Chat chrome. Present on every Chat surface so the
-   * ≤3-taps test reaches settings without routing through the Home tab.
-   */
-  onSettingsPress?: () => void;
 };
 
-/** Slim contextual chat header: orb, gateway, quick model/session chips, overflow. */
+/**
+ * The one-row chat header: back · title with the model as its tappable
+ * subtitle · one menu. Session, speaker, connection status and settings all
+ * live behind that menu (chat-overflow-sheet.tsx), so nothing here stacks to
+ * a second row and no chip competes with the title for phone width.
+ */
 function ChatHeaderImpl({
   gatewayName,
-  status,
   statusDetail,
-  streaming = false,
-  sessionLabel,
   modelLabel,
-  onSessionPress,
   onModelPress,
   onOverflowPress,
   backendLabel,
@@ -61,35 +43,18 @@ function ChatHeaderImpl({
   onRosterPress,
   backendsExpanded,
   overflowExpanded,
-  speakerOn = false,
-  onSpeakerPress,
-  onSettingsPress,
 }: ChatHeaderProps) {
-  const tokens = useTokens();
-  const { width: windowWidth, fontScale } = useWindowDimensions();
-  const color = statusColor(tokens, status);
-  const pulsing = streaming || status === 'connecting' || status === 'reconnecting' || status === 'pairing';
   const title = chatHeaderTitle({ gatewayName, backendLabel, groupName });
   const showModel = Boolean(modelLabel && onModelPress);
-  const showSession = chatHeaderSessionChip(
-    groupName?.trim()
-      ? { surface: 'group' }
-      : { surface: 'thread', sessionLabel, sessionPress: Boolean(onSessionPress) },
-  );
-  const stacked =
-    chatHeaderChipLayout({
-      windowWidth,
-      fontScale,
-      model: showModel,
-      session: showSession,
-    }) === 'stacked';
-  const chipMaxWidth = chatHeaderChipMaxWidth(fontScale);
+  const subtitle = chatHeaderSubtitle({
+    gatewayName,
+    modelLabel,
+    modelPress: showModel,
+    backendLabel,
+    groupName,
+    statusDetail,
+  });
 
-  const orb = (
-    <View style={[styles.orbHalo, { borderColor: tokens.border }]}>
-      <PulsingDot color={color} active={pulsing} />
-    </View>
-  );
   const back = onRosterPress ? (
     <PressableScale
       onPress={onRosterPress}
@@ -105,68 +70,31 @@ function ChatHeaderImpl({
     </PressableScale>
   ) : null;
   const titles = (
-    <PressableScale
-      onPress={onBackendPress}
-      disabled={!onBackendPress || !backendLabel}
-      accessibilityRole={backendLabel && onBackendPress ? 'button' : undefined}
-      accessibilityLabel={backendLabel ? `Chat backend: ${backendLabel}. Change backend.` : undefined}
-      accessibilityState={{ disabled: !onBackendPress || !backendLabel, expanded: backendsExpanded ?? false }}
-      style={styles.titles}>
-      <Text variant="headline" numberOfLines={1} style={styles.name}>
-        {title}
-      </Text>
-      <Text variant="micro" color="secondary" numberOfLines={1}>
-        {streaming
-          ? 'Streaming response…'
-          : backendLabel || groupName?.trim()
-            ? `via ${gatewayName}${statusDetail ? ` · ${statusDetail}` : ''}`
-            : statusDetail || 'Ready for chat and slash commands'}
-      </Text>
-    </PressableScale>
-  );
-  const modelChip =
-    modelLabel && onModelPress ? (
-      <Chip
-        label={modelLabel}
-        icon={{ ios: 'cpu', android: 'memory', web: 'memory' }}
+    <View style={styles.titles}>
+      <PressableScale
+        onPress={onBackendPress}
+        disabled={!onBackendPress || !backendLabel}
+        accessibilityRole={backendLabel && onBackendPress ? 'button' : undefined}
+        accessibilityLabel={backendLabel ? `Chat backend: ${backendLabel}. Change backend.` : undefined}
+        accessibilityState={{ disabled: !onBackendPress || !backendLabel, expanded: backendsExpanded ?? false }}
+        style={styles.titlePress}>
+        <Text variant="headline" numberOfLines={1} style={styles.name}>
+          {title}
+        </Text>
+      </PressableScale>
+      <PressableScale
         onPress={onModelPress}
-        style={[styles.chip, { maxWidth: chipMaxWidth }]}
-      />
-    ) : null;
-  const sessionChip =
-    showSession && sessionLabel && onSessionPress ? (
-      <Chip
-        label={sessionLabel}
-        icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
-        onPress={onSessionPress}
-        style={[styles.chip, { maxWidth: chipMaxWidth }]}
-      />
-    ) : null;
-
-  // Reading replies aloud is this conversation's own opt-in (B2), so the
-  // control is drawn only where this device has a voice to read them in:
-  // `onSpeakerPress` is absent on a build without one, and the button is the
-  // same 32px square the back and overflow controls beside it use. Its state
-  // is in the label and the glyph rather than in an `accessibilityState`,
-  // which the two controls above are the header's only carriers of.
-  const speaker = onSpeakerPress ? (
-    <PressableScale
-      onPress={onSpeakerPress}
-      hitSlop={10}
-      accessibilityRole="button"
-      accessibilityLabel={speakerOn ? 'Stop reading replies aloud' : 'Read replies aloud'}
-      style={styles.overflow}>
-      <Icon
-        name={{
-          ios: speakerOn ? 'speaker.wave.2.fill' : 'speaker.slash.fill',
-          android: speakerOn ? 'volume_up' : 'volume_off',
-          web: speakerOn ? 'volume_up' : 'volume_off',
-        }}
-        size={18}
-        color={speakerOn ? 'accentWarm' : 'textSecondary'}
-      />
-    </PressableScale>
-  ) : null;
+        disabled={!showModel}
+        hitSlop={8}
+        accessibilityRole={showModel ? 'button' : undefined}
+        accessibilityLabel={showModel ? `Model: ${modelLabel}. Change model.` : undefined}
+        style={styles.titlePress}>
+        <Text variant="micro" color="secondary" numberOfLines={1}>
+          {subtitle}
+        </Text>
+      </PressableScale>
+    </View>
+  );
   const overflow = onOverflowPress ? (
     <PressableScale
       onPress={onOverflowPress}
@@ -182,22 +110,6 @@ function ChatHeaderImpl({
       />
     </PressableScale>
   ) : null;
-  // Trailing settings gear: the same resting brand-violet glyph the screen
-  // headers wear, kept in the 32px control family this header already uses.
-  const settings = onSettingsPress ? (
-    <PressableScale
-      onPress={onSettingsPress}
-      hitSlop={10}
-      accessibilityRole="button"
-      accessibilityLabel="Settings"
-      style={styles.overflow}>
-      <Icon
-        name={{ ios: 'gearshape', android: 'settings', web: 'settings' }}
-        size={18}
-        color="accent"
-      />
-    </PressableScale>
-  ) : null;
 
   return (
     <View style={styles.wrap}>
@@ -205,34 +117,10 @@ function ChatHeaderImpl({
         variant="hero"
         radius={Radius.xl}
         padding={Spacing.two}
-        style={[styles.card, stacked && styles.cardStacked]}>
-        {stacked ? (
-          <>
-            <View style={styles.row}>
-              {orb}
-              {back}
-              {titles}
-              {speaker}
-              {overflow}
-              {settings}
-            </View>
-            <View style={styles.chipRow}>
-              {modelChip}
-              {sessionChip}
-            </View>
-          </>
-        ) : (
-          <>
-            {orb}
-            {back}
-            {titles}
-            {modelChip}
-            {sessionChip}
-            {speaker}
-            {overflow}
-            {settings}
-          </>
-        )}
+        style={styles.card}>
+        {back}
+        {titles}
+        {overflow}
       </GlassSurface>
     </View>
   );
@@ -252,43 +140,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.two,
   },
-  cardStacked: {
-    flexDirection: 'column',
-    alignItems: 'stretch',
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-    minWidth: 0,
-    alignSelf: 'stretch',
-  },
-  chipRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: Spacing.two,
-  },
-  orbHalo: {
-    width: 34,
-    height: 34,
-    borderRadius: Radius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-  },
   titles: {
     flex: 1,
     minWidth: 0,
     gap: 1,
   },
+  titlePress: {
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+  },
   name: {
     fontSize: 17,
     lineHeight: 22,
-  },
-  chip: {
-    // maxWidth is set dynamically via chatHeaderChipMaxWidth(fontScale) so large
-    // system fonts do not force a 120px pill to clip off-screen.
   },
   overflow: {
     width: 32,

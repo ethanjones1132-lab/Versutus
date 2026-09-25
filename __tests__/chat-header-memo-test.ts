@@ -48,10 +48,11 @@ describe('chat header render cost', () => {
     expect(header).toBeDefined();
 
     // Each press prop is the stable wrapper, never an inline arrow that would
-    // allocate a new function per render.
-    expect(header).toMatch(/onSessionPress=\{threadSurface \? handleHeaderSessionPress : undefined\}/);
+    // allocate a new function per render. The one-row header keeps only the
+    // controls it draws — back, model subtitle, one menu — so the session row
+    // is threaded to the menu the header opens instead.
     expect(header).toMatch(/onModelPress=\{threadSurface \? handleHeaderModelPress : undefined\}/);
-    expect(header).toMatch(/onOverflowPress=\{threadSurface \? handleHeaderOverflowPress : undefined\}/);
+    expect(header).toMatch(/onOverflowPress=\{handleHeaderOverflowPress\}/);
     expect(header).toMatch(
       /onBackendPress=\{surface\.kind === 'configurable' && backends\.length > 0 \? handleHeaderBackendPress : undefined\}/,
     );
@@ -59,13 +60,20 @@ describe('chat header render cost', () => {
       /onRosterPress=\{surface\.kind === 'roster' \? undefined : handleHeaderRosterPress\}/,
     );
 
+    const sheet = readChatScreenSource().match(/<ChatOverflowSheet[\s\S]*?\/>/)?.[0];
+    expect(sheet).toBeDefined();
+    expect(sheet).toMatch(/onSessionsPress=\{threadSurface \? handleHeaderSessionPress : undefined\}/);
+    expect(sheet).toMatch(
+      /onSpeakerPress=\{\s*threadSurface && speakerKey && speechReady \? handleSpeakerPress : undefined,?\s*\}/,
+    );
+
     // No leftover inline arrow wrappers at the header call site — those are what
     // defeated memo before this change.
-    expect(header).not.toMatch(/onSessionPress=\{threadSurface \? \(\) =>/);
     expect(header).not.toMatch(/onModelPress=\{threadSurface \? \(\) =>/);
     expect(header).not.toMatch(/onOverflowPress=\{threadSurface \? \(\) =>/);
     expect(header).not.toMatch(/onBackendPress=\{[^}]*\? \(\) =>/);
     expect(header).not.toMatch(/onRosterPress=\{[^}]*=> \{\s*clearBot\(\)/);
+    expect(sheet).not.toMatch(/onSessionsPress=\{threadSurface \? \(\) =>/);
   });
 
   test('the stable header callbacks are defined once as useCallback wrappers', () => {

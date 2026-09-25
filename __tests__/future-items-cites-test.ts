@@ -21,17 +21,17 @@ const d5Section = futureItems.split('### D5.')[1]?.split('\n## ')[0] ?? '';
 
 describe('FUTURE-ITEMS open cites describe the live tree', () => {
   test('P1 attach offer cites the live chat-screen lines, not the drifted ones', () => {
-    expect(p1Section).toContain('`src/components/chat/chat-screen.tsx:1144,2419`');
+    expect(p1Section).toContain('`src/components/chat/chat-screen.tsx:1144,2408`');
     expect(p1Section).not.toContain('1125,2324');
     expect(chatScreen[1143]).toContain('canAttach = supportsImageInput');
-    expect(chatScreen[2418]).toContain('onAttach={canAttach ? handleAttach : undefined}');
+    expect(chatScreen[2407]).toContain('onAttach={canAttach ? handleAttach : undefined}');
   });
 
   test('P1 keeps the live composer-draw and supportsImageInput cites', () => {
-    expect(p1Section).toContain('`src/components/chat/chat-composer.tsx:276-294`');
+    expect(p1Section).toContain('`src/components/chat/chat-composer.tsx:275-293`');
     expect(p1Section).toContain('`src/lib/gateway/chat-parts.ts:92`');
-    expect(chatComposer[275]).toContain('onAttach && !callActive && !isStreaming');
-    expect(chatComposer.slice(275, 294).join('\n')).toContain('accessibilityLabel="Attach an image"');
+    expect(chatComposer[274]).toContain('onAttach && !callActive && !isStreaming');
+    expect(chatComposer.slice(274, 293).join('\n')).toContain('accessibilityLabel="Attach an image"');
     expect(chatParts[91]).toContain('export function supportsImageInput');
   });
 

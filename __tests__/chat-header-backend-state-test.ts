@@ -71,13 +71,15 @@ describe('Chat header backend title screen-reader state', () => {
   test('the backend-title PressableScale keeps the visible Text headlines byte-identical', () => {
     const src = readChatHeaderSource();
     // The visible UI is what sighted users see inside the press target —
-    // the <Text variant="headline"> title and the <Text variant="micro">
-    // streaming/subtitle line. The new accessibilityState must not change
-    // either of them.
+    // the <Text variant="headline"> title, plus the model subtitle the one-row
+    // header draws beneath it (chat-header-layout.ts owns which line that is).
     expect(src).toContain('<Text variant="headline" numberOfLines={1} style={styles.name}>');
-    expect(src).toContain(
-      "streaming\n          ? 'Streaming response…'\n          : backendLabel || groupName?.trim()\n            ? `via ${gatewayName}${statusDetail ? ` · ${statusDetail}` : ''}`\n            : statusDetail || 'Ready for chat and slash commands'",
-    );
+    expect(src).toContain('<Text variant="micro" color="secondary" numberOfLines={1}>');
+    expect(src).toContain('{subtitle}');
+    // The header announces no streaming of its own: the model line is the
+    // subtitle, and streaming has exactly one signal elsewhere (S7).
+    expect(src).not.toContain('Streaming response');
+    expect(src).toContain('chatHeaderSubtitle({');
   });
 
   test('accessibilityState appears on the backend-title and overflow PressableScales and is not duplicated on surrounding controls', () => {
@@ -97,8 +99,11 @@ describe('Chat header backend title screen-reader state', () => {
     );
 
     // Ensure only the backend title and the overflow carry a state tuple
-    // (the Back-to-roster button must NOT grow an accessibilityState prop).
-    const allPressables = src.match(/<PressableScale[\s\S]*?\/>/g) ?? [];
+    // (the Back-to-roster button and the model subtitle must NOT grow one).
+    // Split on the opening tag rather than matching to a self-closing `/>`:
+    // title and subtitle sit between them with no self-closing tag of their
+    // own, so a `/>`-terminated match would swallow both pressables as one.
+    const allPressables = src.split('<PressableScale').slice(1);
     const stateCarriers = allPressables.filter((p) =>
       /accessibilityState=\{\{/.test(p),
     );
