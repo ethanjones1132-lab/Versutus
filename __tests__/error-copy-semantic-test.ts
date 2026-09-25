@@ -30,7 +30,7 @@ const errorCopySites = [
       { needle: 'color="statusDisconnected" style={styles.sheetError}', count: 2 },
     ],
     keep: [
-      'color="accentWarm" style={styles.scopeNote}',
+      'color="accent" style={styles.scopeNote}',
       '{error ? (',
       'style={styles.sheetError}',
     ],
@@ -91,10 +91,11 @@ describe('error-copy sweep keeps behaviour and scope boundaries', () => {
     }
   });
 
-  it('leaves the separate group-room chrome accents for the group-room item', () => {
+  it('the group-room chrome this sweep deferred now reads brand violet', () => {
     const source = readSource(...CHAT, 'group-room-view.tsx');
-    expect(source.match(/color="accentWarm"/g) ?? []).toHaveLength(3);
-    expect(source).toContain('tintColor={tokens.accentWarm}');
+    expect(source).not.toMatch(/accentWarm|accentWarmMuted/);
+    expect(source).toContain('tintColor={tokens.accent}');
+    expect(source).toContain('color="accent" style={styles.scopeNote}');
   });
 
   it('leaves informational non-error captions on brand violet', () => {

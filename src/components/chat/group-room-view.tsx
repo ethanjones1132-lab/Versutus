@@ -461,8 +461,8 @@ export function GroupRoomView({
             <RefreshControl
               refreshing={refreshing}
               onRefresh={handleRefresh}
-              tintColor={tokens.accentWarm}
-              colors={[tokens.accentWarm]}
+              tintColor={tokens.accent}
+              colors={[tokens.accent]}
               progressBackgroundColor={tokens.backgroundElevated}
             />
           ) : undefined
@@ -531,7 +531,7 @@ export function GroupRoomView({
               </View>
             </View>
             {mentioned.length > 0 ? (
-              <Text variant="micro" color="accentWarm" style={styles.scopeNote}>
+              <Text variant="micro" color="accent" style={styles.scopeNote}>
                 @mentions scope the round to {mentioned.length === 1 ? 'one bot' : `${mentioned.length} bots`}.
               </Text>
             ) : null}
@@ -569,11 +569,11 @@ export function GroupRoomView({
                       {displayNameOf(memberId)}
                     </Text>
                     {routingTag ? (
-                      <Text variant="micro" color="accentWarm" numberOfLines={1} style={[styles.memberChipPin, { maxWidth: memberPinMaxWidth }]}>
+                      <Text variant="micro" color="accent" numberOfLines={1} style={[styles.memberChipPin, { maxWidth: memberPinMaxWidth }]}>
                         {routingTag}
                       </Text>
                     ) : missingFromRoster ? (
-                      <Text variant="micro" color="accentWarm" numberOfLines={1} style={[styles.memberChipPin, { maxWidth: memberPinMaxWidth }]}>
+                      <Text variant="micro" color="accent" numberOfLines={1} style={[styles.memberChipPin, { maxWidth: memberPinMaxWidth }]}>
                         Not on gateway
                       </Text>
                     ) : modelPin ? (
