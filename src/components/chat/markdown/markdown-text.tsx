@@ -76,7 +76,7 @@ function BlockView({ block, baseColor, compact, maxFontSizeMultiplier }: { block
       return <CodeBlock code={block.code} language={block.language} />;
     case 'quote':
       return (
-        <View style={[styles.quote, { borderLeftColor: Palette.accentWarmMuted }]}>
+        <View style={[styles.quote, { borderLeftColor: Palette.accentMuted }]}>
           <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[compact ? styles.bodyCompact : styles.body, { color: Palette.textSecondary, fontStyle: 'italic' }]}>
             <InlineSpans spans={block.spans} baseColor={Palette.textSecondary} maxFontSizeMultiplier={maxFontSizeMultiplier} />
           </RNText>
@@ -87,7 +87,7 @@ function BlockView({ block, baseColor, compact, maxFontSizeMultiplier }: { block
         <View style={styles.list}>
           {block.items.map((item, index) => (
             <View key={index} style={styles.listItem}>
-              <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[compact ? styles.listMarkerCompact : styles.listMarker, { color: Palette.accentWarm }]}>
+              <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[compact ? styles.listMarkerCompact : styles.listMarker, { color: Palette.accent }]}>
                 {block.ordered ? `${index + 1}.` : '•'}
               </RNText>
               <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[compact ? styles.bodyCompact : styles.body, styles.listText, { color: baseColor }]}>
@@ -164,10 +164,10 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.mono,
     fontSize: 13,
     backgroundColor: Palette.backgroundInset,
-    color: Palette.accentWarm,
+    color: Palette.accent,
   },
   link: {
-    color: Palette.accentWarm,
+    color: Palette.accent,
     textDecorationLine: 'underline',
   },
   quote: {

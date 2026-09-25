@@ -42,7 +42,7 @@ export function ToolCallCard({ toolCall }: { toolCall: ChatToolCall }) {
       <Icon
         name={{ ios: 'wrench.and.screwdriver', android: 'build', web: 'build' }}
         size={13}
-        color="accentWarm"
+        color="accent"
       />
       <Text variant="mono" color="secondary" numberOfLines={1} style={styles.name}>
         {toolCall.name}
