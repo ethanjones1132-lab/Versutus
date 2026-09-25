@@ -62,7 +62,7 @@ describe('Chat auxiliary panes rest on the quiet stage', () => {
 
   it('bot detail keeps its sheet, memory, routing, and handoff surfaces', () => {
     const src = readSource('src', 'components', 'chat', 'bot-detail-sheet.tsx');
-    expect(src).toContain("<Text variant=\"caption\" color={soulState.failed ? 'accent' : 'tertiary'}>");
+    expect(src).toContain("<Text variant=\"caption\" color={soulState.failed ? 'statusDisconnected' : 'tertiary'}>");
     expect(src).toContain("<Text variant=\"body\" color={detail.routingNext ? 'accent' : undefined}>");
     expect(src).toContain('<Text variant="caption" color="accent">');
     expect(src).toContain('<BaseSheet');

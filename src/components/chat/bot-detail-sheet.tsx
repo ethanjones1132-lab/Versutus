@@ -113,7 +113,7 @@ export function BotDetailSheet({
             </Text>
           ) : null}
           {soulNote ? (
-            <Text variant="caption" color={soulState.failed ? 'accent' : 'tertiary'}>
+            <Text variant="caption" color={soulState.failed ? 'statusDisconnected' : 'tertiary'}>
               {soulNote}
             </Text>
           ) : null}

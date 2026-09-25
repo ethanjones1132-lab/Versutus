@@ -96,7 +96,7 @@ export function CreateGroupSheet({
         )}
 
         {error ? (
-          <Text variant="caption" color="accent" style={styles.error}>
+          <Text variant="caption" color="statusDisconnected" style={styles.error}>
             {error}
           </Text>
         ) : null}

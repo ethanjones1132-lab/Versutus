@@ -649,7 +649,7 @@ export function GroupRoomView({
 
 
       {error ? (
-        <Text variant="caption" color="accentWarm" style={styles.error}>{error}</Text>
+        <Text variant="caption" color="statusDisconnected" style={styles.error}>{error}</Text>
       ) : null}
 
       <ComposerKeyboardLift>
@@ -759,7 +759,7 @@ export function GroupRoomView({
             style={styles.renameField}
           />
           {error ? (
-            <Text variant="caption" color="accentWarm" style={styles.sheetError}>{error}</Text>
+            <Text variant="caption" color="statusDisconnected" style={styles.sheetError}>{error}</Text>
           ) : null}
           <View style={styles.sheetActions}>
             <Button
@@ -824,7 +824,7 @@ export function GroupRoomView({
             </Text>
           )}
           {error ? (
-            <Text variant="caption" color="accentWarm" style={styles.sheetError}>{error}</Text>
+            <Text variant="caption" color="statusDisconnected" style={styles.sheetError}>{error}</Text>
           ) : null}
           <View style={styles.sheetActions}>
             <Button

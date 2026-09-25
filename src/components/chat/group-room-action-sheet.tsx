@@ -230,7 +230,7 @@ export function GroupRoomActionSheet({
               </Text>
             )}
             {error ? (
-              <Text variant="caption" color="accent" style={styles.sheetError}>
+              <Text variant="caption" color="statusDisconnected" style={styles.sheetError}>
                 {error}
               </Text>
             ) : null}
@@ -278,7 +278,7 @@ export function GroupRoomActionSheet({
               </Text>
             )}
             {error ? (
-              <Text variant="caption" color="accent" style={styles.sheetError}>
+              <Text variant="caption" color="statusDisconnected" style={styles.sheetError}>
                 {error}
               </Text>
             ) : null}
@@ -315,7 +315,7 @@ export function GroupRoomActionSheet({
               style={styles.renameField}
             />
             {error ? (
-              <Text variant="caption" color="accent" style={styles.sheetError}>
+              <Text variant="caption" color="statusDisconnected" style={styles.sheetError}>
                 {error}
               </Text>
             ) : null}
@@ -411,7 +411,7 @@ export function GroupRoomActionSheet({
               />
             ) : null}
             {error ? (
-              <Text variant="caption" color="accent" style={styles.sheetError}>
+              <Text variant="caption" color="statusDisconnected" style={styles.sheetError}>
                 {error}
               </Text>
             ) : null}
