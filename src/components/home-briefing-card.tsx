@@ -59,9 +59,9 @@ export function HomeBriefingCard() {
         <Icon
           name={{ ios: 'clock', android: 'schedule', web: 'schedule' }}
           size={16}
-          color="accentWarm"
+          color="accent"
         />
-        <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+        <Text variant="caption" color="accent" style={styles.eyebrow}>
           While you were away
         </Text>
       </View>

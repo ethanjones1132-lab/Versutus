@@ -46,10 +46,10 @@ export function HomeStatusCard({
       variant="hero"
       padding={Spacing.four}
       style={[styles.card, { borderColor: tokens.borderStrong }]}>
-      <View style={[styles.metalRule, { backgroundColor: tokens.accentWarm }]} />
+      <View style={[styles.metalRule, { backgroundColor: tokens.accent }]} />
       <View style={styles.header}>
         <View style={styles.titleBlock}>
-          <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+          <Text variant="caption" color="accent" style={styles.eyebrow}>
             Versutus link
           </Text>
           <Text variant="headline">{title}</Text>
@@ -78,7 +78,7 @@ export function HomeStatusCard({
 
         {isBusy ? (
           <View style={styles.loadingRow}>
-            <ActivityIndicator color={tokens.accentWarm} />
+            <ActivityIndicator color={tokens.accent} />
             <Text color="secondary">Working in the background…</Text>
           </View>
         ) : null}

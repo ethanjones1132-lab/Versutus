@@ -205,7 +205,7 @@ export function GatewayHomeDashboard() {
     <>
       <Card variant="hero" padding={Spacing.four} style={styles.summaryCard}>
         <View style={styles.heroHeader}>
-          <View style={[styles.orb, { borderColor: tokens.glassHeroBorder }]}>
+          <View style={[styles.orb, { borderColor: tokens.borderStrong }]}>
             <PulsingDot
               color={orbColor}
               active={status === 'connecting' || status === 'reconnecting' || status === 'pairing' || activeRuns.length > 0}
@@ -330,14 +330,14 @@ export function GatewayHomeDashboard() {
       />
 
       {pendingRunApproval ? (
-        <Card variant="hero" padding={Spacing.three} style={[styles.approvalCard, { borderColor: tokens.accentWarm }]}>
+        <Card variant="hero" padding={Spacing.three} style={[styles.approvalCard, { borderColor: tokens.accent }]}>
           <View style={styles.approvalHeader}>
             <Icon
               name={{ ios: 'hand.raised.fill', android: 'pan_tool', web: 'pan_tool' }}
               size={16}
-              color="accentWarm"
+              color="accent"
             />
-            <Text variant="caption" color="accentWarm" style={styles.approvalLabel}>
+            <Text variant="caption" color="accent" style={styles.approvalLabel}>
               Run needs approval
             </Text>
           </View>
@@ -348,7 +348,7 @@ export function GatewayHomeDashboard() {
         </Card>
       ) : runsSupported && activeRuns.length === 0 ? (
         <Card padding={Spacing.three} style={styles.runHintCard}>
-          <Text variant="caption" color="accentWarm" style={styles.approvalLabel}>
+          <Text variant="caption" color="accent" style={styles.approvalLabel}>
             Agentic runs
           </Text>
           <Text variant="body" color="secondary">
@@ -459,7 +459,7 @@ const styles = StyleSheet.create({
     gap: Spacing.one,
   },
   eyebrow: {
-    color: Palette.accentWarm,
+    color: Palette.accent,
     textTransform: 'uppercase',
   },
   title: {
