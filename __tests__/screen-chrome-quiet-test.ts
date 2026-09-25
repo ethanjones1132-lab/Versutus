@@ -13,8 +13,9 @@ import { Palette } from '@/constants/tokens';
  * visual-direction-2026-09): ScreenHeader's trailing control rests on a flat
  * inset panel wearing brand violet (not a lit chip + focus tint), StatTile's
  * icon is demoted to the cool secondary gray so the headline carries the
- * tile, and the ambient field every Screen mounts paints violet orbs on cool
- * hairlines — never champagne GOLD/SAPPHIRE glass. Public APIs unchanged.
+ * tile, and the ambient field every Screen mounts is a flat stage with at most one
+ * faint still violet glow — never champagne GOLD/SAPPHIRE glass or busy art.
+ * Public APIs unchanged.
  */
 
 const nodeFs = jest.requireActual('fs') as {
@@ -83,28 +84,39 @@ describe('StatTile icon is demoted so the headline carries the tile', () => {
   });
 });
 
-describe('the ambient stage every Screen mounts paints violet, not champagne glass', () => {
+describe('the ambient stage every Screen mounts is flat, violet, and still', () => {
   const native = readSource('src', 'components', 'layout', 'AmbientCanvas.native.tsx');
   const fallback = readSource('src', 'components', 'layout', 'ambient-fallback.tsx');
   const AMBIENT_FILES: [string, string][] = [
     ['native Skia canvas', native],
-    ['reanimated fallback', fallback],
+    ['still-glow fallback', fallback],
   ];
 
-  it.each(AMBIENT_FILES)('%s drops glass tiers and champagne/sapphire leftovers', (_label, src) => {
+  it.each(AMBIENT_FILES)('%s is quiet — no grain, tilt, stray rules, or drift loops', (_label, src) => {
     expect(src).not.toContain('glassBorder');
     expect(src).not.toContain('GOLD');
     expect(src).not.toContain('SAPPHIRE');
     expect(src).not.toContain('goldRule');
+    expect(src).not.toContain('grain.png');
+    expect(src).not.toContain('ImageShader');
+    expect(src).not.toContain('withRepeat');
+    expect(src).not.toContain('withTiming');
+    expect(src).not.toMatch(/rotate:\s*'?-?\d/);
+    expect(src).not.toContain('styles.plate');
+    expect(src).not.toContain('styles.rule');
+    expect(src).not.toContain('centerLine');
+    expect(src).not.toContain('styles.vignette');
     expect(src).not.toMatch(/rgba\(\s*240\s*,\s*214\s*,\s*144/);
     expect(src).not.toMatch(/rgba\(\s*59\s*,\s*111\s*,\s*217/);
     expect(src).not.toMatch(/Palette\.glass\b|Palette\.gold\b/);
   });
 
-  it('the native orbs are violet-dominant at subliminal alpha', () => {
-    const orbs = [...native.matchAll(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/g)];
-    expect(orbs.length).toBeGreaterThanOrEqual(2);
-    for (const match of orbs) {
+  it('mounts exactly one faint still glow, violet-dominant at subliminal alpha', () => {
+    expect((native.match(/<RadialGradient/g) ?? []).length).toBe(1);
+    expect(native).toContain('GLOW');
+    const glows = [...native.matchAll(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/g)];
+    expect(glows.length).toBe(1);
+    for (const match of glows) {
       const r = Number(match[1]);
       const g = Number(match[2]);
       const b = Number(match[3]);
@@ -113,21 +125,11 @@ describe('the ambient stage every Screen mounts paints violet, not champagne gla
       expect(r).toBeGreaterThan(g);
       expect(a).toBeLessThanOrEqual(0.2);
     }
-    expect(native).toContain('VIOLET');
-    expect(native).toContain('VIOLET_BRIGHT');
-  });
-
-  it('plates and the center line sit on cool hairlines with muted violet rules', () => {
-    for (const [, src] of AMBIENT_FILES) {
-      expect(src).toContain('borderColor: tokens.border');
-      expect(src).toContain('backgroundColor: tokens.border');
-      expect(src).toContain('styles.rule, styles.ruleTop');
-      expect(src).toContain('tokens.accentMuted');
-      expect(src).toContain('tokens.accentWarmMuted');
-      expect(src).not.toContain('styles.goldRule');
-    }
-    expect(fallback).toContain('color={tokens.accentWarmMuted}');
-    expect(fallback).toContain('color={tokens.accentMuted}');
+    // Fallback keeps a single still disc on the muted brand wash.
+    expect(fallback).toContain('tokens.accentMuted');
+    expect(fallback).toContain('styles.glow');
+    expect(fallback).not.toContain('GlowOrb');
+    expect(fallback).not.toContain('accentWarmMuted');
   });
 
   it('the Screen shell keeps its cool stage and ambient API', () => {

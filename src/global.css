@@ -10,11 +10,11 @@
   --font-serif: Georgia, 'Times New Roman', serif;
 
   --color-background: #0a0a0b;
-  --color-background-elevated: #111113;
+  --color-background-elevated: #141416;
   --color-accent: #8b7cff;
   --color-accent-warm: #a79bff;
   --color-text-primary: #f5f7fa;
   --color-text-secondary: #9ca3af;
-  --color-glass: rgba(17, 17, 19, 0.82);
+  --color-glass: rgba(20, 20, 22, 0.82);
   --color-glass-border: rgba(245, 247, 250, 0.08);
 }

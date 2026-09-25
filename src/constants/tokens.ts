@@ -12,24 +12,24 @@ import { Easing } from 'react-native-reanimated';
  * metallic gold as a rare highlight only (never the brand accent).
  */
 export const Palette = {
-  // Elevation ramp: base → inset (recessed) → elevated (cards) → raised (sheets/heroes)
-  // Cool near-black stage, not brown-black (visual-direction lock).
+  // Elevation ramp: base → inset → elevated → raised. Steps are wide enough that
+  // cards read without hairlines (S4 / visual-direction). Cool near-black stage.
   background: '#0A0A0B',
-  backgroundInset: '#0D0D0F',
-  backgroundElevated: '#111113',
-  backgroundRaised: '#16161A',
+  backgroundInset: '#101012',
+  backgroundElevated: '#141416',
+  backgroundRaised: '#1C1C20',
 
   // Glass tiers (cool translucent; flat-panel + hairline first)
-  glass: 'rgba(17, 17, 19, 0.82)',
+  glass: 'rgba(20, 20, 22, 0.82)',
   glassBorder: 'rgba(245, 247, 250, 0.08)',
   glassHighlight: 'rgba(245, 247, 250, 0.04)',
-  glassHero: 'rgba(22, 22, 26, 0.92)',
+  glassHero: 'rgba(28, 28, 32, 0.92)',
   glassHeroBorder: 'rgba(245, 247, 250, 0.12)',
 
   // Text — bright cool white / cool gray
   textPrimary: '#F5F7FA',
   textSecondary: '#9CA3AF',
-  textTertiary: '#6B7280',
+  textTertiary: '#8A8F98',
   textInverse: '#0A0A0B',
 
   // Accent — soft electric violet is the brand; `accentWarm` is the brighter
