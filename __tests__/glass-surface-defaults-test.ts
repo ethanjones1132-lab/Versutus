@@ -26,11 +26,14 @@ const SEP = __dirname.includes('\\') ? '\\' : '/';
 const GLASS_VIEW = 'GlassView' as ElementType;
 
 /**
- * Contract test for the flat-defaults pass (visual-direction-2026-09): the
- * default GlassSurface material on every platform is a flat elevated panel
- * with a cool hairline. Glass (iOS liquid glass, web backdrop blur) exists
- * only behind the explicit `glass` opt-in for sheets/modals. Props API is
- * unchanged apart from the additive optional `glass` flag.
+ * Contract test for the flat-defaults pass (visual-direction-2026-09) and the
+ * S4b hairline drop on top of it: the default GlassSurface material on every
+ * platform is a flat elevated panel that draws **no border at all** — the
+ * widened elevation step separates it from the stage. Glass (iOS liquid glass,
+ * web backdrop blur) exists only behind the explicit `glass` opt-in for
+ * sheets/modals. A consumer that genuinely needs an edge declares its own
+ * `borderWidth` in its own style and that wins. Props API is unchanged apart
+ * from the additive optional `glass` flag.
  */
 
 const nodeFs = jest.requireActual('fs') as {
@@ -79,7 +82,7 @@ describe('GlassSurface defaults to a flat elevated panel', () => {
     expect(renderer.root.findAllByType(GLASS_VIEW)).toHaveLength(1);
   });
 
-  it('paints the surface variant as an opaque stage panel with a cool hairline', async () => {
+  it('paints the surface variant as an opaque, borderless stage panel', async () => {
     const stagePanels = [
       [undefined, Palette.backgroundElevated, Palette.border],
       ['hero', Palette.backgroundRaised, Palette.borderStrong],
@@ -92,6 +95,8 @@ describe('GlassSurface defaults to a flat elevated panel', () => {
       const style = StyleSheet.flatten(surface.props.style);
       expect(style.backgroundColor).toBe(background);
       expect(style.borderColor).toBe(border);
+      // S4b: the value step carries the card, so nothing is drawn on its edge.
+      expect(style.borderWidth).toBe(0);
       // Opaque stage color — never a translucent glass tier or gold.
       expect(style.backgroundColor).not.toMatch(/rgba\([^)]+,\s*0?\.\d+\)/);
       expect(style.backgroundColor).not.toBe(Palette.glass);
@@ -102,11 +107,24 @@ describe('GlassSurface defaults to a flat elevated panel', () => {
       });
       renderer = undefined;
     }
-    // Chip is the one intentionally tinted (violet accent) variant.
+    // Chip is the one intentionally tinted (violet accent) variant, and it is
+    // borderless too — the connection pill declares its own edge when pairing.
     renderer = await renderSurface({ variant: 'chip' });
     const chipStyle = StyleSheet.flatten(renderer.root.findByType(View).props.style);
     expect(chipStyle.backgroundColor).toBe(Palette.accentMuted);
     expect(chipStyle.borderColor).toBe(Palette.accentWarmMuted);
+    expect(chipStyle.borderWidth).toBe(0);
+  });
+
+  it('leaves an edge to the consumer that needs one', async () => {
+    // Sheets, focused inputs, selected rows and failure cards all rely on this:
+    // the default is silent, and a declared width/colour overrides it.
+    renderer = await renderSurface({
+      style: { borderWidth: 2, borderColor: Palette.accent },
+    });
+    const style = StyleSheet.flatten(renderer.root.findByType(View).props.style);
+    expect(style.borderWidth).toBe(2);
+    expect(style.borderColor).toBe(Palette.accent);
   });
 
   it('keeps the existing props API alongside the additive glass flag', async () => {
@@ -155,5 +173,15 @@ describe('platform sources gate every blur behind the glass opt-in', () => {
   it('the glass flag is optional on the shared props type', () => {
     const src = readSource('types.ts');
     expect(src).toMatch(/glass\?: boolean;/);
+  });
+
+  it('no platform surface hardcodes a default hairline (S4b)', () => {
+    // The base style carries no width at all; each platform reads the width
+    // from the variant map, which is where the borderless decision lives.
+    for (const file of ['GlassSurface.tsx', 'GlassSurface.ios.tsx', 'GlassSurface.web.tsx']) {
+      const src = readSource(file);
+      expect(src).toContain('borderWidth: variantStyle.borderWidth');
+      expect(src).not.toMatch(/borderWidth: StyleSheet\.hairlineWidth/);
+    }
   });
 });

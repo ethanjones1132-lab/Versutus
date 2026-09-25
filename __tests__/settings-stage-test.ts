@@ -27,16 +27,25 @@ describe('gateway settings inherits the quiet violet stage', () => {
     expect(src).toContain("color=\"accent\" />");
   });
 
-  test('settings keeps flat hero, surface, and inset card material', () => {
+  test('settings keeps flat, borderless hero, surface, and inset card material', () => {
     const src = settings();
     const shared = variants();
     expect(src).toContain('variant="hero"');
     expect(src).toContain('variant="surface"');
     expect(src).toContain('variant="inset"');
     expect(src).not.toContain('glass');
-    expect(shared).toMatch(/hero: \{ backgroundColor: Palette\.backgroundRaised, borderColor: Palette\.borderStrong \}/);
-    expect(shared).toMatch(/surface: \{ backgroundColor: Palette\.backgroundElevated, borderColor: Palette\.border \}/);
-    expect(shared).toMatch(/inset: \{ backgroundColor: Palette\.backgroundInset, borderColor: Palette\.borderSubtle \}/);
+    // S4b: the settings stacks are the reason the wireframe look showed up
+    // here first, so every shared variant they lean on must ship borderWidth 0
+    // alongside its cool hairline colour.
+    expect(shared).toMatch(
+      /hero: \{[^}]*backgroundColor: Palette\.backgroundRaised,[^}]*borderColor: Palette\.borderStrong,[^}]*borderWidth: 0[^}]*\}/,
+    );
+    expect(shared).toMatch(
+      /surface: \{[^}]*backgroundColor: Palette\.backgroundElevated,[^}]*borderColor: Palette\.border,[^}]*borderWidth: 0[^}]*\}/,
+    );
+    expect(shared).toMatch(
+      /inset: \{[^}]*backgroundColor: Palette\.backgroundInset,[^}]*borderColor: Palette\.borderSubtle,[^}]*borderWidth: 0[^}]*\}/,
+    );
   });
 
   test('the brand accent remains violet rather than metallic gold', () => {

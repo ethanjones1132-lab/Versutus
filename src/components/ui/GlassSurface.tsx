@@ -9,10 +9,11 @@ import type { GlassSurfaceProps } from './types';
 export { glassVariantStyles } from './glass-variants';
 
 /**
- * Shared flat-surface implementation (Android + default): elevated panel +
- * hairline from the variant map, no blur primitive. Web and iOS can layer a
- * real glass material (backdrop blur / liquid glass) behind the `glass` opt-in;
- * Android has no blur here, so the prop is a no-op and stays flat either way.
+ * Shared flat-surface implementation (Android + default): elevated panel with
+ * no edge (the variant map owns the width, which is 0), no blur primitive. Web
+ * and iOS can layer a real glass material (backdrop blur / liquid glass) behind
+ * the `glass` opt-in; Android has no blur here, so the prop is a no-op and
+ * stays flat either way.
  */
 export function GlassSurface({
   children,
@@ -30,6 +31,7 @@ export function GlassSurface({
         {
           backgroundColor: variantStyle.backgroundColor,
           borderColor: variantStyle.borderColor,
+          borderWidth: variantStyle.borderWidth,
           borderRadius: radius,
           padding: padding > 0 ? padding : undefined,
         },
@@ -42,7 +44,6 @@ export function GlassSurface({
 
 const styles = StyleSheet.create({
   surface: {
-    borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
   },
 });

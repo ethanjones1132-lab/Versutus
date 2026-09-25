@@ -26,10 +26,14 @@ function readSource(...parts: string[]): string {
 }
 
 /**
- * Contract test for the flatten-glass pass (visual-direction-2026-09): the
- * shared surface variants resolve to solid cool near-black stage panels with
- * cool hairline borders — not translucent champagne glass, not gold. Variant
- * name API (hero/surface/inset/chip) must not change.
+ * Contract test for the flatten-glass pass (visual-direction-2026-09) and the
+ * S4b hairline drop that followed it: the shared surface variants resolve to
+ * solid cool near-black stage panels, never translucent champagne glass and
+ * never gold, and they ship **no edge at all** — the elevation step is what
+ * separates a card from the stage. The cool hairline colour stays in the map
+ * because it is the value a surface reaches for the moment a consumer decides
+ * it genuinely needs an edge. Variant name API (hero/surface/inset/chip) must
+ * not change.
  */
 
 type Rgba = { r: number; g: number; b: number; a: number };
@@ -122,5 +126,27 @@ describe('glassVariantStyles flatten contract', () => {
   it('chip stays on the violet accent pair', () => {
     expect(glassVariantStyles.chip.backgroundColor).toBe(Palette.accentMuted);
     expect(glassVariantStyles.chip.borderColor).toBe(Palette.accentWarmMuted);
+  });
+
+  it('draws no edge: every variant ships borderWidth 0 (S4b)', () => {
+    // The wireframe habit was the shared surface ringing itself around every
+    // card on the stage. Now the elevation step carries the card and a ring is
+    // something a consumer declares in its own style, where it means an
+    // affordance (a focused input, a selected row, a failure, a floating
+    // sheet) instead of decoration.
+    for (const variant of VARIANTS) {
+      expect(glassVariantStyles[variant].borderWidth).toBe(0);
+    }
+  });
+
+  it('keeps the cool hairline colour in the map for consumers that need an edge', () => {
+    // Dropping the default width is not dropping the palette: the colour each
+    // variant would ring with is still there, and it is still cool.
+    for (const variant of VARIANTS) {
+      const { r, b, a } = parseColor(glassVariantStyles[variant].borderColor);
+      expect(b).toBeGreaterThanOrEqual(r);
+      expect(a).toBeGreaterThan(0);
+      expect(a).toBeLessThan(1);
+    }
   });
 });

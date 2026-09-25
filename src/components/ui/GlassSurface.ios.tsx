@@ -17,8 +17,8 @@ export function GlassSurface({
 }: GlassSurfaceProps) {
   const variantStyle = glassVariantStyles[variant];
 
-  // Flat elevated panel + hairline is the default material; liquid glass is
-  // an explicit opt-in (sheets/modals), never what a card lands on.
+  // Flat elevated panel is the default material and draws no edge; liquid
+  // glass is an explicit opt-in (sheets/modals), never what a card lands on.
   if (!glass) {
     return (
       <View
@@ -27,6 +27,7 @@ export function GlassSurface({
           {
             backgroundColor: variantStyle.backgroundColor,
             borderColor: variantStyle.borderColor,
+            borderWidth: variantStyle.borderWidth,
             borderRadius: radius,
             padding: padding > 0 ? padding : undefined,
           },
@@ -45,7 +46,11 @@ export function GlassSurface({
       tintColor={variantStyle.backgroundColor}
       style={[
         styles.surface,
-        { borderRadius: radius, borderColor: variantStyle.borderColor },
+        {
+          borderRadius: radius,
+          borderColor: variantStyle.borderColor,
+          borderWidth: variantStyle.borderWidth,
+        },
         style,
       ]}>
       <View style={padding > 0 ? { padding } : undefined}>{children}</View>
@@ -56,6 +61,5 @@ export function GlassSurface({
 const styles = StyleSheet.create({
   surface: {
     overflow: 'hidden',
-    borderWidth: StyleSheet.hairlineWidth,
   },
 });

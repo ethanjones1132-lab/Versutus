@@ -6,7 +6,7 @@ import { glassVariantStyles } from './glass-variants';
 import type { GlassSurfaceProps } from './types';
 
 // Backdrop blur + lift, applied only when a consumer opts into glass —
-// flat panels + hairline carry the default (visual-direction lock).
+// borderless flat panels carry the default (visual-direction lock).
 const webGlass = {
   backdropFilter: 'blur(28px) saturate(145%)',
   boxShadow: 'inset 0 1px 0 rgba(245, 247, 250, 0.06), 0 18px 48px rgba(0, 0, 0, 0.52)',
@@ -30,6 +30,7 @@ export function GlassSurface({
         {
           backgroundColor: variantStyle.backgroundColor,
           borderColor: variantStyle.borderColor,
+          borderWidth: variantStyle.borderWidth,
           borderRadius: radius,
           padding: padding > 0 ? padding : undefined,
         },
@@ -42,7 +43,6 @@ export function GlassSurface({
 
 const styles = StyleSheet.create({
   surface: {
-    borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
   },
 });
