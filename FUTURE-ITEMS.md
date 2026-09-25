@@ -280,10 +280,10 @@ Candidates, not commitments — promote one to a full spec before building.
 ChatGPT/Gemini treat attaching an image or PDF as table stakes.
 
 **Shipped.** Image attach from the photo library, capability-gated: the
-paperclip appears only when the selected model declares image/vision input
-(`supportsImageInput`, `src/lib/gateway/chat-parts.ts:92`; offered at
-`src/components/chat/chat-screen.tsx:1144,2419` and drawn in
-`src/components/chat/chat-composer.tsx:461-476`), and the picked image rides
+`+` menu offers an image only when the selected model declares image/vision
+input (`supportsImageInput`, `src/lib/gateway/chat-parts.ts:92`; offered at
+`src/components/chat/chat-screen.tsx:1144,2419` and drawn in the composer's
+`+` menu at `src/components/chat/chat-composer.tsx:276-294`), and the picked image rides
 the existing chat pipeline as a data-URL content part.
 
 **Remaining.** Camera capture and non-image document attachments, through the

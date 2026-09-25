@@ -105,6 +105,11 @@ export const ChatComposer = memo(function ChatComposer({
 }: ChatComposerProps) {
   const tokens = useTokens();
   const [focused, setFocused] = useState(false);
+  // The `+` menu: every composer affordance the pill itself has no room for
+  // (attach, hands-free call, the one-tap commands, browse) lives behind the
+  // one borderless control on the pill's left, so the dock keeps no chip row
+  // and no floating terminal on the thread.
+  const [menuOpen, setMenuOpen] = useState(false);
   const [micDevice, setMicDevice] = useState({ available: false, permissionAskable: false });
   const sendWidth = useSharedValue(56);
 
@@ -134,11 +139,26 @@ export const ChatComposer = memo(function ChatComposer({
     permissionAskable: micDevice.permissionAskable,
   });
 
+  // The pill's trailing slot holds exactly one control: the mic holds the
+  // empty draft, and the round send (Stop while a reply streams) takes the
+  // slot the moment there is text. Nothing else draws beside the field, so
+  // the placeholder keeps the whole line to itself at phone width.
+  const showSend = draft.trim().length > 0 || isStreaming;
+  // What the `+` menu can offer right now. With nothing to offer there is no
+  // control to draw rather than a `+` that opens an empty panel.
+  const canOpenMenu = Boolean(
+    (onAttach && !callActive && !isStreaming) ||
+      (onStartCall && !callActive) ||
+      (quickActions.length > 0 && !isStreaming && !draft.trim()) ||
+      (dockUtilities.includes('browse-commands') && onBrowseCommands),
+  );
+
   const sendAnimatedStyle = useAnimatedStyle(() => ({
     minWidth: sendWidth.value,
   }));
 
   const handleAction = async () => {
+    setMenuOpen(false);
     if (isStreaming) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       onStop();
@@ -238,51 +258,107 @@ export const ChatComposer = memo(function ChatComposer({
   const composerInner = (
     <ComposerKeyboardLift>
       <View style={styles.dock}>
-        <View style={styles.utilityRow}>
-          <View style={styles.chipGroup}>
-            {!isStreaming && !draft.trim() && quickActions.length > 0
-              ? quickActions.map((action) => (
-                  <PressableScale
-                    key={action.label}
-                    onPress={async () => {
-                      await Haptics.selectionAsync();
-                      onSelectSlashSuggestion?.(action.draft);
-                    }}
-                    hitSlop={9}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Quick action ${action.label}`}
-                    style={[
-                      styles.quickChip,
-                      { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
-                    ]}>
-                    <Icon name={action.icon} size={11} color="accent" />
-                    <Text variant="micro" color="accent">
-                      {action.label}
-                    </Text>
-                  </PressableScale>
-                ))
-              : null}
+        {menuOpen && canOpenMenu ? (
+          <View
+            style={[
+              styles.palette,
+              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.border, maxHeight: paletteMaxHeight },
+            ]}>
+            <Text variant="micro" color="tertiary" style={styles.paletteTitle}>
+              Add
+            </Text>
+            <ScrollView
+              style={[styles.paletteScroll, { maxHeight: paletteScrollMaxHeight }]}
+              contentContainerStyle={styles.paletteContent}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}>
+              {onAttach && !callActive && !isStreaming ? (
+                <PressableScale
+                  style={[
+                    styles.menuRow,
+                    { backgroundColor: tokens.backgroundInset, borderColor: tokens.borderSubtle },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Attach an image"
+                  onPress={async () => {
+                    await Haptics.selectionAsync();
+                    setMenuOpen(false);
+                    onAttach();
+                  }}>
+                  <Icon name={{ ios: 'photo', android: 'image', web: 'image' }} size={14} color="accent" />
+                  <Text variant="caption" style={styles.menuLabel}>
+                    Attach an image
+                  </Text>
+                </PressableScale>
+              ) : null}
+              {onStartCall && !callActive ? (
+                <PressableScale
+                  style={[
+                    styles.menuRow,
+                    { backgroundColor: tokens.backgroundInset, borderColor: tokens.borderSubtle },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel={HANDSFREE_START_LABEL}
+                  onPress={async () => {
+                    await Haptics.selectionAsync();
+                    setMenuOpen(false);
+                    onStartCall();
+                  }}>
+                  <Icon name={{ ios: 'phone.fill', android: 'call', web: 'call' }} size={14} color="accent" />
+                  <Text variant="caption" style={styles.menuLabel}>
+                    {HANDSFREE_START_LABEL}
+                  </Text>
+                </PressableScale>
+              ) : null}
+              {!isStreaming && !draft.trim() && quickActions.length > 0
+                ? quickActions.map((action) => (
+                    <PressableScale
+                      key={action.label}
+                      onPress={async () => {
+                        await Haptics.selectionAsync();
+                        setMenuOpen(false);
+                        onSelectSlashSuggestion?.(action.draft);
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Quick action ${action.label}`}
+                      style={[
+                        styles.menuRow,
+                        { backgroundColor: tokens.backgroundInset, borderColor: tokens.borderSubtle },
+                      ]}>
+                      <Icon name={action.icon} size={14} color="accent" />
+                      <Text variant="caption" style={styles.menuLabel}>
+                        {action.label}
+                      </Text>
+                    </PressableScale>
+                  ))
+                : null}
+              {dockUtilities.includes('browse-commands') && onBrowseCommands ? (
+                <PressableScale
+                  onPress={async () => {
+                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setMenuOpen(false);
+                    onBrowseCommands();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Browse commands"
+                  style={[
+                    styles.menuRow,
+                    { backgroundColor: tokens.backgroundInset, borderColor: tokens.borderSubtle },
+                  ]}>
+                  <Icon
+                    name={{ ios: 'command', android: 'terminal', web: 'terminal' }}
+                    size={14}
+                    color="accent"
+                  />
+                  <Text variant="caption" style={styles.menuLabel}>
+                    Browse commands
+                  </Text>
+                </PressableScale>
+              ) : null}
+            </ScrollView>
           </View>
-          <View style={styles.chipGroup}>
-            {dockUtilities.includes('browse-commands') && onBrowseCommands ? (
-              <PressableScale
-                onPress={async () => {
-                  await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  onBrowseCommands();
-                }}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="Browse commands"
-                style={styles.utilityButton}>
-                <Icon
-                  name={{ ios: 'command', android: 'terminal', web: 'terminal' }}
-                  size={15}
-                  color="textTertiary"
-                />
-              </PressableScale>
-            ) : null}
-          </View>
-        </View>
+        ) : null}
 
         {mentionPicks.length > 0 && onSelectMention ? (
           <View
@@ -453,24 +529,28 @@ export const ChatComposer = memo(function ChatComposer({
         ) : null}
 
         <Card
-          padding={Spacing.two}
+          padding={Spacing.one}
           style={[
-            styles.composer,
+            styles.pill,
             { borderColor: focused ? tokens.accentWarm : tokens.border },
           ]}>
-          {onAttach && !callActive && !isStreaming ? (
+          {canOpenMenu ? (
+            // The one control on the left: borderless, and the door to the
+            // affordances the pill has no room to draw inline (attach, call,
+            // the one-tap commands, browse).
             <PressableScale
-              style={[
-                styles.micButton,
-                { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
-              ]}
-              onPress={onAttach}
+              onPress={async () => {
+                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setMenuOpen((open) => !open);
+              }}
+              hitSlop={6}
               accessibilityRole="button"
-              accessibilityLabel="Attach an image">
+              accessibilityLabel="Add image or command"
+              style={styles.plusButton}>
               <Icon
-                name={{ ios: 'paperclip', android: 'attach_file', web: 'attach_file' }}
-                size={16}
-                color="accent"
+                name={{ ios: 'plus', android: 'add', web: 'add' }}
+                size={20}
+                color={menuOpen ? 'accent' : 'textSecondary'}
               />
             </PressableScale>
           ) : null}
@@ -485,40 +565,23 @@ export const ChatComposer = memo(function ChatComposer({
             // (none / no autocorrect) are for URLs and tokens, not prose.
             autoCapitalize="sentences"
             autoCorrect={true}
-            onFocus={() => setFocused(true)}
+            onFocus={() => {
+              setFocused(true);
+              // The field taking the cursor is the operator typing, not
+              // reading the menu: the panel leaves with the keyboard up.
+              setMenuOpen(false);
+            }}
             onBlur={() => setFocused(false)}
             accessibilityLabel="Message input"
             style={styles.input}
           />
-          {onStartCall && !callActive ? (
-            // Beside the mic, never instead of it: a phone-shaped control that
-            // opens the disclosure sheet. The provider offers it only where a
-            // tap can actually start a session.
+          {!showSend && micState.kind !== 'hidden' ? (
+            // The empty pill's trailing control: drawn from the one fold and
+            // nothing else — dimmed with the module's own reason line while
+            // the gateway is away, live while it is connected. A build with
+            // no recognizer draws no mic at all.
             <PressableScale
-              style={[
-                styles.micButton,
-                { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
-              ]}
-              onPress={onStartCall}
-              accessibilityRole="button"
-              accessibilityLabel={HANDSFREE_START_LABEL}>
-              <Icon
-                name={{ ios: 'phone.fill', android: 'call', web: 'call' }}
-                size={16}
-                color="accent"
-              />
-            </PressableScale>
-          ) : null}
-          {micState.kind !== 'hidden' ? (
-            // Drawn from the one fold and nothing else: dimmed with the
-            // module's own reason line while the gateway is away, live while
-            // it is connected. A build with no recognizer draws no mic at all.
-            <PressableScale
-              style={[
-                styles.micButton,
-                { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
-                micDisabled && styles.micDisabled,
-              ]}
+              style={[styles.micButton, micDisabled && styles.micDisabled]}
               disabled={micDisabled}
               onPressIn={handleMicPressIn}
               onPressOut={handleMicPressOut}
@@ -526,50 +589,54 @@ export const ChatComposer = memo(function ChatComposer({
               accessibilityLabel={micLabel}>
               <Icon
                 name={{ ios: 'mic.fill', android: 'mic', web: 'mic' }}
-                size={16}
+                size={18}
                 color={!micDisabled ? 'accent' : 'textTertiary'}
               />
             </PressableScale>
           ) : null}
-          <Animated.View style={sendAnimatedStyle}>
-            <PressableScale
-              style={[
-                styles.sendButton,
-                {
-                  backgroundColor: isStreaming ? tokens.accentWarm : tokens.accent,
-                  borderColor: tokens.accentWarm,
-                },
-                isActionDisabled && styles.sendDisabled,
-              ]}
-              onPress={() => void handleAction()}
-              disabled={isActionDisabled}
-              accessibilityRole="button"
-              accessibilityLabel={copy.sendLabel}
-              accessibilityState={{ disabled: isActionDisabled, busy: isStreaming }}
-              onPressIn={() => {
-                // Reanimated shared value — mutable by design, not React state.
-                // eslint-disable-next-line react-hooks/immutability
-                sendWidth.value = withSpring(isStreaming ? 68 : 52, springSnappy);
-              }}
-              onPressOut={() => {
-                // Reanimated shared value — mutable by design, not React state.
-                // eslint-disable-next-line react-hooks/immutability
-                sendWidth.value = withSpring(56, springSnappy);
-              }}>
-              <Icon
-                name={
-                  isStreaming
-                    ? { ios: 'stop.fill', android: 'stop', web: 'stop' }
-                    : { ios: 'arrow.up', android: 'arrow_upward', web: 'arrow_upward' }
-                }
-                size={16}
-                color="textInverse"
-              />
-            </PressableScale>
-          </Animated.View>
+          {showSend ? (
+            // The mic's own slot once there is text: the round send, and the
+            // same round Stop while a reply is streaming.
+            <Animated.View style={sendAnimatedStyle}>
+              <PressableScale
+                style={[
+                  styles.sendButton,
+                  {
+                    backgroundColor: isStreaming ? tokens.accentWarm : tokens.accent,
+                    borderColor: tokens.accentWarm,
+                  },
+                  isActionDisabled && styles.sendDisabled,
+                ]}
+                onPress={() => void handleAction()}
+                disabled={isActionDisabled}
+                accessibilityRole="button"
+                accessibilityLabel={copy.sendLabel}
+                accessibilityState={{ disabled: isActionDisabled, busy: isStreaming }}
+                onPressIn={() => {
+                  // Reanimated shared value — mutable by design, not React state.
+                  // eslint-disable-next-line react-hooks/immutability
+                  sendWidth.value = withSpring(isStreaming ? 68 : 52, springSnappy);
+                }}
+                onPressOut={() => {
+                  // Reanimated shared value — mutable by design, not React state.
+                  // eslint-disable-next-line react-hooks/immutability
+                  sendWidth.value = withSpring(56, springSnappy);
+                }}>
+                <Icon
+                  name={
+                    isStreaming
+                      ? { ios: 'stop.fill', android: 'stop', web: 'stop' }
+                      : { ios: 'arrow.up', android: 'arrow_upward', web: 'arrow_upward' }
+                  }
+                  size={16}
+                  color="textInverse"
+                />
+              </PressableScale>
+            </Animated.View>
+          ) : null}
         </Card>
 
-        {micState.kind !== 'hidden' && micDisabled ? (
+        {!showSend && micState.kind !== 'hidden' && micDisabled ? (
           // The mic says why it cannot be held, in the module's own words:
           // a dimmed control on its own is silence, and silence about a
           // microphone reads as a broken one. A live call states its own lock.
@@ -611,33 +678,6 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.two,
     gap: Spacing.two,
   },
-  utilityRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.four,
-    minHeight: 24,
-  },
-  chipGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-  },
-  quickChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.one,
-    height: 26,
-    paddingHorizontal: Spacing.two + 2,
-    borderRadius: Radius.full,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  utilityButton: {
-    width: 28,
-    height: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   palette: {
     marginHorizontal: Spacing.four,
     borderRadius: Radius.lg,
@@ -675,12 +715,34 @@ const styles = StyleSheet.create({
   paletteDesc: {
     paddingRight: Spacing.two,
   },
-  composer: {
+  // The one pill: a single rounded row the field sits in. `+` on the left,
+  // the field, and one trailing control (mic, or the round send once there
+  // is text) — no chip row, no floating terminal, no boxed button cluster.
+  pill: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: Spacing.two,
+    gap: Spacing.one,
     marginHorizontal: Spacing.four,
-    borderRadius: Radius.xl,
+    borderRadius: Radius.full,
+  },
+  plusButton: {
+    width: 36,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.full,
+  },
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    minHeight: 44,
+    paddingHorizontal: Spacing.two,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  menuLabel: {
+    flex: 1,
   },
   attachmentRow: {
     flexDirection: 'row',
@@ -708,14 +770,15 @@ const styles = StyleSheet.create({
     maxHeight: 140,
     paddingHorizontal: Spacing.two,
     paddingVertical: Spacing.one,
-    // The composer's Card owns the chrome (focus-driven border, Radius.xl);
-    // the kit field renders bare inside it.
+    // The pill's Card owns the chrome (focus-driven border, Radius.full);
+    // the kit field renders bare inside it. No horizontal padding beyond
+    // this: the placeholder keeps the whole line at 375px.
     backgroundColor: 'transparent',
     borderWidth: 0,
     borderRadius: 0,
   },
   sendButton: {
-    borderRadius: Radius.md,
+    borderRadius: Radius.full,
     minHeight: 48,
     paddingHorizontal: Spacing.three,
     alignItems: 'center',
@@ -725,16 +788,15 @@ const styles = StyleSheet.create({
   sendDisabled: {
     opacity: 0.5,
   },
-  // The mic sits beside send inside the composer card. A 44pt-wide, 48pt-tall
-  // square: the touch floor, without wearing the accent-filled send chrome —
-  // a hold is a secondary action, and only its glyph is lit while live.
+  // The mic is the empty pill's trailing control: a borderless round glyph
+  // in the slot the send takes once there is text. It carries no fill and no
+  // hairline — a hold is a secondary action, and only its glyph is lit.
   micButton: {
     width: 44,
     minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: Radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: Radius.full,
   },
   micDisabled: {
     opacity: 0.5,

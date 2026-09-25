@@ -28,10 +28,10 @@ describe('FUTURE-ITEMS open cites describe the live tree', () => {
   });
 
   test('P1 keeps the live composer-draw and supportsImageInput cites', () => {
-    expect(p1Section).toContain('`src/components/chat/chat-composer.tsx:461-476`');
+    expect(p1Section).toContain('`src/components/chat/chat-composer.tsx:276-294`');
     expect(p1Section).toContain('`src/lib/gateway/chat-parts.ts:92`');
-    expect(chatComposer[460]).toContain('onAttach && !callActive && !isStreaming');
-    expect(chatComposer.slice(460, 476).join('\n')).toContain('accessibilityLabel="Attach an image"');
+    expect(chatComposer[275]).toContain('onAttach && !callActive && !isStreaming');
+    expect(chatComposer.slice(275, 294).join('\n')).toContain('accessibilityLabel="Attach an image"');
     expect(chatParts[91]).toContain('export function supportsImageInput');
   });
 

@@ -18,6 +18,9 @@ export type ComposerCopy = {
  * A tap while not connected still queues (`queueOfflineInput`) whenever a
  * gateway profile exists. The copy has to say that up front — the Queued
  * badge only appears after the line is already on the thread.
+ *
+ * Every placeholder stays on one line at 375px — the pill's field shows
+ * nothing else on an empty draft — so each is 26 characters or fewer.
  */
 export function composerCopy(input: ComposerCopyInput): ComposerCopy {
   const queues = input.canSend && input.status !== 'connected';
@@ -29,7 +32,7 @@ export function composerCopy(input: ComposerCopyInput): ComposerCopy {
 
 function placeholderCopy(input: { canSend: boolean; queues: boolean; isStreaming: boolean; queuedCount?: number }): string {
   if (input.isStreaming && input.queuedCount && input.queuedCount > 0) {
-    return input.queuedCount === 1 ? '1 queued — will send next' : `${input.queuedCount} queued — will send in order`;
+    return input.queuedCount === 1 ? '1 queued — sends next' : `${input.queuedCount} queued — sends in order`;
   }
   if (input.queues) return 'Message will queue';
   if (!input.canSend) return 'Connect a gateway to chat';

@@ -61,8 +61,8 @@ describe('composerCopy', () => {
     const twoQueued = composerCopy({ canSend: true, isStreaming: true, status: 'connected', queuedCount: 2 });
 
     expect(idle.placeholder).toBe('Message or /command');
-    expect(oneQueued.placeholder).toBe('1 queued — will send next');
-    expect(twoQueued.placeholder).toBe('2 queued — will send in order');
+    expect(oneQueued.placeholder).toBe('1 queued — sends next');
+    expect(twoQueued.placeholder).toBe('2 queued — sends in order');
     expect(oneQueued.placeholder).not.toBe(idle.placeholder);
   });
 
@@ -70,6 +70,21 @@ describe('composerCopy', () => {
     expect(
       composerCopy({ canSend: true, isStreaming: false, status: 'connected', queuedCount: 1 }).placeholder,
     ).toBe('Message or /command');
+  });
+
+  test('every placeholder stays short enough to hold one line at 375px', () => {
+    // The pill's field is the only text on an empty draft, and RN cannot
+    // ellipsize a placeholder — a long one wraps the composer's first line.
+    const samples = [
+      composerCopy({ canSend: true, isStreaming: false, status: 'connected' }),
+      composerCopy({ canSend: true, isStreaming: false, status: 'disconnected' }),
+      composerCopy({ canSend: false, isStreaming: false, status: 'disconnected' }),
+      composerCopy({ canSend: true, isStreaming: true, status: 'connected', queuedCount: 1 }),
+      composerCopy({ canSend: true, isStreaming: true, status: 'connected', queuedCount: 9 }),
+    ];
+    for (const copy of samples) {
+      expect(copy.placeholder.length).toBeLessThanOrEqual(26);
+    }
   });
 
   test('every status is classified — connected is live, the rest queue when send is open', () => {

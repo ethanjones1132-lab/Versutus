@@ -69,8 +69,11 @@ describe('Empty states lead with bright-white hierarchy and violet CTAs', () => 
 
   it('the composer quick actions rest on the brand accent; focus/stream keep the brighter tint', () => {
     const src = readSource('src', 'components', 'chat', 'chat-composer.tsx');
-    expect(src).toContain('<Icon name={action.icon} size={11} color="accent" />');
-    expect(src).toContain('<Text variant="micro" color="accent">');
+    // The one-tap commands moved off the dock's chip row and into the `+`
+    // menu; the rows still rest on the brand accent glyph.
+    expect(src).toContain('<Icon name={action.icon} size={14} color="accent" />');
+    expect(src).toContain('accessibilityLabel={`Quick action ${action.label}`}');
+    expect(src).toContain('accessibilityLabel="Add image or command"');
     // Focus ring and streaming send are the two live states accentWarm is for.
     expect(src).toContain('borderColor: focused ? tokens.accentWarm : tokens.border');
     expect(src).toContain('backgroundColor: isStreaming ? tokens.accentWarm : tokens.accent');

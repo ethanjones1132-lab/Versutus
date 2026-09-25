@@ -15,51 +15,61 @@ function readComposerSource(): string {
   return readSource(['src', 'components', 'chat', 'chat-composer.tsx']);
 }
 
-// The quick-action chip is the PressableScale rendering
-// `Quick action ${action.label}`; the browse-commands utility button is the
-// one rendering `Browse commands`.
-function readQuickChipBlock(): string {
+/** The declaration of one StyleSheet key, from its name to its closing brace. */
+function styleBlock(src: string, key: string): string {
+  const start = src.indexOf(`${key}: {`);
+  if (start === -1) throw new Error(`${key} style not found in chat-composer.tsx`);
+  return src.slice(start, src.indexOf('},', start) + 2);
+}
+
+/** The `+` PressableScale — the one that carries the Add image or command label. */
+function readPlusBlock(): string {
   const src = readComposerSource();
-  const labelAt = src.indexOf('Quick action ${action.label}');
+  const labelAt = src.indexOf('accessibilityLabel="Add image or command"');
   const openAt = src.lastIndexOf('<PressableScale', labelAt);
   return src.slice(openAt, labelAt);
 }
 
-function readQuickChipStyle(): string {
-  const src = readComposerSource();
-  const start = src.indexOf('quickChip: {');
-  const end = src.indexOf('},', start) + 2;
-  return src.slice(start, end);
-}
-
-test('the quick-action chip reaches the 44pt touch floor without moving the row', () => {
-  const chip = readQuickChipBlock();
-  const style = readQuickChipStyle();
-  // Layout stays put: the visual chip keeps its 26pt height.
-  expect(style).toMatch(/height: 26/);
-  // Touch expands outside layout: 26 + 2 * 9 = 44.
-  expect(chip).toContain('hitSlop={9}');
-  const height = Number(style.match(/height: (\d+)/)?.[1]);
-  const hitSlop = Number(chip.match(/hitSlop=\{(\d+)\}/)?.[1]);
-  expect(height + hitSlop * 2).toBeGreaterThanOrEqual(44);
+// The pill replaced the boxed attach/call/mic/send cluster: three controls on
+// the composer now carry a touch floor of their own — the borderless `+` on
+// the left, every row of the menu it opens, and the mic in the trailing slot.
+test('the `+` control reaches the 44pt touch floor without growing a box', () => {
+  const plus = readPlusBlock();
+  const style = styleBlock(readComposerSource(), 'plusButton');
+  // Layout: a 36pt-wide, 48pt-tall target — the height is already the floor,
+  // and the hitSlop widens it past 44 without moving the pill's row.
+  expect(style).toMatch(/width: 36/);
+  expect(style).toMatch(/minHeight: 48/);
+  expect(style).not.toMatch(/borderWidth/);
+  expect(plus).toContain('hitSlop={6}');
+  const width = Number(style.match(/width: (\d+)/)?.[1]);
+  const hitSlop = Number(plus.match(/hitSlop=\{(\d+)\}/)?.[1]);
+  expect(width + hitSlop * 2).toBeGreaterThanOrEqual(44);
 });
 
-test('the sibling utility button still reaches exactly 44', () => {
+test('every `+` menu row reaches the 44pt floor', () => {
   const src = readComposerSource();
-  const labelAt = src.indexOf('Browse commands');
-  const openAt = src.lastIndexOf('<PressableScale', labelAt);
-  const button = src.slice(openAt, labelAt);
-  expect(button).toContain('hitSlop={8}');
-  const styleStart = src.indexOf('utilityButton: {');
-  const style = src.slice(styleStart, src.indexOf('},', styleStart) + 2);
-  expect(style).toMatch(/height: 28/);
-  expect(28 + 8 * 2).toBe(44);
+  const row = styleBlock(src, 'menuRow');
+  expect(row).toMatch(/minHeight: 44/);
+  // The four rows the menu can draw — attach, hands-free call, the one-tap
+  // commands, browse — all mount through that one style.
+  expect((src.match(/styles\.menuRow/g) ?? []).length).toBeGreaterThanOrEqual(4);
 });
 
-test('the chip grouping, layout, and selection haptics are unchanged', () => {
+test('the mic keeps the touch floor now that it is the only trailing control', () => {
+  const style = styleBlock(readComposerSource(), 'micButton');
+  expect(style).toMatch(/width: 44/);
+  expect(style).toMatch(/minHeight: 48/);
+});
+
+test('the chip row, the boxed utility button and their styles are gone', () => {
   const src = readComposerSource();
-  expect(src).toContain('styles.utilityRow');
-  expect(src).toContain('styles.chipGroup');
-  expect(src).toContain('styles.quickChip');
+  expect(src).not.toContain('styles.utilityRow');
+  expect(src).not.toContain('styles.chipGroup');
+  expect(src).not.toContain('styles.quickChip');
+  expect(src).not.toContain('styles.utilityButton');
+  expect(src).toContain('styles.pill');
+  // Selection haptics survive: every `+` menu row still taps through the
+  // safe vocabulary on selection.
   expect(src).toContain('Haptics.selectionAsync()');
 });
