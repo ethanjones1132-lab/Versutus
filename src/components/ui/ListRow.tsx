@@ -12,6 +12,13 @@ import { Text } from './Text';
 export type ListRowProps = {
   title: string;
   subtitle?: string;
+  /**
+   * A third, quietest line under the title — the static explanation a grouped
+   * settings row carries beneath a live value (S4c). `subtitle` stays the
+   * one-line value a peer row reads; `detail` says what the row is for, and is
+   * allowed to wrap to two lines.
+   */
+  detail?: string;
   /** Leading glyph; rendered inside a chip halo. */
   icon?: IconName;
   /** Leading status dot color (semantic key or raw). Overrides icon halo when set. */
@@ -50,6 +57,7 @@ export type ListRowProps = {
 export function ListRow({
   title,
   subtitle,
+  detail,
   icon,
   statusColor,
   leading,
@@ -102,6 +110,11 @@ export function ListRow({
         {subtitle ? (
           <Text variant="caption" color="secondary" numberOfLines={1}>
             {subtitle}
+          </Text>
+        ) : null}
+        {detail ? (
+          <Text variant="micro" color="tertiary" numberOfLines={2}>
+            {detail}
           </Text>
         ) : null}
       </View>
