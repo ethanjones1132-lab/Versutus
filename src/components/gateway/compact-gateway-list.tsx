@@ -89,7 +89,7 @@ function GatewayRow({
       style={[
         styles.rowCard,
         isActive && {
-          borderColor: tokens.accentWarm,
+          borderColor: tokens.accent,
           borderWidth: 1,
         },
       ]}>

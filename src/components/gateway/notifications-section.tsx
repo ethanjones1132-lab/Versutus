@@ -113,7 +113,7 @@ export function NotificationsSection() {
       <Card variant="hero" padding={Spacing.three} style={styles.card}>
         <View style={styles.row}>
           <View style={styles.title}>
-            <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+            <Text variant="caption" color="accent" style={styles.eyebrow}>
               Relay
             </Text>
             <Text variant="headline">Push notifications</Text>

@@ -61,7 +61,7 @@ export function CapabilityHive({
         ))}
       </View>
       <View style={styles.summary}>
-        <Text variant="micro" color="accentWarm">
+        <Text variant="micro" color="statusConnected">
           {ready}/{counted.length} ready
         </Text>
         <PressableScale
@@ -179,7 +179,7 @@ const styles = StyleSheet.create({
     opacity: 1,
     width: 11,
     height: 11,
-    borderColor: Palette.accentWarm,
+    borderColor: Palette.accent,
     borderWidth: 1,
   },
   summary: {

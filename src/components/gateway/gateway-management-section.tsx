@@ -33,7 +33,7 @@ export function GatewayManagementSection() {
       <Card variant="hero" padding={Spacing.three} style={styles.card}>
         <View style={styles.sectionHeading}>
           <View style={styles.sectionTitle}>
-            <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+            <Text variant="caption" color="accent" style={styles.eyebrow}>
               Startup
             </Text>
             <Text variant="headline">Automatic connection</Text>
@@ -54,7 +54,7 @@ export function GatewayManagementSection() {
 
       <View style={styles.sectionHeader}>
         <View style={styles.sectionTitle}>
-          <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+          <Text variant="caption" color="accent" style={styles.eyebrow}>
             Discovery
           </Text>
           <Text variant="headline">Nearby gateways</Text>
@@ -92,7 +92,7 @@ export function GatewayManagementSection() {
       <Divider />
       <View style={styles.sectionHeader}>
         <View style={styles.sectionTitle}>
-          <Text variant="caption" color="accentWarm" style={styles.eyebrow}>
+          <Text variant="caption" color="accent" style={styles.eyebrow}>
             Profiles
           </Text>
           <Text variant="headline">Saved gateways</Text>

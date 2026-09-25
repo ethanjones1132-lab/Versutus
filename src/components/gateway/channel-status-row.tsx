@@ -34,7 +34,7 @@ export function ChannelStatusRow({
     model.tone === 'live'
       ? tokens.statusConnected
       : model.tone === 'attention'
-        ? tokens.accentWarm
+        ? tokens.statusConnecting
         : tokens.textTertiary;
 
   return (
@@ -86,7 +86,7 @@ const styles = StyleSheet.create({
     backgroundColor: Palette.backgroundInset,
   },
   rowAttention: {
-    borderColor: Palette.accentWarm,
+    borderColor: Palette.statusConnecting,
     borderWidth: StyleSheet.hairlineWidth * 2,
   },
   dot: {

@@ -47,7 +47,7 @@ export function GatewayCapabilities({ snapshot }: { snapshot: GatewayCapabilityS
           accessibilityRole="button"
           accessibilityLabel={showAll ? 'Hide unsupported capabilities' : 'Show all capabilities'}
           accessibilityState={{ expanded: showAll }}>
-          <Text variant="caption" color="accentWarm" style={styles.toggle}>
+          <Text variant="caption" color="accent" style={styles.toggle}>
             {showAll
               ? 'Hide unsupported'
               : hiddenCount > 0
@@ -83,7 +83,7 @@ function CapabilityPill({ group }: { group: GatewayCapabilityGroup }) {
 
   const color =
     status === 'ready'
-      ? tokens.accentWarm
+      ? tokens.statusConnected
       : status === 'warming' || status === 'stale'
         ? tokens.statusConnecting
         : status === 'missing-scope' || status === 'unsupported'
