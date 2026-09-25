@@ -1,57 +1,73 @@
-# Versutus visual direction — 2026-09-23
+# Versutus visual direction — 2026-09
 
-Status: **ACCEPTED 2026-09-23 ~22:44 ET**
-Peer bar: Claude mobile, Codex mobile, Grok Bot.
+Status: **ACCEPTED 2026-09-23** (palette + Chat-first) · **CORRECTED 2026-09-24** (structure over paint)
 
-Outranks honesty/ErrorCard queue. `.sprint/CHARTER.md` on `sprint/2026-09-23-ui-overhaul` is rewritten against this file.
+Peer bar: Claude mobile, Codex mobile, Grok Bot / ChatGPT.
 
-## Why we paused free-mimo
-Free-mimo was shipping honesty/ErrorCard nits. Useful, not the bar. Product still doesn’t feel like a flagship agentic client. Free-mimo checkout stays **PAUSED**; this overhaul runs in a separate worktree.
+Authoritative correction: `docs/ui-audit-claude-2026-09-24.md`. That audit outranks any reading of this file as “recolour the existing dashboard violet.”
+
+## Verdict locked 2026-09-24
+
+`sprint/2026-09-23-ui-overhaul` landed palette + Chat-as-default cleanly. It did **not** land premium structure. Peers look expensive because they **remove** chrome. Versutus still boxes everything.
+
+**Done (keep):** cool near-black stage, soft electric violet brand, Chat default route, colour discipline, honest empty/fail/loading, WCAG AA on main/secondary/violet.
+
+**Not done (required):** unboxed assistant replies, pill composer, empty one-row header, almost no borders, quiet tool/thinking chrome, still/minimal stage, swipeable sheets, Regular body type, 150–250ms motion, plain-language copy.
 
 ## North star
-A dark, quiet stage where the agent is the hero; chrome disappears; every high-value action is at most three taps from the Chat tab.
 
-## Locked defaults (ACCEPTED 2026-09-23 ~22:44 ET)
-Human accepted Claude/Codex/Grok-class sleek minimal luxury with contrast that pops and ≤3 taps. Locks:
+A dark, quiet stage where the **assistant’s words** are the hero. Chrome disappears. Surfaces are told apart by **value steps and spacing**, not hairlines. Every high-value action ≤3 taps from Chat.
 
-| Decision | Lock | Rationale |
-|---|---|---|
-| Accent | Soft electric violet (brand) | Claude-adjacent; calm luxury; pops on near-black without Grok-loud blue or terminal-green “dev tool” read |
-| Stage | Cool near-black (`#0A0A0B`–`#111113`), not brown-black | Kill muddy champagne-glass on `#030304` |
-| Type | Bright white / cool near-white primary; muted cool gray secondary | Drop parchment warmth as default |
-| Luxury punch | Metallic gold accents — **tasteful minimum** | Gold is highlight / rarity only, not champagne-glass everywhere; not the brand accent |
-| Material | Flat elevated panels + hairline borders first | Glass only on sheets/modals |
-| Default land | **Chat** (roster → Bot Chat) | Conversation-first like the peer bar |
-| Home | Demote: thin status / fold into Chat chrome — not a co-equal product | Four equal tabs currently fight the product |
-| Activity / Tools | Keep; lower visual weight vs Chat | Power stays; Chat is the hero |
-| ≤3 taps from Chat root | Bot Chat, model, sessions, pending approvals, settings entry, connect gateway | Non-negotiable IA test |
-| Motion | Fast 150–250ms; streaming/presence is the only continuous Chat motion | Ambient parallax stays subliminal or goes |
-| Light mode | Out of scope until dark language is undeniable | — |
-| Honesty-only greens | Forbidden unless ship-blocker | — |
+## Locked palette (unchanged)
 
-Accent hex to refine at token pass (starting point, not sacred): violet primary `#8B7CFF`, muted `rgba(139,124,255,0.18)`, on-accent text near-white. Metallic gold highlight token (e.g. `#D4AF37` / cool metallic) for rare luxury punches only. Status green/amber/red stay semantic and are **not** the brand accent.
+| Decision | Lock |
+|---|---|
+| Accent | Soft electric violet (brand) — start `#8B7CFF` |
+| Stage | Cool near-black `#0A0A0B`–`#111113` |
+| Type | Bright white primary; secondary ≥ `#8A8F98` (raise from `#6B7280`) |
+| Gold | Defined for rarity only — **do not ship until distinct from warning amber** |
+| Status | Semantic green/amber/red — **never** reuse as bot avatar colours |
+| Light mode | Out of scope |
 
-## Current system (honest read)
-- Tokens: warm champagne / bronze glass (`src/constants/tokens.ts`) → baroque dashboard, not quiet agent stage.
-- Tabs: Home · Chat · Activity · Tools as equal pillars; Home is a command-center dashboard.
-- Density: StatTiles, stacked glass cards, competing title/headline roles.
-- Aug 10 “flagship” roadmap closed capability gaps; it did **not** land this visual language.
+## Locked structure (NEW — 2026-09-24)
 
-## Build order (structural only)
-1. Token contrast pass — cool near-black stage, bright white type, soft electric violet brand accent, metallic gold highlight (minimal); flatten glass defaults in primitives.
-2. Chat shell overhaul — roster + Bot Chat + composer as the luxury surface.
-3. Tab IA — Chat as initial route; Home demoted or merged; badge approvals on Activity + Chat entry.
-4. Sheet language — one modal material system (flat/hairline, glass only if needed).
-5. Home residual — status strip / overflow only; no dashboard reincarnation.
-6. Residual screens — Activity / Tools / settings inherit the same language.
+| Surface | Lock |
+|---|---|
+| Assistant message | Full-width text on stage; **no** card, **no** border, **no** avatar initial required, timestamp only in overflow/long-press |
+| User message | Soft grey bubble, **no** border, **no** selected violet tint |
+| Tools / thinking | One quiet collapsible line (`Used N tools · Thought Ns ›`); never taller than the answer by default |
+| Header | **One** row: back · title (+ model as tappable subtitle) · one menu. Everything else in the menu |
+| Composer | **One** pill: borderless `+` left; mic → round send when there is text. No chip row, no floating terminal icon on the thread |
+| Streaming | **Exactly one** continuous signal (prefer caret or subtle presence). Ban header “Streaming…”, RUNNING badge, bouncing dots, and border-colour flash together |
+| Background | Flat stage. Delete tilted panels, grain, drifting glows, stray lines. At most one faint **still** glow |
+| Surfaces | Widen steps e.g. `#0A0A0B` / `#141416` / `#1C1C20`. Drop most borders; ~70 border declarations is a failure mode |
+| Settings / Activity | Grouped rows (label · value · chevron). Ban marketing-card stacks with violet ALL-CAPS section labels |
+| Sheets | Grab handle + swipe-to-dismiss on BaseSheet |
+| Type | Load Regular (400) for body; Medium+ for UI chrome only; tighten tracking on large headings |
+| Motion | 150–250ms; messages fade + slight rise (no L/R slide); no bouncy spring defaults |
+| Copy | Plain words only — no PROFILE-SCOPED / slash-command / Hermes-registry user-facing strings |
 
-## Explicit non-goals
-- No new feature families while the visual system is replaced.
-- No ErrorCard-only / honesty-only iterations unless ship-blocker.
-- Do not weaken the verify gate.
-- Free-mimo is **not** primary for this overhaul — DeepSeek V4.1 Flash via Hermes OpenRouter.
+## Build order (structural — replaces prior token→paint order)
 
-## Still open (only if human cares later)
-- Exact violet / gold hex saturation (token pass can tune).
-- Whether Home tab **disappears** vs becomes a thin “Gate” status tab.
-- Whether Tools stays a tab or moves behind Chat overflow.
+1. **Message layout** — unbox assistant; soften user; collapse tools/thinking
+2. **Pill composer**
+3. **One-row header**
+4. **Strip stage noise + most borders**; widen surface steps
+5. **Swipeable sheets**
+6. Then human decides: **kill bottom tabs → side drawer** (item still open)
+7. Plain-language pass + dim-text AA + avatar/status de-clash + motion/type weights
+
+## Explicit non-goals / forbidden
+
+- “Read X as brand violet” / residual recolour as a green
+- New feature families while structure is wrong
+- Honesty-only / ErrorCard-only unless ship-blocker
+- Weakening the verify gate
+- Using gold until it is visually distinct from warning amber
+- Four equal dashboard tabs as the end state (tabs may remain temporarily; drawer is the open product call)
+
+## Still open (human)
+
+- Side drawer vs keep thin tabs (audit item 15) — biggest single step toward peer feel
+- Exact violet hex saturation
+- Whether Home disappears entirely vs thin Gate status
