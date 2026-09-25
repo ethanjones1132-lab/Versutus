@@ -1080,7 +1080,6 @@ export function ChatScreen() {
     : undefined;
   const modelLabel =
     effectiveModel(activeGateway, selectedBackendId, selectedBotId) ?? botOwnModel ?? 'Default model';
-  const identity = settings.pcName ?? activeGateway?.name;
   // Only the backend actually routing this thread. The `?? backends[0]`
   // fallback that used to be here labelled the chip "Claude Code" whenever the
   // selection had not resolved — the same lie the Gate setup screen told, and
@@ -1829,7 +1828,6 @@ export function ChatScreen() {
           {item.showDivider && item.label ? <DayDivider label={item.label} /> : null}
           <MessageBubble
             message={item.message}
-            identity={identity}
             onRetry={retryCommand}
             onCancel={cancelCommand}
             onResume={handleResumeMessage}
@@ -1838,7 +1836,7 @@ export function ChatScreen() {
         </>
       );
     },
-    [cancelCommand, handleResumeMessage, identity, retryCommand],
+    [cancelCommand, handleResumeMessage, retryCommand],
   );
 
   if (!activeGateway) {

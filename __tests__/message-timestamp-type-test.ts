@@ -15,29 +15,30 @@ function readBubbleSource(): string {
   return readSource(['src', 'components', 'chat', 'message-bubble.tsx']);
 }
 
-// The timestamp StyleSheet block that sits beside every bubble.
-function readTimestampBlock(): string {
-  const src = readBubbleSource();
-  const keyAt = src.indexOf('timestamp: {');
-  const closeAt = src.indexOf('},', keyAt);
-  return src.slice(keyAt, closeAt + 2);
+function readSheetSource(): string {
+  return readSource(['src', 'components', 'chat', 'message-actions-sheet.tsx']);
 }
 
-test('the timestamp sits on the micro type metrics', () => {
-  const block = readTimestampBlock();
-  expect(block).toMatch(/fontSize: 11/);
-  expect(block).toMatch(/lineHeight: 14/);
-  expect(block).not.toMatch(/fontSize: 10/);
-  expect(block).not.toMatch(/lineHeight: 13/);
-});
-
-test('the timestamp keeps the mono family', () => {
-  const block = readTimestampBlock();
-  expect(block).toMatch(/fontFamily: FontFamily\.mono/);
-});
-
-test('the mono timestamp copy still renders beside every bubble', () => {
+// CHARTER priority 1 / visual-direction-2026-09: peers put no monospace clock
+// under every message. The transcript row is text only; the time survives in
+// the long-press overflow, where it belongs.
+test('the transcript no longer prints a clock under every message', () => {
   const src = readBubbleSource();
-  expect(src).toContain('formatClockTime(message.timestamp)');
-  expect(src).toMatch(/variant="micro"[^>]*style=\{styles\.timestamp\}/);
+  expect(src).not.toContain('formatClockTime');
+  expect(src).not.toContain('styles.timestamp');
+  expect(src).not.toMatch(/timestamp: \{/);
+});
+
+test('the clock still reaches the reader through the long-press sheet', () => {
+  const sheet = readSheetSource();
+  expect(sheet).toContain('formatClockTime(message.timestamp)');
+  expect(sheet).toContain('timeLabel');
+});
+
+test('the overflow time rides the readable caption line, not an 11px mono whisper', () => {
+  const sheet = readSheetSource();
+  const meta = sheet.match(/<View style=\{styles\.meta\}>[\s\S]*?<\/View>/)?.[0];
+  expect(meta).toBeDefined();
+  expect(meta).toContain('variant="caption"');
+  expect(meta).toContain('{timeLabel}');
 });

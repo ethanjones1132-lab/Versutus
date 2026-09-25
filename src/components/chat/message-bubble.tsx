@@ -7,12 +7,11 @@ import Animated from 'react-native-reanimated';
 import { MarkdownText } from '@/components/chat/markdown/markdown-text';
 import { StreamingIndicator } from '@/components/chat/streaming-indicator';
 import { ToolCallCard } from '@/components/chat/tool-call-card';
-import { Badge, Card, PressableScale, Text } from '@/components/ui';
-import { FontFamily, Palette, Radius, Spacing } from '@/constants/tokens';
+import { Badge, PressableScale, Text } from '@/components/ui';
+import { Radius, Spacing } from '@/constants/tokens';
 import { bubbleMaxWidth } from '@/lib/motion/bubble-width';
 import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { entering } from '@/lib/motion/presets';
-import { formatClockTime } from '@/lib/format';
 import { useTokens } from '@/hooks/use-tokens';
 import { interruptedSendAgainLabel } from '@/lib/gateway/interrupted-copy';
 import type { ChatMessage, CommandTranscriptEntry } from '@/lib/gateway/types';
@@ -23,10 +22,8 @@ type MessageBubbleProps = {
   onCancel?: (id: string) => void;
   /** Resend the previous user turn after a mid-stream disconnect. */
   onResume?: (message: ChatMessage) => void;
-  /** Long-press opens the message action sheet. */
+  /** Long-press opens the message action sheet (copy, retry, delete, time). */
   onLongPress?: (message: ChatMessage) => void;
-  /** Gateway display name; its initial becomes the assistant monogram. */
-  identity?: string;
 };
 
 const COMMAND_STATUS_LABEL = {
@@ -41,21 +38,25 @@ const COMMAND_STATUS_TONE = {
   error: 'danger',
 } as const;
 
-export const MessageBubble = memo(function MessageBubble({ message, onRetry, onCancel, onResume, onLongPress, identity }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, onRetry, onCancel, onResume, onLongPress }: MessageBubbleProps) {
   const tokens = useTokens();
   const { width: windowWidth } = useWindowDimensions();
   const isUser = message.role === 'user';
   const isCommand = !!message.command;
-  const hasMonogram = !isUser && !!identity;
-  const columnMaxWidth = bubbleMaxWidth(windowWidth, hasMonogram);
+  const columnMaxWidth = bubbleMaxWidth(windowWidth, false);
   const [rawOpen, setRawOpen] = useState(false);
   const hasReasoning = typeof message.reasoning === 'string' && message.reasoning.length > 0;
-  const [reasoningUserOverride, setReasoningUserOverride] = useState<boolean | null>(null);
-  const isReasoningExpanded = hasReasoning
-    ? reasoningUserOverride !== null
-      ? reasoningUserOverride
-      : !!message.streaming
-    : false;
+  const toolCallCount = message.toolCalls?.length ?? 0;
+  const activityParts: string[] = [];
+  if (toolCallCount > 0) {
+    activityParts.push(toolCallCount === 1 ? 'Used 1 tool' : `Used ${toolCallCount} tools`);
+  }
+  if (hasReasoning) activityParts.push('Thinking');
+  const activityLabel = activityParts.join(' · ');
+  const hasActivity = activityParts.length > 0;
+  const [activityUserOverride, setActivityUserOverride] = useState<boolean | null>(null);
+  const activitySettled = !!message.streaming && message.text.length === 0;
+  const isActivityOpen = activityUserOverride !== null ? activityUserOverride : activitySettled;
   const commandStatus = message.command?.status;
 
   const duration = message.command?.durationMs
@@ -75,42 +76,21 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
     <Animated.View
       entering={isUser ? entering.slideInRight : entering.slideInLeft}
       style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}>
-      {!isUser && identity ? (
-        <View
-          style={[
-            styles.monogram,
-            { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
-          ]}>
-          <Text variant="micro" color="accent" style={styles.monogramLetter}>
-            {identity.slice(0, 1).toUpperCase()}
-          </Text>
-        </View>
-      ) : null}
       <View
         style={[
           styles.bubbleColumn,
           isUser ? styles.bubbleColumnUser : styles.bubbleColumnAssistant,
-          { maxWidth: columnMaxWidth },
+          isUser ? { maxWidth: columnMaxWidth } : null,
         ]}>
         <PressableScale
           onLongPress={() => void handleLongPress()}
           delayLongPress={350}>
-        <Card
-          variant={isUser ? 'chip' : 'surface'}
-          padding={Spacing.three}
-          style={[
-            styles.bubble,
-            isCommand && styles.commandBubble,
-            isUser
-              ? { backgroundColor: tokens.accentMuted, borderColor: tokens.accent }
-              : isInterrupted
-                ? { borderColor: tokens.statusDisconnected }
-                : message.streaming || commandStatus === 'running'
-                  ? { borderColor: tokens.accentMuted }
-                  : commandStatus === 'error'
-                    ? { borderColor: tokens.statusDisconnected }
-                    : { borderColor: tokens.border },
-          ]}>
+          <View
+            style={[
+              styles.bubble,
+              isUser ? styles.userBubble : styles.assistantBubble,
+              isUser ? { backgroundColor: tokens.backgroundRaised } : null,
+            ]}>
           {message.queued ? (
             <Badge label="Queued" tone="warning" dot={false} />
           ) : null}
@@ -134,40 +114,42 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
             </View>
           ) : null}
 
-          {message.toolCalls?.map((toolCall, index) => (
-            <ToolCallCard key={`${toolCall.name}-${index}`} toolCall={toolCall} />
-          ))}
-
-          {!isUser && hasReasoning ? (
-            <View style={styles.reasoningSection}>
+          {!isUser && hasActivity ? (
+            <View style={styles.activitySection}>
               <PressableScale
                 onPress={async () => {
                   await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setReasoningUserOverride((prev) => (prev !== null ? !prev : !message.streaming));
+                  setActivityUserOverride((prev) => (prev !== null ? !prev : !activitySettled));
                 }}
                 accessibilityRole="button"
-                accessibilityLabel={isReasoningExpanded ? 'Hide thinking' : 'Thinking'}
-                accessibilityState={{ expanded: isReasoningExpanded }}
+                accessibilityLabel={activityLabel}
+                accessibilityState={{ expanded: isActivityOpen }}
                 hitSlop={CHIP_HIT_SLOP}
-                style={styles.reasoningToggle}>
-                <Text variant="caption" color="accent">
-                  {isReasoningExpanded ? 'Hide thinking' : 'Thinking'}
+                style={styles.activityToggle}>
+                <Text variant="caption" color="secondary">
+                  {activityLabel}
+                  {isActivityOpen ? '' : ' ›'}
                 </Text>
               </PressableScale>
-              {isReasoningExpanded ? (
+              {isActivityOpen ? (
                 <View
                   style={[
-                    styles.reasoningCard,
+                    styles.activityCard,
                     {
                       backgroundColor: tokens.backgroundInset,
                       borderColor: tokens.border,
                     },
                   ]}>
-                  <ScrollView style={styles.reasoningScroll} nestedScrollEnabled>
-                    <Text variant="caption" color="secondary">
-                      {message.reasoning}
-                    </Text>
-                  </ScrollView>
+                  {hasReasoning ? (
+                    <ScrollView style={styles.reasoningScroll} nestedScrollEnabled>
+                      <Text variant="caption" color="secondary">
+                        {message.reasoning}
+                      </Text>
+                    </ScrollView>
+                  ) : null}
+                  {message.toolCalls?.map((toolCall, index) => (
+                    <ToolCallCard key={`${toolCall.name}-${index}`} toolCall={toolCall} />
+                  ))}
                 </View>
               ) : null}
             </View>
@@ -306,14 +288,9 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
           ) : null}
 
           {message.streaming || commandStatus === 'running' ? <StreamingIndicator /> : null}
-        </Card>
+          </View>
         </PressableScale>
-        {message.timestamp ? (
-          <Text variant="micro" color="tertiary" style={styles.timestamp}>
-            {formatClockTime(message.timestamp)}
-          </Text>
-        ) : null}
-        </View>
+      </View>
     </Animated.View>
   );
 });
@@ -343,20 +320,6 @@ const styles = StyleSheet.create({
   rowAssistant: {
     justifyContent: 'flex-start',
   },
-  monogram: {
-    width: 26,
-    height: 26,
-    borderRadius: Radius.full,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: Spacing.two,
-  },
-  monogramLetter: {
-    fontFamily: FontFamily.sansSemiBold,
-    fontSize: 11,
-    lineHeight: 14,
-  },
   bubbleColumn: {
     flexShrink: 1,
     minWidth: 0,
@@ -366,17 +329,20 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   bubbleColumnAssistant: {
-    alignItems: 'flex-start',
+    alignItems: 'stretch',
+    flexGrow: 1,
   },
   bubble: {
-    borderRadius: Radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
     gap: Spacing.two,
-  },
-  commandBubble: {
     maxWidth: '100%',
-    borderColor: Palette.border,
-    padding: Spacing.two,
+  },
+  userBubble: {
+    borderRadius: Radius.xl,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+  },
+  assistantBubble: {
+    padding: 0,
   },
   commandHeader: {
     flexDirection: 'row',
@@ -393,6 +359,26 @@ const styles = StyleSheet.create({
   },
   commandTitleText: {
     flexShrink: 1,
+  },
+  activitySection: {
+    gap: Spacing.two,
+  },
+  activityToggle: {
+    alignSelf: 'flex-start',
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activityCard: {
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: Spacing.two,
+    gap: Spacing.two,
+    maxHeight: 320,
+  },
+  reasoningScroll: {
+    maxHeight: 200,
   },
   rawSection: {
     gap: Spacing.two,
@@ -411,23 +397,6 @@ const styles = StyleSheet.create({
   rawScroll: {
     maxHeight: 240,
   },
-  reasoningSection: {
-    gap: Spacing.two,
-  },
-  reasoningToggle: {
-    alignSelf: 'flex-start',
-    minHeight: 28,
-    justifyContent: 'center',
-  },
-  reasoningCard: {
-    borderRadius: Radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: Spacing.two,
-    maxHeight: 220,
-  },
-  reasoningScroll: {
-    maxHeight: 200,
-  },
   commandActions: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -438,12 +407,6 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     minHeight: 28,
     justifyContent: 'center',
-  },
-  timestamp: {
-    fontSize: 11,
-    lineHeight: 14,
-    fontFamily: FontFamily.mono,
-    paddingHorizontal: Spacing.one,
   },
   interruptedReason: {
     fontSize: 12,

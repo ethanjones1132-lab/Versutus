@@ -59,7 +59,7 @@ export default function DevPreviewScreen() {
     for (const message of MOCK_CHAT_MESSAGES) {
       const label = message.timestamp ? formatDayDivider(message.timestamp) : null;
       if (label && label !== lastLabel) rows.push(<DayDivider key={`day-${label}`} label={label} />);
-      rows.push(<MessageBubble key={message.id} message={message} identity="V" />);
+      rows.push(<MessageBubble key={message.id} message={message} />);
       lastLabel = label;
     }
     return rows;

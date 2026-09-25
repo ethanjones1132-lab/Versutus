@@ -17,6 +17,13 @@ function readSource(...parts: string[]): string {
     .replace(/\r\n/g, '\n');
 }
 
+function styleBlock(src: string, key: string): string {
+  const keyAt = src.indexOf(`${key}: {`);
+  if (keyAt < 0) throw new Error(`missing style block ${key}`);
+  const closeAt = src.indexOf('},', keyAt);
+  return src.slice(keyAt, closeAt + 2);
+}
+
 function hex(value: string): [number, number, number] {
   const match = /^#([0-9a-f]{6})$/i.exec(value);
   if (!match) throw new Error(`expected 6-digit hex, got ${value}`);
@@ -28,17 +35,26 @@ describe('message bubbles and streaming presence use the brand stage', () => {
   const bubble = readSource('src', 'components', 'chat', 'message-bubble.tsx');
   const streaming = readSource('src', 'components', 'chat', 'streaming-indicator.tsx');
 
-  test('the assistant monogram and user edge wear the brand violet', () => {
-    expect(bubble).toContain('<Text variant="micro" color="accent" style={styles.monogramLetter}>');
-    expect(bubble).toContain('{ backgroundColor: tokens.accentMuted, borderColor: tokens.accent }');
-    expect(bubble).not.toMatch(/accentWarm|accentWarmMuted/);
+  test('the assistant reply is unboxed and the user bubble is soft grey', () => {
+    // No card shell, no avatar monogram: the answer is text on the stage.
+    expect(bubble).not.toMatch(/<Card\b/);
+    expect(bubble).not.toContain('styles.monogram');
+    // User fill is a neutral surface step — never the violet "selected" tint.
+    expect(bubble).toContain('{ backgroundColor: tokens.backgroundRaised }');
+    expect(bubble).not.toContain('tokens.accentMuted');
+    expect(bubble).not.toMatch(/borderColor: tokens\.accent\b/);
   });
 
-  test('live bubble borders use the muted brand pair without changing state branches', () => {
-    expect(bubble).toContain("? { borderColor: tokens.accentMuted }");
-    expect(bubble).toContain("? { borderColor: tokens.statusDisconnected }");
-    expect(bubble).toContain("commandStatus === 'running'");
+  test('no bubble state leans on a border: the shell style blocks are borderless', () => {
+    for (const key of ['bubble', 'userBubble', 'assistantBubble']) {
+      expect(styleBlock(bubble, key)).not.toMatch(/border(?:Width|Color)/);
+    }
+    // Interrupted / streaming / failed turns keep their own signals (badges,
+    // the caret, the retry action) instead of a hairline colour change.
+    expect(bubble).not.toMatch(/borderColor: tokens\.(accent|statusDisconnected)/);
     expect(bubble).toContain('<StreamingIndicator />');
+    expect(bubble).toContain("commandStatus === 'running'");
+    expect(bubble).toContain('label="Interrupted"');
   });
 
   test('streaming dots are brand violet and keep the repeating presence motion', () => {
