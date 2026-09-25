@@ -1,6 +1,14 @@
 import * as Haptics from 'expo-haptics';
-import { ReactNode, useEffect, useState, useSyncExternalStore } from 'react';
-import { Keyboard, Modal, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { ReactNode, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import {
+  Keyboard,
+  Modal,
+  PanResponder,
+  Pressable,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import Animated, {
   Easing,
   runOnJS,
@@ -21,6 +29,12 @@ import {
   sheetMaxHeight,
   sheetMaxWidth,
 } from '@/lib/motion/sheet-height';
+import {
+  SHEET_SWIPE,
+  sheetSwipeOffset,
+  sheetSwipeShouldDismiss,
+  sheetSwipeVelocity,
+} from '@/lib/motion/sheet-swipe';
 
 function subscribeKeyboardHeight(onChange: () => void) {
   const show = Keyboard.addListener('keyboardDidShow', onChange);
@@ -114,6 +128,77 @@ export function BaseSheet({
     transform: [{ translateY: translateY.value }],
   }));
 
+  // ─── Swipe to dismiss ───
+  //
+  // A sheet that can only be closed by a Close button is a floating card. The
+  // drag lives in one grab zone (the handle plus the header) rather than on
+  // the whole sheet, so a FlatList inside the sheet keeps its own scroll and a
+  // text field keeps its own gestures. It is gated on onClose because a sheet
+  // with no way to close must not advertise a way to close.
+
+  /** Back to rest after a drag that did not clear the bar. */
+  const settleBack = useCallback(() => {
+    // Reanimated shared value — mutable by design, not React state.
+    // eslint-disable-next-line react-hooks/immutability
+    translateY.value = withTiming(0, {
+      duration: Motion.duration.fast,
+      easing: Motion.easing.decelerate,
+    });
+  }, [translateY]);
+
+  /** Commit the dismissal the finger started; onClose finishes the exit. */
+  const flyOut = useCallback(() => {
+    // Reanimated shared value — mutable by design, not React state.
+    // eslint-disable-next-line react-hooks/immutability
+    translateY.value = withTiming(hiddenOffset, {
+      duration: Motion.duration.fast,
+      easing: Motion.easing.accelerate,
+    });
+  }, [hiddenOffset, translateY]);
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        // Touch-down is a tap, not the start of a drag: claiming here would
+        // steal the responder from the Close control on touch-down and break it.
+        onStartShouldSetPanResponder: () => false,
+        // Vertical intent only. A horizontal swipe inside the sheet is a
+        // carousel, not a dismiss.
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          Math.abs(gesture.dy) > SHEET_SWIPE.claim,
+        onPanResponderMove: (_event, gesture) => {
+          // Reanimated shared value — mutable by design, not React state.
+          // eslint-disable-next-line react-hooks/immutability
+          translateY.value = sheetSwipeOffset({
+            delta: gesture.dy,
+            position,
+            hiddenTravel: hiddenOffset,
+          });
+        },
+        onPanResponderRelease: (_event, gesture) => {
+          if (
+            !sheetSwipeShouldDismiss({
+              // |offset| is how far the sheet has been dragged off rest. Which
+              // way it went is carried by the mirrored velocity, so a wrong-way
+              // drag cannot clear the travel bar on its own.
+              travel: Math.abs(translateY.value),
+              velocity: sheetSwipeVelocity({ vy: gesture.vy, position }),
+            })
+          ) {
+            settleBack();
+            return;
+          }
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          flyOut();
+          onClose?.();
+        },
+        // The gesture was taken away mid-drag (a parent claimed it): settle,
+        // never leave the sheet parked under a finger that is gone.
+        onPanResponderTerminate: () => settleBack(),
+      }),
+    [flyOut, hiddenOffset, onClose, position, settleBack, translateY],
+  );
+
   if (!mounted) return null;
 
   const isBottom = position === 'bottom';
@@ -124,6 +209,26 @@ export function BaseSheet({
       onClose();
     }
   };
+
+  const header = (
+    <View style={styles.header}>
+      <Text variant="mono" color="accent" style={styles.eyebrow}>
+        {eyebrow}
+      </Text>
+      {onClose ? (
+        <PressableScale
+          onPress={async () => {
+            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            onClose();
+          }}
+          hitSlop={12}>
+          <Text variant="caption" color="tertiary">
+            {closeLabel || 'Close'}
+          </Text>
+        </PressableScale>
+      ) : null}
+    </View>
+  );
 
   return (
     <Modal visible={mounted} transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
@@ -153,23 +258,14 @@ export function BaseSheet({
             animatedStyle,
           ]}>
           <GlassSurface variant="hero" glass={glass} padding={0} style={styles.sheetSurface}>
-            <View style={styles.header}>
-              <Text variant="mono" color="accent" style={styles.eyebrow}>
-                {eyebrow}
-              </Text>
-              {onClose ? (
-                <PressableScale
-                  onPress={async () => {
-                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    onClose();
-                  }}
-                  hitSlop={12}>
-                  <Text variant="caption" color="tertiary">
-                    {closeLabel || 'Close'}
-                  </Text>
-                </PressableScale>
-              ) : null}
-            </View>
+            {onClose ? (
+              <View {...panResponder.panHandlers} style={styles.grabZone}>
+                <View style={styles.grabHandle} />
+                {header}
+              </View>
+            ) : (
+              header
+            )}
 
             {title ? (
               <Text variant="title" style={styles.title}>
@@ -231,6 +327,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingTop: 8,
     paddingBottom: 4,
+  },
+  // The whole handle+header strip is one drag surface, so the gesture works
+  // from the handle or from the title without a wider invisible target.
+  grabZone: {
+    flexShrink: 0,
+  },
+  // The affordance itself: a quiet, centred pill above the eyebrow. Width and
+  // height are the numbers iOS itself uses, so the sheet reads as draggable
+  // without a label explaining it.
+  grabHandle: {
+    alignSelf: 'center',
+    width: 36,
+    height: 4,
+    marginTop: 8,
+    borderRadius: Radius.full,
+    backgroundColor: Palette.borderStrong,
   },
   eyebrow: {
     textTransform: 'uppercase',
