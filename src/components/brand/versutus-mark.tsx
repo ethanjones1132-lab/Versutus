@@ -4,7 +4,7 @@ import { Palette } from '@/constants/tokens';
 
 type VersutusMarkProps = {
   size?: number;
-  /** Rounded sapphire gradient tile behind the motif */
+  /** Rounded brand-violet gradient tile behind the motif */
   showBackground?: boolean;
 };
 
@@ -14,7 +14,7 @@ export function VersutusMark({ size = 76, showBackground = true }: VersutusMarkP
       <Defs>
         <LinearGradient id="versutusMarkBg" x1="38" y1="0" x2="38" y2="76" gradientUnits="userSpaceOnUse">
           <Stop stopColor={Palette.accent} />
-          <Stop stopColor="#1E3A6E" />
+          <Stop stopColor={Palette.backgroundRaised} />
         </LinearGradient>
       </Defs>
 
@@ -30,13 +30,13 @@ export function VersutusMark({ size = 76, showBackground = true }: VersutusMarkP
       />
       <Path
         d="M38 22 L38 30"
-        stroke={Palette.accentWarm}
+        stroke={Palette.textPrimary}
         strokeWidth={2}
         strokeLinecap="round"
         fill="none"
       />
-      <Circle cx={38} cy={18} r={5} fill={Palette.accentWarm} />
-      <Circle cx={38} cy={18} r={2} fill="#1E3A6E" />
+      <Circle cx={38} cy={18} r={5} fill={Palette.textPrimary} />
+      <Circle cx={38} cy={18} r={2} fill={Palette.background} />
     </Svg>
   );
 }

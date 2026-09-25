@@ -14,12 +14,12 @@
  * and under jest.
  */
 
-/** Accent set for generated avatars — multi-accent against the dark gold
- * palette, tuned for contrast on #030304. These are per-entity identity
+/** Accent set for generated avatars — multi-accent against the cool violet
+ * stage, tuned for contrast on #0A0A0B. These are per-entity identity
  * colors, not semantic state colors, so they live with the derivation logic
  * rather than in Palette (which stays the source of truth for UI semantics). */
 export const BOT_AVATAR_ACCENTS = [
-  '#D6B76A', // gold — palette accent
+  '#8B7CFF', // brand violet — matches Palette.accent
   '#5BC8D5', // cyan
   '#D96BB0', // magenta
   '#E08A4C', // orange
