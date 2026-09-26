@@ -104,16 +104,17 @@ export const Motion = {
 } as const;
 
 export const Typography = {
-  display: { fontSize: 40, lineHeight: 44, fontWeight: '600' as const, letterSpacing: 0 },
-  title: { fontSize: 28, lineHeight: 34, fontWeight: '600' as const, letterSpacing: 0 },
-  headline: { fontSize: 20, lineHeight: 26, fontWeight: '600' as const, letterSpacing: 0 },
-  body: { fontSize: 16, lineHeight: 24, fontWeight: '500' as const, letterSpacing: 0 },
+  display: { fontSize: 40, lineHeight: 44, fontWeight: '600' as const, letterSpacing: -0.8 },
+  title: { fontSize: 28, lineHeight: 34, fontWeight: '600' as const, letterSpacing: -0.5 },
+  headline: { fontSize: 20, lineHeight: 26, fontWeight: '600' as const, letterSpacing: -0.3 },
+  body: { fontSize: 16, lineHeight: 24, fontWeight: '400' as const, letterSpacing: 0 },
   caption: { fontSize: 13, lineHeight: 18, fontWeight: '500' as const, letterSpacing: 0 },
   micro: { fontSize: 11, lineHeight: 14, fontWeight: '500' as const, letterSpacing: 0.4 },
   mono: { fontSize: 12, lineHeight: 18, fontWeight: '500' as const },
 } as const;
 
 export const FontFamily = {
+  sansRegular: 'InstrumentSans_400Regular',
   sans: 'InstrumentSans_500Medium',
   sansSemiBold: 'InstrumentSans_600SemiBold',
   sansBold: 'InstrumentSans_700Bold',

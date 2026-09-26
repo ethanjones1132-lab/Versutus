@@ -57,11 +57,14 @@ function InlineSpans({ spans, baseColor, maxFontSizeMultiplier }: { spans: MdInl
   );
 }
 
-const HEADING_SIZES: Record<1 | 2 | 3 | 4, { fontSize: number; lineHeight: number }> = {
-  1: { fontSize: 22, lineHeight: 28 },
-  2: { fontSize: 19, lineHeight: 25 },
-  3: { fontSize: 17, lineHeight: 23 },
-  4: { fontSize: 16, lineHeight: 22 },
+const HEADING_SIZES: Record<
+  1 | 2 | 3 | 4,
+  { fontSize: number; lineHeight: number; letterSpacing: number }
+> = {
+  1: { fontSize: 22, lineHeight: 28, letterSpacing: -0.4 },
+  2: { fontSize: 19, lineHeight: 25, letterSpacing: -0.3 },
+  3: { fontSize: 17, lineHeight: 23, letterSpacing: -0.2 },
+  4: { fontSize: 16, lineHeight: 22, letterSpacing: -0.1 },
 };
 
 function BlockView({ block, baseColor, compact, maxFontSizeMultiplier }: { block: MdBlock; baseColor: string; compact: boolean; maxFontSizeMultiplier?: number }) {
@@ -138,12 +141,12 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   body: {
-    fontFamily: FontFamily.sans,
+    fontFamily: FontFamily.sansRegular,
     fontSize: 16,
     lineHeight: 24,
   },
   bodyCompact: {
-    fontFamily: FontFamily.sans,
+    fontFamily: FontFamily.sansRegular,
     fontSize: 13,
     lineHeight: 18,
   },

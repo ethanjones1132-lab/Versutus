@@ -1,4 +1,5 @@
 import {
+  InstrumentSans_400Regular,
   InstrumentSans_500Medium,
   InstrumentSans_600SemiBold,
   InstrumentSans_700Bold,
@@ -21,6 +22,7 @@ export const FONT_LOAD_TIMEOUT_MS = 5000;
 
 export function FontProvider({ children }: { children: React.ReactNode }) {
   const [loaded, error] = useFonts({
+    InstrumentSans_400Regular,
     InstrumentSans_500Medium,
     InstrumentSans_600SemiBold,
     InstrumentSans_700Bold,

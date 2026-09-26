@@ -97,7 +97,7 @@ export function TextField({
 
 const styles = StyleSheet.create({
   input: {
-    fontFamily: FontFamily.sans,
+    fontFamily: FontFamily.sansRegular,
     fontSize: 16,
     lineHeight: 22,
     paddingHorizontal: 14,
