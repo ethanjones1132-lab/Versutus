@@ -21,7 +21,7 @@ test('android nonsense inset falls back to base', () => {
   );
 });
 
-test('ios keeps base padding regardless of inset (NativeTabs owns bottom)', () => {
+test('ios keeps base padding regardless of inset (drawer owns no bottom inset)', () => {
   expect(chatTranscriptContentPaddingBottom({ platform: 'ios', insetBottom: 34 })).toBe(
     CHAT_TRANSCRIPT_BASE_PADDING,
   );

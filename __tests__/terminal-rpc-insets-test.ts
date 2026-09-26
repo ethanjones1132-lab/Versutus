@@ -20,7 +20,7 @@ test('android zero/negative/nonsense inset falls back to base', () => {
   );
 });
 
-test('ios keeps base regardless of inset (NativeTabs owns bottom)', () => {
+test('ios keeps base regardless of inset (drawer owns no bottom inset)', () => {
   expect(terminalRpcContentPaddingBottom({ platform: 'ios', insetBottom: 42 })).toBe(
     TERMINAL_RPC_BASE_PADDING,
   );

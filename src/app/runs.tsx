@@ -401,7 +401,7 @@ export default function RunsScreen() {
   );
 
   return (
-    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: false })} parallaxY={parallaxY}>
+    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY}>
       <FlatList
         data={listData}
         keyExtractor={(item) => item.id}

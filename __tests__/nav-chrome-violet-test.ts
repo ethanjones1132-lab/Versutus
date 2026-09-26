@@ -19,7 +19,7 @@ const readTokens = () => readSource(['src', 'constants', 'tokens.ts']);
 /**
  * Contract test for the ambient + navigation chrome pass (CHARTER priority
  * 1, visual-direction 2026-09): the route theme's primary/notification and
- * Home's pull-to-refresh wear brand `accent`, the NativeTabs selected pair
+ * Home's pull-to-refresh wear brand `accent`, the side-drawer IA
  * pinned by tab-ia-chat-root-test stays on `accentWarm`, and the brand
  * accent is violet — never metallic gold.
  */
@@ -46,12 +46,12 @@ describe('System chrome reads one brand violet at rest', () => {
     expect(src).not.toContain('tokens.accentWarm');
   });
 
-  test('NativeTabs selected chrome stays on the pinned accentWarm pair', () => {
+  test('side drawer layout carries no gold and no NativeTabs chrome', () => {
     const src = readTabsLayout();
-    expect(src).toContain('selected: Palette.accentWarm');
-    expect(src).toContain('tintColor={Palette.accentWarm}');
-    expect(src).toContain('indicatorColor={Palette.accentMuted}');
+    expect(src).toContain('<Drawer');
+    expect(src).not.toContain('NativeTabs');
     expect(src).not.toContain('Palette.gold');
+    expect(src).not.toContain('#D4AF37');
   });
 
   test('brand accent is soft electric violet; gold stays a separate highlight', () => {

@@ -17,53 +17,17 @@ const readTerminal = () => readSource(['src', 'components', 'terminal', 'termina
 const readCommandChip = () => readSource(['src', 'components', 'terminal', 'command-chip.tsx']);
 
 /**
- * Contract test for the Activity + Tools weight pass (CHARTER priority 3):
- * Chat keeps the full violet selected lift on the tab bar while Activity and
- * Tools opt down to a quiet cool-white selected icon + medium label, and both
- * screens inherit the flat cool stage — brand violet at rest, never glass
- * tiers or champagne leftovers.
+ * Contract test for Activity + Tools weight after the side-drawer IA:
+ * no bottom tab bar chrome to tint; Activity and Tools screens still inherit
+ * the flat cool stage — brand violet at rest, never glass tiers or gold.
  */
 describe('Activity and Tools carry quieter weight than Chat', () => {
-  test('the bar still offers Chat the violet selected lift, never gold', () => {
+  test('the layout ships a side drawer with zero NativeTabs and no gold', () => {
     const src = readTabsLayout();
-    expect(src).toContain('selected: Palette.accentWarm');
-    expect(src).toContain('tintColor={Palette.accentWarm}');
-    expect(src).toContain('indicatorColor={Palette.accentMuted}');
+    expect(src).toContain('<Drawer');
+    expect(src).not.toContain('NativeTabs');
     expect(src).not.toContain('Palette.gold');
     expect(src).not.toContain('#D4AF37');
-  });
-
-  test('Activity and Tools select to cool white at medium weight, not violet', () => {
-    const src = readTabsLayout();
-    const activity = src.indexOf('<NativeTabs.Trigger name="activity">');
-    const terminal = src.indexOf('<NativeTabs.Trigger name="terminal">');
-    const home = src.indexOf('<NativeTabs.Trigger name="home">');
-    expect(activity).toBeGreaterThanOrEqual(0);
-    expect(terminal).toBeGreaterThan(activity);
-
-    // The quiet selected label rides on both non-hero triggers.
-    expect(src.match(/selectedStyle={quietSelectedLabel}/g)?.length).toBe(2);
-    // …and their icons override the bar's violet selected color.
-    expect(src.match(/selectedColor={Palette\.textPrimary}/g)?.length).toBe(2);
-
-    // No brand-violet selected chrome hides inside the Activity/Tools spans.
-    for (const [start, end] of [
-      [activity, terminal],
-      [terminal, home > terminal ? home : src.length],
-    ] as const) {
-      const span = src.slice(start, end);
-      expect(span).not.toContain('accentWarm');
-      expect(span).not.toContain('Palette.accent');
-    }
-
-    // The quiet label resolves cool white on the resting medium weight.
-    expect(src).toContain('color: Palette.textPrimary');
-    expect(src).toContain("fontWeight: '500'");
-
-    // Chat itself stays on the inherited violet lift — no quiet override.
-    const chat = src.slice(src.indexOf('<NativeTabs.Trigger name="chat">'), activity);
-    expect(chat).not.toContain('selectedColor=');
-    expect(chat).not.toContain('quietSelectedLabel');
   });
 
   test('Activity refresh wears brand violet at rest, never the focus tint', () => {

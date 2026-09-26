@@ -26,7 +26,7 @@ test('android zero/negative/nonsense inset falls back to base', () => {
   );
 });
 
-test('ios keeps base regardless of inset (NativeTabs owns bottom)', () => {
+test('ios keeps base regardless of inset (drawer owns no bottom inset)', () => {
   expect(tabContentPaddingBottom({ platform: 'ios', insetBottom: 42 })).toBe(TAB_HOME_BASE_PADDING);
   expect(
     tabContentPaddingBottom({ platform: 'ios', insetBottom: 42, base: TAB_ROSTER_BASE_PADDING }),

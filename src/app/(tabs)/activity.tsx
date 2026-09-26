@@ -1,3 +1,4 @@
+import { DrawerMenuButton } from '@/components/nav/drawer-menu-button';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
@@ -116,7 +117,7 @@ export default function ActivityScreen() {
   };
 
   return (
-    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: false })} parallaxY={parallaxY}>
+    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY}>
       <ScrollView
         style={styles.list}
         contentContainerStyle={[
@@ -137,7 +138,10 @@ export default function ActivityScreen() {
         }>
         <View style={styles.header}>
           <View style={styles.titleRow}>
-            <Text variant="title">Activity</Text>
+            <DrawerMenuButton />
+            <View style={styles.titleText}>
+              <Text variant="title">Activity</Text>
+            </View>
             <Badge
               label={status === 'connected' ? 'Live' : 'Offline'}
               tone={status === 'connected' ? 'success' : 'neutral'}
@@ -258,6 +262,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: Spacing.two,
+  },
+  titleText: {
+    flex: 1,
   },
   card: { gap: Spacing.two },
   runsEntryCard: {

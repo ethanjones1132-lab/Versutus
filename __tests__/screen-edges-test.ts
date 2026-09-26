@@ -1,22 +1,22 @@
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
 
-test('Home and Activity on Android leave the bottom edge to NativeTabs', () => {
+test('hasDock false leaves bottom to a nested owner on Android', () => {
   expect(screenEdgesFor({ platform: 'android', hasDock: false })).toEqual(['top']);
 });
 
-test('Home and Activity on iOS leave the bottom edge to NativeTabs', () => {
+test('hasDock false leaves bottom to a nested owner on iOS', () => {
   expect(screenEdgesFor({ platform: 'ios', hasDock: false })).toEqual(['top']);
 });
 
-test('iOS Chat and Terminal keep the bottom edge for the composer', () => {
+test('hasDock true keeps the bottom edge for composer / post-tabs screens on iOS', () => {
   expect(screenEdgesFor({ platform: 'ios', hasDock: true })).toEqual(['top', 'bottom']);
 });
 
-test('Android Chat keeps the bottom edge until keyboard-lift stops subtracting it', () => {
+test('hasDock true keeps the bottom edge on Android', () => {
   expect(screenEdgesFor({ platform: 'android', hasDock: true })).toEqual(['top', 'bottom']);
 });
 
-test('web keeps the bottom edge because NativeTabs does not document a web inset', () => {
+test('web keeps the bottom edge regardless of hasDock', () => {
   expect(screenEdgesFor({ platform: 'web', hasDock: false })).toEqual(['top', 'bottom']);
   expect(screenEdgesFor({ platform: 'web', hasDock: true })).toEqual(['top', 'bottom']);
 });

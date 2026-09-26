@@ -65,7 +65,7 @@ describe('Every high-value action is ≤3 taps from the Chat root', () => {
     expect(overflow).toContain('onSessionsPress();');
   });
 
-  test('pending approvals are one Activity tab away, listed at its top', () => {
+  test('pending approvals are one Activity drawer hop away, listed at its top', () => {
     const src = readActivity();
     expect(src).toContain('<ApprovalInbox />');
   });

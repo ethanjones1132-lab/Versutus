@@ -14,6 +14,7 @@ import { WebSymbol } from './WebSymbol';
 export function ScreenHeader({
   title,
   subtitle,
+  leading,
   onTrailingPress,
   trailingIcon = { ios: 'gearshape.fill' as const, android: 'settings', web: 'gearshape.fill' },
   trailing,
@@ -23,6 +24,7 @@ export function ScreenHeader({
 
   return (
     <View style={[styles.header, style]}>
+      {leading}
       {title ? (
         <View style={styles.titles}>
           <Text variant="headline">{title}</Text>

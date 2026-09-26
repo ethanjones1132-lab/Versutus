@@ -19,6 +19,8 @@ export type ChatHeaderProps = {
   groupName?: string;
   onBackendPress?: () => void;
   onRosterPress?: () => void;
+  /** Opens the side drawer from the roster (no back chevron). */
+  onMenuPress?: () => void;
   /** True while the backends section of the thread config sheet is open. */
   backendsExpanded?: boolean;
   /** True while the chat overflow sheet is open. */
@@ -26,10 +28,12 @@ export type ChatHeaderProps = {
 };
 
 /**
- * The one-row chat header: back · title with the model as its tappable
- * subtitle · one menu. Session, speaker, connection status and settings all
- * live behind that menu (chat-overflow-sheet.tsx), so nothing here stacks to
- * a second row and no chip competes with the title for phone width.
+ * The one-row chat header: menu-or-back · title with the model as its
+ * tappable subtitle · one overflow menu. On the roster the leading control
+ * opens the side drawer; in a thread it returns to the roster. Session,
+ * speaker, connection status and settings all live behind the overflow menu
+ * (chat-overflow-sheet.tsx), so nothing here stacks to a second row and no
+ * chip competes with the title for phone width.
  */
 function ChatHeaderImpl({
   gatewayName,
@@ -41,6 +45,7 @@ function ChatHeaderImpl({
   groupName,
   onBackendPress,
   onRosterPress,
+  onMenuPress,
   backendsExpanded,
   overflowExpanded,
 }: ChatHeaderProps) {
@@ -55,7 +60,7 @@ function ChatHeaderImpl({
     statusDetail,
   });
 
-  const back = onRosterPress ? (
+  const leading = onRosterPress ? (
     <PressableScale
       onPress={onRosterPress}
       hitSlop={10}
@@ -64,6 +69,19 @@ function ChatHeaderImpl({
       style={styles.overflow}>
       <Icon
         name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
+        size={18}
+        color="textSecondary"
+      />
+    </PressableScale>
+  ) : onMenuPress ? (
+    <PressableScale
+      onPress={onMenuPress}
+      hitSlop={10}
+      accessibilityRole="button"
+      accessibilityLabel="Open navigation menu"
+      style={styles.overflow}>
+      <Icon
+        name={{ ios: 'line.3.horizontal', android: 'menu', web: 'menu' }}
         size={18}
         color="textSecondary"
       />
@@ -118,7 +136,7 @@ function ChatHeaderImpl({
         radius={Radius.xl}
         padding={Spacing.two}
         style={styles.card}>
-        {back}
+        {leading}
         {titles}
         {overflow}
       </GlassSurface>

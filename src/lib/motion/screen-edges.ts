@@ -1,16 +1,14 @@
 /**
- * Safe-area edges for a tab Screen sitting inside Expo 57 NativeTabs.
+ * Safe-area edges for a Screen under the side-drawer IA (zero bottom tabs).
  *
- * NativeTabs already owns the bottom inset: Android wraps tab content in a
- * SafeAreaView and applies the bottom edge; iOS enables automatic
- * content-inset adjustment on the first nested scroll view. Home and Activity
- * are those ScrollViews, so a Screen that also pads `bottom` stacks a second
- * tab-bar-height of empty space.
+ * `hasDock` means the screen owns a bottom chrome of its own (composer,
+ * sticky dock). Those screens need Screen's bottom edge so the chrome clears
+ * the home indicator. Screens without a dock also take the bottom edge now
+ * that NativeTabs no longer owns it — the drawer does not inset content.
  *
- * Chat and Terminal keep a composer outside the list. On iOS that composer
- * still needs Screen's bottom edge. On Android the composer stays padded too:
- * `composerKeyboardLift` subtracts `insets.bottom`, so dropping the edge
- * without changing the lift puts the composer under the IME.
+ * `hasDock: false` is retained for callers that still opt out of bottom
+ * padding (e.g. a nested surface that pads itself), but the default for
+ * top-level Chat / Activity / Tools / Gate screens is `hasDock: true`.
  */
 
 export type ScreenEdge = 'top' | 'bottom';

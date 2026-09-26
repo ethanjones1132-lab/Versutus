@@ -1,12 +1,6 @@
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
-import {
-  type Href,
-  useFocusEffect,
-  useIsFocused,
-  useLocalSearchParams,
-  useRouter,
-} from 'expo-router';
+import { type Href, useFocusEffect, useIsFocused, useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, FlatList, Platform, RefreshControl, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -303,6 +297,7 @@ function PairingRequiredBanner({ onShow }: { onShow: () => void }) {
 
 export function ChatScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const params = useLocalSearchParams<{ call?: string }>();
   const tokens = useTokens();
   const {
@@ -954,6 +949,9 @@ export function ChatScreen() {
     clearBot();
     showSurface({ kind: 'roster' });
   }, [clearBot, showSurface]);
+  const handleHeaderMenuPress = useCallback(() => {
+    navigation.dispatch({ type: 'OPEN_DRAWER' });
+  }, [navigation]);
   // Settings entry on the Chat chrome itself: the ≤3-taps test reaches it
   // straight from any Chat surface instead of detouring through Home's gear.
   const handleHeaderSettingsPress = useCallback(() => {
@@ -1860,7 +1858,7 @@ export function ChatScreen() {
   }
 
   return (
-    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: false })} parallaxY={parallaxY}>
+    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY}>
       <ChatHeader
         gatewayName={settings.pcName ?? activeGateway.name}
         statusDetail={status === 'connected' ? undefined : statusDetail || probeMessage}
@@ -1878,6 +1876,7 @@ export function ChatScreen() {
         groupName={surface.kind === 'group' ? activeGroup?.name : undefined}
         onBackendPress={surface.kind === 'configurable' && backends.length > 0 ? handleHeaderBackendPress : undefined}
         onRosterPress={surface.kind === 'roster' ? undefined : handleHeaderRosterPress}
+        onMenuPress={surface.kind === 'roster' ? handleHeaderMenuPress : undefined}
         backendsExpanded={backendPickerVisible}
         overflowExpanded={overflowVisible}
       />

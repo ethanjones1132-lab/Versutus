@@ -160,10 +160,10 @@ describe('ListRow announcement screen-reader wiring', () => {
     expect(src).toContain('{subtitle}');
   });
 
-  test('the scorecards card is the one caller that hands one', () => {
-    // Scoped to the one surface that composes a budgeted line: every other
-    // ListRow leaves accessibilityLabel undefined and derives its own label
-    // exactly as today.
+  test('scorecards and the side drawer are the callers that hand an a11y label', () => {
+    // Scorecards composes a budgeted line; the side drawer announces Gate /
+    // nav rows with an explicit label. Every other ListRow still derives its
+    // own label from title/subtitle.
     const srcRoot = [__dirname, '..', 'src', 'components'].join(SEP);
     const withListRow: string[] = [];
     listFilesWithListRow(srcRoot, withListRow);
@@ -175,8 +175,11 @@ describe('ListRow announcement screen-reader wiring', () => {
       const src = nodeFs.readFileSync(file, 'utf8');
       return /<ListRow[\s\S]*?accessibilityLabel=\{/.test(src);
     });
-    expect(passing).toEqual([
-      nodePath.join(srcRoot, 'activity', 'scorecards-section.tsx'),
-    ]);
+    expect(passing.sort()).toEqual(
+      [
+        nodePath.join(srcRoot, 'activity', 'scorecards-section.tsx'),
+        nodePath.join(srcRoot, 'nav', 'side-drawer-content.tsx'),
+      ].sort(),
+    );
   });
 });

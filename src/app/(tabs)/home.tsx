@@ -4,6 +4,7 @@ import { AppState, Platform, RefreshControl, ScrollView, StyleSheet } from 'reac
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GatewayHomeDashboard } from '@/components/gateway/gateway-home-dashboard';
+import { DrawerMenuButton } from '@/components/nav/drawer-menu-button';
 import { ErrorCard, Screen, ScreenHeader } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
@@ -59,9 +60,10 @@ export default function HomeScreen() {
 
   return (
     <Screen
-      edges={screenEdgesFor({ platform: Platform.OS, hasDock: false })}
+      edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })}
       parallaxY={parallaxY}>
       <ScreenHeader
+        leading={<DrawerMenuButton />}
         title="Versutus"
         subtitle={
           gateways.length === 0

@@ -149,6 +149,8 @@ export type ScreenProps = {
 export type ScreenHeaderProps = {
   title?: string;
   subtitle?: string;
+  /** Optional leading control (e.g. side-drawer menu). */
+  leading?: ReactNode;
   onTrailingPress?: () => void;
   trailingIcon?: { ios: SFSymbol; android: string; web: string };
   trailing?: ReactNode;
