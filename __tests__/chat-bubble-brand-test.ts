@@ -57,12 +57,15 @@ describe('message bubbles and streaming presence use the brand stage', () => {
     expect(bubble).toContain('label="Interrupted"');
   });
 
-  test('streaming dots are brand violet and keep the repeating presence motion', () => {
+  test('the streaming presence is one brand-violet orb that breathes, not bouncing dots', () => {
     expect(streaming).toContain('backgroundColor: tokens.accent');
     expect(streaming).not.toContain('backgroundColor: tokens.textSecondary');
     expect(streaming).toContain('withRepeat(');
-    expect(streaming).toContain('withSequence(');
     expect(streaming).toMatch(/withRepeat\([\s\S]*?-1[\s\S]*?\)/);
+    // One signal: a single orb (with its halo), no per-dot delays.
+    expect(streaming).not.toContain('withDelay');
+    expect(streaming).not.toContain('<Dot');
+    expect(streaming).toContain('pulseTiming');
   });
 
   test('the brand accent is violet, never gold', () => {

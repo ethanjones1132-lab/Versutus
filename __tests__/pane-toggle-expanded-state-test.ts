@@ -21,7 +21,7 @@ function readPane(file: string): string {
   return readSource(['src', 'components', 'chat', file]);
 }
 
-// The four Bot Chat collapsible section toggles (BotChrome, SkillsPane,
+// The Bot Chat collapsible section toggles (SkillsPane,
 // ToolsPane, RoutinesPane) render through `Button` with a real `open`
 // boolean driving `{open ? … : null}` content, but `Button` announced only
 // `disabled` — so a screen-reader user heard the swapped label with no
@@ -54,11 +54,6 @@ describe('pane toggle expanded state', () => {
     expect(src).toMatch(/accessibilityHint,\n\s+expanded,\n\s+busy,\n\s+selected,\n\}: ButtonProps\)/);
   });
 
-  test('BotChrome passes expanded={open} on its toggle', () => {
-    const src = readPane('bot-chrome.tsx');
-    expect(src).toContain('expanded={open}');
-  });
-
   test('SkillsPane passes expanded={open} on its toggle', () => {
     const src = readPane('skills-pane.tsx');
     expect(src).toContain('expanded={open}');
@@ -77,24 +72,20 @@ describe('pane toggle expanded state', () => {
   test('each pane wires expanded exactly once, on the toggle — not the Retry button', () => {
     // The Retry buttons inside the panes are pure actions and correctly
     // stateless; the single `expanded={open}` per file is the toggle.
-    for (const file of ['skills-pane.tsx', 'tools-pane.tsx', 'routines-pane.tsx', 'bot-chrome.tsx']) {
+    for (const file of ['skills-pane.tsx', 'tools-pane.tsx', 'routines-pane.tsx']) {
       const src = readPane(file);
       expect(src.match(/expanded=\{open\}/g)?.length ?? 0).toBe(1);
     }
   });
 
-  test('the four toggle label calls stay byte-identical', () => {
-    expect(readPane('bot-chrome.tsx')).toContain('label={botChromeToggleLabel(open)}');
+  test('the three toggle label calls stay byte-identical', () => {
     expect(readPane('skills-pane.tsx')).toContain('label={skillsToggleLabel(state, open)}');
     expect(readPane('tools-pane.tsx')).toContain('label={toolsetsToggleLabel(state, open)}');
     expect(readPane('routines-pane.tsx')).toContain('label={routinesToggleLabel(state, open)}');
   });
 
-  test('the four toggles keep variant, size, and the flip handler byte-identical', () => {
-    const chrome = readPane('bot-chrome.tsx');
-    expect(chrome).toContain('variant="ghost"');
-    expect(chrome).toContain('size="sm"');
-    for (const file of ['bot-chrome.tsx', 'skills-pane.tsx', 'tools-pane.tsx', 'routines-pane.tsx']) {
+  test('the three toggles keep the flip handler byte-identical', () => {
+    for (const file of ['skills-pane.tsx', 'tools-pane.tsx', 'routines-pane.tsx']) {
       expect(readPane(file)).toContain('onPress={() => setOpen((value) => !value)}');
     }
   });

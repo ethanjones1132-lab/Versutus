@@ -6,7 +6,17 @@ export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'destructive';
 
 export type ButtonSize = 'md' | 'sm';
 
-export type TextVariant = 'display' | 'title' | 'headline' | 'body' | 'caption' | 'micro' | 'mono' | 'link';
+export type TextVariant =
+  | 'display'
+  | 'title'
+  | 'headline'
+  | 'body'
+  | 'callout'
+  | 'caption'
+  | 'eyebrow'
+  | 'micro'
+  | 'mono'
+  | 'link';
 
 export type TextColor =
   | 'primary'

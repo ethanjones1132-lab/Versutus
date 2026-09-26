@@ -18,12 +18,19 @@ const colorKey = {
   statusPairing: 'statusPairing',
 } as const;
 
+/**
+ * Display and title are the serif voice (Nocturne): the screen's name and the
+ * greeting read like a well-set page, while every line the operator acts on
+ * stays in the sans.
+ */
 const variantStyle = {
-  display: { ...Typography.display, fontFamily: FontFamily.sansSemiBold },
-  title: { ...Typography.title, fontFamily: FontFamily.sansSemiBold },
+  display: { ...Typography.display, fontFamily: FontFamily.serif },
+  title: { ...Typography.title, fontFamily: FontFamily.serif },
   headline: { ...Typography.headline, fontFamily: FontFamily.sansSemiBold },
   body: { ...Typography.body, fontFamily: FontFamily.sansRegular },
+  callout: { ...Typography.callout, fontFamily: FontFamily.sans },
   caption: { ...Typography.caption, fontFamily: FontFamily.sans },
+  eyebrow: { ...Typography.eyebrow, fontFamily: FontFamily.sansSemiBold },
   micro: { ...Typography.micro, fontFamily: FontFamily.sans },
   mono: { ...Typography.mono, fontFamily: FontFamily.mono },
   link: { ...Typography.body, fontWeight: '600', fontFamily: FontFamily.sansSemiBold },
@@ -37,6 +44,7 @@ const variantStyle = {
  */
 const variantFontScaleCap: Partial<Record<TextVariant, number>> = {
   caption: 1.4,
+  eyebrow: 1.3,
   micro: 1.3,
   mono: 1.4,
 };

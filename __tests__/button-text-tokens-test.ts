@@ -38,14 +38,14 @@ function hex(value: string): [number, number, number] {
 describe('Button consumes the cool stage + violet brand tokens', () => {
   const src = readSource('Button.tsx');
 
-  it('secondary sits on the flat elevated panel with a cool hairline, not glass', () => {
-    expect(src).toContain('backgroundColor: tokens.backgroundElevated');
-    expect(src).toContain('borderColor: tokens.border');
+  it('secondary sits on the raised step with a specular edge, not glass', () => {
+    expect(src).toContain('backgroundColor: tokens.backgroundRaised');
+    expect(src).toContain('borderColor: tokens.specular');
     expect(src).not.toMatch(/tokens\.glass\b|tokens\.glassBorder/);
   });
 
   it('primary wears the violet brand accent, not gold or champagne', () => {
-    expect(src).toContain('backgroundColor: tokens.accent');
+    expect(src).toContain('backgroundColor: tokens.accentDeep');
     expect(src).toContain('borderColor: tokens.accent');
     const [r, g, b] = hex(Palette.accent);
     expect(b).toBeGreaterThan(g);

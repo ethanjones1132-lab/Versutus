@@ -5,7 +5,7 @@ import { Canvas, Group, RadialGradient, Rect, vec } from '@shopify/react-native-
 import { AmbientFallback, type AmbientCanvasProps } from './ambient-fallback';
 
 /** Single still violet wash — subliminal, no drift (S4 quiet stage). */
-const GLOW = 'rgba(139, 124, 255, 0.10)';
+const GLOW = 'rgba(139, 124, 255, 0.16)';
 
 class SkiaAmbientBoundary extends Component<
   { children: ReactNode; fallback: ReactNode },
@@ -31,10 +31,12 @@ class SkiaAmbientBoundary extends Component<
 export function AmbientCanvas(_props: AmbientCanvasProps) {
   const { width, height } = useWindowDimensions();
   const fallback = <AmbientFallback />;
-  // Anchor the still glow upper-left; size scales with the shorter viewport edge.
-  const side = Math.min(width, height) * 0.9;
-  const originX = width * -0.12;
-  const originY = height * -0.18;
+  // One lamp above the stage: a wide, low ellipse of violet light centred
+  // just above the top edge, fading out before it reaches the content's
+  // middle. It lights the header and the greeting, and nothing else.
+  const side = Math.max(width, height * 0.55) * 1.3;
+  const originX = (width - side) / 2;
+  const originY = -side * 0.62;
 
   return (
     <SkiaAmbientBoundary fallback={fallback}>

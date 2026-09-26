@@ -51,8 +51,10 @@ describe('Regular 400 body type is loaded and applied', () => {
     expect(Typography.body.fontWeight).toBe('400');
     expect(Typography.caption.fontWeight).toBe('500');
     expect(Typography.micro.fontWeight).toBe('500');
-    expect(Typography.display.fontWeight).toBe('600');
-    expect(Typography.title.fontWeight).toBe('600');
+    // Display and title are set in Instrument Serif, whose only weight is 400:
+    // declaring 600 over it would make a platform synthesise a bold serif.
+    expect(Typography.display.fontWeight).toBe('400');
+    expect(Typography.title.fontWeight).toBe('400');
     expect(Typography.headline.fontWeight).toBe('600');
   });
 });
@@ -66,11 +68,12 @@ describe('the shared Text default renders reading copy at Regular', () => {
     );
   });
 
-  test('chrome variants stay on Medium and headings stay on SemiBold', () => {
+  test('chrome variants stay on Medium, headlines on SemiBold, and titles are the serif voice', () => {
     expect(textSource).toContain('caption: { ...Typography.caption, fontFamily: FontFamily.sans }');
     expect(textSource).toContain('micro: { ...Typography.micro, fontFamily: FontFamily.sans }');
-    expect(textSource).toMatch(/display: \{ \.\.\.Typography\.display, fontFamily: FontFamily\.sansSemiBold \}/);
-    expect(textSource).toMatch(/title: \{ \.\.\.Typography\.title, fontFamily: FontFamily\.sansSemiBold \}/);
+    expect(textSource).toMatch(/display: \{ \.\.\.Typography\.display, fontFamily: FontFamily\.serif \}/);
+    expect(textSource).toMatch(/title: \{ \.\.\.Typography\.title, fontFamily: FontFamily\.serif \}/);
+    expect(FontFamily.serif).toBe('InstrumentSerif_400Regular');
     expect(textSource).toMatch(/headline: \{ \.\.\.Typography\.headline, fontFamily: FontFamily\.sansSemiBold \}/);
   });
 

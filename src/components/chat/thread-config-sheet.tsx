@@ -51,6 +51,8 @@ function subscribeKeyboardHeight(onChange: () => void) {
 }
 
 function getKeyboardHeight(): number {
+  // react-native-web ships no Keyboard.metrics — the web has no IME inset.
+  if (typeof Keyboard.metrics !== 'function') return 0;
   const height = Keyboard.metrics()?.height;
   return typeof height === 'number' && Number.isFinite(height) ? height : 0;
 }

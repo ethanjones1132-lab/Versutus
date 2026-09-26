@@ -7,10 +7,10 @@
     Courier New, monospace;
   --font-rounded: 'Instrument Sans', 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo,
     'MS PGothic', sans-serif;
-  --font-serif: Georgia, 'Times New Roman', serif;
+  --font-serif: 'Instrument Serif', Georgia, 'Times New Roman', serif;
 
   --color-background: #0a0a0b;
-  --color-background-elevated: #141416;
+  --color-background-elevated: #18181c;
   --color-accent: #8b7cff;
   --color-accent-warm: #a79bff;
   --color-text-primary: #f5f7fa;

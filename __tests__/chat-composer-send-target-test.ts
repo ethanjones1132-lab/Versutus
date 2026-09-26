@@ -85,7 +85,7 @@ describe('Chat composer mic control', () => {
   test('the mic is drawn beside send, inside the composer card', () => {
     const src = readComposerSource();
     const fieldAt = src.indexOf('<TextField');
-    const sendAt = src.indexOf('<Animated.View style={sendAnimatedStyle}>');
+    const sendAt = src.indexOf('accessibilityLabel={copy.sendLabel}');
     const micAt = src.indexOf("micState.kind !== 'hidden'");
 
     expect(micAt).toBeGreaterThan(fieldAt);

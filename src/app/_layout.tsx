@@ -18,11 +18,13 @@ import { HandsfreeCallBanner } from '@/components/voice/handsfree-call-banner';
 import { TlsFingerprintGuard } from '@/components/gateway/tls-fingerprint-guard';
 import { VersutusDarkTheme } from '@/constants/navigation-theme';
 import {
-  GatewayProvider,
+  GatewayProvider as LiveGatewayProvider,
   useGateway,
   type SendChatInputOutcome,
 } from '@/context/gateway-provider';
+import { DemoGatewayProvider } from '@/context/demo-gateway-provider';
 import { HandsfreeVoiceProvider } from '@/context/handsfree-voice-provider';
+import { isShowcaseMode } from '@/lib/demo/showcase-mode';
 import type { ChatSurface } from '@/lib/gateway/bots';
 import { deepLinkTarget } from '@/lib/gateway/deep-link';
 import { openSessionById, openSessionByIdFailureText } from '@/lib/gateway/session-open-by-id';
@@ -595,6 +597,10 @@ function SharedTextRouter() {
 
   return null;
 }
+
+// Dev web only: `?showcase=1` mounts the fixed showcase fleet in place of a
+// live Gate, so the real screens can be reviewed without a connection.
+const GatewayProvider = isShowcaseMode() ? DemoGatewayProvider : LiveGatewayProvider;
 
 export default function RootLayout() {
   return (

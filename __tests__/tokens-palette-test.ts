@@ -71,8 +71,10 @@ describe('Palette token contract', () => {
       expect(b).toBeGreaterThanOrEqual(r);
       expect(b).toBeGreaterThanOrEqual(g);
       expect(r).toBeGreaterThanOrEqual(0x0a);
-      expect(b).toBeLessThanOrEqual(0x20);
-      expect(g).toBeLessThanOrEqual(0x20);
+      // Nocturne widened the steps (raised is #222228) so a sheet reads off the
+      // stage without an edge; every step is still near-black.
+      expect(b).toBeLessThanOrEqual(0x2a);
+      expect(g).toBeLessThanOrEqual(0x2a);
     }
   });
 

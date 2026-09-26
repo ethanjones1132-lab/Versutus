@@ -1,8 +1,10 @@
 import { memo } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { GlassSurface, Icon, PressableScale, Text } from '@/components/ui';
+import { BotAvatar, GroupAvatar } from '@/components/chat/bot-avatar';
+import { Icon, PressableScale, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
+import { useTokens } from '@/hooks/use-tokens';
 import { chatHeaderSubtitle, chatHeaderTitle } from '@/lib/motion/chat-header-layout';
 
 export type ChatHeaderProps = {
@@ -17,6 +19,8 @@ export type ChatHeaderProps = {
   backendLabel?: string;
   /** Group room name. Titles the header; rooms have no model subtitle. */
   groupName?: string;
+  /** The room's members, for the header crest. */
+  groupMemberIds?: string[];
   onBackendPress?: () => void;
   onRosterPress?: () => void;
   /** Opens the side drawer from the roster (no back chevron). */
@@ -25,15 +29,24 @@ export type ChatHeaderProps = {
   backendsExpanded?: boolean;
   /** True while the chat overflow sheet is open. */
   overflowExpanded?: boolean;
+  /** The Bot this thread talks to — draws its crest beside the name. */
+  botId?: string;
+  /** Opens the Bot's own panel (voice, skills, tools, routines) from its name. */
+  onBotPress?: () => void;
+  /**
+   * The roster draws its own large greeting under the header, so the header
+   * there is only its two controls: no title competes with the greeting.
+   */
+  titleHidden?: boolean;
 };
 
 /**
- * The one-row chat header: menu-or-back · title with the model as its
- * tappable subtitle · one overflow menu. On the roster the leading control
- * opens the side drawer; in a thread it returns to the roster. Session,
- * speaker, connection status and settings all live behind the overflow menu
- * (chat-overflow-sheet.tsx), so nothing here stacks to a second row and no
- * chip competes with the title for phone width.
+ * The one-row chat header, flat on the stage: menu-or-back · crest, title and
+ * the model as its tappable subtitle · one overflow menu. On the roster the
+ * leading control opens the side drawer; in a thread it returns to the
+ * roster. Session, speaker, connection status and settings all live behind
+ * the overflow menu (chat-overflow-sheet.tsx), so nothing here stacks to a
+ * second row and no chip competes with the title for phone width.
  */
 function ChatHeaderImpl({
   gatewayName,
@@ -43,12 +56,17 @@ function ChatHeaderImpl({
   onOverflowPress,
   backendLabel,
   groupName,
+  groupMemberIds,
   onBackendPress,
   onRosterPress,
   onMenuPress,
   backendsExpanded,
   overflowExpanded,
+  botId,
+  onBotPress,
+  titleHidden = false,
 }: ChatHeaderProps) {
+  const tokens = useTokens();
   const title = chatHeaderTitle({ gatewayName, backendLabel, groupName });
   const showModel = Boolean(modelLabel && onModelPress);
   const subtitle = chatHeaderSubtitle({
@@ -66,11 +84,11 @@ function ChatHeaderImpl({
       hitSlop={10}
       accessibilityRole="button"
       accessibilityLabel="Back to roster"
-      style={styles.overflow}>
+      style={styles.control}>
       <Icon
         name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
-        size={18}
-        color="textSecondary"
+        size={20}
+        color="textPrimary"
       />
     </PressableScale>
   ) : onMenuPress ? (
@@ -79,40 +97,74 @@ function ChatHeaderImpl({
       hitSlop={10}
       accessibilityRole="button"
       accessibilityLabel="Open navigation menu"
-      style={styles.overflow}>
+      style={styles.control}>
       <Icon
         name={{ ios: 'line.3.horizontal', android: 'menu', web: 'menu' }}
-        size={18}
-        color="textSecondary"
+        size={20}
+        color="textPrimary"
       />
     </PressableScale>
   ) : null;
-  const titles = (
-    <View style={styles.titles}>
-      <PressableScale
-        onPress={onBackendPress}
-        disabled={!onBackendPress || !backendLabel}
-        accessibilityRole={backendLabel && onBackendPress ? 'button' : undefined}
-        accessibilityLabel={backendLabel ? `Chat backend: ${backendLabel}. Change backend.` : undefined}
-        accessibilityState={{ disabled: !onBackendPress || !backendLabel, expanded: backendsExpanded ?? false }}
-        style={styles.titlePress}>
-        <Text variant="headline" numberOfLines={1} style={styles.name}>
-          {title}
-        </Text>
-      </PressableScale>
-      <PressableScale
-        onPress={onModelPress}
-        disabled={!showModel}
-        hitSlop={8}
-        accessibilityRole={showModel ? 'button' : undefined}
-        accessibilityLabel={showModel ? `Model: ${modelLabel}. Change model.` : undefined}
-        style={styles.titlePress}>
-        <Text variant="micro" color="secondary" numberOfLines={1}>
-          {subtitle}
-        </Text>
-      </PressableScale>
+
+  const crest = groupName && groupMemberIds?.length ? (
+    <GroupAvatar memberIds={groupMemberIds} size={30} />
+  ) : botId ? (
+    <BotAvatar botId={botId} name={backendLabel} size={30} />
+  ) : null;
+
+  const titles = titleHidden ? (
+    <View style={styles.titles} />
+  ) : (
+    <View style={styles.identity}>
+      {crest}
+      <View style={styles.titles}>
+        {botId && onBotPress ? (
+          // A Bot's name opens the Bot's own panel. A plain door: the panel
+          // is a sheet with its own title, so there is no state to announce.
+          <PressableScale
+            onPress={onBotPress}
+            accessibilityRole="button"
+            accessibilityLabel={`${title}. Open Bot details.`}
+            style={styles.titlePress}>
+            <Text variant="headline" numberOfLines={1} style={styles.name}>
+              {title}
+            </Text>
+          </PressableScale>
+        ) : (
+          <PressableScale
+            onPress={onBackendPress}
+            disabled={!onBackendPress || !backendLabel}
+            accessibilityRole={backendLabel && onBackendPress ? 'button' : undefined}
+            accessibilityLabel={backendLabel ? `Chat backend: ${backendLabel}. Change backend.` : undefined}
+            accessibilityState={{ disabled: !onBackendPress || !backendLabel, expanded: backendsExpanded ?? false }}
+            style={styles.titlePress}>
+            <Text variant="headline" numberOfLines={1} style={styles.name}>
+              {title}
+            </Text>
+          </PressableScale>
+        )}
+        <PressableScale
+          onPress={onModelPress}
+          disabled={!showModel}
+          hitSlop={8}
+          accessibilityRole={showModel ? 'button' : undefined}
+          accessibilityLabel={showModel ? `Model: ${modelLabel}. Change model.` : undefined}
+          style={[styles.titlePress, styles.subtitleRow]}>
+          <Text variant="caption" color="secondary" numberOfLines={1} style={styles.subtitle}>
+            {subtitle}
+          </Text>
+          {showModel ? (
+            <Icon
+              name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }}
+              size={12}
+              color={tokens.textTertiary}
+            />
+          ) : null}
+        </PressableScale>
+      </View>
     </View>
   );
+
   const overflow = onOverflowPress ? (
     <PressableScale
       onPress={onOverflowPress}
@@ -120,26 +172,20 @@ function ChatHeaderImpl({
       accessibilityRole="button"
       accessibilityLabel="Chat options"
       accessibilityState={{ expanded: overflowExpanded ?? false }}
-      style={styles.overflow}>
+      style={styles.control}>
       <Icon
-        name={{ ios: 'ellipsis', android: 'more_vert', web: 'more_vert' }}
-        size={18}
-        color="textSecondary"
+        name={{ ios: 'ellipsis', android: 'more_horiz', web: 'more_horiz' }}
+        size={20}
+        color="textPrimary"
       />
     </PressableScale>
   ) : null;
 
   return (
-    <View style={styles.wrap}>
-      <GlassSurface
-        variant="hero"
-        radius={Radius.xl}
-        padding={Spacing.two}
-        style={styles.card}>
-        {leading}
-        {titles}
-        {overflow}
-      </GlassSurface>
+    <View style={styles.bar}>
+      {leading}
+      {titles}
+      {overflow}
     </View>
   );
 }
@@ -148,15 +194,31 @@ export const ChatHeader = memo(ChatHeaderImpl);
 ChatHeader.displayName = 'ChatHeader';
 
 const styles = StyleSheet.create({
-  wrap: {
-    paddingHorizontal: Spacing.three,
-    paddingTop: Spacing.two,
-    paddingBottom: Spacing.two,
-  },
-  card: {
+  // Flat on the stage: no card, no ring. The bar is told from the transcript
+  // by the space above the first message, not by a surface of its own.
+  bar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.two,
+    gap: Spacing.one,
+    minHeight: 56,
+    paddingHorizontal: Spacing.two,
+    paddingTop: Spacing.one,
+    paddingBottom: Spacing.one,
+  },
+  control: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  identity: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two + 2,
+    paddingLeft: Spacing.one,
   },
   titles: {
     flex: 1,
@@ -164,17 +226,20 @@ const styles = StyleSheet.create({
     gap: 1,
   },
   titlePress: {
-    alignSelf: 'stretch',
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
     justifyContent: 'center',
+  },
+  subtitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  subtitle: {
+    flexShrink: 1,
   },
   name: {
     fontSize: 17,
     lineHeight: 22,
-  },
-  overflow: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });

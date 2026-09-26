@@ -1,48 +1,68 @@
-import {
-  BOT_AVATAR_ACCENTS,
-  BOT_AVATAR_SHAPES,
-  botAvatarFromId,
-} from '@/lib/bot-avatar';
+import { BOT_CREST_TONES, botCrestFromId, botInitial } from '@/lib/bot-avatar';
 
-test('the same id always derives the same avatar', () => {
-  const first = botAvatarFromId('researcher');
-  const second = botAvatarFromId('researcher');
-  expect(second).toEqual(first);
+/** Status hues a crest must never wear (Palette.statusConnected/Connecting/Disconnected). */
+const STATUS_HUES = ['#63D7A6', '#D6B76A', '#E56D6D', '#F0D690'];
+
+function hueDegrees(hex: string): number {
+  const n = parseInt(hex.slice(1), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => v / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  if (max === min) return -1; // achromatic
+  const d = max - min;
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return (h * 60 + 360) % 360;
+}
+
+test('the same id always derives the same crest', () => {
+  expect(botCrestFromId('researcher', 'Researcher')).toEqual(botCrestFromId('researcher', 'Researcher'));
 });
 
-test('different ids derive different avatars often enough to tell bots apart', () => {
-  const avatars = Array.from({ length: 30 }, (_, i) => botAvatarFromId(`bot-${i}`));
-  const shapes = new Set(avatars.map((a) => a.shape));
-  const accents = new Set(avatars.map((a) => a.accent));
-  // A roster of a handful of bots must not collapse onto one look.
-  expect(shapes.size).toBeGreaterThan(1);
-  expect(accents.size).toBeGreaterThan(2);
+test('different ids spread across tones often enough to tell bots apart', () => {
+  const tones = new Set(
+    Array.from({ length: 40 }, (_, i) => botCrestFromId(`bot-${i}`).tone.from),
+  );
+  expect(tones.size).toBeGreaterThan(4);
 });
 
-test('every derived avatar is one of the declared combinations', () => {
-  for (const id of ['default', 'researcher', '', '🤖-bot', 'x'.repeat(500)]) {
-    const avatar = botAvatarFromId(id);
-    expect(BOT_AVATAR_SHAPES).toContain(avatar.shape);
-    expect(BOT_AVATAR_ACCENTS).toContain(avatar.accent);
+test('every tone is declared and every declared tone is reachable', () => {
+  const seen = new Set<string>();
+  for (let h = 0; h < 4096 && seen.size < BOT_CREST_TONES.length; h += 1) {
+    const { tone } = botCrestFromId(`bucket-${h}`);
+    expect(BOT_CREST_TONES).toContainEqual(tone);
+    seen.add(tone.from);
   }
+  expect(seen.size).toBe(BOT_CREST_TONES.length);
+});
+
+test('no crest tone reuses a status hue, so identity never reads as online or failing', () => {
+  // UI audit 2026-09-24 item 11: the old accent list carried the exact
+  // "connected" mint, so an unroutable Bot wore a green dot.
+  for (const tone of BOT_CREST_TONES) {
+    for (const stop of [tone.from, tone.to]) {
+      expect(STATUS_HUES).not.toContain(stop.toUpperCase());
+      const hue = hueDegrees(stop);
+      // Green (mint) through amber and red are status territory.
+      const inStatusBand = hue >= 0 && (hue < 60 || (hue > 90 && hue < 170) || hue > 350);
+      expect({ stop, inStatusBand }).toEqual({ stop, inStatusBand: false });
+    }
+  }
+});
+
+test('the initial is the first letter or digit of the name, upper-cased', () => {
+  expect(botInitial('aria')).toBe('A');
+  expect(botInitial('  forge-2')).toBe('F');
+  expect(botInitial('2fa-bot')).toBe('2');
+  expect(botInitial('émile')).toBe('É');
+  expect(botCrestFromId('ledger-bot', 'Ledger').initial).toBe('L');
+  // No name: the id speaks for the Bot.
+  expect(botCrestFromId('sentinel').initial).toBe('S');
 });
 
 test('derivation is total over awkward ids (empty, astral, long)', () => {
-  expect(() => botAvatarFromId('')).not.toThrow();
-  expect(() => botAvatarFromId('🤖-bot')).not.toThrow();
-  // Astral characters are surrogate pairs; the hash walks code units, so both
-  // halves participate and the result stays stable.
-  expect(botAvatarFromId('🤖-bot')).toEqual(botAvatarFromId('🤖-bot'));
-});
-
-test('the combination space is exactly shapes x accents with no dead buckets', () => {
-  expect(BOT_AVATAR_SHAPES.length * BOT_AVATAR_ACCENTS.length).toBe(15);
-  const seen = new Set<string>();
-  for (let h = 0; h < 4096; h += 1) {
-    // Reconstruct bucket coverage by hashing synthetic ids until every
-    // shape/accent pair appears at least once.
-    seen.add(Object.values(botAvatarFromId(`bucket-${h}`)).join(':'));
-    if (seen.size === 15) break;
-  }
-  expect(seen.size).toBe(15);
+  expect(botInitial('')).toBe('·');
+  expect(botInitial('🤖')).toBe('·');
+  expect(() => botCrestFromId('')).not.toThrow();
+  expect(botCrestFromId('🤖-bot')).toEqual(botCrestFromId('🤖-bot'));
+  expect(() => botCrestFromId('x'.repeat(500))).not.toThrow();
 });

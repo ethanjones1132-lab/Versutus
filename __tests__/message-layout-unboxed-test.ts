@@ -43,7 +43,7 @@ describe('message layout: assistant unboxed, user soft grey, activity collapsed'
   });
 
   test('the user message is one soft grey pill with no border and no violet tint', () => {
-    expect(bubble).toMatch(/userBubble: \{[\s\S]*?borderRadius: Radius\.xl,/);
+    expect(bubble).toMatch(/userBubble: \{[\s\S]*?borderRadius: 22,/);
     expect(bubble).toContain('{ backgroundColor: tokens.backgroundRaised }');
     expect(bubble).not.toContain('tokens.accentMuted');
     const keyAt = bubble.indexOf('userBubble: {');
@@ -54,7 +54,8 @@ describe('message layout: assistant unboxed, user soft grey, activity collapsed'
 
   test('tools and thinking share one quiet expandable summary line', () => {
     expect(bubble).toContain("`Used ${toolCallCount} tools`");
-    expect(bubble).toContain("if (hasReasoning) activityParts.push('Thinking')");
+    // A live turn is Thinking; a finished one Thought — the line says which.
+    expect(bubble).toContain("if (hasReasoning) activityParts.push(message.streaming ? 'Thinking' : 'Thought')");
     expect(bubble).toContain("const activityLabel = activityParts.join(' · ')");
     expect(bubble).toContain('accessibilityLabel={activityLabel}');
     // Exactly one summary line, rendered above the answer.

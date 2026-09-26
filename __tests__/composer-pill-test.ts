@@ -79,11 +79,12 @@ test('the trailing slot holds exactly one control, and it morphs on text', () =>
   expect(pill).not.toContain('HANDSFREE_START_LABEL');
   expect(pill).not.toContain('Attach an image');
   expect(pill).not.toContain('paperclip');
-  // The send keeps the accent fill, now on a round shape.
+  // The send is a round violet jewel inside a full 48pt target.
   const send = styleBlock(readComposerSource(), 'sendButton');
   expect(send).toMatch(/borderRadius: Radius\.full/);
+  expect(styleBlock(readComposerSource(), 'sendOrb')).toMatch(/borderRadius: Radius\.full/);
   expect(readComposerSource()).toContain(
-    'backgroundColor: isStreaming ? tokens.accentWarm : tokens.accent',
+    'backgroundColor: isStreaming ? tokens.textPrimary : tokens.accentDeep',
   );
 });
 

@@ -9,15 +9,21 @@ import { Easing } from 'react-native-reanimated';
  *
  * Visual language per docs/visual-direction-2026-09.md (ACCEPTED): cool
  * near-black stage, bright cool-white type, soft electric violet brand accent,
- * metallic gold as a rare highlight only (never the brand accent).
+ * metallic gold as a rare highlight only (never the brand accent). The
+ * Nocturne pass (docs/design-language-nocturne-2026-09.md) widens the
+ * elevation steps, adds the specular edge floating surfaces carry, and sets
+ * titles in Instrument Serif.
  */
 export const Palette = {
   // Elevation ramp: base → inset → elevated → raised. Steps are wide enough that
   // cards read without hairlines (S4 / visual-direction). Cool near-black stage.
   background: '#0A0A0B',
-  backgroundInset: '#101012',
-  backgroundElevated: '#141416',
-  backgroundRaised: '#1C1C20',
+  backgroundInset: '#111114',
+  backgroundElevated: '#18181C',
+  backgroundRaised: '#222228',
+  // The one edge a floating surface (sheet, menu, composer) carries: light
+  // catching its top lip. Cards resting on the stage carry nothing.
+  specular: 'rgba(255, 255, 255, 0.07)',
 
   // Glass tiers (cool translucent; flat-panel + hairline first)
   glass: 'rgba(20, 20, 22, 0.82)',
@@ -36,6 +42,10 @@ export const Palette = {
   // violet for selected/focus states (was gold-as-primary).
   accent: '#8B7CFF',
   accentMuted: 'rgba(139, 124, 255, 0.18)',
+  // The deep end of the violet orb's gradient (send, primary buttons) and the
+  // glow it casts. Light, never paint: these never fill a card.
+  accentDeep: '#6B5CF0',
+  accentGlow: 'rgba(139, 124, 255, 0.34)',
   accentWarm: '#A79BFF',
   accentWarmMuted: 'rgba(167, 155, 255, 0.16)',
 
@@ -89,11 +99,17 @@ export const Elevation = {
   modal: 12,
 } as const;
 
+/**
+ * 150–250 ms for everything the operator touches (visual-direction motion
+ * lock); `breath` is the half-cycle of the few things that pulse on their
+ * own — a connecting dot, the streaming caret.
+ */
 export const Motion = {
   duration: {
     fast: 150,
-    normal: 300,
-    slow: 600,
+    normal: 200,
+    slow: 250,
+    breath: 900,
   },
   easing: {
     standard: Easing.bezier(0.2, 0, 0, 1),
@@ -103,17 +119,26 @@ export const Motion = {
   },
 } as const;
 
+/**
+ * `display` and `title` are set in Instrument Serif (400 is its only weight),
+ * so their `fontWeight` stays 400 — a synthetic bold on a display serif reads
+ * as a rendering fault. Everything the operator operates stays Instrument Sans.
+ */
 export const Typography = {
-  display: { fontSize: 40, lineHeight: 44, fontWeight: '600' as const, letterSpacing: -0.8 },
-  title: { fontSize: 28, lineHeight: 34, fontWeight: '600' as const, letterSpacing: -0.5 },
-  headline: { fontSize: 20, lineHeight: 26, fontWeight: '600' as const, letterSpacing: -0.3 },
+  display: { fontSize: 40, lineHeight: 44, fontWeight: '400' as const, letterSpacing: -0.4 },
+  title: { fontSize: 32, lineHeight: 38, fontWeight: '400' as const, letterSpacing: -0.3 },
+  headline: { fontSize: 17, lineHeight: 22, fontWeight: '600' as const, letterSpacing: -0.2 },
   body: { fontSize: 16, lineHeight: 24, fontWeight: '400' as const, letterSpacing: 0 },
+  callout: { fontSize: 15, lineHeight: 20, fontWeight: '500' as const, letterSpacing: -0.1 },
   caption: { fontSize: 13, lineHeight: 18, fontWeight: '500' as const, letterSpacing: 0 },
+  eyebrow: { fontSize: 12, lineHeight: 16, fontWeight: '600' as const, letterSpacing: 0.2 },
   micro: { fontSize: 11, lineHeight: 14, fontWeight: '500' as const, letterSpacing: 0.4 },
-  mono: { fontSize: 12, lineHeight: 18, fontWeight: '500' as const },
+  mono: { fontSize: 13, lineHeight: 20, fontWeight: '500' as const },
 } as const;
 
 export const FontFamily = {
+  serif: 'InstrumentSerif_400Regular',
+  serifItalic: 'InstrumentSerif_400Regular_Italic',
   sansRegular: 'InstrumentSans_400Regular',
   sans: 'InstrumentSans_500Medium',
   sansSemiBold: 'InstrumentSans_600SemiBold',

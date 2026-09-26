@@ -49,7 +49,7 @@ describe('roster render cost', () => {
     const list = src.match(/\n {4}<FlatList<RosterItem>[\s\S]*?\n {4}\/>/)?.[0];
     expect(list).toBeDefined();
     // Header carries the search input, the agent error, and the rooms error.
-    expect(list).toMatch(/ListHeaderComponent=\{[\s\S]*?placeholder="Search agents"/);
+    expect(list).toMatch(/ListHeaderComponent=\{[\s\S]*?placeholder="Search your team"/);
     expect(list).toMatch(/ListHeaderComponent=\{[\s\S]*?styles\.error/);
     // Footer carries the New Agent / New Group Room rows + capability notes.
     expect(list).toMatch(/ListFooterComponent=\{[\s\S]*?title="New Agent"/);

@@ -98,11 +98,11 @@ describe('Badge tones sit on muted brand/status fills with brand accent text', (
   });
 });
 
-describe('ListRow halo is a flat inset panel with a brand-violet glyph', () => {
+describe('ListRow icon sits in a raised tile with a brand-violet glyph', () => {
   const src = readSource('ListRow.tsx');
 
-  it('icon halo uses the inset variant and accent glyph, not chip/accentWarm', () => {
-    expect(src).toContain('variant="inset"');
+  it('icon tile is the raised step with an accent glyph, not chip/accentWarm', () => {
+    expect(src).toContain('styles.iconTile, { backgroundColor: tokens.backgroundRaised }');
     expect(src).toContain('color="accent"');
     expect(src).not.toContain('variant="chip"');
     expect(src).not.toMatch(/accentWarm/);

@@ -2,9 +2,10 @@ import { memo, useState, useCallback } from 'react';
 import { FlatList, Platform, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { BotAvatar } from '@/components/chat/bot-avatar';
-import { Button, EmptyState, ListRow, Skeleton, Text, TextField } from '@/components/ui';
-import { Spacing } from '@/constants/tokens';
+import { BotAvatar, GroupAvatar } from '@/components/chat/bot-avatar';
+import { PulsingDot, statusColor } from '@/components/connection-badge';
+import { Button, EmptyState, Icon, PressableScale, Skeleton, Text, TextField, type IconName } from '@/components/ui';
+import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import {
   botRowSubtitle,
@@ -19,7 +20,10 @@ import {
   groupMemberLine,
   type BotGroupRoom,
 } from '@/lib/gateway/groups';
-import { rosterBotTap } from '@/lib/gateway/roster-tap';
+import { botReportedRoutable, rosterBotTap } from '@/lib/gateway/roster-tap';
+import type { ConnectionStatus } from '@/lib/gateway/types';
+import { haptics } from '@/lib/haptics';
+import { gateLineFor, greetingFor } from '@/lib/home/greeting';
 import { TAB_ROSTER_BASE_PADDING, tabContentPaddingBottom } from '@/lib/motion/tab-insets';
 
 export type ChatRosterProps = {
@@ -41,6 +45,12 @@ export type ChatRosterProps = {
    * draws no copy of its own about it.
    */
   heldShareCopy?: string;
+  /** The Gate's name, for the line under the greeting. */
+  gatewayName?: string;
+  /** The Gate's connection, for the same line and its dot. */
+  status?: ConnectionStatus;
+  /** Opens the Gate's own screen from the line under the greeting. */
+  onGatePress?: () => void;
   onSelectConfigurable: () => void;
   onSelectBot: (bot: PublicBot) => void;
   /**
@@ -73,6 +83,129 @@ export type ChatRosterProps = {
   onRefresh?: () => Promise<void> | void;
 };
 
+/**
+ * One Bot's line in the roster: its purpose when the Gate reports one, else
+ * the routing verdict. An unroutable Bot always reads its verdict — the fix is
+ * one tap away and the operator must see why before they tap.
+ */
+function botPurpose(bot: PublicBot): string {
+  if (!botReportedRoutable(bot)) return botRowSubtitle(bot);
+  const description = bot.description?.trim();
+  if (!description) return botRowSubtitle(bot);
+  // The first sentence is the Bot's job title; the rest belongs to its panel.
+  // A job title reads without its full stop; a question or exclamation keeps its mark.
+  const first = description.match(/^[^.!?]+[.!?]?/)?.[0] ?? description;
+  return first.trim().replace(/\.$/, '');
+}
+
+/** The pinned model's short name, the provider prefix dropped. */
+function modelShortName(bot: PublicBot): string | undefined {
+  const pin = bot.model?.default?.trim();
+  if (!pin) return undefined;
+  return pin.includes('/') ? pin.slice(pin.lastIndexOf('/') + 1) : pin;
+}
+
+/**
+ * A roster member: crest, name, one line of purpose, and a quiet trailing
+ * note. No chevron — the whole row is the door, as it is in any messages list.
+ */
+function RosterMemberRow({
+  leading,
+  title,
+  subtitle,
+  trailing,
+  onPress,
+  onLongPress,
+  attention = false,
+}: {
+  leading: React.ReactNode;
+  title: string;
+  subtitle: string;
+  trailing?: string;
+  onPress?: () => void;
+  onLongPress?: () => void;
+  attention?: boolean;
+}) {
+  return (
+    <PressableScale
+      onPress={
+        onPress
+          ? async () => {
+              await haptics.selection();
+              onPress();
+            }
+          : undefined
+      }
+      onLongPress={
+        onLongPress
+          ? async () => {
+              await haptics.selection();
+              onLongPress();
+            }
+          : undefined
+      }
+      disabled={!onPress && !onLongPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${title}, ${subtitle}`}
+      style={styles.member}>
+      {leading}
+      <View style={styles.memberText}>
+        <View style={styles.memberTitleRow}>
+          <Text variant="callout" numberOfLines={1} style={styles.memberName}>
+            {title}
+          </Text>
+          {trailing ? (
+            <Text variant="micro" color="tertiary" numberOfLines={1} style={styles.memberTrailing}>
+              {trailing}
+            </Text>
+          ) : null}
+        </View>
+        <Text
+          variant="caption"
+          color={attention ? 'statusConnecting' : 'secondary'}
+          numberOfLines={1}>
+          {subtitle}
+        </Text>
+      </View>
+    </PressableScale>
+  );
+}
+
+/**
+ * A quiet creation action at the foot of the roster: a pill with its name.
+ * What the action does is said to a screen reader as the hint, so the pill
+ * stays one word-group wide on the phone.
+ */
+function RosterAction({
+  title,
+  subtitle,
+  icon,
+  onPress,
+}: {
+  title: string;
+  subtitle: string;
+  icon: IconName;
+  onPress: () => void;
+}) {
+  const tokens = useTokens();
+  return (
+    <PressableScale
+      onPress={async () => {
+        await haptics.selection();
+        onPress();
+      }}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityHint={subtitle}
+      style={[styles.action, { backgroundColor: tokens.backgroundElevated }]}>
+      <Icon name={icon} size={15} color="accent" />
+      <Text variant="caption" style={styles.actionLabel}>
+        {title}
+      </Text>
+    </PressableScale>
+  );
+}
+
 function ChatRosterImpl({
   rows,
   loading = false,
@@ -80,6 +213,9 @@ function ChatRosterImpl({
   groups = [],
   groupsError,
   heldShareCopy,
+  gatewayName,
+  status,
+  onGatePress,
   onSelectConfigurable,
   onSelectBot,
   onBotDetail,
@@ -116,18 +252,17 @@ function ChatRosterImpl({
         return (
           <View>
             {item.showSectionLabel ? (
-              <Text variant="caption" color="tertiary" style={styles.sectionLabel}>
-                GROUP ROOMS
+              <Text variant="eyebrow" color="tertiary" style={styles.sectionLabel}>
+                Rooms
               </Text>
             ) : null}
-            <ListRow
+            <RosterMemberRow
               key={item.group.id}
               title={item.group.name}
               subtitle={groupMemberLine(item.group)}
-              leading={<BotAvatar botId={item.group.id} />}
+              leading={<GroupAvatar memberIds={item.group.memberIds} size={44} />}
               onPress={onSelectGroup ? () => onSelectGroup(item.group) : undefined}
               onLongPress={onGroupDetail ? () => onGroupDetail(item.group) : undefined}
-              style={styles.row}
             />
           </View>
         );
@@ -135,40 +270,56 @@ function ChatRosterImpl({
       const row = item.row;
       if (row.kind === 'configurable') {
         return (
-          <ListRow
+          <PressableScale
             key="configurable"
-            title="Chat"
-            subtitle="Model, sessions, and backend"
-            icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
             onPress={onSelectConfigurable}
-            style={styles.row}
-          />
+            accessibilityRole="button"
+            accessibilityLabel="Direct chat. Talk to any model, no Bot in between."
+            style={styles.member}>
+            <View style={[styles.directTile, { backgroundColor: tokens.accentMuted }]}>
+              <Icon name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }} size={20} color="accent" />
+            </View>
+            <View style={styles.memberText}>
+              <Text variant="callout" numberOfLines={1} style={styles.memberName}>
+                Direct chat
+              </Text>
+              <Text variant="caption" color="secondary" numberOfLines={1}>
+                Talk to any model, no Bot in between
+              </Text>
+            </View>
+          </PressableScale>
         );
       }
+      const routable = botReportedRoutable(row.bot);
       return (
-        <ListRow
+        <RosterMemberRow
           key={row.bot.id}
           title={row.bot.displayName}
-          subtitle={botRowSubtitle(row.bot)}
-          leading={<BotAvatar botId={row.bot.id} />}
+          subtitle={botPurpose(row.bot)}
+          trailing={routable ? modelShortName(row.bot) : undefined}
+          attention={!routable}
+          leading={
+            <BotAvatar botId={row.bot.id} name={row.bot.displayName} size={44} attention={!routable} />
+          }
           onPress={rosterBotTap(row.bot, {
             onChat: () => onSelectBot(row.bot),
             onDetail: onBotDetail ? () => onBotDetail(row.bot) : undefined,
           })}
           onLongPress={onBotDetail ? () => onBotDetail(row.bot) : undefined}
-          style={styles.row}
         />
       );
     },
-    [onSelectGroup, onGroupDetail, onSelectConfigurable, onSelectBot, onBotDetail, rosterBotTap],
+    [onSelectGroup, onGroupDetail, onSelectConfigurable, onSelectBot, onBotDetail, tokens.accentMuted],
   );
 
   if (loading && rows.length <= 1) {
     return (
       <View style={styles.pad}>
-        <Skeleton width="88%" height={56} />
-        <Skeleton width="72%" height={56} style={styles.gap} />
-        <Skeleton width="80%" height={56} style={styles.gap} />
+        <Skeleton width="62%" height={40} />
+        <Skeleton width="44%" height={14} style={styles.gapSmall} />
+        <Skeleton width="100%" height={60} style={styles.gap} />
+        <Skeleton width="100%" height={60} style={styles.gap} />
+        <Skeleton width="100%" height={60} style={styles.gap} />
       </View>
     );
   }
@@ -177,6 +328,9 @@ function ChatRosterImpl({
   const visibleGroups = filterGroupRooms(groups, query);
   const visibleBotCount = visibleRows.filter((row) => row.kind === 'bot').length;
   const totalBotCount = rows.filter((row) => row.kind === 'bot').length;
+  const readyBotCount = rows.filter(
+    (row) => row.kind === 'bot' && botReportedRoutable(row.bot),
+  ).length;
   const emptyView = rosterEmptyView({
     totalBotRows: totalBotCount,
     visibleBotRows: visibleBotCount,
@@ -190,6 +344,10 @@ function ChatRosterImpl({
     hasBotManagement: canManageAgents,
     hasGroupRooms: canHostGroups,
   });
+  const gateLine =
+    gatewayName && status
+      ? gateLineFor({ gatewayName, status, readyBots: readyBotCount, totalBots: totalBotCount })
+      : undefined;
 
   // FlatList data: the configurable row, every visible bot row, then every
   // visible group room. Only these rows virtualize — search, errors, the
@@ -235,6 +393,28 @@ function ChatRosterImpl({
       }
       ListHeaderComponent={
         <View>
+          <View style={styles.hero}>
+            <Text variant="display">
+              {greetingFor(new Date())}
+            </Text>
+            {gateLine && status ? (
+              <PressableScale
+                onPress={onGatePress}
+                disabled={!onGatePress}
+                hitSlop={8}
+                accessibilityRole={onGatePress ? 'button' : undefined}
+                accessibilityLabel={onGatePress ? `${gateLine}. Open the Gate.` : gateLine}
+                style={styles.gateLine}>
+                <PulsingDot
+                  color={statusColor(tokens, status)}
+                  active={status === 'connecting' || status === 'reconnecting'}
+                />
+                <Text variant="caption" color="secondary" numberOfLines={1} style={styles.gateText}>
+                  {gateLine}
+                </Text>
+              </PressableScale>
+            ) : null}
+          </View>
           {heldShareCopy ? (
             <Text variant="caption" color="secondary" style={styles.heldShare}>
               {heldShareCopy}
@@ -244,7 +424,7 @@ function ChatRosterImpl({
             <TextField
               value={query}
               onChangeText={setQuery}
-              placeholder="Search agents"
+              placeholder="Search your team"
               returnKeyType="search"
               style={styles.search}
             />
@@ -262,6 +442,11 @@ function ChatRosterImpl({
           {groupsError && handleRefresh ? (
             <Button label="Retry" variant="ghost" size="sm" onPress={handleRefresh} />
           ) : null}
+          {items.length > 0 ? (
+            <Text variant="eyebrow" color="tertiary" style={styles.sectionLabel}>
+              Your team
+            </Text>
+          ) : null}
         </View>
       }
       ListFooterComponent={
@@ -277,39 +462,40 @@ function ChatRosterImpl({
               onAction={handleRefresh}
             />
           ) : null}
-          {onNewAgent ? (
-            <ListRow
-              title="New Agent"
-              subtitle="Name, soul, keys, and model pin"
-              icon={{ ios: 'plus.circle', android: 'add_circle', web: 'add_circle' }}
-              onPress={onNewAgent}
-              style={styles.row}
-            />
-          ) : null}
-          {/* D6's other half: a packet exported from another host, read back
-              here. Offered only where the gateway can create the Bot it names. */}
-          {onImportAgent ? (
-            <ListRow
-              title="Import handoff"
-              subtitle="Create a Bot from an exported packet"
-              icon={{ ios: 'square.and.arrow.down', android: 'download', web: 'download' }}
-              onPress={onImportAgent}
-              style={styles.row}
-            />
-          ) : null}
-          {/* Under the two-bot floor the sheet itself names the floor and
-              refuses Create — hiding the row only hid that honest copy. */}
-          {onNewGroup ? (
-            <ListRow
-              title="New Group Room"
-              subtitle="2–6 bots reply in rounds to one message"
-              icon={{ ios: 'person.3', android: 'groups', web: 'groups' }}
-              onPress={onNewGroup}
-              style={styles.row}
-            />
+          {onNewAgent || onImportAgent || onNewGroup ? (
+            <View style={styles.actions}>
+              {onNewAgent ? (
+                <RosterAction
+                  title="New Agent"
+                  subtitle="Name, soul, keys, and model pin"
+                  icon={{ ios: 'plus', android: 'add', web: 'add' }}
+                  onPress={onNewAgent}
+                />
+              ) : null}
+              {/* Under the two-bot floor the sheet itself names the floor and
+                  refuses Create — hiding the row only hid that honest copy. */}
+              {onNewGroup ? (
+                <RosterAction
+                  title="New Group Room"
+                  subtitle="2–6 bots reply in rounds to one message"
+                  icon={{ ios: 'person.3', android: 'groups', web: 'groups' }}
+                  onPress={onNewGroup}
+                />
+              ) : null}
+              {/* D6's other half: a packet exported from another host, read back
+                  here. Offered only where the gateway can create the Bot it names. */}
+              {onImportAgent ? (
+                <RosterAction
+                  title="Import handoff"
+                  subtitle="Create a Bot from an exported packet"
+                  icon={{ ios: 'square.and.arrow.down', android: 'download', web: 'download' }}
+                  onPress={onImportAgent}
+                />
+              ) : null}
+            </View>
           ) : null}
           {capabilityNotes.map((note) => (
-            <Text key={note} variant="caption" color="secondary" style={styles.capability}>
+            <Text key={note} variant="caption" color="tertiary" style={styles.capability}>
               {note}
             </Text>
           ))}
@@ -349,12 +535,51 @@ export const ChatRoster = memo(ChatRosterImpl);
 ChatRoster.displayName = 'ChatRoster';
 
 const styles = StyleSheet.create({
-  pad: { paddingHorizontal: Spacing.three, paddingTop: Spacing.two, paddingBottom: Spacing.five },
-  search: { marginBottom: Spacing.two, minHeight: 48 },
-  row: { marginBottom: Spacing.one },
-  gap: { marginTop: Spacing.two },
+  pad: { paddingHorizontal: Spacing.four - 4, paddingTop: Spacing.one, paddingBottom: Spacing.five },
+  hero: { gap: Spacing.two, paddingHorizontal: Spacing.one, paddingTop: Spacing.two, paddingBottom: Spacing.four },
+  gateLine: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, alignSelf: 'flex-start' },
+  gateText: { flexShrink: 1 },
+  search: { marginBottom: Spacing.three, minHeight: 48, borderRadius: Radius.full, borderWidth: 0 },
+  sectionLabel: { marginTop: Spacing.two, marginBottom: Spacing.one, paddingHorizontal: Spacing.one },
+  member: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three - 2,
+    paddingVertical: Spacing.two + 2,
+    paddingHorizontal: Spacing.one,
+    minHeight: 64,
+    borderRadius: Radius.lg,
+  },
+  memberText: { flex: 1, minWidth: 0, gap: 2 },
+  memberTitleRow: { flexDirection: 'row', alignItems: 'baseline', gap: Spacing.two },
+  memberName: { flex: 1, fontSize: 16, lineHeight: 21 },
+  memberTrailing: { flexShrink: 0, maxWidth: 120 },
+  directTile: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
+    marginTop: Spacing.four,
+    paddingHorizontal: Spacing.one,
+  },
+  action: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one + 2,
+    minHeight: 40,
+    paddingHorizontal: Spacing.three - 2,
+    borderRadius: Radius.full,
+  },
+  actionLabel: { fontSize: 14 },
+  gap: { marginTop: Spacing.three },
+  gapSmall: { marginTop: Spacing.two },
   error: { marginBottom: Spacing.two },
   heldShare: { marginBottom: Spacing.two },
-  sectionLabel: { marginTop: Spacing.three, marginBottom: Spacing.one + 2, paddingHorizontal: Spacing.one },
-  capability: { marginTop: Spacing.two },
+  capability: { marginTop: Spacing.three, paddingHorizontal: Spacing.one },
 });

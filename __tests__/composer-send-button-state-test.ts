@@ -29,7 +29,7 @@ describe('Chat composer Send/Stop button screen-reader state', () => {
     // prop and whose busy mirrors `isStreaming` — the two flags that change
     // what the screen reader user needs to hear.
     expect(src).toMatch(
-      /<PressableScale[\s\S]*?disabled=\{isActionDisabled\}[\s\S]*?accessibilityLabel=\{copy\.sendLabel\}[\s\S]*?accessibilityState=\{\{\s*disabled:\s*isActionDisabled,\s*busy:\s*isStreaming\s*\}\}[\s\S]*?onPressIn/,
+      /<PressableScale[\s\S]*?disabled=\{isActionDisabled\}[\s\S]*?accessibilityLabel=\{copy\.sendLabel\}[\s\S]*?accessibilityState=\{\{\s*disabled:\s*isActionDisabled,\s*busy:\s*isStreaming\s*\}\}/,
     );
   });
 
@@ -63,18 +63,13 @@ describe('Chat composer Send/Stop button screen-reader state', () => {
     expect(src).toContain('onPress={() => void handleAction()}');
   });
 
-  test('the Send/Stop PressableScale keeps the onPressIn/onPressOut send-width animation byte-identical', () => {
+  test('the Send/Stop press carries no spring of its own — the shared press scale is the feedback', () => {
     const src = readComposerSource();
-    // The spring-driven sendWidth animation on onPressIn/onPressOut is the
-    // visible button press feedback; the new accessibilityState must not
-    // touch it. Both the Reanimated shared-value assignments and the
-    // springSnappy preset must be intact.
-    expect(src).toContain(
-      'sendWidth.value = withSpring(isStreaming ? 68 : 52, springSnappy);',
-    );
-    expect(src).toContain(
-      'sendWidth.value = withSpring(56, springSnappy);',
-    );
+    // Nocturne motion lock: no bouncy springs. The width spring that used to
+    // stretch the send on press is gone; PressableScale's clamped scale is the
+    // one press response every control shares.
+    expect(src).not.toContain('sendWidth');
+    expect(src).not.toContain('withSpring');
   });
 
   test('accessibilityState appears on the Send/Stop PressableScale and the suggestion row only', () => {
@@ -86,7 +81,7 @@ describe('Chat composer Send/Stop button screen-reader state', () => {
     // mention picks, Browse-all-commands row) are flat navigation buttons with
     // no state to announce and must remain accessibilityRole="button" with
     // no accessibilityState.
-    const sendBlock = src.match(/<PressableScale[\s\S]*?sendWidth\.value = withSpring\(56, springSnappy\);[\s\S]*?<\/PressableScale>/)?.[0];
+    const sendBlock = src.match(/<PressableScale\s+style=\{styles\.sendButton\}[\s\S]*?<\/PressableScale>/)?.[0];
     expect(sendBlock).toBeDefined();
     expect(sendBlock).toMatch(
       /accessibilityState=\{\{\s*disabled:\s*isActionDisabled,\s*busy:\s*isStreaming\s*\}\}/,

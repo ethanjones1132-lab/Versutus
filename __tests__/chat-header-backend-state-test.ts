@@ -74,7 +74,8 @@ describe('Chat header backend title screen-reader state', () => {
     // the <Text variant="headline"> title, plus the model subtitle the one-row
     // header draws beneath it (chat-header-layout.ts owns which line that is).
     expect(src).toContain('<Text variant="headline" numberOfLines={1} style={styles.name}>');
-    expect(src).toContain('<Text variant="micro" color="secondary" numberOfLines={1}>');
+    // The model subtitle is a caption with a disclosure chevron (Nocturne header).
+    expect(src).toContain('<Text variant="caption" color="secondary" numberOfLines={1} style={styles.subtitle}>');
     expect(src).toContain('{subtitle}');
     // The header announces no streaming of its own: the model line is the
     // subtitle, and streaming has exactly one signal elsewhere (S7).

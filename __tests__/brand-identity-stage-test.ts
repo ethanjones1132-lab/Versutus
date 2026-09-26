@@ -1,4 +1,4 @@
-import { BOT_AVATAR_ACCENTS, BOT_AVATAR_SHAPES, botAvatarFromId } from '@/lib/bot-avatar';
+import { BOT_CREST_TONES, botCrestFromId } from '@/lib/bot-avatar';
 
 declare const __dirname: string;
 
@@ -36,20 +36,18 @@ describe('brand identity reads violet/cool on the near-black stage', () => {
     expect(source).toContain('fill="url(#versutusMarkBg)"');
   });
 
-  test('generated bot avatars seed from brand violet instead of retired gold', () => {
+  test('generated bot crests seed from brand violet instead of retired gold', () => {
     const source = avatarDerivation();
     expect(source).not.toMatch(RETIRED_IDENTITY);
-    expect(source).toContain("'#8B7CFF', // brand violet — matches Palette.accent");
+    expect(source).toContain("{ from: '#A99DFF', to: '#5646D0' }, // violet — the brand's own");
     expect(source).toContain('#0A0A0B');
   });
 
-  test('avatar derivation stays deterministic and inside the declared accent set', () => {
-    expect(BOT_AVATAR_ACCENTS).toHaveLength(5);
-    expect(BOT_AVATAR_SHAPES.length * BOT_AVATAR_ACCENTS.length).toBe(15);
-    expect(BOT_AVATAR_ACCENTS).toContain('#8B7CFF');
-    expect(botAvatarFromId('researcher')).toEqual(botAvatarFromId('researcher'));
+  test('crest derivation stays deterministic and inside the declared tone set', () => {
+    expect(BOT_CREST_TONES.length).toBeGreaterThanOrEqual(5);
+    expect(botCrestFromId('researcher')).toEqual(botCrestFromId('researcher'));
     for (const id of ['default', '', '🤖-bot']) {
-      expect(BOT_AVATAR_ACCENTS).toContain(botAvatarFromId(id).accent);
+      expect(BOT_CREST_TONES).toContainEqual(botCrestFromId(id).tone);
     }
   });
 });

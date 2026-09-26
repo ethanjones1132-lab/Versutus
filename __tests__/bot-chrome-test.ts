@@ -1,4 +1,4 @@
-import { botChromeCombined, botChromeToggleLabel } from '@/lib/gateway/bot-chrome';
+import { botChromeCombined } from '@/lib/gateway/bot-chrome';
 import { EMPTY_ROUTINES, routinesToggleLabel } from '@/lib/gateway/routines';
 import { EMPTY_SKILLS, skillsToggleLabel } from '@/lib/gateway/skills';
 import { EMPTY_TOOLSETS, toolsetsToggleLabel } from '@/lib/gateway/toolsets';
@@ -25,19 +25,20 @@ describe('botChromeCombined', () => {
   });
 });
 
-describe('botChromeToggleLabel', () => {
-  test('a closed strip is Bot; open hides it', () => {
-    expect(botChromeToggleLabel(false)).toBe('Bot');
-    expect(botChromeToggleLabel(true)).toBe('Hide Bot');
+describe('the Bot panel', () => {
+  test('opens from the Bot name in the header instead of a strip above the transcript', () => {
+    const screen = readSource('src', 'components', 'chat', 'chat-screen.tsx');
+    expect(screen).toContain("onBotPress={surface.kind === 'bot' ? () => setBotPanelVisible(true) : undefined}");
+    expect(screen).toMatch(/<BotPanelSheet[\s\S]*?visible=\{botPanelVisible\}[\s\S]*?<BotChrome/);
+    const chrome = readSource('src', 'components', 'chat', 'bot-chrome.tsx');
+    expect(chrome).not.toContain('<Button');
+    expect(chrome).not.toContain('useState');
   });
 
   test('inner pane labels stay Skills, Tools, and Routines', () => {
     expect(skillsToggleLabel(EMPTY_SKILLS, false)).toBe('Skills');
     expect(toolsetsToggleLabel(EMPTY_TOOLSETS, false)).toBe('Tools');
     expect(routinesToggleLabel(EMPTY_ROUTINES, false)).toBe('Routines');
-    expect(botChromeToggleLabel(false)).not.toBe(skillsToggleLabel(EMPTY_SKILLS, false));
-    expect(botChromeToggleLabel(false)).not.toBe(toolsetsToggleLabel(EMPTY_TOOLSETS, false));
-    expect(botChromeToggleLabel(false)).not.toBe(routinesToggleLabel(EMPTY_ROUTINES, false));
   });
 });
 

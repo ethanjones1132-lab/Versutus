@@ -71,12 +71,13 @@ describe('Empty states lead with bright-white hierarchy and violet CTAs', () => 
     const src = readSource('src', 'components', 'chat', 'chat-composer.tsx');
     // The one-tap commands moved off the dock's chip row and into the `+`
     // menu; the rows still rest on the brand accent glyph.
-    expect(src).toContain('<Icon name={action.icon} size={14} color="accent" />');
+    expect(src).toContain('<Icon name={action.icon} size={15} color="accent" />');
     expect(src).toContain('accessibilityLabel={`Quick action ${action.label}`}');
     expect(src).toContain('accessibilityLabel="Add image or command"');
-    // Focus ring and streaming send are the two live states accentWarm is for.
-    expect(src).toContain('borderColor: focused ? tokens.accentWarm : tokens.border');
-    expect(src).toContain('backgroundColor: isStreaming ? tokens.accentWarm : tokens.accent');
+    // Focus rings the pill in the brand violet; the send is the violet jewel
+    // and turns to a plain white stop while a reply streams.
+    expect(src).toContain('borderColor: focused ? tokens.accent : tokens.specular');
+    expect(src).toContain('backgroundColor: isStreaming ? tokens.textPrimary : tokens.accentDeep');
   });
 
   it('the brand accent is soft electric violet, never gold', () => {

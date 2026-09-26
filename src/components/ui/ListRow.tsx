@@ -4,7 +4,6 @@ import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { haptics } from '@/lib/haptics';
 
-import { GlassSurface } from './GlassSurface';
 import { Icon, type IconName } from './Icon';
 import { PressableScale } from './PressableScale';
 import { Text } from './Text';
@@ -99,12 +98,14 @@ export function ListRow({
       ) : statusColor ? (
         <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
       ) : icon ? (
-        <GlassSurface variant="inset" radius={Radius.full} padding={0} style={styles.iconHalo}>
+        // A rounded tile, not a halo: the glyph sits in a small lit square the
+        // way a well-made settings list sets its icons.
+        <View style={[styles.iconTile, { backgroundColor: tokens.backgroundRaised }]}>
           <Icon name={icon} size={16} color="accent" />
-        </GlassSurface>
+        </View>
       ) : null}
       <View style={styles.titles}>
-        <Text variant="body" numberOfLines={1}>
+        <Text variant="body" numberOfLines={1} style={styles.title}>
           {title}
         </Text>
         {subtitle ? (
@@ -135,25 +136,30 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.three - 4,
-    paddingVertical: Spacing.two + 2,
+    paddingVertical: Spacing.two + 3,
     paddingHorizontal: Spacing.two,
-    minHeight: 48,
+    minHeight: 52,
+    borderRadius: Radius.md,
   },
   statusDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    marginHorizontal: Spacing.two,
+    marginHorizontal: Spacing.two + 4,
   },
-  iconHalo: {
-    width: 34,
-    height: 34,
+  iconTile: {
+    width: 32,
+    height: 32,
+    borderRadius: Radius.sm + 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   titles: {
     flex: 1,
     minWidth: 0,
-    gap: 1,
+    gap: 2,
+  },
+  title: {
+    letterSpacing: -0.1,
   },
 });

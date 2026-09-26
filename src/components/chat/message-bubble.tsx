@@ -1,13 +1,13 @@
 import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { memo, useState } from 'react';
-import { ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 
 import { MarkdownText } from '@/components/chat/markdown/markdown-text';
 import { StreamingIndicator } from '@/components/chat/streaming-indicator';
 import { ToolCallCard } from '@/components/chat/tool-call-card';
-import { Badge, PressableScale, Text } from '@/components/ui';
+import { Badge, Icon, PressableScale, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { bubbleMaxWidth } from '@/lib/motion/bubble-width';
 import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
@@ -51,7 +51,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
   if (toolCallCount > 0) {
     activityParts.push(toolCallCount === 1 ? 'Used 1 tool' : `Used ${toolCallCount} tools`);
   }
-  if (hasReasoning) activityParts.push('Thinking');
+  if (hasReasoning) activityParts.push(message.streaming ? 'Thinking' : 'Thought');
   const activityLabel = activityParts.join(' · ');
   const hasActivity = activityParts.length > 0;
   const [activityUserOverride, setActivityUserOverride] = useState<boolean | null>(null);
@@ -69,12 +69,17 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
     onLongPress(message);
   };
 
-  const body = message.streaming ? `${message.text} ▍` : message.text;
+  // One streaming signal: the breathing orb under the reply. The text itself
+  // carries no caret glyph.
+  const body = message.text;
   const isInterrupted = !!message.interrupted;
 
   return (
     <Animated.View
-      entering={isUser ? entering.slideInRight : entering.slideInLeft}
+      // Native only: on the web, Reanimated's entering keyframes leave cells
+      // that the windowed list recycles parked out of flow, stacking turns on
+      // top of each other. The web transcript simply appears.
+      entering={Platform.OS === 'web' ? undefined : entering.rise}
       style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}>
       <View
         style={[
@@ -126,20 +131,30 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
                 accessibilityState={{ expanded: isActivityOpen }}
                 hitSlop={CHIP_HIT_SLOP}
                 style={styles.activityToggle}>
-                <Text variant="caption" color="secondary">
+                <Icon
+                  name={
+                    toolCallCount > 0
+                      ? { ios: 'wrench.and.screwdriver', android: 'construction', web: 'construction' }
+                      : { ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }
+                  }
+                  size={12}
+                  color="textTertiary"
+                />
+                <Text variant="caption" color="tertiary">
                   {activityLabel}
-                  {isActivityOpen ? '' : ' ›'}
                 </Text>
+                <Icon
+                  name={
+                    isActivityOpen
+                      ? { ios: 'chevron.up', android: 'expand_less', web: 'expand_less' }
+                      : { ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }
+                  }
+                  size={12}
+                  color="textTertiary"
+                />
               </PressableScale>
               {isActivityOpen ? (
-                <View
-                  style={[
-                    styles.activityCard,
-                    {
-                      backgroundColor: tokens.backgroundInset,
-                      borderColor: tokens.border,
-                    },
-                  ]}>
+                <View style={[styles.activityCard, { backgroundColor: tokens.backgroundInset }]}>
                   {hasReasoning ? (
                     <ScrollView style={styles.reasoningScroll} nestedScrollEnabled>
                       <Text variant="caption" color="secondary">
@@ -230,14 +245,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
                 </Text>
               </PressableScale>
               {rawOpen ? (
-                <View
-                  style={[
-                    styles.rawCard,
-                    {
-                      backgroundColor: tokens.backgroundInset,
-                      borderColor: tokens.border,
-                    },
-                  ]}>
+                <View style={[styles.rawCard, { backgroundColor: tokens.backgroundInset }]}>
                   <ScrollView style={styles.rawScroll} nestedScrollEnabled>
                     <Text variant="mono" color="secondary">
                       {message.command.raw}
@@ -303,9 +311,9 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.one,
   },
   attachmentImage: {
-    width: 140,
-    height: 140,
-    borderRadius: Radius.md,
+    width: 148,
+    height: 148,
+    borderRadius: Radius.lg,
   },
   row: {
     flexDirection: 'row',
@@ -336,10 +344,12 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     maxWidth: '100%',
   },
+  // The user's turn: a soft raised pebble, no border, no violet tint — it is
+  // the operator's own words, not a selection.
   userBubble: {
-    borderRadius: Radius.xl,
+    borderRadius: 22,
     paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
+    paddingVertical: Spacing.two + 2,
   },
   assistantBubble: {
     padding: 0,
@@ -369,11 +379,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: Spacing.one + 2,
   },
   activityCard: {
-    borderRadius: Radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: Spacing.two,
+    borderRadius: Radius.lg,
+    padding: Spacing.three - 4,
     gap: Spacing.two,
     maxHeight: 320,
   },
@@ -389,9 +399,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   rawCard: {
-    borderRadius: Radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    padding: Spacing.two,
+    borderRadius: Radius.lg,
+    padding: Spacing.three - 4,
     maxHeight: 260,
   },
   rawScroll: {

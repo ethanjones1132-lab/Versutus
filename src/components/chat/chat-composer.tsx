@@ -1,7 +1,6 @@
 import * as Haptics from 'expo-haptics';
 import { memo, useEffect, useRef, useState, useSyncExternalStore, type Ref } from 'react';
 import { Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
@@ -17,7 +16,6 @@ import {
   chatComposerPaletteMaxHeight,
   chatComposerPaletteScrollMaxHeight,
 } from '@/lib/motion/chat-composer-palette';
-import { springSnappy } from '@/lib/motion/presets';
 import {
   HANDSFREE_MIC_LOCK_COPY,
   HANDSFREE_START_LABEL,
@@ -111,7 +109,6 @@ export const ChatComposer = memo(function ChatComposer({
   // and no floating terminal on the thread.
   const [menuOpen, setMenuOpen] = useState(false);
   const [micDevice, setMicDevice] = useState({ available: false, permissionAskable: false });
-  const sendWidth = useSharedValue(56);
 
   // What this phone can do about voice is a device answer the composer cannot
   // know until it asks: whether this build carries a recognizer, and whether a
@@ -152,10 +149,6 @@ export const ChatComposer = memo(function ChatComposer({
       (quickActions.length > 0 && !isStreaming && !draft.trim()) ||
       (dockUtilities.includes('browse-commands') && onBrowseCommands),
   );
-
-  const sendAnimatedStyle = useAnimatedStyle(() => ({
-    minWidth: sendWidth.value,
-  }));
 
   const handleAction = async () => {
     setMenuOpen(false);
@@ -261,7 +254,7 @@ export const ChatComposer = memo(function ChatComposer({
           <View
             style={[
               styles.palette,
-              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.border, maxHeight: paletteMaxHeight },
+              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.specular, maxHeight: paletteMaxHeight },
             ]}>
             <Text variant="micro" color="tertiary" style={styles.paletteTitle}>
               Add
@@ -274,10 +267,7 @@ export const ChatComposer = memo(function ChatComposer({
               showsVerticalScrollIndicator={false}>
               {onAttach && !callActive && !isStreaming ? (
                 <PressableScale
-                  style={[
-                    styles.menuRow,
-                    { backgroundColor: tokens.backgroundInset, borderColor: tokens.borderSubtle },
-                  ]}
+                  style={styles.menuRow}
                   accessibilityRole="button"
                   accessibilityLabel="Attach an image"
                   onPress={async () => {
@@ -285,18 +275,17 @@ export const ChatComposer = memo(function ChatComposer({
                     setMenuOpen(false);
                     onAttach();
                   }}>
-                  <Icon name={{ ios: 'photo', android: 'image', web: 'image' }} size={14} color="accent" />
-                  <Text variant="caption" style={styles.menuLabel}>
+                  <View style={[styles.menuTile, { backgroundColor: tokens.backgroundInset }]}>
+                    <Icon name={{ ios: 'photo', android: 'image', web: 'image' }} size={15} color="accent" />
+                  </View>
+                  <Text variant="callout" style={styles.menuLabel}>
                     Attach an image
                   </Text>
                 </PressableScale>
               ) : null}
               {onStartCall && !callActive ? (
                 <PressableScale
-                  style={[
-                    styles.menuRow,
-                    { backgroundColor: tokens.backgroundInset, borderColor: tokens.borderSubtle },
-                  ]}
+                  style={styles.menuRow}
                   accessibilityRole="button"
                   accessibilityLabel={HANDSFREE_START_LABEL}
                   onPress={async () => {
@@ -304,8 +293,10 @@ export const ChatComposer = memo(function ChatComposer({
                     setMenuOpen(false);
                     onStartCall();
                   }}>
-                  <Icon name={{ ios: 'phone.fill', android: 'call', web: 'call' }} size={14} color="accent" />
-                  <Text variant="caption" style={styles.menuLabel}>
+                  <View style={[styles.menuTile, { backgroundColor: tokens.backgroundInset }]}>
+                    <Icon name={{ ios: 'phone.fill', android: 'call', web: 'call' }} size={15} color="accent" />
+                  </View>
+                  <Text variant="callout" style={styles.menuLabel}>
                     {HANDSFREE_START_LABEL}
                   </Text>
                 </PressableScale>
@@ -321,12 +312,11 @@ export const ChatComposer = memo(function ChatComposer({
                       }}
                       accessibilityRole="button"
                       accessibilityLabel={`Quick action ${action.label}`}
-                      style={[
-                        styles.menuRow,
-                        { backgroundColor: tokens.backgroundInset, borderColor: tokens.borderSubtle },
-                      ]}>
-                      <Icon name={action.icon} size={14} color="accent" />
-                      <Text variant="caption" style={styles.menuLabel}>
+                      style={styles.menuRow}>
+                      <View style={[styles.menuTile, { backgroundColor: tokens.backgroundInset }]}>
+                    <Icon name={action.icon} size={15} color="accent" />
+                  </View>
+                      <Text variant="callout" style={styles.menuLabel}>
                         {action.label}
                       </Text>
                     </PressableScale>
@@ -341,16 +331,15 @@ export const ChatComposer = memo(function ChatComposer({
                   }}
                   accessibilityRole="button"
                   accessibilityLabel="Browse commands"
-                  style={[
-                    styles.menuRow,
-                    { backgroundColor: tokens.backgroundInset, borderColor: tokens.borderSubtle },
-                  ]}>
-                  <Icon
-                    name={{ ios: 'command', android: 'terminal', web: 'terminal' }}
-                    size={14}
-                    color="accent"
-                  />
-                  <Text variant="caption" style={styles.menuLabel}>
+                  style={styles.menuRow}>
+                  <View style={[styles.menuTile, { backgroundColor: tokens.backgroundInset }]}>
+                    <Icon
+                      name={{ ios: 'command', android: 'terminal', web: 'terminal' }}
+                      size={15}
+                      color="accent"
+                    />
+                  </View>
+                  <Text variant="callout" style={styles.menuLabel}>
                     Browse commands
                   </Text>
                 </PressableScale>
@@ -363,7 +352,7 @@ export const ChatComposer = memo(function ChatComposer({
           <View
             style={[
               styles.palette,
-              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.border, maxHeight: paletteMaxHeight },
+              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.specular, maxHeight: paletteMaxHeight },
             ]}>
             <Text variant="micro" color="tertiary" style={styles.paletteTitle}>
               Mention
@@ -379,13 +368,7 @@ export const ChatComposer = memo(function ChatComposer({
                 return (
                   <PressableScale
                     key={botId}
-                    style={[
-                      styles.paletteItem,
-                      {
-                        backgroundColor: tokens.backgroundInset,
-                        borderColor: tokens.borderSubtle,
-                      },
-                    ]}
+                    style={styles.paletteItem}
                     accessibilityRole="button"
                     accessibilityLabel={`Mention ${label}`}
                     onPress={async () => {
@@ -413,7 +396,7 @@ export const ChatComposer = memo(function ChatComposer({
           <View
             style={[
               styles.palette,
-              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.border, maxHeight: paletteMaxHeight },
+              { backgroundColor: tokens.backgroundRaised, borderColor: tokens.specular, maxHeight: paletteMaxHeight },
             ]}>
             <Text variant="micro" color="tertiary" style={styles.paletteTitle}>
               Commands
@@ -432,11 +415,8 @@ export const ChatComposer = memo(function ChatComposer({
                     key={item.value}
                     style={[
                       styles.paletteItem,
-                      {
-                        backgroundColor: tokens.backgroundInset,
-                        borderColor: danger ? tokens.accentWarmMuted : tokens.borderSubtle,
-                        opacity: unavailable ? 0.55 : 1,
-                      },
+                      danger ? { backgroundColor: tokens.accentWarmMuted } : null,
+                      { opacity: unavailable ? 0.55 : 1 },
                     ]}
                     disabled={unavailable}
                     accessibilityRole="button"
@@ -476,10 +456,7 @@ export const ChatComposer = memo(function ChatComposer({
               })}
               {onBrowseCommands ? (
                 <PressableScale
-                  style={[
-                    styles.paletteItem,
-                    { backgroundColor: 'transparent', borderColor: tokens.borderSubtle },
-                  ]}
+                  style={styles.paletteItem}
                   accessibilityRole="button"
                   accessibilityLabel="Browse all commands"
                   onPress={async () => {
@@ -510,10 +487,7 @@ export const ChatComposer = memo(function ChatComposer({
             {attachments.map((attachment) => (
               <PressableScale
                 key={attachment.uri}
-                style={[
-                  styles.attachmentChip,
-                  { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
-                ]}
+                style={[styles.attachmentChip, { backgroundColor: tokens.backgroundRaised }]}
                 accessibilityRole="button"
                 accessibilityLabel={`Remove ${attachment.name ?? 'image'}`}
                 onPress={() => onRemoveAttachment?.(attachment.uri)}>
@@ -528,10 +502,11 @@ export const ChatComposer = memo(function ChatComposer({
         ) : null}
 
         <Card
+          variant="hero"
           padding={Spacing.one}
           style={[
             styles.pill,
-            { borderColor: focused ? tokens.accentWarm : tokens.border },
+            { borderColor: focused ? tokens.accent : tokens.specular },
           ]}>
           {canOpenMenu ? (
             // The one control on the left: borderless, and the door to the
@@ -547,9 +522,13 @@ export const ChatComposer = memo(function ChatComposer({
               accessibilityLabel="Add image or command"
               style={styles.plusButton}>
               <Icon
-                name={{ ios: 'plus', android: 'add', web: 'add' }}
+                name={
+                  menuOpen
+                    ? { ios: 'xmark', android: 'close', web: 'close' }
+                    : { ios: 'plus', android: 'add', web: 'add' }
+                }
                 size={20}
-                color={menuOpen ? 'accent' : 'textSecondary'}
+                color={menuOpen ? 'textPrimary' : 'textSecondary'}
               />
             </PressableScale>
           ) : null}
@@ -588,50 +567,45 @@ export const ChatComposer = memo(function ChatComposer({
               accessibilityLabel={micLabel}>
               <Icon
                 name={{ ios: 'mic.fill', android: 'mic', web: 'mic' }}
-                size={18}
-                color={!micDisabled ? 'accent' : 'textTertiary'}
+                size={20}
+                color={!micDisabled ? 'textSecondary' : 'textTertiary'}
               />
             </PressableScale>
           ) : null}
           {showSend ? (
             // The mic's own slot once there is text: the round send, and the
             // same round Stop while a reply is streaming.
-            <Animated.View style={sendAnimatedStyle}>
-              <PressableScale
+            <PressableScale
+              style={styles.sendButton}
+              onPress={() => void handleAction()}
+              disabled={isActionDisabled}
+              accessibilityRole="button"
+              accessibilityLabel={copy.sendLabel}
+              accessibilityState={{ disabled: isActionDisabled, busy: isStreaming }}>
+              <View
                 style={[
-                  styles.sendButton,
+                  styles.sendOrb,
+                  isStreaming ? styles.stopLift : styles.sendLift,
                   {
-                    backgroundColor: isStreaming ? tokens.accentWarm : tokens.accent,
-                    borderColor: tokens.accentWarm,
+                    // The violet jewel sends; while a reply streams it turns to
+                    // a plain white stop — the one control that changes meaning
+                    // changes colour, and nothing else on the pill does.
+                    backgroundColor: isStreaming ? tokens.textPrimary : tokens.accentDeep,
                   },
                   isActionDisabled && styles.sendDisabled,
-                ]}
-                onPress={() => void handleAction()}
-                disabled={isActionDisabled}
-                accessibilityRole="button"
-                accessibilityLabel={copy.sendLabel}
-                accessibilityState={{ disabled: isActionDisabled, busy: isStreaming }}
-                onPressIn={() => {
-                  // Reanimated shared value — mutable by design, not React state.
-                  // eslint-disable-next-line react-hooks/immutability
-                  sendWidth.value = withSpring(isStreaming ? 68 : 52, springSnappy);
-                }}
-                onPressOut={() => {
-                  // Reanimated shared value — mutable by design, not React state.
-                  // eslint-disable-next-line react-hooks/immutability
-                  sendWidth.value = withSpring(56, springSnappy);
-                }}>
+                ]}>
                 <Icon
                   name={
                     isStreaming
                       ? { ios: 'stop.fill', android: 'stop', web: 'stop' }
                       : { ios: 'arrow.up', android: 'arrow_upward', web: 'arrow_upward' }
                   }
-                  size={16}
-                  color="textInverse"
+                  size={isStreaming ? 14 : 18}
+                  weight="semibold"
+                  color={isStreaming ? 'textInverse' : 'textPrimary'}
                 />
-              </PressableScale>
-            </Animated.View>
+              </View>
+            </PressableScale>
           ) : null}
         </Card>
 
@@ -668,25 +642,30 @@ function subscribeKeyboardHeight(onChange: () => void) {
 }
 
 function getKeyboardHeight(): number {
+  // react-native-web ships no Keyboard.metrics — the web has no IME inset.
+  if (typeof Keyboard.metrics !== 'function') return 0;
   const height = Keyboard.metrics()?.height;
   return typeof height === 'number' && Number.isFinite(height) ? height : 0;
 }
 
 const styles = StyleSheet.create({
   dock: {
+    paddingTop: Spacing.one,
     paddingBottom: Spacing.two,
     gap: Spacing.two,
   },
+  // Menus float above the pill on the raised step, lit along the edge like
+  // every other floating surface; the rows inside carry no boxes of their own.
   palette: {
     marginHorizontal: Spacing.four,
-    borderRadius: Radius.lg,
+    borderRadius: 20,
     borderWidth: StyleSheet.hairlineWidth,
     maxHeight: 180,
+    boxShadow: '0 18px 40px rgba(0,0,0,0.45)',
   },
   paletteTitle: {
-    paddingHorizontal: Spacing.three - 4,
-    paddingTop: Spacing.two,
-    textTransform: 'uppercase',
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.three - 4,
   },
   paletteScroll: {
     maxHeight: 150,
@@ -696,10 +675,9 @@ const styles = StyleSheet.create({
     gap: Spacing.one,
   },
   paletteItem: {
-    borderWidth: StyleSheet.hairlineWidth,
     borderRadius: Radius.md,
-    paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.one + 2,
+    paddingHorizontal: Spacing.two + 2,
+    paddingVertical: Spacing.two,
     gap: 2,
   },
   paletteRow: {
@@ -717,12 +695,17 @@ const styles = StyleSheet.create({
   // The one pill: a single rounded row the field sits in. `+` on the left,
   // the field, and one trailing control (mic, or the round send once there
   // is text) — no chip row, no floating terminal, no boxed button cluster.
+  // The one pill, on the raised step with a lit edge (the accent ring while it
+  // holds the cursor) and a soft shadow that lifts it off the transcript.
   pill: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: Spacing.one,
+    gap: Spacing.half,
     marginHorizontal: Spacing.four,
     borderRadius: Radius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: Spacing.one,
+    boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
   },
   plusButton: {
     width: 36,
@@ -734,11 +717,18 @@ const styles = StyleSheet.create({
   menuRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.two,
+    gap: Spacing.three - 4,
     minHeight: 44,
     paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.one,
     borderRadius: Radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
+  },
+  menuTile: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   menuLabel: {
     flex: 1,
@@ -754,21 +744,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.one,
-    paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.one,
-    borderRadius: Radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    maxWidth: 160,
+    paddingHorizontal: Spacing.two + 2,
+    paddingVertical: Spacing.one + 2,
+    borderRadius: Radius.full,
+    maxWidth: 180,
   },
   attachmentName: {
     flexShrink: 1,
   },
   input: {
     flex: 1,
-    minHeight: 40,
+    minHeight: 48,
     maxHeight: 140,
     paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.one,
+    paddingVertical: Spacing.three - 4,
     // The pill's Card owns the chrome (focus-driven border, Radius.full);
     // the kit field renders bare inside it. No horizontal padding beyond
     // this: the placeholder keeps the whole line at 375px.
@@ -776,16 +765,29 @@ const styles = StyleSheet.create({
     borderWidth: 0,
     borderRadius: 0,
   },
+  // The send is a full 48pt target; the orb drawn inside it is 40pt round.
   sendButton: {
-    borderRadius: Radius.full,
+    minWidth: 48,
     minHeight: 48,
-    paddingHorizontal: Spacing.three,
+    borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
+  },
+  sendOrb: {
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendLift: {
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.28), 0 6px 18px rgba(139,124,255,0.45)',
+  },
+  stopLift: {
+    boxShadow: '0 6px 18px rgba(0,0,0,0.4)',
   },
   sendDisabled: {
-    opacity: 0.5,
+    opacity: 0.4,
   },
   // The mic is the empty pill's trailing control: a borderless round glyph
   // in the slot the send takes once there is text. It carries no fill and no

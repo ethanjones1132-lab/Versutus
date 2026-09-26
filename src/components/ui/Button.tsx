@@ -21,13 +21,17 @@ export function Button({
 }: ButtonProps) {
   const tokens = useTokens();
 
+  // Primary is the violet jewel: the deep end of the brand gradient under a
+  // white label (4.7:1), lit along its top lip and casting a violet glow. The
+  // lighter brand accent stays for links, focus and glyphs, where it is light
+  // rather than a fill.
   const variantStyles =
     variant === 'primary'
-      ? { backgroundColor: tokens.accent, color: 'inverse' as const, borderColor: tokens.accent }
+      ? { backgroundColor: tokens.accentDeep, color: 'primary' as const, borderColor: tokens.accent }
       : variant === 'destructive'
         ? { backgroundColor: tokens.statusDisconnected, color: 'inverse' as const, borderColor: tokens.statusDisconnected }
         : variant === 'secondary'
-          ? { backgroundColor: tokens.backgroundElevated, color: 'primary' as const, borderColor: tokens.border }
+          ? { backgroundColor: tokens.backgroundRaised, color: 'primary' as const, borderColor: tokens.specular }
           : { backgroundColor: 'transparent', color: 'accent' as const, borderColor: 'transparent' };
 
   return (
@@ -50,7 +54,7 @@ export function Button({
         style,
       ]}>
       <Text
-        variant={size === 'sm' ? 'caption' : 'body'}
+        variant={size === 'sm' ? 'caption' : 'callout'}
         color={variantStyles.color}
         numberOfLines={1}
         // A button label must stay on one line inside its own box. Unbounded
@@ -68,18 +72,21 @@ const styles = StyleSheet.create({
   button: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: Spacing.three,
+    minHeight: 52,
+    paddingVertical: Spacing.three - 2,
     paddingHorizontal: Spacing.four,
-    borderRadius: Radius.md,
+    borderRadius: Radius.lg,
     borderWidth: StyleSheet.hairlineWidth,
   },
   buttonSm: {
-    paddingVertical: Spacing.two,
+    minHeight: 36,
+    paddingVertical: Spacing.two - 1,
     paddingHorizontal: Spacing.three,
+    borderRadius: Radius.md,
   },
   primary: {
     // Violet brand lift on the near-black stage — never the old champagne gold.
-    boxShadow: 'inset 0 1px 0 rgba(245,247,250,0.14), 0 12px 32px rgba(139,124,255,0.22)',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.22), 0 10px 28px rgba(139,124,255,0.28)',
   },
   label: {
     fontFamily: FontFamily.sansSemiBold,

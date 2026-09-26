@@ -56,9 +56,9 @@ describe('Chat shell chrome resolves flat stage + brand violet', () => {
 
   it('the composer field focuses violet, not a neutral strong hairline', () => {
     const src = readSource('src', 'components', 'chat', 'chat-composer.tsx');
-    expect(src).toContain('borderColor: focused ? tokens.accentWarm : tokens.border');
+    expect(src).toContain('borderColor: focused ? tokens.accent : tokens.specular');
     expect(src).not.toContain('borderStrong :');
-    expect(src).toContain('backgroundColor: isStreaming ? tokens.accentWarm : tokens.accent');
+    expect(src).toContain('backgroundColor: isStreaming ? tokens.textPrimary : tokens.accentDeep');
   });
 
   it('pull-to-refresh across roster + thread wears the brand violet', () => {

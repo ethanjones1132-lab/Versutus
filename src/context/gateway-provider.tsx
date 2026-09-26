@@ -4745,6 +4745,30 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
+export type { ChatSurfaceContextValue, GatewayContextValue };
+
+/**
+ * Mounts a prepared gateway value with no live Gate behind it. The showcase
+ * provider (`demo-gateway-provider.tsx`, dev web only) is its one caller: it
+ * lets the real screens render against a fixed fleet so a design pass can be
+ * seen end to end without handing a browser the operator's token.
+ */
+export function GatewayValueProvider({
+  value,
+  chat,
+  children,
+}: {
+  value: GatewayContextValue;
+  chat: ChatSurfaceContextValue;
+  children: React.ReactNode;
+}) {
+  return (
+    <GatewayContext.Provider value={value}>
+      <ChatSurfaceContext.Provider value={chat}>{children}</ChatSurfaceContext.Provider>
+    </GatewayContext.Provider>
+  );
+}
+
 export function useChatSurface() {
   const context = useContext(ChatSurfaceContext);
   if (!context) throw new Error('useChatSurface must be used within GatewayProvider');

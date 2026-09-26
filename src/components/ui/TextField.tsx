@@ -1,4 +1,4 @@
-import { StyleSheet, TextInput } from 'react-native';
+import { Platform, StyleSheet, TextInput } from 'react-native';
 
 import { FontFamily, Radius } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
@@ -74,6 +74,10 @@ export function TextField({
       placeholderTextColor={tokens.textTertiary}
       secureTextEntry={secureTextEntry}
       multiline={multiline}
+      // A browser textarea defaults to two rows, which drew the chat pill two
+      // lines tall on the web; one row lets the style's minHeight decide.
+      // Native keeps its own growth (numberOfLines caps lines on Android).
+      {...(Platform.OS === 'web' && multiline ? { numberOfLines: 1 } : null)}
       autoCapitalize={autoCapitalize}
       autoCorrect={autoCorrect}
       editable={editable}

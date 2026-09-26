@@ -60,7 +60,8 @@ describe('Chat header backend picker expanded state', () => {
   test('both headline Text lines stay byte-identical', () => {
     const src = readChatHeaderSource();
     expect(src).toContain('<Text variant="headline" numberOfLines={1} style={styles.name}>');
-    expect(src).toContain('<Text variant="micro" color="secondary" numberOfLines={1}>');
+    // The model subtitle is a caption with a disclosure chevron (Nocturne header).
+    expect(src).toContain('<Text variant="caption" color="secondary" numberOfLines={1} style={styles.subtitle}>');
     expect(src).toContain('{subtitle}');
     // The model is the subtitle of the one-row header, drawn by the layout
     // rule; the header itself prints no streaming line.
