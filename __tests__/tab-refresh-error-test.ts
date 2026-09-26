@@ -69,9 +69,9 @@ describe('tab pull-to-refresh failure is surfaced', () => {
 
   test('the Activity notice renders below the title row and above the runs entry card', () => {
     const src = readActivity();
-    const titleAt = src.indexOf('<Text variant="title">Activity</Text>');
+    const titleAt = src.indexOf('title="Activity"');
     const errorAt = src.indexOf('refreshError ? (');
-    const entryAt = src.indexOf('styles.runsEntryCard');
+    const entryAt = src.indexOf('<SectionHeader title="Needs you" />');
     expect(titleAt).toBeGreaterThanOrEqual(0);
     expect(errorAt).toBeGreaterThan(titleAt);
     expect(entryAt).toBeGreaterThan(errorAt);

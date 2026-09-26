@@ -5,7 +5,16 @@ export type ComposerCopyInput = {
   isStreaming: boolean;
   status: ConnectionStatus;
   queuedCount?: number;
+  /**
+   * Who the words go to — the Bot's display name. The idle placeholder names
+   * them ("Message Forge"); a name too long for one line at 375px falls back
+   * to the plain prompt rather than wrapping the pill.
+   */
+  recipient?: string;
 };
+
+/** The longest recipient name the idle placeholder carries on one line. */
+const RECIPIENT_MAX = 18;
 
 export type ComposerCopy = {
   placeholder: string;
@@ -25,18 +34,34 @@ export type ComposerCopy = {
 export function composerCopy(input: ComposerCopyInput): ComposerCopy {
   const queues = input.canSend && input.status !== 'connected';
   return {
-    placeholder: placeholderCopy({ canSend: input.canSend, queues, isStreaming: input.isStreaming, queuedCount: input.queuedCount }),
+    placeholder: placeholderCopy({
+      canSend: input.canSend,
+      queues,
+      isStreaming: input.isStreaming,
+      queuedCount: input.queuedCount,
+      recipient: input.recipient,
+    }),
     sendLabel: sendLabelCopy({ isStreaming: input.isStreaming, queues }),
   };
 }
 
-function placeholderCopy(input: { canSend: boolean; queues: boolean; isStreaming: boolean; queuedCount?: number }): string {
+function placeholderCopy(input: {
+  canSend: boolean;
+  queues: boolean;
+  isStreaming: boolean;
+  queuedCount?: number;
+  recipient?: string;
+}): string {
   if (input.isStreaming && input.queuedCount && input.queuedCount > 0) {
     return input.queuedCount === 1 ? '1 queued — sends next' : `${input.queuedCount} queued — sends in order`;
   }
   if (input.queues) return 'Message will queue';
   if (!input.canSend) return 'Connect a gateway to chat';
-  return 'Message or /command';
+  const recipient = input.recipient?.trim();
+  if (recipient && recipient.length <= RECIPIENT_MAX) return `Message ${recipient}`;
+  // Plain words: the command palette is one tap behind the `+`, so the
+  // placeholder no longer advertises slash syntax.
+  return 'Ask anything';
 }
 
 function sendLabelCopy(input: { isStreaming: boolean; queues: boolean }): string {

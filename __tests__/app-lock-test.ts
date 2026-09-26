@@ -386,7 +386,8 @@ describe('the gate and its switch', () => {
     expect(src).toContain('saveAppLock');
     // The reason line and the switch are one branch: a device that cannot
     // answer never renders a control that could not finish.
-    expect(src).toMatch(/\{appLockReason \? \(/);
+    expect(src).toContain('appLockReason ? appLockUnavailableCopy(appLockReason) : APP_LOCK_SUMMARY');
+    expect(src).toMatch(/appLockReason \? undefined : \(\s*<Switch/);
   });
 
   test('the lock copy never claims the gateway did anything', () => {

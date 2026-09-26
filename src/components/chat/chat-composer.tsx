@@ -76,6 +76,8 @@ type ChatComposerProps = {
   attachments?: { uri: string; name?: string }[];
   /** P1: drop one staged image before sending. */
   onRemoveAttachment?: (uri: string) => void;
+  /** The Bot this thread talks to, named in the empty pill ("Message Forge"). */
+  recipientName?: string;
 };
 
 export const ChatComposer = memo(function ChatComposer({
@@ -100,6 +102,7 @@ export const ChatComposer = memo(function ChatComposer({
   onAttach,
   attachments = [],
   onRemoveAttachment,
+  recipientName,
 }: ChatComposerProps) {
   const tokens = useTokens();
   const [focused, setFocused] = useState(false);
@@ -127,7 +130,7 @@ export const ChatComposer = memo(function ChatComposer({
     };
   }, []);
 
-  const copy = composerCopy({ canSend, isStreaming, status, queuedCount });
+  const copy = composerCopy({ canSend, isStreaming, status, queuedCount, recipient: recipientName });
   const dockUtilities = composerDockUtilities({ canBrowseCommands: Boolean(onBrowseCommands) });
   const micState = micControlState({
     available: micDevice.available,

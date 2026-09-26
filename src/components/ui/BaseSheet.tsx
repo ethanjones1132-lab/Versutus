@@ -18,11 +18,13 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { GlassSurface } from './GlassSurface';
+import { Icon } from './Icon';
 import { PressableScale } from './PressableScale';
 import { Text } from './Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Motion, Palette, Radius } from '@/constants/tokens';
+import { sentenceCase } from '@/lib/copy/sentence-case';
 import {
   sheetAnchoredEdgeMargin,
   sheetContentPaddingBottom,
@@ -210,10 +212,14 @@ export function BaseSheet({
     }
   };
 
+  // The eyebrow names what kind of sheet this is, quietly: sentence case,
+  // tertiary, never the violet capitals the card stacks used to shout in.
+  // Closing is one round control; its name (Close / Cancel / Dismiss) is what
+  // a screen reader hears.
   const header = (
     <View style={styles.header}>
-      <Text variant="mono" color="accent" style={styles.eyebrow}>
-        {eyebrow}
+      <Text variant="eyebrow" color="tertiary" style={styles.eyebrow}>
+        {sentenceCase(eyebrow)}
       </Text>
       {onClose ? (
         <PressableScale
@@ -221,10 +227,11 @@ export function BaseSheet({
             await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             onClose();
           }}
-          hitSlop={12}>
-          <Text variant="caption" color="tertiary">
-            {closeLabel || 'Close'}
-          </Text>
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel={closeLabel || 'Close'}
+          style={styles.close}>
+          <Icon name={{ ios: 'xmark', android: 'close', web: 'close' }} size={14} color="textSecondary" />
         </PressableScale>
       ) : null}
     </View>
@@ -311,9 +318,12 @@ const styles = StyleSheet.create({
   // inset; these remain for anything reading the base style.
   bottom: {},
   top: {},
+  // A floating pane of the raised step. Its only edge is light catching the
+  // top lip (the inset highlight); the drop shadow separates it from the scrim.
   sheetSurface: {
-    borderRadius: Radius.xl,
-    borderWidth: StyleSheet.hairlineWidth * 2,
+    borderRadius: 28,
+    borderWidth: 0,
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), 0 -12px 48px rgba(0,0,0,0.5)',
     overflow: 'hidden',
     // Never taller than the sheet: the header stays put and the content area
     // below it is what gives way.
@@ -324,9 +334,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 8,
-    paddingTop: 8,
-    paddingBottom: 4,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 6,
+  },
+  close: {
+    width: 30,
+    height: 30,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Palette.backgroundInset,
   },
   // The whole handle+header strip is one drag surface, so the gesture works
   // from the handle or from the title without a wider invisible target.
@@ -345,12 +363,15 @@ const styles = StyleSheet.create({
     backgroundColor: Palette.borderStrong,
   },
   eyebrow: {
-    textTransform: 'uppercase',
+    flexShrink: 1,
   },
+  // Sheet titles are the serif voice at a size a sheet can carry.
   title: {
     flexShrink: 0,
+    fontSize: 26,
+    lineHeight: 32,
     paddingHorizontal: 16,
-    paddingBottom: 8,
+    paddingBottom: 12,
   },
   content: {
     // Shrinks before the header does, so a long list scrolls inside the sheet

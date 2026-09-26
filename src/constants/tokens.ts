@@ -57,6 +57,7 @@ export const Palette = {
   statusConnected: '#63D7A6',
   statusConnectedMuted: 'rgba(99, 215, 166, 0.16)',
   statusConnecting: '#D6B76A',
+  statusConnectingMuted: 'rgba(214, 183, 106, 0.14)',
   statusDisconnected: '#E56D6D',
   statusDisconnectedMuted: 'rgba(229, 109, 109, 0.16)',
   statusPairing: '#F0D690',

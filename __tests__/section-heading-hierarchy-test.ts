@@ -42,9 +42,12 @@ function countTitles(src: string): number {
 
 describe('named screens carry exactly one title-level heading in their own body', () => {
   test('Activity', () => {
+    // Activity opens on the shared large title (PageTitle), the one heading
+    // above its sections; no card inside it is promoted to a title.
     const src = activityScreen();
-    expect(countTitles(src)).toBe(1);
-    expect(src).toContain('<Text variant="title">Activity</Text>');
+    expect(countTitles(src)).toBe(0);
+    expect((src.match(/<PageTitle/g) ?? []).length).toBe(1);
+    expect(src).toContain('title="Activity"');
   });
 
   test('Runs', () => {
@@ -93,23 +96,16 @@ describe('section headers sit at headline, never competing with the screen title
 });
 
 describe('Activity section headers converge on one level', () => {
-  test('the Approvals card heading is a headline, not body text', () => {
-    const src = approvalInbox();
-    expect(src).toContain('<Text variant="headline">Approvals</Text>');
-    expect(src).not.toContain('<Text variant="body">Approvals</Text>');
-    expect(countTitles(src)).toBe(0);
-  });
-
-  test('the Approval decisions card heading is a headline, not body text', () => {
+  test('every Activity section is named by one section header at the same level', () => {
     const src = activityScreen();
-    expect(src).toContain('<Text variant="headline">Approval decisions</Text>');
-    expect(src).not.toContain('<Text variant="body">Approval decisions</Text>');
-  });
-
-  test('Configured profiles stays a headline', () => {
-    const src = agentTargets();
-    expect(src).toContain('<Text variant="headline">Configured profiles</Text>');
-    expect(countTitles(src)).toBe(0);
+    for (const title of ['Needs you', 'Runs', 'Your decisions', 'Gateways']) {
+      expect(src).toMatch(new RegExp(`<SectionHeader title="${title}"`));
+    }
+    // The groups under those headers carry no heading of their own.
+    expect(countTitles(approvalInbox())).toBe(0);
+    expect(approvalInbox()).not.toContain('<Text variant="headline">Approvals</Text>');
+    expect(countTitles(agentTargets())).toBe(0);
+    expect(agentTargets()).not.toContain('<Text variant="headline">Configured profiles</Text>');
   });
 });
 

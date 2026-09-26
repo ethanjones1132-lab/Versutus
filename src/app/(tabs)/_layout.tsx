@@ -23,10 +23,10 @@ export default function TabsLayout() {
         drawerType: 'front',
         swipeEnabled: true,
         swipeEdgeWidth: 44,
-        overlayColor: 'rgba(0, 0, 0, 0.45)',
+        overlayColor: 'rgba(0, 0, 0, 0.55)',
         drawerStyle: {
           backgroundColor: Palette.backgroundElevated,
-          width: 304,
+          width: 300,
         },
       }}>
       <Drawer.Screen

@@ -31,7 +31,7 @@ describe('skills and routines panes are bounded and scrollable on phones', () =>
 
   test('skills pane keeps the toggle button fixed outside the scroll body', () => {
     const src = readFile('src/components/chat/skills-pane.tsx');
-    const toggleIdx = src.indexOf('<Button');
+    const toggleIdx = src.indexOf('<DisclosureRow');
     const scrollIdx = src.indexOf('<ScrollView');
     expect(toggleIdx).toBeGreaterThan(-1);
     expect(toggleIdx).toBeLessThan(scrollIdx);
@@ -59,7 +59,7 @@ describe('skills and routines panes are bounded and scrollable on phones', () =>
 
   test('routines pane keeps the toggle button fixed outside the scroll body', () => {
     const src = readFile('src/components/chat/routines-pane.tsx');
-    const toggleIdx = src.indexOf('<Button');
+    const toggleIdx = src.indexOf('<DisclosureRow');
     const scrollIdx = src.indexOf('<ScrollView');
     expect(toggleIdx).toBeGreaterThan(-1);
     expect(toggleIdx).toBeLessThan(scrollIdx);

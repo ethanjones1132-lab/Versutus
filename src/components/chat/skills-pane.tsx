@@ -1,7 +1,7 @@
 import { memo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { Button, ErrorCard, ListRow, Skeleton, Text } from '@/components/ui';
+import { DisclosureRow, ErrorCard, ListRow, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import {
   SKILLS_PANE_MAX_HEIGHT,
@@ -39,10 +39,9 @@ function SkillsPaneImpl({
 
   return (
     <View style={styles.wrap}>
-      <Button
+      <DisclosureRow
         label={skillsToggleLabel(state, open)}
-        variant="ghost"
-        size="md"
+        icon={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }}
         expanded={open}
         onPress={() => setOpen((value) => !value)}
       />
@@ -91,7 +90,7 @@ export const SkillsPane = memo(SkillsPaneImpl);
 SkillsPane.displayName = 'SkillsPane';
 
 const styles = StyleSheet.create({
-  wrap: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.one },
+  wrap: { paddingHorizontal: Spacing.two, gap: Spacing.two },
   scroll: { maxHeight: SKILLS_PANE_MAX_HEIGHT },
   body: { gap: Spacing.one, paddingTop: Spacing.one },
   gap: { marginTop: Spacing.two },

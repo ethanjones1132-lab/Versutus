@@ -18,21 +18,25 @@ function variants(): string {
 }
 
 describe('gateway settings inherits the quiet violet stage', () => {
-  test('section labels and the device glyph use the brand accent', () => {
+  test('settings is grouped rows under quiet section labels, never a violet eyebrow stack', () => {
     const src = settings();
     expect(src).not.toMatch(/accentWarm|accentWarmMuted|Palette\.gold|tokens\.gold/);
-    const eyebrowCount = (src.match(/style=\{styles\.eyebrow\}/g) ?? []).length;
-    expect(eyebrowCount).toBe(8);
-    expect((src.match(/color="accent" style=\{styles\.eyebrow\}/g) ?? []).length).toBe(eyebrowCount);
-    expect(src).toContain("color=\"accent\" />");
+    // Visual direction: Settings is grouped rows (label · value · chevron),
+    // named by sentence-case section headers — no ALL-CAPS violet eyebrows.
+    expect(src).not.toContain('style={styles.eyebrow}');
+    expect(src).not.toContain("textTransform: 'uppercase'");
+    for (const title of ['Gate', 'Privacy', 'Voice', 'Notifications', 'Approvals', 'This device', 'This build']) {
+      expect(src).toContain(`<SectionHeader title="${title}" />`);
+    }
+    expect(src).toContain('<RowGroup>');
+    expect(src).toContain('<RowGroupRow');
+    expect(src).toContain("color={selected ? 'accent' : 'textTertiary'}");
   });
 
-  test('settings keeps flat, borderless hero, surface, and inset card material', () => {
+  test('settings keeps flat, borderless surface material', () => {
     const src = settings();
     const shared = variants();
-    expect(src).toContain('variant="hero"');
     expect(src).toContain('variant="surface"');
-    expect(src).toContain('variant="inset"');
     expect(src).not.toContain('glass');
     // S4b: the settings stacks are the reason the wireframe look showed up
     // here first, so every shared variant they lean on must ship borderWidth 0

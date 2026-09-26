@@ -22,7 +22,7 @@ function readChatScreen(): string {
 // ChatEmptyState use it). Offer Reconnect on that variant only.
 function readTranscriptEmpty(): string {
   const src = readChatScreen();
-  const match = src.match(/<EmptyState[\s\S]*?'Waiting for connection'[\s\S]*?\/>/);
+  const match = src.match(/<EmptyState[\s\S]*?"Waiting for connection"[\s\S]*?\/>/);
   expect(match).not.toBeNull();
   return match![0];
 }
@@ -30,32 +30,31 @@ function readTranscriptEmpty(): string {
 describe('Bot Chat waiting-for-connection empty state', () => {
   test('the Waiting-for-connection empty state offers Reconnect wired to retryAutoConnect', () => {
     const empty = readTranscriptEmpty();
-    expect(empty).toMatch(/actionLabel=\{[\s\S]*?'Reconnect'/);
+    expect(empty).toMatch(/actionLabel="Reconnect"/);
     expect(empty).toMatch(/onAction=\{[\s\S]*?void retryAutoConnect\(\)[\s\S]*?\}/);
   });
 
   test('Reconnect is offered only while status is not connected', () => {
+    // The waiting state is its own branch now: a connected empty thread renders
+    // the welcome instead, so this EmptyState only ever draws disconnected.
+    const src = readChatScreen();
+    expect(src).toMatch(/\) : status === 'connected' \? \([\s\S]*?<ThreadWelcome[\s\S]*?\) : \([\s\S]*?"Waiting for connection"/);
     const empty = readTranscriptEmpty();
-    expect(empty).toMatch(
-      /actionLabel=\{status !== 'connected' \? 'Reconnect' : undefined\}/,
-    );
-    expect(empty).toMatch(
-      /onAction=\{status !== 'connected' \? \(\) => void retryAutoConnect\(\) : undefined\}/,
-    );
+    expect(empty).toContain('actionLabel="Reconnect"');
+    expect(empty).toContain('onAction={() => void retryAutoConnect()}');
   });
 
-  test('the Waiting-for-connection title and description stay byte-identical', () => {
+  test('the Waiting-for-connection title and description stay plain', () => {
     const empty = readTranscriptEmpty();
-    expect(empty).toContain("'Waiting for connection'");
-    expect(empty).toContain("'The chat goes live as soon as the gateway connects.'");
+    expect(empty).toContain('title="Waiting for connection"');
+    expect(empty).toContain('description="The chat goes live as soon as the gateway connects."');
   });
 
-  test('the Say-hello title and description stay byte-identical, with no action of their own', () => {
-    const empty = readTranscriptEmpty();
-    expect(empty).toContain("status === 'connected' ? 'Say hello to your agent' : 'Waiting for connection'");
-    expect(empty).toContain(
-      "'Type /help to explore your gateway — /run for agentic tasks.'",
-    );
+  test('a connected empty thread offers starters that fill the composer, never send', () => {
+    const src = readChatScreen();
+    const welcome = src.match(/<ThreadWelcome[\s\S]*?\/>/)?.[0] ?? '';
+    expect(welcome).toContain('onPick={setDraft}');
+    expect(src).not.toContain('Type /help to explore your gateway');
   });
 
   test('EmptyState renders the action only when both actionLabel and onAction are set', () => {

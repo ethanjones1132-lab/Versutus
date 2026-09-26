@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { CronJobSheet } from '@/components/activity/cron-job-sheet';
 import { CronRunSheet } from '@/components/activity/cron-run-sheet';
-import { Button, ErrorCard, ListRow, Skeleton, Text, TextField } from '@/components/ui';
+import { Button, DisclosureRow, ErrorCard, ListRow, Skeleton, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { ROUTINE_TEMPLATES, applyRoutineTemplate } from '@/lib/gateway/routine-templates';
 import {
@@ -125,10 +125,9 @@ function RoutinesPaneImpl({
 
   return (
     <View style={styles.wrap}>
-      <Button
+      <DisclosureRow
         label={routinesToggleLabel(state, open)}
-        variant="ghost"
-        size="md"
+        icon={{ ios: 'clock.arrow.circlepath', android: 'schedule', web: 'schedule' }}
         expanded={open}
         onPress={() => setOpen((value) => !value)}
       />
@@ -240,7 +239,7 @@ function RoutinesPaneImpl({
 }
 
 const styles = StyleSheet.create({
-  wrap: { paddingHorizontal: Spacing.three, paddingBottom: Spacing.one },
+  wrap: { paddingHorizontal: Spacing.two, gap: Spacing.two },
   scroll: { maxHeight: ROUTINES_PANE_MAX_HEIGHT },
   body: { gap: Spacing.one, paddingTop: Spacing.one },
   gap: { marginTop: Spacing.two },

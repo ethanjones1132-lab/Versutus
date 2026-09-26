@@ -34,10 +34,14 @@ function occurrences(source: string, needle: string): number {
 // section chrome printed the brighter focus violet at rest, and readiness /
 // channel attention borrowed the brand instead of the semantic status ramp.
 describe('gateway and settings sections read the quiet brand stage', () => {
-  it('the four section eyebrows resolve brand violet', () => {
+  it('the four section eyebrows are quiet sentence-case labels, never violet capitals', () => {
     const source = management();
-    expect(occurrences(source, 'color="accent" style={styles.eyebrow}')).toBe(3);
-    expect(notifications()).toContain('color="accent" style={styles.eyebrow}');
+    expect(occurrences(source, 'variant="eyebrow" color="tertiary" style={styles.eyebrow}')).toBe(3);
+    expect(notifications()).toContain('variant="eyebrow" color="tertiary" style={styles.eyebrow}');
+    for (const src of [source, notifications()]) {
+      expect(src).not.toContain('color="accent" style={styles.eyebrow}');
+      expect(src).not.toContain("textTransform: 'uppercase'");
+    }
     for (const src of [source, notifications()]) {
       expect(src).not.toContain('accentWarm');
     }

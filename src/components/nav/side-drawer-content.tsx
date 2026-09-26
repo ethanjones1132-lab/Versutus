@@ -3,22 +3,27 @@ import {
   type DrawerContentComponentProps,
 } from 'expo-router/drawer';
 import { useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { VersutusMark } from '@/components/brand/versutus-mark';
+import { BotAvatar } from '@/components/chat/bot-avatar';
 import { PulsingDot, statusColor, statusLabel } from '@/components/connection-badge';
-import { ListRow, Text } from '@/components/ui';
+import { Icon, PressableScale, Text } from '@/components/ui';
 import type { IconName } from '@/components/ui/Icon';
-import { Palette, Spacing } from '@/constants/tokens';
+import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
+import type { PublicBot } from '@/lib/gateway/bots';
+import { botReportedRoutable } from '@/lib/gateway/roster-tap';
+import { haptics } from '@/lib/haptics';
 
 type NavHref = '/chat' | '/activity' | '/terminal' | '/gateway/settings' | '/home';
 
 type NavTarget = {
   key: string;
   title: string;
-  subtitle: string;
   href: NavHref;
   icon: IconName;
   routeNames?: string[];
@@ -28,7 +33,6 @@ const PRIMARY: NavTarget[] = [
   {
     key: 'chat',
     title: 'Chats',
-    subtitle: 'Roster and conversations',
     href: '/chat',
     icon: {
       ios: 'bubble.left.and.bubble.right',
@@ -40,7 +44,6 @@ const PRIMARY: NavTarget[] = [
   {
     key: 'activity',
     title: 'Activity',
-    subtitle: 'Approvals, cron, spend',
     href: '/activity',
     icon: { ios: 'bolt', android: 'bolt', web: 'bolt' },
     routeNames: ['activity'],
@@ -48,126 +51,291 @@ const PRIMARY: NavTarget[] = [
   {
     key: 'terminal',
     title: 'Tools',
-    subtitle: 'Shell, RPC, agent commands',
     href: '/terminal',
     icon: { ios: 'terminal', android: 'terminal', web: 'terminal' },
     routeNames: ['terminal'],
   },
-  {
-    key: 'settings',
-    title: 'Settings',
-    subtitle: 'Gateway, voice, devices',
-    href: '/gateway/settings',
-    icon: { ios: 'gearshape', android: 'settings', web: 'settings' },
-  },
 ];
+
+const SETTINGS: NavTarget = {
+  key: 'settings',
+  title: 'Settings',
+  href: '/gateway/settings',
+  icon: { ios: 'gearshape', android: 'settings', web: 'settings' },
+};
+
+/** How many Bots the drawer lists before the roster takes over. */
+const DRAWER_TEAM_LIMIT = 6;
+
+function DrawerRow({
+  title,
+  icon,
+  leading,
+  active = false,
+  count,
+  onPress,
+  accessibilityLabel,
+}: {
+  title: string;
+  icon?: IconName;
+  leading?: React.ReactNode;
+  active?: boolean;
+  /** A number that needs the operator (pending approvals). Hidden at zero. */
+  count?: number;
+  onPress: () => void;
+  accessibilityLabel?: string;
+}) {
+  const tokens = useTokens();
+  return (
+    <PressableScale
+      onPress={async () => {
+        await haptics.selection();
+        onPress();
+      }}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? title}
+      accessibilityState={{ selected: active }}
+      style={[styles.row, active ? { backgroundColor: tokens.backgroundRaised } : null]}>
+      {leading ?? (icon ? <Icon name={icon} size={19} color={active ? 'textPrimary' : 'textSecondary'} /> : null)}
+      <Text
+        variant="callout"
+        color={active ? 'primary' : 'secondary'}
+        numberOfLines={1}
+        style={styles.rowTitle}>
+        {title}
+      </Text>
+      {count ? (
+        <View style={[styles.count, { backgroundColor: tokens.accentDeep }]}>
+          <Text variant="micro" style={styles.countText}>
+            {count > 99 ? '99+' : String(count)}
+          </Text>
+        </View>
+      ) : null}
+    </PressableScale>
+  );
+}
 
 /**
  * Side drawer IA per CHARTER / visual-direction (LOCKED): chats, Activity,
  * Tools, settings entry, and a thin Gate/connect status. Home is not a
  * co-equal destination — Gate status here is the residual, with a quiet tap
  * through to `/home` for the full dashboard when needed. Zero bottom tabs.
+ *
+ * Nocturne adds the team: the Bots the operator talks to are one tap from
+ * anywhere, the way a messages app keeps your people in its sidebar.
  */
 export function SideDrawerContent(props: DrawerContentComponentProps) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const tokens = useTokens();
-  const { status, statusDetail, activeGateway, gateways } = useGateway();
+  const {
+    status,
+    statusDetail,
+    activeGateway,
+    gateways,
+    settings,
+    listBots,
+    openBot,
+    requestSurface,
+    pendingApprovals,
+  } = useGateway();
   const routeName = props.state.routes[props.state.index]?.name;
+  const [team, setTeam] = useState<PublicBot[]>([]);
+
+  // The drawer keeps its own short read of the team: it is mounted beside
+  // every screen, so it cannot borrow the Chat screen's roster.
+  useEffect(() => {
+    if (status !== 'connected') return;
+    let cancelled = false;
+    void listBots()
+      .then((bots) => {
+        if (!cancelled) setTeam(bots);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [listBots, status]);
 
   const go = (href: NavHref) => {
     props.navigation.closeDrawer();
     router.push(href);
   };
 
+  const openTeammate = (bot: PublicBot) => {
+    props.navigation.closeDrawer();
+    router.push('/chat');
+    // The same two steps a quick reply takes: open the Bot's chat, then ask
+    // the Chat screen to move onto it. A failed open leaves the roster up.
+    void openBot(bot.id)
+      .then((opened) => {
+        if (opened) requestSurface({ kind: 'bot', botId: bot.id });
+      })
+      .catch(() => undefined);
+  };
+
+  const gateName = settings.pcName ?? activeGateway?.name;
   const gateSubtitle =
-    activeGateway?.name ??
-    (gateways.length === 0 ? 'No gateway yet' : statusDetail || statusLabel(status));
+    status === 'connected'
+      ? statusLabel(status)
+      : gateways.length === 0
+        ? 'No gateway yet'
+        : statusDetail || statusLabel(status);
+  const routableTeam = team.filter(botReportedRoutable).slice(0, DRAWER_TEAM_LIMIT);
 
   return (
-    <DrawerContentScrollView
-      {...props}
-      contentContainerStyle={[
-        styles.scroll,
-        {
-          paddingTop: Math.max(insets.top, Spacing.three),
-          paddingBottom: insets.bottom + Spacing.four,
-        },
-      ]}
-      style={styles.root}>
+    <View style={[styles.root, { paddingTop: Math.max(insets.top, Spacing.three) }]}>
       <View style={styles.brand}>
-        <Text variant="headline">Versutus</Text>
-        <Text variant="caption" color="secondary">
-          Conversation first
+        <VersutusMark size={30} />
+        <Text variant="title" style={styles.wordmark}>
+          Versutus
         </Text>
       </View>
 
-      <View style={styles.section}>
-        {PRIMARY.map((item) => {
-          const active = item.routeNames?.includes(routeName) ?? false;
-          return (
-            <ListRow
+      <DrawerContentScrollView
+        {...props}
+        contentContainerStyle={styles.scroll}
+        style={styles.scrollView}
+        showsVerticalScrollIndicator={false}>
+        <View style={styles.section}>
+          {PRIMARY.map((item) => (
+            <DrawerRow
               key={item.key}
               title={item.title}
-              subtitle={item.subtitle}
               icon={item.icon}
+              active={item.routeNames?.includes(routeName) ?? false}
+              count={item.key === 'activity' ? pendingApprovals.length : undefined}
+              accessibilityLabel={
+                item.key === 'activity' && pendingApprovals.length > 0
+                  ? `Activity, ${pendingApprovals.length} waiting for you`
+                  : item.title
+              }
               onPress={() => go(item.href)}
-              chevron
-              accessibilityLabel={`${item.title}. ${item.subtitle}`}
-              style={active ? styles.activeRow : undefined}
             />
-          );
-        })}
-      </View>
+          ))}
+        </View>
 
-      <View style={styles.gate}>
-        <Text variant="micro" color="secondary" style={styles.gateLabel}>
-          GATE
-        </Text>
-        <ListRow
-          title={statusLabel(status)}
-          subtitle={gateSubtitle}
-          leading={
-            <PulsingDot
-              color={statusColor(tokens, status)}
-              active={status === 'connecting' || status === 'reconnecting'}
-            />
-          }
-          onPress={() => go('/home')}
-          chevron
-          accessibilityLabel={`Gate status: ${statusLabel(status)}. ${gateSubtitle}. Open Gate details.`}
-        />
+        {routableTeam.length > 0 ? (
+          <View style={styles.section}>
+            <Text variant="eyebrow" color="tertiary" style={styles.sectionLabel}>
+              Your team
+            </Text>
+            {routableTeam.map((bot) => (
+              <DrawerRow
+                key={bot.id}
+                title={bot.displayName}
+                leading={<BotAvatar botId={bot.id} name={bot.displayName} size={26} />}
+                accessibilityLabel={`Chat with ${bot.displayName}`}
+                onPress={() => openTeammate(bot)}
+              />
+            ))}
+          </View>
+        ) : null}
+      </DrawerContentScrollView>
+
+      <View style={[styles.foot, { paddingBottom: insets.bottom + Spacing.three }]}>
+        <DrawerRow title={SETTINGS.title} icon={SETTINGS.icon} onPress={() => go(SETTINGS.href)} />
+        <PressableScale
+          onPress={async () => {
+            await haptics.selection();
+            go('/home');
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={`Gate status: ${statusLabel(status)}. ${gateName ?? gateSubtitle}. Open Gate details.`}
+          style={[styles.gate, { backgroundColor: tokens.backgroundRaised }]}>
+          <PulsingDot
+            color={statusColor(tokens, status)}
+            active={status === 'connecting' || status === 'reconnecting'}
+          />
+          <View style={styles.gateText}>
+            <Text variant="callout" numberOfLines={1}>
+              {gateName ?? 'Gate'}
+            </Text>
+            <Text variant="caption" color="secondary" numberOfLines={1}>
+              {gateSubtitle}
+            </Text>
+          </View>
+          <Icon
+            name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
+            size={14}
+            color="textTertiary"
+          />
+        </PressableScale>
       </View>
-    </DrawerContentScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: {
+    flex: 1,
     backgroundColor: Palette.backgroundElevated,
+  },
+  brand: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two + 2,
+    paddingHorizontal: Spacing.four - 4,
+    paddingBottom: Spacing.three,
+  },
+  wordmark: {
+    fontSize: 28,
+    lineHeight: 32,
+  },
+  scrollView: {
+    flex: 1,
   },
   scroll: {
     paddingHorizontal: Spacing.two,
+    paddingTop: 0,
     gap: Spacing.four,
   },
-  brand: {
-    paddingHorizontal: Spacing.two,
-    gap: Spacing.one,
-  },
   section: {
-    gap: Spacing.one,
+    gap: 2,
   },
-  activeRow: {
-    backgroundColor: Palette.backgroundRaised,
+  sectionLabel: {
+    paddingHorizontal: Spacing.three - 4,
+    paddingBottom: Spacing.one,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three - 2,
+    minHeight: 44,
+    paddingHorizontal: Spacing.three - 4,
+    borderRadius: Radius.md,
+  },
+  rowTitle: {
+    flex: 1,
+  },
+  count: {
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 6,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  countText: {
+    color: '#FFFFFF',
+    letterSpacing: 0,
+  },
+  foot: {
+    paddingHorizontal: Spacing.two,
+    paddingTop: Spacing.two,
+    gap: Spacing.two,
   },
   gate: {
-    gap: Spacing.one,
-    paddingTop: Spacing.two,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Palette.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three - 4,
+    paddingHorizontal: Spacing.three - 2,
+    paddingVertical: Spacing.three - 4,
+    borderRadius: Radius.lg,
   },
-  gateLabel: {
-    paddingHorizontal: Spacing.two,
-    letterSpacing: 0.8,
+  gateText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
   },
 });

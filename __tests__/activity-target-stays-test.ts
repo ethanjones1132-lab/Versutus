@@ -29,7 +29,7 @@ function readDashboard(): string {
 
 function readSelect(): string {
   const src = readActivity();
-  const match = src.match(/onSelect=\{\(gateway\) => \{[\s\S]*?\n        \}\}/);
+  const match = src.match(/onSelect=\{\(gateway\) => \{[\s\S]*?\n\s*\}\}/);
   expect(match).not.toBeNull();
   return match![0];
 }

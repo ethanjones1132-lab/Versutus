@@ -30,9 +30,10 @@ const toneStyles: Record<BadgeTone, { backgroundColor: string; borderColor: stri
     borderColor: Palette.statusConnectedMuted,
     color: Palette.statusConnected,
   },
+  // Amber on its own muted amber: a warning never borrows the brand's violet.
   warning: {
-    backgroundColor: Palette.accentMuted,
-    borderColor: Palette.accentMuted,
+    backgroundColor: Palette.statusConnectingMuted,
+    borderColor: Palette.statusConnectingMuted,
     color: Palette.statusConnecting,
   },
   danger: {
@@ -65,8 +66,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.one,
-    paddingHorizontal: Spacing.two,
-    paddingVertical: 3,
+    paddingHorizontal: Spacing.two + 1,
+    paddingVertical: 4,
     borderRadius: Radius.full,
     borderWidth: StyleSheet.hairlineWidth,
     alignSelf: 'flex-start',
@@ -76,7 +77,8 @@ const styles = StyleSheet.create({
     height: 5,
     borderRadius: 3,
   },
+  // Plain words in their own case — a badge says "Active", it does not shout.
   label: {
-    textTransform: 'uppercase',
+    letterSpacing: 0.2,
   },
 });

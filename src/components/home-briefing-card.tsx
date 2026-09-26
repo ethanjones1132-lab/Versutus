@@ -61,7 +61,7 @@ export function HomeBriefingCard() {
           size={16}
           color="accent"
         />
-        <Text variant="caption" color="accent" style={styles.eyebrow}>
+        <Text variant="eyebrow" color="tertiary" style={styles.eyebrow}>
           While you were away
         </Text>
       </View>
@@ -90,7 +90,6 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   eyebrow: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    flexShrink: 1,
   },
 });

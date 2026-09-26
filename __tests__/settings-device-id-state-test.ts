@@ -30,7 +30,7 @@ function readDeviceStateWindow(): string {
 /** The This-device card, from its headline to the end of its Card. */
 function readDeviceCard(): string {
   const src = settings();
-  const start = src.indexOf('>This device</Text>');
+  const start = src.indexOf('<SectionHeader title="This device" />');
   expect(start).toBeGreaterThanOrEqual(0);
   const end = src.indexOf('</Card>', start);
   expect(end).toBeGreaterThan(start);

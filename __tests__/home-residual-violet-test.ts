@@ -33,7 +33,9 @@ describe('Home residual chrome reads brand violet on the cool stage', () => {
   it('the status hero draws its metal rule, eyebrow and spinner from the brand', () => {
     const src = statusCard();
     expect(src).toContain('<View style={[styles.metalRule, { backgroundColor: tokens.accent }]} />');
-    expect(src).toContain('color="accent" style={styles.eyebrow}');
+    // Section labels are quiet tertiary sentence case (Nocturne); the brand
+    // keeps the rule and the spinner.
+    expect(src).toContain('variant="eyebrow" color="tertiary" style={styles.eyebrow}');
     expect(src).toContain('<ActivityIndicator color={tokens.accent} />');
     expect(src).not.toContain('accentWarm');
     expect(src).not.toContain('glassHeroBorder');
@@ -41,8 +43,9 @@ describe('Home residual chrome reads brand violet on the cool stage', () => {
 
   it('the "while you were away" digest wears the brand eyebrow and clock', () => {
     const src = briefing();
-    expect(occurrences(src, 'color="accent"')).toBe(2);
+    expect(occurrences(src, 'color="accent"')).toBe(1);
     expect(src).toContain('color="accent"\n        />');
+    expect(src).toContain('variant="eyebrow" color="tertiary" style={styles.eyebrow}');
     expect(src).not.toContain('accentWarm');
   });
 

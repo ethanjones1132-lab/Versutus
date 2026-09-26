@@ -33,7 +33,9 @@ describe('the pane toggles are the only way into each pane and meet the touch ta
       const blockEnd = src.indexOf('/>', labelAt);
       expect(blockEnd).toBeGreaterThan(labelAt);
       const toggleBlock = src.slice(labelAt, blockEnd);
-      expect(toggleBlock).toMatch(/size="md"/);
+      // The toggle is a DisclosureRow: a full-width row whose own style holds
+      // the target (asserted below against DisclosureRow.tsx).
+      expect(src.slice(0, labelAt)).toMatch(/<DisclosureRow\s*$/);
     });
 
     test(`${file} toggle does not fall back to the sm sizing`, () => {
@@ -45,4 +47,13 @@ describe('the pane toggles are the only way into each pane and meet the touch ta
       expect(toggleBlock).not.toMatch(/size="sm"/);
     });
   }
+});
+
+test('the disclosure row the panes open through is at least a 48dp target', () => {
+  const src = jest.requireActual('fs').readFileSync(
+    require('path').join(__dirname, '..', 'src', 'components', 'ui', 'DisclosureRow.tsx'),
+    'utf8',
+  ) as string;
+  const minHeight = Number(src.match(/minHeight:\s*(\d+)/)?.[1]);
+  expect(minHeight).toBeGreaterThanOrEqual(48);
 });

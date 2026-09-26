@@ -8,7 +8,19 @@ import { DeviceIdRow } from '@/components/device-id-row';
 import { NotificationsSection } from '@/components/gateway/notifications-section';
 import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
 import { TransportSecurityCard } from '@/components/gateway/transport-security-card';
-import { Badge, Card, ErrorCard, Icon, Screen, Skeleton, Text } from '@/components/ui';
+import { VersutusMark } from '@/components/brand/versutus-mark';
+import {
+  Badge,
+  Card,
+  ErrorCard,
+  Icon,
+  RowGroup,
+  RowGroupRow,
+  Screen,
+  SectionHeader,
+  Skeleton,
+  Text,
+} from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
@@ -67,8 +79,16 @@ function voiceReadiness(
 }
 
 export default function GatewaySettingsScreen() {
-  const { activeGateway, settings, deviceId, deviceIdState, deviceIdError, reloadDeviceId, gatewayRequest } =
-    useGateway();
+  const {
+    activeGateway,
+    settings,
+    status,
+    deviceId,
+    deviceIdState,
+    deviceIdError,
+    reloadDeviceId,
+    gatewayRequest,
+  } = useGateway();
   const tokens = useTokens();
   const [copied, setCopied] = useState<'id' | null>(null);
   const [appLock, setAppLock] = useState(false);
@@ -230,273 +250,248 @@ export default function GatewaySettingsScreen() {
     setTimeout(() => setCopied(null), 2000);
   }, []);
 
+  const gateName = settings.pcName ?? activeGateway?.name ?? 'No gateway yet';
+
   return (
-    <Screen>
+    <Screen edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.heading}>
-          <Text variant="title">Gateway settings</Text>
-          <Text variant="caption" color="secondary">
-            Device identity and saved routes. Providers, CLI environments, and gateway management moved to Gate setup.
-          </Text>
+        {/* Who this app is talking to, set like the top of an account page:
+            the mark, the Gate's name in the serif, and one status line. */}
+        <View style={styles.identity}>
+          <VersutusMark size={56} />
+          <View style={styles.identityText}>
+            <Text variant="title" numberOfLines={1} style={styles.identityName}>
+              {gateName}
+            </Text>
+            <View style={styles.identityStatus}>
+              <View
+                style={[
+                  styles.statusDot,
+                  { backgroundColor: status === 'connected' ? tokens.statusConnected : tokens.textTertiary },
+                ]}
+              />
+              <Text variant="caption" color="secondary" numberOfLines={1}>
+                {status === 'connected' ? 'Connected' : 'Not connected'}
+                {activeGateway?.kind ? ` · ${activeGateway.kind === 'hermes' ? 'Hermes Gate' : activeGateway.kind}` : ''}
+              </Text>
+            </View>
+          </View>
         </View>
 
-        <Link href="/gateway/setup" asChild>
-          <Pressable accessibilityRole="button">
-            <Card variant="hero" padding={Spacing.three} style={styles.card}>
-              <View style={styles.sectionHeading}>
-                <View style={styles.sectionTitle}>
-                  <Text variant="caption" color="accent" style={styles.eyebrow}>
-                    Gate setup
-                  </Text>
-                  <Text variant="headline">Manage providers & gateways</Text>
-                </View>
-                <Icon name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }} size={18} color="textTertiary" />
-              </View>
-              <Text variant="caption" color="secondary">
-                Providers, CLI environments, saved gateways, and capability registry.
-              </Text>
-            </Card>
-          </Pressable>
-        </Link>
-
-        <SpendEntryRow />
-
-        {settings.tailscaleHost ? (
-          <Card variant="surface" padding={Spacing.three} style={styles.card}>
-            <View style={styles.sectionHeading}>
-              <View style={styles.sectionTitle}>
-                <Text variant="caption" color="accent" style={styles.eyebrow}>
-                  Primary route
-                </Text>
-                <Text variant="headline">Your PC</Text>
-              </View>
-              <Badge label="Saved" tone="success" dot={false} />
-            </View>
-            <Text color="secondary">{settings.pcName ?? settings.tailscaleHost}</Text>
-            <Text variant="mono" color="tertiary">
-              {settings.tailscaleHost}
-            </Text>
-            <Link href="/onboarding" asChild>
-              <Pressable accessibilityRole="button">
-                <Text variant="link" color="accent">
-                  Update address or API key
-                </Text>
-              </Pressable>
+        <View style={styles.section}>
+          <SectionHeader title="Gate" />
+          <RowGroup>
+            <Link href="/gateway/setup" asChild>
+              <RowGroupRow
+                title="Providers & gateways"
+                subtitle="Providers, environments, saved gateways"
+                icon={{ ios: 'server.rack', android: 'dns', web: 'dns' }}
+                chevron
+              />
             </Link>
-          </Card>
-        ) : null}
+            {settings.tailscaleHost ? (
+              <Link href="/onboarding" asChild>
+                <RowGroupRow
+                  title="Your PC"
+                  subtitle={`${settings.pcName ?? settings.tailscaleHost} · ${settings.tailscaleHost}`}
+                  detail="Update address or API key"
+                  icon={{ ios: 'desktopcomputer', android: 'computer', web: 'computer' }}
+                  chevron
+                />
+              </Link>
+            ) : null}
+          </RowGroup>
+          <SpendEntryRow />
+        </View>
 
-        <Card variant="surface" padding={Spacing.three} style={styles.card}>
-          <View style={styles.sectionHeading}>
-            <View style={styles.sectionTitle}>
-              <Text variant="caption" color="accent" style={styles.eyebrow}>
-                This build
-              </Text>
-              <Text variant="headline">Runtime environment</Text>
-            </View>
-          </View>
-          <Text color="secondary">
-            What this build&apos;s engine actually provides. Tests run elsewhere; only
-            the device can answer for the device.
-          </Text>
-          <Link href="/gateway/diagnostics" asChild>
-            <Pressable accessibilityRole="button">
-              <Text variant="link" color="accent">
-                Check runtime environment
-              </Text>
-            </Pressable>
-          </Link>
-        </Card>
+        <View style={styles.section}>
+          <SectionHeader title="Privacy" />
+          <RowGroup>
+            <RowGroupRow
+              title={APP_LOCK_LABEL}
+              detail={appLockReason ? appLockUnavailableCopy(appLockReason) : APP_LOCK_SUMMARY}
+              icon={{ ios: 'faceid', android: 'fingerprint', web: 'fingerprint' }}
+              chevron={false}
+              trailing={
+                // A device that cannot ask for a fingerprint or Face ID gets the
+                // module's own line, never a switch that could not finish.
+                appLockReason ? undefined : (
+                  <Switch
+                    value={appLock}
+                    onValueChange={handleAppLock}
+                    trackColor={{ true: tokens.accentDeep, false: tokens.backgroundRaised }}
+                    thumbColor={tokens.textPrimary}
+                    accessibilityLabel={APP_LOCK_LABEL}
+                    accessibilityState={{ checked: appLock }}
+                  />
+                )
+              }
+            />
+            <RowGroupRow
+              title={WIDGET_PRIVACY_LABEL}
+              detail={WIDGET_PRIVACY_SUMMARY}
+              icon={{ ios: 'rectangle.stack', android: 'widgets', web: 'widgets' }}
+              chevron={false}
+              trailing={
+                <Switch
+                  value={hideWidgetResult}
+                  onValueChange={handleWidgetPrivacy}
+                  trackColor={{ true: tokens.accentDeep, false: tokens.backgroundRaised }}
+                  thumbColor={tokens.textPrimary}
+                  accessibilityLabel={WIDGET_PRIVACY_LABEL}
+                  accessibilityState={{ checked: hideWidgetResult }}
+                />
+              }
+            />
+          </RowGroup>
+        </View>
 
-        <Card variant="surface" padding={Spacing.three} style={styles.card}>
-          <View style={styles.sectionHeading}>
-            <View style={styles.sectionTitle}>
-              <Text variant="caption" color="accent" style={styles.eyebrow}>
-                Privacy
-              </Text>
-              <Text variant="headline">{APP_LOCK_LABEL}</Text>
-            </View>
-          </View>
-          <Text color="secondary">{APP_LOCK_SUMMARY}</Text>
-          {appLockReason ? (
-            // A device that cannot ask for a fingerprint or Face ID gets the
-            // module's own line, never a switch that could not finish.
-            <Text variant="caption" color="tertiary">
-              {appLockUnavailableCopy(appLockReason)}
+        <View style={styles.section}>
+          <SectionHeader title="Voice" />
+          <Card variant="surface" padding={Spacing.three} style={styles.card}>
+            <Text variant="headline">Power hands-free with</Text>
+            <Text variant="caption" color="secondary">
+              Where a call&apos;s audio goes, and which machine runs the speech models.
             </Text>
-          ) : (
-            <Switch
-              value={appLock}
-              onValueChange={handleAppLock}
-              trackColor={{ true: tokens.accent, false: tokens.border }}
-              thumbColor={tokens.textPrimary}
-              accessibilityLabel={APP_LOCK_LABEL}
-              accessibilityState={{ checked: appLock }}
-            />
-          )}
-          <View style={styles.sectionHeading}>
-            <View style={styles.sectionTitle}>
-              <Text variant="caption" color="accent" style={styles.eyebrow}>
-                Home screen
-              </Text>
-              <Text variant="headline">{WIDGET_PRIVACY_LABEL}</Text>
-            </View>
-          </View>
-          <Text color="secondary">{WIDGET_PRIVACY_SUMMARY}</Text>
-          <Switch
-            value={hideWidgetResult}
-            onValueChange={handleWidgetPrivacy}
-            trackColor={{ true: tokens.accent, false: tokens.border }}
-            thumbColor={tokens.textPrimary}
-            accessibilityLabel={WIDGET_PRIVACY_LABEL}
-            accessibilityState={{ checked: hideWidgetResult }}
-          />
-        </Card>
-
-        <Card variant="surface" padding={Spacing.three} style={styles.card}>
-          <View style={styles.sectionHeading}>
-            <View style={styles.sectionTitle}>
-              <Text variant="caption" color="accent" style={styles.eyebrow}>
-                Voice
-              </Text>
-              <Text variant="headline">Power hands-free with</Text>
-            </View>
-          </View>
-          <Text color="secondary">
-            Where a call&apos;s audio goes, and which machine runs the speech models.
-          </Text>
-          {voiceCheckState === 'failed' ? (
-            <ErrorCard
-              cause={voiceCheckError ?? "The Gate did not answer this PC's voice check."}
-              affected="Voice engine readiness on this PC"
-              next="Retry — the rows below only reflect the Gate after a successful read."
-              onRetry={retryVoiceCapabilities}
-            />
-          ) : null}
-          {VOICE_ENGINE_ROWS.map((row) => {
-            const selected = voiceEngine === row.id;
-            return (
-              <Pressable
-                key={row.id}
-                accessibilityRole="radio"
-                accessibilityState={{ selected }}
-                accessibilityLabel={`${row.label}. ${row.summary}`}
-                onPress={() => handleVoiceEngine(row.id)}
-                style={[styles.voiceRow, selected ? { borderColor: tokens.accent } : null]}>
-                <View style={styles.sectionTitle}>
-                  <Text variant="caption" color={selected ? 'accent' : 'primary'}>
-                    {row.label}
+            {voiceCheckState === 'failed' ? (
+              <ErrorCard
+                cause={voiceCheckError ?? "The Gate did not answer this PC's voice check."}
+                affected="Voice engine readiness on this PC"
+                next="Retry — the rows below only reflect the Gate after a successful read."
+                onRetry={retryVoiceCapabilities}
+              />
+            ) : null}
+            <View style={styles.voiceRows}>
+              {VOICE_ENGINE_ROWS.map((row) => {
+                const selected = voiceEngine === row.id;
+                return (
+                  <Pressable
+                    key={row.id}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected }}
+                    accessibilityLabel={`${row.label}. ${row.summary}`}
+                    onPress={() => handleVoiceEngine(row.id)}
+                    style={[
+                      styles.voiceRow,
+                      { backgroundColor: selected ? tokens.backgroundRaised : tokens.backgroundInset },
+                      selected ? { borderColor: tokens.accent } : null,
+                    ]}>
+                    <View style={styles.voiceText}>
+                      <Text variant="callout" color={selected ? 'primary' : 'secondary'}>
+                        {row.label}
+                      </Text>
+                      <Text variant="caption" color="tertiary">
+                        {row.summary}
+                      </Text>
+                      <Text variant="caption" color="tertiary">
+                        {voiceReadiness(row.id, voiceCapabilities, voiceCheckState, voiceCheckError)}
+                      </Text>
+                    </View>
+                    <Icon
+                      name={
+                        selected
+                          ? { ios: 'checkmark.circle.fill', android: 'check_circle', web: 'check_circle' }
+                          : { ios: 'circle', android: 'radio_button_unchecked', web: 'radio_button_unchecked' }
+                      }
+                      size={20}
+                      color={selected ? 'accent' : 'textTertiary'}
+                    />
+                  </Pressable>
+                );
+              })}
+              <View style={[styles.voiceRow, styles.voiceRowDisabled, { backgroundColor: tokens.backgroundInset }]}>
+                <View style={styles.voiceText}>
+                  <Text variant="callout" color="tertiary">
+                    {GROK_ROW_LABEL}
                   </Text>
-                  <Text variant="micro" color="tertiary">
-                    {row.summary}
-                  </Text>
-                  <Text variant="micro" color="tertiary">
-                    {voiceReadiness(row.id, voiceCapabilities, voiceCheckState, voiceCheckError)}
+                  <Text variant="caption" color="tertiary">
+                    {GROK_DISABLED_REASON}
                   </Text>
                 </View>
-                {selected ? <Badge label="Using" tone="success" dot={false} /> : null}
-              </Pressable>
-            );
-          })}
-          <View style={[styles.voiceRow, styles.voiceRowDisabled]}>
-            <View style={styles.sectionTitle}>
-              <Text variant="caption" color="tertiary">
-                {GROK_ROW_LABEL}
-              </Text>
-              <Text variant="micro" color="tertiary">
-                {GROK_DISABLED_REASON}
-              </Text>
+                <Badge label="Unavailable" tone="neutral" dot={false} />
+              </View>
             </View>
-            <Badge label="Disabled" tone="warning" dot={false} />
-          </View>
-          <View style={styles.voiceRow}>
-            <View style={styles.sectionTitle}>
-              <Text variant="caption" color="tertiary">
+            <View style={styles.voiceMeta}>
+              <Text variant="caption" color="secondary">
                 Today
               </Text>
-              <Text variant="micro" color="tertiary">
+              <Text variant="caption" color="tertiary" style={styles.voiceMetaText}>
                 {voiceUsageCopy(voiceCapabilities?.usedToday, voiceCapabilities?.lastError)}
               </Text>
             </View>
-          </View>
-          {installing ? (
-            <View style={styles.voiceRow}>
-              <View style={styles.sectionTitle}>
+            {installing ? (
+              <View style={styles.voiceMeta}>
                 <Text variant="caption" color="accent">
                   Installing on this PC…
                 </Text>
-                <Text variant="micro" color="tertiary">
+                <Text variant="caption" color="tertiary" style={styles.voiceMetaText}>
                   {installNote ?? 'This can take a few minutes.'}
                 </Text>
               </View>
-            </View>
-          ) : voiceCapabilities?.engines.local?.state === 'not-installed' || installNote ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Install on this PC"
-              onPress={handleVoiceInstall}
-              style={styles.voiceRow}>
-              <View style={styles.sectionTitle}>
-                <Text variant="caption" color="accent">
-                  Install on this PC (≈2 GB download)
-                </Text>
-                <Text variant="micro" color="tertiary">
-                  {installNote ?? 'Downloads the speech models to the Gate PC.'}
-                </Text>
-              </View>
-            </Pressable>
-          ) : null}
-        </Card>
-
-        <NotificationsSection />
-
-        <Card variant="surface" padding={Spacing.three} style={styles.card}>
-          <View style={styles.sectionHeading}>
-            <View style={styles.sectionTitle}>
-              <Text variant="caption" color="accent" style={styles.eyebrow}>
-                Approvals
-              </Text>
-              <Text variant="headline">Decision history</Text>
-            </View>
-            {auditLoaded ? (
-              <Badge
-                label={String(audit.length)}
-                tone={audit.length > 0 ? 'accent' : 'neutral'}
-                dot={false}
-              />
+            ) : voiceCapabilities?.engines.local?.state === 'not-installed' || installNote ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Install on this PC"
+                onPress={handleVoiceInstall}
+                style={[styles.installRow, { backgroundColor: tokens.accentMuted }]}>
+                <Icon name={{ ios: 'arrow.down.circle', android: 'download', web: 'download' }} size={18} color="accent" />
+                <View style={styles.voiceText}>
+                  <Text variant="callout" color="accent">
+                    Install on this PC (≈2 GB download)
+                  </Text>
+                  <Text variant="caption" color="tertiary">
+                    {installNote ?? 'Downloads the speech models to the Gate PC.'}
+                  </Text>
+                </View>
+              </Pressable>
             ) : null}
-          </View>
-          {!auditLoaded ? (
-            <>
-              <Skeleton width="72%" height={14} />
-              <Skeleton width="90%" height={12} />
-              <Skeleton width="64%" height={12} />
-            </>
-          ) : (
-            <>
-              <Text color="secondary">{approvalAuditSummaryCopy(audit.length)}</Text>
-              {audit.slice(0, 5).map((record) => (
-                <Text key={`${record.approvalId}-${record.at}`} variant="caption" color="tertiary">
-                  {approvalAuditCopy(record)}
+          </Card>
+        </View>
+
+        <View style={styles.section}>
+          <SectionHeader title="Notifications" />
+          <NotificationsSection />
+        </View>
+
+        <View style={styles.section}>
+          <SectionHeader title="Approvals" />
+          <Card variant="surface" padding={Spacing.three} style={styles.card}>
+            <View style={styles.cardTitleRow}>
+              <Text variant="headline">Decision history</Text>
+              {auditLoaded ? (
+                <Badge
+                  label={String(audit.length)}
+                  tone={audit.length > 0 ? 'accent' : 'neutral'}
+                  dot={false}
+                />
+              ) : null}
+            </View>
+            {!auditLoaded ? (
+              <>
+                <Skeleton width="72%" height={14} />
+                <Skeleton width="90%" height={12} />
+                <Skeleton width="64%" height={12} />
+              </>
+            ) : (
+              <>
+                <Text variant="caption" color="secondary">
+                  {approvalAuditSummaryCopy(audit.length)}
                 </Text>
-              ))}
-            </>
-          )}
-        </Card>
+                {audit.slice(0, 5).map((record) => (
+                  <Text key={`${record.approvalId}-${record.at}`} variant="caption" color="tertiary">
+                    {approvalAuditCopy(record)}
+                  </Text>
+                ))}
+              </>
+            )}
+          </Card>
+        </View>
 
         {activeGateway ? (
-          <>
+          <View style={styles.section}>
+            <SectionHeader title="This device" />
             <TransportSecurityCard url={activeGateway.url} tlsFingerprint={activeGateway.tlsFingerprint} />
-            <Card variant="inset" padding={Spacing.three} style={styles.card}>
-              <View style={styles.sectionHeading}>
-                <View style={styles.sectionTitle}>
-                  <Text variant="caption" color="accent" style={styles.eyebrow}>
-                    Device identity
-                  </Text>
-                  <Text variant="headline">This device</Text>
-                </View>
-                <Icon name={{ ios: 'iphone', android: 'smartphone', web: 'smartphone' }} size={18} color="accent" />
-              </View>
+            <Card variant="surface" padding={Spacing.three} style={styles.card}>
               {deviceId ? (
                 <DeviceIdRow deviceId={deviceId} copied={copied} onCopy={copyText} />
               ) : deviceIdState === 'failed' ? (
@@ -511,12 +506,26 @@ export default function GatewaySettingsScreen() {
                   Loading device identity…
                 </Text>
               )}
-              <Text variant="micro" color="tertiary">
+              <Text variant="caption" color="tertiary">
                 Used for gateway pairing and access requests. The private key remains in secure storage.
               </Text>
             </Card>
-          </>
+          </View>
         ) : null}
+
+        <View style={styles.section}>
+          <SectionHeader title="This build" />
+          <RowGroup>
+            <Link href="/gateway/diagnostics" asChild>
+              <RowGroupRow
+                title="Runtime environment"
+                subtitle="What this build's engine actually provides"
+                icon={{ ios: 'cpu', android: 'memory', web: 'memory' }}
+                chevron
+              />
+            </Link>
+          </RowGroup>
+        </View>
       </ScrollView>
     </Screen>
   );
@@ -524,22 +533,60 @@ export default function GatewaySettingsScreen() {
 
 const styles = StyleSheet.create({
   content: {
-    padding: Spacing.four,
-    gap: Spacing.three,
+    paddingHorizontal: Spacing.four - 4,
+    paddingTop: Spacing.four,
+    paddingBottom: Spacing.five,
+    gap: Spacing.four,
   },
-  heading: {
-    gap: Spacing.one,
+  identity: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+    paddingHorizontal: Spacing.one,
+  },
+  identityText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  identityName: {
+    fontSize: 30,
+    lineHeight: 36,
+  },
+  identityStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  section: {
+    gap: Spacing.two,
   },
   card: {
     borderRadius: Radius.lg,
     gap: Spacing.two,
   },
-  voiceRow: {
+  cardTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: Spacing.two,
-    padding: Spacing.two,
+  },
+  voiceRows: {
+    gap: Spacing.two,
+    marginTop: Spacing.one,
+  },
+  voiceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: Spacing.three - 4,
+    paddingHorizontal: Spacing.three - 4,
+    paddingVertical: Spacing.three - 4,
     borderRadius: Radius.md,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'transparent',
@@ -547,24 +594,24 @@ const styles = StyleSheet.create({
   voiceRowDisabled: {
     opacity: 0.6,
   },
-  sectionHeading: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.two,
-  },
-  sectionTitle: {
+  voiceText: {
     flex: 1,
-    gap: Spacing.one,
+    gap: 2,
   },
-  eyebrow: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+  voiceMeta: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.one,
   },
-  sectionHeader: {
+  voiceMetaText: {
+    flex: 1,
+  },
+  installRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.two,
+    gap: Spacing.three - 4,
+    padding: Spacing.three - 4,
+    borderRadius: Radius.md,
   },
 });

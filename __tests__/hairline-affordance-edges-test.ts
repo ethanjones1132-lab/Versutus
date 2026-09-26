@@ -44,9 +44,11 @@ const AFFORDANCE_EDGES = [
     ],
   },
   {
+    // The lift edge is light on the sheet's top lip (an inset highlight that
+    // follows the corner radius) rather than a ring drawn all the way round.
     label: 'a floating sheet keeps a lift edge over the transcript',
     parts: ['src', 'components', 'ui', 'BaseSheet.tsx'],
-    keep: ['borderWidth: StyleSheet.hairlineWidth * 2,'],
+    keep: ["boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)"],
   },
   {
     label: 'a secondary button keeps a button edge on the flat stage',

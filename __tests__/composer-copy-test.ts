@@ -14,9 +14,28 @@ describe('composerCopy', () => {
     expect(
       composerCopy({ canSend: true, isStreaming: false, status: 'connected' }),
     ).toEqual({
-      placeholder: 'Message or /command',
+      placeholder: 'Ask anything',
       sendLabel: 'Send message',
     });
+  });
+
+  test('a Bot thread names who the words go to', () => {
+    expect(
+      composerCopy({ canSend: true, isStreaming: false, status: 'connected', recipient: 'Forge' }).placeholder,
+    ).toBe('Message Forge');
+    // A name that would wrap the pill falls back to the plain prompt.
+    expect(
+      composerCopy({
+        canSend: true,
+        isStreaming: false,
+        status: 'connected',
+        recipient: 'Quarterly Research Director',
+      }).placeholder,
+    ).toBe('Ask anything');
+    // Queue and offline copy still win: the operator must know it will wait.
+    expect(
+      composerCopy({ canSend: true, isStreaming: false, status: 'disconnected', recipient: 'Forge' }).placeholder,
+    ).toBe('Message will queue');
   });
 
   test('disconnected send says the turn will queue', () => {
@@ -60,7 +79,7 @@ describe('composerCopy', () => {
     const oneQueued = composerCopy({ canSend: true, isStreaming: true, status: 'connected', queuedCount: 1 });
     const twoQueued = composerCopy({ canSend: true, isStreaming: true, status: 'connected', queuedCount: 2 });
 
-    expect(idle.placeholder).toBe('Message or /command');
+    expect(idle.placeholder).toBe('Ask anything');
     expect(oneQueued.placeholder).toBe('1 queued — sends next');
     expect(twoQueued.placeholder).toBe('2 queued — sends in order');
     expect(oneQueued.placeholder).not.toBe(idle.placeholder);
@@ -69,7 +88,7 @@ describe('composerCopy', () => {
   test('queuedCount is ignored when not streaming', () => {
     expect(
       composerCopy({ canSend: true, isStreaming: false, status: 'connected', queuedCount: 1 }).placeholder,
-    ).toBe('Message or /command');
+    ).toBe('Ask anything');
   });
 
   test('every placeholder stays short enough to hold one line at 375px', () => {

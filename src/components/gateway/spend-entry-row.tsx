@@ -2,7 +2,7 @@ import { Link } from 'expo-router';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Card, Icon, Text } from '@/components/ui';
-import { Radius, Spacing } from '@/constants/tokens';
+import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 
 /**
@@ -24,24 +24,24 @@ export function SpendEntryRow() {
 
   return (
     <Link href="/gateway/spend" asChild>
-      <Pressable accessibilityRole="button">
-        <Card variant="surface" padding={Spacing.three} style={styles.card}>
-          <View style={styles.heading}>
-            <View style={styles.title}>
-              <Text variant="caption" color="accent" style={styles.eyebrow}>
-                Spend
-              </Text>
-              <Text variant="headline">What this gateway has cost</Text>
-            </View>
-            <Icon
-              name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
-              size={18}
-              color="textTertiary"
-            />
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Spend. Tokens and cost across this gateway's sessions, per Bot where the gateway can split them.">
+        <Card variant="surface" padding={Spacing.three - 2} style={styles.card}>
+          <View style={styles.tile}>
+            <Icon name={{ ios: 'chart.bar', android: 'bar_chart', web: 'bar_chart' }} size={16} color="accent" />
           </View>
-          <Text variant="caption" color="secondary">
-            Tokens and cost across this gateway&apos;s sessions, per Bot where the gateway can split them.
-          </Text>
+          <View style={styles.title}>
+            <Text variant="body">Spend</Text>
+            <Text variant="caption" color="secondary" numberOfLines={1}>
+              What this gateway has cost, per Bot
+            </Text>
+          </View>
+          <Icon
+            name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
+            size={14}
+            color="textTertiary"
+          />
         </Card>
       </Pressable>
     </Link>
@@ -51,20 +51,20 @@ export function SpendEntryRow() {
 const styles = StyleSheet.create({
   card: {
     borderRadius: Radius.lg,
-    gap: Spacing.two,
-  },
-  heading: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.two,
+    gap: Spacing.three - 4,
+  },
+  tile: {
+    width: 32,
+    height: 32,
+    borderRadius: Radius.sm + 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Palette.backgroundRaised,
   },
   title: {
     flex: 1,
-    gap: Spacing.one,
-  },
-  eyebrow: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    gap: 2,
   },
 });

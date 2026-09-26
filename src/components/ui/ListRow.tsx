@@ -105,7 +105,7 @@ export function ListRow({
         </View>
       ) : null}
       <View style={styles.titles}>
-        <Text variant="body" numberOfLines={1} style={styles.title}>
+        <Text variant="body" numberOfLines={2} style={styles.title}>
           {title}
         </Text>
         {subtitle ? (
@@ -114,7 +114,7 @@ export function ListRow({
           </Text>
         ) : null}
         {detail ? (
-          <Text variant="micro" color="tertiary" numberOfLines={2}>
+          <Text variant="caption" color="tertiary" numberOfLines={3}>
             {detail}
           </Text>
         ) : null}

@@ -9,7 +9,9 @@ import { ApprovalDecisionCard } from '@/components/activity/approval-decision-ca
 import { ApprovalInbox } from '@/components/activity/approval-inbox';
 import { CronSection } from '@/components/activity/cron-section';
 import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
-import { Badge, Button, Card, ErrorCard, Screen, Skeleton, Text } from '@/components/ui';
+import { RecentRuns } from '@/components/activity/recent-runs';
+import { PulsingDot } from '@/components/connection-badge';
+import { Card, ErrorCard, PageTitle, Screen, SectionHeader, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
@@ -37,7 +39,9 @@ export default function ActivityScreen() {
   const tokens = useTokens();
   const {
     activeGateway,
+    activityRunsForActiveGateway,
     gateways,
+    settings,
     status,
     pendingRunApproval,
     resolveRunApproval,
@@ -137,16 +141,23 @@ export default function ActivityScreen() {
           />
         }>
         <View style={styles.header}>
-          <View style={styles.titleRow}>
-            <DrawerMenuButton />
-            <View style={styles.titleText}>
-              <Text variant="title">Activity</Text>
-            </View>
-            <Badge
-              label={status === 'connected' ? 'Live' : 'Offline'}
-              tone={status === 'connected' ? 'success' : 'neutral'}
-            />
-          </View>
+          <PageTitle
+            title="Activity"
+            leading={<DrawerMenuButton />}
+            status={
+              <>
+                <PulsingDot
+                  color={status === 'connected' ? tokens.statusConnected : tokens.textTertiary}
+                  active={status === 'connecting' || status === 'reconnecting'}
+                />
+                <Text variant="caption" color="secondary">
+                  {status === 'connected'
+                    ? `Live${activeGateway ? ` · ${settings.pcName ?? activeGateway.name}` : ''}`
+                    : 'Offline — showing what this phone last saw'}
+                </Text>
+              </>
+            }
+          />
 
           {refreshError ? (
             <ErrorCard
@@ -158,57 +169,11 @@ export default function ActivityScreen() {
             />
           ) : null}
 
-          {/* Workflows slice 3b: runs have their own destination, so this is
-              the scheduled-work view rather than a run list. */}
-          <Card variant="inset" padding={Spacing.three} style={styles.runsEntryCard}>
-            <Text variant="body" color="secondary">
-              Scheduled work is here. Individual runs have their own screen.
-            </Text>
-            <Button
-              label="Open runs"
-              variant="ghost"
-              size="sm"
-              onPress={() => router.push('/runs')}
-            />
-          </Card>
-
           {/* D1: the Gate's pending approvals, triaged without the run open. */}
-          <ApprovalInbox />
-
-          {/* D1: what this device has already decided — the tally plus the
-              newest lines. Settings keeps the full history. Loading shows
-              placeholders (never the empty tally); a refused read shows an
-              inline retry instead of inventing an empty log. */}
-          <Card variant="inset" padding={Spacing.three} style={styles.card}>
-            <Text variant="headline">Approval decisions</Text>
-            {auditState === 'loading' ? (
-              <>
-                <Skeleton width="72%" height={14} />
-                <Skeleton width="90%" height={12} />
-                <Skeleton width="64%" height={12} />
-              </>
-            ) : null}
-            {auditState === 'failed' ? (
-              <ErrorCard
-                cause={auditError ?? 'Decision history could not be read.'}
-                affected="Approval decisions on this device"
-                next="Retry the read."
-                onRetry={() => void readAudit()}
-              />
-            ) : null}
-            {auditState === 'ready' ? (
-              <>
-                <Text variant="caption" color="secondary">
-                  {approvalAuditTallyCopy(audit)}
-                </Text>
-                {approvalAuditRecent(audit, 4).map((record) => (
-                  <Text key={`${record.approvalId}-${record.at}`} variant="micro" color="tertiary">
-                    {approvalAuditCopy(record)}
-                  </Text>
-                ))}
-              </>
-            ) : null}
-          </Card>
+          <View style={styles.section}>
+            <SectionHeader title="Needs you" />
+            <ApprovalInbox />
+          </View>
 
           {pendingRunApproval ? (
             <ApprovalDecisionCard
@@ -217,23 +182,68 @@ export default function ActivityScreen() {
               onResolve={(approved, feedback) => resolveRunApproval(approved, feedback)}
             />
           ) : null}
+
+          {/* Workflows slice 3b: runs have their own destination; this is the
+              glance — what is waiting, what is working, what just finished. */}
+          <View style={styles.section}>
+            <SectionHeader title="Runs" actionLabel="See all" onAction={() => router.push('/runs')} />
+            <RecentRuns runs={activityRunsForActiveGateway} onOpenRuns={() => router.push('/runs')} />
+          </View>
         </View>
 
       <View style={styles.footer}>
       <CronSection cronReloadSignal={cronReloadSignal} />
 
+      {/* D1: what this device has already decided — the tally plus the
+          newest lines. Settings keeps the full history. Loading shows
+          placeholders (never the empty tally); a refused read shows an
+          inline retry instead of inventing an empty log. */}
+      <View style={styles.section}>
+        <SectionHeader title="Your decisions" />
+        <Card variant="surface" padding={Spacing.three} style={styles.card}>
+          {auditState === 'loading' ? (
+            <>
+              <Skeleton width="72%" height={14} />
+              <Skeleton width="90%" height={12} />
+              <Skeleton width="64%" height={12} />
+            </>
+          ) : null}
+          {auditState === 'failed' ? (
+            <ErrorCard
+              cause={auditError ?? 'Decision history could not be read.'}
+              affected="Approval decisions on this device"
+              next="Retry the read."
+              onRetry={() => void readAudit()}
+            />
+          ) : null}
+          {auditState === 'ready' ? (
+            <>
+              <Text variant="body">{approvalAuditTallyCopy(audit)}</Text>
+              {approvalAuditRecent(audit, 4).map((record) => (
+                <Text key={`${record.approvalId}-${record.at}`} variant="caption" color="tertiary">
+                  {approvalAuditCopy(record)}
+                </Text>
+              ))}
+            </>
+          ) : null}
+        </Card>
+      </View>
+
       {/* Spend is the gateway-wide readout, so it sits with the gateway-wide
           work. Renders nothing while no connection can answer it. */}
       <SpendEntryRow />
 
-      <AgentTargets
-        gateways={gateways}
-        activeGatewayId={activeGateway?.id}
-        status={status}
-        onSelect={(gateway) => {
-          void connectGateway(gateway);
-        }}
-      />
+      <View style={styles.section}>
+        <SectionHeader title="Gateways" />
+        <AgentTargets
+          gateways={gateways}
+          activeGatewayId={activeGateway?.id}
+          status={status}
+          onSelect={(gateway) => {
+            void connectGateway(gateway);
+          }}
+        />
+      </View>
       </View>
       </ScrollView>
     </Screen>
@@ -245,29 +255,20 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   listContent: {
-    paddingHorizontal: Spacing.four,
+    paddingHorizontal: Spacing.four - 4,
     paddingTop: Spacing.two,
     paddingBottom: Spacing.four,
-    gap: Spacing.three,
+    gap: Spacing.four,
     flexGrow: 1,
   },
   header: {
-    gap: Spacing.three,
+    gap: Spacing.four,
   },
   footer: {
-    gap: Spacing.three,
+    gap: Spacing.four,
   },
-  titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  section: {
     gap: Spacing.two,
-  },
-  titleText: {
-    flex: 1,
   },
   card: { gap: Spacing.two },
-  runsEntryCard: {
-    gap: Spacing.two,
-  },
 });

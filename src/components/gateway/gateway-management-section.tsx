@@ -33,7 +33,7 @@ export function GatewayManagementSection() {
       <Card variant="hero" padding={Spacing.three} style={styles.card}>
         <View style={styles.sectionHeading}>
           <View style={styles.sectionTitle}>
-            <Text variant="caption" color="accent" style={styles.eyebrow}>
+            <Text variant="eyebrow" color="tertiary" style={styles.eyebrow}>
               Startup
             </Text>
             <Text variant="headline">Automatic connection</Text>
@@ -54,7 +54,7 @@ export function GatewayManagementSection() {
 
       <View style={styles.sectionHeader}>
         <View style={styles.sectionTitle}>
-          <Text variant="caption" color="accent" style={styles.eyebrow}>
+          <Text variant="eyebrow" color="tertiary" style={styles.eyebrow}>
             Discovery
           </Text>
           <Text variant="headline">Nearby gateways</Text>
@@ -92,7 +92,7 @@ export function GatewayManagementSection() {
       <Divider />
       <View style={styles.sectionHeader}>
         <View style={styles.sectionTitle}>
-          <Text variant="caption" color="accent" style={styles.eyebrow}>
+          <Text variant="eyebrow" color="tertiary" style={styles.eyebrow}>
             Profiles
           </Text>
           <Text variant="headline">Saved gateways</Text>
@@ -150,8 +150,7 @@ const styles = StyleSheet.create({
     gap: Spacing.one,
   },
   eyebrow: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    flexShrink: 1,
   },
   sectionHeader: {
     flexDirection: 'row',

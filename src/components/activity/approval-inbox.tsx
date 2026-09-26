@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Badge, Button, Card, ErrorCard, Skeleton, Text } from '@/components/ui';
-import { Palette, Spacing } from '@/constants/tokens';
+import { BotAvatar } from '@/components/chat/bot-avatar';
+import { Button, ErrorCard, Icon, Skeleton, Text } from '@/components/ui';
+import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { useTokens } from '@/hooks/use-tokens';
 import { approvalClassLabel, approvalInboxCopy, batchApprovableRows } from '@/lib/gateway/approvals';
 
 /**
@@ -21,6 +23,7 @@ export function ApprovalInbox() {
     decideApproval,
     approvalBusy,
   } = useGateway();
+  const tokens = useTokens();
   const [batchBusy, setBatchBusy] = useState(false);
   // A refused Approve/Deny (single or batch) names the failure here instead
   // of vanishing: decideApproval rejects with no catch at the provider, so
@@ -52,15 +55,7 @@ export function ApprovalInbox() {
   };
 
   return (
-    <Card padding={Spacing.three} style={styles.card}>
-      <View style={styles.header}>
-        <Text variant="headline">Approvals</Text>
-        <Badge
-          label={String(pendingApprovals.length)}
-          tone={pendingApprovals.length > 0 ? 'accent' : 'neutral'}
-        />
-      </View>
-
+    <View style={[styles.group, { backgroundColor: tokens.backgroundElevated }]}>
       {decideError ? (
         <ErrorCard
           cause={decideError}
@@ -71,10 +66,10 @@ export function ApprovalInbox() {
       ) : null}
 
       {pendingApprovalsState === 'loading' ? (
-        <>
+        <View style={styles.pad}>
           <Skeleton width="80%" height={14} />
           <Skeleton width="56%" height={12} />
-        </>
+        </View>
       ) : null}
 
       {pendingApprovalsState === 'failed' ? (
@@ -88,17 +83,65 @@ export function ApprovalInbox() {
 
       {pendingApprovalsState === 'ready' ? (
         pendingApprovals.length === 0 ? (
-          <Text variant="caption" color="secondary">
-            No approvals are waiting.
-          </Text>
+          <View style={styles.quiet}>
+            <Icon name={{ ios: 'checkmark.circle', android: 'check_circle', web: 'check_circle' }} size={18} color="statusConnected" />
+            <Text variant="caption" color="secondary">
+              No approvals are waiting.
+            </Text>
+          </View>
         ) : (
           <>
+            {pendingApprovals.map((row, index) => (
+              <View
+                key={row.approvalId}
+                style={[
+                  styles.row,
+                  index > 0 ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: tokens.borderSubtle } : null,
+                ]}>
+                <View style={styles.rowHead}>
+                  {row.botId ? (
+                    <BotAvatar botId={row.botId} size={32} />
+                  ) : (
+                    <View style={[styles.shield, { backgroundColor: tokens.backgroundRaised }]}>
+                      <Icon name={{ ios: 'checkmark.shield', android: 'verified_user', web: 'verified_user' }} size={16} color="statusConnecting" />
+                    </View>
+                  )}
+                  <View style={styles.rowText}>
+                    <Text variant="body" style={styles.summary}>
+                      {approvalInboxCopy(row)}
+                    </Text>
+                    <Text variant="caption" color="tertiary">
+                      {approvalClassLabel(row.cls)}
+                      {row.operation ? ` · ${row.operation}` : ''}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.actions}>
+                  <Button
+                    label="Deny"
+                    size="sm"
+                    variant="secondary"
+                    onPress={() => void decide(row.approvalId, 'deny')}
+                    disabled={approvalBusy === row.approvalId}
+                    style={styles.action}
+                  />
+                  <Button
+                    label="Approve"
+                    size="sm"
+                    onPress={() => void decide(row.approvalId, 'approve')}
+                    disabled={approvalBusy === row.approvalId}
+                    style={styles.action}
+                  />
+                </View>
+              </View>
+            ))}
             {pendingApprovals.length > 1 ? (
-              <View style={styles.actions}>
+              <View style={[styles.batch, { borderTopColor: tokens.borderSubtle }]}>
                 {approvable.length > 0 ? (
                   <Button
                     label={`Approve ${approvable.length} read-only`}
                     size="sm"
+                    variant="ghost"
                     disabled={batchBusy}
                     onPress={() => void decideAll(approvable.map((row) => row.approvalId), 'approve')}
                   />
@@ -106,56 +149,53 @@ export function ApprovalInbox() {
                 <Button
                   label="Deny all"
                   size="sm"
-                  variant="secondary"
+                  variant="ghost"
                   disabled={batchBusy}
                   onPress={() => void decideAll(pendingApprovals.map((row) => row.approvalId), 'deny')}
                 />
               </View>
             ) : null}
-            {pendingApprovals.map((row) => (
-              <View key={row.approvalId} style={styles.row}>
-                <Text variant="caption">{approvalInboxCopy(row)}</Text>
-                <Text variant="micro" color="tertiary">
-                  {approvalClassLabel(row.cls)}
-                  {row.operation ? ` · ${row.operation}` : ''}
-                </Text>
-                <View style={styles.actions}>
-                  <Button
-                    label="Approve"
-                    size="sm"
-                    onPress={() => void decide(row.approvalId, 'approve')}
-                    disabled={approvalBusy === row.approvalId}
-                  />
-                  <Button
-                    label="Deny"
-                    size="sm"
-                    variant="secondary"
-                    onPress={() => void decide(row.approvalId, 'deny')}
-                    disabled={approvalBusy === row.approvalId}
-                  />
-                </View>
-              </View>
-            ))}
           </>
         )
       ) : null}
-    </Card>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  card: { gap: Spacing.two },
-  header: {
+  // One grouped block: each approval is a row, told from the next by a quiet
+  // inset rule — the group is the card, the rows are not boxed again.
+  group: { borderRadius: Radius.lg, overflow: 'hidden' },
+  pad: { padding: Spacing.three, gap: Spacing.two },
+  quiet: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     gap: Spacing.two,
+    padding: Spacing.three,
   },
   row: {
-    gap: Spacing.one,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Palette.border,
-    paddingTop: Spacing.two,
+    gap: Spacing.three - 4,
+    paddingHorizontal: Spacing.three - 2,
+    paddingVertical: Spacing.three - 2,
   },
-  actions: { flexDirection: 'row', gap: Spacing.two },
+  rowHead: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.three - 4 },
+  shield: {
+    width: 32,
+    height: 32,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowText: { flex: 1, minWidth: 0, gap: 2 },
+  summary: { fontSize: 15, lineHeight: 21 },
+  actions: { flexDirection: 'row', gap: Spacing.two, paddingLeft: 44 },
+  action: { flex: 1 },
+  batch: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.one,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
 });

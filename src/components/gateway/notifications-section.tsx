@@ -113,7 +113,7 @@ export function NotificationsSection() {
       <Card variant="hero" padding={Spacing.three} style={styles.card}>
         <View style={styles.row}>
           <View style={styles.title}>
-            <Text variant="caption" color="accent" style={styles.eyebrow}>
+            <Text variant="eyebrow" color="tertiary" style={styles.eyebrow}>
               Relay
             </Text>
             <Text variant="headline">Push notifications</Text>
@@ -290,7 +290,7 @@ const styles = StyleSheet.create({
   card: { gap: Spacing.two },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two },
   title: { flex: 1, gap: 2 },
-  eyebrow: { textTransform: 'uppercase' },
+  eyebrow: { flexShrink: 1 },
   timeRow: { flexDirection: 'row', gap: Spacing.two },
   timeField: { flex: 1, gap: 4 },
   filterName: { flex: 1 },

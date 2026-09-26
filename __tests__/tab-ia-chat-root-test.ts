@@ -69,7 +69,7 @@ describe('Side drawer IA — Chat root, zero bottom tabs', () => {
     expect(src).toContain("href: '/terminal'");
     expect(src).toContain("href: '/gateway/settings'");
     expect(src).toContain("go('/home')");
-    expect(src).toContain('GATE');
+    expect(src).toContain('Gate status');
     expect(src).toContain('statusLabel(status)');
   });
 

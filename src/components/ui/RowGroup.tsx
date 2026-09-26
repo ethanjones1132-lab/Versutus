@@ -70,6 +70,7 @@ export function RowGroupRow({ selected, detail, accessibilityLabel, style, ...re
   return (
     <ListRow
       {...rest}
+      detail={detail}
       selected={selected}
       // A grouped row can draw three lines, so the derived announcement has to
       // say all three: left undefined when there is no detail line, `ListRow`

@@ -9,6 +9,7 @@ import Animated from 'react-native-reanimated';
 import { ApprovalSheet } from '@/components/chat/approval-sheet';
 import { BotChrome } from '@/components/chat/bot-chrome';
 import { BotPanelSheet } from '@/components/chat/bot-panel-sheet';
+import { ThreadWelcome } from '@/components/chat/thread-welcome';
 import { BotDetailSheet } from '@/components/chat/bot-detail-sheet';
 import { ChatComposer } from '@/components/chat/chat-composer';
 import { HandsfreeCallSheet } from '@/components/chat/handsfree-call-sheet';
@@ -1811,6 +1812,20 @@ export function ChatScreen() {
   // Day dividers are decided here, once per message-array change, instead of
   // inside renderItem — renderMessage then depends on the stable callback set
   // only and keeps one identity for the whole streamed turn.
+  // The roster's record for the Bot this thread talks to, when it has been
+  // read: the header's name, the Bot panel and the empty-thread welcome all
+  // draw from it.
+  const activeBotRow = useMemo(
+    () =>
+      surface.kind === 'bot'
+        ? rosterRows.find(
+            (row): row is Extract<RosterRow, { kind: 'bot' }> =>
+              row.kind === 'bot' && row.bot.id === surface.botId,
+          )?.bot
+        : undefined,
+    [rosterRows, surface],
+  );
+
   const transcriptItems = useMemo<TranscriptItem[]>(
     () =>
       messages.map((message, index) => {
@@ -2121,12 +2136,7 @@ export function ChatScreen() {
           visible={botPanelVisible}
           onClose={() => setBotPanelVisible(false)}
           botId={surface.botId}
-          bot={
-            rosterRows.find(
-              (row): row is Extract<RosterRow, { kind: 'bot' }> =>
-                row.kind === 'bot' && row.bot.id === surface.botId,
-            )?.bot
-          }>
+          bot={activeBotRow}>
         <BotChrome
           // The voice this Bot's replies are read in: this device's own list
           // through the picker's fold, offered only where there is a Bot to key
@@ -2337,17 +2347,22 @@ export function ChatScreen() {
           ListEmptyComponent={
             historyLoading ? (
               <ChatSkeleton />
+            ) : status === 'connected' ? (
+              // A connected, empty thread greets the operator by the Bot's
+              // name and offers starting points that fill the composer.
+              <ThreadWelcome
+                botId={surface.kind === 'bot' ? surface.botId : undefined}
+                botName={surface.kind === 'bot' ? activeBotRow?.displayName ?? surface.botId : undefined}
+                purpose={surface.kind === 'bot' ? activeBotRow?.description : undefined}
+                onPick={setDraft}
+              />
             ) : (
               <EmptyState
                 icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
-                title={status === 'connected' ? 'Say hello to your agent' : 'Waiting for connection'}
-                description={
-                  status === 'connected'
-                    ? 'Type /help to explore your gateway — /run for agentic tasks.'
-                    : 'The chat goes live as soon as the gateway connects.'
-                }
-                actionLabel={status !== 'connected' ? 'Reconnect' : undefined}
-                onAction={status !== 'connected' ? () => void retryAutoConnect() : undefined}
+                title="Waiting for connection"
+                description="The chat goes live as soon as the gateway connects."
+                actionLabel="Reconnect"
+                onAction={() => void retryAutoConnect()}
               />
             )
           }
@@ -2428,6 +2443,7 @@ export function ChatScreen() {
         onAttach={canAttach ? handleAttach : undefined}
         attachments={attachments}
         onRemoveAttachment={handleRemoveAttachment}
+        recipientName={surface.kind === 'bot' ? activeBotRow?.displayName : undefined}
       />
       </>
       ) : null}

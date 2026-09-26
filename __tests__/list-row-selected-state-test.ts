@@ -178,7 +178,6 @@ describe('ListRow announcement screen-reader wiring', () => {
     expect(passing.sort()).toEqual(
       [
         nodePath.join(srcRoot, 'activity', 'scorecards-section.tsx'),
-        nodePath.join(srcRoot, 'nav', 'side-drawer-content.tsx'),
       ].sort(),
     );
   });

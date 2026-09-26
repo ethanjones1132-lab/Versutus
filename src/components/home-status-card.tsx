@@ -49,7 +49,7 @@ export function HomeStatusCard({
       <View style={[styles.metalRule, { backgroundColor: tokens.accent }]} />
       <View style={styles.header}>
         <View style={styles.titleBlock}>
-          <Text variant="caption" color="accent" style={styles.eyebrow}>
+          <Text variant="eyebrow" color="tertiary" style={styles.eyebrow}>
             Versutus link
           </Text>
           <Text variant="headline">{title}</Text>
@@ -146,7 +146,7 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   eyebrow: {
-    textTransform: 'uppercase',
+    flexShrink: 1,
   },
   subtitle: {
     lineHeight: 22,

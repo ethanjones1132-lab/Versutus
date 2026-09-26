@@ -63,13 +63,22 @@ describe('BaseSheet renders the flat modal material', () => {
 });
 
 describe('BaseSheet header lands on the violet/white type system', () => {
-  test('the eyebrow wears brand violet, not the brighter focus tint', () => {
+  test('the eyebrow is a quiet sentence-case label, never violet capitals', () => {
     const src = readBaseSheet();
-    expect(src).toContain('color="accent"');
+    // Visual direction bans violet ALL-CAPS section labels; the eyebrow is the
+    // tertiary eyebrow variant, recased from whatever the caller authored.
+    expect(src).toContain('<Text variant="eyebrow" color="tertiary" style={styles.eyebrow}>');
     expect(src).not.toContain('color="accentWarm"');
+    expect(src).not.toContain("textTransform: 'uppercase'");
     // Eyebrow still renders the caller-supplied label (default ACTION).
     expect(src).toContain("eyebrow = 'ACTION'");
-    expect(src).toContain('{eyebrow}');
+    expect(src).toContain('{sentenceCase(eyebrow)}');
+  });
+
+  test('closing is one round control that carries the caller\'s close name', () => {
+    const src = readBaseSheet();
+    expect(src).toContain("accessibilityLabel={closeLabel || 'Close'}");
+    expect(src).toContain("name={{ ios: 'xmark', android: 'close', web: 'close' }}");
   });
 
   test('the title stays bright primary white with no colour override', () => {

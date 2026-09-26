@@ -82,7 +82,7 @@ export function OnboardingScreen() {
                 <VersutusLogotype tagline="A precise mobile console for your AI gateway." />
               </Animated.View>
               <View style={[styles.rule, { backgroundColor: tokens.accentMuted }]} />
-              <Text variant="micro" color="accent" style={styles.eyebrow}>
+              <Text variant="eyebrow" color="tertiary" style={styles.eyebrow}>
                 {busy ? 'DISCOVERING YOUR GATEWAY · 02' : 'FIRST CONNECTION · 01'}
               </Text>
 
@@ -274,8 +274,7 @@ const styles = StyleSheet.create({
     borderRadius: 1,
   },
   eyebrow: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    flexShrink: 1,
   },
   scanSection: {
     alignSelf: 'stretch',

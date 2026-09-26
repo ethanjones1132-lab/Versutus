@@ -21,8 +21,8 @@ describe('brand identity reads violet/cool on the near-black stage', () => {
     const source = mark();
     expect(source).not.toMatch(RETIRED_IDENTITY);
     expect(source).not.toMatch(/accentWarm/);
-    expect(source).toContain('<Stop stopColor={Palette.accent} />');
-    expect(source).toContain('<Stop stopColor={Palette.backgroundRaised} />');
+    expect(source).toContain('<Stop offset="0" stopColor={Palette.accent} />');
+    expect(source).toContain('<Stop offset="1" stopColor={Palette.accentDeep} />');
     expect(source).toContain('stroke={Palette.textPrimary}');
     expect(source).toContain('fill={Palette.background}');
   });

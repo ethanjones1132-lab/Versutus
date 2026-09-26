@@ -48,8 +48,10 @@ describe('Activity carries quieter violet weight than Chat', () => {
 
   test('secondary Activity cards sit on inset panels while their surfaces stay flat', () => {
     const screen = activity();
-    expect(screen).toContain('<Card variant="inset" padding={Spacing.three} style={styles.runsEntryCard}>');
-    expect(screen).toContain('<Card variant="inset" padding={Spacing.three} style={styles.card}>');
+    // Nocturne: runs are a grouped glance with their own section, and the
+    // decisions card sits on the elevated step like every other group.
+    expect(screen).toContain('<RecentRuns runs={activityRunsForActiveGateway}');
+    expect(screen).toContain('<Card variant="surface" padding={Spacing.three} style={styles.card}>');
     expect(screen).not.toMatch(/tokens\.glass|tokens\.glassBorder|Palette\.gold/);
   });
 

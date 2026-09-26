@@ -92,7 +92,7 @@ export function BotChrome({
 }
 
 const styles = StyleSheet.create({
-  body: { gap: Spacing.three },
+  body: { gap: Spacing.two },
   voice: { paddingHorizontal: Spacing.two, gap: Spacing.two },
   voiceRows: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.one },
   refine: { gap: Spacing.two },

@@ -12,9 +12,12 @@ export function VersutusMark({ size = 76, showBackground = true }: VersutusMarkP
   return (
     <Svg width={size} height={size} viewBox="0 0 76 76">
       <Defs>
-        <LinearGradient id="versutusMarkBg" x1="38" y1="0" x2="38" y2="76" gradientUnits="userSpaceOnUse">
-          <Stop stopColor={Palette.accent} />
-          <Stop stopColor={Palette.backgroundRaised} />
+        {/* Violet light falling onto the tile from its top-left corner. Both
+            stops need an offset: without one they sit together at 0 and the
+            tile renders flat. */}
+        <LinearGradient id="versutusMarkBg" x1="0" y1="0" x2="76" y2="76" gradientUnits="userSpaceOnUse">
+          <Stop offset="0" stopColor={Palette.accent} />
+          <Stop offset="1" stopColor={Palette.accentDeep} />
         </LinearGradient>
       </Defs>
 
