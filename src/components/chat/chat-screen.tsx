@@ -2097,6 +2097,9 @@ export function ChatScreen() {
           rows={rosterRows}
           loading={rosterLoading && status === 'connected'}
           error={rosterError}
+          // The read above only runs while connected, so a down gateway has
+          // an UNREAD roster — the footer waits instead of calling it empty.
+          connected={status === 'connected'}
           groups={groupsState.rooms}
           groupsError={groupsListCopy(groupsState)}
           // The shared text this screen is holding, stated where the operator

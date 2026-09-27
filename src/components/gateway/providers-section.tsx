@@ -253,7 +253,7 @@ export function ProvidersSection() {
         </>
       ) : null}
 
-      {loaded && providers.length === 0 && !registering && status === 'connected' ? (
+      {loaded && providers.length === 0 && !registering && status === 'connected' && !error ? (
         <EmptyState
           icon={{ ios: 'square.stack.3d.up', android: 'layers', web: 'layers' }}
           title="No providers yet"

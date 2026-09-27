@@ -51,10 +51,20 @@ export function OnboardingScreen() {
     setError(null);
     setWorking(true);
     try {
-      const ok = await setupFromPcAddress(pcAddress, token);
-      if (ok) {
+      const result = await setupFromPcAddress(pcAddress, token);
+      if (result.kind === 'connected') {
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         router.replace('/(tabs)/chat');
+      } else if (result.kind === 'tls-fingerprint-change') {
+        setError(
+          `TLS fingerprint changed for ${result.gatewayName}. Review the new fingerprint before continuing.`,
+        );
+      } else if (result.kind === 'unreachable') {
+        setError('Could not reach the gateway. Check its address and network, then try again.');
+      } else {
+        setError(
+          'The gateway responded, but the connection did not complete. Check its API key and try again.',
+        );
       }
     } catch (err) {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);

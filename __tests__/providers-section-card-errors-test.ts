@@ -68,6 +68,19 @@ describe('providers section card errors', () => {
     expect((src.match(/setError\(caught instanceof Error \? caught\.message : String\(caught\)\);/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
+  test('empty catalog renders only when loaded, empty, not registering, connected, and error-free', () => {
+    const src = readSection();
+    expect(src).toContain(
+      "loaded && providers.length === 0 && !registering && status === 'connected' && !error",
+    );
+    const emptyIdx = src.indexOf(
+      "loaded && providers.length === 0 && !registering && status === 'connected' && !error",
+    );
+    const block = src.slice(emptyIdx, emptyIdx + 600);
+    expect(block).toContain('<EmptyState');
+    expect(block).toContain('title="No providers yet"');
+  });
+
   test('register/handleRename stay untouched; saveKey still sends the key', () => {
     const src = readSection();
     expect(src).toContain('await client.create(input);');

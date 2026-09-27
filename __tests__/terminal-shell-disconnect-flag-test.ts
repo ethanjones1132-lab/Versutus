@@ -61,4 +61,19 @@ describe('terminal shell disconnect flag', () => {
     const src = readScreen();
     expect(src).toContain('setTerminalLines([]);\n    setTerminalError(null);\n    setTerminalConnected(false);');
   });
+
+  test('a clean stream close reaches a false-setter', () => {
+    const src = readScreen();
+    expect(src).toContain('onClose: () => {');
+    expect(src).toContain(
+      "onClose: () => {\n            setTerminalError('Terminal stream closed');\n            sessionRef.current = null;\n            setTerminalConnected(false);\n          },",
+    );
+  });
+
+  test('a rejected send clears the connected flag beside the error', () => {
+    const src = readScreen();
+    expect(src).toContain(
+      'setTerminalError(error instanceof Error ? error.message : String(error));\n      setTerminalConnected(false);',
+    );
+  });
 });

@@ -341,6 +341,9 @@ test('rosterEmptyView claims zero bots only when the inventory truly answered em
   expect(
     rosterEmptyView({ totalBotRows: 0, visibleBotRows: 0, visibleGroups: 0, query: '' }),
   ).toEqual({ kind: 'zero-bots' });
+  expect(
+    rosterEmptyView({ totalBotRows: 0, visibleBotRows: 0, visibleGroups: 0, query: '', connected: true }),
+  ).toEqual({ kind: 'zero-bots' });
   // A FAILED inventory is not "zero bots" — the phone does not know what the
   // host has. The failure names itself and carries the reason verbatim.
   expect(
@@ -352,6 +355,29 @@ test('rosterEmptyView claims zero bots only when the inventory truly answered em
       error: 'hermes: An internal server error has occurred',
     }),
   ).toEqual({ kind: 'load-failed', reason: 'hermes: An internal server error has occurred' });
+});
+
+test('rosterEmptyView waits for the connection instead of claiming zero from a read that never ran', () => {
+  // The roster read is gated on a live gateway: while it is down, an empty
+  // list is "not read yet", so the authoritative zero must not be drawn.
+  expect(
+    rosterEmptyView({ totalBotRows: 0, visibleBotRows: 0, visibleGroups: 0, query: '', connected: false }),
+  ).toEqual({ kind: 'waiting' });
+  // A named failure is a read that DID run — it still names itself.
+  expect(
+    rosterEmptyView({
+      totalBotRows: 0,
+      visibleBotRows: 0,
+      visibleGroups: 0,
+      query: '',
+      connected: false,
+      error: 'gateway unreachable',
+    }),
+  ).toEqual({ kind: 'load-failed', reason: 'gateway unreachable' });
+  // Rows kept from an earlier read still speak for themselves while down.
+  expect(
+    rosterEmptyView({ totalBotRows: 3, visibleBotRows: 3, visibleGroups: 0, query: '', connected: false }),
+  ).toEqual({ kind: 'none' });
 });
 
 test('rosterEmptyView never calls a group match "no match"', () => {

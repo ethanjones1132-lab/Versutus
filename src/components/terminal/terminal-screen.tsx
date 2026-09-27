@@ -110,6 +110,11 @@ export function TerminalScreen() {
             sessionRef.current = null;
             setTerminalConnected(false);
           },
+          onClose: () => {
+            setTerminalError('Terminal stream closed');
+            sessionRef.current = null;
+            setTerminalConnected(false);
+          },
         },
         activeGateway.token,
       );
@@ -167,6 +172,7 @@ export function TerminalScreen() {
       await sendTerminalInput(gateway.url, session.sid, payload, gateway.token);
     } catch (error) {
       setTerminalError(error instanceof Error ? error.message : String(error));
+      setTerminalConnected(false);
     }
   }, [activeGateway, input]);
 

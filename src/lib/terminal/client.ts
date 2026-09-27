@@ -12,6 +12,7 @@ type TerminalHandlers = {
   onOutput: (chunk: string) => void;
   onError: (message: string) => void;
   onExit: (code: number) => void;
+  onClose: () => void;
 };
 
 function parseSseChunk(buffer: string): { events: TerminalSseFrame[]; rest: string } {
@@ -92,16 +93,33 @@ export async function openTerminalSession(
   const decoder = new TextDecoder();
   let buffer = '';
   let closed = false;
+  let reported = false;
+
+  const pumpHandlers: TerminalHandlers = {
+    onOutput: handlers.onOutput,
+    onError: (message) => {
+      reported = true;
+      handlers.onError(message);
+    },
+    onExit: (code) => {
+      reported = true;
+      handlers.onExit(code);
+    },
+    onClose: handlers.onClose,
+  };
 
   const pump = async () => {
     try {
       while (!closed) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          if (!reported && !closed && !controller.signal.aborted) handlers.onClose();
+          break;
+        }
         buffer += decoder.decode(value, { stream: true });
         const parsed = parseSseChunk(buffer);
         buffer = parsed.rest;
-        for (const evt of parsed.events) handleSseEvent(evt, handlers, setSid);
+        for (const evt of parsed.events) handleSseEvent(evt, pumpHandlers, setSid);
       }
     } catch (error) {
       if (!closed && !controller.signal.aborted) {

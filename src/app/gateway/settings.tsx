@@ -42,27 +42,35 @@ import {
   voiceUsageCopy,
 } from '@/lib/voice/voice-engine-copy';
 
+type VoiceCapabilitiesState =
+  | { status: 'loading' }
+  | { status: 'ready'; capabilities: VoiceEngineCapabilities }
+  | { status: 'error' };
+
 /** The readiness sentence for one Settings row. */
 function voiceReadiness(
   id: VoiceEnginePreference,
-  capabilities: VoiceEngineCapabilities | null,
+  state: VoiceCapabilitiesState,
 ): string {
   if (id === 'phone') return 'Always available on this phone.';
   if (id === 'auto') return 'Follows whichever engine below is ready.';
-  if (!capabilities) return 'Checking this PC…';
+  if (state.status === 'loading') return 'Checking this PC…';
+  if (state.status === 'error') return 'Could not check this PC.';
+  const { capabilities } = state;
   if (!capabilities.enabled) return 'Gate voice is turned off on this PC.';
   const status = capabilities.engines[id];
   return voiceEngineReadinessCopy(status?.state ?? 'unavailable', status?.reason);
 }
 
 export default function GatewaySettingsScreen() {
-  const { activeGateway, settings, deviceId, gatewayRequest } = useGateway();
+  const { activeGateway, settings, deviceId, gatewayRequest, status } = useGateway();
   const tokens = useTokens();
   const [copied, setCopied] = useState<'id' | null>(null);
   const [appLock, setAppLock] = useState(false);
   const [appLockReason, setAppLockReason] = useState<AppLockUnavailableReason | null>(null);
   const [voiceEngine, setVoiceEngine] = useState<VoiceEnginePreference>(settings.voiceEngine);
-  const [voiceCapabilities, setVoiceCapabilities] = useState<VoiceEngineCapabilities | null>(null);
+  const [voiceCapabilities, setVoiceCapabilities] = useState<VoiceCapabilitiesState>({ status: 'loading' });
+  const [voiceRetryCount, setVoiceRetryCount] = useState(0);
   const [installing, setInstalling] = useState(false);
   const [installNote, setInstallNote] = useState<string | null>(null);
   // D1: this device's durable approval decisions (newest first).
@@ -105,19 +113,21 @@ export default function GatewaySettingsScreen() {
     void (async () => {
       const stored = await loadAppSettings();
       if (!cancelled) setVoiceEngine(stored.voiceEngine);
+      if (status !== 'connected') {
+        if (!cancelled) setVoiceCapabilities({ status: 'error' });
+        return;
+      }
       try {
         const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', await pushDeviceParams());
-        if (!cancelled) setVoiceCapabilities(read);
+        if (!cancelled) setVoiceCapabilities({ status: 'ready', capabilities: read });
       } catch {
-        // Offline or a Gate that predates voice: the rows still name the
-        // stored choice and why nothing on the PC can be checked.
-        if (!cancelled) setVoiceCapabilities(null);
+        if (!cancelled) setVoiceCapabilities({ status: 'error' });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [gatewayRequest]);
+  }, [gatewayRequest, status, voiceRetryCount]);
 
   useEffect(() => {
     let cancelled = false;
@@ -159,7 +169,7 @@ export default function GatewaySettingsScreen() {
     }
     try {
       const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', await pushDeviceParams());
-      setVoiceCapabilities(read);
+      setVoiceCapabilities({ status: 'ready', capabilities: read });
     } catch {
       // keep the last known capabilities
     }
@@ -355,7 +365,11 @@ export default function GatewaySettingsScreen() {
                 Today
               </Text>
               <Text variant="micro" color="tertiary">
-                {voiceUsageCopy(voiceCapabilities?.usedToday, voiceCapabilities?.lastError)}
+                {voiceUsageCopy(
+                  voiceCapabilities.status === 'ready' ? voiceCapabilities.capabilities.usedToday : undefined,
+                  voiceCapabilities.status === 'ready' ? voiceCapabilities.capabilities.lastError : null,
+                  voiceCapabilities.status,
+                )}
               </Text>
             </View>
           </View>
@@ -370,7 +384,22 @@ export default function GatewaySettingsScreen() {
                 </Text>
               </View>
             </View>
-          ) : voiceCapabilities?.engines.local?.state === 'not-installed' || installNote ? (
+          ) : voiceCapabilities.status === 'error' ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Retry voice check"
+              onPress={() => setVoiceRetryCount((n) => n + 1)}
+              style={styles.voiceRow}>
+              <View style={styles.sectionTitle}>
+                <Text variant="caption" color="accent">
+                  Retry voice check
+                </Text>
+                <Text variant="micro" color="tertiary">
+                  The Gate could not answer. Tap to try again.
+                </Text>
+              </View>
+            </Pressable>
+          ) : voiceCapabilities.status === 'ready' && voiceCapabilities.capabilities.engines.local?.state === 'not-installed' || installNote ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Install on this PC"
