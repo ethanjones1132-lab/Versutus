@@ -207,6 +207,8 @@ export type SessionMessagePage = {
 
 /** A single tool invocation surfaced during a response (rendered as a card). */
 export type ChatToolCall = {
+  /** Stable within one turn; keeps two calls of the same tool separate. */
+  id?: string;
   name: string;
   status?: 'running' | 'complete' | 'error';
   durationMs?: number;

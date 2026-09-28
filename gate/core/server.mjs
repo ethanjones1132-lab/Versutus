@@ -847,7 +847,12 @@ export async function createGate(config = {}) {
       if (!isAuthenticated) {
         // The log is the only place a refusal can be diagnosed from; the line
         // names the credential's shape, never its value (auth-failure.mjs).
-        console.warn(describeAuthFailure({ method, pathname, authorization: authHeader }));
+        console.warn(describeAuthFailure({
+          method,
+          pathname,
+          authorization: authHeader,
+          remoteAddress: req.socket.remoteAddress,
+        }));
         res.writeHead(401);
         res.end(JSON.stringify({
           error: 'Unauthorized',
@@ -2048,17 +2053,22 @@ export async function createGate(config = {}) {
             }
           }
         }
-        // Every model a native environment can reach, alongside direct providers.
-        for (const descriptor of await backendManager.list().catch(() => [])) {
+        // Every model a native environment can reach, alongside direct
+        // providers. Cold startup can be slow for a CLI environment, so let
+        // independent backends load together while preserving catalog order.
+        const descriptors = await backendManager.list().catch(() => []);
+        const backendModels = await Promise.all(descriptors.map(async (descriptor) => {
           try {
             const backend = await backendManager.get(descriptor.id);
-            for (const model of await backend.listModels()) {
-              allModels.push({ ...model, object: 'model', backendId: descriptor.id });
-            }
+            return (await backend.listModels()).map((model) => ({
+              ...model, object: 'model', backendId: descriptor.id,
+            }));
           } catch {
-            // a backend that will not start must not blank the model list
+            // A backend that will not start must not blank the model list.
+            return [];
           }
-        }
+        }));
+        for (const models of backendModels) allModels.push(...models);
 
         res.writeHead(200);
         res.end(JSON.stringify({

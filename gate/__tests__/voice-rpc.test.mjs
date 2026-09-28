@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { VoiceSessionRegistry, createVoiceRpc } from '../core/voice/voice-rpc.mjs';
+import { ATTACHED_LIVENESS_MS, VoiceSessionRegistry, createVoiceRpc } from '../core/voice/voice-rpc.mjs';
 
 function capabilities({ local = 'ready', codex = 'disabled' } = {}) {
   return () => ({
@@ -256,17 +256,90 @@ test('a grant that never attaches stops blocking new starts after its grace peri
     (error) => error.code === 'call_in_progress',
   );
 
-  // The media socket attached a different session: that one blocks until ended.
+  // A live attached session blocks only while it is actually alive: the phone
+  // streams audio, so its lease is refreshed and the device stays taken.
   registry.create({ voiceSessionId: 'vs-live', deviceId: 'dev-1', engine: 'local', thread });
   registry.markAttached('vs-live');
   clock += 120_000;
+  registry.markActivity('vs-live');
   await assert.rejects(
     () => methods['voice.session.start']({ engine: 'local', thread }, ctx),
     (error) => error.code === 'call_in_progress',
   );
 
-  // The orphaned grant aged out; the attached one, once ended, frees the device.
+  // The orphaned grant aged out; the live one, once ended, frees the device.
   registry.end('vs-live');
   const grant = await methods['voice.session.start']({ engine: 'local', thread }, ctx);
   assert.ok(grant.voiceSessionId);
+});
+
+// The first attempt attached its media socket, then was abandoned — the phone
+// died, was killed, or never learned the start had failed. `markAttached` is a
+// one-way latch and `voice.session.stop` never landed, so nothing was left to
+// release the device: every later start was `call_in_progress` until the Gate
+// process itself restarted. An attached session therefore needs a liveness
+// lease, not just the grant-attach grace.
+test('an attached call whose phone went silent frees the device, so a retry can start', async () => {
+  let clock = 1_000;
+  const registry = new VoiceSessionRegistry({ now: () => clock });
+  let n = 0;
+  const { methods } = createVoiceRpc({
+    capabilities: capabilities(),
+    registry,
+    makeId: () => `vs-${(n += 1)}`,
+  });
+
+  const first = await methods['voice.session.start']({ engine: 'local', thread }, ctx);
+  registry.markAttached(first.voiceSessionId);
+  registry.markActivity(first.voiceSessionId);
+  // The call is live, so it still holds the device.
+  await assert.rejects(
+    () => methods['voice.session.start']({ engine: 'local', thread }, ctx),
+    (error) => error.code === 'call_in_progress',
+  );
+
+  // Then the phone vanished without ending the call and without saying so.
+  clock += ATTACHED_LIVENESS_MS + 1;
+  const retry = await methods['voice.session.start']({ engine: 'local', thread }, ctx);
+  assert.ok(retry.voiceSessionId);
+  assert.notEqual(retry.voiceSessionId, first.voiceSessionId);
+});
+
+test('an abandoned attached session is released with a named reason, not silently', async () => {
+  let clock = 1_000;
+  const registry = new VoiceSessionRegistry({ now: () => clock });
+  registry.create({ voiceSessionId: 'vs-gone', deviceId: 'dev-1', engine: 'local', thread });
+  registry.markAttached('vs-gone');
+
+  assert.equal(registry.liveForDevice('dev-1').voiceSessionId, 'vs-gone');
+  clock += ATTACHED_LIVENESS_MS + 1;
+  assert.equal(registry.liveForDevice('dev-1'), null);
+  assert.equal(registry.get('vs-gone').ended, true);
+  assert.equal(registry.get('vs-gone').endedReason, 'abandoned');
+});
+
+// The guard on the fix: a long call is not an abandoned one. The phone streams
+// mic audio continuously, so a healthy call refreshes its lease many times a
+// second and must hold the device for as long as it lasts.
+test('a long call that keeps sending audio never loses its reservation', async () => {
+  let clock = 1_000;
+  const registry = new VoiceSessionRegistry({ now: () => clock });
+  const { methods } = createVoiceRpc({
+    capabilities: capabilities(),
+    registry,
+    makeId: () => 'vs-long',
+  });
+
+  const grant = await methods['voice.session.start']({ engine: 'local', thread }, ctx);
+  registry.markAttached(grant.voiceSessionId);
+  // Forty minutes of conversation: audio every 250 ms, and the clock running.
+  for (let elapsed = 250; elapsed <= 40 * 60_000; elapsed += 250) {
+    clock = 1_000 + elapsed;
+    registry.markActivity(grant.voiceSessionId);
+  }
+  await assert.rejects(
+    () => methods['voice.session.start']({ engine: 'local', thread }, ctx),
+    (error) => error.code === 'call_in_progress',
+  );
+  assert.equal(registry.get(grant.voiceSessionId).ended, false);
 });

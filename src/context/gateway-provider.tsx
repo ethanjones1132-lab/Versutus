@@ -241,6 +241,12 @@ export type SendChatInputOutcome =
   | 'complete'
   | 'error';
 
+type PcAddressSetupResult =
+  | { kind: 'connected' }
+  | { kind: 'unreachable' }
+  | { kind: 'not-connected' }
+  | { kind: 'tls-fingerprint-change'; gatewayName: string };
+
 type GatewayContextValue = {
   gateways: GatewayProfile[];
   activeGateway: GatewayProfile | null;
@@ -453,7 +459,7 @@ type GatewayContextValue = {
   ) => Promise<SendChatInputOutcome>;
   stopStreaming: () => Promise<void>;
   reloadHistory: () => Promise<void>;
-  setupFromPcAddress: (pcAddress: string, token?: string) => Promise<boolean>;
+  setupFromPcAddress: (pcAddress: string, token?: string) => Promise<PcAddressSetupResult>;
   retryAutoConnect: () => Promise<void>;
   /** A pending automatic cool-down retry, or null when none is scheduled. */
   autoRetry: AutoRetryPulse | null;
@@ -918,6 +924,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [status, activeHello, liveCapabilities, capabilityCheckedAt, capabilityInstances, activeManifest, selectedBackendId],
   );
   const [pendingConfirmation, setPendingConfirmation] = useState<GatewayActionPreview | null>(null);
+  const pendingConfirmationMessageIdRef = useRef<string | null>(null);
   const [modelPicker, setModelPicker] = useState<{
     visible: boolean;
     mode: 'default' | 'fallbacks' | 'agent';
@@ -959,6 +966,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const historyCursorRef = useRef<string | null>(null);
   const loadingEarlierRef = useRef(false);
   const confirmationBypassRef = useRef(false);
+  // The resend of an already-shown command: the user line for it is on screen
+  // from the time the sheet was raised, so it must not be written twice.
+  const confirmationResendRef = useRef(false);
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
   const [pendingRunApproval, setPendingRunApproval] = useState<{ runId: string; prompt: string } | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRow[]>([]);
@@ -970,6 +980,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     previousFingerprint: string;
     observedFingerprint: string;
   } | null>(null);
+  const tlsFingerprintChangeRef = useRef<{
+    gateway: GatewayProfile;
+    previousFingerprint: string;
+    observedFingerprint: string;
+  } | null>(null);
+  const updateTlsFingerprintChange = useCallback(
+    (next: { gateway: GatewayProfile; previousFingerprint: string; observedFingerprint: string } | null) => {
+      tlsFingerprintChangeRef.current = next;
+      setTlsFingerprintChange(next);
+    },
+    [],
+  );
   const [activityRuns, setActivityRuns] = useState<ActivityRun[]>([]);
   const activityRunsRef = useRef<ActivityRun[]>([]);
   useEffect(() => {
@@ -1597,7 +1619,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         setActiveGateway(updated);
         void upsertGateway(updated).then(setGateways);
       } else if (tofu.kind === 'changed') {
-        setTlsFingerprintChange({
+        updateTlsFingerprintChange({
           gateway,
           previousFingerprint: tofu.previousFingerprint,
           observedFingerprint: tofu.observedFingerprint,
@@ -1679,7 +1701,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // patchActivityRuns is a useCallback with [] deps, so its identity is stable
     // for the provider's lifetime; listing it satisfies exhaustive-deps without
     // changing when this callback is rebuilt.
-    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns, teardownRetiredActiveGateway, resetSessionSelector],
+    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns, teardownRetiredActiveGateway, resetSessionSelector, updateTlsFingerprintChange],
   );
 
   const connectGateway = useCallback(
@@ -2494,6 +2516,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             onReasoning: (reasoning: string) => {
               batcher.queueReasoning(reasoning);
             },
+            onTelemetryWarning: (warning: string) => {
+              setMessages((prev) => appendSystemNote(prev, warning));
+            },
             // A gateway may answer with a model the operator did not choose —
             // Hermes falls through `fallback_providers` and says so only in
             // its runtime block. Saying nothing left the thread looking like
@@ -3053,15 +3078,6 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         return 'busy';
       }
 
-      if (options?.messageId) {
-        setMessages((prev) =>
-          prev.map((message) =>
-            message.id === options.messageId ? { ...message, queued: false } : message,
-          ),
-        );
-      } else {
-        appendLocalMessage('user', trimmed);
-      }
       const commandLabel = readCommandLabel(trimmed);
       const matchingCmd = findConfirmableSlash(trimmed, dynamicCommands);
       const hasConfirmFlag = trimmed.includes('--confirm');
@@ -3073,9 +3089,33 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         !confirmationBypassRef.current;
 
       if (needsConfirmation) {
+        if (options?.messageId) {
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === options.messageId ? { ...message, queued: false } : message,
+            ),
+          );
+          pendingConfirmationMessageIdRef.current = options.messageId;
+        } else {
+          pendingConfirmationMessageIdRef.current = appendLocalMessage('user', trimmed);
+        }
         const preview = await buildActionPreview(trimmed, matchingCmd ?? null, commandLabel, gatewayRequest);
         setPendingConfirmation(preview);
         return 'confirmation';
+      }
+
+      // The sheet owns the line for the command it raises, so a plain command
+      // shows it here and a resend leaves the one already on screen alone.
+      if (!confirmationResendRef.current) {
+        if (options?.messageId) {
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === options.messageId ? { ...message, queued: false } : message,
+            ),
+          );
+        } else {
+          appendLocalMessage('user', trimmed);
+        }
       }
 
       commandStartTimeRef.current = Date.now();
@@ -3378,9 +3418,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [activeGateway, reloadHistoryFor]);
 
   const setupFromPcAddress = useCallback(
-    async (pcAddress: string, token?: string) => {
+    async (pcAddress: string, token?: string): Promise<PcAddressSetupResult> => {
       const host = normalizePcAddress(pcAddress);
       if (!host) throw new Error('Enter your gateway address');
+
+      // This explicit attempt must report its own TLS decision, not a change
+      // left over from a previous connection attempt.
+      updateTlsFingerprintChange(null);
+      setProbeMessage('');
 
       const pcName = friendlyPcName(host);
       const nextSettings = await saveAppSettings({
@@ -3446,7 +3491,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           `${hint}Saved your address, but could not reach the gateway. Make sure it is running and exposed over Tailscale or local network.`,
         );
         scheduleAutoRetryRef.current(20000);
-        return false;
+        return { kind: 'unreachable' };
       }
 
       const gateway = await resolveGatewayForUrl(
@@ -3465,9 +3510,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         setAutoRetry(null);
       }
       await connectGateway(gateway);
-      return true;
+      const tlsChange = tlsFingerprintChangeRef.current;
+      if (tlsChange) return { kind: 'tls-fingerprint-change', gatewayName: tlsChange.gateway.name };
+      if (statusRef.current === 'connected') return { kind: 'connected' };
+
+      setProbeMessage('The gateway responded, but the connection did not complete. Check its API key and try again.');
+      return { kind: 'not-connected' };
     },
-    [connectGateway, gateways, resolveGatewayForUrl, applyConnectionPhase],
+    [connectGateway, gateways, resolveGatewayForUrl, applyConnectionPhase, updateTlsFingerprintChange],
   );
 
   // The connect cycle the auto-retry timer and the foreground heal both ride.
@@ -3670,17 +3720,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       tlsFingerprintTrusted: true,
       tlsFingerprintFirstSeenAt: Date.now(),
     };
-    setTlsFingerprintChange(null);
+    updateTlsFingerprintChange(null);
     setActiveGateway(updated);
     const next = await upsertGateway(updated);
     setGateways(next);
     await attachClient(updated);
-  }, [tlsFingerprintChange, attachClient]);
+  }, [tlsFingerprintChange, attachClient, updateTlsFingerprintChange]);
 
   const rejectTlsFingerprintChange = useCallback(() => {
-    setTlsFingerprintChange(null);
+    updateTlsFingerprintChange(null);
     disconnectGateway();
-  }, [disconnectGateway]);
+  }, [disconnectGateway, updateTlsFingerprintChange]);
 
   const refreshCapabilities = useCallback(async () => {
     if (!activeGateway) return;
@@ -3746,13 +3796,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     }
     const apply = pendingConfirmation.applyCommand;
     setPendingConfirmation(null);
+    pendingConfirmationMessageIdRef.current = null;
     confirmationBypassRef.current = true;
+    confirmationResendRef.current = true;
     void sendChatInput(apply + (apply.includes('--confirm') ? '' : ' --confirm')).finally(() => {
       confirmationBypassRef.current = false;
+      confirmationResendRef.current = false;
     });
   }, [pendingConfirmation, activeGateway, sendChatInput]);
 
   const cancelPendingConfirmation = useCallback(() => {
+    const messageId = pendingConfirmationMessageIdRef.current;
+    if (messageId) {
+      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      pendingConfirmationMessageIdRef.current = null;
+    }
     setPendingConfirmation(null);
   }, []);
 

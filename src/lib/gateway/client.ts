@@ -2,7 +2,7 @@ import { createChatStreamAcc, interpretChatStreamChunk } from '@/lib/gateway/cha
 import { GatewayHttpError, isAuthRejection } from '@/lib/gateway/errors';
 import { withGetSessionsRetry } from '@/lib/gateway/get-sessions-retry';
 import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
-import { HttpTransport } from '@/lib/gateway/http-transport';
+import { HttpTransport, assertChatStreamComplete } from '@/lib/gateway/http-transport';
 import {
   ConnectionMonitor,
   hasRecentContact,
@@ -528,6 +528,7 @@ export class HermesGatewayClient {
       signal?: AbortSignal;
       onToolCall?: (tool: import('@/lib/gateway/types').ChatToolCall) => void;
       onReasoning?: (text: string) => void;
+      onTelemetryWarning?: (message: string) => void;
       onModelReport?: (report: import('@/lib/gateway/run-failures').ModelReport) => void;
     },
   ): Promise<string> {
@@ -569,13 +570,14 @@ export class HermesGatewayClient {
     let streamError: string | null = null;
     const acc = createChatStreamAcc();
     let lastModelReport: import('@/lib/gateway/run-failures').ModelReport | null = null;
-    await this.transport.streamSSE(response, (data) => {
+    const completed = await this.transport.streamSSE(response, (data) => {
       try {
         const interpreted = interpretChatStreamChunk(JSON.parse(data), acc);
         if (interpreted.streamError) {
           streamError = interpreted.streamError;
           return;
         }
+        if (interpreted.telemetryWarning) options?.onTelemetryWarning?.(interpreted.telemetryWarning);
         if (interpreted.text) {
           fullText += interpreted.text;
           onDelta(interpreted.text);
@@ -607,7 +609,7 @@ export class HermesGatewayClient {
       }
     }, signal);
 
-    if (streamError) throw new Error(streamError);
+    assertChatStreamComplete(completed, streamError, signal);
     return fullText;
   }
 

@@ -36,6 +36,13 @@ export const SPECULATION_WINDOW_MS = 600;
 // database contention and still answer (2026-09-19), and the banner now names
 // a slow wait instead of sitting silent — so a stall that recovers completes
 // the turn instead of failing it.
+//
+// This is the voice turn's only bound, and it belongs to the call rather than to
+// the shared runner: `runBackendTurn` applies no cutoff of its own, because a
+// bound on silence cannot tell a slow turn from a dead one and would take the
+// slow ones down with it. So the voice call carries the window, and the runner
+// hands the turn back the moment it ends — by finishing, or by the caller
+// aborting, which is what this timer does.
 export const TURN_TIMEOUT_MS = 180_000;
 
 function rejectUpgrade(socket, status, message) {
@@ -61,6 +68,7 @@ export function attachVoiceMediaSocket({
   resumeTimeoutMs = RESUME_TIMEOUT_MS,
   audioBufferMs = AUDIO_BUFFER_MS,
   turnTimeoutMs = TURN_TIMEOUT_MS,
+  speculationWindowMs = SPECULATION_WINDOW_MS,
 } = {}) {
   const wss = new WebSocketServer({ noServer: true });
   const calls = new Map();
@@ -154,6 +162,15 @@ export function attachVoiceMediaSocket({
 
     const api = { attach, end, get ended() { return ended; } };
 
+    // The registry ends sessions from the outside too: a stale reservation
+    // released as abandoned, a `voice.session.stop` that landed after the
+    // phone's own teardown. The call has to end in that same turn, or it would
+    // keep running beside the session that took its device — two media calls
+    // for one device — until its own timers eventually noticed.
+    const leaveRegistry = registry.onEnd?.((endedSession, reason) => {
+      if (endedSession.voiceSessionId === session.voiceSessionId) end(reason);
+    });
+
     const clearTurnTimer = () => {
       if (turnTimer) {
         clearTimeout(turnTimer);
@@ -226,13 +243,20 @@ export function attachVoiceMediaSocket({
           break;
         case 'turn.run':
           if (speculative) {
-            clearTimeout(speculative.timer);
-            if (speculative.text === effect.text) {
+            const entry = speculative;
+            clearTimeout(entry.timer);
+            if (entry.text === effect.text) {
               // `final` promotes the turn the early end already started.
-              speculative.committed = true;
+              entry.committed = true;
+              speculative = null;
+              turns += 1;
+              // The backend can answer before the final transcript arrives.
+              // Deliver its buffered events only after the reducer is thinking.
+              for (const event of entry.pending) dispatch(event);
+              entry.pending.length = 0;
               break;
             }
-            speculative.controller.abort();
+            entry.controller.abort();
             speculative = null;
           }
           turns += 1;
@@ -312,50 +336,76 @@ export function attachVoiceMediaSocket({
         return;
       }
       const controller = new AbortController();
+      const entry = isSpeculative
+        ? { text, controller, committed: false, pending: [], timer: null }
+        : null;
       turnAbort = controller;
       // A backend that never answers must not park the call in thinking: the
       // turn is failed and listening reopens, exactly as the phone engine's
       // reply watchdog does. Aborting also discharges a late resolution.
       let timedOut = false;
-      turnTimer = setTimeout(() => {
+      const deliver = (event) => {
+        if (entry && !entry.committed) {
+          if (speculative === entry) entry.pending.push(event);
+          return;
+        }
+        dispatch(event);
+      };
+      const timer = setTimeout(() => {
         timedOut = true;
         if (turnAbort === controller) {
-          dispatch({ type: 'replyFailed', message: 'The turn timed out.' });
+          deliver({ type: 'replyFailed', message: 'The turn timed out.' });
         }
         controller.abort();
       }, turnTimeoutMs);
-      turnTimer.unref?.();
-      if (isSpeculative) {
-        const entry = { text, controller, committed: false, timer: null };
+      turnTimer = timer;
+      timer.unref?.();
+      if (entry) {
         entry.timer = setTimeout(() => {
-          entry.committed = true;
-        }, SPECULATION_WINDOW_MS);
+          // The worker normally emits final immediately after earlyEnd. If
+          // that frame is lost, its already-finalized transcript still needs
+          // to release the answer rather than strand the call in listening.
+          if (speculative === entry && !ended && call.phase === 'listening') {
+            dispatch({ type: 'final', text: entry.text, turnId: session.voiceSessionId });
+          }
+        }, speculationWindowMs);
         entry.timer.unref?.();
         speculative = entry;
       }
       try {
         const result = await runTurn(session, text, {
           signal: controller.signal,
-          onDelta: (delta) => dispatch({ type: 'replyDelta', text: delta }),
+          onDelta: (delta) => deliver({ type: 'replyDelta', text: delta }),
           onApproval: (approval) =>
-            dispatch({ type: 'approvalRequired', summary: approval?.summary ?? 'Approval needed' }),
+            deliver({ type: 'approvalRequired', summary: approval?.summary ?? 'Approval needed' }),
+          // How far the runner got, so a silent turn is placed in the log: was
+          // the event feed up, was the turn accepted, did any activity arrive,
+          // and if it stalled, which step it was waiting on.
+          onStage: (detail) => log(
+            `voice.turn stage session=${session.voiceSessionId} stage=${detail?.stage}`
+            + ` afterMs=${detail?.elapsedMs ?? 0}`
+            + `${detail?.blockedOn ? ` blockedOn=${detail.blockedOn}` : ''}`,
+          ),
         });
         if (controller.signal.aborted) return;
         if (timedOut) return;
         if (result && result.hasContent === false) {
-          dispatch({ type: 'replyFailed', message: 'The turn produced no reply.' });
+          deliver({ type: 'replyFailed', message: 'The turn produced no reply.' });
         } else {
-          dispatch({ type: 'replyDone' });
+          deliver({ type: 'replyDone' });
         }
       } catch (error) {
         if (!controller.signal.aborted) {
-          dispatch({ type: 'replyFailed', message: error.message });
+          deliver({ type: 'replyFailed', message: error.message });
         }
       } finally {
-        clearTurnTimer();
+        // A changed final may have started a replacement while this aborted
+        // speculative turn was unwinding. Clear only this turn's timer.
+        clearTimeout(timer);
+        if (turnTimer === timer) turnTimer = null;
         if (turnAbort === controller) turnAbort = null;
-        if (speculative?.controller === controller) {
-          clearTimeout(speculative.timer);
+        if (entry && speculative === entry && controller.signal.aborted) {
+          clearTimeout(entry.timer);
           speculative = null;
         }
       }
@@ -369,12 +419,16 @@ export function attachVoiceMediaSocket({
           return;
         }
         lastAudioAt = now();
+        registry.markActivity(session.voiceSessionId);
         trace.audioFrames += 1;
         trace.audioBytes += frame.length;
         engine.pushAudio(frame);
         return;
       }
       try {
+        // Any frame proves the phone is there, even one too malformed to act
+        // on: the lease tracks liveness, not protocol correctness.
+        registry.markActivity(session.voiceSessionId);
         const control = parsePhoneFrame(data.toString());
         if (control.t === 'mute') dispatch({ type: control.on ? 'mute' : 'unmute' });
         else if (control.t === 'skip' || control.t === 'bargein') {
@@ -428,6 +482,9 @@ export function attachVoiceMediaSocket({
       // sendFrame's guard must not swallow the reducer's own `ended` frame.
       if (ended || endingNow) return;
       endingNow = true;
+      // Detach before the registry is told again below: the call is already
+      // leaving, so it must not re-enter through its own notification.
+      leaveRegistry?.();
       clearResumeTimer();
       clearAudioTimer();
       clearTurnTimer();
@@ -455,12 +512,15 @@ export function attachVoiceMediaSocket({
       dispatch({ type: 'final', text: event.text, turnId: session.voiceSessionId }),
     );
     engine.on?.('partial', (event) => dispatch({ type: 'partial', text: event.text }));
-    engine.on?.('speechAudio', (event) =>
-      dispatch({ type: 'speechAudio', pcm: event.pcm, gen: event.gen }),
-    );
+    engine.on?.('speechAudio', (event) => {
+      // Outbound speech is traffic too: a call the phone is listening to has not
+      // gone silent, so its reservation lease must not lapse mid-reply.
+      registry.markActivity(session.voiceSessionId);
+      dispatch({ type: 'speechAudio', pcm: event.pcm, gen: event.gen });
+    });
     engine.on?.('speechDone', (event) => dispatch({ type: 'speechDone', gen: event.gen }));
     engine.on?.('earlyEnd', (event) => {
-      if (call.phase !== 'listening' || turnAbort) return;
+      if (call.phase !== 'listening' || turnAbort || speculative) return;
       void startTurn(event.text, { speculative: true });
     });
     engine.on?.('userSpeechStart', () => {

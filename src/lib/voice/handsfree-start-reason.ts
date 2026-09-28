@@ -36,6 +36,7 @@ export type HandsfreeStartResult =
   | 'session-start-failed'
   | 'session-grant-incomplete'
   | 'media-start-failed'
+  | 'start-timed-out'
   | 'call-torn-down-while-starting'
   | 'native-session-unavailable'
   | 'unavailable';
@@ -77,6 +78,7 @@ export const HANDSFREE_START_FAILURES: readonly HandsfreeStartFailure[] = [
   'session-start-failed',
   'session-grant-incomplete',
   'media-start-failed',
+  'start-timed-out',
   'call-torn-down-while-starting',
   'native-session-unavailable',
   'unavailable',

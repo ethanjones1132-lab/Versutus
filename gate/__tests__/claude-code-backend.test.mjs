@@ -94,6 +94,17 @@ test('partial message deltas normalize when enabled', () => {
   assert.equal(event.payload.text, 'chunk');
 });
 
+test('partial thinking and tool start events normalize', () => {
+  assert.deepEqual(normalizeClaudeEvent({
+    type: 'stream_event',
+    event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'checking' } },
+  }), { type: 'message.reasoning.delta', payload: { text: 'checking', sessionId: undefined } });
+  assert.deepEqual(normalizeClaudeEvent({
+    type: 'stream_event',
+    event: { type: 'content_block_start', index: 3, content_block: { type: 'tool_use', id: 't1', name: 'Read', input: {} } },
+  }), { type: 'tool.started', payload: { name: 'Read', callId: 't1', input: {} } });
+});
+
 // An auth failure arrives as subtype 'success' with the error in `result` —
 // treating that as a completed turn would surface the error as the answer.
 test('an authentication failure is a failed run, not a successful one', () => {
@@ -189,8 +200,59 @@ test('a turn binds the session id and assembles the reply', async () => {
   assert.ok(args.includes('--session-id'), 'the turn must bind a session for continuity');
   assert.equal(args[args.indexOf('--session-id') + 1], SESSION_ID);
   assert.equal(args[args.indexOf('--model') + 1], 'sonnet');
+  assert.ok(args.includes('--include-partial-messages'));
   // Approval bypass flags are prohibited (ADR 0002/0003).
   assert.ok(!args.some((a) => /dangerously|bypassPermissions|dontAsk/i.test(a)), 'must never bypass permissions');
+});
+
+test('partial text reaches the callback once without a duplicate whole assistant message', async () => {
+  const { home, cwd } = await makeHome([]);
+  const backend = createClaudeCodeBackend({
+    claudeHome: home, cwd, executablePath: 'claude.exe',
+    spawnImpl: () => fakeChild([
+      { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'live ' } } },
+      { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'answer' } } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'live answer' }] } },
+      { type: 'result', subtype: 'success', result: 'live answer' },
+    ]),
+  });
+  const seen = [];
+  const result = await backend.sendMessage(SESSION_ID, { text: 'hi' }, (event) => {
+    if (event.type === 'message.delta') seen.push(event.payload.text);
+  });
+  assert.deepEqual(seen, ['live ', 'answer']);
+  assert.equal(result.text, 'live answer');
+});
+
+test('partial tool JSON reaches the caller before completion without duplicating the tool start', async () => {
+  const { home, cwd } = await makeHome([]);
+  const backend = createClaudeCodeBackend({
+    claudeHome: home, cwd, executablePath: 'claude.exe',
+    spawnImpl: () => fakeChild([
+      { type: 'stream_event', event: { type: 'content_block_start', index: 3, content_block: { type: 'tool_use', id: 't2', name: 'Read', input: {} } } },
+      { type: 'stream_event', event: { type: 'content_block_delta', index: 3, delta: { type: 'input_json_delta', partial_json: '{"file_path":' } } },
+      { type: 'stream_event', event: { type: 'content_block_delta', index: 3, delta: { type: 'input_json_delta', partial_json: '"AGENTS.md"}' } } },
+      { type: 'stream_event', event: { type: 'content_block_stop', index: 3 } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'Read', input: { file_path: 'AGENTS.md' } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't2' }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } },
+      { type: 'result', subtype: 'success', result: 'done' },
+    ]),
+  });
+  const seen = [];
+
+  const result = await backend.sendMessage(SESSION_ID, { text: 'read it' }, (event) => seen.push(event));
+
+  assert.equal(result.text, 'done');
+  assert.equal(seen.filter((event) => event.type === 'tool.started' && event.payload.callId === 't2').length, 1);
+  const progress = seen.find((event) => event.type === 'tool.progress' && event.payload.callId === 't2');
+  assert.deepEqual(progress, {
+    type: 'tool.progress',
+    payload: { name: 'Read', callId: 't2', detail: '{"file_path":"AGENTS.md"}', snapshot: true },
+  });
+  assert.deepEqual(seen.map((event) => event.type), [
+    'tool.started', 'tool.progress', 'tool.output', 'message.delta', 'run.completed',
+  ]);
 });
 
 test('an auth failure during a turn rejects rather than returning the error as the answer', async () => {

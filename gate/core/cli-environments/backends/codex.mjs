@@ -77,16 +77,34 @@ export function normalizeCodexEvent(message) {
   switch (method) {
     case 'item/agentMessage/delta':
       return { type: 'message.delta', payload: { text: params.delta ?? '', threadId: params.threadId } };
+    case 'item/reasoning/summaryTextDelta':
+      return { type: 'message.reasoning.delta', payload: { text: params.delta ?? '', threadId: params.threadId } };
     case 'item/started':
       if (!isToolItem(params.item)) break;
-      return { type: 'tool.started', payload: { name: toolName(params.item), callId: params.item?.id } };
+      return { type: 'tool.started', payload: {
+        name: toolName(params.item), callId: params.item?.id,
+        ...(params.item?.command ? { input: params.item.command }
+          : params.item?.arguments !== undefined ? { input: params.item.arguments } : {}),
+      } };
     case 'item/completed':
       if (!isToolItem(params.item)) break;
-      return { type: 'tool.output', payload: { name: toolName(params.item), callId: params.item?.id } };
+      return { type: 'tool.output', payload: {
+        name: toolName(params.item), callId: params.item?.id,
+        status: params.item?.status,
+        isError: ['failed', 'declined'].includes(params.item?.status)
+          || Boolean(params.item?.error),
+        output: params.item?.aggregatedOutput ?? params.item?.error?.message,
+      } };
     case 'item/commandExecution/outputDelta':
     case 'command/exec/outputDelta':
     case 'process/outputDelta':
-      return { type: 'tool.output', payload: { name: 'exec', text: decodeChunk(params.chunk ?? params.delta) } };
+      return { type: 'tool.progress', payload: {
+        name: 'exec', callId: params.itemId, text: decodeChunk(params.chunk ?? params.delta),
+      } };
+    case 'item/mcpToolCall/progress':
+      return { type: 'tool.progress', payload: {
+        name: 'mcpToolCall', callId: params.itemId, text: params.message ?? '',
+      } };
     case 'turn/completed':
       return { type: 'run.completed', payload: { threadId: params.threadId, turnId: params.turnId } };
     case 'error':
@@ -154,6 +172,15 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe } = {}) {
     });
   }
 
+  function scopedHandler(sessionId, onEvent) {
+    return (message) => {
+      const threadId = message?.params?.threadId;
+      if (sessionId && threadId && threadId !== sessionId) return;
+      const normalized = normalizeCodexEvent(message);
+      if (normalized) onEvent(normalized);
+    };
+  }
+
   return {
     kind: 'codex',
 
@@ -188,7 +215,18 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe } = {}) {
         cwd,
         input: [{ type: 'text', text }],
       };
-      if (model?.modelId) params.model = model.modelId;
+      if (model?.modelId) {
+        params.model = model.modelId;
+      } else {
+        // The CLI's configured default can be unavailable to this account.
+        // Pick from its live catalog when the caller left the model unset.
+        try {
+          const catalog = unwrap(await rpc.request('model/list', { limit: 200 }), 'models');
+          const available = catalog.filter((entry) => !entry.hidden);
+          const chosen = available.find((entry) => entry.isDefault) ?? available[0];
+          if (chosen) params.model = chosen.id ?? chosen.model;
+        } catch { /* preserve the CLI's own default when the catalog is unavailable */ }
+      }
       // Subscribe before starting: the first deltas can land before turn/start
       // has even returned.
       const settled = awaitTurn(sessionId);
@@ -228,17 +266,28 @@ export function createCodexBackend({ rpc, cwd, onApproval, subscribe } = {}) {
       }));
     },
 
+    /** Notifications are registered synchronously before the turn starts. */
+    streamEvents(sessionId, onEvent, signal) {
+      if (!subscribe) return Promise.resolve();
+      return new Promise((resolve) => {
+        const handler = scopedHandler(sessionId, onEvent);
+        const unsubscribe = subscribe(handler);
+        const finish = () => {
+          signal?.removeEventListener('abort', finish);
+          unsubscribe();
+          resolve();
+        };
+        if (signal?.aborted) finish();
+        else signal?.addEventListener('abort', finish, { once: true });
+      });
+    },
+
     /**
      * Codex pushes notifications for every thread on one connection, so filter
      * by thread the way OpenCode's shared bus is filtered by session.
      */
     subscribe(sessionId, onEvent) {
-      return (message) => {
-        const threadId = message?.params?.threadId;
-        if (sessionId && threadId && threadId !== sessionId) return;
-        const normalized = normalizeCodexEvent(message);
-        if (normalized) onEvent(normalized);
-      };
+      return scopedHandler(sessionId, onEvent);
     },
   };
 }

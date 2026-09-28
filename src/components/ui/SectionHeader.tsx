@@ -27,6 +27,7 @@ export function SectionHeader({ title, actionLabel, onAction, style }: SectionHe
       </Text>
       {actionLabel && onAction ? (
         <PressableScale
+          style={styles.action}
           onPress={async () => {
             await haptics.selection();
             onAction();
@@ -54,5 +55,9 @@ const styles = StyleSheet.create({
   },
   title: {
     flexShrink: 1,
+  },
+  action: {
+    minHeight: 44,
+    justifyContent: 'center',
   },
 });

@@ -6,7 +6,12 @@ import { once } from 'node:events';
 import { WebSocket } from 'ws';
 
 import { VOICE_STREAM_PATH, attachVoiceMediaSocket } from '../core/voice/media-socket.mjs';
-import { VoiceSessionRegistry, createVoiceRpc } from '../core/voice/voice-rpc.mjs';
+import {
+  ATTACHED_LIVENESS_MS,
+  GRANT_ATTACH_GRACE_MS,
+  VoiceSessionRegistry,
+  createVoiceRpc,
+} from '../core/voice/voice-rpc.mjs';
 import { ScriptedEngine } from '../core/voice/engines/scripted-engine.mjs';
 
 const TOKENS = { 'tok-1': { deviceId: 'dev-1' }, 'tok-2': { deviceId: 'dev-2' } };
@@ -293,6 +298,8 @@ async function startControllableCall({
   runTurn,
   resumeTimeoutMs = 20_000,
   turnTimeoutMs = 120_000,
+  speculationWindowMs,
+  audit,
 } = {}) {
   const registry = new VoiceSessionRegistry();
   registry.create(SESSION);
@@ -311,6 +318,8 @@ async function startControllableCall({
     runTurn,
     resumeTimeoutMs,
     turnTimeoutMs,
+    speculationWindowMs,
+    audit,
   });
   server.listen(0);
   await once(server, 'listening');
@@ -337,6 +346,91 @@ async function startControllableCall({
       }),
   };
 }
+
+test('a speculative reply arriving before final is delivered once after confirmation', async () => {
+  const engine = makeControllableEngine();
+  const turns = [];
+  const audit = [];
+  const call = await startControllableCall({
+    engine,
+    audit: (line) => audit.push(line),
+    runTurn: async (_session, text, handlers) => {
+      turns.push(text);
+      handlers.onDelta('fast answer');
+      return { hasContent: true };
+    },
+  });
+
+  engine.emit('earlyEnd', { text: 'hello' });
+  await waitUntil(() => turns.length === 1);
+  await new Promise((done) => setTimeout(done, 20));
+  assert.ok(!call.frames.some((frame) => frame.t === 'reply'));
+  engine.emit('final', { text: 'hello' });
+  const reply = await waitUntil(() => call.frames.find((frame) => frame.t === 'reply'));
+  assert.equal(reply.delta, 'fast answer');
+  assert.deepEqual(turns, ['hello']);
+
+  const closed = once(call.first, 'close');
+  call.first.send(JSON.stringify({ t: 'end' }));
+  await closed;
+  assert.equal(audit[0]?.turns, 1);
+  await call.close();
+});
+
+test('a changed final aborts the speculative turn and keeps the replacement timeout', async () => {
+  const engine = makeControllableEngine();
+  const turns = [];
+  let draftAborted = false;
+  const call = await startControllableCall({
+    engine,
+    turnTimeoutMs: 80,
+    runTurn: (_session, text, handlers) => {
+      turns.push(text);
+      if (text === 'corrected') return new Promise(() => {});
+      return new Promise((_resolve, reject) => {
+        handlers.signal.addEventListener('abort', () => {
+          draftAborted = true;
+          reject(new Error('draft aborted'));
+        });
+      });
+    },
+  });
+
+  engine.emit('earlyEnd', { text: 'draft' });
+  await waitUntil(() => turns.length === 1);
+  engine.emit('final', { text: 'corrected' });
+  await waitUntil(() => draftAborted && turns.length === 2);
+  const failed = await waitUntil(() =>
+    call.frames.find((frame) => frame.t === 'turn' && frame.state === 'failed'),
+  );
+  assert.match(failed.error, /timed out/);
+  assert.deepEqual(turns, ['draft', 'corrected']);
+  call.first.close();
+  await once(call.first, 'close');
+  await call.close();
+});
+
+test('an early end without a final confirms after its speculation window', async () => {
+  const engine = makeControllableEngine();
+  const turns = [];
+  const call = await startControllableCall({
+    engine,
+    speculationWindowMs: 30,
+    runTurn: async (_session, text, handlers) => {
+      turns.push(text);
+      handlers.onDelta('answer');
+      return { hasContent: true };
+    },
+  });
+
+  engine.emit('earlyEnd', { text: 'hello' });
+  const reply = await waitUntil(() => call.frames.find((frame) => frame.t === 'reply'));
+  assert.equal(reply.delta, 'answer');
+  assert.deepEqual(turns, ['hello']);
+  call.first.close();
+  await once(call.first, 'close');
+  await call.close();
+});
 
 test('barge-in cancels the spoken reply and reopens listening', async () => {
   const engine = makeControllableEngine();
@@ -436,6 +530,162 @@ test('a call nobody rejoins ends with reason network when the window expires', a
   );
   assert.equal(call.registry.get(SESSION.voiceSessionId).endedReason, 'network');
   await call.close();
+});
+
+// The reservation a phone never released: it attached its media socket, then
+// vanished — killed, dropped, or never reaching for `voice.session.stop` — and
+// not one more frame crossed in either direction. The Gate must free the device
+// for a retry, and the call that held it must go with the released reservation:
+// releasing the record alone would leave the old call running next to the new
+// session's, two media calls for one device.
+test('releasing a stale reservation ends its media call before the device is handed to a new session', async () => {
+  let clock = 1_000;
+  const registry = new VoiceSessionRegistry({ now: () => clock });
+  registry.create(SESSION);
+  const { methods } = createVoiceRpc({
+    capabilities: () => ({
+      enabled: true,
+      engines: {
+        local: { state: 'ready' },
+        codex: { state: 'disabled', reason: 'no key' },
+      },
+    }),
+    registry,
+    makeId: () => 'vs-2',
+  });
+
+  const server = createServer((_req, res) => {
+    res.writeHead(404);
+    res.end();
+  });
+  const deviceTokens = {
+    verify: async (authorization) => (authorization === 'Bearer tok-1' ? { deviceId: 'dev-1' } : null),
+  };
+  const wss = attachVoiceMediaSocket({
+    server,
+    deviceTokens,
+    registry,
+    createEngine: () => makeControllableEngine(),
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const port = server.address().port;
+
+  const oldFrames = [];
+  const first = new WebSocket(urlFor(port, SESSION.voiceSessionId), {
+    headers: { Authorization: 'Bearer tok-1' },
+  });
+  first.on('message', (data, isBinary) => {
+    if (!isBinary) oldFrames.push(JSON.parse(data.toString()));
+  });
+  const newFrames = [];
+  let second = null;
+  try {
+    await once(first, 'open');
+    await waitUntil(() => oldFrames.some((frame) => frame.t === 'ready'));
+
+    // The phone is gone: no frame in either direction while the clock runs on.
+    clock += ATTACHED_LIVENESS_MS + 1;
+
+    const grant = await methods['voice.session.start'](
+      { engine: 'local', thread: { kind: 'bot', sessionId: 's1', botId: 'b1' } },
+      { deviceId: 'dev-1' },
+    );
+    assert.equal(grant.voiceSessionId, 'vs-2');
+
+    // The abandoned call is over before the new session may begin: its phone
+    // is told why, and its socket closes instead of running alongside.
+    const ended = await waitUntil(() => oldFrames.find((frame) => frame.t === 'ended'), 500);
+    assert.equal(ended.reason, 'abandoned');
+    await waitUntil(() => first.readyState === WebSocket.CLOSED, 500);
+    assert.equal(registry.get(SESSION.voiceSessionId).endedReason, 'abandoned');
+
+    // The new session's socket opens on a Gate with exactly one live call.
+    second = new WebSocket(urlFor(port, grant.voiceSessionId), {
+      headers: { Authorization: 'Bearer tok-1' },
+    });
+    second.on('message', (data, isBinary) => {
+      if (!isBinary) newFrames.push(JSON.parse(data.toString()));
+    });
+    await once(second, 'open');
+    await waitUntil(() => newFrames.some((frame) => frame.t === 'ready'));
+    assert.equal(registry.liveForDevice('dev-1').voiceSessionId, 'vs-2');
+  } finally {
+    first.close();
+    second?.close();
+    for (const client of wss.clients) client.terminate();
+    await new Promise((done) => {
+      wss.close(() => server.close(done));
+    });
+  }
+});
+
+// The other half of the stale reservation: a grant that never attached at all.
+// `liveForDevice` stops counting it as live once its grace lapses, so a retry
+// takes the device — but the abandoned record itself was left open. A socket
+// that arrives late (the phone wedged through the grace, then finally dials)
+// could still open the released session and run a call beside the replacement:
+// two media calls for one device. The released grant must be ended, not merely
+// skipped, so the late upgrade is refused exactly as an ended session is.
+test('a socket that arrives after its grant lapsed is refused, not run beside the replacement call', async () => {
+  let clock = 1_000;
+  const registry = new VoiceSessionRegistry({ now: () => clock });
+  registry.create(SESSION);
+  const { methods } = createVoiceRpc({
+    capabilities: () => ({
+      enabled: true,
+      engines: {
+        local: { state: 'ready' },
+        codex: { state: 'disabled', reason: 'no key' },
+      },
+    }),
+    registry,
+    makeId: () => 'vs-2',
+  });
+
+  const server = createServer((_req, res) => {
+    res.writeHead(404);
+    res.end();
+  });
+  const deviceTokens = {
+    verify: async (authorization) => (authorization === 'Bearer tok-1' ? { deviceId: 'dev-1' } : null),
+  };
+  const wss = attachVoiceMediaSocket({
+    server,
+    deviceTokens,
+    registry,
+    createEngine: () => makeControllableEngine(),
+  });
+  server.listen(0);
+  await once(server, 'listening');
+  const port = server.address().port;
+
+  let late = null;
+  try {
+    // The first grant never opened a socket; its grace lapses and a retry takes
+    // the device with a fresh session.
+    clock += GRANT_ATTACH_GRACE_MS + 1;
+    const grant = await methods['voice.session.start'](
+      { engine: 'local', thread: { kind: 'bot', sessionId: 's1', botId: 'b1' } },
+      { deviceId: 'dev-1' },
+    );
+    assert.equal(grant.voiceSessionId, 'vs-2');
+
+    // The late socket names the session the retry superseded; it must be refused,
+    // not started as the second live call on this device.
+    late = new WebSocket(urlFor(port, SESSION.voiceSessionId), {
+      headers: { Authorization: 'Bearer tok-1' },
+    });
+    await assert.rejects(() => once(late, 'open'));
+    assert.equal(registry.get(SESSION.voiceSessionId).ended, true);
+    assert.equal(registry.liveForDevice('dev-1').voiceSessionId, 'vs-2');
+  } finally {
+    late?.close();
+    for (const client of wss.clients) client.terminate();
+    await new Promise((done) => {
+      wss.close(() => server.close(done));
+    });
+  }
 });
 
 test('a turn that never answers is failed and listening reopens', async () => {

@@ -10,6 +10,16 @@ function jsonResponse(body: unknown, status = 200) {
   } as unknown as Response;
 }
 
+/** Fail loudly instead of hanging when streamSSE never settles. */
+function settlesWithin<T>(promise: Promise<T>, ms = 500): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(() => reject(new Error(`streamSSE did not settle within ${ms}ms`)), ms),
+    ),
+  ]);
+}
+
 describe('HttpTransport', () => {
   const realFetch = globalThis.fetch;
   afterEach(() => {
@@ -83,7 +93,7 @@ describe('HttpTransport', () => {
       },
     } as unknown as Response;
 
-    await transport.streamSSE(response, () => undefined);
+    await expect(transport.streamSSE(response, () => undefined)).resolves.toBe(true);
 
     // A frame landing is the gateway answering us — direct liveness evidence
     // for the connection monitor during long chat / run-event streams.
@@ -104,9 +114,197 @@ describe('HttpTransport', () => {
       },
     } as unknown as Response;
 
-    await transport.streamSSE(response, () => undefined);
+    await expect(transport.streamSSE(response, () => undefined)).resolves.toBe(false);
 
     // Opening a body proves nothing; only delivered bytes do.
+    expect(transport.lastContactAt).toBe(0);
+  });
+
+  test('recognizes a terminal marker split across chunks without a final newline', async () => {
+    const frames = [
+      new TextEncoder().encode('data: {"delta":"hi"}\r\n\r\ndata: [DO'),
+      new TextEncoder().encode('NE]'),
+    ];
+    const response = {
+      body: {
+        getReader: () => ({
+          read: () => Promise.resolve(frames.length
+            ? { done: false, value: frames.shift() }
+            : { done: true }),
+          cancel: () => undefined,
+        }),
+      },
+    } as unknown as Response;
+    const chunks: string[] = [];
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+
+    await expect(transport.streamSSE(response, (chunk) => chunks.push(chunk))).resolves.toBe(true);
+    expect(chunks).toEqual(['{"delta":"hi"}']);
+  });
+
+  test('an abort settles even when the reader ignores read and cancel', async () => {
+    const controller = new AbortController();
+    const response = {
+      body: {
+        getReader: () => ({
+          read: () => new Promise(() => {}),
+          cancel: () => new Promise(() => {}),
+        }),
+      },
+    } as unknown as Response;
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+
+    const pending = transport.streamSSE(response, () => undefined, controller.signal);
+    controller.abort();
+
+    await expect(settlesWithin(pending)).resolves.toBe(false);
+  });
+
+  test('no onChunk fires after the caller aborts, even mid-batch', async () => {
+    const controller = new AbortController();
+    let cancelled = false;
+    const frames = [new TextEncoder().encode('data: one\n\ndata: two\n\ndata: three\n\n')];
+    const response = {
+      body: {
+        getReader: () => ({
+          read: () =>
+            frames.length
+              ? Promise.resolve({ done: false, value: frames.shift() })
+              : new Promise(() => {}),
+          cancel: () => {
+            cancelled = true;
+            return new Promise(() => {});
+          },
+        }),
+      },
+    } as unknown as Response;
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+    const chunks: string[] = [];
+
+    const pending = transport.streamSSE(
+      response,
+      (chunk) => {
+        chunks.push(chunk);
+        controller.abort();
+      },
+      controller.signal,
+    );
+
+    await expect(settlesWithin(pending)).resolves.toBe(false);
+    expect(chunks).toEqual(['one']);
+    expect(cancelled).toBe(true);
+  });
+
+  test('a read landing after abort delivers no callback', async () => {
+    const controller = new AbortController();
+    let releaseRead: (() => void) | undefined;
+    const response = {
+      body: {
+        getReader: () => ({
+          read: () =>
+            new Promise((resolve) => {
+              releaseRead = () =>
+                resolve({ done: false, value: new TextEncoder().encode('data: late\n\n') });
+            }),
+          cancel: () => Promise.resolve(),
+        }),
+      },
+    } as unknown as Response;
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+    const chunks: string[] = [];
+
+    const pending = transport.streamSSE(response, (chunk) => chunks.push(chunk), controller.signal);
+    controller.abort();
+    await expect(settlesWithin(pending)).resolves.toBe(false);
+
+    releaseRead?.();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(chunks).toEqual([]);
+  });
+
+  test('an already-aborted signal returns false without reading', async () => {
+    let readCalled = false;
+    const response = {
+      body: {
+        getReader: () => ({
+          read: () => {
+            readCalled = true;
+            return new Promise(() => {});
+          },
+          cancel: () => Promise.resolve(),
+        }),
+      },
+    } as unknown as Response;
+    const controller = new AbortController();
+    controller.abort();
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+
+    await expect(
+      settlesWithin(transport.streamSSE(response, () => undefined, controller.signal)),
+    ).resolves.toBe(false);
+    expect(readCalled).toBe(false);
+  });
+
+  test('a DONE marker returns true even when cancel never settles', async () => {
+    const frames = [
+      new TextEncoder().encode('data: {"delta":"hi"}\n\n'),
+      new TextEncoder().encode('data: [DONE]\n\n'),
+    ];
+    const response = {
+      body: {
+        getReader: () => ({
+          read: () =>
+            Promise.resolve(
+              frames.length ? { done: false, value: frames.shift() } : { done: true },
+            ),
+          cancel: () => new Promise(() => {}),
+        }),
+      },
+    } as unknown as Response;
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+    const chunks: string[] = [];
+
+    await expect(
+      settlesWithin(transport.streamSSE(response, (chunk) => chunks.push(chunk))),
+    ).resolves.toBe(true);
+    expect(chunks).toEqual(['{"delta":"hi"}']);
+  });
+
+  test('an EOF returns false even when cancel never settles', async () => {
+    const response = {
+      body: {
+        getReader: () => ({
+          read: () => Promise.resolve({ done: true }),
+          cancel: () => new Promise(() => {}),
+        }),
+      },
+    } as unknown as Response;
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+
+    await expect(settlesWithin(transport.streamSSE(response, () => undefined))).resolves.toBe(false);
+    expect(transport.lastContactAt).toBe(0);
+  });
+
+  test('an abort landing in the same tick as a read delivers no callback or contact', async () => {
+    const controller = new AbortController();
+    const response = {
+      body: {
+        getReader: () => ({
+          read: () => {
+            controller.abort();
+            return Promise.resolve({ done: false, value: new TextEncoder().encode('data: hi\n\n') });
+          },
+          cancel: () => Promise.resolve(),
+        }),
+      },
+    } as unknown as Response;
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+    const chunks: string[] = [];
+
+    await expect(
+      settlesWithin(transport.streamSSE(response, (chunk) => chunks.push(chunk), controller.signal)),
+    ).resolves.toBe(false);
+    expect(chunks).toEqual([]);
     expect(transport.lastContactAt).toBe(0);
   });
 

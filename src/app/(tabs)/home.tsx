@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GatewayHomeDashboard } from '@/components/gateway/gateway-home-dashboard';
 import { DrawerMenuButton } from '@/components/nav/drawer-menu-button';
-import { ErrorCard, Screen, ScreenHeader } from '@/components/ui';
+import { ErrorCard, PageTitle, Screen, ScreenHeader, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
@@ -64,18 +64,7 @@ export default function HomeScreen() {
       parallaxY={parallaxY}>
       <ScreenHeader
         leading={<DrawerMenuButton />}
-        title="Versutus"
-        subtitle={
-          gateways.length === 0
-            ? 'Connect your gateway'
-            : status === 'connected'
-              ? 'Connected'
-              : status === 'connecting' || status === 'reconnecting'
-                ? 'Connecting'
-                : status === 'pairing'
-                  ? 'Needs approval'
-                  : 'Disconnected'
-        }
+        title=""
         onTrailingPress={() => router.push('/gateway/settings')}
       />
       <ScrollView
@@ -91,6 +80,22 @@ export default function HomeScreen() {
             progressBackgroundColor={tokens.backgroundElevated}
           />
         }>
+        <PageTitle
+          title="Gate"
+          status={
+            <Text variant="caption" color="secondary">
+              {gateways.length === 0
+                ? 'Connect your gateway'
+                : status === 'connected'
+                  ? 'Connected'
+                  : status === 'connecting' || status === 'reconnecting'
+                    ? 'Connecting'
+                    : status === 'pairing'
+                      ? 'Needs approval'
+                      : 'Disconnected'}
+            </Text>
+          }
+        />
         {refreshError ? (
           <ErrorCard
             cause={refreshError}
@@ -112,7 +117,7 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   content: {
-    paddingHorizontal: Spacing.four,
+    paddingHorizontal: Spacing.four - 4,
     paddingBottom: Spacing.four,
     gap: Spacing.three,
   },

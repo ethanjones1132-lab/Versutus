@@ -83,7 +83,12 @@ export function voiceEngineDisclosure(preference: VoiceEnginePreference): string
 export function voiceUsageCopy(
   usedToday: { localMinutes?: number; codexMinutes?: number } | undefined,
   lastError?: string | null,
+  readState?: 'loading' | 'ready' | 'error',
 ): string {
+  // A read that has not answered yet has measured nothing, so it may not
+  // report a zero. The refused read names itself the same way.
+  if (readState === 'loading') return 'Checking usage on this PC…';
+  if (readState === 'error') return 'Usage unknown.';
   const local = Math.max(0, Math.round(usedToday?.localMinutes ?? 0));
   const codex = Math.max(0, Math.round(usedToday?.codexMinutes ?? 0));
   const base = local === 0 && codex === 0

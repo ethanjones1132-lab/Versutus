@@ -139,7 +139,7 @@ describe('hands-free native contract', () => {
   });
 
   it('takes startSession options as a map on both platforms, matching the TS contract', () => {
-    expect(tsModule).toContain('startSession(options: { title: string })');
+    expect(tsModule).toContain('startSession(options: { title: string; startId?: string })');
     expect(kotlin).toMatch(/AsyncFunction\("startSession"\)\s*\{\s*options: Map<String, Any\?>, promise: Promise ->/);
     expect(kotlin).not.toMatch(/AsyncFunction\("startSession"\)\s*\{\s*title: String/);
     expect(swift).toMatch(/AsyncFunction\("startSession"\)\s*\{\s*\(options: \[String: Any\?\], promise: Promise\) in/);
@@ -155,7 +155,7 @@ describe('hands-free native contract', () => {
   });
 
   it('resolves startSession only when the service reports its foreground start, with a timeout', () => {
-    expect(kotlin).toContain('HandsfreeCallService.pendingStartCallback =');
+    expect(kotlin).toContain('HandsfreeCallService.beginPendingStart(startId)');
     expect(kotlin).toContain('START_TIMEOUT_MS');
     expect(kotlin).not.toMatch(/startForegroundService\(context, intent\)\s*\n\s*promise\.resolve\("started"\)/);
     expect(service).toMatch(/try\s*\{\s*startForegroundWithNotification\(title\)/);
@@ -166,6 +166,133 @@ describe('hands-free native contract', () => {
     const start = kotlin.slice(kotlin.indexOf('AsyncFunction("startSession")'), kotlin.indexOf('AsyncFunction("startListening")'));
     expect(start).toMatch(/val required = arrayOf\(Manifest\.permission\.RECORD_AUDIO\)/);
     expect(start).not.toMatch(/required[^\n]*POST_NOTIFICATIONS/);
+  });
+
+  it('lets only the newest start attempt answer a permission dialog', () => {
+    // A permission dialog outlives the JS deadline. The callback must check
+    // that its id is still the newest before it posts startService, and
+    // stopSession must cancel exactly its own id, so a late grant cannot open a
+    // microphone behind a newer retry's back.
+    const start = kotlin.slice(kotlin.indexOf('AsyncFunction("startSession")'), kotlin.indexOf('AsyncFunction("startListening")'));
+    expect(start).toContain('HandsfreeCallService.claimStartAttempt(startId)');
+    expect(start).toMatch(/if \(!HandsfreeCallService\.ownsStartAttempt\(startId\)\)/);
+    expect(start).not.toMatch(/postDelayed\(\{ startService\(context, title, promise\) \}/);
+    expect(kotlin).toMatch(/AsyncFunction\("stopSession"\)[\s\S]*?HandsfreeCallService\.(cancelStartAttempt|cancelAllStartAttempts)/);
+    // iOS has the same dialog: a late authorization must be discarded too.
+    expect(swift).toContain('attemptId == self.startAttemptId');
+    expect(swift).toMatch(/self\.startAttemptId = attemptId/);
+  });
+
+  it('rejects a stale service intent before it opens the microphone', () => {
+    // Ownership is checked at the top of `startSession`, before the owner
+    // field, the call state, the foreground notification and audio focus. The
+    // old check lived only in deliverStart, after the microphone was open and
+    // the owner field had already been overwritten with the stale id.
+    const session = service.slice(
+      service.indexOf('fun startSession('),
+      service.indexOf('private fun deliverStart('),
+    );
+    const guard = session.indexOf('ownsStartAttempt(attemptId)');
+    const owner = session.indexOf('noteServiceStart(attemptId)');
+    const stateStart = session.indexOf('state.start()');
+    expect(guard).toBeGreaterThan(-1);
+    expect(owner).toBeGreaterThan(guard);
+    expect(stateStart).toBeGreaterThan(guard);
+  });
+
+  it('expiry invalidates its originating owner, so a stale start intent is rejected', () => {
+    // The 4s timer must do more than clear the pending answer: a stale
+    // ACTION_START the service has not processed yet would still pass
+    // ownsStartAttempt and open the microphone. Expiry invalidates the owner
+    // too. A newer retry's claim moved ownership on, so an old expiry reports
+    // false and must not stop the newer service.
+    const startService = kotlin.slice(kotlin.indexOf('private fun startService('), kotlin.indexOf('companion object'));
+    expect(startService).toContain('HandsfreeCallService.expireStartAttempt(startId)');
+    expect(startService).toMatch(/if \(HandsfreeCallService\.expireStartAttempt\(startId\)\)\s*\{/);
+    expect(service).toContain('fun expireStartAttempt(id: String): Boolean = ownership.expire(id)');
+    expect(service).not.toContain('fun releasePendingStart(');
+    expect(service).toContain('fun beginPendingStart(id: String, callback: (String) -> Unit): Boolean');
+    expect(service).toContain('fun cancelStartAttempt(id: String): Boolean');
+    expect(service).toContain('fun ownsStartAttempt(id: String): Boolean');
+    const ownership = readSource(
+      'modules',
+      'handsfree-voice',
+      'android',
+      'src',
+      'main',
+      'java',
+      'com',
+      'versutus',
+      'handsfreevoice',
+      'HandsfreeStartOwnership.kt',
+    );
+    // Expiry clears BOTH the owner and its pending answer, in one critical section.
+    expect(ownership).toMatch(/fun expire\(id: String\): Boolean = synchronized\(lock\) \{[\s\S]*?owner = null/);
+  });
+
+  it('keys a teardown to its attempt and re-checks the service owner when it executes', () => {
+    // The module queue is a background serial queue: a keyed cancel and the
+    // service effects it triggers could interleave with a newer start's
+    // ACTION_START. Ownership and media functions run on the main queue, the
+    // same boundary the service's onStartCommand and its handler use. The
+    // queued teardown is keyed and re-checked at execution, so an old cleanup
+    // that lands after a newer service booted cannot end the newer call.
+    expect(kotlin).toContain('import expo.modules.kotlin.functions.Queues');
+    expect(kotlin).toMatch(/AsyncFunction\("startSession"\)[\s\S]*?\}\.runOnQueue\(Queues\.MAIN\)/);
+    expect(kotlin).toMatch(/AsyncFunction\("stopSession"\)[\s\S]*?\}\.runOnQueue\(Queues\.MAIN\)/);
+    expect(kotlin).toMatch(/AsyncFunction\("startGateMedia"\)[\s\S]*?\}\.runOnQueue\(Queues\.MAIN\)/);
+    expect(service).toContain('fun endForAttempt(attemptId: String, reason: String)');
+    expect(service).toMatch(
+      /fun endForAttempt\(attemptId: String, reason: String\) \{[\s\S]*?if \(!HandsfreeCallService\.servesStartAttempt\(attemptId\)\) return@post/,
+    );
+    expect(service).toContain('fun servesStartAttempt(id: String): Boolean');
+    expect(service).toContain('fun noteServiceStart(id: String?)');
+    // A keyed stopSession uses the keyed teardown; the user's End stays unkeyed.
+    expect(kotlin).toContain('endForAttempt(startId, "user")');
+    expect(kotlin).toContain('HandsfreeCallService.current?.end("user")');
+  });
+
+  it('keys the Gate media start to its attempt so a delayed old open cannot replace a newer socket', () => {
+    // The media link is the second half of a Gate start. It must carry the
+    // attempt id, and Android must refuse a delayed start for an attempt a
+    // newer retry has superseded.
+    expect(types).toMatch(/startId\?: string;/);
+    expect(kotlin).toMatch(
+      /AsyncFunction\("startGateMedia"\)[\s\S]*?val startId = \(options\["startId"\] as\? String\)/,
+    );
+    expect(kotlin).toMatch(/if \(startId != null && !HandsfreeCallService\.ownsStartAttempt\(startId\)\)/);
+    expect(tsModule).toContain('startGateMedia(options: HandsfreeGateMediaOptions)');
+  });
+
+  it('keys cancellation to its own attempt through a single-lock ownership record', () => {
+    // The owner and the pending answer move together under one lock: the old
+    // design used a `@Volatile` counter bumped with `+=` and a check-then-clear
+    // on the callback, which let a stale answer clear — or a stale cancel end —
+    // a newer attempt.
+    expect(service).toContain('HandsfreeStartOwnership()');
+    expect(kotlin).toMatch(/HandsfreeCallService\.cancelStartAttempt\(startId\)/);
+    // A stopSession with no id is the user's End: it supersedes everything.
+    expect(kotlin).toContain('HandsfreeCallService.cancelAllStartAttempts()');
+    const ownership = readSource(
+      'modules',
+      'handsfree-voice',
+      'android',
+      'src',
+      'main',
+      'java',
+      'com',
+      'versutus',
+      'handsfreevoice',
+      'HandsfreeStartOwnership.kt',
+    );
+    expect(ownership).toContain('synchronized(lock)');
+    // The rule is about the code, not the KDoc that names the design it
+    // replaced: strip comments so the prose mention cannot stand in for a real
+    // `@Volatile` field.
+    const ownershipCode = ownership
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+    expect(ownershipCode).not.toContain('@Volatile');
   });
 
   it('retires the silent notification channel for a visible one', () => {

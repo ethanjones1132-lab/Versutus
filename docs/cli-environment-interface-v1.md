@@ -10,7 +10,7 @@ Supported initial probes: Hermes ACP, Codex JSONL, Claude stream JSON. Codex app
 
 ## Normalized events
 
-`run.started`, `message.delta`, `tool.started`, `tool.output`, `approval.required`, `artifact.created`, `diagnostic`, `terminal.chunk`, `usage`, `run.completed`, `run.failed`, `run.cancelled`.
+`run.started`, `message.delta`, `message.reasoning.delta`, `tool.started`, `tool.progress`, `tool.output`, `approval.required`, `artifact.created`, `diagnostic`, `terminal.chunk`, `usage`, `run.completed`, `run.failed`, `run.cancelled`.
 
 Each event has `runId`, monotonic `sequence`, `timestamp`, `type`, and `payload`. A run emits exactly one terminal `run.*` event.
 

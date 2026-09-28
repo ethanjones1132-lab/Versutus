@@ -142,9 +142,12 @@ export function filterRosterRows(rows: RosterRow[], query: string): RosterRow[] 
 
 /**
  * What the roster's footer may honestly claim when the visible list comes up
- * short. Three truths it must not blur:
+ * short. Four truths it must not blur:
  *   - A FAILED inventory is not "zero bots" — the phone does not know what
  *     the host has, so the failure names itself instead of asserting emptiness.
+ *   - An inventory the app could not even attempt (gateway not connected) is
+ *     not "zero bots" either — the read never ran, so the footer waits for the
+ *     connection instead of reporting a count it never measured.
  *   - A query that matched group rooms but no agents is not "no match" — the
  *     operator is looking at a match right below the banner.
  *   - A blank query is never "no match" — nothing was filtered.
@@ -153,6 +156,7 @@ export type RosterEmptyView =
   | { kind: 'none' }
   | { kind: 'zero-bots' }
   | { kind: 'load-failed'; reason: string }
+  | { kind: 'waiting' }
   | { kind: 'no-match'; query: string };
 
 export function rosterEmptyView({
@@ -161,17 +165,23 @@ export function rosterEmptyView({
   visibleGroups,
   query,
   error,
+  connected = true,
 }: {
   totalBotRows: number;
   visibleBotRows: number;
   visibleGroups: number;
   query: string;
   error?: string;
+  /**
+   * False while the gateway is down — the roster read is gated on a live
+   * connection, so an empty list means "not read yet". Defaults true: a
+   * caller that says nothing is claiming it ran the read.
+   */
+  connected?: boolean;
 }): RosterEmptyView {
   if (totalBotRows <= 0) {
-    return typeof error === 'string' && error.trim()
-      ? { kind: 'load-failed', reason: error }
-      : { kind: 'zero-bots' };
+    if (typeof error === 'string' && error.trim()) return { kind: 'load-failed', reason: error };
+    return connected ? { kind: 'zero-bots' } : { kind: 'waiting' };
   }
   const needle = query.trim();
   if (!needle) return { kind: 'none' };

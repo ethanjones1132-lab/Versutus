@@ -204,4 +204,21 @@ describe('handsfreeStartResultCopy', () => {
       }),
     ).toMatch(/Run voice install on the Gate/);
   });
+
+  // Counterexample: the timeout sentence dropped its detail, so the one start
+  // failure with three different causes (the PC, the microphone prompt, the
+  // audio link) was the one that told the operator the least about which of
+  // them went quiet.
+  test('the sentence for a start that ran out of time says which link went quiet', () => {
+    expect(
+      handsfreeStartResultCopy('start-timed-out', {
+        detail: 'The call did not start: the audio link never answered.',
+      }),
+    ).toMatch(/audio link/);
+    expect(
+      handsfreeStartResultCopy('start-timed-out', {
+        detail: 'The call did not start: the microphone prompt never answered.',
+      }),
+    ).toMatch(/microphone prompt/);
+  });
 });

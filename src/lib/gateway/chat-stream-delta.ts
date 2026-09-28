@@ -3,10 +3,12 @@ import type { ChatToolCall } from '@/lib/gateway/types';
 export type ChatStreamAcc = {
   toolNames: Map<number, string>;
   toolArgs: Map<number, string>;
+  toolIds: Map<number, string>;
+  toolDetails: Map<number, string>;
 };
 
 export function createChatStreamAcc(): ChatStreamAcc {
-  return { toolNames: new Map(), toolArgs: new Map() };
+  return { toolNames: new Map(), toolArgs: new Map(), toolIds: new Map(), toolDetails: new Map() };
 }
 
 export type ChatStreamInterpretation = {
@@ -14,6 +16,7 @@ export type ChatStreamInterpretation = {
   reasoning?: string;
   toolCalls: ChatToolCall[];
   streamError?: string;
+  telemetryWarning?: string;
   /**
    * The model that actually served the turn, as the Gate reports it once the
    * turn resolves. Backends substitute — Hermes falls through
@@ -78,6 +81,16 @@ export function interpretChatStreamChunk(
     };
   }
 
+  const telemetry = asRecord(root.telemetry);
+  if (telemetry?.status === 'degraded') {
+    return {
+      toolCalls: [],
+      telemetryWarning: typeof telemetry.message === 'string' && telemetry.message.trim()
+        ? telemetry.message.slice(0, 200)
+        : 'Live activity was unavailable for this turn.',
+    };
+  }
+
   // A model report rides its own frame (no delta, empty choices) so it can
   // arrive after the text without being mistaken for content.
   const ranModel = typeof root.model === 'string' && root.model ? root.model : undefined;
@@ -89,7 +102,7 @@ export function interpretChatStreamChunk(
   const delta = asRecord(choice?.delta) ?? asRecord(root.delta);
   const toolCalls: ChatToolCall[] = [];
   const text = typeof delta?.content === 'string' && delta.content ? delta.content : undefined;
-  const reasoning = pickReasoning(delta);
+  let reasoning = pickReasoning(delta);
 
   const rawTools = delta?.tool_calls ?? delta?.toolCalls;
   if (Array.isArray(rawTools)) {
@@ -97,18 +110,31 @@ export function interpretChatStreamChunk(
       const item = asRecord(entry);
       if (!item) continue;
       const index = typeof item.index === 'number' ? item.index : 0;
+      if (typeof item.id === 'string' && item.id) acc.toolIds.set(index, item.id);
       const fn = asRecord(item.function);
       const namePart =
         (typeof fn?.name === 'string' && fn.name) ||
         (typeof item.name === 'string' && item.name) ||
         '';
-      if (namePart) acc.toolNames.set(index, (acc.toolNames.get(index) ?? '') + namePart);
+      const status = item.status === 'complete' || item.status === 'error' ? item.status : 'running';
+      if (namePart) {
+        acc.toolNames.set(index, status === 'running'
+          ? (acc.toolNames.get(index) ?? '') + namePart
+          : namePart);
+      }
       const argsPart = typeof fn?.arguments === 'string' ? fn.arguments : '';
       if (argsPart) acc.toolArgs.set(index, (acc.toolArgs.get(index) ?? '') + argsPart);
+      if (typeof item.detail === 'string') acc.toolDetails.set(index, item.detail);
       const name = acc.toolNames.get(index);
       if (!name) continue;
-      const detail = acc.toolArgs.get(index);
-      toolCalls.push({ name, status: 'running', detail });
+      const detail = acc.toolDetails.get(index) ?? acc.toolArgs.get(index);
+      const id = acc.toolIds.get(index);
+      const durationMs = typeof item.durationMs === 'number' && Number.isFinite(item.durationMs)
+        ? item.durationMs : undefined;
+      toolCalls.push({
+        ...(id ? { id } : {}), name, status, detail,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      });
     }
   }
 
@@ -117,6 +143,12 @@ export function interpretChatStreamChunk(
       const item = asRecord(block);
       if (!item) continue;
       const blockType = typeof item.type === 'string' ? item.type : undefined;
+      if (blockType === 'thinking' || blockType === 'reasoning') {
+        const thought = typeof item.thinking === 'string' ? item.thinking
+          : typeof item.text === 'string' ? item.text : '';
+        if (thought) reasoning = `${reasoning ?? ''}${thought}`;
+        continue;
+      }
       if (blockType === undefined || !KNOWN_TOOL_BLOCK_TYPES.has(blockType)) {
         // A block kind no provider has sent before. The Gate relays chunks
         // verbatim, so this is how a future tool-call shape first arrives —

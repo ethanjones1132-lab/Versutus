@@ -20,6 +20,7 @@ function between(src: string, startMarker: string, endMarker: string): string {
 }
 
 const provider = readSource('src', 'context', 'handsfree-voice-provider.tsx');
+const startAttempt = readSource('src', 'lib', 'voice', 'handsfree-start-attempt.ts');
 const layout = readSource('src', 'app', '_layout.tsx');
 const reply = readSource('src', 'lib', 'voice', 'handsfree-reply.ts');
 const banner = readSource('src', 'components', 'voice', 'handsfree-call-banner.tsx');
@@ -234,7 +235,7 @@ describe('start preconditions and captured target', () => {
 
   test('start names each failure through evaluateHandsfreeStart, and the phone engine still opens a native session', () => {
     expect(provider).toContain('evaluateHandsfreeStart');
-    expect(provider).toContain("startSession({ title: target.label })");
+    expect(provider).toContain("startSession({ title: target.label, startId })");
   });
 
   test('a refusal returns to idle and starts no service', () => {
@@ -271,7 +272,17 @@ describe('starting a call cannot strand the provider', () => {
   });
 
   test('a native start that throws is refused, never left in starting', () => {
-    expect(start).toMatch(/try\s*\{\s*outcome = await module\.startSession\(\{ title: target\.label \}\);\s*\}\s*catch/);
+    // The start is awaited through the deadline now, but a rejection is still
+    // the native call's own failure rather than a timeout, so the await stays
+    // inside the same try: the bounded call, not a bare one.
+    expect(start).toMatch(
+      /try\s*\{\s*outcome = await deadline\.guard\([^;]*module\.startSession\(\{ title: target\.label, startId \}\)\s*,?\s*\)\s*;\s*\}\s*catch/,
+    );
+    // A throw is the refusal path — mapped to `unavailable` and then refused,
+    // which is what keeps the phase from sitting at `starting`. Only a deadline
+    // expiry is a timeout, and that is the one branch that returns early.
+    expect(start).toMatch(/if \(isStartTimeout\(err\)\) \{[\s\S]*?return \{ result: 'start-timed-out'/);
+    expect(start).toContain("outcome = 'unavailable'");
     expect(start).toContain("dispatch({ type: 'start-refused' })");
     expect(start).toContain('unsubscribe()');
   });
@@ -353,5 +364,109 @@ describe('a call names the engine it is using and never hides a fallback', () =>
   test('the banner draws the engine and the fallback reason', () => {
     expect(banner).toContain('engineReason');
     expect(banner).toContain('Using {engine}');
+  });
+});
+
+// The abandoned first attempt, end to end. The deadline added to the Gate
+// chain left three holes the reducer's own new event was meant to cover: the
+// provider never dispatched it (so `start-timeout` was unreachable and a start
+// that ran out of budget was folded into a precondition refusal), the phone
+// engine's native start had no deadline at all, and the device identity read
+// that runs after the phase has already moved to `starting` was unbounded.
+describe('a start that never answers is abandoned on both transports', () => {
+  const gateStart = between(
+    provider,
+    'const startGateCall = useCallback(',
+    'const start = useCallback(',
+  );
+  const start = between(provider, 'const start = useCallback(', 'const mute = useCallback(');
+
+  test('an abandoned start reports its own reason on both transports', () => {
+    // A refusal means a precondition the sheet should have blocked. Running out
+    // of budget is a different fact, and the reducer has a distinct event for
+    // it — one that must be reachable from both call sites, not only written.
+    const dispatches = provider.split("dispatch({ type: 'start-timeout' })").length - 1;
+    expect(dispatches).toBeGreaterThanOrEqual(2);
+    expect(gateStart).toContain("attempt.result === 'start-timed-out'");
+    expect(start).toContain("dispatch({ type: 'start-timeout' })");
+    expect(start).toContain('isStartTimeout(');
+  });
+
+  test('the phone engine\u2019s native start runs under the same deadline', () => {
+    // `module.startSession` is the OS prompt the deadline module names
+    // explicitly: an answer that never comes left the phase at `starting`,
+    // which is the whole bug this patch exists to close.
+    expect(start).toContain('startDeadline(');
+    expect(start).toMatch(
+      /deadline\.guard\(\s*'the microphone prompt',\s*module\.startSession\(\{ title: target\.label, startId \}\)\s*,?\s*\)/,
+    );
+    expect(start).toContain('deadline.dispose()');
+  });
+
+  test('nothing after the call is declared starting is left unbounded', () => {
+    // The device identity is read after `dispatch({ type: 'start' })`, so a
+    // secure-store call that never answers strands the start the same way.
+    expect(gateStart).toMatch(/identity\.guard\(/);
+  });
+
+  test('an abandoned native start is cancelled on both transports, without reaching a newer retry', () => {
+    // Clearing the JS refs does not cancel the native start: it may still be
+    // waiting on the OS permission dialog, and a late grant would open a
+    // microphone during the retry the timeout invites. Both the phone path and
+    // the Gate path cancel the exact attempt, by the id it started with; the
+    // native side ignores a superseded id, so the retry's newer attempt owns
+    // the next service.
+    expect(start).toContain('cancelNativeSession(module, startId)');
+    expect(gateStart).toContain('cancelStartSession: (startId) => cancelNativeSession(module, startId)');
+    expect(start).toContain('newHandsfreeStartId()');
+    expect(gateStart).toContain('startSession: (title, startId) => module.startSession({ title, startId })');
+    // The cancel is keyed by the attempt's own id and its failure is swallowed,
+    // so a sync throw or a rejection cannot strand the start or leak.
+    expect(startAttempt).toContain('input.startSession(input.target.label, startId)');
+    expect(startAttempt).toContain('cancelNativeStart(input.cancelStartSession, startId)');
+    expect(startAttempt).toMatch(/void Promise\.resolve\(cancel\(startId\)\)\.catch\(\(\) => undefined\)/);
+  });
+
+  test('the Gate media start carries its attempt id, and a media failure cancels native by that id', () => {
+    // The native session opened before the media link failed, so releasing the
+    // Gate grant alone leaves the microphone live. The media options carry the
+    // attempt id so a delayed old open cannot replace a newer socket, and every
+    // post-native-start failure cancels the exact attempt.
+    expect(startAttempt).toMatch(
+      /startGateMedia\(\{[\s\S]*?voiceSessionId: parsed\.voiceSessionId,[\s\S]*?startId,\s*\}\)/,
+    );
+    expect(startAttempt).toMatch(
+      /if \(!started\) \{[\s\S]*?cancelNativeStart\(input\.cancelStartSession, startId\)/,
+    );
+    expect(startAttempt).toMatch(
+      /if \(nativeInvoked\) cancelNativeStart\(input\.cancelStartSession, startId\)/,
+    );
+  });
+
+  test('a Gate start that runs out of budget is delivered as a timeout, not a refusal', () => {
+    // The old timeout branch ran refuseGateStart() first, dispatching
+    // `start-refused`; the reducer left `starting` on that event, so the
+    // `start-timeout` that followed was inert and the retry reset never ran.
+    // The reset must detach listeners and refs WITHOUT dispatching, and the
+    // timeout event must be the one the reducer hears.
+    const timeoutBranch = gateStart.slice(
+      gateStart.indexOf("if (attempt.result === 'start-timed-out')"),
+      gateStart.indexOf("if (attempt.result !== 'started'"),
+    );
+    expect(timeoutBranch).toContain('abandonGateStart()');
+    expect(timeoutBranch).not.toContain('refuseGateStart()');
+    expect(timeoutBranch).toContain("dispatch({ type: 'start-timeout' })");
+    // The inner chain already logged the timeout once with the link that went
+    // quiet; the provider must not log it again.
+    expect(timeoutBranch).not.toContain('logHandsfreeStart');
+    // Both timeout exits (identity and chain) reset without a refusal.
+    expect(gateStart.match(/abandonGateStart\(\)/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    expect(gateStart).not.toMatch(/refuseGateStart\(\);[\s\S]{0,200}?start-timeout/);
+    // The reset helper detaches listeners and refs but never dispatches.
+    const abandon = between(provider, 'const abandonGateStart = useCallback(', 'const refuseGateStart = useCallback(');
+    expect(abandon).toContain('unsubscribe()');
+    expect(abandon).not.toContain('dispatch(');
+    // The normal refusal path is preserved.
+    expect(provider).toContain("dispatch({ type: 'start-refused' })");
   });
 });

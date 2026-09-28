@@ -94,6 +94,12 @@ export type HandsfreeGateMediaOptions = {
   url: string;
   token: string;
   voiceSessionId: string;
+  /**
+   * The start attempt this media link belongs to. Android refuses a delayed
+   * start for an attempt a newer retry has superseded, so an old media open
+   * cannot stop or replace the newer socket. Omitted on a live reconnect.
+   */
+  startId?: string;
 };
 
 export type HandsfreeVoiceModuleEvents = {

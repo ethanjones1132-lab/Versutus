@@ -5,7 +5,7 @@ jest.mock('@/lib/net/streaming-fetch', () => ({ streamingFetch: jest.fn() }));
 
 const mockStreamingFetch = streamingFetch as jest.Mock;
 
-const handlers = { onOutput: jest.fn(), onError: jest.fn(), onExit: jest.fn() };
+const handlers = { onOutput: jest.fn(), onError: jest.fn(), onExit: jest.fn(), onClose: jest.fn() };
 
 /**
  * A gateway token stored with a trailing \r reached OkHttp raw, which refused

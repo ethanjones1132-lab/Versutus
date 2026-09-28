@@ -69,11 +69,11 @@ describe('message layout: assistant unboxed, user soft grey, activity collapsed'
     expect(bubble).toMatch(/\{isActivityOpen \? \([\s\S]*?styles\.activityCard[\s\S]*?<ToolCallCard/);
     const cardCount = (bubble.match(/<ToolCallCard/g) ?? []).length;
     expect(cardCount).toBe(1);
-    // Default collapsed: the override starts unset and only a live turn with
-    // no answer text yet opens the line by itself.
+    // Default collapsed after completion; during a live turn the activity
+    // remains visible even when answer text has started.
     expect(bubble).toMatch(/useState<boolean \| null>\(null\)/);
     expect(bubble).toContain('activityUserOverride !== null');
-    expect(bubble).toContain('!!message.streaming && message.text.length === 0');
+    expect(bubble).toContain('const activitySettled = !!message.streaming;');
     expect(bubble).toMatch(/activityCard: \{[\s\S]*?maxHeight: 320,/);
   });
 

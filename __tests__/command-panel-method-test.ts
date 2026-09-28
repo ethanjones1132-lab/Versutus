@@ -65,12 +65,18 @@ test('the panel captions buttons from the entry fields with no new data', () => 
   expect(src).not.toContain('fetch(');
 });
 
-test('run behaviour, danger variants, and the Running/disabled states stay untouched', () => {
+test('run behaviour, the write mark, and the Running/disabled states hold', () => {
   const src = panel();
-  expect(src).toContain("label={runningCommandId === command.id ? 'Running' : command.label}");
+  // A row says Running while its command is in flight, and every row holds
+  // while any command runs.
+  expect(src).toContain('const running = runningCommandId === command.id;');
+  expect(src).toContain("{running ? 'Running' : command.label}");
   expect(src).toContain('disabled={!!runningCommandId}');
-  expect(src).toContain("variant={command.danger === 'write' ? 'secondary' : 'primary'}");
-  expect(src).toContain('onPress={() => onRun(command)}');
+  // A command that writes carries its own amber mark rather than the colour
+  // every safe read wears.
+  expect(src).toContain("const writes = command.danger === 'write';");
+  expect(src).toContain("color={writes ? 'statusConnecting' : 'accent'}");
+  expect(src).toContain('onRun(command);');
 });
 
 test('the Raw output sheet trigger stays untouched', () => {

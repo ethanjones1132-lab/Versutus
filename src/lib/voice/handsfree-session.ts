@@ -61,6 +61,7 @@ export type HandsfreeEvent =
   | { type: 'start' }
   | { type: 'started'; startedAtMs?: number }
   | { type: 'start-refused' }
+  | { type: 'start-timeout' }
   | { type: 'partial'; text: string }
   | { type: 'final'; text: string }
   | { type: 'noSpeech' }
@@ -216,6 +217,15 @@ export function reduceHandsfreeSession(
         };
       }
       if (event.type === 'start-refused') {
+        return { state: { ...INITIAL_HANDSFREE_SESSION, callsEnded: state.callsEnded }, effects: [] };
+      }
+      // A start the provider gave up on. It must return to idle for the same
+      // reason a refusal does: this is the only way back for a start that was
+      // abandoned mid-flight, and `canStart` is offered from `idle` only — so
+      // without this the user's one retry was never available to them. No
+      // `stop-session` effect: nothing ever started, so there is nothing to stop
+      // and nothing to count as a call that finished.
+      if (event.type === 'start-timeout') {
         return { state: { ...INITIAL_HANDSFREE_SESSION, callsEnded: state.callsEnded }, effects: [] };
       }
       return stay(state);

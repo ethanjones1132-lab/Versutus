@@ -9,7 +9,7 @@ import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
 import { withGetSessionsRetry } from '@/lib/gateway/get-sessions-retry';
 import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 import { advertisedIpv4 } from '@/lib/gateway/host-lookup';
-import { HttpTransport } from '@/lib/gateway/http-transport';
+import { HttpTransport, assertChatStreamComplete } from '@/lib/gateway/http-transport';
 import { ConnectionMonitor, hasRecentContact } from '@/lib/gateway/connection-monitor';
 import { streamingFetch } from '@/lib/net/streaming-fetch';
 import type { GatewayIdentity } from '@/lib/portal/identify';
@@ -352,6 +352,8 @@ export class ManifestClient implements PortalClient {
       sessionId?: string;
       signal?: AbortSignal;
       onToolCall?: (tool: import('@/lib/gateway/types').ChatToolCall) => void;
+      onReasoning?: (text: string) => void;
+      onTelemetryWarning?: (message: string) => void;
       /** Which model actually served the turn, once the Gate reports it. */
       onModelReport?: (report: import('@/lib/gateway/run-failures').ModelReport) => void;
     },
@@ -413,7 +415,7 @@ export class ManifestClient implements PortalClient {
     // thrown, because the handler's own catch would swallow a throw.
     let streamError: string | null = null;
     const acc = createChatStreamAcc();
-    await this.transport.streamSSE(
+    const completed = await this.transport.streamSSE(
       response,
       (data) => {
         try {
@@ -422,10 +424,12 @@ export class ManifestClient implements PortalClient {
             streamError = interpreted.streamError;
             return;
           }
+          if (interpreted.telemetryWarning) options?.onTelemetryWarning?.(interpreted.telemetryWarning);
           if (interpreted.text) {
             fullText += interpreted.text;
             onDelta(interpreted.text);
           }
+          if (interpreted.reasoning) options?.onReasoning?.(interpreted.reasoning);
           if (options?.onToolCall) {
             for (const tool of interpreted.toolCalls) options.onToolCall(tool);
           }
@@ -445,7 +449,7 @@ export class ManifestClient implements PortalClient {
       signal,
     );
 
-    if (streamError) throw new Error(streamError);
+    assertChatStreamComplete(completed, streamError, signal);
     return fullText;
   }
 

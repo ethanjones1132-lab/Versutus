@@ -32,3 +32,14 @@ test('tells a missing header apart from a malformed one', () => {
     /empty bearer/,
   );
 });
+
+test('records the socket peer without trusting proxy headers or exposing a token', () => {
+  const line = describeAuthFailure({
+    method: 'GET',
+    pathname: '/v1/models',
+    authorization: undefined,
+    remoteAddress: '100.95.10.22',
+  });
+  assert.match(line, /GET \/v1\/models from 100\.95\.10\.22/);
+  assert.match(line, /no authorization header/);
+});

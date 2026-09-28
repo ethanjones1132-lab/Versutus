@@ -46,7 +46,8 @@ describe('onboarding first-connection chrome', () => {
   });
 
   test('the onboarding flow keeps its validation, retry, and connect behavior', () => {
-    expect(onboarding).toContain('const ok = await setupFromPcAddress(pcAddress, token);');
+    expect(onboarding).toContain('const result = await setupFromPcAddress(pcAddress, token);');
+    expect(onboarding).toContain("if (result.kind === 'connected')");
     expect(onboarding).toContain('disabled={cta.locked || !validation.valid}');
     expect(onboarding).toContain('<Button label="Retry" onPress={() => void retryAutoConnect()} />');
     expect(onboarding).toContain("router.push('/gateway/add')");
