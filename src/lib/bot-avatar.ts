@@ -27,16 +27,20 @@ export type BotCrestTone = {
 
 /** Stage the tones were tuned against: the near-black #0A0A0B. */
 export const BOT_CREST_TONES: readonly BotCrestTone[] = [
+  // Jewel tones, spread across hue *and* value so two crests side by side
+  // never read as the same person. Every stop stays out of the status bands
+  // (mint, amber, red) — see __tests__/bot-avatar-test.ts.
   { from: '#A99DFF', to: '#5646D0' }, // violet — the brand's own
-  { from: '#8FA8FF', to: '#3B4FB8' }, // indigo
-  { from: '#86BEEB', to: '#2F6597' }, // steel blue
-  { from: '#D39BF0', to: '#7C3FA6' }, // orchid
-  { from: '#EFA3D6', to: '#9A4383' }, // rose quartz
-  { from: '#7FD3E3', to: '#23707F' }, // deep cyan
-  { from: '#D4D6DE', to: '#5E6272' }, // platinum
-  { from: '#6F8BD9', to: '#22306E' }, // midnight
-  { from: '#B98AF5', to: '#5B2BA0' }, // amethyst
-  { from: '#8FB8C4', to: '#3B5F6B' }, // slate
+  { from: '#86A9FF', to: '#2446B8' }, // cobalt
+  { from: '#6FD2D8', to: '#12646E' }, // lagoon
+  { from: '#62B6F2', to: '#1B5A90' }, // ocean
+  { from: '#F190C8', to: '#8C2766' }, // mulberry
+  { from: '#D9A3F6', to: '#7636AC' }, // orchid
+  { from: '#F59AB4', to: '#A3345C' }, // raspberry
+  { from: '#E8E9EE', to: '#646878' }, // platinum
+  // Two twilight crests turn between hues as they fall into shadow.
+  { from: '#F3A6C8', to: '#5B3FC4' }, // dusk — rose into violet
+  { from: '#7EDBD9', to: '#3140A6' }, // tide — lagoon into cobalt
 ] as const;
 
 export type BotCrest = {
@@ -71,7 +75,55 @@ export function botInitial(name: string): string {
   return '·';
 }
 
+/** The tone a Bot wears when nothing else is known: its id's own bucket. */
+function naturalTone(botId: string): number {
+  return fnv1a(botId) % BOT_CREST_TONES.length;
+}
+
+/**
+ * Tones assigned across the operator's current fleet, so two Bots on the same
+ * roster never wear the same crest while tones remain. A hash alone cannot
+ * promise that — six Bots over ten tones collide more often than not.
+ *
+ * Deterministic and order-free: ids are walked sorted, each takes its natural
+ * tone when free, and only the Bots that collide step forward to the next
+ * free tone. A Bot that owns its natural tone never moves when the fleet
+ * changes around it.
+ */
+let fleetTones = new Map<string, number>();
+
+export function registerCrestFleet(botIds: readonly string[]): void {
+  const ids = [...new Set(botIds)].sort();
+  const next = new Map<string, number>();
+  const taken = new Set<number>();
+  const colliders: string[] = [];
+  for (const id of ids) {
+    const slot = naturalTone(id);
+    if (taken.has(slot)) {
+      colliders.push(id);
+    } else {
+      taken.add(slot);
+      next.set(id, slot);
+    }
+  }
+  const count = BOT_CREST_TONES.length;
+  for (const id of colliders) {
+    // A fleet larger than the tone set starts a second round of tones.
+    if (taken.size >= count) taken.clear();
+    const start = naturalTone(id);
+    for (let step = 1; step <= count; step += 1) {
+      const slot = (start + step) % count;
+      if (!taken.has(slot)) {
+        taken.add(slot);
+        next.set(id, slot);
+        break;
+      }
+    }
+  }
+  fleetTones = next;
+}
+
 export function botCrestFromId(botId: string, displayName?: string): BotCrest {
-  const tone = BOT_CREST_TONES[fnv1a(botId) % BOT_CREST_TONES.length];
+  const tone = BOT_CREST_TONES[fleetTones.get(botId) ?? naturalTone(botId)];
   return { tone, initial: botInitial(displayName?.trim() || botId) };
 }

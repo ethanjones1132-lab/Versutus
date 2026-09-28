@@ -1770,6 +1770,12 @@ export function ChatScreen() {
   // Thread surfaces ride the provider message pipeline; a group room and the
   // roster do not (the room owns its transcript locally).
   const threadSurface = surface.kind === 'configurable' || surface.kind === 'bot';
+  const spendCopy =
+    spendState.surfaceKey === spendSurfaceKey ? threadSpendCopy(spendState, currentSessionId) : undefined;
+  const spendRetry =
+    spendState.surfaceKey === spendSurfaceKey && !spendState.loaded && spendState.failed
+      ? handleSpendRetry
+      : undefined;
 
   // Bot Chat (and configurable chat) @-picks from the roster Bot ids, reusing
   // the group-room helper. TextField has no selection hook, so the caret is
@@ -1896,6 +1902,7 @@ export function ChatScreen() {
         botId={surface.kind === 'bot' ? surface.botId : undefined}
         onBotPress={surface.kind === 'bot' ? () => setBotPanelVisible(true) : undefined}
         titleHidden={surface.kind === 'roster'}
+        spendNote={threadSurface && !spendRetry ? spendCopy : undefined}
         onBackendPress={surface.kind === 'configurable' && backends.length > 0 ? handleHeaderBackendPress : undefined}
         onRosterPress={surface.kind === 'roster' ? undefined : handleHeaderRosterPress}
         onMenuPress={surface.kind === 'roster' ? handleHeaderMenuPress : undefined}
@@ -2113,21 +2120,15 @@ export function ChatScreen() {
         />
       ) : null}
 
-      {threadSurface ? (
+      {/* Only the failed first read keeps a glance row — it needs room for
+          Retry. A read total rides the header's subtitle line instead. */}
+      {threadSurface && spendRetry ? (
         <ThreadSpendGlance
-          copy={
-            spendState.surfaceKey === spendSurfaceKey
-              ? threadSpendCopy(spendState, currentSessionId)
-              : undefined
-          }
+          copy={spendCopy}
           // The glance owns no fetch — the retry arrives as a prop, and only
           // on the failed-first-read state. A failed re-read keeps the last
           // good total with its own stale copy, so no button renders there.
-          onRetry={
-            spendState.surfaceKey === spendSurfaceKey && !spendState.loaded && spendState.failed
-              ? handleSpendRetry
-              : undefined
-          }
+          onRetry={spendRetry}
         />
       ) : null}
 

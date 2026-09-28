@@ -38,6 +38,12 @@ export type ChatHeaderProps = {
    * there is only its two controls: no title competes with the greeting.
    */
   titleHidden?: boolean;
+  /**
+   * What this thread has cost ("18k · $0.42"). Rides the subtitle line after
+   * the model, so the header stays one row instead of growing a glance
+   * beneath it.
+   */
+  spendNote?: string;
 };
 
 /**
@@ -65,6 +71,7 @@ function ChatHeaderImpl({
   botId,
   onBotPress,
   titleHidden = false,
+  spendNote,
 }: ChatHeaderProps) {
   const tokens = useTokens();
   const title = chatHeaderTitle({ gatewayName, backendLabel, groupName });
@@ -143,24 +150,34 @@ function ChatHeaderImpl({
             </Text>
           </PressableScale>
         )}
-        <PressableScale
-          onPress={onModelPress}
-          disabled={!showModel}
-          hitSlop={8}
-          accessibilityRole={showModel ? 'button' : undefined}
-          accessibilityLabel={showModel ? `Model: ${modelLabel}. Change model.` : undefined}
-          style={[styles.titlePress, styles.subtitleRow]}>
-          <Text variant="caption" color="secondary" numberOfLines={1} style={styles.subtitle}>
-            {subtitle}
-          </Text>
-          {showModel ? (
-            <Icon
-              name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }}
-              size={12}
-              color={tokens.textTertiary}
-            />
+        <View style={styles.subtitleLine}>
+          <PressableScale
+            onPress={onModelPress}
+            disabled={!showModel}
+            hitSlop={8}
+            accessibilityRole={showModel ? 'button' : undefined}
+            accessibilityLabel={showModel ? `Model: ${modelLabel}. Change model.` : undefined}
+            style={[styles.titlePress, styles.subtitleRow]}>
+            <Text variant="caption" color="secondary" numberOfLines={1} style={styles.subtitle}>
+              {subtitle}
+            </Text>
+            {showModel ? (
+              <Icon
+                name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }}
+                size={12}
+                color={tokens.textTertiary}
+              />
+            ) : null}
+          </PressableScale>
+          {spendNote ? (
+            <>
+              <View style={[styles.spendDot, { backgroundColor: tokens.textTertiary }]} />
+              <Text variant="caption" color="tertiary" numberOfLines={1} style={styles.spend}>
+                {spendNote}
+              </Text>
+            </>
           ) : null}
-        </PressableScale>
+        </View>
       </View>
     </View>
   );
@@ -237,6 +254,21 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     flexShrink: 1,
+  },
+  subtitleLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.one + 2,
+    minWidth: 0,
+  },
+  spendDot: {
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
+  },
+  spend: {
+    flexShrink: 0,
+    fontVariant: ['tabular-nums'],
   },
   name: {
     fontSize: 17,

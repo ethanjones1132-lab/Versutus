@@ -137,6 +137,7 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
     listBots,
     openBot,
     requestSurface,
+    clearBot,
     pendingApprovals,
   } = useGateway();
   const routeName = props.state.routes[props.state.index]?.name;
@@ -174,6 +175,15 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
       .catch(() => undefined);
   };
 
+  // A fresh conversation with no Bot in between — the drawer's first answer
+  // to "I want to ask something", the way every assistant's sidebar opens.
+  const startNewChat = () => {
+    props.navigation.closeDrawer();
+    router.push('/chat');
+    clearBot();
+    requestSurface({ kind: 'configurable' });
+  };
+
   const gateName = settings.pcName ?? activeGateway?.name;
   const gateSubtitle =
     status === 'connected'
@@ -184,13 +194,32 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
   const routableTeam = team.filter(botReportedRoutable).slice(0, DRAWER_TEAM_LIMIT);
 
   return (
-    <View style={[styles.root, { paddingTop: Math.max(insets.top, Spacing.three) }]}>
+    <View style={[styles.root, { paddingTop: Math.max(insets.top, Spacing.two) + Spacing.three }]}>
       <View style={styles.brand}>
-        <VersutusMark size={30} />
+        <VersutusMark size={28} />
         <Text variant="title" style={styles.wordmark}>
           Versutus
         </Text>
       </View>
+
+      <PressableScale
+        onPress={async () => {
+          await haptics.selection();
+          startNewChat();
+        }}
+        accessibilityRole="button"
+        accessibilityLabel="New chat"
+        accessibilityHint="Talk to any model, no Bot in between"
+        style={[styles.newChat, { backgroundColor: tokens.backgroundRaised, borderTopColor: tokens.specular }]}>
+        <Icon
+          name={{ ios: 'square.and.pencil', android: 'edit_square', web: 'edit_square' }}
+          size={17}
+          color="textPrimary"
+        />
+        <Text variant="callout" style={styles.newChatLabel}>
+          New chat
+        </Text>
+      </PressableScale>
 
       <DrawerContentScrollView
         {...props}
@@ -276,11 +305,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.two + 2,
     paddingHorizontal: Spacing.four - 4,
-    paddingBottom: Spacing.three,
+    paddingBottom: Spacing.four - 4,
   },
   wordmark: {
     fontSize: 28,
     lineHeight: 32,
+    letterSpacing: -0.3,
+  },
+  newChat: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two + 2,
+    minHeight: 44,
+    marginHorizontal: Spacing.two,
+    marginBottom: Spacing.four - 4,
+    paddingHorizontal: Spacing.three - 2,
+    borderRadius: Radius.full,
+    // The lip of light every floating surface carries (Nocturne: Surfaces).
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  newChatLabel: {
+    flex: 1,
   },
   scrollView: {
     flex: 1,

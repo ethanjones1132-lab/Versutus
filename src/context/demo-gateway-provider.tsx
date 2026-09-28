@@ -18,6 +18,7 @@ import {
   SHOWCASE_TRANSCRIPTS,
 } from '@/lib/demo/showcase-fleet';
 import type { ChatMessage, GatewayCapabilities, GatewayHelloOk } from '@/lib/gateway/types';
+import { registerCrestFleet } from '@/lib/bot-avatar';
 import { GATEWAY_COMMANDS, buildCapabilitySnapshot } from '@/lib/gateway/dashboard';
 
 type Value = GatewayContextValue;
@@ -175,7 +176,10 @@ export function DemoGatewayProvider({ children }: { children: React.ReactNode })
       selectedBackendId: undefined,
       selectBackend: idle,
       selectedBotId,
-      listBots: async () => SHOWCASE_BOTS,
+      listBots: async () => {
+        registerCrestFleet(SHOWCASE_BOTS.map((bot) => bot.id));
+        return SHOWCASE_BOTS;
+      },
       routineJobs: [],
       routineRead: { jobs: [], status: 'ready', gatewayId: SHOWCASE_GATEWAY.id },
       canReadBotSessions: false,

@@ -63,6 +63,20 @@ in Instrument Serif on a two-stop gradient disc, the hue derived from the Bot id
 curated set that excludes every status hue (mint, amber, red). Unroutable Bots carry a small
 amber notch — the only status mark on an avatar.
 
+The crest is lit like polished stone, not painted like a sticker: a soft sheen pools at the
+upper left, and a rim of light runs bright along the top edge and falls into shadow underneath.
+The ten tones spread across hue *and* value (brand violet, cobalt, lagoon, ocean, mulberry,
+orchid, raspberry, platinum, and two twilight tones that turn between hues).
+
+**No two teammates share a crest.** A hash alone cannot promise that (six Bots over ten tones
+collide more often than not), so tones are assigned across the fleet whenever the inventory
+is read (`registerCrestFleet` in `src/lib/bot-avatar.ts`): each Bot keeps its natural tone
+when free, and only colliders step to the next free one. It is order-free and deterministic,
+and a Bot that owns its natural tone never moves.
+
+An empty thread lights the crest with a halo of its own tone: the one still glow on that
+screen.
+
 ## Motion
 
 - 150 ms for presses and toggles, 200 ms for content arriving, 250 ms for sheets and the drawer.
@@ -71,13 +85,18 @@ amber notch — the only status mark on an avatar.
 
 ## Surfaces, screen by screen
 
-- **Roster (Chat home):** greeting in serif, the Gate as a quiet status line, Bots as crest
-  rows with their one-line purpose, group rooms, and creation as a single quiet row.
-- **Thread:** flat header (back · name + model · menu), the reply on the stage, the user
-  bubble on `raised`, activity as one expandable line, a jewel composer with a violet orb.
-  An empty thread greets you by the Bot's name and offers starting points.
-- **Drawer:** new chat, the Bots you talk to, recent conversations, then Activity, Tools and
-  Settings, with the Gate at the foot as a single status line.
+- **Roster (Chat home):** greeting in serif with its last word in italic ("Good *evening*"),
+  the Gate as a quiet status line, Bots as crest rows with their one-line purpose (no model
+  ids; the thread header carries the model), group rooms, then "Grow the team": creation
+  as rows in the roster's own rhythm, never a wrap of pills.
+- **Thread:** flat header (back · name, then model ⌄ · what the thread has cost, on one
+  line) · menu. The reply sits on the stage; list markers are drawn dots in the tertiary tone,
+  and violet is kept for quote rules and links. The user bubble sits on `raised`, activity is
+  one expandable line, and the composer is a jewel with a violet orb. An empty thread greets
+  you by the Bot's name under its halo and offers starters as centred pills that fill the
+  composer and never send.
+- **Drawer:** the mark and wordmark, a New chat pill, then Chats / Activity / Tools, the Bots
+  you talk to, and Settings, with the Gate at the foot as a single status line.
 - **Activity / Settings / Gate:** grouped rows — label, value, chevron. No eyebrow stacks.
 
 ## Seeing it without a Gate

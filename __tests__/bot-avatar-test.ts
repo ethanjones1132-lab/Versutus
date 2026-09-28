@@ -1,4 +1,4 @@
-import { BOT_CREST_TONES, botCrestFromId, botInitial } from '@/lib/bot-avatar';
+import { BOT_CREST_TONES, botCrestFromId, botInitial, registerCrestFleet } from '@/lib/bot-avatar';
 
 /** Status hues a crest must never wear (Palette.statusConnected/Connecting/Disconnected). */
 const STATUS_HUES = ['#63D7A6', '#D6B76A', '#E56D6D', '#F0D690'];
@@ -65,4 +65,41 @@ test('derivation is total over awkward ids (empty, astral, long)', () => {
   expect(() => botCrestFromId('')).not.toThrow();
   expect(botCrestFromId('🤖-bot')).toEqual(botCrestFromId('🤖-bot'));
   expect(() => botCrestFromId('x'.repeat(500))).not.toThrow();
+});
+
+describe('fleet-aware crest tones', () => {
+  afterEach(() => registerCrestFleet([]));
+
+  test('a registered fleet never shares a tone while tones remain', () => {
+    const fleet = ['aria', 'forge', 'ledger', 'sentinel', 'muse', 'scout'];
+    registerCrestFleet(fleet);
+    const tones = fleet.map((id) => botCrestFromId(id).tone.from);
+    expect(new Set(tones).size).toBe(fleet.length);
+  });
+
+  test('a Bot whose natural tone is free keeps it inside a fleet', () => {
+    const natural = botCrestFromId('aria').tone;
+    registerCrestFleet(['aria']);
+    expect(botCrestFromId('aria').tone).toEqual(natural);
+  });
+
+  test('assignment is independent of the order the inventory arrives in', () => {
+    const fleet = ['aria', 'forge', 'ledger', 'sentinel', 'muse', 'scout'];
+    registerCrestFleet(fleet);
+    const forward = fleet.map((id) => botCrestFromId(id).tone);
+    registerCrestFleet([...fleet].reverse());
+    expect(fleet.map((id) => botCrestFromId(id).tone)).toEqual(forward);
+  });
+
+  test('ids outside the fleet fall back to their natural tone', () => {
+    const natural = botCrestFromId('stranger').tone;
+    registerCrestFleet(['aria', 'forge']);
+    expect(botCrestFromId('stranger').tone).toEqual(natural);
+  });
+
+  test('a fleet larger than the tone set still derives a declared tone for everyone', () => {
+    const fleet = Array.from({ length: BOT_CREST_TONES.length * 2 + 1 }, (_, i) => `bot-${i}`);
+    registerCrestFleet(fleet);
+    for (const id of fleet) expect(BOT_CREST_TONES).toContainEqual(botCrestFromId(id).tone);
+  });
 });

@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BotAvatar, GroupAvatar } from '@/components/chat/bot-avatar';
 import { PulsingDot, statusColor } from '@/components/connection-badge';
 import { Button, EmptyState, Icon, PressableScale, Skeleton, Text, TextField, type IconName } from '@/components/ui';
-import { Radius, Spacing } from '@/constants/tokens';
+import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import {
   botRowSubtitle,
@@ -98,11 +98,22 @@ function botPurpose(bot: PublicBot): string {
   return first.trim().replace(/\.$/, '');
 }
 
-/** The pinned model's short name, the provider prefix dropped. */
-function modelShortName(bot: PublicBot): string | undefined {
-  const pin = bot.model?.default?.trim();
-  if (!pin) return undefined;
-  return pin.includes('/') ? pin.slice(pin.lastIndexOf('/') + 1) : pin;
+/**
+ * The greeting with its one permitted flourish: the last word set in the
+ * italic serif ("Good *evening*"). Nocturne allows italic serif for exactly
+ * one emphasised word inside a display line, and nowhere else.
+ */
+function Greeting({ text }: { text: string }) {
+  const split = text.lastIndexOf(' ');
+  if (split < 0) return <Text variant="display">{text}</Text>;
+  return (
+    <Text variant="display">
+      {text.slice(0, split + 1)}
+      <Text variant="display" style={styles.greetingItalic}>
+        {text.slice(split + 1)}
+      </Text>
+    </Text>
+  );
 }
 
 /**
@@ -172,9 +183,10 @@ function RosterMemberRow({
 }
 
 /**
- * A quiet creation action at the foot of the roster: a pill with its name.
- * What the action does is said to a screen reader as the hint, so the pill
- * stays one word-group wide on the phone.
+ * A creation action at the foot of the roster, drawn in the roster's own
+ * rhythm: a quiet inset tile where a crest would sit, the action's name, and
+ * one plain line of what it makes. It reads as the next seat at the table,
+ * not a toolbar.
  */
 function RosterAction({
   title,
@@ -197,11 +209,18 @@ function RosterAction({
       accessibilityRole="button"
       accessibilityLabel={title}
       accessibilityHint={subtitle}
-      style={[styles.action, { backgroundColor: tokens.backgroundElevated }]}>
-      <Icon name={icon} size={15} color="accent" />
-      <Text variant="caption" style={styles.actionLabel}>
-        {title}
-      </Text>
+      style={styles.member}>
+      <View style={[styles.actionTile, { backgroundColor: tokens.backgroundElevated }]}>
+        <Icon name={icon} size={18} color="secondary" />
+      </View>
+      <View style={styles.memberText}>
+        <Text variant="callout" numberOfLines={1} style={styles.memberName}>
+          {title}
+        </Text>
+        <Text variant="caption" color="tertiary" numberOfLines={1}>
+          {subtitle}
+        </Text>
+      </View>
     </PressableScale>
   );
 }
@@ -296,7 +315,6 @@ function ChatRosterImpl({
           key={row.bot.id}
           title={row.bot.displayName}
           subtitle={botPurpose(row.bot)}
-          trailing={routable ? modelShortName(row.bot) : undefined}
           attention={!routable}
           leading={
             <BotAvatar botId={row.bot.id} name={row.bot.displayName} size={44} attention={!routable} />
@@ -394,9 +412,7 @@ function ChatRosterImpl({
       ListHeaderComponent={
         <View>
           <View style={styles.hero}>
-            <Text variant="display">
-              {greetingFor(new Date())}
-            </Text>
+            <Greeting text={greetingFor(new Date())} />
             {gateLine && status ? (
               <PressableScale
                 onPress={onGatePress}
@@ -464,6 +480,9 @@ function ChatRosterImpl({
           ) : null}
           {onNewAgent || onImportAgent || onNewGroup ? (
             <View style={styles.actions}>
+              <Text variant="eyebrow" color="tertiary" style={styles.sectionLabel}>
+                Grow the team
+              </Text>
               {onNewAgent ? (
                 <RosterAction
                   title="New Agent"
@@ -561,22 +580,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.two,
-    marginTop: Spacing.four,
-    paddingHorizontal: Spacing.one,
-  },
-  action: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.one + 2,
-    minHeight: 40,
-    paddingHorizontal: Spacing.three - 2,
+  actions: { marginTop: Spacing.three },
+  actionTile: {
+    width: 44,
+    height: 44,
     borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  actionLabel: { fontSize: 14 },
+  greetingItalic: { fontFamily: FontFamily.serifItalic },
   gap: { marginTop: Spacing.three },
   gapSmall: { marginTop: Spacing.two },
   error: { marginBottom: Spacing.two },

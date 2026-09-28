@@ -2,6 +2,7 @@ import Constants from 'expo-constants';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 
+import { registerCrestFleet } from '@/lib/bot-avatar';
 import { GatewayDiscoveryScanner, isNativeDiscoveryAvailable } from '@/lib/discovery/scanner';
 import { beaconKindForUrl, buildExplicitHostCandidates, buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/lib/gateway/candidates';
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
@@ -3856,7 +3857,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const listBots = useCallback(async (): Promise<PublicBot[]> => {
     const client = clientRef.current;
     if (!client?.listBots) return [];
-    return client.listBots();
+    const bots = await client.listBots();
+    // Every surface that draws a crest reads the fleet from here, so the
+    // tones are assigned once across the whole team (no two Bots alike).
+    registerCrestFleet(bots.map((bot) => bot.id));
+    return bots;
   }, []);
 
   /**

@@ -90,9 +90,17 @@ function BlockView({ block, baseColor, compact, maxFontSizeMultiplier }: { block
         <View style={styles.list}>
           {block.items.map((item, index) => (
             <View key={index} style={styles.listItem}>
-              <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[compact ? styles.listMarkerCompact : styles.listMarker, { color: Palette.accent }]}>
-                {block.ordered ? `${index + 1}.` : '•'}
-              </RNText>
+              {block.ordered ? (
+                <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[compact ? styles.listMarkerCompact : styles.listMarker, { color: Palette.textTertiary }]}>
+                  {`${index + 1}.`}
+                </RNText>
+              ) : (
+                // A drawn dot, not a glyph: '•' in Instrument Sans sets as a
+                // small square. Centred on the first line's x-height.
+                <View style={compact ? styles.listDotSlotCompact : styles.listDotSlot}>
+                  <View style={[styles.listDot, { backgroundColor: Palette.textTertiary }]} />
+                </View>
+              )}
               <RNText maxFontSizeMultiplier={maxFontSizeMultiplier} style={[compact ? styles.bodyCompact : styles.body, styles.listText, { color: baseColor }]}>
                 <InlineSpans spans={item} baseColor={baseColor} maxFontSizeMultiplier={maxFontSizeMultiplier} />
               </RNText>
@@ -152,7 +160,7 @@ const styles = StyleSheet.create({
   },
   heading: {
     fontFamily: FontFamily.sansSemiBold,
-    marginTop: Spacing.one,
+    marginTop: Spacing.two + 2,
   },
   bold: {
     fontFamily: FontFamily.sansBold,
@@ -167,7 +175,7 @@ const styles = StyleSheet.create({
     fontFamily: FontFamily.mono,
     fontSize: 13,
     backgroundColor: Palette.backgroundInset,
-    color: Palette.accent,
+    color: Palette.textPrimary,
   },
   link: {
     color: Palette.accent,
@@ -179,7 +187,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   list: {
-    gap: Spacing.one,
+    gap: Spacing.one + 2,
   },
   listItem: {
     flexDirection: 'row',
@@ -187,16 +195,34 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   listMarker: {
-    fontFamily: FontFamily.sansSemiBold,
-    fontSize: 14,
+    fontFamily: FontFamily.sansRegular,
+    fontSize: 15,
     lineHeight: 24,
     minWidth: 16,
+    fontVariant: ['tabular-nums'],
   },
   listMarkerCompact: {
     fontFamily: FontFamily.sansSemiBold,
     fontSize: 12,
     lineHeight: 18,
     minWidth: 14,
+  },
+  listDotSlot: {
+    width: 16,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  listDotSlotCompact: {
+    width: 14,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  listDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
   },
   listText: {
     flex: 1,

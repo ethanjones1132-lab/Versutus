@@ -28,11 +28,14 @@ describe('agent markdown and tool-call chrome read as the brand stage', () => {
   const markdown = readSource('src', 'components', 'chat', 'markdown', 'markdown-text.tsx');
   const toolCall = readSource('src', 'components', 'chat', 'tool-call-card.tsx');
 
-  test('quotes, list markers, inline code and links wear the brand violet', () => {
+  test('violet is light on the reply, not paint: quotes and links carry it; markers and code stay quiet', () => {
+    // Nocturne rule 2 (docs/design-language-nocturne-2026-09.md): violet is
+    // never a colour for body text. A quote's rule and a link are the lamp;
+    // list markers and inline code read in the text's own tones.
     expect(markdown).toContain('borderLeftColor: Palette.accentMuted');
-    expect(markdown).toContain('styles.listMarker, { color: Palette.accent }');
-    expect(markdown).toContain('backgroundColor: Palette.backgroundInset,\n    color: Palette.accent,');
     expect(markdown).toContain('link: {\n    color: Palette.accent,');
+    expect(markdown).toContain('styles.listMarker, { color: Palette.textTertiary }');
+    expect(markdown).toContain('backgroundColor: Palette.backgroundInset,\n    color: Palette.textPrimary,');
   });
 
   test('the transcript renderer carries no focus-tint or gold chrome', () => {
