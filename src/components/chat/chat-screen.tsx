@@ -1087,8 +1087,8 @@ export function ChatScreen() {
           row.kind === 'bot' && row.bot.id === selectedBotId,
       )?.bot.model?.default ?? undefined
     : undefined;
-  const modelLabel =
-    effectiveModel(activeGateway, selectedBackendId, selectedBotId) ?? botOwnModel ?? 'Default model';
+  const threadModel = effectiveModel(activeGateway, selectedBackendId, selectedBotId) ?? botOwnModel;
+  const modelLabel = threadModel ?? 'Default model';
   // Only the backend actually routing this thread. The `?? backends[0]`
   // fallback that used to be here labelled the chip "Claude Code" whenever the
   // selection had not resolved — the same lie the Gate setup screen told, and
@@ -2607,7 +2607,11 @@ export function ChatScreen() {
         models={modelRows}
         modelsError={modelCatalogError}
         modelsLoaded={modelCatalogLoaded}
-        currentModel={activeGateway.model}
+        // "Current" in the thread's own picker is the model this thread runs on
+        // — the one the header names — not the Gate-wide default: a Bot's
+        // thread answers on its own pin, and marking the default "Current"
+        // there claimed a model the thread was not using.
+        currentModel={modelPicker.mode === 'default' ? threadModel ?? activeGateway.model : activeGateway.model}
         backendLabel={backends.length > 1 ? activeBackend?.label : undefined}
         modelMode={modelPicker.mode}
         modelAgentId={modelPicker.agentId}

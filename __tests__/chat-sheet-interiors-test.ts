@@ -32,11 +32,14 @@ describe('chat sheet interiors use the locked modal language', () => {
     expect(src).not.toMatch(/glassBorder|glassHighlight|Palette\.glass|tokens\.gold|Palette\.gold|accentWarm/);
   });
 
-  it('thread-config selection uses a muted brand fill, brand border, and cool resting hairline', () => {
+  it('thread-config marks the current item with light, not a violet box', () => {
+    // Sessions and models: a lit lift and a violet light bar on the current
+    // row, nothing on the rest; the selected backend takes the same lift.
     const src = readSource('thread-config-sheet.tsx');
-    expect(src.match(/backgroundColor: isCurrent \? tokens\.accentMuted : tokens\.backgroundInset/g) ?? []).toHaveLength(2);
-    expect(src.match(/borderColor: isCurrent \? tokens\.accent : tokens\.border/g) ?? []).toHaveLength(2);
-    expect(src).toContain('backgroundColor: tokens.accentMuted, borderColor: tokens.accent');
+    expect(src.match(/backgroundColor: isCurrent \? tokens\.rowSelected : 'transparent'/g) ?? []).toHaveLength(2);
+    expect(src.match(/\{isCurrent \? <CurrentBar \/> : null\}/g) ?? []).toHaveLength(2);
+    expect(src).not.toMatch(/borderColor: isCurrent \? tokens\.accent/);
+    expect(src).toContain('{ backgroundColor: tokens.rowSelected, borderRadius: Radius.md }');
     expect(src).toContain('color={pinned ? \'accent\' : \'textTertiary\'}');
     expect(src).not.toContain('tokens.borderSubtle');
     expect(src).toContain('selected={item.id === selectedBackendId}');

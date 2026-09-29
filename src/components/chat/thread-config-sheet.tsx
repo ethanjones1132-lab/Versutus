@@ -12,6 +12,7 @@ import { formatCost, formatRelativeTime, formatTokenCount } from '@/lib/format';
 import {
   filterModels,
   groupByProvider,
+  providerDisplayName,
   modelPickerName,
   sameModelId,
   OTHER_GROUP_KEY,
@@ -93,7 +94,8 @@ type ModelItem = {
   modelLock?: ModelTurnLock;
 };
 
-type PickerSection = ModelSection<ModelItem>;
+/** A provider group as the list draws it: `count` is the group's size, open or shut. */
+type PickerSection = ModelSection<ModelItem> & { count: number };
 
 const SECTION_LABELS: Record<ThreadConfigMode, string> = {
   sessions: 'Sessions',
@@ -364,13 +366,7 @@ function SessionsSection({
       return (
         <Animated.View entering={entering.fadeIn}>
           <PressableScale
-            style={[
-              styles.sessionCard,
-              {
-                backgroundColor: isCurrent ? tokens.accentMuted : tokens.backgroundInset,
-                borderColor: isCurrent ? tokens.accent : tokens.border,
-              },
-            ]}
+            style={[styles.sessionCard, { backgroundColor: isCurrent ? tokens.rowSelected : 'transparent' }]}
             accessibilityRole="button"
             accessibilityLabel={`Switch to session ${sessionLabelTitle(item.title, label)}`}
             accessibilityState={{ selected: isCurrent }}
@@ -378,6 +374,7 @@ function SessionsSection({
               await Haptics.selectionAsync();
               onSelect?.(item.id);
             }}>
+            {isCurrent ? <CurrentBar /> : null}
             <View style={styles.sessionHeader}>
               {renaming ? (
                 <TextField
@@ -396,7 +393,9 @@ function SessionsSection({
                 </Text>
               )}
               {botChatBadge ? <Badge label={botChatBadge} tone="neutral" dot={false} /> : null}
-              {isCurrent ? <Badge label="Current" tone="accent" dot={false} /> : null}
+              {isCurrent ? (
+                <Icon name={{ ios: 'checkmark', android: 'check', web: 'check' }} size={16} color="accent" />
+              ) : null}
               {pinned ? <Badge label="Pinned" tone="neutral" dot={false} /> : null}
               {gatewayId ? (
                 <PressableScale
@@ -481,10 +480,7 @@ function SessionsSection({
       startRename,
       submitRename,
       togglePin,
-      tokens.accent,
-      tokens.accentMuted,
-      tokens.backgroundInset,
-      tokens.border,
+      tokens.rowSelected,
     ],
   );
 
@@ -646,6 +642,16 @@ function SessionsSection({
   );
 }
 
+/**
+ * The current item's mark in a sheet's list: a thin bar of violet light at the
+ * row's leading edge. With the row's soft lift and a check, it is how every
+ * list in this sheet says "this one" — light, never a violet box.
+ */
+function CurrentBar() {
+  const tokens = useTokens();
+  return <View pointerEvents="none" style={[styles.currentBar, { backgroundColor: tokens.accent }]} />;
+}
+
 /** Formerly model-picker-sheet: searchable, provider-grouped catalog. */
 function ModelsSection({
   models = [],
@@ -733,8 +739,7 @@ function ModelsSection({
             style={[
               styles.modelCard,
               {
-                backgroundColor: isCurrent ? tokens.accentMuted : tokens.backgroundInset,
-                borderColor: isCurrent ? tokens.accent : tokens.border,
+                backgroundColor: isCurrent ? tokens.rowSelected : 'transparent',
                 opacity: item.available === false || locked ? 0.6 : 1,
               },
             ]}
@@ -746,19 +751,23 @@ function ModelsSection({
               await Haptics.selectionAsync();
               onSelect?.(item.id, item.providerId ?? item.provider);
             }}>
+            {isCurrent ? <CurrentBar /> : null}
             <View style={styles.modelHeader}>
               <Text variant="body" numberOfLines={2} style={styles.modelId}>
                 {name}
               </Text>
+              {/* Only the exceptions are marked: available is the default, so
+                  it wears nothing; this one wears a check, a locked one a lock. */}
               {isCurrent ? (
-                <Badge label="Current" tone="accent" dot={false} />
-              ) : (
-                <Badge
-                  label={item.available === false || locked ? 'Locked' : 'Available'}
-                  tone={item.available === false || locked ? 'neutral' : 'success'}
-                  dot={false}
-                />
-              )}
+                <Icon name={{ ios: 'checkmark', android: 'check', web: 'check' }} size={16} color="accent" />
+              ) : item.available === false || locked ? (
+                <View style={styles.lockedMark}>
+                  <Icon name={{ ios: 'lock.fill', android: 'lock', web: 'lock' }} size={11} color="textTertiary" />
+                  <Text variant="micro" color="tertiary">
+                    Locked
+                  </Text>
+                </View>
+              ) : null}
             </View>
             {locked ? (
               <View style={styles.modelLockRow}>
@@ -791,7 +800,7 @@ function ModelsSection({
         </Animated.View>
       );
     },
-    [currentDefault, onSelect, tokens.accent, tokens.accentMuted, tokens.backgroundInset, tokens.border],
+    [currentDefault, onSelect, tokens.rowSelected],
   );
 
   const renderSectionHeader = useCallback(
@@ -813,10 +822,14 @@ function ModelsSection({
             size={14}
             color={tokens.textSecondary}
           />
-          <Text variant="caption" style={styles.sectionTitle}>
-            {section.title}
+          <Text variant="caption" color="secondary" style={styles.sectionTitle}>
+            {providerDisplayName(section.title)}
           </Text>
-          <Badge label={String(section.data.length)} tone="neutral" dot={false} />
+          {/* The group's whole size — a collapsed group hands the list no
+              rows, and used to read "0" as if it were empty. */}
+          <Text variant="micro" color="tertiary">
+            {String(section.count)}
+          </Text>
         </PressableScale>
       );
     },
@@ -878,6 +891,7 @@ function ModelsSection({
         <SectionList
           sections={sections.map((section) => ({
             ...section,
+            count: section.data.length,
             data: isExpanded(section.key) ? section.data : [],
           }))}
           keyExtractor={(item) => `${item.providerId ?? item.provider ?? OTHER_GROUP_KEY}:${item.id}`}
@@ -947,11 +961,9 @@ function BackendsSection({
           statusColor={healthy ? tokens.statusConnected : tokens.textTertiary}
           trailing={<Badge label={item.state ?? 'unknown'} tone={healthy ? 'success' : 'neutral'} dot={false} />}
           selected={item.id === selectedBackendId}
-           style={
-             item.id === selectedBackendId
-               ? { backgroundColor: tokens.accentMuted, borderColor: tokens.accent, borderWidth: StyleSheet.hairlineWidth * 2, borderRadius: Radius.lg }
-               : undefined
-           }
+          style={
+            item.id === selectedBackendId ? { backgroundColor: tokens.rowSelected, borderRadius: Radius.md } : undefined
+          }
           onPress={() => onSelect?.(item.id)}
         />
       );
@@ -1121,10 +1133,24 @@ const styles = StyleSheet.create({
   },
   sessionCard: {
     borderRadius: Radius.md,
-    padding: Spacing.two,
-    marginBottom: Spacing.two,
-    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: Spacing.two + 2,
+    paddingHorizontal: Spacing.three - 2,
+    marginBottom: 2,
     gap: 2,
+    overflow: 'hidden',
+  },
+  currentBar: {
+    position: 'absolute',
+    left: 0,
+    top: 10,
+    bottom: 10,
+    width: 3,
+    borderRadius: 2,
+  },
+  lockedMark: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   sessionHeader: {
     flexDirection: 'row',
@@ -1162,6 +1188,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.two,
     paddingVertical: Spacing.two,
+    paddingHorizontal: Spacing.one,
   },
   sectionTitle: {
     flex: 1,
@@ -1169,10 +1196,11 @@ const styles = StyleSheet.create({
   },
   modelCard: {
     borderRadius: Radius.md,
-    padding: Spacing.two,
-    marginBottom: Spacing.two,
-    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: Spacing.two + 2,
+    paddingHorizontal: Spacing.three - 2,
+    marginBottom: 2,
     gap: 2,
+    overflow: 'hidden',
   },
   modelHeader: {
     flexDirection: 'row',

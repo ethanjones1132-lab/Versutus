@@ -120,12 +120,13 @@ describe('SegmentedControl selection reads brand violet on a cool hairline', () 
   const src = readSource('SegmentedControl.tsx');
 
   it('indicator keeps the muted brand fill behind a cool hairline border', () => {
-    expect(src).toContain('backgroundColor: tokens.accentMuted, borderColor: tokens.border');
+    // Light, not paint: the thumb is a lit lift with the specular lip.
+    expect(src).toContain('backgroundColor: tokens.rowSelected, borderTopColor: tokens.specular');
     expect(src).not.toContain('accentWarmMuted');
   });
 
-  it('selected segment label is the brand accent', () => {
-    expect(src).toContain("color={selected ? 'accent' : 'secondary'}");
+  it('the selected segment label reads by brightness and weight, not a violet tint', () => {
+    expect(src).toContain("color={selected ? 'primary' : 'tertiary'}");
     expect(src).not.toMatch(/accentWarm/);
   });
 

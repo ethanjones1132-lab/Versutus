@@ -68,7 +68,8 @@ const AFFORDANCE_EDGES = [
   {
     label: 'the selected segment keeps the indicator edge',
     parts: ['src', 'components', 'ui', 'SegmentedControl.tsx'],
-    keep: ['borderWidth: StyleSheet.hairlineWidth,'],
+    // The thumb's edge is the specular lip every raised surface carries.
+    keep: ['borderTopWidth: StyleSheet.hairlineWidth,'],
   },
   {
     label: 'a live call banner over the thread keeps its own edge',

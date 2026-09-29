@@ -44,7 +44,7 @@ describe('the session selector reads the label store', () => {
     const src = sheet();
     // The badge sits beside the shipped Current badge on the same row.
     expect(src).toMatch(
-      /<Badge label="Current" tone="accent" dot=\{false\} \/>[\s\S]{0,400}?<Badge label="Pinned"/,
+      /\{isCurrent \? \([\s\S]{0,160}?name=\{\{ ios: 'checkmark'[\s\S]{0,200}?<Badge label="Pinned"/,
     );
     expect(src).toMatch(/accessibilityLabel=\{`\$\{pinned \? 'Unpin' : 'Pin'\} session /);
     expect(src).toMatch(/accessibilityLabel=\{`Rename session /);

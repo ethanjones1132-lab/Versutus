@@ -81,13 +81,13 @@ describe('Thread-config section-header screen-reader state', () => {
     );
   });
 
-  test('the section-header Badge label={String(section.data.length)} is byte-identical', () => {
+  test('the section header shows the group size, open or collapsed', () => {
     const src = readThreadConfigSource();
-    // The model count badge per section is the second visible signal; the
-    // accessibilityState addition must not change the rendered Badge.
-    expect(src).toContain(
-      '<Badge label={String(section.data.length)} tone="neutral" dot={false} />',
-    );
+    // The count per section is the second visible signal. It reads the
+    // group's own size: a collapsed group hands the list no rows, and the
+    // old `section.data.length` printed "0" beside every closed provider.
+    expect(src).toContain('{String(section.count)}');
+    expect(src).not.toContain('String(section.data.length)');
   });
 
   test('the expanded useState still declares the boolean default', () => {

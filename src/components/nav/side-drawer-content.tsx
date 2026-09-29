@@ -3,8 +3,9 @@ import {
   type DrawerContentComponentProps,
 } from 'expo-router/drawer';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import Svg, { Defs, LinearGradient, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { VersutusMark } from '@/components/brand/versutus-mark';
@@ -16,6 +17,7 @@ import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import type { PublicBot } from '@/lib/gateway/bots';
+import { teamPresence, type TeamPresence } from '@/lib/activity/presence';
 import { botReportedRoutable } from '@/lib/gateway/roster-tap';
 import { haptics } from '@/lib/haptics';
 
@@ -67,12 +69,59 @@ const SETTINGS: NavTarget = {
 /** How many Bots the drawer lists before the roster takes over. */
 const DRAWER_TEAM_LIMIT = 6;
 
+/**
+ * The drawer is part of the lit room: the house violet pools behind the mark
+ * at the top, and the panel's leading edge catches a hairline of light.
+ */
+function DrawerLight() {
+  const tokens = useTokens();
+  const id = useId().replace(/[^a-zA-Z0-9_-]/g, '');
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <Svg width="100%" height={260} style={styles.pool}>
+        <Defs>
+          <RadialGradient id={`pool-${id}`} cx="18%" cy="4%" rx="75%" ry="80%" fx="18%" fy="4%">
+            <Stop offset="0" stopColor={tokens.accent} stopOpacity={0.34} />
+            <Stop offset="0.5" stopColor={tokens.accentDeep} stopOpacity={0.1} />
+            <Stop offset="1" stopColor={tokens.accentDeep} stopOpacity={0} />
+          </RadialGradient>
+        </Defs>
+        <Rect width="100%" height={260} fill={`url(#pool-${id})`} />
+      </Svg>
+      <Svg width={1} height="100%" style={styles.edge}>
+        <Defs>
+          <LinearGradient id={`edge-${id}`} x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor="#FFFFFF" stopOpacity={0.14} />
+            <Stop offset="0.45" stopColor="#FFFFFF" stopOpacity={0.04} />
+            <Stop offset="1" stopColor="#FFFFFF" stopOpacity={0} />
+          </LinearGradient>
+        </Defs>
+        <Rect width={1} height="100%" fill={`url(#edge-${id})`} />
+      </Svg>
+    </View>
+  );
+}
+
+function PresenceNote({ presence }: { presence: TeamPresence }) {
+  const tokens = useTokens();
+  const color = presence === 'needs-you' ? tokens.statusConnecting : tokens.accent;
+  return (
+    <View style={styles.presence}>
+      <View style={[styles.presenceDot, { backgroundColor: color }]} />
+      <Text variant="micro" style={{ color }}>
+        {presence === 'needs-you' ? 'needs you' : 'working'}
+      </Text>
+    </View>
+  );
+}
+
 function DrawerRow({
   title,
   icon,
   leading,
   active = false,
   count,
+  note,
   onPress,
   accessibilityLabel,
 }: {
@@ -82,6 +131,8 @@ function DrawerRow({
   active?: boolean;
   /** A number that needs the operator (pending approvals). Hidden at zero. */
   count?: number;
+  /** A quiet line at the row's end: what a teammate is doing right now. */
+  note?: React.ReactNode;
   onPress: () => void;
   accessibilityLabel?: string;
 }) {
@@ -95,7 +146,10 @@ function DrawerRow({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? title}
       accessibilityState={{ selected: active }}
-      style={[styles.row, active ? { backgroundColor: tokens.backgroundRaised } : null]}>
+      style={[styles.row, active ? { backgroundColor: tokens.rowSelected } : null]}>
+      {/* Where you are: the same lit lift and violet light bar as the current
+          row in every sheet — one way the app says "this one". */}
+      {active ? <View pointerEvents="none" style={[styles.activeBar, { backgroundColor: tokens.accent }]} /> : null}
       {leading ?? (icon ? <Icon name={icon} size={19} color={active ? 'textPrimary' : 'textSecondary'} /> : null)}
       <Text
         variant="callout"
@@ -104,9 +158,11 @@ function DrawerRow({
         style={styles.rowTitle}>
         {title}
       </Text>
+      {note}
       {count ? (
-        <View style={[styles.count, { backgroundColor: tokens.accentDeep }]}>
-          <Text variant="micro" style={styles.countText}>
+        // What needs you wears the attention amber, as it does on Activity.
+        <View style={[styles.count, { backgroundColor: tokens.statusConnecting }]}>
+          <Text variant="micro" style={[styles.countText, { color: tokens.textInverse }]}>
             {count > 99 ? '99+' : String(count)}
           </Text>
         </View>
@@ -139,7 +195,9 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
     requestSurface,
     clearBot,
     pendingApprovals,
+    activityRunsForActiveGateway,
   } = useGateway();
+  const presence = teamPresence(activityRunsForActiveGateway);
   const routeName = props.state.routes[props.state.index]?.name;
   const [team, setTeam] = useState<PublicBot[]>([]);
 
@@ -195,6 +253,7 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
 
   return (
     <View style={[styles.root, { paddingTop: Math.max(insets.top, Spacing.two) + Spacing.three }]}>
+      <DrawerLight />
       <View style={styles.brand}>
         <VersutusMark size={28} />
         <Text variant="title" style={styles.wordmark}>
@@ -254,7 +313,14 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
                 key={bot.id}
                 title={bot.displayName}
                 leading={<BotAvatar botId={bot.id} name={bot.displayName} size={26} />}
-                accessibilityLabel={`Chat with ${bot.displayName}`}
+                note={presence.get(bot.id) ? <PresenceNote presence={presence.get(bot.id)!} /> : undefined}
+                accessibilityLabel={`Chat with ${bot.displayName}${
+                  presence.get(bot.id) === 'needs-you'
+                    ? ', needs you'
+                    : presence.get(bot.id) === 'working'
+                      ? ', working'
+                      : ''
+                }`}
                 onPress={() => openTeammate(bot)}
               />
             ))}
@@ -349,6 +415,35 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingHorizontal: Spacing.three - 4,
     borderRadius: Radius.md,
+    overflow: 'hidden',
+  },
+  activeBar: {
+    position: 'absolute',
+    left: 0,
+    top: 11,
+    bottom: 11,
+    width: 3,
+    borderRadius: 2,
+  },
+  pool: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+  },
+  edge: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+  },
+  presence: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  presenceDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
   },
   rowTitle: {
     flex: 1,
@@ -362,8 +457,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   countText: {
-    color: '#FFFFFF',
     letterSpacing: 0,
+    fontWeight: '700',
   },
   foot: {
     paddingHorizontal: Spacing.two,

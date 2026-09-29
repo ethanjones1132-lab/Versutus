@@ -102,7 +102,7 @@ describe('ListRow selected state screen-reader wiring', () => {
     const src = readBackendsSource();
     // The sighted treatment is what the new state mirrors; it must not move.
     expect(src).toContain(
-      '? { backgroundColor: tokens.accentMuted, borderColor: tokens.accent, borderWidth: StyleSheet.hairlineWidth * 2, borderRadius: Radius.lg }',
+      '? { backgroundColor: tokens.rowSelected, borderRadius: Radius.md }',
     );
   });
 

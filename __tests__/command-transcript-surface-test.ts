@@ -223,7 +223,7 @@ test('a share the platform refuses says so instead of nothing', () => {
 
 test('the section heading is a headline under the sheet title, never a second title', () => {
   const src = section();
-  expect(src).toContain('<Text variant="headline">Command history</Text>');
+  expect(src).toContain('<Text variant="body">Command history</Text>');
   expect(src).not.toContain('variant="title"');
 });
 

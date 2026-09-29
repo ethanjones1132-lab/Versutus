@@ -49,6 +49,11 @@ export type ListRowProps = {
   accessibilityHint?: string;
   /** Selected state announced to screen readers when defined (e.g. a picked backend). */
   selected?: boolean;
+  /**
+   * `danger` for the one row that ends something (Disconnect): its glyph and
+   * title wear the failure red, so it never reads like its quiet neighbours.
+   */
+  tone?: 'default' | 'danger';
   style?: StyleProp<ViewStyle>;
 };
 
@@ -64,6 +69,7 @@ export function ListRow({
   onPress,
   onLongPress,
   chevron,
+  tone = 'default',
   accessibilityLabel,
   accessibilityHint,
   selected,
@@ -101,11 +107,18 @@ export function ListRow({
         // A rounded tile, not a halo: the glyph sits in a small lit square the
         // way a well-made settings list sets its icons.
         <View style={[styles.iconTile, { backgroundColor: tokens.backgroundRaised }]}>
-          <Icon name={icon} size={16} color="accent" />
+          {tone === 'danger' ? (
+            <Icon name={icon} size={16} color="statusDisconnected" />
+          ) : (
+            <Icon name={icon} size={16} color="accent" />
+          )}
         </View>
       ) : null}
       <View style={styles.titles}>
-        <Text variant="body" numberOfLines={2} style={styles.title}>
+        <Text
+          variant="body"
+          numberOfLines={2}
+          style={[styles.title, tone === 'danger' ? { color: tokens.statusDisconnected } : null]}>
           {title}
         </Text>
         {subtitle ? (

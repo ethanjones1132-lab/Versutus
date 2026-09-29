@@ -2,8 +2,8 @@ import * as Clipboard from 'expo-clipboard';
 import { useEffect, useState } from 'react';
 import { StyleSheet, Switch, View } from 'react-native';
 
-import { Button, ListRow, Text } from '@/components/ui';
-import { Spacing } from '@/constants/tokens';
+import { Button, Icon, ListRow, PressableScale, Text } from '@/components/ui';
+import { Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import {
@@ -109,16 +109,43 @@ export function CommandHistorySection() {
   };
 
   return (
-    <View style={styles.block}>
-      <Text variant="headline">Command history</Text>
-      <Text variant="caption" color="secondary">
-        Slash commands run in this session, newest first.
-      </Text>
-      <Button
-        label={commandHistoryToggleLabel(open, commandTranscripts.length)}
-        variant="ghost"
-        onPress={() => setOpen(!open)}
-      />
+    <View style={[styles.block, { backgroundColor: tokens.backgroundInset }]}>
+      {/* One disclosure row: the name, how many are held, and a chevron that
+          turns — not a heading, a sentence and a button that repeats it. */}
+      <PressableScale
+        onPress={async () => {
+          await haptics.selection();
+          setOpen(!open);
+        }}
+        accessibilityRole="button"
+        accessibilityLabel={commandHistoryToggleLabel(open, commandTranscripts.length)}
+        accessibilityHint="Slash commands run in this session, newest first."
+        accessibilityState={{ expanded: open }}
+        style={styles.disclosure}>
+        <View style={[styles.iconTile, { backgroundColor: tokens.backgroundRaised }]}>
+          <Icon name={{ ios: 'terminal', android: 'terminal', web: 'terminal' }} size={16} color="accent" />
+        </View>
+        <View style={styles.disclosureText}>
+          <Text variant="body">Command history</Text>
+          <Text variant="caption" color="secondary" numberOfLines={1}>
+            Slash commands run in this session, newest first.
+          </Text>
+        </View>
+        {commandTranscripts.length > 0 ? (
+          <Text variant="caption" color="tertiary">
+            {String(commandTranscripts.length)}
+          </Text>
+        ) : null}
+        <Icon
+          name={
+            open
+              ? { ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }
+              : { ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }
+          }
+          size={14}
+          color="textTertiary"
+        />
+      </PressableScale>
       {open ? (
         rows.length === 0 ? (
           <Text variant="caption" color="secondary" style={styles.empty}>
@@ -177,7 +204,28 @@ export function CommandHistorySection() {
 }
 
 const styles = StyleSheet.create({
-  block: { gap: Spacing.two, paddingHorizontal: Spacing.two },
+  block: {
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.one,
+    marginBottom: Spacing.three,
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+  },
+  disclosure: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three - 4,
+    minHeight: 56,
+  },
+  disclosureText: { flex: 1, minWidth: 0 },
+  iconTile: {
+    width: 32,
+    height: 32,
+    borderRadius: Radius.sm + 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   empty: { paddingBottom: Spacing.two },
   rawToggle: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
   rawToggleCopy: { flex: 1, minWidth: 0 },

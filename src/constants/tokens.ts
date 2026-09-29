@@ -33,6 +33,9 @@ export const Palette = {
   // through it, so the room's light reaches the UI and not only the backdrop.
   // Tertiary text keeps AA over it under every lamp colour (glass-variants-test).
   stagePanel: 'rgba(28, 28, 34, 0.72)',
+  // The current item in a list inside a sheet: a soft lift of light, with a
+  // violet light bar at its edge — light, never a violet fill.
+  rowSelected: 'rgba(245, 247, 250, 0.07)',
 
   // Glass tiers (cool translucent; flat-panel + hairline first)
   glass: 'rgba(20, 20, 22, 0.82)',

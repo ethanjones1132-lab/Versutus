@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, Switch, View } from 'react-native';
 
 import { CommandHistorySection } from '@/components/chat/command-history-section';
 import { SessionAnalytics } from '@/components/chat/session-analytics';
 import { PulsingDot, statusColor, statusLabel } from '@/components/connection-badge';
-import { BaseSheet, ConfirmSheet, Divider, ListRow, Text } from '@/components/ui';
-import { Spacing } from '@/constants/tokens';
+import { BaseSheet, ConfirmSheet, ListRow, Text } from '@/components/ui';
+import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { formatRelativeTime } from '@/lib/format';
 import type { ConnectionStatus } from '@/lib/gateway/types';
@@ -110,20 +110,25 @@ export function ChatOverflowSheet({
           sessions={sessions}
           rowCount={rowCount}
           messageCount={session?.messageCount}
+          lastActive={lastActive}
         />
       ) : spendCopy ? (
         <Text variant="caption" color="tertiary" style={styles.noSession}>
           {spendCopy}
         </Text>
       ) : null}
-      {lastActive ? (
+      {!spendSession && lastActive ? (
         <Text variant="micro" color="tertiary" style={styles.lastActive}>
           Last active {formatRelativeTime(lastActive)}
         </Text>
       ) : null}
-      <CommandHistorySection />
 
-      <View style={styles.actions}>
+      {/* What this conversation can do, as one grouped well; the app-level
+          door and the one row that ends something each stand apart. */}
+      <Text variant="caption" color="secondary" style={styles.groupLabel}>
+        This conversation
+      </Text>
+      <View style={[styles.group, { backgroundColor: tokens.backgroundInset }]}>
         {onSessionsPress ? (
           <ListRow
             title="Sessions"
@@ -161,6 +166,8 @@ export function ChatOverflowSheet({
           />
         ) : null}
         {onSpeakerPress ? (
+          // A setting, so a switch: flipping it leaves the sheet open, the way
+          // every other on/off in the app behaves.
           <ListRow
             title="Read replies aloud"
             subtitle={speakerOn ? 'On' : 'Off'}
@@ -170,10 +177,17 @@ export function ChatOverflowSheet({
               web: speakerOn ? 'volume_up' : 'volume_off',
             }}
             chevron={false}
-            onPress={() => {
-              onSpeakerPress();
-              onClose();
-            }}
+            onPress={onSpeakerPress}
+            trailing={
+              <Switch
+                value={speakerOn === true}
+                onValueChange={() => onSpeakerPress()}
+                trackColor={{ true: tokens.accentDeep, false: tokens.backgroundRaised }}
+                thumbColor={tokens.textPrimary}
+                accessibilityLabel="Read replies aloud"
+                accessibilityState={{ checked: speakerOn === true }}
+              />
+            }
           />
         ) : null}
         <ListRow
@@ -194,21 +208,26 @@ export function ChatOverflowSheet({
             onClose();
           }}
         />
+      </View>
+
+      <CommandHistorySection />
+
+      <View style={[styles.group, { backgroundColor: tokens.backgroundInset }]}>
         {onSettingsPress ? (
           <ListRow
             title="Settings"
             icon={{ ios: 'gearshape', android: 'settings', web: 'settings' }}
-            chevron={false}
+            chevron
             onPress={() => {
               onSettingsPress();
               onClose();
             }}
           />
         ) : null}
-        <Divider />
         <ListRow
           title="Disconnect gateway"
           icon={{ ios: 'power', android: 'power_settings_new', web: 'power_settings_new' }}
+          tone="danger"
           chevron={false}
           onPress={() => {
             setDisconnectArmed(true);
@@ -249,7 +268,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.two,
     paddingBottom: Spacing.two,
   },
-  actions: {
-    gap: 0,
+  groupLabel: {
+    paddingHorizontal: Spacing.two,
+    paddingBottom: Spacing.one,
+  },
+  group: {
+    borderRadius: Radius.lg,
+    overflow: 'hidden',
+    paddingVertical: Spacing.one,
+    marginBottom: Spacing.three,
   },
 });

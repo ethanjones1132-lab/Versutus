@@ -335,6 +335,36 @@ export const OTHER_GROUP_KEY = 'other';
  * display name; models reporting neither land in one explicit "Other" group,
  * because dropping unattributed entries would hide real, selectable models.
  */
+/** Providers whose names are not their ids with a capital letter. */
+const PROVIDER_NAMES: Readonly<Record<string, string>> = {
+  openai: 'OpenAI',
+  xai: 'xAI',
+  deepseek: 'DeepSeek',
+  openrouter: 'OpenRouter',
+  nvidia: 'NVIDIA',
+  zai: 'Z.ai',
+  'z-ai': 'Z.ai',
+  minimax: 'MiniMax',
+  mistralai: 'Mistral',
+  'meta-llama': 'Meta',
+  moonshotai: 'Moonshot',
+  huggingface: 'Hugging Face',
+};
+
+/**
+ * A provider as a person would write it: "OpenAI", not "openai". Known
+ * spellings first, then the id with its first letter raised; an id that
+ * already carries capitals is left as its owner wrote it.
+ */
+export function providerDisplayName(provider: string): string {
+  const trimmed = provider.trim();
+  if (!trimmed) return provider;
+  const known = PROVIDER_NAMES[trimmed.toLowerCase()];
+  if (known) return known;
+  if (trimmed !== trimmed.toLowerCase()) return trimmed;
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
 export function groupByProvider<T extends ModelSearchable>(models: T[]): ModelSection<T>[] {
   const groups = new Map<string, ModelSection<T>>();
   for (const model of models) {
