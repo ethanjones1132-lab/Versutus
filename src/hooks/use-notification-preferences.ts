@@ -56,6 +56,10 @@ export function useNotificationPreferences() {
   const [sendingTest, setSendingTest] = useState(false);
   const [permission, setPermission] = useState<'unknown' | 'granted' | 'denied'>('unknown');
   const [error, setError] = useState<string | null>(null);
+  // Whether the prefs on screen are the Gate's: a read or write has landed.
+  // Until then they are DEFAULT_PREFS, so every switch drawn from them is a
+  // guess, and a tap would write one field over preferences never read.
+  const [synced, setSynced] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
 
   const isCustom = activeGateway?.kind === 'custom';
@@ -89,6 +93,7 @@ export function useNotificationPreferences() {
       sentDeviceId = true;
       const raw = await gatewayRequest<Record<string, unknown>>('notifications.preferences.get', params);
       setPrefs(normalize(raw));
+      setSynced(true);
     } catch (err) {
       // A refusal that arrived after the phone named itself is the Gate's own
       // verdict (unpaired), not the missing-identity copy.
@@ -119,6 +124,7 @@ export function useNotificationPreferences() {
           ...params,
         });
         setPrefs(normalize(raw));
+        setSynced(true);
       } catch (err) {
         setError(describeGatewayError(err, { sentDeviceId }));
       } finally {
@@ -203,6 +209,7 @@ export function useNotificationPreferences() {
     error,
     testResult,
     connected,
+    synced,
     setPatch,
     setEnabled,
     sendTest,

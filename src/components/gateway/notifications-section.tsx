@@ -29,6 +29,7 @@ export function NotificationsSection() {
     error,
     testResult,
     connected,
+    synced,
     setPatch,
     setEnabled,
     sendTest,
@@ -107,7 +108,7 @@ export function NotificationsSection() {
         <ErrorCard
           cause={error}
           affected="Push notification preferences on this device"
-          next="Retry — the switches below only reflect the Gate after a successful read."
+          next="Retry — the switches below stay locked until the Gate's own settings are read."
           onRetry={() => void reload()}
         />
       ) : null}
@@ -128,7 +129,7 @@ export function NotificationsSection() {
               onValueChange={(value) => void setEnabled(value)}
               trackColor={{ true: tokens.accent, false: tokens.border }}
               thumbColor={tokens.textPrimary}
-              disabled={saving}
+              disabled={saving || !synced}
               accessibilityLabel="Push notifications from this Gate"
               accessibilityState={{ checked: prefs.enabled }}
             />
@@ -166,7 +167,7 @@ export function NotificationsSection() {
                 onValueChange={(value) => void setPatch({ richBody: value })}
                 trackColor={{ true: tokens.accent, false: tokens.border }}
                 thumbColor={tokens.textPrimary}
-                disabled={saving}
+                disabled={saving || !synced}
                 accessibilityLabel="Include message text in notifications"
                 accessibilityState={{ checked: prefs.richBody }}
               />
@@ -181,7 +182,7 @@ export function NotificationsSection() {
                 onValueChange={(value) => void setPatch({ widgetUpdates: value })}
                 trackColor={{ true: tokens.accent, false: tokens.border }}
                 thumbColor={tokens.textPrimary}
-                disabled={saving}
+                disabled={saving || !synced}
                 accessibilityLabel="Send data-only widget updates"
                 accessibilityState={{ checked: prefs.widgetUpdates }}
               />
@@ -218,7 +219,7 @@ export function NotificationsSection() {
               </View>
             </View>
             {quietError ? <Text color="secondary">{quietError}</Text> : null}
-            <Button label={saving ? 'Saving…' : 'Save quiet hours'} onPress={saveQuietHours} disabled={saving} />
+            <Button label={saving ? 'Saving…' : 'Save quiet hours'} onPress={saveQuietHours} disabled={saving || !synced} />
             <View style={styles.row}>
               <Text variant="body">Approvals pierce quiet hours</Text>
               <Switch
@@ -226,7 +227,7 @@ export function NotificationsSection() {
                 onValueChange={(value) => void setPatch({ quietHoursAllowApprovals: value })}
                 trackColor={{ true: tokens.accent, false: tokens.border }}
                 thumbColor={tokens.textPrimary}
-                disabled={saving}
+                disabled={saving || !synced}
                 accessibilityLabel="Let approval notices through during quiet hours"
                 accessibilityState={{ checked: prefs.quietHoursAllowApprovals }}
               />
@@ -259,7 +260,7 @@ export function NotificationsSection() {
                   onValueChange={(value) => saveBotFilter(filterRows)(row.botId, value)}
                   trackColor={{ true: tokens.accent, false: tokens.border }}
                   thumbColor={tokens.textPrimary}
-                  disabled={saving}
+                  disabled={saving || !synced}
                   accessibilityLabel={`Allow ${row.kind === 'bot' ? row.displayName : row.botId} notifications`}
                   accessibilityState={{ checked: row.enabled }}
                 />

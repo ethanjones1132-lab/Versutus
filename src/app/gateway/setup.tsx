@@ -12,6 +12,7 @@ import { ProvidersSection } from '@/components/gateway/providers-section';
 import { Card, Chip, Screen, SegmentedControl, Text } from '@/components/ui';
 import { useGateway } from '@/context/gateway-provider';
 import { backendChipLabel } from '@/lib/gateway/backend-freshness';
+import { gateSetupReach } from '@/lib/gateway/gate-setup-reach';
 import { Spacing } from '@/constants/tokens';
 
 type Section = 'providers' | 'environments' | 'capabilities' | 'notifications' | 'management';
@@ -32,7 +33,11 @@ const SECTIONS = [
  */
 export default function GatewaySetupScreen() {
   const [section, setSection] = useState<Section>('providers');
-  const { backends, selectedBackendId, selectBackend } = useGateway();
+  const { backends, selectedBackendId, selectBackend, activeGateway, activeManifest, status } = useGateway();
+  const reach = gateSetupReach({ status, kind: activeGateway?.kind, hasManifest: activeManifest !== null });
+  // The Gate-only tabs speak the Gate's RPCs; on anything else they would
+  // only stack refusals, so one card says what this connection is instead.
+  const gateOnly = section !== 'management' && (reach === 'not-a-gate' || reach === 'reaching-gate');
   // Show what is actually selected. This used to fall back to `backends[0]`,
   // which drew the Claude Code chip as chosen while the provider held
   // undefined — so the screen disagreed with the thing doing the routing, and
@@ -71,7 +76,20 @@ export default function GatewaySetupScreen() {
           onSelect={setSection}
         />
 
-        {section === 'providers' ? (
+        {gateOnly ? (
+          <Card padding={Spacing.three} style={styles.card}>
+            <Text variant="headline">{reach === 'reaching-gate' ? 'Reaching the Gate…' : 'This is not a Versutus Gate'}</Text>
+            <Text variant="caption" color="secondary">
+              {reach === 'reaching-gate'
+                ? "The Gate's manifest has not answered yet. This tab opens as soon as it does."
+                : `${activeGateway?.name ?? 'This gateway'} is a ${
+                    activeGateway?.kind === 'openclaw' ? 'OpenClaw' : 'Hermes'
+                  } server. Providers, CLI environments, capabilities and push are served by a Versutus Gate — connect to the Gate (port 8760) on this PC to manage them.`}
+            </Text>
+          </Card>
+        ) : null}
+
+        {section === 'providers' && !gateOnly ? (
           <View style={styles.panel}>
             <Text variant="caption" color="secondary">
               Model providers the Gate owns — it holds the key and the catalog.
@@ -80,7 +98,7 @@ export default function GatewaySetupScreen() {
           </View>
         ) : null}
 
-        {section === 'environments' ? (
+        {section === 'environments' && !gateOnly ? (
           <View style={styles.panel}>
             <Text variant="caption" color="secondary">
               CLI agents attached to this Gate. They never receive your provider keys.
@@ -89,7 +107,7 @@ export default function GatewaySetupScreen() {
           </View>
         ) : null}
 
-        {section === 'capabilities' ? (
+        {section === 'capabilities' && !gateOnly ? (
           <View style={styles.panel}>
             <Text variant="caption" color="secondary">
               Instances of non-provider capability kinds. Providers are managed on the Providers
@@ -110,7 +128,7 @@ export default function GatewaySetupScreen() {
           </View>
         ) : null}
 
-        {section === 'notifications' ? (
+        {section === 'notifications' && !gateOnly ? (
           <View style={styles.panel}>
             <Text variant="caption" color="secondary">
               Push notifications from this Gate — runs, approvals, replies and routines, with the app

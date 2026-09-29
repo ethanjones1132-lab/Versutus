@@ -158,7 +158,7 @@ export function EnvironmentsSection() {
         </>
       ) : null}
 
-      {loaded && environments.length === 0 && !registering && !editing && status === 'connected' ? (
+      {loaded && environments.length === 0 && !registering && !editing && status === 'connected' && !error ? (
         <EmptyState
           icon={{ ios: 'terminal', android: 'terminal', web: 'terminal' }}
           title="No CLI environments yet"

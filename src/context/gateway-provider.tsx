@@ -190,6 +190,13 @@ import {
   type GatewayCapabilityCommand,
   type GatewayManifest,
 } from '@/lib/portal/manifest';
+import {
+  lateManifestUpgradesClient,
+  loadCachedGateManifest,
+  manifestForAttach,
+  saveCachedGateManifest,
+  type AttachManifestSource,
+} from '@/lib/portal/attach-manifest';
 import { identifyGateway, type GatewayIdentity } from '@/lib/portal/identify';
 import { loadAppSettings, saveAppSettings, type AppSettings } from '@/lib/settings/app-settings';
 import {
@@ -1068,6 +1075,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // open. Bot pins live per Bot, so checking only at connect (when usually no
   // Bot is selected yet) never looked at them: a Bot pinned to a provider its
   // Hermes catalogue does not have kept failing every turn (2026-09-16).
+  // A connect that could not read its Gate's manifest re-attaches once the
+  // manifest answers (attach-manifest.ts). attachClient reaches itself
+  // through this ref, the way the other late callbacks here do.
+  const upgradeClientRef = useRef<(gateway: GatewayProfile) => Promise<void>>(async () => undefined);
   const repairStalePinRef = useRef<
     ((client: PortalClient, isCurrent: () => boolean, fallbackGateway: GatewayProfile | undefined) => Promise<void>) | null
   >(null);
@@ -1356,12 +1367,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   );
 
   const attachClient = useCallback(
-    async (gatewayInput: GatewayProfile) => {
+    async (gatewayInput: GatewayProfile, options: { upgrade?: boolean } = {}) => {
       let gateway = gatewayInput;
       authFailureRef.current = false;
       const existing = clientRef.current;
       const existingStatus = existing?.connectionStatus;
       if (
+        // An upgrade replaces a live client on purpose: it is the wrong one.
+        !options.upgrade &&
         existing &&
         activeGatewayRef.current?.id === gateway.id &&
         (existingStatus === 'connected' ||
@@ -1399,6 +1412,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // The manifest this attach served, kept for the post-connect re-sync so
       // it can retry over the very IPv4s the Gate just advertised.
       let fetchedManifest: GatewayManifest | null = null;
+      // Where that manifest came from: a connect that had none built the
+      // Hermes adapter, and a late manifest must then rebuild the client.
+      let attachSource: AttachManifestSource = 'none';
       if (gateway.kind !== 'openclaw') {
         // Child profiles are materialised under parent.url + basePath and do
         // not host their own well-known manifest — fetch the parent's.
@@ -1407,10 +1423,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           parentUrl = known.find((item) => item.id === gateway.parentId)?.url;
         }
         const manifestUrl = manifestUrlForGateway(gateway, parentUrl);
-        const manifest = await fetchGatewayManifestWithLookupRetry(
-          manifestUrl,
-          manifestAlternateIpv4(gateway, null),
-        ).catch(() => null);
+        // A child profile serves its parent's manifest, so it shares the cache.
+        const manifestCacheId = gateway.parentId ?? gateway.id;
+        const attached = await manifestForAttach({
+          // A Gate that misses one fetch is still a Gate: retry once, then
+          // build from the last manifest it served, never the Hermes adapter.
+          knownGate: gateway.kind === 'custom',
+          fetchLive: () => fetchGatewayManifestWithLookupRetry(manifestUrl, manifestAlternateIpv4(gateway, null)),
+          loadCached: () => loadCachedGateManifest(manifestCacheId),
+          saveCached: (served) => saveCachedGateManifest(manifestCacheId, served),
+        });
+        const manifest = attached.manifest;
+        attachSource = attached.source;
         // Another attachClient may have superseded us while we awaited.
         if (!isCurrent()) return;
         if (manifest) {
@@ -1682,6 +1706,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         .then((manifest) => {
           if (!manifest || !isCurrent()) return undefined;
           setActiveManifest(manifest);
+          void saveCachedGateManifest(gateway.parentId ?? gateway.id, manifest).catch(() => undefined);
+          if (lateManifestUpgradesClient(attachSource, manifest)) {
+            // Connected without the manifest means connected through the
+            // Hermes adapter, where every Gate-only call fails. The Gate has
+            // answered now: rebuild the client as the Gate's own.
+            void upgradeClientRef.current(gateway);
+            return undefined;
+          }
           if (gateway.parentId) return undefined;
           return syncChildProfiles(gateway, manifestProviders(manifest));
         })
@@ -1704,6 +1736,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // changing when this callback is rebuilt.
     [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns, teardownRetiredActiveGateway, resetSessionSelector, updateTlsFingerprintChange],
   );
+
+  useEffect(() => {
+    upgradeClientRef.current = (gateway: GatewayProfile) => attachClient(gateway, { upgrade: true });
+  }, [attachClient]);
 
   const connectGateway = useCallback(
     async (gateway: GatewayProfile) => {

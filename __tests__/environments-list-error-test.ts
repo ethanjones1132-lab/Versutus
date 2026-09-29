@@ -80,8 +80,9 @@ describe('environments list names a refusal instead of an empty Gate', () => {
     expect(src).toContain(
       'description="Attach a CLI such as OpenCode, Codex or Claude Code to this Gate."',
     );
+    // Successful and empty only: a failed read never also claims an empty Gate.
     expect(src).toContain(
-      '{loaded && environments.length === 0 && !registering && !editing && status === \'connected\' ? (',
+      '{loaded && environments.length === 0 && !registering && !editing && status === \'connected\' && !error ? (',
     );
   });
 
