@@ -78,7 +78,11 @@ export function utf8Encode(text: string): Uint8Array {
     let cp = text.codePointAt(i) as number;
     // A surrogate pair is one code point across two UTF-16 units.
     if (cp > 0xffff) i++;
-    if (cp < 0x80) {
+
+    if (cp >= 0xd800 && cp <= 0xdfff) {
+      // Unpaired surrogate: encode as replacement character U+FFFD.
+      out.push(0xef, 0xbf, 0xbd);
+    } else if (cp < 0x80) {
       out.push(cp);
     } else if (cp < 0x800) {
       out.push(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));

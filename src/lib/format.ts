@@ -1,11 +1,10 @@
-/** Small display formatters shared across chat, home, and activity surfaces. */
-
-/** 1200 → "1.2k", 2500000 → "2.5M" */
+/** 1200 → "1.2k", 2500000 → "2.5M", 1200000000 → "1.2B" */
 export function formatTokenCount(count: number): string {
   if (!Number.isFinite(count) || count < 0) return '0';
   if (count < 1000) return String(Math.round(count));
   if (count < 1_000_000) return `${(count / 1000).toFixed(count < 10_000 ? 1 : 0)}k`;
-  return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count < 1_000_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  return `${(count / 1_000_000_000).toFixed(1)}B`;
 }
 
 /** 0.0042 → "$0.0042", 1.2 → "$1.20" */
@@ -16,7 +15,7 @@ export function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
-/** Relative timestamp: "just now", "4m ago", "2h ago", "3d ago", else short date. */
+/** Relative timestamp: "just now", "4m ago", "2h ago", "3d ago", else short date (with year if different from current year). */
 export function formatRelativeTime(timestamp: number): string {
   if (!Number.isFinite(timestamp)) return 'just now';
   const ms = timestamp > 1_000_000_000_000 ? timestamp : timestamp * 1000;
@@ -28,7 +27,12 @@ export function formatRelativeTime(timestamp: number): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ago`;
-  return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+  const date = new Date(ms);
+  const dateString = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return date.getFullYear() !== new Date().getFullYear()
+    ? `${dateString} ${date.getFullYear()}`
+    : dateString;
 }
 
 /** Compact clock time for message details: "14:03" */

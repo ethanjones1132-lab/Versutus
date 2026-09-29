@@ -4,7 +4,7 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { ConstellationView } from '@/components/fleet/constellation-view';
 import { Badge, PressableScale, Text } from '@/components/ui';
 import { fleetConstellationInput } from '@/lib/fleet/constellation-input';
-import { constellationModel, constellationNodeAccessibilityLabel } from '@/lib/fleet/constellation-model';
+import { constellationLayout, constellationModel, constellationNodeAccessibilityLabel } from '@/lib/fleet/constellation-model';
 
 jest.mock('@/constants/tokens', () => ({
   Radius: { xxl: 24 },
@@ -299,5 +299,74 @@ describe('the view is tappable and honest', () => {
     const src = constellationView();
     expect(src).not.toContain('gatewayRequest(');
     expect(src).not.toContain('useGateway(');
+  });
+});
+
+describe('host and routine edges have unique ids and render correctly', () => {
+  test('constellationLayout gives distinct ids to hosts and routine edges for the same pair', () => {
+    const model = constellationModel({
+      profiles: [{ id: 'home', name: 'Home' }],
+      connectedGatewayId: 'home',
+      roster: [{ id: 'scout', displayName: 'Scout' }],
+      routineReadStatus: 'ready',
+      cronJobs: [{ id: 'routine', name: '[bot:scout] Check', lastStatus: 'ok' }],
+    });
+    const layout = constellationLayout(model, 320);
+    const hostsEdge = layout.edges.find((e) => e.kind === 'hosts');
+    const routineEdge = layout.edges.find((e) => e.kind === 'routine');
+    expect(hostsEdge).toBeDefined();
+    expect(routineEdge).toBeDefined();
+    expect(hostsEdge!.id).not.toBe(routineEdge!.id);
+    expect(hostsEdge!.id).toContain('@hosts');
+    expect(routineEdge!.id).toContain('@routine');
+    expect(hostsEdge!.from).toBe(routineEdge!.from);
+    expect(hostsEdge!.to).toBe(routineEdge!.to);
+  });
+
+  test('native canvas filters host edges to only kind=hosts', () => {
+    const src = readSource('src', 'components', 'fleet', 'constellation-canvas.native.tsx');
+    expect(src).toContain('layout.edges');
+    expect(src).toContain(".filter((edge) => edge.kind === 'hosts')");
+  });
+
+  test('fallback canvas distinguishes edges by kind and uses unique keys', () => {
+    const src = readSource('src', 'components', 'fleet', 'constellation-canvas-fallback.tsx');
+    expect(src).toContain("edge.kind === 'routine'");
+    expect(src).toContain('key={edge.id}');
+  });
+
+  test('a Bot with routines shows one host line and one routine arc in layout', () => {
+    const model = constellationModel({
+      profiles: [{ id: 'home', name: 'Home' }],
+      connectedGatewayId: 'home',
+      roster: [{ id: 'scout', displayName: 'Scout' }],
+      routineReadStatus: 'ready',
+      cronJobs: [
+        { id: 'r1', name: '[bot:scout] Morning', lastStatus: 'ok' },
+        { id: 'r2', name: '[bot:scout] Evening', lastStatus: 'warn' },
+      ],
+    });
+    const layout = constellationLayout(model, 320);
+    const hostsEdges = layout.edges.filter((e) => e.kind === 'hosts');
+    const routineEdges = layout.edges.filter((e) => e.kind === 'routine');
+    expect(hostsEdges).toHaveLength(1);
+    expect(routineEdges).toHaveLength(1);
+    expect(hostsEdges[0].from).toBe(routineEdges[0].from);
+    expect(hostsEdges[0].to).toBe(routineEdges[0].to);
+  });
+
+  test('a Bot without routines shows only a host edge', () => {
+    const model = constellationModel({
+      profiles: [{ id: 'home', name: 'Home' }],
+      connectedGatewayId: 'home',
+      roster: [{ id: 'scout', displayName: 'Scout' }],
+      routineReadStatus: 'ready',
+      cronJobs: [],
+    });
+    const layout = constellationLayout(model, 320);
+    const hostsEdges = layout.edges.filter((e) => e.kind === 'hosts');
+    const routineEdges = layout.edges.filter((e) => e.kind === 'routine');
+    expect(hostsEdges).toHaveLength(1);
+    expect(routineEdges).toHaveLength(0);
   });
 });
