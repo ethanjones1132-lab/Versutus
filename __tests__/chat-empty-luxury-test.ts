@@ -74,10 +74,12 @@ describe('Empty states lead with bright-white hierarchy and violet CTAs', () => 
     expect(src).toContain('<Icon name={action.icon} size={15} color="accent" />');
     expect(src).toContain('accessibilityLabel={`Quick action ${action.label}`}');
     expect(src).toContain('accessibilityLabel="Add image or command"');
-    // Focus rings the pill in the brand violet; the send is the violet jewel
-    // and turns to a plain white stop while a reply streams.
-    expect(src).toContain('borderColor: focused ? tokens.accent : tokens.specular');
-    expect(src).toContain('backgroundColor: isStreaming ? tokens.textPrimary : tokens.accentDeep');
+    // Focus kindles the pill's rim in the room's tone (violet by default);
+    // the send is that tone's jewel and turns to a plain white stop while a
+    // reply streams.
+    expect(src).toContain('tone = BRAND_TONE,');
+    expect(src).toContain('focused={focused}');
+    expect(src).toMatch(/\{isStreaming \? \([\s\S]*?tokens\.textPrimary[\s\S]*?<SendOrb tone=\{tone\}/);
   });
 
   it('the brand accent is soft electric violet, never gold', () => {

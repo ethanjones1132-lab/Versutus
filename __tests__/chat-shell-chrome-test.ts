@@ -54,11 +54,19 @@ describe('Chat shell chrome resolves flat stage + brand violet', () => {
     expect(src).not.toContain('Palette.glass');
   });
 
-  it('the composer field focuses violet, not a neutral strong hairline', () => {
+  it('the composer field focuses in coloured light, not a neutral strong hairline', () => {
     const src = readSource('src', 'components', 'chat', 'chat-composer.tsx');
-    expect(src).toContain('borderColor: focused ? tokens.accent : tokens.specular');
+    // The Lens kindles its rim in the room's tone on focus — the brand
+    // violet unless a Bot's crest names another.
+    expect(src).toContain('tone = BRAND_TONE,');
+    expect(src).toMatch(/<ComposerBezel\s+tone=\{tone\}\s+focused=\{focused\}/);
     expect(src).not.toContain('borderStrong :');
-    expect(src).toContain('backgroundColor: isStreaming ? tokens.textPrimary : tokens.accentDeep');
+    // No neutral hairline swaps in on focus (the popovers keep their own
+    // specular edge; the pill's focus is light, not a border colour).
+    expect(src).not.toContain('focused ? tokens.accent : tokens.specular');
+    // The send is the room's jewel; Stop is plain white.
+    expect(src).toContain('<SendOrb tone={tone}');
+    expect(src).toContain('styles.stopLift, { backgroundColor: tokens.textPrimary }');
   });
 
   it('pull-to-refresh across roster + thread wears the brand violet', () => {

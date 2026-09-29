@@ -178,7 +178,8 @@ import {
 } from '@/lib/voice/voice-preferences';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
-import type { StageRoom } from '@/lib/stage/lamp';
+import { BRAND_TONE, type StageRoom } from '@/lib/stage/lamp';
+import { useBotCrest } from '@/hooks/use-crest-fleet';
 import { signalSent, signalSpeaking } from '@/lib/stage/signals';
 import { chatTranscriptContentPaddingBottom } from '@/lib/motion/chat-transcript-insets';
 import { chatJumpBottom } from '@/lib/motion/chat-jump-inset';
@@ -1786,6 +1787,10 @@ export function ChatScreen() {
     if (surface.kind === 'configurable') return { kind: 'direct' };
     return { kind: 'lobby' };
   }, [surface, activeGroup]);
+  // The composer is glass in this room's light: it kindles in the Bot's crest
+  // colours in the Bot's own thread, and in the house violet elsewhere.
+  const threadCrest = useBotCrest(surface.kind === 'bot' ? surface.botId : '');
+  const composerTone = surface.kind === 'bot' ? threadCrest.tone : BRAND_TONE;
   const spendCopy =
     spendState.surfaceKey === spendSurfaceKey ? threadSpendCopy(spendState, currentSessionId) : undefined;
   const spendRetry =
@@ -2467,6 +2472,7 @@ export function ChatScreen() {
         // P1: offered only when the selected model declares image input.
         onAttach={canAttach ? handleAttach : undefined}
         attachments={attachments}
+        tone={composerTone}
         onRemoveAttachment={handleRemoveAttachment}
         recipientName={surface.kind === 'bot' ? activeBotRow?.displayName : undefined}
       />

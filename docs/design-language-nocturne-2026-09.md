@@ -57,7 +57,7 @@ line — e.g. "Good *evening*." Nowhere else.
 | `backgroundElevated` | `#18181C` | Cards, row groups, the drawer |
 | `backgroundRaised` | `#222228` | Sheets, menus, the user bubble, pressed rows |
 
-Raised surfaces that float (sheets, menus, the composer) carry one `specular` hairline on
+Raised surfaces that float (sheets, menus) carry one `specular` hairline on
 their top edge — `rgba(255,255,255,0.07)` — the way light catches the lip of a glass. Cards
 on the stage carry nothing.
 
@@ -131,6 +131,30 @@ is hidden or off-screen, when the app is in the background, and when nobody has 
 change is a 220 ms fade, and nothing rises. If the shader cannot run, a still disc of the
 room's colour stands in.
 
+## The Lens
+
+The composer is a piece of curved glass lit by the room it sits in. It takes the **room's
+tone**: the crest of the Bot the thread talks to, the house violet anywhere else
+(`src/lib/stage/composer-light.ts`, `src/components/chat/composer-lens.tsx`).
+
+- **At rest** the glass is `raised` with a depth gradient (light at the top lip, falling to
+  nothing) and a white rim lit at its upper-left, the way a lens catches a lamp above it.
+- **On focus** the rim kindles into the tone's gradient, a soft halo of the tone rises
+  around the pill, and one glint of light crosses the glass (1.05 s).
+- **Typing** shimmers the rim for each burst (70 ms up, 560 ms decay). Only a growing draft
+  shimmers; the draft clearing after a send doesn't count as typing.
+- **The send orb** blooms in (scale 0.62 → 1, 220 ms) when there is text: a jewel cut from
+  the tone, its body running from the lit stop at the lip to the deep stop past the middle,
+  with the light kept in a sheen. Its arrow is white whenever white clears the 3:1 an icon
+  needs; only platinum, too pale for that, takes the stage's near-black.
+- **On send** a ring of the tone leaves the orb (1 → 2.6×, 760 ms) and a glint crosses the
+  glass as the stage's swell rises. The ring lives in the send slot, so it outlasts the orb
+  turning into the plain white Stop. Stop changes material because it changes meaning.
+- **Hold-to-talk** makes the rim breathe at 1.1 s, the caret's own rhythm, while the mic
+  listens.
+- Under **Reduce Motion** the glint, shimmer, breath, bloom and ring all stand down. The rim
+  still lights on focus, because that shows state.
+
 ## Motion
 
 - 150 ms for presses and toggles, 200 ms for content arriving, 250 ms for sheets and the drawer.
@@ -148,7 +172,7 @@ room's colour stands in.
 - **Thread:** flat header (back · name, then model ⌄ · what the thread has cost, on one
   line) · menu. The reply sits on the stage; list markers are drawn dots in the tertiary tone,
   and violet is kept for quote rules and links. The user bubble sits on `raised`, activity is
-  one expandable line, and the composer is a jewel with a violet orb. An empty thread greets
+  one expandable line, and the composer is **the Lens** (below). An empty thread greets
   you by the Bot's name under its halo and offers starters as centred pills that fill the
   composer and never send.
 - **Drawer:** the mark and wordmark, a New chat pill, then Chats / Activity / Tools, the Bots

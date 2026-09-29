@@ -45,7 +45,12 @@ test('the dock renders one rounded pill and no chip row above it', () => {
   const src = readComposerSource();
   const pill = styleBlock(src, 'pill');
   expect(pill).toMatch(/borderRadius: Radius\.full/);
-  expect(pill).toMatch(/marginHorizontal: Spacing\.four/);
+  // The Lens wraps the pill and owns its inset from the screen edge, so the
+  // halo and rim trace the glass exactly.
+  const lens = styleBlock(src, 'lens');
+  expect(lens).toMatch(/marginHorizontal: Spacing\.four/);
+  expect(lens).toMatch(/borderRadius: Radius\.full/);
+  expect(src).toContain('style={styles.lens}>');
   // Exactly one Card in the whole file: the pill. The quick-action chip row
   // and the floating browse button that used to sit above it are gone.
   expect((src.match(/<Card/g) ?? [])).toHaveLength(1);
@@ -79,13 +84,13 @@ test('the trailing slot holds exactly one control, and it morphs on text', () =>
   expect(pill).not.toContain('HANDSFREE_START_LABEL');
   expect(pill).not.toContain('Attach an image');
   expect(pill).not.toContain('paperclip');
-  // The send is a round violet jewel inside a full 48pt target.
+  // The send is a round jewel in the room's tone inside a full 48pt target;
+  // while a reply streams it is a plain white round Stop.
   const send = styleBlock(readComposerSource(), 'sendButton');
   expect(send).toMatch(/borderRadius: Radius\.full/);
   expect(styleBlock(readComposerSource(), 'sendOrb')).toMatch(/borderRadius: Radius\.full/);
-  expect(readComposerSource()).toContain(
-    'backgroundColor: isStreaming ? tokens.textPrimary : tokens.accentDeep',
-  );
+  expect(pill).toContain('<SendOrb tone={tone}');
+  expect(pill).toContain('styles.stopLift, { backgroundColor: tokens.textPrimary }');
 });
 
 test('the mic is drawn empty-handed: no box, no fill, just the glyph', () => {

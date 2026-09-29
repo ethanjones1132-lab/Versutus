@@ -11,7 +11,9 @@ import {
   type TextStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 
+import { ComposerBezel, LaunchRing, SendOrb } from '@/components/chat/composer-lens';
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
 import { Badge, Card, Icon, PressableScale, Text, TextField, type IconName, type TextFieldHandle } from '@/components/ui';
 import { FontFamily, Radius, Spacing } from '@/constants/tokens';
@@ -19,6 +21,8 @@ import { composerCopy, composerDockUtilities } from '@/lib/gateway/composer-copy
 import { spokenDraftHold, type SpokenDraftHold } from '@/lib/gateway/composer-draft';
 import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
 import type { ConnectionStatus } from '@/lib/gateway/types';
+import type { BotCrestTone } from '@/lib/bot-avatar';
+import { BRAND_TONE } from '@/lib/stage/lamp';
 import { haptics } from '@/lib/haptics';
 import { chatComposerKeyboardOffset } from '@/lib/motion/chat-composer-layout';
 import {
@@ -87,6 +91,12 @@ type ChatComposerProps = {
   onRemoveAttachment?: (uri: string) => void;
   /** The Bot this thread talks to, named in the empty pill ("Message Forge"). */
   recipientName?: string;
+  /**
+   * The room's colours — the crest tone of the Bot this thread talks to, the
+   * house violet otherwise. The glass kindles in them when it holds the
+   * cursor, and the send orb is cut from them.
+   */
+  tone?: BotCrestTone;
 };
 
 export const ChatComposer = memo(function ChatComposer({
@@ -112,9 +122,24 @@ export const ChatComposer = memo(function ChatComposer({
   attachments = [],
   onRemoveAttachment,
   recipientName,
+  tone = BRAND_TONE,
 }: ChatComposerProps) {
   const tokens = useTokens();
   const [focused, setFocused] = useState(false);
+  // The glass's light, as counters the Lens animates on: a shimmer for each
+  // burst of typing, one glint when the glass takes focus or a message
+  // leaves, a ring of light from the orb on send, and the rim's breath while
+  // a hold-to-talk is listening.
+  const [keystrokes, setKeystrokes] = useState(0);
+  const [sweeps, setSweeps] = useState(0);
+  const [launches, setLaunches] = useState(0);
+  const [listening, setListening] = useState(false);
+  const lastDraftLength = useRef(draft.length);
+  useEffect(() => {
+    // Only growth shimmers: a cleared draft after a send is not typing.
+    if (draft.length > lastDraftLength.current) setKeystrokes((n) => n + 1);
+    lastDraftLength.current = draft.length;
+  }, [draft]);
   // The `+` menu: every composer affordance the pill itself has no room for
   // (attach, hands-free call, the one-tap commands, browse) lives behind the
   // one borderless control on the pill's left, so the dock keeps no chip row
@@ -170,6 +195,10 @@ export const ChatComposer = memo(function ChatComposer({
       return;
     }
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // The message leaves as light: a ring from the orb, a glint across the
+    // glass — and the stage's swell rises from here (src/lib/stage/signals).
+    setLaunches((n) => n + 1);
+    setSweeps((n) => n + 1);
     onSend();
   };
 
@@ -187,6 +216,7 @@ export const ChatComposer = memo(function ChatComposer({
     const hold = spokenDraftHold(draft, onChangeText);
     const entry = { hold, released: false };
     micHoldRef.current = entry;
+    setListening(true);
 
     void startSpeechRecognition({}, (transcript) => hold.onTranscript(transcript)).then((started) => {
       if (!started) {
@@ -195,6 +225,7 @@ export const ChatComposer = memo(function ChatComposer({
         // leaving half a draft nobody asked for.
         hold.onCancelled();
         if (micHoldRef.current === entry) micHoldRef.current = null;
+        setListening(false);
         // A refused hold is a line rather than a quiet no-op — and only the
         // platform's own record is allowed to name the reason. The phone's
         // answer says whether a hold can be offered at all, so a microphone the
@@ -217,6 +248,7 @@ export const ChatComposer = memo(function ChatComposer({
 
   const handleMicPressOut = () => {
     void haptics.light();
+    setListening(false);
     const entry = micHoldRef.current;
     micHoldRef.current = null;
     if (!entry) return;
@@ -513,13 +545,17 @@ export const ChatComposer = memo(function ChatComposer({
           </View>
         ) : null}
 
-        <Card
-          variant="hero"
-          padding={Spacing.one}
-          style={[
-            styles.pill,
-            { borderColor: focused ? tokens.accent : tokens.specular },
-          ]}>
+        <ComposerBezel
+          tone={tone}
+          focused={focused}
+          listening={listening}
+          keystrokes={keystrokes}
+          sweeps={sweeps}
+          style={styles.lens}>
+        <Card variant="hero" padding={Spacing.one} style={[styles.pill, { backgroundColor: tokens.backgroundRaised }]}>
+          {/* The glass's own depth: a faint lift of light at the top of the
+              body, falling to nothing, so the pill reads as curved glass. */}
+          <GlassDepth />
           {canOpenMenu ? (
             // The one control on the left: borderless, and the door to the
             // affordances the pill has no room to draw inline (attach, call,
@@ -557,6 +593,7 @@ export const ChatComposer = memo(function ChatComposer({
             autoCorrect={true}
             onFocus={() => {
               setFocused(true);
+              setSweeps((n) => n + 1);
               // The field taking the cursor is the operator typing, not
               // reading the menu: the panel leaves with the keyboard up.
               setMenuOpen(false);
@@ -585,8 +622,9 @@ export const ChatComposer = memo(function ChatComposer({
             </PressableScale>
           ) : null}
           {showSend ? (
-            // The mic's own slot once there is text: the round send, and the
-            // same round Stop while a reply is streaming.
+            // The mic's own slot once there is text: the jewel send, and a
+            // plain white Stop while a reply is streaming — the one control
+            // that changes meaning changes material, and nothing else does.
             <PressableScale
               style={styles.sendButton}
               onPress={() => void handleAction()}
@@ -594,32 +632,18 @@ export const ChatComposer = memo(function ChatComposer({
               accessibilityRole="button"
               accessibilityLabel={copy.sendLabel}
               accessibilityState={{ disabled: isActionDisabled, busy: isStreaming }}>
-              <View
-                style={[
-                  styles.sendOrb,
-                  isStreaming ? styles.stopLift : styles.sendLift,
-                  {
-                    // The violet jewel sends; while a reply streams it turns to
-                    // a plain white stop — the one control that changes meaning
-                    // changes colour, and nothing else on the pill does.
-                    backgroundColor: isStreaming ? tokens.textPrimary : tokens.accentDeep,
-                  },
-                  isActionDisabled && styles.sendDisabled,
-                ]}>
-                <Icon
-                  name={
-                    isStreaming
-                      ? { ios: 'stop.fill', android: 'stop', web: 'stop' }
-                      : { ios: 'arrow.up', android: 'arrow_upward', web: 'arrow_upward' }
-                  }
-                  size={isStreaming ? 14 : 18}
-                  weight="semibold"
-                  color={isStreaming ? 'textInverse' : 'textPrimary'}
-                />
-              </View>
+              <LaunchRing tone={tone} launches={launches} />
+              {isStreaming ? (
+                <View style={[styles.sendOrb, styles.stopLift, { backgroundColor: tokens.textPrimary }]}>
+                  <Icon name={{ ios: 'stop.fill', android: 'stop', web: 'stop' }} size={14} weight="semibold" color="textInverse" />
+                </View>
+              ) : (
+                <SendOrb tone={tone} disabled={isActionDisabled} />
+              )}
             </PressableScale>
           ) : null}
         </Card>
+        </ComposerBezel>
 
         {!showSend && micState.kind !== 'hidden' && micDisabled ? (
           // The mic says why it cannot be held, in the module's own words:
@@ -668,6 +692,24 @@ function getKeyboardHeight(): number {
  * stays visible on the ring.
  */
 const BARE_FIELD_ON_WEB = Platform.OS === 'web' ? ({ outlineStyle: 'none' } as unknown as TextStyle) : null;
+
+/** The glass body's depth: light at its top lip falling away, like curved glass. */
+function GlassDepth() {
+  return (
+    <View pointerEvents="none" style={styles.depth}>
+      <Svg width="100%" height="100%">
+        <Defs>
+          <LinearGradient id="composer-depth" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor="#FFFFFF" stopOpacity={0.065} />
+            <Stop offset="0.45" stopColor="#FFFFFF" stopOpacity={0.015} />
+            <Stop offset="1" stopColor="#000000" stopOpacity={0.1} />
+          </LinearGradient>
+        </Defs>
+        <Rect width="100%" height="100%" fill="url(#composer-depth)" />
+      </Svg>
+    </View>
+  );
+}
 
 const styles = StyleSheet.create({
   dock: {
@@ -718,15 +760,32 @@ const styles = StyleSheet.create({
   // is text) — no chip row, no floating terminal, no boxed button cluster.
   // The one pill, on the raised step with a lit edge (the accent ring while it
   // holds the cursor) and a soft shadow that lifts it off the transcript.
+  // The Lens (composer-lens.tsx) sits where the pill used to: the margin is
+  // its, so the halo and the rim wrap the glass exactly.
+  lens: {
+    marginHorizontal: Spacing.four,
+    borderRadius: Radius.full,
+  },
   pill: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     gap: Spacing.half,
-    marginHorizontal: Spacing.four,
     borderRadius: Radius.full,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderWidth: 0,
     paddingHorizontal: Spacing.one,
-    boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
+    // Not clipped: the ring a message lets go leaves the glass. The depth
+    // layer clips itself to the pill's curve instead.
+    overflow: 'visible',
+    boxShadow: '0 14px 36px rgba(0,0,0,0.55)',
+  },
+  depth: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    borderRadius: Radius.full,
+    overflow: 'hidden',
   },
   plusButton: {
     width: 36,
@@ -801,14 +860,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sendLift: {
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.28), 0 6px 18px rgba(139,124,255,0.45)',
-  },
   stopLift: {
     boxShadow: '0 6px 18px rgba(0,0,0,0.4)',
-  },
-  sendDisabled: {
-    opacity: 0.4,
   },
   // The mic is the empty pill's trailing control: a borderless round glyph
   // in the slot the send takes once there is text. It carries no fill and no
