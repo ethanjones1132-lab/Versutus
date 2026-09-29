@@ -1,10 +1,11 @@
+import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet } from 'react-native';
 
 import { SpendChart } from '@/components/gateway/spend-chart';
 import { SpendPerBotSection } from '@/components/gateway/spend-per-bot-section';
 import { SpendSessionTable } from '@/components/gateway/spend-session-table';
-import { Card, EmptyState, ErrorCard, Screen, Skeleton, Text } from '@/components/ui';
+import { Card, EmptyState, ErrorCard, Icon, PageTitle, PressableScale, Screen, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
@@ -80,6 +81,7 @@ import {
  * The entry points are their own slice of P5.
  */
 export default function GatewaySpendScreen() {
+  const router = useRouter();
   const {
     gatewayRequest,
     status,
@@ -193,15 +195,29 @@ export default function GatewaySpendScreen() {
   const buckets = useMemo(() => weekBuckets(state.sessions, now), [state.sessions, now]);
 
   return (
-    <Screen>
+    <Screen edges={['top', 'bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.heading}>
-          <Text variant="title">Spend</Text>
-          <Text variant="caption" color="secondary">
-            What this gateway&apos;s sessions have cost, folded from the session catalogue this
-            device can read.
-          </Text>
-        </View>
+        {/* Spend opens like its sister modal, Settings: the serif title in the
+            lamp's light and one quiet line, no header bar above it. */}
+        <PageTitle
+          title="Spend"
+          leading={
+            <PressableScale
+              onPress={() => (router.canGoBack() ? router.back() : router.replace('/activity'))}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Close spend"
+              style={styles.close}>
+              <Icon name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }} size={20} color="textSecondary" />
+            </PressableScale>
+          }
+          status={
+            <Text variant="caption" color="secondary" style={styles.headingLine}>
+              What this gateway&apos;s sessions have cost, folded from the session catalogue this
+              device can read.
+            </Text>
+          }
+        />
 
         {state.loaded ? (
           <Card variant="hero" padding={Spacing.three} style={styles.card}>
@@ -261,11 +277,19 @@ export default function GatewaySpendScreen() {
 
 const styles = StyleSheet.create({
   content: {
-    padding: Spacing.four,
+    paddingHorizontal: Spacing.four - 4,
+    paddingTop: Spacing.two,
+    paddingBottom: Spacing.four,
     gap: Spacing.three,
   },
-  heading: {
-    gap: Spacing.one,
+  close: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headingLine: {
+    flex: 1,
   },
   card: {
     gap: Spacing.two,

@@ -23,7 +23,7 @@ export function AgentTargets({ gateways, activeGatewayId, status, onSelect }: Ag
 
   return (
     <View style={styles.root}>
-      <View style={[styles.group, { backgroundColor: tokens.backgroundElevated }]}>
+      <View style={[styles.group, { backgroundColor: tokens.stagePanel }]}>
         {gateways.length === 0 ? (
           <EmptyState
             icon={{ ios: 'person.2', android: 'group', web: 'group' }}

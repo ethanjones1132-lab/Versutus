@@ -267,12 +267,16 @@ export function medianRunMs(runs: readonly ActivityRun[], now: number = Date.now
 }
 
 /**
- * What a card is titled. A Bot's own id is its name; the rows that name no Bot
- * share one heading, worded the spec's way ("unattributed", D3:792-797) rather
- * than as an id, so the bucket is never read as a Bot of that name.
+ * What a card is titled. A Bot is titled by the name the roster shows for it
+ * when that is known, else by its own id; the rows that name no Bot share one
+ * heading, worded the spec's way ("unattributed", D3:792-797) rather than as
+ * an id, so the bucket is never read as a Bot of that name.
  */
-export function scorecardBotLabel(botId: string | null): string {
-  return scorecardBotId(botId) ?? 'Unattributed';
+export function scorecardBotLabel(botId: string | null, names?: Readonly<Record<string, string>>): string {
+  const id = scorecardBotId(botId);
+  if (id === null) return 'Unattributed';
+  const name = names?.[id]?.trim();
+  return name ? name : id;
 }
 
 /** The fates in the fold's own order, with the word each one reads as. */

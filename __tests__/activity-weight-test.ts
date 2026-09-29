@@ -27,9 +27,12 @@ describe('Activity carries quieter violet weight than Chat', () => {
   });
 
   test('run and approval cards use the muted brand pair for their visual state', () => {
+    // A run card rings only when it means something: violet for the run a
+    // notice or an Activity tap named, red for a failure; at rest, nothing.
     const run = runCard();
     expect(run).toContain('? tokens.accent');
-    expect(run).toContain('? tokens.accentMuted');
+    expect(run).toContain('? tokens.statusDisconnected');
+    expect(run).toContain(": 'transparent'");
 
     const approval = approvalCard();
     expect(approval).toContain('tokens.statusDisconnected : tokens.accent');
@@ -51,7 +54,7 @@ describe('Activity carries quieter violet weight than Chat', () => {
     // Nocturne: runs are a grouped glance with their own section, and the
     // decisions card sits on the elevated step like every other group.
     expect(screen).toContain('<RecentRuns runs={activityRunsForActiveGateway}');
-    expect(screen).toContain('<Card variant="surface" padding={Spacing.three} style={styles.card}>');
+    expect(screen).toContain('<Card variant="stage" padding={Spacing.three} style={styles.card}>');
     expect(screen).not.toMatch(/tokens\.glass|tokens\.glassBorder|Palette\.gold/);
   });
 

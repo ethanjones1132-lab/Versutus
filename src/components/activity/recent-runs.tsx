@@ -13,7 +13,8 @@ import { haptics } from '@/lib/haptics';
 /** How many runs the Activity glance shows before "See all" takes over. */
 export const RECENT_RUNS_LIMIT = 4;
 
-function toneColor(tokens: Tokens, tone: RunStatusTone): string {
+/** A run status tone as colour — shared by Activity's rows and the Runs cards. */
+export function runToneColor(tokens: Tokens, tone: RunStatusTone): string {
   switch (tone) {
     case 'live':
       return tokens.accent;
@@ -36,17 +37,18 @@ function toneColor(tokens: Tokens, tone: RunStatusTone): string {
  */
 export function RecentRuns({
   runs,
-  onOpenRuns,
+  onOpenRun,
 }: {
   runs: ActivityRun[];
-  onOpenRuns: () => void;
+  /** A tap on a row opens Runs on that run — found, scrolled to and lit. */
+  onOpenRun: (runId: string) => void;
 }) {
   const tokens = useTokens();
   const shown = runsForGlance(runs, RECENT_RUNS_LIMIT);
 
   if (shown.length === 0) {
     return (
-      <View style={[styles.group, styles.empty, { backgroundColor: tokens.backgroundElevated }]}>
+      <View style={[styles.group, styles.empty, { backgroundColor: tokens.stagePanel }]}>
         <Text variant="caption" color="secondary">
           No runs yet. Ask a Bot to do something and it shows up here.
         </Text>
@@ -55,19 +57,19 @@ export function RecentRuns({
   }
 
   return (
-    <View style={[styles.group, { backgroundColor: tokens.backgroundElevated }]}>
+    <View style={[styles.group, { backgroundColor: tokens.stagePanel }]}>
       {shown.map((run, index) => {
         const status = runStatusCopy(run.status);
-        const color = toneColor(tokens, status.tone);
+        const color = runToneColor(tokens, status.tone);
         return (
           <PressableScale
             key={run.id}
             onPress={async () => {
               await haptics.selection();
-              onOpenRuns();
+              onOpenRun(run.id);
             }}
             accessibilityRole="button"
-            accessibilityLabel={`${run.prompt}. ${status.label}, ${formatRelativeTime(run.startedAt)}. Open runs.`}
+            accessibilityLabel={`${run.prompt}. ${status.label}, ${formatRelativeTime(run.startedAt)}. Open this run.`}
             style={[
               styles.row,
               index > 0 ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: tokens.borderSubtle } : null,

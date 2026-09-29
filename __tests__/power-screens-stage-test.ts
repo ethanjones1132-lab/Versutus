@@ -62,12 +62,15 @@ describe('power screens inherit the quiet violet stage', () => {
 
   test('runs rest on the brand accent while preserving lifecycle and refresh paths', () => {
     const source = runs();
-    expect(source).toContain('<Text variant="caption" color="accent" style={styles.approvalEyebrow}>');
+    // The start card is named in sentence case at headline weight — the
+    // violet ALL-CAPS eyebrow is retired here as everywhere else.
+    expect(source).toContain('<Text variant="headline">Start a run</Text>');
+    expect(source).not.toContain("textTransform: 'uppercase'");
     expect(source).toContain('tintColor={tokens.accent}');
     expect(source).toContain('colors={[tokens.accent]}');
     expect(source).not.toMatch(/accentWarm|accentWarmMuted/);
     expect(source).toContain('await sendChatInput(`/run ${prompt}`)');
-    expect(source).toContain('<RunCard run={item.run} onStop={stopActivityRun} />');
+    expect(source).toContain('<RunCard run={item.run} highlighted={item.id === focusedRunId} onStop={stopActivityRun} />');
     expect(source).toContain('await Promise.all([refreshCapabilities(), refreshGateways()])');
   });
 });

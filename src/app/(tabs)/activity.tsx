@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Platform, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ActivityGlance } from '@/components/activity/activity-glance';
 import { AgentTargets } from '@/components/activity/agent-targets';
 import { ApprovalDecisionCard } from '@/components/activity/approval-decision-card';
 import { ApprovalInbox } from '@/components/activity/approval-inbox';
@@ -11,9 +12,10 @@ import { CronSection } from '@/components/activity/cron-section';
 import { SpendEntryRow } from '@/components/gateway/spend-entry-row';
 import { RecentRuns } from '@/components/activity/recent-runs';
 import { PulsingDot } from '@/components/connection-badge';
-import { Card, ErrorCard, PageTitle, Screen, SectionHeader, Skeleton, Text } from '@/components/ui';
+import { Card, ErrorCard, Icon, PageTitle, Screen, SectionHeader, Skeleton, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { useNow } from '@/hooks/use-now';
 import { useTokens } from '@/hooks/use-tokens';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
@@ -44,6 +46,8 @@ export default function ActivityScreen() {
     settings,
     status,
     pendingRunApproval,
+    pendingApprovals,
+    requestRunFocus,
     resolveRunApproval,
     refreshPendingApprovals,
     connectGateway,
@@ -69,6 +73,17 @@ export default function ActivityScreen() {
   const [auditError, setAuditError] = useState<string | null>(null);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
+  // The glance's "now": a minute is as fine as a day-long ribbon can show.
+  const now = useNow(60_000);
+  // Any run on Activity opens Runs *on that run*: the same door a run
+  // notice uses, so Runs finds it, scrolls to it and lights its edge.
+  const openRun = useCallback(
+    (runId: string) => {
+      requestRunFocus({ runId });
+      router.push('/runs');
+    },
+    [requestRunFocus, router],
+  );
 
   // One reader for mount, retry, and pull-to-refresh: the strict loader
   // rejects on a storage refusal so `failed` is reachable, and `isLive`
@@ -159,6 +174,16 @@ export default function ActivityScreen() {
             }
           />
 
+          {/* The day at a glance: three figures, and the last day's runs as a
+              ribbon of light in their Bots' colours. */}
+          <ActivityGlance
+            pendingApprovals={pendingApprovals.length}
+            runs={activityRunsForActiveGateway}
+            now={now}
+            onOpenRuns={() => router.push('/runs')}
+            onOpenRun={openRun}
+          />
+
           {refreshError ? (
             <ErrorCard
               cause={refreshError}
@@ -187,7 +212,7 @@ export default function ActivityScreen() {
               glance — what is waiting, what is working, what just finished. */}
           <View style={styles.section}>
             <SectionHeader title="Runs" actionLabel="See all" onAction={() => router.push('/runs')} />
-            <RecentRuns runs={activityRunsForActiveGateway} onOpenRuns={() => router.push('/runs')} />
+            <RecentRuns runs={activityRunsForActiveGateway} onOpenRun={openRun} />
           </View>
         </View>
 
@@ -200,33 +225,41 @@ export default function ActivityScreen() {
           inline retry instead of inventing an empty log. */}
       <View style={styles.section}>
         <SectionHeader title="Your decisions" />
-        <Card variant="surface" padding={Spacing.three} style={styles.card}>
-          {auditState === 'loading' ? (
-            <>
-              <Skeleton width="72%" height={14} />
-              <Skeleton width="90%" height={12} />
-              <Skeleton width="64%" height={12} />
-            </>
-          ) : null}
-          {auditState === 'failed' ? (
-            <ErrorCard
-              cause={auditError ?? 'Decision history could not be read.'}
-              affected="Approval decisions on this device"
-              next="Retry the read."
-              onRetry={() => void readAudit()}
-            />
-          ) : null}
-          {auditState === 'ready' ? (
-            <>
+        {auditState === 'loading' ? (
+          <Card variant="stage" padding={Spacing.three} style={styles.card}>
+            <Skeleton width="72%" height={14} />
+            <Skeleton width="90%" height={12} />
+            <Skeleton width="64%" height={12} />
+          </Card>
+        ) : null}
+        {auditState === 'failed' ? (
+          <ErrorCard
+            cause={auditError ?? 'Decision history could not be read.'}
+            affected="Approval decisions on this device"
+            next="Retry the read."
+            onRetry={() => void readAudit()}
+          />
+        ) : null}
+        {auditState === 'ready' ? (
+          audit.length === 0 ? (
+            // Nothing decided yet is a quiet line, not a box holding a sentence.
+            <View style={styles.quiet}>
+              <Icon name={{ ios: 'checkmark.seal', android: 'verified', web: 'verified' }} size={15} color="textTertiary" />
+              <Text variant="caption" color="tertiary" style={styles.quietText}>
+                {approvalAuditTallyCopy(audit)}
+              </Text>
+            </View>
+          ) : (
+            <Card variant="stage" padding={Spacing.three} style={styles.card}>
               <Text variant="body">{approvalAuditTallyCopy(audit)}</Text>
               {approvalAuditRecent(audit, 4).map((record) => (
                 <Text key={`${record.approvalId}-${record.at}`} variant="caption" color="tertiary">
                   {approvalAuditCopy(record)}
                 </Text>
               ))}
-            </>
-          ) : null}
-        </Card>
+            </Card>
+          )
+        ) : null}
       </View>
 
       {/* Spend is the gateway-wide readout, so it sits with the gateway-wide
@@ -271,4 +304,11 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   card: { gap: Spacing.two },
+  quiet: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.two,
+  },
+  quietText: { flex: 1 },
 });

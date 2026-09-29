@@ -29,7 +29,7 @@ describe('the section paints the shipped fold, and aggregates nothing itself', (
 
     expect(src).toContain("from '@/lib/fleet/scorecard'");
     expect(src).toContain('buildScorecards(runs)');
-    expect(src).toContain('{scorecardBotLabel(card.botId)}');
+    expect(src).toContain('{scorecardBotLabel(card.botId, botNames)}');
     expect(src).toContain('const fates = scorecardFateCopy(card.fates);');
     expect(src).toContain('{scorecardWindowCopy(runs.length)}');
     expect(src).toContain('{SCORECARD_FOOTER_COPY}');
@@ -123,7 +123,7 @@ describe('a card the drawn line cannot hold in full is still announced in full',
     // fold, over the one `facts` object the drawn line is composed from, with
     // the card's own state as its third argument (pinned below).
     expect(src).toContain(
-      'accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId), facts, showing)}',
+      'accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId, botNames), facts, showing)}',
     );
     expect(src.match(/scorecardCardAnnouncement\(/g)).toHaveLength(1);
     // The name is the card's own title fold, not a second naming rule here.
@@ -234,7 +234,7 @@ describe('a card promises only the tap it can deliver', () => {
       'trailing={showing ? <Badge label={SCORECARD_SHOWING_LABEL} tone="accent" /> : undefined}',
     );
     expect(src).toContain(
-      'accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId), facts, showing)}',
+      'accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId, botNames), facts, showing)}',
     );
     expect(src).toContain('accessibilityHint={scorecardCardHint(showing)}');
   });
@@ -554,7 +554,7 @@ describe('what must keep working', () => {
   test('every RunCard affordance and the empty state are still the shipped ones', () => {
     const src = runs();
 
-    expect(src).toContain('<RunCard run={item.run} onStop={stopActivityRun} />');
+    expect(src).toContain('<RunCard run={item.run} highlighted={item.id === focusedRunId} onStop={stopActivityRun} />');
     expect(src).toContain('onOpenTranscript={setOpenAgenticRunId}');
     expect(src).toContain('onRetry={(prompt) => retryRun({ ...item.run, prompt })}');
     expect(src).toContain('activityRunsForActiveGateway.length === 0');

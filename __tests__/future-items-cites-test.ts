@@ -48,7 +48,7 @@ describe('FUTURE-ITEMS open cites describe the live tree', () => {
   test('D5 keeps scorecards botSpendCapCopy distinct as the session-list bound', () => {
     expect(d5Section).toContain('botSpendCapCopy');
     expect(d5Section).toContain('session-list bound');
-    expect(scorecards[287]).toContain('botSpendCapCopy(SESSION_SPEND_LIST_LIMIT)');
+    expect(scorecards[291]).toContain('botSpendCapCopy(SESSION_SPEND_LIST_LIMIT)');
   });
 
   test('keep-working: P1 and D5 headers and their shipped/remaining split stay', () => {

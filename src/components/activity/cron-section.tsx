@@ -140,7 +140,7 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
   const live = runningCount(jobs);
 
   return (
-    <Card padding={Spacing.three} style={styles.card}>
+    <Card variant="stage" padding={Spacing.three} style={styles.card}>
       <View style={styles.header}>
         <Text variant="headline">Cron ({jobs.length})</Text>
         {live > 0 ? <Badge label={`${live} running`} tone="accent" /> : null}

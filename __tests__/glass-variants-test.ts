@@ -8,6 +8,20 @@ declare const __dirname: string;
 
 import { Palette } from '@/constants/tokens';
 import { glassVariantStyles } from '@/components/ui/glass-variants';
+import { BOT_CREST_TONES } from '@/lib/bot-avatar';
+import {
+  LAMP_CORE_CHROMA,
+  LAMP_CORE_FLOOR,
+  LAMP_EDGE_CHROMA,
+  LAMP_EDGE_FLOOR,
+  STAGE_BASE,
+  contrastRatio,
+  hexToLinear,
+  lampLight,
+  linearToSrgb,
+  luminance,
+  srgbToLinear,
+} from '@/lib/stage/lamp';
 
 const SEP = __dirname.includes('\\') ? '\\' : '/';
 const nodeFs = jest.requireActual('fs') as {
@@ -51,7 +65,7 @@ function parseColor(value: string): Rgba {
   throw new Error(`unparseable color: ${value}`);
 }
 
-const VARIANTS = ['hero', 'surface', 'inset', 'chip'] as const;
+const VARIANTS = ['hero', 'surface', 'inset', 'chip', 'stage'] as const;
 
 describe('glassVariantStyles flatten contract', () => {
   it('keeps the variant name API', () => {
@@ -147,6 +161,45 @@ describe('glassVariantStyles flatten contract', () => {
       expect(b).toBeGreaterThanOrEqual(r);
       expect(a).toBeGreaterThan(0);
       expect(a).toBeLessThan(1);
+    }
+  });
+});
+
+describe('the stage panel lets the lamp through without costing a word', () => {
+  // Alpha-composite the panel over a stage colour (sRGB, as the platforms blend).
+  function over(stageLinear: readonly [number, number, number]): [number, number, number] {
+    const { r, g, b, a } = parseColor(glassVariantStyles.stage.backgroundColor);
+    return [r, g, b].map((channel, i) => {
+      const under = linearToSrgb(stageLinear[i]) * 255;
+      return channel * a + under * (1 - a);
+    }) as [number, number, number];
+  }
+
+  it('is translucent, edgeless, and named in the palette — not a retired glass tier', () => {
+    expect(glassVariantStyles.stage.backgroundColor).toBe(Palette.stagePanel);
+    expect(parseColor(Palette.stagePanel).a).toBeLessThan(1);
+    expect(glassVariantStyles.stage.borderWidth).toBe(0);
+  });
+
+  it('over the dark stage it is the elevated step, within a level per channel', () => {
+    const composite = over(STAGE_BASE);
+    const elevated = parseColor(Palette.backgroundElevated);
+    expect(Math.abs(composite[0] - elevated.r)).toBeLessThanOrEqual(1.5);
+    expect(Math.abs(composite[1] - elevated.g)).toBeLessThanOrEqual(1.5);
+    expect(Math.abs(composite[2] - elevated.b)).toBeLessThanOrEqual(1.5);
+  });
+
+  it('under the brightest pixel of any lamp, tertiary text on it keeps AA', () => {
+    const floor = luminance(hexToLinear(Palette.textTertiary));
+    for (const tone of BOT_CREST_TONES) {
+      for (const light of [
+        lampLight(tone.from, LAMP_CORE_CHROMA, LAMP_CORE_FLOOR),
+        lampLight(tone.to, LAMP_EDGE_CHROMA, LAMP_EDGE_FLOOR),
+      ]) {
+        const brightest = [0, 1, 2].map((i) => STAGE_BASE[i] + light[i]) as [number, number, number];
+        const panel = over(brightest).map((v) => srgbToLinear(v / 255)) as [number, number, number];
+        expect(contrastRatio(floor, luminance(panel))).toBeGreaterThanOrEqual(4.5);
+      }
     }
   });
 });

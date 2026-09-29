@@ -99,5 +99,6 @@ it('the shared surface is the only place a default width was removed', () => {
   }
   const variants = readSource('src', 'components', 'ui', 'glass-variants.ts');
   const mapping = variants.slice(variants.indexOf('export const glassVariantStyles'));
-  expect((mapping.match(/borderWidth: 0/g) ?? []).length).toBe(4);
+  // Every variant — hero, surface, inset, stage, chip — ships no edge.
+  expect((mapping.match(/borderWidth: 0/g) ?? []).length).toBe(5);
 });

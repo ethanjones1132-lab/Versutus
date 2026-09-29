@@ -3,7 +3,7 @@ import { StyleSheet, Text as RNText, View } from 'react-native';
 import Svg, { Circle, Defs, LinearGradient, RadialGradient, Stop } from 'react-native-svg';
 
 import { FontFamily, Palette } from '@/constants/tokens';
-import { botCrestFromId } from '@/lib/bot-avatar';
+import { useBotCrest } from '@/hooks/use-crest-fleet';
 
 type BotAvatarProps = {
   botId: string;
@@ -26,7 +26,8 @@ type BotAvatarProps = {
  * edge and fades out underneath, where the disc turns away from the lamp.
  */
 export function BotAvatar({ botId, name, size = 40, attention = false }: BotAvatarProps) {
-  const { tone, initial } = botCrestFromId(botId, name);
+  // Subscribed so a crest drawn before the fleet was known redraws in its tone.
+  const { tone, initial } = useBotCrest(botId, name);
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const bodyId = `crest-body-${uid}`;
   const sheenId = `crest-sheen-${uid}`;

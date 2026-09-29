@@ -6,7 +6,7 @@ import { BotAvatar } from '@/components/chat/bot-avatar';
 import { Icon, PressableScale, Text } from '@/components/ui';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
-import { botCrestFromId } from '@/lib/bot-avatar';
+import { useBotCrest } from '@/hooks/use-crest-fleet';
 import { threadStarters, threadWelcomeTitle } from '@/lib/gateway/thread-starters';
 import { haptics } from '@/lib/haptics';
 
@@ -56,7 +56,8 @@ export function ThreadWelcome({
 }) {
   const tokens = useTokens();
   const starters = threadStarters(botId ? 'bot' : 'direct');
-  const glow = botId ? botCrestFromId(botId, botName).tone.from : Palette.accent;
+  const crest = useBotCrest(botId ?? '', botName);
+  const glow = botId ? crest.tone.from : Palette.accent;
 
   return (
     <View style={styles.root}>

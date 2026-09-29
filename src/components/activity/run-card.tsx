@@ -1,32 +1,17 @@
 import { memo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
-import { Badge, Card, Icon, PressableScale, Text } from '@/components/ui';
-import { Radius, Spacing } from '@/constants/tokens';
+import { BotAvatar } from '@/components/chat/bot-avatar';
+import { runToneColor } from '@/components/activity/recent-runs';
+import { Card, Icon, PressableScale, Text } from '@/components/ui';
+import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { useNow } from '@/hooks/use-now';
 import { watchedRunSpanMs } from '@/lib/fleet/scorecard';
 import { formatDuration, formatRelativeTime } from '@/lib/format';
 import { haptics } from '@/lib/haptics';
+import { runStatusCopy } from '@/lib/gateway/run-status-copy';
 import type { ActivityRun } from '@/lib/gateway/runs';
-
-const STATUS_LABEL: Record<ActivityRun['status'], string> = {
-  running: 'Running',
-  'waiting-approval': 'Needs approval',
-  complete: 'Complete',
-  failed: 'Failed',
-  cancelled: 'Cancelled',
-  unresolved: 'Unconfirmed',
-};
-
-const STATUS_TONE: Record<ActivityRun['status'], 'warning' | 'accent' | 'success' | 'danger' | 'neutral'> = {
-  running: 'warning',
-  'waiting-approval': 'accent',
-  complete: 'success',
-  failed: 'danger',
-  cancelled: 'neutral',
-  unresolved: 'warning',
-};
 
 export type RunCardProps = {
   run: ActivityRun;
@@ -81,28 +66,40 @@ export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript, on
    * Its own status says this device never learned the end of it (`runs.ts:25-30`).
    */
   const span = watchedRunSpanMs(run);
+  // The same words and colours as Activity's rows, so a run reads the same
+  // on both screens: waiting is amber, working is violet, done is mint.
+  const status = runStatusCopy(run.status);
 
   return (
     <Card
-      variant={live ? 'surface' : 'inset'}
+      variant="stage"
       padding={Spacing.three}
       style={[
         styles.card,
         {
-          borderColor:
-            // The focus edge wins only where the card would not already ring
-            // in the warm accent (a waiting-approval card already does).
-            highlighted && run.status !== 'waiting-approval'
-              ? tokens.accent
-              : run.status === 'failed'
-                ? tokens.statusDisconnected
-                : live
-                  ? tokens.accentMuted
-                  : tokens.borderSubtle,
+          // An edge only where it means something: the run a notice or an
+          // Activity tap named, or a failure. A resting card rings nothing.
+          borderColor: highlighted
+            ? tokens.accent
+            : run.status === 'failed'
+              ? tokens.statusDisconnected
+              : 'transparent',
         },
       ]}>
       <View style={styles.header}>
-        <Badge label={STATUS_LABEL[run.status]} tone={STATUS_TONE[run.status]} />
+        <View style={styles.who}>
+          {run.botId ? (
+            <BotAvatar botId={run.botId} size={28} />
+          ) : (
+            <View style={[styles.directTile, { backgroundColor: tokens.accentMuted }]}>
+              <Icon name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }} size={13} color="accent" />
+            </View>
+          )}
+          <View style={[styles.dot, { backgroundColor: runToneColor(tokens, status.tone) }]} />
+          <Text variant="caption" style={{ color: runToneColor(tokens, status.tone) }}>
+            {status.label}
+          </Text>
+        </View>
         {live ? (
           <LiveElapsed startedAt={run.startedAt} />
         ) : (
@@ -113,7 +110,7 @@ export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript, on
         )}
       </View>
 
-      <Text variant="body" numberOfLines={expanded ? undefined : 2}>
+      <Text variant="body" numberOfLines={expanded ? undefined : 2} style={styles.prompt}>
         {run.prompt}
       </Text>
 
@@ -160,7 +157,7 @@ export const RunCard = memo(function RunCard({ run, onStop, onOpenTranscript, on
               color="accent"
             />
             <Text variant="caption" color="accent">
-              {expanded ? 'Hide events' : `${run.events.length} events`}
+              {expanded ? 'Hide events' : `${run.events.length} ${run.events.length === 1 ? 'event' : 'events'}`}
             </Text>
           </PressableScale>
         ) : null}
@@ -233,6 +230,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: Spacing.two,
+  },
+  who: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    flexShrink: 1,
+  },
+  directTile: {
+    width: 28,
+    height: 28,
+    borderRadius: Radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  prompt: {
+    fontFamily: FontFamily.sans,
+    fontSize: 16,
+    lineHeight: 22,
   },
   ticker: {
     borderRadius: Radius.sm,

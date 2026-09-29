@@ -65,6 +65,12 @@ A control that rests *in* the lamp's light (the roster's search) is `stageGlass`
 glass, `rgba(14,14,18,0.58)` — so the light glows dimly through it instead of the control
 reading as a hole cut in the light. Dark enough that tertiary text keeps AA over it.
 
+Panels resting on the stage — row groups, cards, run cards on Activity, Runs and Settings —
+are the `stage` variant, `stagePanel` `rgba(28,28,34,0.72)`: over the dark stage it composites
+to the elevated step exactly (`#18181C`), and near the top the lamp glows through it, so the
+room's light reaches the UI and not only the backdrop. Tertiary text on it keeps AA under
+every lamp colour (`glass-variants-test`). Sheets and menus keep the opaque steps.
+
 ## Identity
 
 Bots are people on a team, not status lights. Each Bot gets a **monogram crest**: its initial
@@ -147,7 +153,23 @@ room's colour stands in.
   composer and never send.
 - **Drawer:** the mark and wordmark, a New chat pill, then Chats / Activity / Tools, the Bots
   you talk to, and Settings, with the Gate at the foot as a single status line.
-- **Activity / Settings / Gate:** grouped rows — label, value, chevron. No eyebrow stacks.
+- **Activity:** the serif title, then *the day at a glance* — three figures in the display
+  serif (needs you · working · done today; "failed" only on a day something did), and the
+  last day as a ribbon of light: every run a bead in its Bot's crest colour, on a perspective
+  (square-root) time scale with honest 6h / 1h ticks, the waiting run carrying the one amber
+  ring. A waiting approval is lit by the Bot that asks (a pool of its crest light). Every run
+  on Activity — a row or a bead — opens Runs *on that run*: found, scrolled to, and lit.
+- **Runs:** Activity opened out — the same title, status line and ribbon, the start box on a
+  lit panel, sentence-case section names, and run cards in Activity's words and colours
+  (waiting amber, working violet, done mint, failed red) with the Bot's crest. A card rings
+  only for focus or failure. Scorecards carry crests and the roster's names.
+- **Settings / Spend:** no header bar; the serif title in the lamp's light, with the Gate's
+  identity (mark, name, connection) as Settings' one status line. Grouped rows and lit
+  panels; voice engines as a radio list, not boxed paragraphs; an empty section is one
+  quiet line, never a box holding a sentence.
+- **Crests** read the fleet's tone assignment through `useBotCrest`, which hands the
+  assignment to a pure function — the React Compiler infers memo inputs from use, and a
+  crest drawn before the team loaded must redraw in its assigned tone.
 
 ## Seeing it without a Gate
 

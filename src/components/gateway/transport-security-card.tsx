@@ -9,7 +9,7 @@ export function TransportSecurityCard({ url, tlsFingerprint }: { url: string; tl
   const tone = info.isEncrypted ? 'success' : 'warning';
 
   return (
-    <Card variant="inset" padding={Spacing.three} style={styles.card}>
+    <Card variant="stage" padding={Spacing.three} style={styles.card}>
       <View style={styles.header}>
         <Icon
           name={

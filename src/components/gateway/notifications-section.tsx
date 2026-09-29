@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react';
 import { StyleSheet, Switch, View } from 'react-native';
 
-import { Button, Card, ErrorCard, Skeleton, Text, TextField } from '@/components/ui';
+import { Button, Card, ErrorCard, Icon, Skeleton, Text, TextField } from '@/components/ui';
 import { useTokens } from '@/hooks/use-tokens';
 import { useNotificationPreferences } from '@/hooks/use-notification-preferences';
 import { useGateway } from '@/context/gateway-provider';
@@ -72,11 +72,13 @@ export function NotificationsSection() {
 
   if (!connected) {
     return (
-      <Card variant="inset" padding={Spacing.three}>
-        <Text color="secondary">
+      // Nothing to set here yet: one quiet line, not a box holding a paragraph.
+      <View style={styles.quiet}>
+        <Icon name={{ ios: 'bell.slash', android: 'notifications_off', web: 'notifications_off' }} size={15} color="textTertiary" />
+        <Text variant="caption" color="tertiary" style={styles.quietText}>
           Connect to a Versutus Gate to manage push notifications. Hermes and OpenClaw gateways do not relay them.
         </Text>
-      </Card>
+      </View>
     );
   }
 
@@ -287,6 +289,8 @@ export function NotificationsSection() {
 
 const styles = StyleSheet.create({
   container: { gap: Spacing.two },
+  quiet: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.two, paddingHorizontal: Spacing.two },
+  quietText: { flex: 1 },
   card: { gap: Spacing.two },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two },
   title: { flex: 1, gap: 2 },

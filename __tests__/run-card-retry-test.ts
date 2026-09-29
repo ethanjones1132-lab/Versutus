@@ -107,6 +107,10 @@ describe('runs screen retry wiring', () => {
     // create a second in-flight run the operator did not ask for. The card
     // prop is optional and the live call site stays untouched.
     const screen = readSource('src', 'app', 'runs.tsx');
-    expect(screen).toMatch(/case 'active':\s*return <RunCard run=\{item\.run\} onStop=\{stopActivityRun\} \/>/);
+    // A live card may carry the focus highlight (a notice or an Activity tap
+    // named it) but never the finished-run handlers.
+    expect(screen).toMatch(
+      /case 'active':\s*return <RunCard run=\{item\.run\} highlighted=\{item\.id === focusedRunId\} onStop=\{stopActivityRun\} \/>/,
+    );
   });
 });

@@ -47,6 +47,13 @@ export const glassVariantStyles: Record<
     borderColor: Palette.borderSubtle,
     borderWidth: 0,
   },
+  // Resting on the lit stage: the elevated step over the dark, lamplight
+  // through it near the top. Sheets and menus keep the opaque steps above.
+  stage: {
+    backgroundColor: Palette.stagePanel,
+    borderColor: Palette.border,
+    borderWidth: 0,
+  },
   chip: {
     backgroundColor: Palette.accentMuted,
     borderColor: Palette.accentWarmMuted,

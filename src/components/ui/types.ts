@@ -32,7 +32,11 @@ export type TextColor =
   | 'statusDisconnected'
   | 'statusPairing';
 
-export type GlassVariant = 'hero' | 'surface' | 'inset' | 'chip';
+/**
+ * `stage` is the panel for content resting directly on the lit stage: the
+ * elevated step in the dark, glowing with the lamp's light near the top.
+ */
+export type GlassVariant = 'hero' | 'surface' | 'inset' | 'chip' | 'stage';
 
 export type GlassSurfaceProps = {
   children: ReactNode;

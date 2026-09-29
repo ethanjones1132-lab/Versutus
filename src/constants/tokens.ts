@@ -28,6 +28,11 @@ export const Palette = {
   // search): it dims the light behind it instead of punching a hole in it.
   // Dark enough that tertiary text keeps AA over the brightest stage pixel.
   stageGlass: 'rgba(14, 14, 18, 0.58)',
+  // A panel resting on the stage (row groups, cards): over the dark stage it
+  // composites to the elevated step, #18181C; under the lamp the light glows
+  // through it, so the room's light reaches the UI and not only the backdrop.
+  // Tertiary text keeps AA over it under every lamp colour (glass-variants-test).
+  stagePanel: 'rgba(28, 28, 34, 0.72)',
 
   // Glass tiers (cool translucent; flat-panel + hairline first)
   glass: 'rgba(20, 20, 22, 0.82)',

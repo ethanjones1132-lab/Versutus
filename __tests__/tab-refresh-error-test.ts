@@ -79,7 +79,7 @@ describe('tab pull-to-refresh failure is surfaced', () => {
 
   test('the Runs notice renders below the title row and above the start card', () => {
     const src = readRuns();
-    const titleAt = src.indexOf('<Text variant="title">Runs</Text>');
+    const titleAt = src.indexOf('title="Runs"');
     const errorAt = src.indexOf('refreshError ? (');
     const startAt = src.indexOf('styles.startCard');
     expect(titleAt).toBeGreaterThanOrEqual(0);

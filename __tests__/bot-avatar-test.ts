@@ -1,4 +1,6 @@
-import { BOT_CREST_TONES, botCrestFromId, botInitial, registerCrestFleet } from '@/lib/bot-avatar';
+import { BOT_CREST_TONES, botCrestFromId, botCrestIn, botInitial, crestFleetSnapshot, registerCrestFleet } from '@/lib/bot-avatar';
+
+declare const __dirname: string;
 
 /** Status hues a crest must never wear (Palette.statusConnected/Connecting/Disconnected). */
 const STATUS_HUES = ['#63D7A6', '#D6B76A', '#E56D6D', '#F0D690'];
@@ -101,5 +103,35 @@ describe('fleet-aware crest tones', () => {
     const fleet = Array.from({ length: BOT_CREST_TONES.length * 2 + 1 }, (_, i) => `bot-${i}`);
     registerCrestFleet(fleet);
     for (const id of fleet) expect(BOT_CREST_TONES).toContainEqual(botCrestFromId(id).tone);
+  });
+});
+
+describe('crests drawn before the fleet arrives', () => {
+  afterEach(() => registerCrestFleet([]));
+
+  test('the assignment is replaced — never mutated — and only when it really changes', () => {
+    registerCrestFleet(['aria', 'forge']);
+    const first = crestFleetSnapshot();
+    registerCrestFleet(['forge', 'aria']);
+    expect(crestFleetSnapshot()).toBe(first); // same fleet, same object: no redraw
+    registerCrestFleet(['aria', 'forge', 'sentinel', 'scout']);
+    expect(crestFleetSnapshot()).not.toBe(first);
+  });
+
+  test('a crest is a pure function of the assignment it is handed', () => {
+    const empty = new Map<string, number>();
+    registerCrestFleet(['sentinel', 'scout']);
+    const assigned = crestFleetSnapshot();
+    // Sentinel and Scout share a natural tone; the fleet moves one of them.
+    expect(botCrestIn(empty, 'sentinel').tone).toEqual(botCrestIn(empty, 'scout').tone);
+    expect(botCrestIn(assigned, 'sentinel').tone).not.toEqual(botCrestIn(assigned, 'scout').tone);
+    expect(botCrestFromId('sentinel')).toEqual(botCrestIn(assigned, 'sentinel'));
+  });
+
+  test('every drawn crest reads the assignment through the subscribed hook', () => {
+    const fs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
+    const avatar = fs.readFileSync(`${__dirname}/../src/components/chat/bot-avatar.tsx`, 'utf8');
+    expect(avatar).toContain('useBotCrest(botId, name)');
+    expect(avatar).not.toContain('botCrestFromId(');
   });
 });

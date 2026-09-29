@@ -1,6 +1,6 @@
 import * as Haptics from 'expo-haptics';
-import { useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, RefreshControl, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -8,12 +8,15 @@ import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
 import { activityKeyboardBehavior } from '@/lib/activity/keyboard-behavior';
 import { partitionRunsByState } from '@/lib/activity/run-partition';
 
+import { ActivityGlance } from '@/components/activity/activity-glance';
 import { AgenticRunSheet } from '@/components/activity/agentic-run-sheet';
+import { PulsingDot } from '@/components/connection-badge';
 import { RunCard } from '@/components/activity/run-card';
 import { ScorecardsSection } from '@/components/activity/scorecards-section';
-import { Badge, Button, Card, EmptyState, ErrorCard, Screen, Text, TextField } from '@/components/ui';
+import { Button, Card, EmptyState, ErrorCard, Icon, PageTitle, PressableScale, Screen, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import { useNow } from '@/hooks/use-now';
 import { useTokens } from '@/hooks/use-tokens';
 import { filterRunsByBot, type ScorecardFilter } from '@/lib/fleet/scorecard';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
@@ -46,7 +49,9 @@ export default function RunsScreen() {
     sendChatInput,
     loadRunEvents,
     requestedRunFocus,
+    requestRunFocus,
     clearRequestedRunFocus,
+    pendingApprovals,
     cron,
     listBots,
     readBotSessions,
@@ -73,6 +78,9 @@ export default function RunsScreen() {
   // read lands — which is also what a refused or failed read leaves, so no
   // card ever claims a spend nobody read.
   const [spendRows, setSpendRows] = useState<BotSpendRow[]>([]);
+  // The roster's names, so a scorecard reads "Forge" rather than its id.
+  // A failed read leaves the ids, which are still true.
+  const [botNames, setBotNames] = useState<Record<string, string>>({});
   // A tapped "View transcript" on a finished run card opens the sheet keyed on
   // the run id; null closes. The sheet keys itself on the id, so a different
   // run arrives as a fresh component with empty state.
@@ -83,6 +91,9 @@ export default function RunsScreen() {
   const [scorecardFilter, setScorecardFilter] = useState<ScorecardFilter>(null);
   const { parallaxY, onScroll } = useAmbientParallaxScroll();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const now = useNow(60_000);
+  const listRef = useRef<FlatList<ActivityItem>>(null);
 
   // A run notice's tap names a run, and the list may be filtered to another Bot
   // at that moment (a scorecard tap's filter is sticky state on this screen).
@@ -228,6 +239,19 @@ export default function RunsScreen() {
   useFocusEffect(loadBotSpend);
 
   useEffect(() => {
+    if (status !== 'connected') return undefined;
+    let live = true;
+    void listBots()
+      .then((bots) => {
+        if (live) setBotNames(Object.fromEntries(bots.map((bot) => [bot.id, bot.displayName])));
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [listBots, status]);
+
+  useEffect(() => {
     const timer = setTimeout(() => {
       void loadBotSpend();
     }, 0);
@@ -265,6 +289,18 @@ export default function RunsScreen() {
     return () => clearTimeout(timer);
   }, [focusRequest, listData]);
 
+  // A focused run is not only lit but brought into view: the operator tapped
+  // it on Activity (or a notice named it) and should land on it.
+  useEffect(() => {
+    if (!focusedRunId) return undefined;
+    const index = listData.findIndex((item) => item.id === focusedRunId);
+    if (index < 0) return undefined;
+    const timer = setTimeout(() => {
+      listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.15 });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [focusedRunId, listData]);
+
   const renderItem = useCallback(
     ({ item }: { item: ActivityItem }) => {
       switch (item.kind) {
@@ -275,7 +311,7 @@ export default function RunsScreen() {
             </Text>
           );
         case 'active':
-          return <RunCard run={item.run} onStop={stopActivityRun} />;
+          return <RunCard run={item.run} highlighted={item.id === focusedRunId} onStop={stopActivityRun} />;
         case 'finished':
           return (
             <RunCard
@@ -292,13 +328,43 @@ export default function RunsScreen() {
 
   const listHeader = (
     <View style={styles.header}>
-      <View style={styles.titleRow}>
-        <Text variant="title">Runs</Text>
-        <Badge
-          label={status === 'connected' ? 'Live' : 'Offline'}
-          tone={status === 'connected' ? 'success' : 'neutral'}
-        />
-      </View>
+      {/* Runs opens the way Activity does — the serif title in the lamp's
+          light, one status line, and the same day as a ribbon of light — so it
+          reads as Activity, opened out, not a different screen. */}
+      <PageTitle
+        title="Runs"
+        leading={
+          <PressableScale
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/activity'))}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Back to Activity"
+            style={styles.back}>
+            <Icon name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }} size={20} color="textPrimary" />
+          </PressableScale>
+        }
+        status={
+          <>
+            <PulsingDot
+              color={status === 'connected' ? tokens.statusConnected : tokens.textTertiary}
+              active={status === 'connecting' || status === 'reconnecting'}
+            />
+            <Text variant="caption" color="secondary">
+              {status === 'connected'
+                ? `Live${activeRuns.length > 0 ? ` · ${activeRuns.length} in flight` : ''}`
+                : 'Offline — showing what this phone last saw'}
+            </Text>
+          </>
+        }
+      />
+
+      <ActivityGlance
+        pendingApprovals={pendingApprovals.length}
+        runs={activityRunsForActiveGateway}
+        now={now}
+        onOpenRuns={() => setScorecardFilter(null)}
+        onOpenRun={(runId) => requestRunFocus({ runId })}
+      />
 
       {refreshError ? (
         <ErrorCard
@@ -313,11 +379,9 @@ export default function RunsScreen() {
       {runsSupported
         ? (() => {
             const startCard = (
-              <Card padding={Spacing.three} style={styles.startCard}>
-                <Text variant="caption" color="accent" style={styles.approvalEyebrow}>
-                  Start a run
-                </Text>
-                <Text variant="body" color="secondary">
+              <Card variant="stage" padding={Spacing.three} style={styles.startCard}>
+                <Text variant="headline">Start a run</Text>
+                <Text variant="caption" color="secondary">
                   Agentic task with live events and approval gates. Tracks here while it runs.
                 </Text>
                 <TextField
@@ -396,14 +460,19 @@ export default function RunsScreen() {
           above renders, with the gateway's own routine health and P5's spend
           beside them. A tapped card filters that list; it folds the whole
           read, so the cards stay whole while the list narrows. */}
-      <ScorecardsSection runs={activityRunsForActiveGateway} jobs={routineJobs} spendRows={spendRows} filter={scorecardFilter} onSelect={setScorecardFilter} />
+      <ScorecardsSection runs={activityRunsForActiveGateway} jobs={routineJobs} spendRows={spendRows} filter={scorecardFilter} onSelect={setScorecardFilter} botNames={botNames} />
     </View>
   );
 
   return (
     <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY}>
       <FlatList
+        ref={listRef}
         data={listData}
+        onScrollToIndexFailed={(info) => {
+          // Rows vary in height; land near it rather than nowhere.
+          listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true });
+        }}
         keyExtractor={(item) => item.id}
         style={styles.list}
         contentContainerStyle={[
@@ -445,7 +514,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   listContent: {
-    paddingHorizontal: Spacing.four,
+    paddingHorizontal: Spacing.four - 4,
     paddingTop: Spacing.two,
     paddingBottom: Spacing.four,
     gap: Spacing.three,
@@ -457,21 +526,19 @@ const styles = StyleSheet.create({
   footer: {
     gap: Spacing.three,
   },
-  titleRow: {
-    flexDirection: 'row',
+  back: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.two,
-  },
-  approvalEyebrow: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    justifyContent: 'center',
   },
   startCard: {
     gap: Spacing.two,
   },
+  // Section names in plain sentence case, the quiet labels Activity and
+  // Settings use, never violet capitals.
   sectionTitle: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    paddingHorizontal: Spacing.two,
+    paddingTop: Spacing.two,
   },
 });

@@ -650,10 +650,9 @@ export default function RootLayout() {
                   <Stack.Screen
                     name="runs"
                     options={{
-                      headerShown: true,
+                      // Runs draws its own serif title, like Activity.
+                      headerShown: false,
                       title: 'Runs',
-                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                      headerTintColor: VersutusDarkTheme.colors.text,
                     }}
                   />
                   <Stack.Screen name="onboarding" options={{ headerShown: false }} />
@@ -671,20 +670,18 @@ export default function RootLayout() {
                     name="gateway/settings"
                     options={{
                       presentation: 'modal',
-                      headerShown: true,
+                      // The page draws its own serif title in the lamp's light.
+                      headerShown: false,
                       title: 'Settings',
-                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                      headerTintColor: VersutusDarkTheme.colors.text,
                     }}
                   />
                   <Stack.Screen
                     name="gateway/spend"
                     options={{
                       presentation: 'modal',
-                      headerShown: true,
+                      // The page draws its own serif title in the lamp's light.
+                      headerShown: false,
                       title: 'Spend',
-                      headerStyle: { backgroundColor: VersutusDarkTheme.colors.card },
-                      headerTintColor: VersutusDarkTheme.colors.text,
                     }}
                   />
                   <Stack.Screen

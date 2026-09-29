@@ -92,10 +92,19 @@ function naturalTone(botId: string): number {
  */
 let fleetTones = new Map<string, number>();
 let fleetVersion = 0;
+const fleetListeners = new Set<() => void>();
 
-/** Bumped whenever the fleet's tones are reassigned, so a cached crest colour knows to refresh. */
+/** Bumped whenever the fleet's tones actually change, so a drawn crest knows to redraw. */
 export function crestFleetVersion(): number {
   return fleetVersion;
+}
+
+/** Hear when the fleet's tones change (a crest drawn before the inventory arrived). */
+export function subscribeCrestFleet(listener: () => void): () => void {
+  fleetListeners.add(listener);
+  return () => {
+    fleetListeners.delete(listener);
+  };
 }
 
 export function registerCrestFleet(botIds: readonly string[]): void {
@@ -126,11 +135,29 @@ export function registerCrestFleet(botIds: readonly string[]): void {
       }
     }
   }
+  // Every screen re-reads the inventory; only a real change redraws crests.
+  const same = next.size === fleetTones.size && [...next].every(([id, slot]) => fleetTones.get(id) === slot);
+  if (same) return;
   fleetTones = next;
   fleetVersion += 1;
+  for (const listener of fleetListeners) listener();
+}
+
+/** The fleet's current tone assignment: replaced, never mutated, on each change. */
+export function crestFleetSnapshot(): ReadonlyMap<string, number> {
+  return fleetTones;
+}
+
+/**
+ * A crest under a given assignment — pure, so a component that passes the
+ * assignment in visibly depends on it (a memoizing compiler cannot keep a
+ * crest computed before the fleet arrived).
+ */
+export function botCrestIn(fleet: ReadonlyMap<string, number>, botId: string, displayName?: string): BotCrest {
+  const tone = BOT_CREST_TONES[fleet.get(botId) ?? naturalTone(botId)];
+  return { tone, initial: botInitial(displayName?.trim() || botId) };
 }
 
 export function botCrestFromId(botId: string, displayName?: string): BotCrest {
-  const tone = BOT_CREST_TONES[fleetTones.get(botId) ?? naturalTone(botId)];
-  return { tone, initial: botInitial(displayName?.trim() || botId) };
+  return botCrestIn(fleetTones, botId, displayName);
 }

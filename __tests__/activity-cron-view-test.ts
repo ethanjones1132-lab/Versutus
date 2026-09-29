@@ -48,7 +48,7 @@ describe('Activity is the cron view, and runs live on their own destination', ()
     const src = runs();
     expect(src).toContain("label={starting ? 'Starting…' : 'Run task'}");
     expect(src).toContain('<ScorecardsSection');
-    expect(src).toContain('<RunCard run={item.run} onStop={stopActivityRun} />');
+    expect(src).toContain('<RunCard run={item.run} highlighted={item.id === focusedRunId} onStop={stopActivityRun} />');
   });
 
   test('the Runs destination is a registered Stack route', () => {

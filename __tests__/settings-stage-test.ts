@@ -36,7 +36,9 @@ describe('gateway settings inherits the quiet violet stage', () => {
   test('settings keeps flat, borderless surface material', () => {
     const src = settings();
     const shared = variants();
-    expect(src).toContain('variant="surface"');
+    // Cards on the settings page rest on the lit stage panel (the elevated
+    // step in the dark, lamplight through it near the top).
+    expect(src).toContain('variant="stage"');
     expect(src).not.toContain('glass');
     // S4b: the settings stacks are the reason the wireframe look showed up
     // here first, so every shared variant they lean on must ship borderWidth 0

@@ -27,7 +27,7 @@ export function SpendEntryRow() {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Spend. Tokens and cost across this gateway's sessions, per Bot where the gateway can split them.">
-        <Card variant="surface" padding={Spacing.three - 2} style={styles.card}>
+        <Card variant="stage" padding={Spacing.three - 2} style={styles.card}>
           <View style={styles.tile}>
             <Icon name={{ ios: 'chart.bar', android: 'bar_chart', web: 'bar_chart' }} size={16} color="accent" />
           </View>

@@ -1,12 +1,43 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
 import { Button, ErrorCard, Icon, Skeleton, Text } from '@/components/ui';
-import { Radius, Spacing } from '@/constants/tokens';
+import { FontFamily, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
+import { useBotCrest } from '@/hooks/use-crest-fleet';
 import { approvalClassLabel, approvalInboxCopy, batchApprovableRows } from '@/lib/gateway/approvals';
+import { BRAND_TONE } from '@/lib/stage/lamp';
+
+const GLOW_W = 260;
+const GLOW_H = 180;
+
+/**
+ * The one thing on Activity that needs the operator is lit by whoever is
+ * asking: a soft pool of the requesting Bot's crest light in the row's upper
+ * left, the way the lamp lights a Bot's own thread.
+ */
+function RequesterGlow({ botId }: { botId?: string }) {
+  const id = `ask-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const crest = useBotCrest(botId ?? '');
+  const tone = botId ? crest.tone : BRAND_TONE;
+  return (
+    <View pointerEvents="none" style={styles.glow}>
+      <Svg width={GLOW_W} height={GLOW_H}>
+        <Defs>
+          <RadialGradient id={id} cx="18%" cy="22%" rx="62%" ry="70%" fx="18%" fy="22%">
+            <Stop offset="0" stopColor={tone.from} stopOpacity={0.2} />
+            <Stop offset="0.5" stopColor={tone.to} stopOpacity={0.08} />
+            <Stop offset="1" stopColor={tone.to} stopOpacity={0} />
+          </RadialGradient>
+        </Defs>
+        <Rect width={GLOW_W} height={GLOW_H} fill={`url(#${id})`} />
+      </Svg>
+    </View>
+  );
+}
 
 /**
  * D1: the approval inbox. Lists the Gate's pending approvals with the class
@@ -55,7 +86,7 @@ export function ApprovalInbox() {
   };
 
   return (
-    <View style={[styles.group, { backgroundColor: tokens.backgroundElevated }]}>
+    <View style={[styles.group, { backgroundColor: tokens.stagePanel }]}>
       {decideError ? (
         <ErrorCard
           cause={decideError}
@@ -98,9 +129,10 @@ export function ApprovalInbox() {
                   styles.row,
                   index > 0 ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: tokens.borderSubtle } : null,
                 ]}>
+                <RequesterGlow botId={row.botId} />
                 <View style={styles.rowHead}>
                   {row.botId ? (
-                    <BotAvatar botId={row.botId} size={32} />
+                    <BotAvatar botId={row.botId} size={40} />
                   ) : (
                     <View style={[styles.shield, { backgroundColor: tokens.backgroundRaised }]}>
                       <Icon name={{ ios: 'checkmark.shield', android: 'verified_user', web: 'verified_user' }} size={16} color="statusConnecting" />
@@ -179,16 +211,17 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.three - 2,
   },
   rowHead: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.three - 4 },
+  glow: { position: 'absolute', left: 0, top: 0, width: GLOW_W, height: GLOW_H },
   shield: {
-    width: 32,
-    height: 32,
+    width: 40,
+    height: 40,
     borderRadius: Radius.full,
     alignItems: 'center',
     justifyContent: 'center',
   },
   rowText: { flex: 1, minWidth: 0, gap: 2 },
-  summary: { fontSize: 15, lineHeight: 21 },
-  actions: { flexDirection: 'row', gap: Spacing.two, paddingLeft: 44 },
+  summary: { fontSize: 16, lineHeight: 22, fontFamily: FontFamily.sans },
+  actions: { flexDirection: 'row', gap: Spacing.two, paddingLeft: 52 },
   action: { flex: 1 },
   batch: {
     flexDirection: 'row',

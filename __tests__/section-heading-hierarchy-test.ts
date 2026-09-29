@@ -51,9 +51,12 @@ describe('named screens carry exactly one title-level heading in their own body'
   });
 
   test('Runs', () => {
+    // Runs opens as Activity does: the shared large title, and nothing inside
+    // it promoted to a second title.
     const src = runsScreen();
-    expect(countTitles(src)).toBe(1);
-    expect(src).toContain('<Text variant="title">Runs</Text>');
+    expect(countTitles(src)).toBe(0);
+    expect((src.match(/<PageTitle/g) ?? []).length).toBe(1);
+    expect(src).toContain('title="Runs"');
   });
 
   test('Capabilities', () => {

@@ -333,6 +333,14 @@ describe('scorecardBotLabel', () => {
     expect(scorecardBotLabel('atlas')).toBe('atlas');
   });
 
+  test('a Bot the roster names is titled by that name; an unknown or blank name falls back to the id', () => {
+    const names = { atlas: 'Atlas', forge: '   ' };
+    expect(scorecardBotLabel('atlas', names)).toBe('Atlas');
+    expect(scorecardBotLabel('forge', names)).toBe('forge');
+    expect(scorecardBotLabel('muse', names)).toBe('muse');
+    expect(scorecardBotLabel(null, names)).toBe('Unattributed');
+  });
+
   test('the rows that name no Bot get one heading, not a Bot named after them', () => {
     const label = scorecardBotLabel(null);
 

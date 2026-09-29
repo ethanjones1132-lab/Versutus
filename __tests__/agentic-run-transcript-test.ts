@@ -144,7 +144,11 @@ describe('agentic-run transcript wiring', () => {
       /case 'finished':\s*return \([\s\S]*?<RunCard\s+run=\{item\.run\}\s+highlighted=\{item\.id === focusedRunId\}\s+onOpenTranscript=\{setOpenAgenticRunId\}/,
     );
     // Live cards keep the original shape — no onOpenTranscript passed.
-    expect(screen).toMatch(/case 'active':\s*return <RunCard run=\{item\.run\} onStop=\{stopActivityRun\} \/>/);
+    // A live card may carry the focus highlight (a notice or an Activity tap
+    // named it) but never the finished-run handlers.
+    expect(screen).toMatch(
+      /case 'active':\s*return <RunCard run=\{item\.run\} highlighted=\{item\.id === focusedRunId\} onStop=\{stopActivityRun\} \/>/,
+    );
 
     // And the card itself only renders the affordance when both gates pass:
     // not live (a live run is already streaming) and a callback is supplied.

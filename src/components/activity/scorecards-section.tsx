@@ -101,6 +101,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { AppState, StyleSheet, Switch, View } from 'react-native';
 
+import { BotAvatar } from '@/components/chat/bot-avatar';
 import { Badge, Button, Card, Divider, ListRow, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
@@ -152,6 +153,7 @@ export function ScorecardsSection({
   spendRows,
   filter,
   onSelect,
+  botNames,
 }: {
   /** The runs this device persisted — the whole read, never the filtered view. */
   runs: readonly ActivityRun[];
@@ -165,6 +167,8 @@ export function ScorecardsSection({
   /** The bucket the tab is filtered to, or null for no filter. */
   filter: ScorecardFilter;
   onSelect: (filter: ScorecardFilter) => void;
+  /** The roster's names by Bot id, so a card reads "Forge", not "forge". */
+  botNames?: Readonly<Record<string, string>>;
 }) {
   const tokens = useTokens();
   // Fold the list the tab was handed, exactly as the tab's own filter does,
@@ -267,7 +271,7 @@ export function ScorecardsSection({
   const cardsCarrySpend = scorecardsCarrySpend(cards);
 
   return (
-    <Card padding={Spacing.three} style={styles.card}>
+    <Card variant="stage" padding={Spacing.three} style={styles.card}>
       <Text variant="headline">Scorecards</Text>
 
       {/* The window is the read's, so it is named once for the cards below
@@ -337,9 +341,10 @@ export function ScorecardsSection({
             return (
               <ListRow
                 key={card.botId ?? 'unattributed'}
-                title={scorecardBotLabel(card.botId)}
+                title={scorecardBotLabel(card.botId, botNames)}
                 subtitle={scorecardCardLine(facts)}
-                accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId), facts, showing)}
+                leading={card.botId ? <BotAvatar botId={card.botId} size={32} /> : undefined}
+                accessibilityLabel={scorecardCardAnnouncement(scorecardBotLabel(card.botId, botNames), facts, showing)}
                 onPress={() => onSelect({ botId: card.botId })}
                 trailing={showing ? <Badge label={SCORECARD_SHOWING_LABEL} tone="accent" /> : undefined}
                 chevron={scorecardCardChevron(showing)}

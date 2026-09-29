@@ -1,6 +1,6 @@
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
-import { Link } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 
@@ -14,6 +14,8 @@ import {
   Card,
   ErrorCard,
   Icon,
+  PageTitle,
+  PressableScale,
   RowGroup,
   RowGroupRow,
   Screen,
@@ -90,6 +92,7 @@ export default function GatewaySettingsScreen() {
     gatewayRequest,
   } = useGateway();
   const tokens = useTokens();
+  const router = useRouter();
   const [copied, setCopied] = useState<'id' | null>(null);
   const [appLock, setAppLock] = useState(false);
   const [appLockReason, setAppLockReason] = useState<AppLockUnavailableReason | null>(null);
@@ -253,30 +256,42 @@ export default function GatewaySettingsScreen() {
   const gateName = settings.pcName ?? activeGateway?.name ?? 'No gateway yet';
 
   return (
-    <Screen edges={['bottom']}>
+    <Screen edges={['top', 'bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
-        {/* Who this app is talking to, set like the top of an account page:
-            the mark, the Gate's name in the serif, and one status line. */}
-        <View style={styles.identity}>
-          <VersutusMark size={56} />
-          <View style={styles.identityText}>
-            <Text variant="title" numberOfLines={1} style={styles.identityName}>
-              {gateName}
-            </Text>
+        {/* Settings opens like every page: the serif title in the lamp's
+            light, and the Gate it is talking to as its one status line — the
+            mark, the name, the connection. One serif line, no header bar. */}
+        <PageTitle
+          title="Settings"
+          leading={
+            <PressableScale
+              onPress={() => (router.canGoBack() ? router.back() : router.replace('/chat'))}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="Close settings"
+              style={styles.close}>
+              <Icon name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }} size={20} color="textSecondary" />
+            </PressableScale>
+          }
+          status={
             <View style={styles.identityStatus}>
+              <VersutusMark size={22} />
+              <Text variant="callout" numberOfLines={1} style={styles.identityName}>
+                {gateName}
+              </Text>
               <View
                 style={[
                   styles.statusDot,
                   { backgroundColor: status === 'connected' ? tokens.statusConnected : tokens.textTertiary },
                 ]}
               />
-              <Text variant="caption" color="secondary" numberOfLines={1}>
+              <Text variant="caption" color="secondary" numberOfLines={1} style={styles.identityDetail}>
                 {status === 'connected' ? 'Connected' : 'Not connected'}
                 {activeGateway?.kind ? ` · ${activeGateway.kind === 'hermes' ? 'Hermes Gate' : activeGateway.kind}` : ''}
               </Text>
             </View>
-          </View>
-        </View>
+          }
+        />
 
         <View style={styles.section}>
           <SectionHeader title="Gate" />
@@ -348,7 +363,7 @@ export default function GatewaySettingsScreen() {
 
         <View style={styles.section}>
           <SectionHeader title="Voice" />
-          <Card variant="surface" padding={Spacing.three} style={styles.card}>
+          <Card variant="stage" padding={Spacing.three} style={styles.card}>
             <Text variant="headline">Power hands-free with</Text>
             <Text variant="caption" color="secondary">
               Where a call&apos;s audio goes, and which machine runs the speech models.
@@ -373,8 +388,7 @@ export default function GatewaySettingsScreen() {
                     onPress={() => handleVoiceEngine(row.id)}
                     style={[
                       styles.voiceRow,
-                      { backgroundColor: selected ? tokens.backgroundRaised : tokens.backgroundInset },
-                      selected ? { borderColor: tokens.accent } : null,
+                      selected ? { backgroundColor: tokens.backgroundRaised, borderColor: tokens.accent } : null,
                     ]}>
                     <View style={styles.voiceText}>
                       <Text variant="callout" color={selected ? 'primary' : 'secondary'}>
@@ -399,7 +413,7 @@ export default function GatewaySettingsScreen() {
                   </Pressable>
                 );
               })}
-              <View style={[styles.voiceRow, styles.voiceRowDisabled, { backgroundColor: tokens.backgroundInset }]}>
+              <View style={[styles.voiceRow, styles.voiceRowDisabled]}>
                 <View style={styles.voiceText}>
                   <Text variant="callout" color="tertiary">
                     {GROK_ROW_LABEL}
@@ -455,7 +469,7 @@ export default function GatewaySettingsScreen() {
 
         <View style={styles.section}>
           <SectionHeader title="Approvals" />
-          <Card variant="surface" padding={Spacing.three} style={styles.card}>
+          <Card variant="stage" padding={Spacing.three} style={styles.card}>
             <View style={styles.cardTitleRow}>
               <Text variant="headline">Decision history</Text>
               {auditLoaded ? (
@@ -491,7 +505,7 @@ export default function GatewaySettingsScreen() {
           <View style={styles.section}>
             <SectionHeader title="This device" />
             <TransportSecurityCard url={activeGateway.url} tlsFingerprint={activeGateway.tlsFingerprint} />
-            <Card variant="surface" padding={Spacing.three} style={styles.card}>
+            <Card variant="stage" padding={Spacing.three} style={styles.card}>
               {deviceId ? (
                 <DeviceIdRow deviceId={deviceId} copied={copied} onCopy={copyText} />
               ) : deviceIdState === 'failed' ? (
@@ -534,29 +548,28 @@ export default function GatewaySettingsScreen() {
 const styles = StyleSheet.create({
   content: {
     paddingHorizontal: Spacing.four - 4,
-    paddingTop: Spacing.four,
+    paddingTop: Spacing.two,
     paddingBottom: Spacing.five,
     gap: Spacing.four,
   },
-  identity: {
-    flexDirection: 'row',
+  close: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
-    gap: Spacing.three,
-    paddingHorizontal: Spacing.one,
-  },
-  identityText: {
-    flex: 1,
-    minWidth: 0,
-    gap: 2,
-  },
-  identityName: {
-    fontSize: 30,
-    lineHeight: 36,
+    justifyContent: 'center',
   },
   identityStatus: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
+    minWidth: 0,
+  },
+  identityName: {
+    flexShrink: 1,
+  },
+  identityDetail: {
+    flexShrink: 1,
   },
   statusDot: {
     width: 7,
@@ -577,7 +590,7 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   voiceRows: {
-    gap: Spacing.two,
+    gap: 2,
     marginTop: Spacing.one,
   },
   voiceRow: {

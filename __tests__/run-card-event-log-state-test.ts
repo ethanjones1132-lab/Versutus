@@ -67,7 +67,7 @@ describe('RunCard event-log toggle screen-reader state', () => {
     // count of events when collapsed, "Hide events" when expanded. The new
     // accessibilityState must not touch it.
     expect(src).toMatch(
-      /expanded \? 'Hide events' : `\$\{run\.events\.length\} events`/,
+      /expanded \? 'Hide events' : `\$\{run\.events\.length\} \$\{run\.events\.length === 1 \? 'event' : 'events'\}`/,
     );
   });
 
