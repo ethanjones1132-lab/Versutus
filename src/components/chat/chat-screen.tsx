@@ -178,6 +178,8 @@ import {
 } from '@/lib/voice/voice-preferences';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
+import type { StageRoom } from '@/lib/stage/lamp';
+import { signalSent, signalSpeaking } from '@/lib/stage/signals';
 import { chatTranscriptContentPaddingBottom } from '@/lib/motion/chat-transcript-insets';
 import { chatJumpBottom } from '@/lib/motion/chat-jump-inset';
 
@@ -964,6 +966,11 @@ export function ChatScreen() {
 
   const pairingKey = `${deviceId ?? ''}:${pairingDetails?.requestId ?? ''}`;
   const isStreaming = isSending || messages.some((message) => message.streaming);
+  // While a Bot is replying the room is a little brighter; it settles after.
+  useEffect(() => {
+    signalSpeaking(isStreaming);
+  }, [isStreaming]);
+  useEffect(() => () => signalSpeaking(false), []);
   const queuedCount = messages.filter((message) => message.queued).length;
   const showPairingSheet = status === 'pairing' && !!deviceId && dismissedPairingKey !== pairingKey;
   // Dismiss hides the sheet without ending pairing — this banner is the way
@@ -1180,6 +1187,7 @@ export function ChatScreen() {
     setDraft('');
     setAttachments([]);
     pinnedRef.current = true;
+    signalSent();
     await sendChatInput(text, { skills: skillsState.skills, attachments: files });
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
   }, [attachments, draft, sendChatInput, setDraft, skillsState.skills]);
@@ -1770,6 +1778,14 @@ export function ChatScreen() {
   // Thread surfaces ride the provider message pipeline; a group room and the
   // roster do not (the room owns its transcript locally).
   const threadSurface = surface.kind === 'configurable' || surface.kind === 'bot';
+  // Whose light fills the room: the Bot in this thread, every member of a
+  // group room, or the house violet on the roster and in a direct chat.
+  const stageRoom = useMemo<StageRoom>(() => {
+    if (surface.kind === 'bot') return { kind: 'bot', botId: surface.botId };
+    if (surface.kind === 'group' && activeGroup) return { kind: 'room', memberIds: activeGroup.memberIds };
+    if (surface.kind === 'configurable') return { kind: 'direct' };
+    return { kind: 'lobby' };
+  }, [surface, activeGroup]);
   const spendCopy =
     spendState.surfaceKey === spendSurfaceKey ? threadSpendCopy(spendState, currentSessionId) : undefined;
   const spendRetry =
@@ -1882,7 +1898,7 @@ export function ChatScreen() {
   }
 
   return (
-    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY}>
+    <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY} room={stageRoom}>
       <ChatHeader
         gatewayName={settings.pcName ?? activeGateway.name}
         statusDetail={status === 'connected' ? undefined : statusDetail || probeMessage}
@@ -2260,7 +2276,15 @@ export function ChatScreen() {
                           // names the unread roster instead of asserting routing verdicts
                           // from zero knowledge (rook 2026-08-24T20:51).
                           inventoryLoaded={inventoryLoaded}
-                          onSend={(text, mentionedIds) => botGroups.send(activeGroup.id, { text, mentionedIds })}
+                          onSend={(text, mentionedIds) => {
+                            // The room answers a round the way a thread answers a message:
+                            // a swell as it leaves, a brighter room while the members reply.
+                            signalSent();
+                            signalSpeaking(true);
+                            return botGroups
+                              .send(activeGroup.id, { text, mentionedIds })
+                              .finally(() => signalSpeaking(false));
+                          }}
               loadHistory={() => botGroups.history(activeGroup.id)}
               onRename={(name) =>
                 botGroups.rename(activeGroup.id, name).then((room) => {

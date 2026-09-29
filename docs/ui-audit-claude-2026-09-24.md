@@ -54,6 +54,8 @@ Then decide drawer / kill tabs (item 15).
 
 **Operator decision 2026-09-24 ~21:51 ET:** Drawer — kill bottom tabs. Locked in visual-direction + charter.
 
+**Operator decision 2026-09-28:** the stage is the centrepiece. Item 6's "at most one faint still glow" is superseded by the lamp (`docs/design-language-nocturne-2026-09.md`, **The stage**): one light, no loops, asleep when unseen or idle, still under Reduce Motion, and held to AA for the dimmest stage text by construction. Do not strip it back to a still glow.
+
 ## Operator notes
 
 - Sprint paused 2026-09-24 ~21:50 ET at `2f7ab2c` so direction can absorb this audit before more violet residual commits.

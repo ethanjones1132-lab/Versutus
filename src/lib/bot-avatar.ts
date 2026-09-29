@@ -91,6 +91,12 @@ function naturalTone(botId: string): number {
  * changes around it.
  */
 let fleetTones = new Map<string, number>();
+let fleetVersion = 0;
+
+/** Bumped whenever the fleet's tones are reassigned, so a cached crest colour knows to refresh. */
+export function crestFleetVersion(): number {
+  return fleetVersion;
+}
 
 export function registerCrestFleet(botIds: readonly string[]): void {
   const ids = [...new Set(botIds)].sort();
@@ -121,6 +127,7 @@ export function registerCrestFleet(botIds: readonly string[]): void {
     }
   }
   fleetTones = next;
+  fleetVersion += 1;
 }
 
 export function botCrestFromId(botId: string, displayName?: string): BotCrest {

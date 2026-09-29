@@ -442,7 +442,7 @@ function ChatRosterImpl({
               onChangeText={setQuery}
               placeholder="Search your team"
               returnKeyType="search"
-              style={styles.search}
+              style={[styles.search, { backgroundColor: tokens.stageGlass, borderTopColor: tokens.specular }]}
             />
           ) : null}
           {error ? (
@@ -558,7 +558,13 @@ const styles = StyleSheet.create({
   hero: { gap: Spacing.two, paddingHorizontal: Spacing.one, paddingTop: Spacing.two, paddingBottom: Spacing.four },
   gateLine: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, alignSelf: 'flex-start' },
   gateText: { flexShrink: 1 },
-  search: { marginBottom: Spacing.three, minHeight: 48, borderRadius: Radius.full, borderWidth: 0 },
+  search: {
+    marginBottom: Spacing.three,
+    minHeight: 48,
+    borderRadius: Radius.full,
+    borderWidth: 0,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
   sectionLabel: { marginTop: Spacing.two, marginBottom: Spacing.one, paddingHorizontal: Spacing.one },
   member: {
     flexDirection: 'row',

@@ -13,9 +13,9 @@ import { Palette } from '@/constants/tokens';
  * visual-direction-2026-09): ScreenHeader's trailing control rests on a flat
  * inset panel wearing brand violet (not a lit chip + focus tint), StatTile's
  * icon is demoted to the cool secondary gray so the headline carries the
- * tile, and the ambient field every Screen mounts is a flat stage with at most one
- * faint still violet glow — never champagne GOLD/SAPPHIRE glass or busy art.
- * Public APIs unchanged.
+ * tile, and the stage every Screen mounts is one lamp (docs/design-language-
+ * nocturne-2026-09.md, "The stage") — never champagne GOLD/SAPPHIRE glass or the
+ * retired busy art. Public APIs unchanged.
  */
 
 const nodeFs = jest.requireActual('fs') as {
@@ -84,23 +84,31 @@ describe('StatTile icon is demoted so the headline carries the tile', () => {
   });
 });
 
-describe('the ambient stage every Screen mounts is flat, violet, and still', () => {
+describe('the stage every Screen mounts is one lamp, not busy art', () => {
+  // Operator 2026-09-28: the stage is the centrepiece. The audit's objection
+  // (2026-09-24 item 6) was busy art — tilted panels, stray rules, grain,
+  // drifting orbs — and battery. The lamp answers it: one light, no loops,
+  // and it only moves while it is seen.
   const native = readSource('src', 'components', 'layout', 'AmbientCanvas.native.tsx');
+  const web = readSource('src', 'components', 'layout', 'AmbientCanvas.web.tsx');
+  const gpu = readSource('src', 'components', 'layout', 'stage-gl.ts');
   const fallback = readSource('src', 'components', 'layout', 'ambient-fallback.tsx');
-  const AMBIENT_FILES: [string, string][] = [
-    ['native Skia canvas', native],
-    ['still-glow fallback', fallback],
+  const STAGE_FILES: [string, string][] = [
+    ['native Skia lamp', native],
+    ['web lamp', web],
+    ['web GPU loop', gpu],
+    ['still fallback', fallback],
   ];
 
-  it.each(AMBIENT_FILES)('%s is quiet — no grain, tilt, stray rules, or drift loops', (_label, src) => {
+  it.each(STAGE_FILES)('%s carries none of the retired busy art and no animation loop', (_label, src) => {
     expect(src).not.toContain('glassBorder');
     expect(src).not.toContain('GOLD');
     expect(src).not.toContain('SAPPHIRE');
     expect(src).not.toContain('goldRule');
     expect(src).not.toContain('grain.png');
     expect(src).not.toContain('ImageShader');
+    // The air is noise sampled at a clock, never a looping animation.
     expect(src).not.toContain('withRepeat');
-    expect(src).not.toContain('withTiming');
     expect(src).not.toMatch(/rotate:\s*'?-?\d/);
     expect(src).not.toContain('styles.plate');
     expect(src).not.toContain('styles.rule');
@@ -111,32 +119,44 @@ describe('the ambient stage every Screen mounts is flat, violet, and still', () 
     expect(src).not.toMatch(/Palette\.glass\b|Palette\.gold\b/);
   });
 
-  it('mounts exactly one faint still glow, violet-dominant at subliminal alpha', () => {
-    expect((native.match(/<RadialGradient/g) ?? []).length).toBe(1);
-    expect(native).toContain('GLOW');
-    const glows = [...native.matchAll(/rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)/g)];
-    expect(glows.length).toBe(1);
-    for (const match of glows) {
-      const r = Number(match[1]);
-      const g = Number(match[2]);
-      const b = Number(match[3]);
-      const a = Number(match[4]);
-      expect(b).toBeGreaterThanOrEqual(r);
-      expect(r).toBeGreaterThan(g);
-      expect(a).toBeLessThanOrEqual(0.2);
-    }
-    // Fallback keeps a single still disc on the muted brand wash.
-    expect(fallback).toContain('tokens.accentMuted');
+  it('both platforms draw exactly one light: the shared lamp shader', () => {
+    expect((native.match(/<Shader\b/g) ?? []).length).toBe(1);
+    expect(native).toContain('STAGE_SHADER_SKSL');
+    expect(native).not.toContain('<RadialGradient');
+    expect(native).not.toContain('<Image');
+    expect(gpu).toContain('STAGE_SHADER_GLSL');
+    expect(web).toContain('mountStage');
+  });
+
+  it('the air only moves while someone can see it', () => {
+    // Native: the clock runs while focused, motion is allowed and someone is here.
+    expect(native).toContain('useIsFocused()');
+    expect(native).toContain('useReducedMotion()');
+    expect(native).toMatch(/const running = focused && !reduced && awake;/);
+    expect(native).toContain('clock.setActive(running)');
+    // The tilt sensor exists only while the lamp is running.
+    expect(native).toContain('{running ? <TiltSource');
+    // Web: one context app-wide; asleep when hidden, offscreen, idle or reduced.
+    expect(gpu).toContain('document.hidden');
+    expect(gpu).toContain('IntersectionObserver');
+    expect(gpu).toContain('STAGE_TIMING.idleAfterMs');
+    expect(gpu).toContain('prefers-reduced-motion: reduce');
+    expect((gpu.match(/getContext\('webgl'/g) ?? []).length).toBe(1);
+  });
+
+  it('the still fallback keeps a single disc, lit in the room’s colour', () => {
     expect(fallback).toContain('styles.glow');
+    expect(fallback).toContain('tokens.accentMuted');
+    expect(fallback).toContain('useStageLights(room)');
     expect(fallback).not.toContain('GlowOrb');
     expect(fallback).not.toContain('accentWarmMuted');
   });
 
-  it('the Screen shell keeps its cool stage and ambient API', () => {
+  it('the Screen shell keeps its stage, its ambient API, and hands the lamp its room', () => {
     const screen = readSource('src', 'components', 'ui', 'Screen.tsx');
     expect(screen).toContain('backgroundColor: tokens.background');
     expect(screen).toContain('ambient = true');
-    expect(screen).toContain('AmbientCanvas');
+    expect(screen).toContain('<AmbientCanvas parallaxX={parallaxX} parallaxY={parallaxY} room={room} />');
   });
 });
 

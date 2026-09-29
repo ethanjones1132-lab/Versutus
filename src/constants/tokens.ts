@@ -24,6 +24,10 @@ export const Palette = {
   // The one edge a floating surface (sheet, menu, composer) carries: light
   // catching its top lip. Cards resting on the stage carry nothing.
   specular: 'rgba(255, 255, 255, 0.07)',
+  // Smoked glass for a control resting in the lamp's light (the roster's
+  // search): it dims the light behind it instead of punching a hole in it.
+  // Dark enough that tertiary text keeps AA over the brightest stage pixel.
+  stageGlass: 'rgba(14, 14, 18, 0.58)',
 
   // Glass tiers (cool translucent; flat-panel + hairline first)
   glass: 'rgba(20, 20, 22, 0.82)',

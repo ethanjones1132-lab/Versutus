@@ -16,6 +16,7 @@ import { ConnectedToast } from '@/components/connected-toast';
 import { FontProvider } from '@/components/font-provider';
 import { HandsfreeCallBanner } from '@/components/voice/handsfree-call-banner';
 import { TlsFingerprintGuard } from '@/components/gateway/tls-fingerprint-guard';
+import { StageSignalBridge } from '@/components/layout/stage-signal-bridge';
 import { VersutusDarkTheme } from '@/constants/navigation-theme';
 import {
   GatewayProvider as LiveGatewayProvider,
@@ -617,6 +618,7 @@ export default function RootLayout() {
              <NotificationRouter />
              <GatewayDeepLinkRouter />
              <SharedTextRouter />
+             <StageSignalBridge />
             <AppBootstrap>
               <View style={styles.root}>
                 <AnimatedSplashOverlay />

@@ -4,6 +4,11 @@ Status: **2026-09-25**, builds on `visual-direction-2026-09.md` (palette, struct
 all still locked) and `ui-audit-claude-2026-09-24.md`. Those documents decided *what to
 remove*. This one decides *what the product feels like once the chrome is gone*.
 
+**2026-09-28 — the stage is the lamp.** The operator made the stage the centrepiece: the one
+still glow became a real light (see **The stage**). This supersedes the audit's "at most one
+faint still glow" (item 6). Its objections still bind — no busy art, no loops, no battery
+drain — and the lamp is built to meet them.
+
 ## The idea in one line
 
 A private office at night: a dark, quiet room, one warm lamp of violet, and the work set in
@@ -17,8 +22,8 @@ the thing a principal hands their chief of staff — calm, legible, expensive by
 1. **Type carries the luxury.** Instrument Serif for titles, greetings and names; Instrument
    Sans for everything you operate; JetBrains Mono only for things a machine wrote. Never
    more than one serif line competing on a screen.
-2. **Light, not paint.** Violet appears as *light*: one still glow on the stage, the send orb,
-   a focus ring, a selected row. It is never a fill for whole cards or a colour for body text.
+2. **Light, not paint.** Colour appears as *light*: the lamp over the stage, the send orb, a
+   focus ring, a selected row. It is never a fill for whole cards or a colour for body text.
 3. **Value steps, not lines.** Surfaces are told apart by `stage → inset → surface → raised`
    and by space. A border is drawn only when it means something (focus, selection, failure).
 4. **One signal per state.** A streaming reply shows one breathing caret. A connected Gate
@@ -56,6 +61,10 @@ Raised surfaces that float (sheets, menus, the composer) carry one `specular` ha
 their top edge — `rgba(255,255,255,0.07)` — the way light catches the lip of a glass. Cards
 on the stage carry nothing.
 
+A control that rests *in* the lamp's light (the roster's search) is `stageGlass` — smoked
+glass, `rgba(14,14,18,0.58)` — so the light glows dimly through it instead of the control
+reading as a hole cut in the light. Dark enough that tertiary text keeps AA over it.
+
 ## Identity
 
 Bots are people on a team, not status lights. Each Bot gets a **monogram crest**: its initial
@@ -77,11 +86,52 @@ and a Bot that owns its natural tone never moves.
 An empty thread lights the crest with a halo of its own tone: the one still glow on that
 screen.
 
+## The stage
+
+A dark room lit by one lamp that hangs just above the top edge, over the upper left — the
+same light that pools the sheen on every crest. It is a GPU shader, written once
+(`src/lib/stage/shader.ts`) and run by WebGL on the web and by a Skia runtime effect on the
+phone, so both platforms show the same light.
+
+- **The lamp.** A soft pool with an inverse-square-like falloff: it lights the header and the
+  greeting, and the room is dark again by the middle of the screen, where you read. Its hue
+  runs from the crest's deep stop at the fringe to its lit stop at the hot core.
+- **The air.** Slow, layered haze — broad billows and finer wisps a layer nearer — that is
+  only ever seen *in* the light. It morphs in place; nothing slides. Faint shafts turn through
+  the key light, and a sparse dust of motes drifts upward in the beam.
+- **Whose room it is.** The lobby (roster, Activity, Tools, Settings) and a direct chat are
+  lit in the house violet. A Bot's thread is lit in that Bot's crest tone. A group room hangs
+  one lamp per member across the ceiling, and their light mixes where the pools meet.
+- **The room answers.** The session's first light warms up from a dark room. A room change
+  crossfades, the light breathing out and in on the way. A sent message rises from the
+  composer as a swell of light that lifts the dust as it passes. While a Bot replies the room
+  is a little brighter. An offline Gate dims every lamp. On the phone, tilting it moves the
+  light like a reflection. None of these is a *signal* — the caret, the dot and the count
+  still carry the state; the room only feels it.
+
+**The ceiling.** Every lamp colour is its crest stop re-made in OKLCH — hue kept, chroma as
+vivid as the sRGB gamut allows — and carried at one fixed luminance, so every room is equally
+bright and only the colour changes. All light meets the stage through one exposure curve
+(1 − e^−x), so no pixel can pass the stage plus one lamp colour. That ceiling keeps the dimmest
+words on the stage (`textTertiary`) at 4.5:1 everywhere, dither included. A lamp hue also
+keeps 45° (OKLCH) clear of every status hue: at night a pink turns crimson, and a crimson room
+reads as a failure. `__tests__/stage-shader-test.ts` renders the real shader in Skia and holds
+the brightest pixel of every room to AA.
+
+**Discipline.** One WebGL context app-wide on the web. The air draws at 24 fps (it moves too
+slowly for more to show) and only a change gets every frame. The stage sleeps when its screen
+is hidden or off-screen, when the app is in the background, and when nobody has touched it for
+40 s — the air stills, and a touch wakes it. Under Reduce Motion the air stands still, a room
+change is a 220 ms fade, and nothing rises. If the shader cannot run, a still disc of the
+room's colour stands in.
+
 ## Motion
 
 - 150 ms for presses and toggles, 200 ms for content arriving, 250 ms for sheets and the drawer.
 - Content enters with **fade + 6 pt rise**. Nothing slides sideways, nothing bounces.
 - The streaming caret breathes at 1.1 s. It is the only animated thing on a reply.
+- The stage's light keeps its own time (**The stage**): the air moves slower than the eye
+  tracks; a room change takes 1.6 s, a swell 2.1 s, the first light 2.4 s.
 
 ## Surfaces, screen by screen
 

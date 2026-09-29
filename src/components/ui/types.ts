@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import type { StyleProp, TextStyle, ViewStyle } from 'react-native';
 import type { SFSymbol } from 'sf-symbols-typescript';
 
+import type { StageRoom } from '@/lib/stage/lamp';
+
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'destructive';
 
 export type ButtonSize = 'md' | 'sm';
@@ -154,6 +156,8 @@ export type ScreenProps = {
   ambient?: boolean;
   parallaxX?: number;
   parallaxY?: number;
+  /** Whose light the stage is lit with (src/lib/stage/lamp.ts); the house violet when absent. */
+  room?: StageRoom;
 };
 
 export type ScreenHeaderProps = {

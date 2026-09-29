@@ -21,11 +21,11 @@ const d5Section = futureItems.split('### D5.')[1]?.split('\n## ')[0] ?? '';
 
 describe('FUTURE-ITEMS open cites describe the live tree', () => {
   test('P1 attach offer cites the live chat-screen lines, not the drifted ones', () => {
-    expect(p1Section).toContain('`src/components/chat/chat-screen.tsx:1146,2444`');
+    expect(p1Section).toContain('`src/components/chat/chat-screen.tsx:1153,2468`');
     expect(p1Section).not.toContain('1125,2324');
     expect(p1Section).not.toContain('1142,2407');
-    expect(chatScreen[1145]).toContain('canAttach = supportsImageInput');
-    expect(chatScreen[2443]).toContain('onAttach={canAttach ? handleAttach : undefined}');
+    expect(chatScreen[1152]).toContain('canAttach = supportsImageInput');
+    expect(chatScreen[2467]).toContain('onAttach={canAttach ? handleAttach : undefined}');
   });
 
   test('P1 keeps the live composer-draw and supportsImageInput cites', () => {
