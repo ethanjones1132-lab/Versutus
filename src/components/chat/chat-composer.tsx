@@ -1,6 +1,15 @@
 import * as Haptics from 'expo-haptics';
 import { memo, useEffect, useRef, useState, useSyncExternalStore, type Ref } from 'react';
-import { Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import {
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  View,
+  useWindowDimensions,
+  type TextStyle,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
@@ -554,7 +563,7 @@ export const ChatComposer = memo(function ChatComposer({
             }}
             onBlur={() => setFocused(false)}
             accessibilityLabel="Message input"
-            style={styles.input}
+            style={[styles.input, BARE_FIELD_ON_WEB]}
           />
           {!showSend && micState.kind !== 'hidden' ? (
             // The empty pill's trailing control: drawn from the one fold and
@@ -650,6 +659,15 @@ function getKeyboardHeight(): number {
   const height = Keyboard.metrics()?.height;
   return typeof height === 'number' && Number.isFinite(height) ? height : 0;
 }
+
+/**
+ * The pill's ring already turns violet when the field has focus; the
+ * browser's own focus ring drawn inside it would be a second signal for the
+ * same state. React Native's types stop at solid/dotted/dashed, and
+ * react-native-web hands `none` straight to CSS — web only, keyboard focus
+ * stays visible on the ring.
+ */
+const BARE_FIELD_ON_WEB = Platform.OS === 'web' ? ({ outlineStyle: 'none' } as unknown as TextStyle) : null;
 
 const styles = StyleSheet.create({
   dock: {
