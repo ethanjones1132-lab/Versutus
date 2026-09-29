@@ -2,8 +2,18 @@
 // The provider used to swallow every `voice.session.start` failure into
 // `'unavailable'`. This is the same sequence the provider runs, injectable so
 // a test can drive it against a fake Gate and assert that a call opens.
+//
+// The chain is also bounded, end to end (see `start-deadline`): a link that
+// never answers used to leave the call in `starting` for the life of the
+// process, which meant the user could never press Call a second time. That
+// includes the release — a `voice.session.stop` issued to clean up a start
+// that already failed is a promise from the same Gate, and waiting on it
+// unbounded would strand the start in exactly the way the deadline exists to
+// prevent. So it is issued and raced with the same budget: best effort, and
+// never the thing that keeps the call from coming home to `idle`.
 
 import { mediaSocketUrl } from '@/lib/voice/gate-media-url';
+import { HANDSFREE_START_TIMEOUT_MS, isStartTimeout, startDeadline } from '@/lib/voice/start-deadline';
 import {
   logHandsfreeStart,
   mapGateSessionStartFailure,
@@ -12,6 +22,19 @@ import {
   type HandsfreeStartAttempt,
   type HandsfreeStartLog,
 } from '@/lib/voice/handsfree-start-reason';
+
+type StartDeadline = ReturnType<typeof startDeadline>;
+
+// Every attempt carries its own id. Cancelling names that exact id, so a
+// cleanup that runs after a newer retry has claimed the native side is a no-op
+// there rather than an unkeyed `stopSession` that supersedes the new owner and
+// ends its live call. The random suffix keeps a JS reload from reusing an id a
+// service that outlived the reload still holds.
+let startIdSeq = 0;
+export function newHandsfreeStartId(): string {
+  startIdSeq += 1;
+  return `hs-${startIdSeq.toString(36)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 export type OpenGateVoiceSessionInput = {
   gatewayUrl: string;
@@ -25,27 +48,99 @@ export type OpenGateVoiceSessionInput = {
   };
   device: { deviceId: string };
   gatewayRequest: (method: string, params: Record<string, unknown>) => Promise<unknown>;
-  startSession?: (title: string) => Promise<'started' | 'permission-denied' | 'unavailable'>;
+  /** Opens the native session; the `startId` is the key its cancellation uses. */
+  startSession?: (
+    title: string,
+    startId: string,
+  ) => Promise<'started' | 'permission-denied' | 'unavailable'>;
+  /**
+   * Cancels the native start if JS abandons it while a permission dialog is
+   * still up OR after it opened but the media link could not be joined. Always
+   * named with that attempt's own `startId`, so a new retry's service is
+   * untouched: a newer retry claims a newer id and owns its own service.
+   */
+  cancelStartSession?: (startId: string) => Promise<void> | void;
+  /** The attempt id; generated when omitted so tests can pin it. */
+  startId?: string;
   startGateMedia: (options: {
     url: string;
     token: string;
     voiceSessionId: string;
+    /** The attempt this media link belongs to; the native side keys on it. */
+    startId: string;
   }) => Promise<boolean>;
   mediaUrl?: (base: string, path: string) => string;
   log?: (event: HandsfreeStartLog) => void;
   now?: () => string;
+  /** How long the whole chain may take before the start is abandoned. */
+  startTimeoutMs?: number;
 };
 
 async function stopGrantedSession(
   gatewayRequest: OpenGateVoiceSessionInput['gatewayRequest'],
   voiceSessionId: string | undefined,
+  deadline: StartDeadline,
 ): Promise<void> {
   if (!voiceSessionId) return;
   try {
-    await gatewayRequest('voice.session.stop', { voiceSessionId, reason: 'start-failed' });
+    await deadline.guard(
+      'the release of the call',
+      gatewayRequest('voice.session.stop', { voiceSessionId, reason: 'start-failed' }),
+    );
   } catch {
-    // the session's own idle close ends it if this never lands
+    // Best effort, and bounded: the session's own idle close, or the Gate's
+    // attach grace, ends it if this never lands. A release that hangs must not
+    // become the new way to strand the start.
   }
+}
+
+/**
+ * The native start is a permission dialog as much as it is a service. When JS
+ * abandons it, the native side may still answer — and a late grant would open
+ * the microphone with no call behind it. Cancel that exact attempt so it is
+ * discarded; because the retry this phone is about to offer claims a newer
+ * attempt id, the cancellation cannot reach it.
+ *
+ * Issued and forgotten, exactly like the late-grant release: the budget is
+ * already spent, and a local cancel that never answers must not become the new
+ * way to strand the start. Invoking it is what matters — the attempt is
+ * superseded natively before the retry can claim a newer one.
+ */
+export function cancelNativeStart(
+  cancel: OpenGateVoiceSessionInput['cancelStartSession'],
+  startId: string,
+): void {
+  if (!cancel) return;
+  try {
+    void Promise.resolve(cancel(startId)).catch(() => undefined);
+  } catch {
+    // A synchronous throw still leaves the attempt abandoned on the JS side.
+  }
+}
+
+/**
+ * A `voice.session.start` that lost the race can still answer afterwards. The
+ * timeout path has already stopped reading it, so nothing awaits the result —
+ * but the Gate has still granted a session, and leaving it live makes the next
+ * start `call_in_progress`. Attach to that exact request: when (and only when)
+ * it finally names a session, issue a stop for the id it names. A newer attempt
+ * has an id of its own, so this cannot touch it, and the budget is already
+ * spent, so the release is issued and forgotten rather than waited on.
+ */
+function releaseLateGrant(
+  gatewayRequest: OpenGateVoiceSessionInput['gatewayRequest'],
+  startRequest: Promise<unknown>,
+  deadline: StartDeadline,
+): void {
+  void startRequest
+    .then((late) => {
+      const lateGrant = parseVoiceSessionGrant(late);
+      if (!lateGrant) return undefined;
+      return stopGrantedSession(gatewayRequest, lateGrant.voiceSessionId, deadline);
+    })
+    .catch(() => {
+      // A late refusal is not a grant; a late transport error has nothing to release.
+    });
 }
 
 function finish(
@@ -65,76 +160,151 @@ function finish(
 /**
  * Grant a Gate voice session, take the microphone, and open the media socket.
  * A grant that cannot be joined is stopped so the next start is not
- * `call_in_progress`.
+ * `call_in_progress`, and every link — the grant, the prompt, the media socket
+ * and the release itself — is raced against one budget so a link that never
+ * answers is abandoned rather than leaving the call in `starting` forever. A
+ * timeout names the link that went quiet, because "the start failed" was never
+ * enough to tell a wedged Gate from a wedged microphone prompt.
  */
 export async function openGateVoiceSession(
   input: OpenGateVoiceSessionInput,
 ): Promise<HandsfreeStartAttempt & { grant?: GateVoiceGrant }> {
   const log = input.log ?? logHandsfreeStart;
   const toMediaUrl = input.mediaUrl ?? mediaSocketUrl;
+  const deadline = startDeadline(input.startTimeoutMs ?? HANDSFREE_START_TIMEOUT_MS);
+  // This attempt's native key. Cancellation names it, so cleanup for an
+  // abandoned attempt can never reach the service a newer retry owns.
+  const startId = input.startId ?? newHandsfreeStartId();
 
-  let raw: unknown;
+  // Held outside the try so an expiry after the grant can still release it: a
+  // timeout that left the grant taken would make the retry `call_in_progress`.
+  let grant: GateVoiceGrant | null = null;
+  // Whether the native start was invoked at all. Once it was, every later
+  // failure must cancel this exact attempt: a native session left behind holds
+  // the microphone with no call behind it, and a late grant could open one
+  // during the retry this failure invites. Keyed by `startId`, so cleanup can
+  // never reach the service a newer retry owns.
+  let nativeInvoked = false;
+
   try {
-    raw = await input.gatewayRequest('voice.session.start', {
-      engine: input.target.voiceEngine ?? 'auto',
-      thread: {
-        kind: input.target.surfaceKind,
-        sessionId: input.target.sessionId,
-        botId: input.target.botId,
-      },
-      disclosureAcceptedAt: (input.now ?? (() => new Date().toISOString()))(),
-      ...input.device,
-    });
-  } catch (error) {
-    const mapped = mapGateSessionStartFailure(error);
-    return finish({ result: mapped.result, detail: mapped.detail }, log);
-  }
-
-  const grant = parseVoiceSessionGrant(raw);
-  if (!grant) {
-    return finish({ result: 'session-grant-incomplete' }, log);
-  }
-
-  if (input.startSession) {
-    let sessionOutcome: 'started' | 'permission-denied' | 'unavailable';
+    let raw: unknown;
+    let startRequest: Promise<unknown> | undefined;
     try {
-      sessionOutcome = await input.startSession(input.target.label);
-    } catch {
-      sessionOutcome = 'unavailable';
-    }
-    if (sessionOutcome !== 'started') {
-      await stopGrantedSession(input.gatewayRequest, grant.voiceSessionId);
-      return finish(
-        {
-          result: sessionOutcome === 'permission-denied'
-            ? 'permission-denied'
-            : 'native-session-unavailable',
+      startRequest = input.gatewayRequest('voice.session.start', {
+        engine: input.target.voiceEngine ?? 'auto',
+        thread: {
+          kind: input.target.surfaceKind,
+          sessionId: input.target.sessionId,
+          botId: input.target.botId,
         },
+        disclosureAcceptedAt: (input.now ?? (() => new Date().toISOString()))(),
+        ...input.device,
+      });
+      raw = await deadline.guard('the PC', startRequest);
+    } catch (error) {
+      if (isStartTimeout(error)) {
+        // The budget ran out while the start RPC was still in flight. That
+        // request may answer later with a live session — release whatever it
+        // names, so the retry this phone is about to offer is not refused as
+        // call-in-progress. Native start and media are never reached from here.
+        if (startRequest) releaseLateGrant(input.gatewayRequest, startRequest, deadline);
+        throw error;
+      }
+      const mapped = mapGateSessionStartFailure(error);
+      return finish({ result: mapped.result, detail: mapped.detail }, log);
+    }
+
+    const parsed = parseVoiceSessionGrant(raw);
+    if (!parsed) {
+      return finish({ result: 'session-grant-incomplete' }, log);
+    }
+    grant = parsed;
+
+    if (input.startSession) {
+      let sessionOutcome: 'started' | 'permission-denied' | 'unavailable';
+      try {
+        nativeInvoked = true;
+        sessionOutcome = await deadline.guard(
+          'the microphone prompt',
+          input.startSession(input.target.label, startId),
+        );
+      } catch (error) {
+        // A timeout is rethrown and cancelled once by the outer handler,
+        // together with the grant release. A rejection is the native call's
+        // own failure, mapped to unavailable below.
+        if (isStartTimeout(error)) throw error;
+        sessionOutcome = 'unavailable';
+      }
+      if (sessionOutcome !== 'started') {
+        // The start did not take: cancel the exact native attempt so a late
+        // answer cannot open a microphone during the retry this refusal invites.
+        cancelNativeStart(input.cancelStartSession, startId);
+        await stopGrantedSession(input.gatewayRequest, parsed.voiceSessionId, deadline);
+        return finish(
+          {
+            result: sessionOutcome === 'permission-denied'
+              ? 'permission-denied'
+              : 'native-session-unavailable',
+          },
+          log,
+          { engine: parsed.engine },
+        );
+      }
+    }
+
+    let started = false;
+    try {
+      started = await deadline.guard(
+        'the audio link',
+        input.startGateMedia({
+          url: toMediaUrl(input.gatewayUrl, parsed.streamPath),
+          token: input.gatewayToken,
+          voiceSessionId: parsed.voiceSessionId,
+          // The media link belongs to this attempt. The native side refuses a
+          // delayed start for an abandoned attempt, so it can never stop or
+          // replace the socket a newer retry owns.
+          startId,
+        }),
+      );
+    } catch (error) {
+      if (isStartTimeout(error)) throw error;
+      started = false;
+    }
+    if (!started) {
+      // The native session opened but could not be joined. Cancel it by its own
+      // id so the microphone does not stay live with no media path behind the
+      // retry this failure invites, then release the grant so the retry is not
+      // refused as `call_in_progress`.
+      cancelNativeStart(input.cancelStartSession, startId);
+      await stopGrantedSession(input.gatewayRequest, parsed.voiceSessionId, deadline);
+      return finish(
+        { result: 'media-start-failed' },
         log,
-        { engine: grant.engine },
+        { engine: parsed.engine },
       );
     }
-  }
 
-  let started = false;
-  try {
-    started = await input.startGateMedia({
-      url: toMediaUrl(input.gatewayUrl, grant.streamPath),
-      token: input.gatewayToken,
-      voiceSessionId: grant.voiceSessionId,
-    });
-  } catch {
-    started = false;
+    log({ result: 'started', transport: 'gate', engine: parsed.engine });
+    return { result: 'started', grant: parsed };
+  } catch (error) {
+    if (isStartTimeout(error)) {
+      // The native start, if it was invoked, is cancelled by its own id: a
+      // session left live holds the microphone with no call. The grant, if it
+      // ever arrived, is released so the retry this phone is about to be
+      // offered is not refused as call-in-progress. The budget is already
+      // spent, so the release is issued and not waited for: the Gate answers
+      // it in the background, and nothing about this start depends on a Gate
+      // that has just proved it does not answer.
+      if (nativeInvoked) cancelNativeStart(input.cancelStartSession, startId);
+      await stopGrantedSession(input.gatewayRequest, grant?.voiceSessionId, deadline);
+      return finish(
+        { result: 'start-timed-out', detail: error.message },
+        log,
+        { engine: grant?.engine },
+      );
+    }
+    throw error;
+  } finally {
+    deadline.dispose();
   }
-  if (!started) {
-    await stopGrantedSession(input.gatewayRequest, grant.voiceSessionId);
-    return finish(
-      { result: 'media-start-failed' },
-      log,
-      { engine: grant.engine },
-    );
-  }
-
-  log({ result: 'started', transport: 'gate', engine: grant.engine });
-  return { result: 'started', grant };
 }

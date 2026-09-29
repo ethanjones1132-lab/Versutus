@@ -28,7 +28,8 @@ function dashboard(): string {
 describe('Home is a residual status strip, not a command center', () => {
   test('the header no longer brands Command center', () => {
     expect(home()).not.toContain('Command center');
-    expect(home()).toContain("subtitle={");
+    expect(home()).toContain('<PageTitle');
+    expect(home()).toContain('title="Gate"');
     expect(home()).toContain("'Connect your gateway'");
   });
 
@@ -48,15 +49,15 @@ describe('Home is a residual status strip, not a command center', () => {
     // The strip still reports every count the grid used to own, so the
     // memoized derivations keep a consumer (no dead-use lint, no lost glance).
     expect(src).toMatch(/style=\{styles\.statusStrip\}/);
-    const strip = src.match(/<View style=\{styles\.statusStrip\}>[\s\S]*?<\/View>/)?.[0];
+    const strip = src.slice(src.indexOf('<View style={styles.statusStrip}>'), src.indexOf('<HomeBriefingCard />'));
     expect(strip).toBeDefined();
     expect(strip).toContain('gateways.length');
     expect(strip).toContain('activityRuns.length');
     expect(strip).toContain('activeRuns.length');
     expect(strip).toContain('capabilityCount');
-    // Flat panel + cool hairline, per the locked material language.
+    // The Nocturne status figures sit on a raised surface without a border.
     expect(src).toMatch(/statusStrip:[\s\S]*?backgroundColor: Palette\.backgroundElevated/);
-    expect(src).toMatch(/statusStrip:[\s\S]*?borderColor: Palette\.border/);
+    expect(src).toMatch(/statusStrip:[\s\S]*?borderRadius: Radius\.lg/);
   });
 
   test('the power-user panes stack behind one Diagnostics overflow', () => {

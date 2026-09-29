@@ -66,7 +66,8 @@ describe('onboarding custom gateway URL affordance', () => {
 
   test('the hostname/IP typed Connect path is intact', () => {
     const src = readScreen();
-    expect(src).toContain('const ok = await setupFromPcAddress(pcAddress, token);');
+    expect(src).toContain('const result = await setupFromPcAddress(pcAddress, token);');
+    expect(src).toContain("if (result.kind === 'connected')");
     expect(src).toContain('disabled={cta.locked || !validation.valid}');
     expect(src).toContain('placeholder="ethanspc.tail3a1a8a.ts.net"');
   });

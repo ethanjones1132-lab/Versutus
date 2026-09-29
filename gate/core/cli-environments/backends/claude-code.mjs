@@ -55,6 +55,8 @@ export function normalizeClaudeEvent(event) {
     const tool = parts.find((p) => p.type === 'tool_use');
     if (tool) return { type: 'tool.started', payload: { name: tool.name, callId: tool.id, input: tool.input } };
     if (text) return { type: 'message.delta', payload: { text, sessionId: event.session_id } };
+    const thinking = parts.filter((p) => p.type === 'thinking').map((p) => p.thinking).join('');
+    if (thinking) return { type: 'message.reasoning.delta', payload: { text: thinking, sessionId: event.session_id } };
     return { type: 'diagnostic', payload: { source: 'assistant', parts: parts.map((p) => p.type) } };
   }
 
@@ -68,9 +70,19 @@ export function normalizeClaudeEvent(event) {
   }
 
   if (event.type === 'stream_event') {
+    const block = event.event?.content_block;
+    if (event.event?.type === 'content_block_start' && block?.type === 'tool_use') {
+      return { type: 'tool.started', payload: {
+        name: block.name, callId: block.id,
+        ...(block.input !== undefined ? { input: block.input } : {}),
+      } };
+    }
     const delta = event.event?.delta;
     if (delta?.type === 'text_delta' && delta.text) {
       return { type: 'message.delta', payload: { text: delta.text, sessionId: event.session_id } };
+    }
+    if (delta?.type === 'thinking_delta' && delta.thinking) {
+      return { type: 'message.reasoning.delta', payload: { text: delta.thinking, sessionId: event.session_id } };
     }
     return { type: 'diagnostic', payload: { source: 'stream_event' } };
   }
@@ -250,6 +262,7 @@ export function createClaudeCodeBackend({
       const args = [
         '--print',
         '--output-format', 'stream-json',
+        '--include-partial-messages',
         '--verbose',
         '--permission-mode', permissionMode,
         '--session-id', sessionId,
@@ -264,6 +277,10 @@ export function createClaudeCodeBackend({
       let buffer = '';
       let assembled = '';
       let failure = null;
+      let sawPartialText = false;
+      let sawPartialThinking = false;
+      const partialToolIds = new Set();
+      const partialToolBlocks = new Map();
       const handle = (line) => {
         let parsed;
         try {
@@ -271,8 +288,70 @@ export function createClaudeCodeBackend({
         } catch {
           return;
         }
+        // Claude repeats every partial block in its complete `assistant`
+        // message. Emit the complete message only for blocks whose partials
+        // never arrived, so neither the transcript nor a tool card doubles.
+        if (parsed.type === 'assistant' && Array.isArray(parsed.message?.content)) {
+          for (const part of parsed.message.content) {
+            let event = null;
+            if (part.type === 'text' && part.text && !sawPartialText) {
+              event = { type: 'message.delta', payload: { text: part.text, sessionId: parsed.session_id } };
+            } else if (part.type === 'thinking' && part.thinking && !sawPartialThinking) {
+              event = { type: 'message.reasoning.delta', payload: { text: part.thinking, sessionId: parsed.session_id } };
+            } else if (part.type === 'tool_use' && part.name && !partialToolIds.has(part.id)) {
+              event = { type: 'tool.started', payload: { name: part.name, callId: part.id, input: part.input } };
+            }
+            if (event?.type === 'message.delta') assembled += event.payload.text;
+            if (event) onEvent?.(event);
+          }
+          sawPartialText = false;
+          sawPartialThinking = false;
+          partialToolIds.clear();
+          return;
+        }
+        if (parsed.type === 'stream_event') {
+          const streamEvent = parsed.event ?? {};
+          const index = streamEvent.index;
+          if (streamEvent.type === 'content_block_delta'
+            && streamEvent.delta?.type === 'input_json_delta'
+            && Number.isInteger(index)) {
+            const block = partialToolBlocks.get(index);
+            if (block && typeof streamEvent.delta.partial_json === 'string') {
+              block.partialJson = `${block.partialJson}${streamEvent.delta.partial_json}`.slice(0, 2048);
+            }
+            return;
+          }
+          if (streamEvent.type === 'content_block_stop' && Number.isInteger(index)) {
+            const block = partialToolBlocks.get(index);
+            if (block?.partialJson) {
+              onEvent?.({ type: 'tool.progress', payload: {
+                name: block.name,
+                callId: block.callId,
+                detail: block.partialJson,
+                snapshot: true,
+              } });
+            }
+            partialToolBlocks.delete(index);
+            return;
+          }
+        }
         const normalized = normalizeClaudeEvent(parsed);
         if (!normalized) return;
+        if (parsed.type === 'stream_event') {
+          if (normalized.type === 'message.delta') sawPartialText = true;
+          else if (normalized.type === 'message.reasoning.delta') sawPartialThinking = true;
+          else if (normalized.type === 'tool.started' && normalized.payload.callId) {
+            partialToolIds.add(normalized.payload.callId);
+            const index = parsed.event?.index;
+            if (Number.isInteger(index)) {
+              partialToolBlocks.set(index, {
+                callId: normalized.payload.callId,
+                name: normalized.payload.name,
+                partialJson: '',
+              });
+            }
+          }
+        }
         if (normalized.type === 'message.delta') assembled += normalized.payload.text;
         if (normalized.type === 'run.failed') failure = normalized.payload.text ?? 'run failed';
         if (normalized.type === 'run.completed' && !assembled) assembled = normalized.payload.text ?? '';

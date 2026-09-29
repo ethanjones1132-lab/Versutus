@@ -135,7 +135,9 @@ describe('gateway settings voice readiness keeps working', () => {
     expect(src).toContain('saveAppSettings({ voiceEngine');
     expect(src).toContain('GROK_ROW_LABEL');
     expect(src).toContain('GROK_DISABLED_REASON');
-    expect(src).toContain('voiceUsageCopy(voiceCapabilities?.usedToday, voiceCapabilities?.lastError)');
+    expect(src).toMatch(
+      /voiceUsageCopy\(\s*voiceCapabilities\?\.usedToday,\s*voiceCapabilities\?\.lastError,\s*voiceUsageReadState,?\s*\)/,
+    );
   });
 
   test('the disabled-Gate and resolved engine sentences are unchanged', () => {

@@ -237,7 +237,7 @@ export function DemoGatewayProvider({ children }: { children: React.ReactNode })
       sendChatInput,
       stopStreaming: async () => finishStream(),
       reloadHistory: settle,
-      setupFromPcAddress: async () => true,
+      setupFromPcAddress: async () => ({ kind: 'connected' }),
       retryAutoConnect: settle,
       autoRetry: null,
       setAutoConnect: settle,

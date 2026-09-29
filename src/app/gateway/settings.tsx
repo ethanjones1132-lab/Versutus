@@ -234,12 +234,15 @@ export default function GatewaySettingsScreen() {
     }
     try {
       const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', await pushDeviceParams());
-      setVoiceCapabilities(read);
+      // The refresh after an install publishes the SAME read state as the
+      // first read, so a Gate that once refused does not stay "failed" while
+      // freshly readable rows sit beneath the error card.
+      applyVoiceRead({ ok: true, capabilities: read });
     } catch {
       // keep the last known capabilities
     }
     setInstalling(false);
-  }, [gatewayRequest]);
+  }, [gatewayRequest, applyVoiceRead]);
 
   const handleWidgetPrivacy = useCallback((next: boolean) => {
     setHideWidgetResult(next);
@@ -254,6 +257,10 @@ export default function GatewaySettingsScreen() {
   }, []);
 
   const gateName = settings.pcName ?? activeGateway?.name ?? 'No gateway yet';
+  // The Today line reads the same read state the rows do: an in-flight or
+  // refused read measured nothing and may not print a measured zero.
+  const voiceUsageReadState =
+    voiceCheckState === 'checking' ? 'loading' : voiceCheckState === 'failed' ? 'error' : 'ready';
 
   return (
     <Screen edges={['top', 'bottom']}>
@@ -430,7 +437,11 @@ export default function GatewaySettingsScreen() {
                 Today
               </Text>
               <Text variant="caption" color="tertiary" style={styles.voiceMetaText}>
-                {voiceUsageCopy(voiceCapabilities?.usedToday, voiceCapabilities?.lastError)}
+                {voiceUsageCopy(
+                  voiceCapabilities?.usedToday,
+                  voiceCapabilities?.lastError,
+                  voiceUsageReadState,
+                )}
               </Text>
             </View>
             {installing ? (

@@ -129,7 +129,8 @@ class HandsfreeCallService : Service() {
       }
       else -> {
         val title = intent?.getStringExtra(EXTRA_TITLE) ?: ""
-        startSession(title)
+        val attemptId = intent?.getStringExtra(EXTRA_START_ID)
+        startSession(title, attemptId, startId)
       }
     }
     return HandsfreeCallState.SERVICE_START_MODE
@@ -152,7 +153,21 @@ class HandsfreeCallService : Service() {
   // ── Session start ────────────────────────────────────────────────────────
 
   /** Opens the session and reports the outcome to the pending start. */
-  fun startSession(title: String): Boolean {
+  fun startSession(title: String, attemptId: String? = null, cmdStartId: Int = 0): Boolean {
+    // Ownership is checked FIRST. A stale ACTION_START intent — one the module
+    // already abandoned, or a retry superseded while it sat queued — must touch
+    // nothing: not the service's owner field, not the call state, not the
+    // foreground notification, not audio focus. The old check lived only in
+    // `deliverStart`, by which point the microphone and audio session were
+    // already open and the owner field had already been overwritten with the
+    // stale id, starving the newer attempt's answer. `stopSelf(cmdStartId)` is
+    // start-id safe: if a newer ACTION_START is already queued, the service is
+    // kept for it.
+    if (attemptId != null && !HandsfreeCallService.ownsStartAttempt(attemptId)) {
+      if (!state.isActive && cmdStartId != 0) stopSelf(cmdStartId)
+      return false
+    }
+    HandsfreeCallService.noteServiceStart(attemptId)
     if (!state.start()) {
       deliverStart(if (state.isActive) "started" else "unavailable")
       return false
@@ -177,9 +192,12 @@ class HandsfreeCallService : Service() {
   }
 
   private fun deliverStart(outcome: String) {
-    val callback = pendingStartCallback
-    pendingStartCallback = null
-    callback?.invoke(outcome)
+    // Only the attempt this service booted for may answer, and only while it
+    // still owns the pending slot. The registry makes that one atomic step, so
+    // a stale service start cannot answer — or clear — the pending start a
+    // newer attempt owns. A null id is the service's own boot with no call.
+    val id = HandsfreeCallService.currentServiceAttempt() ?: return
+    HandsfreeCallService.deliverPendingStart(id, outcome)
   }
 
   private fun startForegroundWithNotification(title: String) {
@@ -845,6 +863,23 @@ class HandsfreeCallService : Service() {
     }
   }
 
+  /**
+   * Ends the call only if the service still booted for [attemptId]. A module
+   * cleanup queues this when JS abandons ONE attempt; by the time it runs a
+   * newer retry may already own the service, and a queued old teardown must
+   * not end the newer call. The re-check happens here, when the post actually
+   * executes, on the same main thread that processes `ACTION_START`, not only
+   * when the cleanup was issued. Deliberately keyed: this is never the user's
+   * End, which owns the whole native side and goes through [end].
+   */
+  fun endForAttempt(attemptId: String, reason: String) {
+    mainHandler.post {
+      if (!HandsfreeCallService.servesStartAttempt(attemptId)) return@post
+      if (!state.requestEnd(reason)) return@post
+      teardown()
+    }
+  }
+
   private fun teardown() {
     if (destroyed) return
     destroyed = true
@@ -882,6 +917,7 @@ class HandsfreeCallService : Service() {
     releaseAudioFocus()
     ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
     foregroundStarted = false
+    HandsfreeCallService.clearService()
     stopSelf()
   }
 
@@ -902,6 +938,7 @@ class HandsfreeCallService : Service() {
     const val ACTION_MUTE = "com.versutus.handsfreevoice.action.MUTE"
     const val ACTION_UNMUTE = "com.versutus.handsfreevoice.action.UNMUTE"
     const val EXTRA_TITLE = "com.versutus.handsfreevoice.extra.TITLE"
+    const val EXTRA_START_ID = "com.versutus.handsfreevoice.extra.START_ID"
     // Distinct request codes: one PendingIntent per action, so the Mute intent
     // never overwrites the End intent's tap.
     private const val REQUEST_CODE_END = 8402
@@ -933,9 +970,64 @@ class HandsfreeCallService : Service() {
 
     private const val TAG = "HandsfreeCallService"
 
-    /** Set by the module just before it starts the service; answered exactly once. */
-    @Volatile
-    var pendingStartCallback: ((String) -> Unit)? = null
+    /**
+     * Who owns the current start, and the one answer it is still owed. The
+     * module claims a JS-generated id before any permission work, so an answer
+     * an abandoned attempt is still waiting for — the OS permission dialog
+     * above all — cannot open a microphone behind the newer attempt's back.
+     */
+    private val ownership = HandsfreeStartOwnership()
+
+    /** Claims [id] as the newest start, superseding every earlier one. */
+    fun claimStartAttempt(id: String): Boolean = ownership.claim(id)
+
+    /** True while [id] is the newest start and has not been cancelled. */
+    fun ownsStartAttempt(id: String): Boolean = ownership.owns(id)
+
+    /**
+     * Arms the answer for [id]'s foreground start. False when [id] no longer
+     * owns the start, so the caller settles it as unavailable instead.
+     */
+    fun beginPendingStart(id: String, callback: (String) -> Unit): Boolean =
+      ownership.beginPending(id, callback)
+
+    /** Answers [id]'s pending start exactly once; false when it no longer owns it. */
+    fun deliverPendingStart(id: String, outcome: String): Boolean =
+      ownership.deliver(id, outcome)
+
+    /**
+     * Gives up on [id] because its module timer ran out, invalidating BOTH its
+     * ownership and its pending answer. A stale `ACTION_START` still queued for
+     * a start JS already reported as unavailable must be rejected rather than
+     * admitted. A newer retry's claim moved ownership on, so an old expiry
+     * reports false and must never stop the newer service.
+     */
+    fun expireStartAttempt(id: String): Boolean = ownership.expire(id)
+
+    /**
+     * Cancels exactly [id] if it is the newest start. A cleanup whose id has
+     * been superseded cancels nothing, so an old cancel can never invalidate —
+     * or end — a newer attempt.
+     */
+    fun cancelStartAttempt(id: String): Boolean = ownership.cancel(id)
+
+    /**
+     * Supersedes every start. The user's End owns the whole native side rather
+     * than one attempt, so it uses this instead of a keyed cancel.
+     */
+    fun cancelAllStartAttempts(): Boolean = ownership.cancelAll()
+
+    /** Records the attempt the service actually booted for (null = no call). */
+    fun noteServiceStart(id: String?) = ownership.noteServiceStart(id)
+
+    /** The attempt the service currently booted for, or null when none. */
+    fun currentServiceAttempt(): String? = ownership.currentService()
+
+    /** True while the service still booted for [id]; rechecked at teardown time. */
+    fun servesStartAttempt(id: String): Boolean = ownership.servesService(id)
+
+    /** Clears the service owner once the call has torn down. */
+    fun clearService() = ownership.clearService()
 
     @Volatile
     var current: HandsfreeCallService? = null

@@ -72,16 +72,18 @@ live** — the `session.next.*` family did not appear and must not be relied on:
 
 | Observed event | Payload | Normalized (`cli-environment-interface-v1.md`) |
 |---|---|---|
-| `message.part.delta` | `{sessionID, messageID, partID, field:'text', delta}` | `message.delta` |
-| `message.part.updated` where `part.type==='tool'`, `state.status` pending/running | `{part}` | `tool.started` |
-| `message.part.updated` where `part.type==='tool'`, `state.status` completed/error | `{part}` | `tool.output` |
+| `message.part.delta` | `{sessionID, messageID, partID, field:'text', delta}` | by the named part's type: `message.delta` for `text`, `message.reasoning.delta` for `reasoning`. A delta that arrives before its part's metadata is held until the metadata lands. |
+| `message.part.updated` where `part.type==='text'`/`'reasoning'` | `{part}` with the part's `text` | part-type metadata; the `text` is a snapshot of what the deltas already sent, so only the un-emitted tail is forwarded and the closing snapshot is never replayed |
+| `message.part.updated` where `part.type==='tool'`, `state.status` pending | `{part}` | first update: `tool.started`; later changed input snapshots: `tool.progress` |
+| `message.part.updated` where `part.type==='tool'`, `state.status` running | `{part}` including `state.input` | `tool.progress` with a replacement input snapshot |
+| `message.part.updated` where `part.type==='tool'`, `state.status` completed/error | `{part}` | `tool.output`; a failure's `state.error` is surfaced when `state.output` is absent |
 | `message.updated` | `{info}` with tokens/cost | `usage` |
 | `session.idle` | `{sessionID}` | `run.completed` |
 | `session.error` | `{sessionID, error}` | `run.failed` |
 | `permission.asked` / `permission.v2.asked` | `{id, sessionID, permission/action, patterns/resources}` | `approval.required` |
 | `session.updated`, `session.status`, `session.diff` | — | `diagnostic` |
 
-Every event carries `properties.sessionID`; filter the shared bus by it.
+Every event carries `properties.sessionID`; filter the shared bus by it. Changed tool-input snapshots are coalesced to at most one update every 120 ms, with the latest snapshot flushed before tool completion. The Gate treats an event feed that closes before `session.idle` or `session.error` as degraded telemetry. It does not resubmit the prompt because OpenCode may already have accepted it.
 
 ### Client-side approval matching
 
@@ -212,6 +214,8 @@ cannot escape the transcript directory.
 | `assistant` with a `text` block | `message.delta` (whole block; Claude batches unless `--include-partial-messages`) |
 | `assistant` with a `tool_use` block | `tool.started` |
 | `user` with a `tool_result` block | `tool.output` |
+| `stream_event` with `content_block_start` for `tool_use` | `tool.started` |
+| `stream_event` with `input_json_delta` | Accumulated by content-block index; a bounded `tool.progress` snapshot is sent on `content_block_stop` |
 | `stream_event` with `text_delta` | `message.delta` (token-level, when partial messages are on) |
 | `result` | `run.completed`, or `run.failed` when `is_error` or the text starts with an API error |
 | `system/*` (init, hooks, api_retry) | `diagnostic` |

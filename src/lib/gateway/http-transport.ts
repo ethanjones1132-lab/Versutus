@@ -24,6 +24,17 @@ export function sanitizeHeaderValue(value: string | undefined): string {
   return value.replace(/[^\x20-\x7E]/g, '').trim();
 }
 
+/** A chat turn completes only after its stream reports a terminal marker. */
+export function assertChatStreamComplete(
+  completed: boolean,
+  streamError: string | null,
+  signal?: AbortSignal,
+): void {
+  if (streamError) throw new Error(streamError);
+  if (signal?.aborted) throw new Error('Chat stream stopped');
+  if (!completed) throw new Error('Chat stream closed unexpectedly before completion.');
+}
+
 /** Fetch plumbing shared by every HTTP-dialect gateway client. */
 export class HttpTransport {
   private contactAt = 0;
@@ -114,41 +125,90 @@ export class HttpTransport {
     );
   }
 
-  /** Read an SSE body, invoking onChunk for each `data:` payload. */
+  /** Read an SSE body; return whether its terminal marker arrived. */
   async streamSSE(
     response: Response,
     onChunk: (data: string) => void,
     signal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const reader = response.body?.getReader();
     if (!reader) throw new Error('No response body to stream');
 
     const decoder = new TextDecoder();
     let buffer = '';
 
+    // A peer that never settles read()/cancel() must not pin the caller: race
+    // both against the caller's abort so streamSSE always comes back false.
+    const ABORTED = Symbol('streamSSE-aborted');
+    let dropAbortListener: (() => void) | undefined;
+    const abortSeen = new Promise<typeof ABORTED>((resolve) => {
+      if (!signal) return;
+      if (signal.aborted) {
+        resolve(ABORTED);
+        return;
+      }
+      dropAbortListener = () => resolve(ABORTED);
+      signal.addEventListener('abort', dropAbortListener, { once: true });
+    });
+
+    const acceptLine = (line: string): boolean => {
+      const normalized = line.endsWith('\r') ? line.slice(0, -1) : line;
+      if (!normalized.startsWith('data:')) return false;
+      const raw = normalized.slice(5);
+      const data = raw.startsWith(' ') ? raw.slice(1) : raw;
+      if (data === '[DONE]') return true;
+      onChunk(data);
+      return false;
+    };
+
     try {
       while (true) {
-        if (signal?.aborted) break;
-        const { done, value } = await reader.read();
-        if (done) break;
+        if (signal?.aborted) return false;
+        let frame: ReadableStreamReadResult<Uint8Array> | typeof ABORTED;
+        try {
+          frame = await Promise.race([reader.read(), abortSeen]);
+        } catch (error) {
+          if (signal?.aborted) return false;
+          throw error;
+        }
+        // A read can settle in the same tick as an abort (a peer that aborts
+        // synchronously then hands back bytes); neither its frame nor those
+        // bytes count as fresh contact or a delivered token.
+        if (frame === ABORTED || signal?.aborted) return false;
+        if (frame.done) break;
         // Bytes just arrived from the gateway — the same class of liveness
         // evidence as a completed request(). Without this a long-running
         // chat or run-event stream produces no contact at all, and the
         // connection monitor can declare the gate down while frames are
         // still landing in the operator's hands.
         this.contactAt = Date.now();
-        buffer += decoder.decode(value, { stream: true });
+        buffer += decoder.decode(frame.value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() ?? '';
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6);
-          if (data === '[DONE]') return;
-          onChunk(data);
+          // The abort can land between lines of one decoded frame: drop the
+          // rest of the batch instead of handing the caller stale tokens.
+          if (signal?.aborted) return false;
+          if (acceptLine(line)) return true;
         }
       }
+      buffer += decoder.decode();
+      if (signal?.aborted) return false;
+      if (buffer && acceptLine(buffer)) return true;
+      return false;
     } finally {
-      reader.cancel();
+      if (dropAbortListener && !signal?.aborted) {
+        signal?.removeEventListener('abort', dropAbortListener);
+      }
+      // Best effort release only: awaiting a peer that ignores cancel would
+      // pin an otherwise-complete stream. Sync throws and late rejections are
+      // both swallowed so cleanup never rejects or stalls the caller.
+      try {
+        const releasing = reader.cancel() as Promise<void> | undefined;
+        releasing?.catch?.(() => undefined);
+      } catch {
+        // cancel threw synchronously; there is nothing left to release.
+      }
     }
   }
 }

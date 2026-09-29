@@ -30,6 +30,12 @@ export type ChatRosterProps = {
   rows: RosterRow[];
   loading?: boolean;
   error?: string;
+  /**
+   * Whether the gateway is connected — the roster read is gated on a live
+   * connection, so `false` means the read has not run. The footer must then
+   * wait for it instead of reporting a count nobody measured.
+   */
+  connected: boolean;
   /** Gate-owned group rooms; absent on gateways that do not advertise them. */
   groups?: BotGroupRoom[];
   /**
@@ -229,6 +235,7 @@ function ChatRosterImpl({
   rows,
   loading = false,
   error,
+  connected,
   groups = [],
   groupsError,
   heldShareCopy,
@@ -355,6 +362,7 @@ function ChatRosterImpl({
     visibleGroups: visibleGroups.length,
     query,
     error,
+    connected,
   });
   // Same verdicts that gate the creation rows: a hidden row gets one honest
   // line about why, exactly where the row would have sat.
@@ -518,6 +526,13 @@ function ChatRosterImpl({
               {note}
             </Text>
           ))}
+          {emptyView.kind === 'waiting' ? (
+            <EmptyState
+              icon={{ ios: 'clock', android: 'schedule', web: 'schedule' }}
+              title="Waiting for connection"
+              description="The roster is read as soon as the gateway connects."
+            />
+          ) : null}
           {emptyView.kind === 'zero-bots' ? (
             <EmptyState
               icon={{ ios: 'person.crop.circle', android: 'person', web: 'person' }}

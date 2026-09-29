@@ -62,6 +62,17 @@ test('agent deltas and terminal events normalize', () => {
   );
 });
 
+test('reasoning summary deltas normalize as live thinking', () => {
+  const event = normalizeCodexEvent({
+    method: 'item/reasoning/summaryTextDelta',
+    params: { threadId: 't', delta: 'checking the route' },
+  });
+  assert.deepEqual(event, {
+    type: 'message.reasoning.delta',
+    payload: { text: 'checking the route', threadId: 't' },
+  });
+});
+
 test('command and patch items are tool events; plain messages are not', () => {
   const started = normalizeCodexEvent({
     method: 'item/started',
@@ -71,9 +82,10 @@ test('command and patch items are tool events; plain messages are not', () => {
 
   const output = normalizeCodexEvent({
     method: 'item/commandExecution/outputDelta',
-    params: { chunk: 'file.txt\n' },
+    params: { itemId: 'i1', delta: 'file.txt\n' },
   });
-  assert.equal(output.type, 'tool.output');
+  assert.equal(output.type, 'tool.progress');
+  assert.equal(output.payload.callId, 'i1');
   assert.equal(output.payload.text, 'file.txt\n');
 
   const plain = normalizeCodexEvent({ method: 'item/started', params: { item: { id: 'i2', type: 'agentMessage' } } });
@@ -84,6 +96,24 @@ test('an output delta arriving as a byte array is decoded', () => {
   const bytes = [...Buffer.from('hello')];
   const event = normalizeCodexEvent({ method: 'process/outputDelta', params: { chunk: bytes } });
   assert.equal(event.payload.text, 'hello');
+});
+
+test('tool start exposes its command and failed completion preserves the error', () => {
+  const started = normalizeCodexEvent({
+    method: 'item/started',
+    params: { item: { id: 'i1', type: 'commandExecution', command: 'rg TODO' } },
+  });
+  assert.equal(started.payload.input, 'rg TODO');
+
+  const failed = normalizeCodexEvent({
+    method: 'item/completed',
+    params: { item: {
+      id: 'i1', type: 'commandExecution', status: 'failed', aggregatedOutput: 'permission denied',
+    } },
+  });
+  assert.equal(failed.type, 'tool.output');
+  assert.equal(failed.payload.isError, true);
+  assert.equal(failed.payload.output, 'permission denied');
 });
 
 test('an unknown notification is a diagnostic', () => {
@@ -215,4 +245,46 @@ test('the subscription filters notifications to its own thread', () => {
   handler({ method: 'item/agentMessage/delta', params: { threadId: 'th_1', delta: 'a' } });
   handler({ method: 'item/agentMessage/delta', params: { threadId: 'th_OTHER', delta: 'b' } });
   assert.deepEqual(seen, ['message.delta'], 'another thread must not leak into this stream');
+});
+
+test('an unset model selects the account-supported catalog default', async () => {
+  let emit = () => {};
+  const { calls, rpc } = stubRpc({
+    'model/list': { data: [
+      { id: 'gpt-6-sol', hidden: true, isDefault: true },
+      { id: 'gpt-5.6-luna', hidden: false },
+      { id: 'gpt-5.6-sol', hidden: false, isDefault: true },
+    ] },
+    'turn/start': () => {
+      setTimeout(() => emit({ method: 'turn/completed', params: { threadId: 'th_1' } }), 0);
+      return { turnId: 'tu_1' };
+    },
+  });
+  const backend = createCodexBackend({
+    rpc, cwd: 'C:\\ws',
+    subscribe: (handler) => { emit = handler; return () => {}; },
+  });
+  await backend.sendMessage('th_1', { text: 'hi' });
+  assert.equal(calls[0].method, 'model/list');
+  assert.equal(calls[1].params.model, 'gpt-5.6-sol');
+});
+
+test('streamEvents subscribes before a turn and releases on abort', async () => {
+  const handlers = new Set();
+  const backend = createCodexBackend({
+    rpc: stubRpc().rpc, cwd: 'C:\\ws',
+    subscribe: (handler) => { handlers.add(handler); return () => handlers.delete(handler); },
+  });
+  const controller = new AbortController();
+  const seen = [];
+  const stream = backend.streamEvents('th_1', (event) => seen.push(event), controller.signal);
+  assert.equal(handlers.size, 1);
+  for (const handler of handlers) {
+    handler({ method: 'item/reasoning/summaryTextDelta', params: { threadId: 'th_1', delta: 'thinking' } });
+    handler({ method: 'item/started', params: { threadId: 'th_other', item: { type: 'commandExecution' } } });
+  }
+  controller.abort();
+  await stream;
+  assert.deepEqual(seen.map((event) => event.type), ['message.reasoning.delta']);
+  assert.equal(handlers.size, 0);
 });

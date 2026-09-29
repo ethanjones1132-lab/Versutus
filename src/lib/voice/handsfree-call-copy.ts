@@ -181,6 +181,16 @@ export function handsfreeStartResultCopy(
       return 'The PC opened a call without a media path, so this phone could not join it.';
     case 'media-start-failed':
       return 'This phone could not open the audio link to the PC. Stay on the same network and try again.';
+    case 'start-timed-out':
+      // The detail names the link that went quiet — the PC, the microphone
+      // prompt or the audio link — and this is the one start failure with three
+      // different causes, so the sentence has to carry which of them it was.
+      // It must not promise the PC released the slot: cleanup is best effort,
+      // and a hung or late RPC can still leave the release pending.
+      return withDetail(
+        'The call never finished opening, so it was given up on. Start again.',
+        detail,
+      );
     case 'call-torn-down-while-starting':
       return 'The call ended before it finished opening. The connection dropped or the thread changed.';
     case 'native-session-unavailable':

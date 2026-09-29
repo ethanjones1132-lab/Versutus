@@ -34,7 +34,11 @@ import { isDeviceIdentityError } from '@/lib/gateway/errors';
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
 import { reconnectGateMedia } from '@/lib/voice/gate-reconnect';
 import { loadHandsfreeModule, type HandsfreeNativeModule } from '@/lib/voice/handsfree-device';
-import { openGateVoiceSession } from '@/lib/voice/handsfree-start-attempt';
+import {
+  cancelNativeStart,
+  newHandsfreeStartId,
+  openGateVoiceSession,
+} from '@/lib/voice/handsfree-start-attempt';
 import {
   evaluateHandsfreeStart,
   handsfreeDeviceCanOfferCall,
@@ -68,6 +72,7 @@ import {
   type HandsfreeStartBlocker,
 } from '@/lib/voice/handsfree-start-policy';
 import { beginHandsfreeCall, endHandsfreeCall, stopSpeech } from '@/lib/voice/speech';
+import { isStartTimeout, startDeadline } from '@/lib/voice/start-deadline';
 import type { HandsfreeAvailability, HandsfreeStartOutcome } from '../../modules/handsfree-voice';
 
 /** How long a silence-triggered final is held before it sends. */
@@ -161,6 +166,16 @@ function callDraftThread(target: HandsfreeCallTarget): ComposerDraftThread | und
 function clampLevel(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
+}
+
+/**
+ * Cancels exactly the native start named by `startId`, fire-and-forget. A
+ * synchronous throw or a rejected promise from the native call is swallowed:
+ * the attempt is already abandoned on the JS side, and the caller must never
+ * be stranded or leak an unhandled rejection because the cleanup failed.
+ */
+function cancelNativeSession(module: HandsfreeNativeModule, startId: string): void {
+  cancelNativeStart((id) => module.stopSession({ startId: id }), startId);
 }
 
 /**
@@ -729,7 +744,11 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     };
   }, []);
 
-  const refuseGateStart = useCallback(() => {
+  // Detach every listener and ref a Gate start captured, without telling the
+  // reducer the start was refused. An abandoned start that ran out of budget is
+  // its own fact — `start-timeout` — and a `start-refused` first would move the
+  // reducer out of `starting` and make the timeout event inert.
+  const abandonGateStart = useCallback(() => {
     unsubscribe();
     gateModeRef.current = false;
     setGateMode(false);
@@ -740,8 +759,12 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     moduleRef.current = null;
     targetRef.current = null;
     threadRef.current = undefined;
+  }, [unsubscribe]);
+
+  const refuseGateStart = useCallback(() => {
+    abandonGateStart();
     dispatch({ type: 'start-refused' });
-  }, [dispatch, unsubscribe]);
+  }, [abandonGateStart, dispatch]);
 
   // A Gate-powered call: grant the session, take the microphone, open the
   // media socket. Failures are named and a granted session is released so the
@@ -778,15 +801,37 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       subscribeGate(module);
       sessionRef.current = dispatch({ type: 'start' });
 
+      // The device identity is read after the phase has already moved to
+      // `starting`, so a secure-store call that never answers would strand the
+      // start exactly the way a silent Gate would. It runs under the same
+      // one-shot budget, and an expiry is reported as its own reason: a refusal
+      // means a precondition the sheet should have blocked, which is a
+      // different fact from a link that went quiet.
+      const identity = startDeadline();
       let device: { deviceId: string };
       try {
-        device = await pushDeviceParams();
+        device = await identity.guard('the device identity', pushDeviceParams());
       } catch (err) {
+        identity.dispose();
+        if (isStartTimeout(err)) {
+          // Reset the captured refs and listeners without a refusal: this start
+          // ran out of budget, which the reducer answers with its own event.
+          abandonGateStart();
+          logHandsfreeStart({
+            result: 'start-timed-out',
+            transport: 'gate',
+            engine: target.voiceEngine,
+            detail: err.message,
+          });
+          dispatch({ type: 'start-timeout' });
+          return { result: 'start-timed-out', detail: err.message };
+        }
         refuseGateStart();
         const result = isDeviceIdentityError(err) ? 'identity-unavailable' : 'device-params-failed';
         logHandsfreeStart({ result, transport: 'gate', engine: target.voiceEngine });
         return { result };
       }
+      identity.dispose();
 
       const attempt = await openGateVoiceSession({
         gatewayUrl: gateway.url,
@@ -800,9 +845,24 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         },
         device,
         gatewayRequest: (method, params) => latest.current.gatewayRequest(method, params),
-        startSession: (title) => module.startSession({ title }),
+        startSession: (title, startId) => module.startSession({ title, startId }),
+        // Keyed by the attempt's own id: this cleanup can never stop a newer
+        // retry's session, and a sync throw or rejection is swallowed so it
+        // cannot strand the start or leak an unhandled rejection.
+        cancelStartSession: (startId) => cancelNativeSession(module, startId),
         startGateMedia: (options) => module.startGateMedia(options),
       });
+
+      if (attempt.result === 'start-timed-out') {
+        // The chain inside `openGateVoiceSession` carries its own budget; this
+        // is the one expiry the provider can still see, and it must reach the
+        // reducer as the event that returns the call to idle. The inner chain
+        // already logged the timeout with the link that went quiet — logging it
+        // again here would be a second, less accurate line for one fact.
+        abandonGateStart();
+        dispatch({ type: 'start-timeout' });
+        return { result: 'start-timed-out', detail: attempt.detail };
+      }
 
       if (attempt.result !== 'started' || !attempt.grant) {
         refuseGateStart();
@@ -832,7 +892,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       dispatch({ type: 'started', startedAtMs: Date.now() });
       return { result: 'started' };
     },
-    [dispatch, refuseGateStart, subscribeGate],
+    [abandonGateStart, dispatch, refuseGateStart, subscribeGate],
   );
 
   const start = useCallback(
@@ -902,12 +962,41 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       // The assignment re-reads the ref so TypeScript does not keep the `idle`
       // narrowing from the precondition above across the awaited native start.
       sessionRef.current = dispatch({ type: 'start' });
+      // The native start is the OS prompt the deadline module names explicitly:
+      // an answer that never comes used to leave the phase at `starting` for
+      // the life of the process, and the only way back to `idle` — the phase
+      // Call is offered from — is the `start-timeout` event below.
+      const deadline = startDeadline();
+      // This attempt's native key, so the timeout cleanup below cancels exactly
+      // this start and cannot reach the service a newer retry owns.
+      const startId = newHandsfreeStartId();
       let outcome: HandsfreeStartOutcome;
       try {
-        outcome = await module.startSession({ title: target.label });
-      } catch {
+        outcome = await deadline.guard(
+          'the microphone prompt',
+          module.startSession({ title: target.label, startId }),
+        );
+      } catch (err) {
+        deadline.dispose();
+        if (isStartTimeout(err)) {
+          unsubscribe();
+          moduleRef.current = null;
+          targetRef.current = null;
+          threadRef.current = undefined;
+          // Abandoning the JS side does not cancel the native start: it may
+          // still be waiting on the OS microphone dialog, and a late grant
+          // would open the microphone during the retry this timeout invites.
+          // Cancelling names only this abandoned attempt's id, so a newer retry
+          // that already owns the native side is untouched; a failed cancel is
+          // swallowed so it cannot strand the start or leak a rejection.
+          cancelNativeSession(module, startId);
+          logHandsfreeStart({ result: 'start-timed-out', transport: 'phone', detail: err.message });
+          dispatch({ type: 'start-timeout' });
+          return { result: 'start-timed-out', detail: err.message };
+        }
         outcome = 'unavailable';
       }
+      deadline.dispose();
       if (outcome !== 'started') {
         unsubscribe();
         moduleRef.current = null;

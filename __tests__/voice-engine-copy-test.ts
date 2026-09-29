@@ -124,4 +124,24 @@ describe('Settings renders one Voice section from these words', () => {
     );
     expect(settings).toContain('voiceUsageCopy');
   });
+
+  test('a refused voice.capabilities read does not claim a measured zero', () => {
+    expect(voiceUsageCopy(undefined, null, 'error')).toBe('Usage unknown.');
+    expect(voiceUsageCopy(undefined, null, 'error')).not.toBe('No voice calls today.');
+    // Settings maps its refused read state onto the usage line, so a failure
+    // names itself there instead of printing the measured-zero sentence.
+    expect(settings).toContain('voiceUsageReadState');
+    expect(settings).toContain("voiceCheckState === 'failed' ? 'error'");
+  });
+
+  test('a read still in flight is not a measured zero either', () => {
+    expect(voiceUsageCopy(undefined, null, 'loading')).toBe('Checking usage on this PC…');
+    expect(voiceUsageCopy(undefined, null, 'loading')).not.toBe('No voice calls today.');
+    expect(settings).toContain("voiceCheckState === 'checking' ? 'loading'");
+  });
+
+  test('the refresh after an install publishes the same read state as the first read', () => {
+    expect(settings).toContain('applyVoiceRead({ ok: true, capabilities: read })');
+    expect(settings).not.toContain('setVoiceCapabilities(read)');
+  });
 });

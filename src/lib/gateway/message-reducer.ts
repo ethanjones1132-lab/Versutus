@@ -80,7 +80,9 @@ export function appendToolCallDelta(
   if (idx < 0) return [...messages];
   const copy = [...messages];
   const existing = copy[idx].toolCalls ?? [];
-  const match = existing.findIndex((item) => item.name === toolCall.name);
+  const match = existing.findIndex((item) =>
+    toolCall.id ? item.id === toolCall.id : !item.id && item.name === toolCall.name,
+  );
   const nextTools: ChatToolCall[] =
     match >= 0
       ? existing.map((item, i) => (i === match ? { ...item, ...toolCall } : item))

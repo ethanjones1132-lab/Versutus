@@ -12,29 +12,17 @@ function readGatewayHomeDashboardSource(): string {
   );
 }
 
-function readHeaderButtonBody(): string {
-  const src = readGatewayHomeDashboardSource();
-  const m = src.match(/headerButton:\s*\{([^}]+)\}/);
-  if (!m) throw new Error('headerButton style not found in gateway-home-dashboard.tsx');
-  return m[1];
-}
-
 test('home Gateways Add button meets the 44dp touch target', () => {
-  // The header Button is md (Button.tsx:66-67 base paddingVertical 13 + body
-  // lineHeight 24 = 50dp), but the paddingVertical Spacing.two (8) override
-  // crushes it to 8+24+8 = ~40dp (gateway-home-dashboard.tsx:432-436); 40 < 44
-  // and Add is the only Add-gateway entry visible on Home.
-  const body = readHeaderButtonBody();
-  const minHeightMatch = body.match(/minHeight:\s*(\d+)/);
-  expect(minHeightMatch).not.toBeNull();
-  const minHeight = Number(minHeightMatch![1]);
-  expect(minHeight).toBeGreaterThanOrEqual(44);
-  expect(body).not.toMatch(/minHeight:\s*0\b/);
+  const header = nodeFs.readFileSync(
+    [__dirname, '..', 'src', 'components', 'ui', 'SectionHeader.tsx'].join(SEP),
+    'utf8',
+  );
+  expect(header).toContain('style={styles.action}');
+  expect(header).toMatch(/action:\s*\{[^}]*minHeight:\s*44/);
 });
 
-test('the section-header Add button carries the header button style', () => {
-  // Guard the wiring, not just the style block: the Add button opening
-  // /gateway/add must be the element the raised target applies to.
+test('the section-header action opens Add gateway', () => {
   const src = readGatewayHomeDashboardSource();
-  expect(src).toMatch(/label="Add"[\s\S]*?style=\{styles\.headerButton\}/);
+  expect(src).toContain('actionLabel="Add gateway"');
+  expect(src).toContain("onAction={() => router.push('/gateway/add')}");
 });

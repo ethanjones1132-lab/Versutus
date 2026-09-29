@@ -120,11 +120,15 @@ function GatewayRow({
           </Text>
         </View>
 
-        {isActive ? (
-          <ConnectionBadge status={status} detail={statusDetail} />
-        ) : (
-          <ReachabilityPill state={reachability?.state ?? 'unknown'} latencyMs={reachability?.latencyMs} />
-        )}
+        {/* The live state gets its own line: beside the name it squeezed a
+            long gateway name down to its first letter at phone width. */}
+        <View style={styles.statusLine}>
+          {isActive ? (
+            <ConnectionBadge status={status} detail={statusDetail} />
+          ) : (
+            <ReachabilityPill state={reachability?.state ?? 'unknown'} latencyMs={reachability?.latencyMs} />
+          )}
+        </View>
       </View>
 
       <View style={styles.actions}>
@@ -184,15 +188,16 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   rowCard: {
-    borderRadius: Radius.md,
-    gap: Spacing.two,
+    borderRadius: Radius.lg,
+    gap: Spacing.three - 4,
     borderColor: Palette.border,
   },
   rowTop: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
     gap: Spacing.two,
+  },
+  statusLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   titleBlock: {
     flex: 1,

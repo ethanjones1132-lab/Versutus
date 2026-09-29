@@ -15,8 +15,11 @@ import type {
 export declare class HandsfreeVoiceModule extends NativeModule<HandsfreeVoiceModuleEvents> {
   /** What this device can do, asked before Start is offered. */
   getAvailability(): Promise<HandsfreeAvailability>;
-  /** Open a call session and promote the user-visible lifetime. */
-  startSession(options: { title: string }): Promise<HandsfreeStartOutcome>;
+  /**
+   * Open a call session and promote the user-visible lifetime. `startId` names
+   * this attempt so a later `stopSession` can cancel exactly it.
+   */
+  startSession(options: { title: string; startId?: string }): Promise<HandsfreeStartOutcome>;
   /** Begin recognizing one listening turn. Answers false if it could not start. */
   startListening(): Promise<boolean>;
   /** Stop the current recognition turn. */
@@ -29,8 +32,12 @@ export declare class HandsfreeVoiceModule extends NativeModule<HandsfreeVoiceMod
   setMuted(muted: boolean): Promise<void>;
   /** Play the short, bundled send earcon, fire-and-forget. */
   playSendEarcon(): Promise<void>;
-  /** End the call and release recognition, TTS, audio focus and the service. */
-  stopSession(): Promise<void>;
+  /**
+   * End the call and release recognition, TTS, audio focus and the service.
+   * With a `startId`, cancels only that attempt — a stale id is ignored so an
+   * old cleanup never ends a newer call; without one, this is the user's End.
+   */
+  stopSession(options?: { startId?: string }): Promise<void>;
   /**
    * Open the Gate media socket for a Gate-powered call: raw PCM up, PCM and
    * JSON frames down. Answers false when the context or options are unusable.

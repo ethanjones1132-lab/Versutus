@@ -1,8 +1,25 @@
 import { bytesToBase64, utf8Encode } from '@/lib/encoding';
+import { installStreamingFetch, resetStreamingFetchForTests } from '@/lib/net/streaming-fetch';
+import { openTerminalSession } from '@/lib/terminal/client';
 import { parseTerminalSseEvent } from '@/lib/terminal/sse';
 
 function b64(text: string): string {
   return bytesToBase64(utf8Encode(text));
+}
+
+function terminalSseResponse(frames: string[], close = true) {
+  const body = new ReadableStream({
+    start(controller) {
+      const enc = new TextEncoder();
+      for (const frame of frames) controller.enqueue(enc.encode(frame));
+      if (close) controller.close();
+    },
+  });
+  return { ok: true, status: 200, body } as unknown as Response;
+}
+
+async function flushPump() {
+  for (let i = 0; i < 10; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 test('a truncated JSON session frame is skipped, not a shell error', () => {
@@ -86,5 +103,66 @@ test('a skip does not prevent the next well-formed frame from applying', () => {
   expect(parseTerminalSseEvent({ event: 'session', data: '{"sid":"sid-2"}' })).toEqual({
     kind: 'sid',
     sid: 'sid-2',
+  });
+});
+
+describe('terminal stream close', () => {
+  afterEach(() => resetStreamingFetchForTests());
+
+  test('a clean end-of-stream with no exit frame fires onClose', async () => {
+    const onClose = jest.fn();
+    installStreamingFetch((async () =>
+      terminalSseResponse(['event: session\ndata: {"sid":"sid-1"}\n\n'])) as unknown as typeof globalThis.fetch);
+
+    const session = await openTerminalSession('ws://127.0.0.1:8760', {
+      onOutput: jest.fn(),
+      onError: jest.fn(),
+      onExit: jest.fn(),
+      onClose,
+    });
+    await flushPump();
+
+    expect(session.sid).toBe('sid-1');
+    expect(onClose).toHaveBeenCalledTimes(1);
+    session.close();
+  });
+
+  test('an exit frame suppresses the close notification', async () => {
+    const onClose = jest.fn();
+    const onExit = jest.fn();
+    installStreamingFetch((async () =>
+      terminalSseResponse([
+        'event: session\ndata: {"sid":"sid-1"}\n\n',
+        'event: exit\ndata: {"code":0}\n\n',
+      ])) as unknown as typeof globalThis.fetch);
+
+    const session = await openTerminalSession('ws://127.0.0.1:8760', {
+      onOutput: jest.fn(),
+      onError: jest.fn(),
+      onExit,
+      onClose,
+    });
+    await flushPump();
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    session.close();
+  });
+
+  test('an intentional close does not fire onClose', async () => {
+    const onClose = jest.fn();
+    installStreamingFetch((async () =>
+      terminalSseResponse(['event: session\ndata: {"sid":"sid-1"}\n\n'], false)) as unknown as typeof globalThis.fetch);
+
+    const session = await openTerminalSession('ws://127.0.0.1:8760', {
+      onOutput: jest.fn(),
+      onError: jest.fn(),
+      onExit: jest.fn(),
+      onClose,
+    });
+    session.close();
+    await flushPump();
+
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

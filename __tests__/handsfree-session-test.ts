@@ -52,6 +52,35 @@ describe('reduceHandsfreeSession — the happy turn', () => {
     expect(refused.effects).toEqual([]);
   });
 
+  // The abandoned first attempt. `starting` had exactly three ways out — the
+  // native side confirming, the start being refused, or a terminal event — so a
+  // start that never reported back left the phase pinned at `starting`. The
+  // provider offers Call only when the phase is `idle`, so one abandoned
+  // attempt meant no second attempt was ever possible on this phone.
+  test('a start that never reports back is abandoned, and the phone can try again', () => {
+    const stuck = step(INITIAL_HANDSFREE_SESSION, { type: 'start' }).state;
+    expect(stuck.phase).toBe('starting');
+
+    const abandoned = step(stuck, { type: 'start-timeout' });
+    expect(abandoned.state).toEqual(INITIAL_HANDSFREE_SESSION);
+    expect(abandoned.effects).toEqual([]);
+
+    // And the retry is admitted: a second start opens a fresh attempt.
+    expect(step(abandoned.state, { type: 'start' }).state.phase).toBe('starting');
+  });
+
+  test('an abandoned start is not counted as a call that finished', () => {
+    const stuck = step(INITIAL_HANDSFREE_SESSION, { type: 'start' }).state;
+    expect(step(stuck, { type: 'start-timeout' }).state.callsEnded).toBe(0);
+  });
+
+  test('a start timeout from any other phase changes nothing', () => {
+    for (const phase of ['idle', 'listening', 'speaking', 'ending', 'ended'] as HandsfreePhase[]) {
+      const from: HandsfreeSessionState = { ...INITIAL_HANDSFREE_SESSION, phase };
+      expect(step(from, { type: 'start-timeout' })).toEqual({ state: from, effects: [] });
+    }
+  });
+
   test('a final enters confirming, never sending directly', () => {
     const out = step(listening(), { type: 'final', text: 'hello there' });
     expect(out.state.phase).toBe('confirming');
@@ -100,6 +129,7 @@ describe('reduceHandsfreeSession — the happy turn', () => {
 
 describe('reduceHandsfreeSession — every event has a destination', () => {
   const events: HandsfreeEvent[] = [
+    { type: 'start-timeout' },
     { type: 'partial', text: 'x' },
     { type: 'final', text: 'x' },
     { type: 'noSpeech' },

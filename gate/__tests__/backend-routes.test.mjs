@@ -507,6 +507,58 @@ test('a tool-only turn is not flagged as empty', async () => {
   }
 });
 
+test('the chat SSE route exposes thinking and each tool state before final text', async () => {
+  const registry = stubTurnRegistry({
+    sendMessage: async () => ({
+      text: 'Done',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Done' }] },
+    }),
+    streamEvents: async (id, onEvent, signal) => {
+      onEvent({ type: 'message.reasoning.delta', payload: { text: 'checking' } });
+      onEvent({ type: 'tool.started', payload: { name: 'Read', callId: 'call-1' } });
+      onEvent({ type: 'tool.progress', payload: { name: 'Read', callId: 'call-1', text: 'line 1' } });
+      onEvent({ type: 'tool.progress', payload: { name: 'Read', callId: 'call-1', input: { file_path: 'AGENTS.md' }, snapshot: true } });
+      onEvent({ type: 'tool.progress', payload: { name: 'Read', callId: 'call-1', input: { file_path: 'AGENTS.md' }, snapshot: true } });
+      onEvent({ type: 'tool.output', payload: { name: 'Read', callId: 'call-1', output: 'line 1' } });
+      onEvent({ type: 'message.delta', payload: { text: 'Done' } });
+      await new Promise((resolve) => {
+        if (signal?.aborted) return resolve();
+        signal?.addEventListener('abort', resolve, { once: true });
+      });
+    },
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1',
+        messages: [{ role: 'user', content: 'read the file' }], stream: true,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const frames = (await response.text()).split('\n')
+      .filter((line) => line.startsWith('data: ') && line !== 'data: [DONE]')
+      .map((line) => JSON.parse(line.slice(6)));
+    const deltas = frames.flatMap((frame) => frame.choices?.map((choice) => choice.delta) ?? []);
+    const reasoning = deltas.findIndex((delta) => delta.reasoning_content === 'checking');
+    const start = deltas.findIndex((delta) => delta.tool_calls?.[0]?.status === 'running'
+      && delta.tool_calls[0].detail === undefined);
+    const progress = deltas.findIndex((delta) => delta.tool_calls?.[0]?.status === 'running'
+      && delta.tool_calls[0].detail === 'line 1');
+    const argumentsProgress = deltas.findIndex((delta) => delta.tool_calls?.[0]?.status === 'running'
+      && delta.tool_calls[0].detail === '{"file_path":"AGENTS.md"}');
+    const complete = deltas.findIndex((delta) => delta.tool_calls?.[0]?.status === 'complete');
+    const answer = deltas.findIndex((delta) => delta.content === 'Done');
+    assert.ok(reasoning >= 0 && reasoning < start);
+    assert.ok(start < progress && progress < argumentsProgress && argumentsProgress < complete && complete < answer);
+    assert.equal(deltas.filter((delta) => delta.tool_calls?.[0]?.detail === '{"file_path":"AGENTS.md"}').length, 1);
+    assert.equal(deltas[complete].tool_calls[0].id, 'call-1');
+  } finally {
+    await gate.close();
+  }
+});
+
 test('a non-streaming turn with no content fails instead of returning a fake success', async () => {
   const registry = stubTurnRegistry({
     sendMessage: async () => ({ text: '', message: { role: 'assistant', content: [] } }),
@@ -575,6 +627,52 @@ test('backend models are advertised alongside provider models', async () => {
     assert.ok(stub, 'the backend catalog should appear in /v1/models');
     assert.equal(stub.backendId, 'stub-local');
   } finally {
+    await gate.close();
+  }
+});
+
+test('the merged model catalog reads independent backends concurrently', async () => {
+  const calls = [];
+  const base = stubRegistry(calls).get('stubcli');
+  let releaseSlow;
+  const slowReady = new Promise((resolve) => { releaseSlow = resolve; });
+  const makeAdapter = (adapterId) => ({
+    ...base,
+    adapterId,
+    server: { transport: 'per-turn' },
+    createBackend() {
+      const backend = base.createBackend();
+      return {
+        ...backend,
+        async listModels() {
+          calls.push(adapterId);
+          if (adapterId === 'a-slow') await slowReady;
+          else releaseSlow();
+          return [{ id: `${adapterId}/one`, providerId: adapterId, modelId: 'one' }];
+        },
+      };
+    },
+  });
+  const adapters = [makeAdapter('a-slow'), makeAdapter('b-fast')];
+  const registry = {
+    get(id) { return adapters.find((adapter) => adapter.adapterId === id); },
+    list() { return adapters; },
+  };
+  const { gate } = await makeGate({
+    registry,
+    environments: adapters.map((adapter) => ({ id: adapter.adapterId, adapterId: adapter.adapterId })),
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/models`, {
+      headers: auth(gate),
+      signal: AbortSignal.timeout(3000),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body.data.map((model) => model.id), ['a-slow/one', 'b-fast/one']);
+    assert.deepEqual(calls.sort(), ['a-slow', 'b-fast']);
+  } finally {
+    releaseSlow();
     await gate.close();
   }
 });

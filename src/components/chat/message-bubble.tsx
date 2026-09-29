@@ -55,7 +55,9 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
   const activityLabel = activityParts.join(' · ');
   const hasActivity = activityParts.length > 0;
   const [activityUserOverride, setActivityUserOverride] = useState<boolean | null>(null);
-  const activitySettled = !!message.streaming && message.text.length === 0;
+  // Keep live thinking and tool state visible even after answer text starts.
+  // The user's own toggle still takes precedence.
+  const activitySettled = !!message.streaming;
   const isActivityOpen = activityUserOverride !== null ? activityUserOverride : activitySettled;
   const commandStatus = message.command?.status;
 
@@ -163,7 +165,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
                     </ScrollView>
                   ) : null}
                   {message.toolCalls?.map((toolCall, index) => (
-                    <ToolCallCard key={`${toolCall.name}-${index}`} toolCall={toolCall} />
+                    <ToolCallCard key={toolCall.id ?? `${toolCall.name}-${index}`} toolCall={toolCall} />
                   ))}
                 </View>
               ) : null}

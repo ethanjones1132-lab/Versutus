@@ -1,10 +1,18 @@
 import { StyleSheet, View } from 'react-native';
 
-import { Button, Card, Text } from '@/components/ui';
-import { Palette, Radius, Spacing } from '@/constants/tokens';
+import { Button, Card, Icon, PressableScale, Text } from '@/components/ui';
+import { Radius, Spacing } from '@/constants/tokens';
+import { useTokens } from '@/hooks/use-tokens';
 import type { GatewayCommand } from '@/lib/gateway/dashboard';
 import { commandPanelCaption } from '@/lib/gateway/command-panel';
+import { haptics } from '@/lib/haptics';
 
+/**
+ * The quick commands a mode offers, as a list: what the command is, the call
+ * it makes in mono under it, and a run glyph. A command that writes to the
+ * gateway carries an amber mark instead of looking like every other row —
+ * the old grid painted the safe reads as the loud violet ones.
+ */
 export function GatewayCommandPanel({
   title = 'Quick commands',
   commands,
@@ -20,53 +28,87 @@ export function GatewayCommandPanel({
   onRun: (command: GatewayCommand) => void;
   onOpenOutput?: () => void;
 }) {
+  const tokens = useTokens();
+
   return (
-    <Card padding={Spacing.three} style={styles.card}>
+    <View style={styles.root}>
       <View style={styles.header}>
-        <Text variant="caption" style={styles.onGlassPrimary}>{title}</Text>
+        <Text variant="eyebrow" color="tertiary">
+          {title}
+        </Text>
         {lastSummary ? (
-          <Button label="Raw" variant="ghost" onPress={onOpenOutput} style={styles.rawButton} />
+          <Button label="Raw" variant="ghost" size="sm" onPress={onOpenOutput} style={styles.rawButton} />
         ) : null}
       </View>
 
-      <View style={styles.commandGrid}>
-        {commands.map((command) => {
+      <Card variant="surface" padding={0} style={styles.card}>
+        {commands.map((command, index) => {
           // The caption names the call the entry already carries; entries
-          // that name none keep today's label-only button.
+          // that name none keep a label-only row.
           const caption = commandPanelCaption(command);
+          const running = runningCommandId === command.id;
+          const writes = command.danger === 'write';
           return (
-            <View key={command.id} style={styles.commandCell}>
-              <Button
-                label={runningCommandId === command.id ? 'Running' : command.label}
-                onPress={() => onRun(command)}
-                disabled={!!runningCommandId}
-                variant={command.danger === 'write' ? 'secondary' : 'primary'}
-                style={styles.commandButton}
-              />
-              {caption ? (
-                <Text
-                  variant="caption"
-                  numberOfLines={1}
-                  maxFontSizeMultiplier={1.3}
-                  style={[styles.onGlassSecondary, styles.commandCaption]}>
-                  {caption}
+            <PressableScale
+              key={command.id}
+              onPress={async () => {
+                await haptics.selection();
+                onRun(command);
+              }}
+              disabled={!!runningCommandId}
+              accessibilityRole="button"
+              accessibilityLabel={`${running ? 'Running' : command.label}${caption ? `, ${caption}` : ''}${writes ? ', changes the gateway' : ''}`}
+              accessibilityState={{ disabled: !!runningCommandId, busy: running }}
+              style={[
+                styles.row,
+                index > 0 ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: tokens.borderSubtle } : null,
+                runningCommandId && !running ? styles.dimmed : null,
+              ]}>
+              <View style={[styles.tile, { backgroundColor: writes ? tokens.statusConnectingMuted : tokens.backgroundRaised }]}>
+                <Icon
+                  name={
+                    writes
+                      ? { ios: 'pencil', android: 'edit', web: 'edit' }
+                      : { ios: 'arrow.right', android: 'arrow_forward', web: 'arrow_forward' }
+                  }
+                  size={14}
+                  color={writes ? 'statusConnecting' : 'accent'}
+                />
+              </View>
+              <View style={styles.rowText}>
+                <Text variant="callout" numberOfLines={1}>
+                  {running ? 'Running' : command.label}
                 </Text>
-              ) : null}
-            </View>
+                {caption ? (
+                  <Text
+                    variant="mono"
+                    color="tertiary"
+                    numberOfLines={1}
+                    maxFontSizeMultiplier={1.3}
+                    style={styles.commandCaption}>
+                    {caption}
+                  </Text>
+                ) : null}
+              </View>
+              <Icon
+                name={{ ios: 'play.fill', android: 'play_arrow', web: 'play_arrow' }}
+                size={14}
+                color={running ? 'accent' : 'textTertiary'}
+              />
+            </PressableScale>
           );
         })}
-      </View>
+      </Card>
 
-      <Text variant="caption" style={lastSummary ? styles.onGlassSecondary : styles.onGlassTertiary}>
+      <Text variant="caption" color={lastSummary ? 'secondary' : 'tertiary'} style={styles.summary}>
         {lastSummary ?? 'Run a safe gateway command to inspect the live setup.'}
       </Text>
-    </Card>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  card: {
-    borderRadius: Radius.md,
+  root: {
     gap: Spacing.two,
   },
   header: {
@@ -74,37 +116,45 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: Spacing.two,
+    paddingHorizontal: Spacing.one,
+    minHeight: 28,
   },
-  commandGrid: {
+  card: {
+    borderRadius: Radius.lg,
+  },
+  row: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.two,
+    alignItems: 'center',
+    gap: Spacing.three - 4,
+    minHeight: 56,
+    paddingHorizontal: Spacing.three - 2,
+    paddingVertical: Spacing.two,
   },
-  commandButton: {
-    minWidth: 104,
-    minHeight: 44,
-    flexGrow: 1,
+  dimmed: {
+    opacity: 0.5,
   },
-  commandCell: {
-    minWidth: 104,
-    flexGrow: 1,
-    gap: Spacing.one,
+  tile: {
+    width: 30,
+    height: 30,
+    borderRadius: Radius.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
   },
   commandCaption: {
-    textAlign: 'center',
+    fontSize: 12,
+    lineHeight: 16,
   },
   rawButton: {
-    minHeight: 34,
+    minHeight: 30,
     paddingHorizontal: Spacing.two,
-    paddingVertical: Spacing.one,
+    paddingVertical: 0,
   },
-  onGlassPrimary: {
-    color: Palette.textPrimary,
-  },
-  onGlassSecondary: {
-    color: Palette.textSecondary,
-  },
-  onGlassTertiary: {
-    color: Palette.textTertiary,
+  summary: {
+    paddingHorizontal: Spacing.one,
   },
 });

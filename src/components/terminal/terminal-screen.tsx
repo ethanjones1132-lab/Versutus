@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ChatEmptyState } from '@/components/chat/chat-empty-state';
 import { ComposerKeyboardLift } from '@/components/layout/ComposerKeyboardLift';
-import { ConnectionBadge } from '@/components/connection-badge';
+import { PulsingDot, statusColor, statusLabel } from '@/components/connection-badge';
 import { GatewayCommandPanel } from '@/components/gateway/gateway-command-panel';
 import { CommandLogSheet } from '@/components/terminal/command-log-sheet';
 import { CommandResultView } from '@/components/terminal/command-result-view';
@@ -19,6 +19,7 @@ import {
   Chip,
   EmptyState,
   ErrorCard,
+  PageTitle,
   Screen,
   Text,
   TextField,
@@ -112,6 +113,11 @@ export function TerminalScreen() {
             sessionRef.current = null;
             setTerminalConnected(false);
           },
+          onClose: () => {
+            setTerminalError('Terminal stream closed');
+            sessionRef.current = null;
+            setTerminalConnected(false);
+          },
         },
         activeGateway.token,
       );
@@ -169,6 +175,7 @@ export function TerminalScreen() {
       await sendTerminalInput(gateway.url, session.sid, payload, gateway.token);
     } catch (error) {
       setTerminalError(error instanceof Error ? error.message : String(error));
+      setTerminalConnected(false);
     }
   }, [activeGateway, input]);
 
@@ -247,16 +254,23 @@ export function TerminalScreen() {
   return (
     <Screen edges={screenEdgesFor({ platform: Platform.OS, hasDock: true })} parallaxY={parallaxY}>
       <View style={styles.header}>
-        <DrawerMenuButton />
-        <View style={styles.headerText}>
-          <Text variant="caption" color="accent" style={styles.headerKicker}>
-            {settings.pcName ?? activeGateway.name}
-          </Text>
-          <Text color="secondary" variant="caption">
-            {modeLabel} · {mode === 'shell' && shellReady ? (terminalConnected ? 'live' : 'starting…') : status}
-          </Text>
-        </View>
-        <ConnectionBadge status={status} detail={statusDetail} />
+        <PageTitle
+          title="Tools"
+          leading={<DrawerMenuButton />}
+          status={
+            <>
+              <PulsingDot
+                color={statusColor(tokens, status)}
+                active={status === 'connecting' || status === 'reconnecting'}
+              />
+              <Text variant="caption" color="secondary" numberOfLines={1} style={styles.headerKicker}>
+                {settings.pcName ?? activeGateway.name} · {modeLabel} ·{' '}
+                {mode === 'shell' && shellReady ? (terminalConnected ? 'live' : 'starting…') : statusLabel(status)}
+                {status !== 'connected' && statusDetail ? ` · ${statusDetail}` : ''}
+              </Text>
+            </>
+          }
+        />
       </View>
 
       <View style={styles.modePicker}>
@@ -447,21 +461,11 @@ export function TerminalScreen() {
 
 const styles = StyleSheet.create({
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.four,
+    paddingHorizontal: Spacing.four - 4,
     paddingTop: Spacing.two,
-    paddingBottom: Spacing.one,
-    gap: Spacing.two,
-  },
-  headerText: {
-    flex: 1,
-    gap: Spacing.half,
   },
   headerKicker: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    flexShrink: 1,
   },
   modePicker: {
     paddingHorizontal: Spacing.four,

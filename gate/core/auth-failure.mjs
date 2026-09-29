@@ -7,8 +7,8 @@
 // client sent nothing" from "the client sent a stale token". It never prints
 // the token or any part of it.
 
-export function describeAuthFailure({ method, pathname, authorization }) {
-  const route = `${method} ${pathname}`;
+export function describeAuthFailure({ method, pathname, authorization, remoteAddress }) {
+  const route = `${method} ${pathname}${remoteAddress ? ` from ${remoteAddress}` : ''}`;
   if (typeof authorization !== 'string' || authorization.length === 0) {
     return `auth refused: ${route} - no authorization header`;
   }

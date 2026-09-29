@@ -40,6 +40,13 @@ public class HandsfreeVoiceModule: Module {
   private var lastPartial = ""
   private var onsetStart: TimeInterval = 0
   private var lastLevelEmit: TimeInterval = 0
+  /**
+   * The id of the newest start the module has claimed. A `stopSession` for an
+   * older id (or a newer start) moves it on, so an answer the OS permission
+   * dialog delivers late cannot activate audio behind a newer retry's back.
+   * Touched on `audioQueue` only.
+   */
+  private var startAttemptId: String?
 
   private var interruptionObserver: NSObjectProtocol?
   private var routeObserver: NSObjectProtocol?
@@ -89,28 +96,43 @@ public class HandsfreeVoiceModule: Module {
 
     AsyncFunction("startSession") { (options: [String: Any?], promise: Promise) in
       _ = options["title"] as? String
-      self.requestAuthorization { granted in
-        guard granted else {
-          promise.resolve("permission-denied")
-          return
-        }
-        do {
-          try self.activateAudioSession()
-        } catch {
-          promise.resolve("unavailable")
-          return
-        }
-        self.audioQueue.async {
-          self.sessionActive = true
-          self.destroyed = false
-          if !self.startEngineIfNeeded() {
-            self.audioQueue.async {
-              self.sessionActive = false
+      // The key this attempt's cancellation will name. JS supplies it so an
+      // abandoned start cancels exactly itself; the fallback covers a caller
+      // that never cancels.
+      let requestedId = (options["startId"] as? String)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      self.audioQueue.async {
+        // Claim this start before the permission prompt. A `stopSession` for
+        // this id, or a newer start, takes the id on, so a grant that lands
+        // after JS gave up is discarded instead of activating audio with no
+        // call behind it.
+        let attemptId = (requestedId?.isEmpty == false) ? requestedId! : UUID().uuidString
+        self.startAttemptId = attemptId
+        self.requestAuthorization { granted in
+          self.audioQueue.async {
+            guard attemptId == self.startAttemptId else {
+              DispatchQueue.main.async { promise.resolve("unavailable") }
+              return
             }
-            DispatchQueue.main.async { promise.resolve("unavailable") }
-            return
+            guard granted else {
+              DispatchQueue.main.async { promise.resolve("permission-denied") }
+              return
+            }
+            do {
+              try self.activateAudioSession()
+            } catch {
+              DispatchQueue.main.async { promise.resolve("unavailable") }
+              return
+            }
+            self.sessionActive = true
+            self.destroyed = false
+            if !self.startEngineIfNeeded() {
+              self.sessionActive = false
+              DispatchQueue.main.async { promise.resolve("unavailable") }
+              return
+            }
+            DispatchQueue.main.async { promise.resolve("started") }
           }
-          DispatchQueue.main.async { promise.resolve("started") }
         }
       }
     }
@@ -158,8 +180,18 @@ public class HandsfreeVoiceModule: Module {
       self.audioQueue.async { self.playEarconLocked() }
     }
 
-    AsyncFunction("stopSession") {
-      self.audioQueue.async { self.end(reason: "user") }
+    AsyncFunction("stopSession") { (options: [String: Any?]?) in
+      let requestedId = (options?["startId"] as? String)?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      self.audioQueue.async {
+        if let id = requestedId, !id.isEmpty {
+          // Cancel exactly this attempt. A stale id — a newer retry owns the
+          // start — cancels nothing and must not end the newer call.
+          guard id == self.startAttemptId else { return }
+        }
+        // No id is the user's End: it owns the whole native side.
+        self.endLocked(reason: "user")
+      }
     }
 
     // PENDING-MACOS: the Gate media terminal (OkHttp/URLSession WebSocket,
@@ -544,22 +576,28 @@ public class HandsfreeVoiceModule: Module {
   }
 
   private func end(reason: String) {
-    audioQueue.async {
-      guard self.sessionActive else { return }
-      self.sessionActive = false
-      self.destroyed = true
-      self.stopListeningLocked()
-      self.stopSpeakingLocked()
-      if let engine = self.audioEngine {
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-      }
-      self.audioEngine = nil
-      self.speechRecognizer = nil
-      self.earconPlayer?.stop()
-      self.earconPlayer = nil
-      try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+    audioQueue.async { self.endLocked(reason: reason) }
+  }
+
+  private func endLocked(reason: String) {
+    // Supersede any start still waiting on a permission answer, then tear the
+    // live session down. Clearing even when inactive is what makes a late
+    // grant resolve "unavailable" instead of activating audio.
+    self.startAttemptId = nil
+    guard self.sessionActive else { return }
+    self.sessionActive = false
+    self.destroyed = true
+    self.stopListeningLocked()
+    self.stopSpeakingLocked()
+    if let engine = self.audioEngine {
+      engine.inputNode.removeTap(onBus: 0)
+      engine.stop()
     }
+    self.audioEngine = nil
+    self.speechRecognizer = nil
+    self.earconPlayer?.stop()
+    self.earconPlayer = nil
+    try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
   }
 
   // MARK: - Events

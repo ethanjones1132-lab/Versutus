@@ -11,8 +11,10 @@ import android.speech.tts.TextToSpeech
 import androidx.core.content.ContextCompat
 import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
+import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -72,6 +74,11 @@ class HandsfreeVoiceModule : Module() {
 
     AsyncFunction("startSession") { options: Map<String, Any?>, promise: Promise ->
       val title = (options["title"] as? String)?.trim().orEmpty()
+      // The key this attempt's cancellation will name. JS supplies it so an
+      // abandoned start can cancel exactly itself; the fallback only covers a
+      // caller that never cancels.
+      val startId = (options["startId"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+        ?: UUID.randomUUID().toString()
       if (appContext.currentActivity == null) {
         promise.resolve("unavailable")
         return@AsyncFunction
@@ -93,21 +100,35 @@ class HandsfreeVoiceModule : Module() {
       } else {
         required
       }
+      // Claim this attempt before any permission work. A later startSession or
+      // a stopSession makes a new attempt the owner, so an answer this one is
+      // still waiting on — the OS permission dialog above all — cannot open a
+      // microphone behind a newer retry's back.
+      HandsfreeCallService.claimStartAttempt(startId)
       if (permissions.hasGrantedPermissions(*required)) {
-        startService(context, title, promise)
+        startService(context, title, promise, startId)
       } else {
         permissions.askForPermissions({ result ->
+          if (!HandsfreeCallService.ownsStartAttempt(startId)) {
+            // The JS side abandoned this start and cancelled it, or a newer
+            // retry took over while the dialog was up. This answer belongs to
+            // no live call and must not start a service.
+            promise.resolve("unavailable")
+            return@askForPermissions
+          }
           val micGranted = result[Manifest.permission.RECORD_AUDIO]?.status == PermissionsStatus.GRANTED
           if (!micGranted) {
             promise.resolve("permission-denied")
           } else {
             // Let the activity resume from the permission dialog before the
-            // while-in-use microphone service is created.
-            Handler(Looper.getMainLooper()).postDelayed({ startService(context, title, promise) }, RESUME_SETTLE_MS)
+            // while-in-use microphone service is created. Ownership is checked
+            // again inside startService, because the retry can claim the start
+            // during this settle window.
+            Handler(Looper.getMainLooper()).postDelayed({ startService(context, title, promise, startId) }, RESUME_SETTLE_MS)
           }
         }, *asked)
       }
-    }
+    }.runOnQueue(Queues.MAIN)
 
     AsyncFunction("startListening") {
       HandsfreeCallService.current?.startListening() ?: false
@@ -137,11 +158,25 @@ class HandsfreeVoiceModule : Module() {
       HandsfreeCallService.current?.playSendEarcon()
     }
 
-    AsyncFunction("stopSession") {
-      gateMedia?.stop()
-      gateMedia = null
-      HandsfreeCallService.current?.end("user")
-    }
+    AsyncFunction("stopSession") { options: Map<String, Any?>? ->
+      val startId = (options?.get("startId") as? String)?.trim()?.takeIf { it.isNotEmpty() }
+      if (startId == null) {
+        // The user's End owns the whole native side, not one attempt: supersede
+        // every start still waiting, drop the media socket and end the call.
+        HandsfreeCallService.cancelAllStartAttempts()
+        gateMedia?.stop()
+        gateMedia = null
+        HandsfreeCallService.current?.end("user")
+      } else if (HandsfreeCallService.cancelStartAttempt(startId)) {
+        // This id is still the newest start, so the media belongs to it. The
+        // service teardown is keyed AND re-checked when its queued effect
+        // executes: a newer retry whose service is already up owns the service
+        // by then, and this old cleanup must not end the newer call.
+        gateMedia?.stop()
+        gateMedia = null
+        HandsfreeCallService.current?.endForAttempt(startId, "user")
+      }
+    }.runOnQueue(Queues.MAIN)
 
     // ─── Gate media (the phone as the Gate's microphone and speaker) ───────
     AsyncFunction("startGateMedia") { options: Map<String, Any?>, promise: Promise ->
@@ -149,7 +184,15 @@ class HandsfreeVoiceModule : Module() {
       val url = (options["url"] as? String)?.trim().orEmpty()
       val token = (options["token"] as? String).orEmpty()
       val voiceSessionId = (options["voiceSessionId"] as? String)?.trim().orEmpty()
+      // The attempt this media link belongs to. A delayed start for an
+      // abandoned attempt must not stop, or replace, the socket a newer retry
+      // owns; the same id a `stopSession` would cancel.
+      val startId = (options["startId"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
       if (context == null || url.isEmpty() || voiceSessionId.isEmpty()) {
+        promise.resolve(false)
+        return@AsyncFunction
+      }
+      if (startId != null && !HandsfreeCallService.ownsStartAttempt(startId)) {
         promise.resolve(false)
         return@AsyncFunction
       }
@@ -160,7 +203,7 @@ class HandsfreeVoiceModule : Module() {
       gateMedia = media
       media.start(context, url, token, voiceSessionId)
       promise.resolve(true)
-    }
+    }.runOnQueue(Queues.MAIN)
 
     AsyncFunction("sendGateControl") { json: String ->
       gateMedia?.sendControl(json) ?: false
@@ -169,7 +212,7 @@ class HandsfreeVoiceModule : Module() {
     AsyncFunction("stopGateMedia") {
       gateMedia?.stop()
       gateMedia = null
-    }
+    }.runOnQueue(Queues.MAIN)
 
     // The signed auto-start of §4.4: only the app's own key can sign a
     // `versutus://call` link, so an unsigned link never opens the microphone.
@@ -186,18 +229,36 @@ class HandsfreeVoiceModule : Module() {
 
   private var gateMedia: HandsfreeGateMedia? = null
 
-  private fun startService(context: Context, title: String, promise: Promise) {
+  private fun startService(context: Context, title: String, promise: Promise, startId: String) {
+    // A start the JS side abandoned (its deadline ran out and stopSession
+    // cancelled it) or a newer retry superseded must not create a service.
+    if (!HandsfreeCallService.ownsStartAttempt(startId)) {
+      promise.resolve("unavailable")
+      return
+    }
     val settled = AtomicBoolean(false)
     fun settle(outcome: String) {
       if (settled.compareAndSet(false, true)) promise.resolve(outcome)
     }
-    HandsfreeCallService.pendingStartCallback = { outcome -> settle(outcome) }
+    // Arm the answer atomically. If a cancel or a newer claim landed since the
+    // check above, this id no longer owns the pending slot, so the start is
+    // settled unavailable without arming a callback a newer attempt owns.
+    if (!HandsfreeCallService.beginPendingStart(startId) { outcome -> settle(outcome) }) {
+      settle("unavailable")
+      return
+    }
     Handler(Looper.getMainLooper()).postDelayed({
       if (!settled.get()) {
-        HandsfreeCallService.pendingStartCallback = null
-        // A service that comes up after JS has been told "unavailable" would
-        // hold the microphone with nobody driving it; stop it.
-        context.stopService(Intent(context, HandsfreeCallService::class.java))
+        // Expiry invalidates this attempt's OWNER as well as its pending
+        // answer: a stale ACTION_START still queued for a start JS already
+        // reported as unavailable must be rejected rather than open a
+        // microphone. A newer retry's claim superseded this id, so an old
+        // expiry reports false and must never stop the newer service.
+        if (HandsfreeCallService.expireStartAttempt(startId)) {
+          // A service that comes up after JS has been told "unavailable" would
+          // hold the microphone with nobody driving it; stop it.
+          context.stopService(Intent(context, HandsfreeCallService::class.java))
+        }
         settle("unavailable")
       }
     }, START_TIMEOUT_MS)
@@ -205,9 +266,10 @@ class HandsfreeVoiceModule : Module() {
       val intent = Intent(context, HandsfreeCallService::class.java)
         .setAction(HandsfreeCallService.ACTION_START)
         .putExtra(HandsfreeCallService.EXTRA_TITLE, title)
+        .putExtra(HandsfreeCallService.EXTRA_START_ID, startId)
       ContextCompat.startForegroundService(context, intent)
     } catch (_: Exception) {
-      HandsfreeCallService.pendingStartCallback = null
+      HandsfreeCallService.expireStartAttempt(startId)
       settle("unavailable")
     }
   }

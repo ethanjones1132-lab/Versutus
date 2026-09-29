@@ -54,7 +54,7 @@ describe('Home residual chrome reads brand violet on the cool stage', () => {
     expect(src).toContain('style={[styles.approvalCard, { borderColor: tokens.accent }]}');
     expect(occurrences(src, 'color="accent" style={styles.approvalLabel}')).toBe(2);
     expect(src).toContain('color="accent"\n            />');
-    expect(src).toMatch(/eyebrow: \{\n    color: Palette\.accent,/);
+    expect(src).toMatch(/eyebrow: \{\n    color: Palette\.textTertiary,/);
     expect(src).not.toContain('accentWarm');
   });
 

@@ -45,7 +45,8 @@ describe('onboarding failed auto-connect retry', () => {
 
   test('the typed Connect path is intact: setupFromPcAddress with the validation gate', () => {
     const src = readScreen();
-    expect(src).toContain('const ok = await setupFromPcAddress(pcAddress, token);');
+    expect(src).toContain('const result = await setupFromPcAddress(pcAddress, token);');
+    expect(src).toContain("if (result.kind === 'connected')");
     expect(src).toContain('disabled={cta.locked || !validation.valid}');
   });
 

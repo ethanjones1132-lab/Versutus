@@ -46,8 +46,10 @@ describe('Activity and Tools carry quieter weight than Chat', () => {
     expect(src).toContain('borderColor: tokens.border');
     expect(src).toContain('borderBottomColor: tokens.border');
     expect(src).toContain('borderColor: tokens.border }]}');
-    // Header kicker and Copy control wear brand accent, not the focus tint.
-    expect(src).toContain('color="accent" style={styles.headerKicker}');
+    // The header is the shared large title with one quiet status line; the
+    // Copy control keeps the brand accent, never the focus tint.
+    expect(src).toContain('<PageTitle');
+    expect(src).toContain('title="Tools"');
     expect(src).toContain('color="accent"');
     expect(src).not.toContain('Palette.gold');
   });

@@ -17,7 +17,7 @@ import { GlassCollapsible } from '@/components/glass-collapsible';
 import { HomeBriefingCard } from '@/components/home-briefing-card';
 import { HomeStatusCard } from '@/components/home-status-card';
 import { PairingPanel } from '@/components/pairing-panel';
-import { Badge, Button, Card, ConfirmSheet, ErrorCard, Icon, PressableScale, Text } from '@/components/ui';
+import { Badge, Button, Card, ConfirmSheet, ErrorCard, Icon, PressableScale, SectionHeader, Text } from '@/components/ui';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { useGateway } from '@/context/gateway-provider';
@@ -212,29 +212,31 @@ export function GatewayHomeDashboard() {
             />
           </View>
           <View style={styles.summaryText}>
-            <Text variant="caption" numberOfLines={1} style={styles.eyebrow}>
+            <Text variant="eyebrow" numberOfLines={1} style={styles.eyebrow}>
               Active gateway
             </Text>
             <Text variant="title" numberOfLines={1} style={styles.title}>
               {activeLabel}
             </Text>
-            <Text variant="caption" numberOfLines={2} style={styles.onGlassSecondary}>
-              {connected
-                ? runsSupported
-                  ? 'Ready for chat, slash commands, and agentic runs.'
-                  : 'Ready for chat and the commands this gateway offers.'
-                : 'Saved locally. Select a reachable gateway to activate it.'}
-            </Text>
-          </View>
-          <View style={styles.statusText}>
-            <Badge label={statusLabel} tone={connected ? 'success' : status === 'pairing' ? 'accent' : 'neutral'} />
-            {activeHello?.server?.version && connected ? (
-              <Text variant="caption" color="tertiary" numberOfLines={1} style={styles.onGlassTertiary}>
-                v{activeHello.server.version}
-              </Text>
-            ) : null}
+            <View style={styles.statusText}>
+              <Badge label={statusLabel} tone={connected ? 'success' : status === 'pairing' ? 'accent' : 'neutral'} />
+              {activeHello?.server?.version && connected ? (
+                <Text variant="caption" color="tertiary" numberOfLines={1} style={styles.onGlassTertiary}>
+                  v{activeHello.server.version}
+                </Text>
+              ) : null}
+            </View>
           </View>
         </View>
+        {/* The readiness sentence gets the card's full width: beside the badge
+            column it was cut to "Ready for chat, slash …" on a phone. */}
+        <Text variant="body" style={styles.onGlassSecondary}>
+          {connected
+            ? runsSupported
+              ? 'Ready for chat, slash commands, and agentic runs.'
+              : 'Ready for chat and the commands this gateway offers.'
+            : 'Saved locally. Select a reachable gateway to activate it.'}
+        </Text>
 
         {/* Full width: connection failures name a host and a reason, and the
             cramped status column truncated them to uselessness. */}
@@ -301,7 +303,7 @@ export function GatewayHomeDashboard() {
               router.push('/fleet');
             }}
             disabled={!connected}
-            variant="ghost"
+            variant="secondary"
             size="sm"
             style={styles.primaryAction}
           />
@@ -312,7 +314,7 @@ export function GatewayHomeDashboard() {
               router.push('/council');
             }}
             disabled={!connected}
-            variant="ghost"
+            variant="secondary"
             size="sm"
             style={styles.primaryAction}
           />
@@ -366,30 +368,40 @@ export function GatewayHomeDashboard() {
         </Card>
       ) : null}
 
-      {/* Thin residual status strip: the counts the old metric-tile grid used
-          to shout, collapsed onto one hairline row so Home reads as status. */}
+      {/* The residual counts, set as three quiet figures: the numeral in the
+          serif, what it counts under it. Home reads as status, not a grid of
+          shouting tiles. */}
       <View style={styles.statusStrip}>
-        <Text variant="caption" color="secondary">
-          {gateways.length} gateway{gateways.length === 1 ? '' : 's'}
-          {' · '}
-          {activityRuns.length} run{activityRuns.length === 1 ? '' : 's'}
-          {activeRuns.length > 0 ? ` (${activeRuns.length} in flight)` : ''}
-          {' · '}
-          {capabilityCount} capabilities
-        </Text>
+        <View style={styles.figure}>
+          <Text variant="title" style={styles.figureValue}>
+            {String(gateways.length)}
+          </Text>
+          <Text variant="caption" color="secondary">
+            gateway{gateways.length === 1 ? '' : 's'}
+          </Text>
+        </View>
+        <View style={styles.figure}>
+          <Text variant="title" style={styles.figureValue}>
+            {String(activityRuns.length)}
+          </Text>
+          <Text variant="caption" color="secondary">
+            run{activityRuns.length === 1 ? '' : 's'}
+            {activeRuns.length > 0 ? ` · ${activeRuns.length} live` : ''}
+          </Text>
+        </View>
+        <View style={styles.figure}>
+          <Text variant="title" style={styles.figureValue}>
+            {String(capabilityCount)}
+          </Text>
+          <Text variant="caption" color="secondary">
+            capabilities
+          </Text>
+        </View>
       </View>
 
       <HomeBriefingCard />
 
-      <View style={styles.sectionHeader}>
-        <Text variant="caption">Gateways</Text>
-        <Button
-          label="Add"
-          variant="secondary"
-          onPress={() => router.push('/gateway/add')}
-          style={styles.headerButton}
-        />
-      </View>
+      <SectionHeader title="Gateways" actionLabel="Add gateway" onAction={() => router.push('/gateway/add')} />
       <CompactGatewayList
         gateways={gateways}
         activeGatewayId={activeGateway?.id}
@@ -459,16 +471,16 @@ const styles = StyleSheet.create({
     gap: Spacing.one,
   },
   eyebrow: {
-    color: Palette.accent,
-    textTransform: 'uppercase',
+    color: Palette.textTertiary,
   },
   title: {
     color: Palette.textPrimary,
   },
   statusText: {
-    alignItems: 'flex-end',
-    flexShrink: 0,
-    gap: Spacing.one,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    marginTop: Spacing.one,
   },
   primaryActions: {
     flexDirection: 'row',
@@ -499,29 +511,24 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   approvalLabel: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0.2,
   },
   statusStrip: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
     backgroundColor: Palette.backgroundElevated,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Palette.border,
     borderRadius: Radius.lg,
     paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    paddingVertical: Spacing.three,
     gap: Spacing.two,
   },
-  headerButton: {
-    minHeight: 44,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
+  figure: {
+    flex: 1,
+    gap: 2,
+  },
+  figureValue: {
+    fontSize: 34,
+    lineHeight: 38,
   },
   onGlassPrimary: {
     color: Palette.textPrimary,

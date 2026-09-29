@@ -51,6 +51,17 @@ describe('message reducer regression locks', () => {
     expect(messages[0].toolCalls?.[1]).toEqual({ name: 'write', status: 'running' });
   });
 
+  test('same-name tool calls stay separate when their ids differ', () => {
+    let messages = addStreamingPlaceholder([], 'r1');
+    messages = appendToolCallDelta(messages, 'r1', { id: 'a', name: 'Read', status: 'running' });
+    messages = appendToolCallDelta(messages, 'r1', { id: 'b', name: 'Read', status: 'running' });
+    messages = appendToolCallDelta(messages, 'r1', { id: 'a', name: 'Read', status: 'complete' });
+    expect(messages[0].toolCalls).toEqual([
+      { id: 'a', name: 'Read', status: 'complete' },
+      { id: 'b', name: 'Read', status: 'running' },
+    ]);
+  });
+
   test('finalize marks streaming false and completes running tools', () => {
     let messages = addStreamingPlaceholder([], 'r1');
     messages = appendToolCallDelta(messages, 'r1', { name: 'read', status: 'running' });
