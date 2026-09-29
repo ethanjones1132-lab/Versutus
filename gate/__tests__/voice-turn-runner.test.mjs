@@ -898,7 +898,11 @@ test('a caller that opts in is told when a turn it accepted goes silent', async 
     }),
     (error) => error?.code === 'backend_stall' && /stall/i.test(error.message),
   );
-  assert.ok(stages.some((stage) => stage.stage === 'turn.accepted'));
+  assert.ok(stages.some((stage) => stage.stage === 'turn.send'));
+  assert.ok(
+    !stages.some((stage) => stage.stage === 'turn.accepted'),
+    'a backend that never answers is never reported as having accepted the turn',
+  );
   assert.ok(
     stages.some((stage) => stage.stage === 'turn.stalled' && stage.blockedOn === 'the backend turn'),
     'the stalled stage names what the runner was waiting on',
@@ -939,6 +943,74 @@ test('activity resets an opted-in stall clock so a slow turn that is still worki
   assert.equal(outcome.hasContent, true);
   assert.ok(stages.some((stage) => stage.stage === 'turn.activity'));
   assert.ok(!stages.some((stage) => stage.stage === 'turn.stalled'));
+});
+
+test('acceptance is only claimed once the backend answers, never at send time', async () => {
+  const stages = [];
+  let releaseSend;
+  let sendEntered = false;
+  const backend = {
+    sendMessage() {
+      sendEntered = true;
+      return new Promise((resolve) => { releaseSend = () => resolve({ text: 'answered' }); });
+    },
+  };
+  const turn = runBackendTurn(backend, 'ses_1', { text: 'hi' }, {
+    onStage: (detail) => stages.push(detail),
+    attempt: 'a1',
+    backendId: 'hermes',
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sendEntered, true, 'the send was actually invoked');
+  assert.ok(stages.some((stage) => stage.stage === 'turn.send' && stage.path === 'whole-turn'));
+  assert.ok(
+    stages.every((stage) => stage.attempt === 'a1' && stage.backend === 'hermes'),
+    'every stage names the attempt and the backend descriptor',
+  );
+  assert.ok(
+    !stages.some((stage) => stage.stage === 'turn.accepted'),
+    'no acceptance is claimed while the backend send is unresolved',
+  );
+
+  releaseSend();
+  const outcome = await turn;
+  assert.equal(outcome.hasContent, true);
+  const names = stages.map((stage) => stage.stage);
+  assert.ok(names.indexOf('turn.send') < names.indexOf('turn.accepted'));
+  assert.ok(names.indexOf('turn.accepted') < names.indexOf('turn.response'));
+  assert.ok(names.indexOf('turn.response') <= names.indexOf('turn.settled'));
+});
+
+test('the streaming path sends, accepts the answered POST, then reports the response', async () => {
+  const seen = collector();
+  const stages = [];
+  let releasePost;
+  const backend = {
+    sendMessageStreaming() {
+      return new Promise((resolve) => {
+        releasePost = () => resolve(sseUpstream([delta('hi'), 'data: [DONE]\n\n']));
+      });
+    },
+  };
+  const turn = runBackendTurn(backend, 'ses_1', { text: 'hi' }, {
+    ...seen.handlers,
+    onStage: (detail) => stages.push(detail),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(stages.some((stage) => stage.stage === 'turn.send' && stage.path === 'streaming'));
+  assert.ok(
+    !stages.some((stage) => stage.stage === 'turn.accepted'),
+    'an unanswered POST is not acceptance',
+  );
+
+  releasePost();
+  await turn;
+  const names = stages.map((stage) => stage.stage);
+  assert.ok(names.indexOf('turn.send') < names.indexOf('turn.accepted'));
+  assert.ok(names.indexOf('turn.accepted') < names.indexOf('turn.response'));
+  assert.deepEqual(seen.deltas, ['hi']);
 });
 
 // A shared default bound judges a turn by its silence, and silence is not

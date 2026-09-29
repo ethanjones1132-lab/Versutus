@@ -281,6 +281,98 @@ async function relayNormalizedSse(upstreamResponse, flavorModule, res) {
   res.end();
 }
 
+// ─── Voice turn start: resolve a backend truthfully, then run it ─────────
+// A spoken turn has two waits before the first byte of a reply: choosing the
+// backend for the thread, and the backend's own send. Both are named as stages
+// so a call that produces nothing can be placed instead of only being reported
+// as "no reply". This module owns the first:
+//
+//   resolve.start / resolve.ready / resolve.failed — which backend answers,
+//     with its descriptor carried into the runner's stages too.
+//
+// Acceptance is never emitted here: only the runner knows whether a backend
+// actually answered. The caller's abort releases the resolve wait at once,
+// without waiting for resolution to cooperate — a late resolve must run no
+// send, and touch no session, that a newer turn may now own.
+const VOICE_TURN_ABORTED = Object.freeze({ hasContent: false, aborted: true });
+
+function voiceBackendDescriptor(backend) {
+  if (!backend || typeof backend !== 'object') return 'backend';
+  return String(backend.id ?? backend.name ?? backend.adapterId ?? backend.constructor?.name ?? 'backend');
+}
+
+function raceVoiceAbort(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.resolve(VOICE_TURN_ABORTED);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener('abort', onAbort);
+      resolve(VOICE_TURN_ABORTED);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => { signal.removeEventListener('abort', onAbort); resolve(value); },
+      (error) => { signal.removeEventListener('abort', onAbort); reject(error); },
+    );
+  });
+}
+
+/**
+ * Resolve which backend answers a spoken turn, naming each stage. Aborting the
+ * signal settles the wait without the resolver's cooperation and reports
+ * `aborted` so a late resolution never reaches a send.
+ */
+export async function resolveVoiceTurnBackend(backendManager, thread, {
+  signal,
+  attempt,
+  onStage = () => {},
+} = {}) {
+  const startedAt = Date.now();
+  const meta = attempt === undefined ? {} : { attempt };
+  const stage = (name, extra = {}) => {
+    try {
+      onStage({ stage: name, elapsedMs: Date.now() - startedAt, ...meta, ...extra });
+    } catch {
+      // Telemetry is a witness, never a failure mode.
+    }
+  };
+
+  stage('resolve.start');
+  let backend;
+  try {
+    backend = await raceVoiceAbort(resolveVoiceBackend(backendManager, thread), signal);
+  } catch (error) {
+    stage('resolve.failed', { cause: error?.code ?? error?.name ?? 'resolve_error' });
+    throw error;
+  }
+  if (backend === VOICE_TURN_ABORTED || signal?.aborted) {
+    return { backend: null, descriptor: null, aborted: true };
+  }
+  if (!backend) {
+    const error = new Error('No chat backend could answer this call.');
+    error.code = 'no_voice_backend';
+    stage('resolve.failed', { cause: error.code });
+    throw error;
+  }
+  const descriptor = voiceBackendDescriptor(backend);
+  stage('resolve.ready', { backend: descriptor });
+  return { backend, descriptor, aborted: false };
+}
+
+/** Resolve then run one voice turn, forwarding the backend descriptor. */
+export async function runVoiceTurn(backendManager, session, text, handlers = {}) {
+  const resolved = await resolveVoiceTurnBackend(backendManager, session?.thread, {
+    signal: handlers?.signal,
+    attempt: handlers?.attempt,
+    onStage: handlers?.onStage,
+  });
+  if (resolved.aborted) return VOICE_TURN_ABORTED;
+  return runBackendTurn(resolved.backend, session?.thread?.sessionId, { text }, {
+    ...handlers,
+    backendId: resolved.descriptor,
+  });
+}
+
 /**
  * Create and configure a Versutus Gate HTTP server
  * @param {Object} config
@@ -2347,11 +2439,7 @@ export async function createGate(config = {}) {
         ? new LocalEngine({ paths: voicePaths() })
         : new ScriptedEngine()
     ),
-    runTurn: async (session, text, handlers) => {
-      const backend = await resolveVoiceBackend(backendManager, session.thread);
-      if (!backend) throw new Error('No chat backend could answer this call.');
-      return runBackendTurn(backend, session.thread?.sessionId, { text }, handlers);
-    },
+    runTurn: (session, text, handlers) => runVoiceTurn(backendManager, session, text, handlers),
   });
 
   // Start listening immediately

@@ -300,6 +300,7 @@ async function startControllableCall({
   turnTimeoutMs = 120_000,
   speculationWindowMs,
   audit,
+  log,
 } = {}) {
   const registry = new VoiceSessionRegistry();
   registry.create(SESSION);
@@ -320,6 +321,7 @@ async function startControllableCall({
     turnTimeoutMs,
     speculationWindowMs,
     audit,
+    ...(log ? { log } : {}),
   });
   server.listen(0);
   await once(server, 'listening');
@@ -405,6 +407,43 @@ test('a changed final aborts the speculative turn and keeps the replacement time
   );
   assert.match(failed.error, /timed out/);
   assert.deepEqual(turns, ['draft', 'corrected']);
+  call.first.close();
+  await once(call.first, 'close');
+  await call.close();
+});
+
+test('a speculative replacement gets its own attempt id named in the stage log', async () => {
+  const engine = makeControllableEngine();
+  const lines = [];
+  const attempts = [];
+  const call = await startControllableCall({
+    engine,
+    log: (line) => lines.push(line),
+    turnTimeoutMs: 80,
+    runTurn: (_session, text, handlers) => {
+      attempts.push({ text, attempt: handlers.attempt });
+      handlers.onStage?.({ stage: 'turn.send', path: 'whole-turn', backend: 'hermes-live' });
+      if (text === 'corrected') return new Promise(() => {});
+      return new Promise((_resolve, reject) => {
+        handlers.signal.addEventListener('abort', () => reject(new Error('draft aborted')));
+      });
+    },
+  });
+
+  engine.emit('earlyEnd', { text: 'draft' });
+  await waitUntil(() => attempts.length === 1);
+  engine.emit('final', { text: 'corrected' });
+  await waitUntil(() => attempts.length === 2);
+
+  assert.notEqual(attempts[0].attempt, attempts[1].attempt, 'each startTurn has a unique attempt id');
+  const stageLines = lines.filter((line) => /voice\.turn stage/.test(line));
+  assert.ok(stageLines.some((line) => /attempt=1 .*stage=turn\.send/.test(line)), stageLines.join('\n'));
+  assert.ok(stageLines.some((line) => /attempt=2 .*stage=turn\.send/.test(line)), stageLines.join('\n'));
+  assert.ok(
+    stageLines.every((line) => /backend=hermes-live/.test(line)),
+    'every stage line carries the backend descriptor',
+  );
+
   call.first.close();
   await once(call.first, 'close');
   await call.close();

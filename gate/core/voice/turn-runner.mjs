@@ -269,6 +269,8 @@ export async function runBackendTurn(backend, sessionId, { text, model } = {}, {
   onApproval = NOOP,
   onChunk = NOOP,
   onStage = NOOP,
+  attempt,
+  backendId,
   signal,
   stallTimeoutMs = TURN_STALL_TIMEOUT_MS,
 } = {}) {
@@ -305,13 +307,30 @@ export async function runBackendTurn(backend, sessionId, { text, model } = {}, {
   // the reply stream, an approval) re-arms it, so only true silence trips it.
   const stage = (name, extra = {}) => {
     try {
-      onStage({ stage: name, elapsedMs: handoffAt ? Date.now() - handoffAt : 0, ...extra });
+      onStage({
+        stage: name,
+        elapsedMs: handoffAt ? Date.now() - handoffAt : 0,
+        ...(attempt === undefined ? {} : { attempt }),
+        ...(backendId === undefined ? {} : { backend: backendId }),
+        ...extra,
+      });
     } catch {
       // Telemetry is a witness, never a failure mode.
     }
   };
   let handoffAt = 0;
   let blockedOn = 'the backend turn';
+  // Which path the turn took, so every stage can name it; `accepted` is only
+  // ever emitted with evidence (the backend answered, or the feed proved it was
+  // working after the send), never merely because the runner reached the send.
+  let turnPath = 'whole-turn';
+  let sent = false;
+  let accepted = false;
+  const accept = () => {
+    if (!sent || accepted) return;
+    accepted = true;
+    stage('turn.accepted', { path: turnPath });
+  };
   let stallTimer = null;
   let stalled = false;
   let emittedActivity = false;
@@ -366,9 +385,11 @@ export async function runBackendTurn(backend, sessionId, { text, model } = {}, {
       // fire against a call that has already left.
       let fellThrough = false;
       try {
+        turnPath = 'streaming';
         handoffAt = Date.now();
-        stage('turn.accepted', { backend: 'streaming' });
         armStall('the streaming request');
+        sent = true;
+        stage('turn.send', { path: turnPath });
         let upstream = null;
         try {
           upstream = await raceStop(
@@ -390,6 +411,9 @@ export async function runBackendTurn(backend, sessionId, { text, model } = {}, {
 
         if (upstream === ABORTED_OUTCOME) return ABORTED_OUTCOME;
         if (upstream) {
+          // The POST answered with a body: that is the backend accepting the
+          // turn, and the first truthfully-earned acceptance.
+          accept();
           // The POST is home: the wait is now the reply stream delivering
           // frames. Raced against the caller's abort as well as the bound --
           // unlike the POST above, this wait has no timeout of its own, so a
@@ -415,6 +439,7 @@ export async function runBackendTurn(backend, sessionId, { text, model } = {}, {
           // settlement is observed, so the settled signal is the last word: a
           // caller who hung up gets an aborted turn, never a content flag.
           if (controller.signal.aborted) return ABORTED_OUTCOME;
+          stage('turn.response', { path: turnPath });
           stage('turn.settled');
           return { hasContent, report: {} };
         }
@@ -450,6 +475,9 @@ export async function runBackendTurn(backend, sessionId, { text, model } = {}, {
 
     const handleEvent = (event) => {
       if (controller.signal.aborted || !event) return;
+      // An event after the send is the backend working on this turn: the first
+      // honest evidence the turn was accepted.
+      accept();
       // Any event at all — reasoning, a tool frame, text — is the backend
       // proving it is alive, and pushes the stall bound out.
       noteActivity('the backend turn');
@@ -580,11 +608,15 @@ export async function runBackendTurn(backend, sessionId, { text, model } = {}, {
       // must not keep the runner parked after the caller left or the backend
       // went quiet.
       armStall('the backend turn');
-      stage('turn.accepted', { backend: 'whole-turn' });
+      sent = true;
+      stage('turn.send', { path: turnPath });
       const result = await raceStop(backend.sendMessage(
         sessionId, { text, model }, typeof backend.streamEvents === 'function' ? undefined : handleEvent,
       ));
       if (result === ABORTED_OUTCOME) return ABORTED_OUTCOME;
+      // The send answered, or the feed already proved the backend was working:
+      // either is evidence of acceptance, and neither is assumed at send time.
+      accept();
       const hasContent = sawContent
         || Boolean(result?.text && result.text.trim())
         || Boolean(result?.message?.tool_calls?.length);
@@ -598,6 +630,7 @@ export async function runBackendTurn(backend, sessionId, { text, model } = {}, {
         onChunk(JSON.stringify({ choices: [{ delta: { content: result.text } }] }));
       }
 
+      stage('turn.response', { path: turnPath });
       stage('turn.settled');
       return { hasContent, report: modelReport(result?.runtime, model) };
     } finally {
@@ -610,6 +643,12 @@ export async function runBackendTurn(backend, sessionId, { text, model } = {}, {
       // subscription was created, so there is nothing left to drain.
       controller.abort();
     }
+  } catch (error) {
+    // A failed turn keeps its stage and a safe cause (a code or name, never a
+    // message that could carry the prompt), so the log can place the failure
+    // without being a second place the turn's content can leak.
+    stage('turn.failed', { path: turnPath, cause: error?.code ?? error?.name ?? 'error' });
+    throw error;
   } finally {
     signal?.removeEventListener('abort', forwardAbort);
   }

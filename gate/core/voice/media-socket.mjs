@@ -150,6 +150,10 @@ export function attachVoiceMediaSocket({
     let turnAbort = null;
     let turnTimer = null;
     let speculative = null;
+    // A speculative replacement starts a new turn on the same call, so a call
+    // session id alone cannot tell the old turn's stages from the new one's.
+    // Each startTurn gets its own attempt id, and every stage names it.
+    let turnAttempts = 0;
     let resumeTimer = null;
     let audioTimer = null;
     let lastAudioAt = now();
@@ -335,6 +339,8 @@ export function attachVoiceMediaSocket({
         dispatch({ type: 'replyFailed', message: 'No backend is available for this call.' });
         return;
       }
+      const attempt = String(++turnAttempts);
+      const turnStartedAt = now();
       const controller = new AbortController();
       const entry = isSpeculative
         ? { text, controller, committed: false, pending: [], timer: null }
@@ -375,16 +381,22 @@ export function attachVoiceMediaSocket({
       try {
         const result = await runTurn(session, text, {
           signal: controller.signal,
+          attempt,
           onDelta: (delta) => deliver({ type: 'replyDelta', text: delta }),
           onApproval: (approval) =>
             deliver({ type: 'approvalRequired', summary: approval?.summary ?? 'Approval needed' }),
-          // How far the runner got, so a silent turn is placed in the log: was
-          // the event feed up, was the turn accepted, did any activity arrive,
-          // and if it stalled, which step it was waiting on.
+          // How far the runner got, so a silent turn is placed in the log: which
+          // backend answered, was the turn sent, was it accepted, did any
+          // activity arrive, and if it stalled, which step it was waiting on.
+          // Elapsed is from this turn's own start, not from after resolution,
+          // and the attempt id tells a replacement turn from the one it replaced.
           onStage: (detail) => log(
-            `voice.turn stage session=${session.voiceSessionId} stage=${detail?.stage}`
-            + ` afterMs=${detail?.elapsedMs ?? 0}`
-            + `${detail?.blockedOn ? ` blockedOn=${detail.blockedOn}` : ''}`,
+            `voice.turn stage session=${session.voiceSessionId} attempt=${attempt}`
+            + ` stage=${detail?.stage} afterMs=${now() - turnStartedAt}`
+            + `${detail?.backend ? ` backend=${detail.backend}` : ''}`
+            + `${detail?.path ? ` path=${detail.path}` : ''}`
+            + `${detail?.blockedOn ? ` blockedOn=${detail.blockedOn}` : ''}`
+            + `${detail?.cause ? ` cause=${detail.cause}` : ''}`,
           ),
         });
         if (controller.signal.aborted) return;

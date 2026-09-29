@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createGate } from '../core/server.mjs';
+import { createGate, runVoiceTurn } from '../core/server.mjs';
 
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 const roots = [];
@@ -209,6 +209,99 @@ async function makeGate({ calls = [], provider, registry, terminalSessions, envi
 function auth(gate) {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${gate.token}` };
 }
+
+test('a voice turn names resolve, send, acceptance and response in real order', async () => {
+  const stages = [];
+  let resolveBackend;
+  let releaseSend;
+  let sendCalls = 0;
+  const backend = {
+    id: 'hermes-live',
+    sendMessage() {
+      sendCalls += 1;
+      return new Promise((resolve) => { releaseSend = () => resolve({ text: 'ok' }); });
+    },
+  };
+  const manager = {
+    list: async () => [{ id: 'hermes-live' }],
+    get: () => new Promise((resolve) => { resolveBackend = () => resolve(backend); }),
+  };
+
+  const turn = runVoiceTurn(manager, { thread: { backendId: 'hermes-live', sessionId: 's1' } }, 'hi', {
+    attempt: 't1',
+    onStage: (detail) => stages.push(detail),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(stages.some((stage) => stage.stage === 'resolve.start'));
+  assert.ok(!stages.some((stage) => stage.stage === 'resolve.ready'), 'no backend is chosen yet');
+  assert.equal(sendCalls, 0, 'nothing is sent before the backend resolves');
+
+  resolveBackend();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(stages.some((stage) => stage.stage === 'resolve.ready' && stage.backend === 'hermes-live'));
+  assert.equal(sendCalls, 1, 'the resolved backend receives the turn');
+  assert.ok(stages.some((stage) => stage.stage === 'turn.send'));
+
+  releaseSend();
+  const outcome = await turn;
+  assert.equal(outcome.hasContent, true);
+  const names = stages.map((stage) => stage.stage);
+  assert.ok(names.indexOf('resolve.start') < names.indexOf('resolve.ready'));
+  assert.ok(names.indexOf('resolve.ready') < names.indexOf('turn.send'));
+  assert.ok(names.indexOf('turn.send') < names.indexOf('turn.accepted'));
+  assert.ok(names.indexOf('turn.accepted') < names.indexOf('turn.response'));
+});
+
+test('a voice turn that cannot resolve a backend fails at resolve with no send', async () => {
+  const stages = [];
+  const manager = { list: async () => [], get: async () => null };
+
+  await assert.rejects(
+    () => runVoiceTurn(manager, { thread: { backendId: 'gone', sessionId: 's1' } }, 'hi', {
+      onStage: (detail) => stages.push(detail),
+    }),
+    (error) => error?.code === 'no_voice_backend',
+  );
+  assert.ok(stages.some((stage) => stage.stage === 'resolve.failed' && stage.cause === 'no_voice_backend'));
+  assert.ok(!stages.some((stage) => stage.stage === 'turn.send'), 'nothing is sent when no backend resolves');
+});
+
+test('an aborted resolution releases at once and a late resolve sends and aborts nothing', async () => {
+  const stages = [];
+  let resolveBackend;
+  let sendCalls = 0;
+  let abortCalls = 0;
+  const backend = {
+    id: 'shared',
+    sendMessage() { sendCalls += 1; return { text: 'late' }; },
+    abort() { abortCalls += 1; },
+  };
+  const manager = {
+    list: async () => [{ id: 'shared' }],
+    get: () => new Promise((resolve) => { resolveBackend = () => resolve(backend); }),
+  };
+
+  const caller = new AbortController();
+  const turn = runVoiceTurn(manager, { thread: { backendId: 'shared', sessionId: 's1' } }, 'hi', {
+    signal: caller.signal,
+    onStage: (detail) => stages.push(detail),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  caller.abort();
+  const outcome = await turn;
+  assert.equal(outcome.aborted, true, 'the aborted resolution settles as aborted without the resolver cooperating');
+  assert.equal(sendCalls, 0, 'no turn is sent on a resolution the caller left');
+
+  resolveBackend();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sendCalls, 0, 'a late resolution never sends the abandoned turn');
+  assert.equal(abortCalls, 0, 'a late resolution never aborts a backend a newer turn may now own');
+  assert.ok(!stages.some((stage) => stage.stage === 'turn.send'), 'no send stage is reported after the abort');
+});
 
 test('the manifest advertises sessions only because a backend provides them', async () => {
   const { gate } = await makeGate();
