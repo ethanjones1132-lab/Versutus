@@ -50,7 +50,7 @@ export type BotCrest = {
 };
 
 /** FNV-1a, 32-bit, over UTF-16 code units. */
-function fnv1a(input: string): number {
+export function fnv1a(input: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i += 1) {
     hash ^= input.charCodeAt(i);
@@ -149,15 +149,52 @@ export function crestFleetSnapshot(): ReadonlyMap<string, number> {
 }
 
 /**
+ * What an operator chose for a Bot's look (src/lib/avatar/look-store.ts): a
+ * form, a face, a colour — each optional, each overriding the natural one.
+ * Form and face are validated where they are drawn (src/lib/avatar/look.ts).
+ */
+export type BotLookChoice = {
+  form?: string;
+  face?: string;
+  tone?: BotCrestTone;
+};
+
+const NO_LOOKS: ReadonlyMap<string, BotLookChoice> = new Map();
+let crestLooks: ReadonlyMap<string, BotLookChoice> = NO_LOOKS;
+
+/**
+ * Replace the operator's chosen looks. A chosen colour is the crest's tone
+ * everywhere — the roster, the room's lamp, the composer's orb — so this
+ * speaks through the same version and listeners as the fleet's assignment.
+ */
+export function registerCrestLooks(looks: ReadonlyMap<string, BotLookChoice>): void {
+  if (looks === crestLooks) return;
+  crestLooks = looks;
+  fleetVersion += 1;
+  for (const listener of fleetListeners) listener();
+}
+
+/** The chosen looks: replaced, never mutated, on each change. */
+export function crestLooksSnapshot(): ReadonlyMap<string, BotLookChoice> {
+  return crestLooks;
+}
+
+/**
  * A crest under a given assignment — pure, so a component that passes the
  * assignment in visibly depends on it (a memoizing compiler cannot keep a
  * crest computed before the fleet arrived).
  */
-export function botCrestIn(fleet: ReadonlyMap<string, number>, botId: string, displayName?: string): BotCrest {
-  const tone = BOT_CREST_TONES[fleet.get(botId) ?? naturalTone(botId)];
+export function botCrestIn(
+  fleet: ReadonlyMap<string, number>,
+  botId: string,
+  displayName?: string,
+  looks: ReadonlyMap<string, BotLookChoice> = NO_LOOKS,
+): BotCrest {
+  // A colour the operator chose wins over the one the fleet assigned.
+  const tone = looks.get(botId)?.tone ?? BOT_CREST_TONES[fleet.get(botId) ?? naturalTone(botId)];
   return { tone, initial: botInitial(displayName?.trim() || botId) };
 }
 
 export function botCrestFromId(botId: string, displayName?: string): BotCrest {
-  return botCrestIn(fleetTones, botId, displayName);
+  return botCrestIn(fleetTones, botId, displayName, crestLooks);
 }

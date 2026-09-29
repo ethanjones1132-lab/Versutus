@@ -33,6 +33,8 @@ export type ChatHeaderProps = {
   botId?: string;
   /** Opens the Bot's own panel (voice, skills, tools, routines) from its name. */
   onBotPress?: () => void;
+  /** The Bot is working on a reply: its figure looks up and away, lit round. */
+  botThinking?: boolean;
   /**
    * The roster draws its own large greeting under the header, so the header
    * there is only its two controls: no title competes with the greeting.
@@ -72,6 +74,7 @@ function ChatHeaderImpl({
   onBotPress,
   titleHidden = false,
   spendNote,
+  botThinking = false,
 }: ChatHeaderProps) {
   const tokens = useTokens();
   const title = chatHeaderTitle({ gatewayName, backendLabel, groupName });
@@ -116,7 +119,7 @@ function ChatHeaderImpl({
   const crest = groupName && groupMemberIds?.length ? (
     <GroupAvatar memberIds={groupMemberIds} size={30} />
   ) : botId ? (
-    <BotAvatar botId={botId} name={backendLabel} size={30} />
+    <BotAvatar botId={botId} name={backendLabel} size={30} mood={botThinking ? 'thinking' : 'idle'} />
   ) : null;
 
   const titles = titleHidden ? (

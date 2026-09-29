@@ -51,6 +51,8 @@ export type BotDetailSheetProps = {
   exportNotice?: string;
   /** Clears `exportNotice` — the parent owns that state. */
   onDismissExportNotice?: () => void;
+  /** Opens the Look studio for this Bot — its form, face and colour, kept on this device. */
+  onChangeLook?: () => void;
 };
 
 /**
@@ -70,6 +72,7 @@ export function BotDetailSheet({
   onExport,
   exportNotice,
   onDismissExportNotice,
+  onChangeLook,
 }: BotDetailSheetProps) {
   if (!bot) return null;
   const detail = describeBotDetail(bot);
@@ -173,6 +176,15 @@ export function BotDetailSheet({
             icon={{ ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' }}
             chevron={false}
             onPress={onMessage}
+          />
+        ) : null}
+        {onChangeLook ? (
+          <ListRow
+            title="Change look"
+            subtitle="Form, face and colour"
+            icon={{ ios: 'paintpalette', android: 'palette', web: 'palette' }}
+            chevron={false}
+            onPress={onChangeLook}
           />
         ) : null}
         <ListRow

@@ -65,7 +65,7 @@ export function ThreadWelcome({
         <View style={styles.mark}>
           <Halo color={glow} />
           {botId ? (
-            <BotAvatar botId={botId} name={botName} size={64} />
+            <BotAvatar botId={botId} name={botName} size={64} wake />
           ) : (
             <View style={[styles.directTile, { backgroundColor: tokens.accentMuted }]}>
               <Icon name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }} size={26} color="accent" />

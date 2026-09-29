@@ -128,10 +128,17 @@ describe('crests drawn before the fleet arrives', () => {
     expect(botCrestFromId('sentinel')).toEqual(botCrestIn(assigned, 'sentinel'));
   });
 
-  test('every drawn crest reads the assignment through the subscribed hook', () => {
+  test('every drawn figure reads the assignment through the subscribed hook', () => {
     const fs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
     const avatar = fs.readFileSync(`${__dirname}/../src/components/chat/bot-avatar.tsx`, 'utf8');
-    expect(avatar).toContain('useBotCrest(botId, name)');
+    // A Bot's figure and a group's members both read the look through the
+    // hook, which hands the fleet and the chosen looks to a pure function.
+    expect(avatar).toContain('useBotLook(botId, name)');
+    expect(avatar).toContain('useBotLook(botId)');
     expect(avatar).not.toContain('botCrestFromId(');
+    const hook = fs.readFileSync(`${__dirname}/../src/hooks/use-bot-look.ts`, 'utf8');
+    expect(hook).toContain('useSyncExternalStore(subscribeCrestFleet, crestFleetSnapshot, crestFleetSnapshot)');
+    expect(hook).toContain('useSyncExternalStore(subscribeCrestFleet, crestLooksSnapshot, crestLooksSnapshot)');
+    expect(hook).toContain('return botLookIn(fleet, looks, botId, name);');
   });
 });

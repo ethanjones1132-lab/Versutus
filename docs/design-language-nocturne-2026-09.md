@@ -71,26 +71,76 @@ to the elevated step exactly (`#18181C`), and near the top the lamp glows throug
 room's light reaches the UI and not only the backdrop. Tertiary text on it keeps AA under
 every lamp colour (`glass-variants-test`). Sheets and menus keep the opaque steps.
 
-## Identity
+## Identity — the figures
 
-Bots are people on a team, not status lights. Each Bot gets a **monogram crest**: its initial
-in Instrument Serif on a two-stop gradient disc, the hue derived from the Bot id from a
-curated set that excludes every status hue (mint, amber, red). Unroutable Bots carry a small
-amber notch — the only status mark on an avatar.
+Bots are people on a team, not status lights, so each one is drawn as a **figure**: a cut
+stone in its own colour, wearing a face that is alive. Other assistants give their bots one
+flat disc, a stock photo or a costume. Versutus gives each teammate a jewel of its own.
 
-The crest is lit like polished stone, not painted like a sticker: a soft sheen pools at the
-upper left, and a rim of light runs bright along the top edge and falls into shadow underneath.
-The ten tones spread across hue *and* value (brand violet, cobalt, lagoon, ocean, mulberry,
-orchid, raspberry, platinum, and two twilight tones that turn between hues).
+- **Ten forms** (`src/lib/avatar/forms.ts`): Orb, Pebble, Gem, Drop, Petal, Spark, Shield,
+  Bloom, Diamond, Arch. They're pure geometry in one 100-unit box, and each keeps a flat
+  middle for its face. Gem and Diamond are faceted: a lighter table and hairline cuts.
+- **Ten faces** (`src/lib/avatar/look.ts`): Initial (the serif monogram), Calm, Bright,
+  Visor, Iris, Joy, Serene, Pixel, Starry, and Bare (no face; never given, only chosen).
+- **The light is the stage's light.** Every figure has a sheen pooled at the upper left, a
+  small bright point where the lamp reflects, and a rim that is bright along the top and turns
+  into shadow underneath. From 40 pt, a soft pool of the stone's own colour seats it in the
+  room.
+- **The face lives** (`src/components/avatar/bot-figure.tsx`, all on the UI thread). It blinks
+  on its own rhythm, seeded from the Bot's id so a roster never blinks in unison, sometimes
+  twice. It glances about and breathes by a hair. While its Bot is replying, the eyes turn up
+  and away and light gathers round the figure. The Visor's scan doubles its pace and the
+  Starry eyes turn faster. A Bot looks up as its thread or its panel opens. Touched, it smiles
+  with its eyes and swells by a few percent; nothing bounces.
+- Figures under 30 pt hold still, and faces under 40 pt carry no glow. Reduce Motion stills
+  every figure.
 
-**No two teammates share a crest.** A hash alone cannot promise that (six Bots over ten tones
-collide more often than not), so tones are assigned across the fleet whenever the inventory
-is read (`registerCrestFleet` in `src/lib/bot-avatar.ts`): each Bot keeps its natural tone
-when free, and only colliders step to the next free one. It is order-free and deterministic,
-and a Bot that owns its natural tone never moves.
+**A team is a cast.** Every Bot has a natural form, face and colour from its id. Across the
+fleet they're assigned the way tones always were (`fleetCast`): each Bot keeps its natural
+form and face when free, and only colliders step on. Six Bots never show up as three of the
+same character.
 
-An empty thread lights the crest with a halo of its own tone: the one still glow on that
-screen.
+**Colour.** The ten house jewels (brand violet, cobalt, lagoon, ocean, mulberry, orchid,
+raspberry, platinum, and the two twilight tones dusk and tide) stay the natural palette, and
+keep clear of every status hue. **No two teammates share a colour**
+(`registerCrestFleet` in `src/lib/bot-avatar.ts`).
+
+A face's ink is white wherever white holds 3:1 against the stone's middle. Only a stone too
+pale for that (platinum) wears the stage's near-black. This is tested for every jewel and
+every linked colour on the wheel.
+
+Unroutable Bots carry a small amber notch, the only status mark a figure ever shows. In a
+group crest, members overlap with a keyline in the stage colour traced along each one's own
+silhouette.
+
+### The Look studio
+
+Tap a Bot's figure in its panel, or choose **Change look** from its detail sheet, and the
+studio opens (`src/components/avatar/look-studio-sheet.tsx`). The Bot stands alive in the
+middle of the colour wheel and wears every change the moment it's made.
+
+- **The wheel** (`src/lib/avatar/wheel.ts`, `colour-wheel.tsx`) has two rings. The outer ring
+  is the **lit** hue, where the lamp strikes the stone. The inner ring is the **shade** hue it
+  falls into underneath. Each ring is one OKLCH lightness all the way round, giving up chroma
+  rather than hue at the gamut's edge, so any colour picked still sits on the stage like a
+  jewel.
+- **Linked**, the two thumbs turn together along a dotted tether and keep the distance between
+  them. **Twilight** splits them so a stone can fall from one hue into another, the way dusk
+  and tide do.
+- **The seams.** The wheel is whole but for three frosted seams at the status hues (red,
+  amber, mint), each marked with its status dot. A thumb never rests in a seam; it steps to
+  the near edge. The finger feels a tick each time the colour gets a new name, and the name is
+  set in serif italic under the wheel ("Lagoon into Orchid").
+- **House jewels, forms and faces.** Below the wheel are the house jewels, then rails of forms
+  and faces. Each rail tile is drawn on the Bot itself, never as an abstract swatch, and the
+  chosen tile carries a bar of the stone's light.
+- **Arrival and changes.** The rings turn into place as the studio opens, a new form grows in
+  from the stone before, and a new face is tried on with a smile.
+- **Keeping a look.** Only what differs from the natural look is kept, so the rest still
+  follows the team. Looks live on this device (`src/lib/avatar/look-store.ts`); they're
+  presentation, never sent to the Gate and never part of the Hermes profile (ADR 0004). A
+  chosen colour is the Bot's colour everywhere: the roster, the room's lamp, and the
+  composer's orb.
 
 ## The stage
 
@@ -172,7 +222,8 @@ tone**: the crest of the Bot the thread talks to, the house violet anywhere else
 - **Thread:** flat header (back · name, then model ⌄ · what the thread has cost, on one
   line) · menu. The reply sits on the stage; list markers are drawn dots in the tertiary tone,
   and violet is kept for quote rules and links. The user bubble sits on `raised`, activity is
-  one expandable line, and the composer is **the Lens** (below). An empty thread greets
+  one expandable line, and the composer is **the Lens** (below). The Bot's figure in the header
+  thinks while it replies. An empty thread greets
   you by the Bot's name under its halo and offers starters as centred pills that fill the
   composer and never send.
 - **Drawer:** the mark and wordmark, a New chat pill, then Chats / Activity / Tools, the Bots

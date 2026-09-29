@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { BotAvatar } from '@/components/chat/bot-avatar';
-import { BaseSheet, Text } from '@/components/ui';
+import { BaseSheet, PressableScale, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { PublicBot } from '@/lib/gateway/bots';
@@ -18,6 +18,7 @@ export function BotPanelSheet({
   onClose,
   botId,
   bot,
+  onChangeLook,
   children,
 }: {
   visible: boolean;
@@ -26,6 +27,8 @@ export function BotPanelSheet({
   botId: string;
   /** The roster's record for the Bot, when it has been read. */
   bot?: PublicBot;
+  /** Opens the Look studio; the Bot's figure is the door. */
+  onChangeLook?: () => void;
   children: ReactNode;
 }) {
   const tokens = useTokens();
@@ -40,7 +43,19 @@ export function BotPanelSheet({
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled">
         <View style={styles.hero}>
-          <BotAvatar botId={botId} name={name} size={72} />
+          <PressableScale
+            onPress={onChangeLook}
+            disabled={!onChangeLook}
+            accessibilityRole="button"
+            accessibilityLabel={`Change ${name}'s look`}
+            style={styles.figure}>
+            <BotAvatar botId={botId} name={name} size={84} wake />
+            {onChangeLook ? (
+              <Text variant="micro" color="tertiary">
+                Change look
+              </Text>
+            ) : null}
+          </PressableScale>
           <Text variant="title" style={styles.name} numberOfLines={1}>
             {name}
           </Text>
@@ -76,6 +91,10 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     paddingTop: Spacing.two,
     paddingHorizontal: Spacing.three,
+  },
+  figure: {
+    alignItems: 'center',
+    gap: Spacing.one,
   },
   name: {
     marginTop: Spacing.one,

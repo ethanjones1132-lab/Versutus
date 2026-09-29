@@ -3,6 +3,7 @@ import { useSyncExternalStore } from 'react';
 import {
   botCrestIn,
   crestFleetSnapshot,
+  crestLooksSnapshot,
   crestFleetVersion,
   subscribeCrestFleet,
   type BotCrest,
@@ -25,5 +26,7 @@ export function useCrestFleetVersion(): number {
  */
 export function useBotCrest(botId: string, name?: string): BotCrest {
   const fleet = useSyncExternalStore(subscribeCrestFleet, crestFleetSnapshot, crestFleetSnapshot);
-  return botCrestIn(fleet, botId, name);
+  // A colour the operator chose is the crest's tone too.
+  const looks = useSyncExternalStore(subscribeCrestFleet, crestLooksSnapshot, crestLooksSnapshot);
+  return botCrestIn(fleet, botId, name, looks);
 }

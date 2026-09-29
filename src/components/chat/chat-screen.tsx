@@ -9,6 +9,7 @@ import Animated from 'react-native-reanimated';
 import { ApprovalSheet } from '@/components/chat/approval-sheet';
 import { BotChrome } from '@/components/chat/bot-chrome';
 import { BotPanelSheet } from '@/components/chat/bot-panel-sheet';
+import { LookStudioSheet } from '@/components/avatar/look-studio-sheet';
 import { ThreadWelcome } from '@/components/chat/thread-welcome';
 import { BotDetailSheet } from '@/components/chat/bot-detail-sheet';
 import { ChatComposer } from '@/components/chat/chat-composer';
@@ -413,6 +414,8 @@ export function ChatScreen() {
   const [overflowVisible, setOverflowVisible] = useState(false);
   // The Bot's own panel (voice, skills, tools, routines), opened from its name.
   const [botPanelVisible, setBotPanelVisible] = useState(false);
+  // The Look studio: which Bot's form, face and colour are being chosen.
+  const [lookBot, setLookBot] = useState<{ id: string; name?: string } | null>(null);
   const [backendPickerVisible, setBackendPickerVisible] = useState(false);
   const [paletteVisible, setPaletteVisible] = useState(false);
   const openPalette = useCallback(() => setPaletteVisible(true), [setPaletteVisible]);
@@ -1922,6 +1925,7 @@ export function ChatScreen() {
         groupMemberIds={surface.kind === 'group' ? activeGroup?.memberIds : undefined}
         botId={surface.kind === 'bot' ? surface.botId : undefined}
         onBotPress={surface.kind === 'bot' ? () => setBotPanelVisible(true) : undefined}
+        botThinking={surface.kind === 'bot' && isStreaming}
         titleHidden={surface.kind === 'roster'}
         spendNote={threadSurface && !spendRetry ? spendCopy : undefined}
         onBackendPress={surface.kind === 'configurable' && backends.length > 0 ? handleHeaderBackendPress : undefined}
@@ -2013,6 +2017,8 @@ export function ChatScreen() {
         }}
       />
 
+      <LookStudioSheet botId={lookBot?.id ?? null} name={lookBot?.name} onClose={() => setLookBot(null)} />
+
       <BotDetailSheet
         bot={detailBot}
         soul={detailBot && soulState.botId === detailBot.id ? soulState : undefined}
@@ -2049,6 +2055,15 @@ export function ChatScreen() {
             : undefined
         }
         onExport={detailBot && handoffShareReady ? handleExportBot : undefined}
+        onChangeLook={
+          detailBot
+            ? () => {
+                // The detail sheet closes so the studio owns the stage.
+                setLookBot({ id: detailBot.id, name: detailBot.displayName });
+                setDetailBot(null);
+              }
+            : undefined
+        }
         exportNotice={handoffShareNotice}
         onDismissExportNotice={() => setHandoffShareNotice(undefined)}
       />
@@ -2158,7 +2173,11 @@ export function ChatScreen() {
           visible={botPanelVisible}
           onClose={() => setBotPanelVisible(false)}
           botId={surface.botId}
-          bot={activeBotRow}>
+          bot={activeBotRow}
+          onChangeLook={() => {
+            setLookBot({ id: surface.botId, name: activeBotRow?.displayName });
+            setBotPanelVisible(false);
+          }}>
         <BotChrome
           // The voice this Bot's replies are read in: this device's own list
           // through the picker's fold, offered only where there is a Bot to key
