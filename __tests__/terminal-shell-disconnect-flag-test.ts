@@ -13,20 +13,20 @@ function readScreen(): string {
   return readSource(['src', 'components', 'terminal', 'terminal-screen.tsx']);
 }
 
-// The gateway/status cleanup closed the live shell session but left the
-// terminalConnected flag true, so the Shell header caption and banner dot
-// kept reading "live"/green while the ConnectionBadge beside them reported
-// disconnected. The cleanup now clears the flag.
+// The cleanup effect closed the live shell session on ANY status flip (a
+// health blip -> reconnecting -> connected), killing a healthy stream. It now
+// closes only on gateway change or unmount.
 describe('terminal shell disconnect flag', () => {
-  test('the gateway/status cleanup clears terminalConnected', () => {
+  test('the cleanup effect closes only on gateway change, not status blips', () => {
     const src = readScreen();
     const cleanup = src.match(
-      /useEffect\(\(\) => \{\s*return \(\) => \{[\s\S]*?\};\s*\}, \[gatewayId, status\]\);/,
+      /useEffect\(\(\) => \{\s*return \(\) => \{[\s\S]*?\};\s*\}, \[gatewayId\]\);/,
     )?.[0];
     expect(cleanup).toBeDefined();
     expect(cleanup).toContain('sessionRef.current?.close()');
     expect(cleanup).toContain('sessionRef.current = null');
     expect(cleanup).toContain('setTerminalConnected(false)');
+    expect(src).not.toMatch(/\}, \[gatewayId, status\]\);/);
   });
 
   test('the reconnect effect still restarts the session untouched', () => {
@@ -70,10 +70,10 @@ describe('terminal shell disconnect flag', () => {
     );
   });
 
-  test('a rejected send clears the connected flag beside the error', () => {
+  test('a rejected send restores the input and only clears the flag on a 404', () => {
     const src = readScreen();
-    expect(src).toContain(
-      'setTerminalError(error instanceof Error ? error.message : String(error));\n      setTerminalConnected(false);',
-    );
+    expect(src).toContain('setInput(value);');
+    expect(src).toContain('if (message.includes(\'404\'))');
+    expect(src).toContain('setTerminalConnected(false);');
   });
 });

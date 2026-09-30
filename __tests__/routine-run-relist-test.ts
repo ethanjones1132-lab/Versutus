@@ -94,9 +94,25 @@ describe('routine sheet actions re-list the roster', () => {
     expect(create).not.toContain('.catch(() => foldRoutineRead(target, { ok: false }));');
     const pause = routineCallback(src, 'handleRoutineTogglePause');
     expect(pause).toContain('await botJobs.pause(jobId, paused);');
+    // The list the re-read just parsed must be what the fold stores. The first
+    // .then used to `if (paused) return;` and otherwise return nothing, so the
+    // second .then received `undefined` and routineJobsFromList turned it into
+    // a SUCCESSFUL read of zero jobs — "no routines" after every pause/resume.
+    const firstThen = pause.match(/\.then\(\(jobs\) => \{[\s\S]*?\n        \}\)/)?.[0];
+    expect(firstThen).toBeDefined();
+    expect(firstThen).not.toMatch(/return;/);
+    const handedOn = firstThen?.match(/return (\w+);/)?.[1];
+    expect(handedOn).toBeDefined();
+    expect(firstThen).toContain(`const ${handedOn} = routineJobsFromList(jobs);`);
+    expect(pause).toContain(`{ ok: true, jobs: ${handedOn} }`);
+    expect(pause).not.toContain('{ ok: true, jobs: routineJobsFromList(jobs) }');
+    // A pause still retires the notice up front; only a resume re-arms it, and
+    // only from a job the re-read still holds.
+    expect(pause).toContain('if (paused) void cancelRoutineNotification(jobId);');
     expect(pause).toContain(
-      'foldRoutineRead(botSurfaceId ?? \'\', { ok: true, jobs: routineJobsFromList(jobs) })',
+      `const job = ${handedOn}.find((candidate) => candidate.id === jobId);`,
     );
+    expect(pause).toContain('if (!paused && job) void syncRoutineNotification(job);');
     expect(pause).toMatch(
       /\.catch\(\(caught\) =>\s*foldRoutineRead\(botSurfaceId \?\? '',\s*\{\s*ok:\s*false,\s*error: caught instanceof Error \? caught\.message : String\(caught\),\s*\}\)/,
     );

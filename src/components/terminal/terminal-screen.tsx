@@ -134,14 +134,15 @@ export function TerminalScreen() {
   const gatewayId = activeGateway?.id ?? null;
 
   // Keep the shell session alive while switching between Shell/RPC/Agent. Only
-  // gateway changes, connection loss, or unmount close the live session.
+  // gateway changes or unmount close the live session — a status blip
+  // (reconnecting -> connected) must not kill a healthy stream.
   useEffect(() => {
     return () => {
       sessionRef.current?.close();
       sessionRef.current = null;
       setTerminalConnected(false);
     };
-  }, [gatewayId, status]);
+  }, [gatewayId]);
 
   useEffect(() => {
     if (gatewayId && status === 'connected' && shellReady && mode === 'shell' && !sessionRef.current) {
@@ -174,8 +175,15 @@ export function TerminalScreen() {
     try {
       await sendTerminalInput(gateway.url, session.sid, payload, gateway.token);
     } catch (error) {
-      setTerminalError(error instanceof Error ? error.message : String(error));
-      setTerminalConnected(false);
+      const message = error instanceof Error ? error.message : String(error);
+      // Restore the typed text so a failed send does not lose the input.
+      setInput(value);
+      setTerminalError(message);
+      // A 404 means the gateway no longer knows this session — the stream is
+      // gone. Any other failure (network blip, 500) leaves the session alive.
+      if (message.includes('404')) {
+        setTerminalConnected(false);
+      }
     }
   }, [activeGateway, input]);
 

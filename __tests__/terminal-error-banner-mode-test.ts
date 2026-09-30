@@ -68,7 +68,10 @@ describe('terminal error card mode coverage', () => {
   test('the shell error setters stay byte-identical', () => {
     const src = readScreen();
     expect(src).toContain('onError: (message) => {\n            setTerminalError(message);\n            setTerminalConnected(false);\n          }');
-    expect(src).toContain('setTerminalError(error instanceof Error ? error.message : String(error));');
+    // The send catch derives the message once now — it also reads it to tell a
+    // dead session from a blip — so the inline `setTerminalError(error …)` form
+    // it used to call is gone by design, but the failure is still surfaced.
+    expect(src).toContain('setInput(value);\n      setTerminalError(message);');
   });
 
   test('the shell pane still gates on shell mode', () => {

@@ -28,14 +28,20 @@ import {
 } from '@/lib/voice/handsfree-call-copy';
 
 export function HandsfreeCallBanner() {
-  const { active, phase, partial, label, level, engine, engineReason, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs } =
+  const { active } = useHandsfreeVoice();
+  if (!active) return null;
+  return <ActiveHandsfreeCallBanner />;
+}
+
+function ActiveHandsfreeCallBanner() {
+  const { phase, partial, label, level, engine, engineReason, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs } =
     useHandsfreeVoice();
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
   // The elapsed time is wall-clock truth: the per-second clock is an
   // external store the banner subscribes to for the whole call, so React
   // owns when the fold re-runs and no impure Date.now() is read during
-  // render — A call whose start is unknown stays silent, never zero.
+  // render — a call whose start is unknown stays silent, never zero.
   const subscribeElapsedSeconds = useCallback((onStoreChange: () => void) => {
     const id = setInterval(onStoreChange, 1000);
     return () => clearInterval(id);
@@ -55,8 +61,6 @@ export function HandsfreeCallBanner() {
   // the per-second clock above is what re-runs this fold, so the wait ticks.
   const slowTurnCopy =
     sendingSinceMs !== null ? handsfreeSlowTurnCopy(sendingSinceMs, nowMs) : null;
-
-  if (!active) return null;
 
   const phaseLabel = handsfreePhaseLabel(phase);
   const muted = phase === 'muted';

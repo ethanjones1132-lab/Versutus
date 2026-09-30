@@ -1049,8 +1049,9 @@ async function runModelCommand(args: string[], context: SlashCommandContext): Pr
     const validation = await validateModelId(modelId, context);
     if (context.setModelOverride) {
       await context.setModelOverride(modelId);
+      const warning = validation.state === 'missing' ? `\n${modelCatalogValidationCopy(validation)}` : '';
       return textResult(
-        `Model override set to ${modelId}\nThe current session will reopen so the next turn actually runs on this model.`,
+        `Model override set to ${modelId}\nThe current session will reopen so the next turn actually runs on this model.${warning}`,
         '/model',
       );
     }
@@ -1071,9 +1072,7 @@ async function runModelCommand(args: string[], context: SlashCommandContext): Pr
         return textResult(
           [
             `Set model override to ${modelId}`,
-            validation.state === 'missing'
-              ? 'Not found in the live catalog (you can still force it).'
-              : `Catalog: ${validation.label}`,
+            modelCatalogValidationCopy(validation),
             '',
             `Confirm: /model set ${modelId} --confirm${validation.state === 'missing' ? ' --force' : ''}`,
           ].join('\n'),
@@ -2710,6 +2709,18 @@ function formatValidationState(validation: ModelValidation): string {
   if (validation.state === 'locked') return 'found but not ready';
   if (validation.state === 'missing') return 'not found';
   return validation.error ? `unknown (${truncateLine(validation.error, 90)})` : 'unknown';
+}
+
+/**
+ * The catalog verdict line shared by every `/model` surface: a missing model
+ * is named as absent from the live catalog (the operator can still force it),
+ * a present one carries its catalog label. One helper so the bare switch and
+ * the `set --confirm` preview never drift apart.
+ */
+function modelCatalogValidationCopy(validation: ModelValidation): string {
+  return validation.state === 'missing'
+    ? 'Not found in the live catalog (you can still force it).'
+    : `Catalog: ${validation.label}`;
 }
 
 function readDefaultPrimaryModel(snapshot: ConfigSnapshot): string | undefined {

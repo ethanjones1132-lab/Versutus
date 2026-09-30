@@ -1524,13 +1524,13 @@ export function ChatScreen() {
       await botJobs
         .list()
         .then((jobs) => {
-          if (paused) return;
-          const job = routineJobsFromList(jobs).find((candidate) => candidate.id === jobId);
-          if (job) void syncRoutineNotification(job);
+          const list = routineJobsFromList(jobs);
+          const job = list.find((candidate) => candidate.id === jobId);
+          // Hand THIS re-read on: returning nothing made the fold read `undefined` as a successful read of zero jobs — "no routines" after every toggle.
+          if (!paused && job) void syncRoutineNotification(job);
+          return list;
         })
-        .then((jobs) =>
-          foldRoutineRead(botSurfaceId ?? '', { ok: true, jobs: routineJobsFromList(jobs) }),
-        )
+        .then((list) => foldRoutineRead(botSurfaceId ?? '', { ok: true, jobs: list }))
         .catch((caught) =>
           foldRoutineRead(botSurfaceId ?? '', {
             ok: false,

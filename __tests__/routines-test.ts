@@ -238,3 +238,28 @@ test('a job the host has never run is Not run yet, not active', () => {
   expect(routineJobSummary(job)).toBe('Not run yet');
 });
 
+// The mechanism behind the pause/resume "no routines" bug: the handler's
+// first `.then` returned nothing, so the fold received `undefined` and
+// routineJobsFromList turned that into a SUCCESSFUL read of zero jobs — the
+// pane emptied itself. routine-run-relist-test.ts pins that the handler now
+// hands the re-read on; these two pin what each side of that handoff is worth.
+test('the re-read list the pause fold stores keeps every job the gateway sent', () => {
+  const next = applyRoutineRead(EMPTY_ROUTINES, {
+    ok: true,
+    jobs: routineJobsFromList([HERMES_INBOX, { id: 'job_nightly', name: '[bot:echo] nightly' }]),
+  });
+  expect(next.jobs).toHaveLength(2);
+  expect(next.loaded).toBe(true);
+  expect(next.failed).toBe(false);
+  expect(routinesToggleLabel(next, false)).toBe('Routines (2)');
+});
+
+test('the undefined the buggy chain handed the fold read as zero jobs, successfully', () => {
+  const next = applyRoutineRead(EMPTY_ROUTINES, {
+    ok: true,
+    jobs: routineJobsFromList(undefined),
+  });
+  expect(next).toEqual({ jobs: [], loaded: true, failed: false });
+  expect(routinesToggleLabel(next, false)).toBe('Routines (0)');
+});
+

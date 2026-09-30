@@ -95,4 +95,38 @@ describe('/model <name> direct switch', () => {
     expect(setModelOverride).toHaveBeenCalledWith('qwen-3');
     expect(result.text).toMatch(/session will reopen|override/i);
   });
+
+  test('a bare /model <unknown-id> warns it is not in the live catalog but still sets the override', async () => {
+    const setModelOverride = jest.fn().mockResolvedValue(undefined);
+    const gatewayRequest = jest.fn().mockResolvedValue({
+      models: [{ id: 'grok-4', name: 'grok-4' }],
+    });
+    const result = await executeGatewaySlashCommand('/model unknown-id', {
+      hello: null,
+      currentModel: 'gateway-default',
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      setModelOverride,
+    });
+    expect(setModelOverride).toHaveBeenCalledWith('unknown-id');
+    expect(result.text).toContain('Not found in the live catalog');
+    expect(result.text).toMatch(/session will reopen/i);
+  });
+
+  test('a bare /model <known-id> sets the override with no warning', async () => {
+    const setModelOverride = jest.fn().mockResolvedValue(undefined);
+    const gatewayRequest = jest.fn().mockResolvedValue({
+      models: [{ id: 'grok-4', name: 'grok-4' }],
+    });
+    const result = await executeGatewaySlashCommand('/model grok-4', {
+      hello: null,
+      currentModel: 'gateway-default',
+      gatewayRequest,
+      runAgentCommand: jest.fn(),
+      setModelOverride,
+    });
+    expect(setModelOverride).toHaveBeenCalledWith('grok-4');
+    expect(result.text).not.toContain('Not found in the live catalog');
+    expect(result.text).toMatch(/session will reopen/i);
+  });
 });
