@@ -517,11 +517,11 @@ describe('the child-profile sync path', () => {
     // (`scheduleAutoRetry`), so a stale render value cannot gate this.
     expect(src).toContain('const appSettings = settingsRef.current;');
     expect(src).toContain('if (appSettings.autoConnect && remaining.length > 0) {');
-    expect(src).toContain('void runAutoConnect(appSettings, [...remaining], null);');
+    expect(src).toContain('void runAutoConnect(appSettings, [...remaining], null).catch(reportAutoConnectFailure);');
     // The delete path's own branch — the reference implementation this
     // mirrors, pinned beside it so the two cannot drift apart in silence.
     expect(src).toContain('if (settings.autoConnect && next.length > 0) {');
-    expect(src).toContain('void runAutoConnect(settings, next, null);');
+    expect(src).toContain('void runAutoConnect(settings, next, null).catch(reportAutoConnectFailure);');
     // The promise the operator reads is the same one at both doors, pinned by
     // count so an edit to one path cannot leave the other saying something
     // else — a search the app is not running, or one it is.

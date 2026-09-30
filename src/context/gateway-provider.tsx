@@ -15,7 +15,7 @@ import {
 } from '@/lib/connection/retry-ladder';
 import { abortAndClear } from '@/lib/gateway/abort';
 import { serverSideCancelForCommand } from '@/lib/gateway/cancel';
-import { isConnectionError, isUserAbort } from '@/lib/gateway/errors';
+import { isAuthRejection, isConnectionError, isUserAbort } from '@/lib/gateway/errors';
 import {
   addStreamingPlaceholder,
   addUserMessage,
@@ -567,6 +567,14 @@ type GatewayContextValue = {
 const HISTORY_PAGE_SIZE = 80;
 
 /**
+ * How long a delete waits on the Gate's "forget this device" call before
+ * giving up on it. Long enough for a tailnet round trip, short enough that a
+ * Gate that is already gone cannot hold the teardown — and the screen it is
+ * drawn on — for the whole request timeout.
+ */
+const DEREGISTER_TIMEOUT_MS = 3000;
+
+/**
  * Transcript and send state, split out of the shared gateway value so a
  * streamed frame re-renders only the chat surface that reads them instead
  * of the whole mounted tab tree.
@@ -756,8 +764,12 @@ async function discoverForProbe(timeoutMs = 4200): Promise<import('@/lib/discove
 }
 
 function isGatewayAuthFailure(error: unknown): boolean {
+  // Both shapes of the same refusal: a gateway that answered 401/403 (which
+  // carries the status, not a wording), and the Hermes client's own wording,
+  // which is the only signal a message test can see on what it throws.
+  if (isAuthRejection(error)) return true;
   const message = error instanceof Error ? error.message : String(error);
-  return /(?:401|403|invalid api key|unauthorized|authentication required)/i.test(message);
+  return /(?:invalid api key|unauthorized|authentication required|rejected the api key)/i.test(message);
 }
 
 /**
@@ -1069,6 +1081,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const activeRunTaskIdRef = useRef<string | null>(null);
   const gatewayDownNotifiedRef = useRef(false);
   const authFailureRef = useRef(false);
+  /**
+   * The token the gateway refused, so a later attach can tell "the operator
+   * edited the profile" from "the ladder is retrying the same dead key". The
+   * flag alone cannot: it is raised on the status event, before the rejection
+   * reaches connect()'s caller, and reset at the start of every attach.
+   */
+  const authRejectedTokenRef = useRef<string | undefined>(undefined);
 
   const clientRef = useRef<PortalClient | null>(null);
   // The stored-pin repair, shared by the connect path and a landed Bot Chat
@@ -1141,6 +1160,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       void saveActivityRuns(next);
       return next;
     });
+  }, []);
+
+  /**
+   * Where an automatic connect nobody awaited threw. Every automatic entry
+   * point is fire-and-forget, so without this the failure leaves the process as
+   * an unhandled rejection and the screen keeps whatever the cycle last
+   * painted — which is how a refused key was retried for the rest of the
+   * session while the banner naming it had been erased.
+   */
+  const reportAutoConnectFailure = useCallback((error: unknown) => {
+    setLastError(error instanceof Error ? error.message : String(error));
+    if (!isGatewayAuthFailure(error)) return;
+    authFailureRef.current = true;
+    authRejectedTokenRef.current = activeGatewayRef.current?.token;
+    setProbeMessage('Gateway rejected the API key. Update it from the gateway settings.');
   }, []);
 
   const reloadHistoryFor = useCallback(async (gateway: GatewayProfile) => {
@@ -1369,7 +1403,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const attachClient = useCallback(
     async (gatewayInput: GatewayProfile, options: { upgrade?: boolean } = {}) => {
       let gateway = gatewayInput;
-      authFailureRef.current = false;
+      // A refused key is remembered with the token that earned it. Only the
+      // operator replacing that token re-opens the ladder — every later attach
+      // carrying the same one is the same dead end, and forgetting the flag
+      // here is what turned one rejection into an endless retry.
+      if (gateway.token !== authRejectedTokenRef.current) {
+        authFailureRef.current = false;
+        authRejectedTokenRef.current = undefined;
+      }
       const existing = clientRef.current;
       const existingStatus = existing?.connectionStatus;
       if (
@@ -1402,6 +1443,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
       if (!isCurrent()) return;
       clientRef.current?.disconnect();
+      // The old client is gone and the new one is not built until its manifest
+      // answers. Say so for that whole window: leaving `status` on the previous
+      // client's 'connected' sent the next message to the gateway the operator
+      // had just switched away from, under the new one's name.
+      clientRef.current = null;
+      applyStatus('connecting');
+      applyConnectionPhase('connecting');
+      setStatusDetail('Connecting…');
+      /**
+       * An attach that gives up after this point has to say the connection is
+       * gone. Otherwise the 'connecting' written above stands forever, on a
+       * client that was never installed.
+       */
+      const abandonAttach = () => {
+        if (!isCurrent()) return;
+        applyStatus('disconnected');
+        applyConnectionPhase('failed');
+      };
 
       let identityForClient: GatewayIdentity | undefined;
       let parentUrl: string | undefined;
@@ -1479,8 +1538,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         clientKind,
         gateway,
         {
-          onStatus: (nextStatus, detail) => {
+          onStatus: (nextStatus, detail, info) => {
             if (!isCurrent()) return;
+            // A gateway refusing our credentials announces it on this channel,
+            // BEFORE the rejection reaches connect()'s caller. So the flag has
+            // to be raised here, ahead of the retry decision below: raising it
+            // in the catch was one statement too late, and the ladder spent the
+            // rest of the session re-trying a key only the operator can change.
+            if (info?.authRejected) authFailureRef.current = true;
             applyStatus(nextStatus);
             setStatusDetail(detail ?? '');
 
@@ -1542,6 +1607,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
                   }
                 })();
               }
+            }
+            if (!info?.authRejected) return;
+            // What the retry decision above was not allowed to do: name the
+            // refusal, cancel anything already pending, and remember the key
+            // so the next attach can tell an edit from a repeat.
+            authRejectedTokenRef.current = gateway.token;
+            setLastError(detail ?? null);
+            setProbeMessage('Gateway rejected the API key. Update it from the gateway settings.');
+            if (autoRetryTimerRef.current) {
+              clearTimeout(autoRetryTimerRef.current);
+              autoRetryTimerRef.current = null;
+              setAutoRetry(null);
             }
           },
           onHello: (hello) => {
@@ -1649,6 +1726,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           previousFingerprint: tofu.previousFingerprint,
           observedFingerprint: tofu.observedFingerprint,
         });
+        // Blocked until the operator approves: the client is never installed, so
+        // the window opened above has to be closed rather than left standing.
+        abandonAttach();
         return;
       }
 
@@ -1743,6 +1823,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const connectGateway = useCallback(
     async (gateway: GatewayProfile) => {
+      // A connect for the gateway that is already live is a re-entry — the
+      // foreground heal, an auto-retry — and not the start of a new thread:
+      // attachClient returns at once for a live client, so every reset below
+      // would blank a chat that is still there, drop the hello, and swap the
+      // live session id for the profile's stored pin, with no client event left
+      // to put any of it back.
+      const live = clientRef.current;
+      if (
+        live &&
+        activeGatewayRef.current?.id === gateway.id &&
+        (live.connectionStatus === 'connected' ||
+          live.connectionStatus === 'connecting' ||
+          live.connectionStatus === 'reconnecting')
+      ) {
+        if (activeGatewayRef.current !== gateway) setActiveGateway(gateway);
+        await saveActiveGatewayId(gateway.id);
+        return;
+      }
       setActiveGateway(gateway);
       setActiveHello(null);
       setMessages([]);
@@ -1828,8 +1926,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
       autoConnectInFlightRef.current = true;
       applyConnectionPhase('searching');
-      setProbeMessage('Looking for your gateway…');
-      setLastError(null);
+      // A refused key is not a gateway that moved. Repainting the screen as a
+      // search in progress erased the one line naming the key to change, and
+      // then the cycle went and failed again to earn the ladder another try.
+      if (!authFailureRef.current) {
+        setProbeMessage('Looking for your gateway…');
+        setLastError(null);
+      }
 
       try {
         // Discovery's fixed window runs while the synchronously-known
@@ -2382,14 +2485,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
       // Solution A4: the Gate forgets this device's token before the session
       // goes down — a removed profile must not keep receiving its pushes.
-      // Best-effort: a Gate that is already unreachable still gets deleted.
+      // Started and raced against a short clock instead of awaited: an
+      // unreachable Gate held the whole teardown for the request timeout while
+      // the gateway the operator had just deleted still read as active.
       const leaving = clientRef.current;
       if (leaving && activeGateway?.kind === 'custom') {
-        try {
-          await deregisterWithGate(leaving);
-        } catch {
+        void Promise.race([
+          deregisterWithGate(leaving),
+          new Promise<void>((resolve) => setTimeout(resolve, DEREGISTER_TIMEOUT_MS)),
+        ]).catch(() => {
           // Ignore: the profile is gone either way.
-        }
+        });
       }
       leaving?.disconnect();
       clientRef.current = null;
@@ -2406,12 +2512,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (settings.autoConnect && next.length > 0) {
         applyConnectionPhase('searching');
         setProbeMessage('Searching for another gateway…');
-        void runAutoConnect(settings, next, null);
+        void runAutoConnect(settings, next, null).catch(reportAutoConnectFailure);
       } else {
         applyConnectionPhase('idle');
       }
     }
-  }, [activeGateway, gateways, settings, runAutoConnect, applyStatus, applyConnectionPhase, resetSessionSelector]);
+  }, [activeGateway, gateways, settings, runAutoConnect, applyStatus, applyConnectionPhase, resetSessionSelector, reportAutoConnectFailure]);
 
   const disconnectGateway = useCallback(() => {
     // Supersede first: the client emits 'disconnected' synchronously, and the
@@ -3561,6 +3667,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // Deliberately does NOT forgive the failure streak — only a connected phase
   // or a human-initiated retry does that, or the ladder could never climb.
   const runAutoConnectCycle = useCallback(async () => {
+    // A key the gateway refused is not a moving target. Only the operator
+    // replacing it — a saved profile with a new token, or the retry button —
+    // re-opens this, so an automatic cycle here is pure waste.
+    if (authFailureRef.current) return;
     if (autoRetryTimerRef.current) {
       clearTimeout(autoRetryTimerRef.current);
       autoRetryTimerRef.current = null;
@@ -3576,14 +3686,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [activeGateway?.id, runAutoConnect]);
 
   const retryAutoConnect = useCallback(async () => {
-    // Human-initiated: whatever streak of failures piled up is forgiven and
-    // pacing starts over at the base interval.
+    // Human-initiated: whatever streak of failures piled up is forgiven,
+    // pacing starts over at the base interval, and a key the operator may
+    // have corrected by hand gets the one attempt the ladder withheld.
     autoRetryFailureStreakRef.current = 0;
+    authFailureRef.current = false;
+    authRejectedTokenRef.current = undefined;
     await runAutoConnectCycle();
   }, [runAutoConnectCycle]);
 
   const scheduleAutoRetry = useCallback((floorMs = AUTO_RETRY_BASE_DELAY_MS) => {
     if (!settingsRef.current.autoConnect) return;
+    // A ladder rung on a refused key promises retries that cannot succeed.
+    if (authFailureRef.current) return;
     // Escalate per consecutive failure — 12s doubling up to a 5-minute cap —
     // instead of re-probing a down gateway on the same flat interval forever.
     const delayMs = autoRetryDelayMs(autoRetryFailureStreakRef.current, floorMs);
@@ -3597,10 +3712,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setAutoRetry(null);
       const currentPhase = connectionPhaseRef.current;
       if (currentPhase === 'failed' || currentPhase === 'idle') {
-        void runAutoConnectCycle();
+        void runAutoConnectCycle().catch(reportAutoConnectFailure);
       }
     }, delayMs);
-  }, [runAutoConnectCycle]);
+  }, [runAutoConnectCycle, reportAutoConnectFailure]);
 
   useEffect(() => {
     scheduleAutoRetryRef.current = scheduleAutoRetry;
@@ -3618,12 +3733,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (appSettings.autoConnect && remaining.length > 0) {
         applyConnectionPhase('searching');
         setProbeMessage('Searching for another gateway…');
-        void runAutoConnect(appSettings, [...remaining], null);
+        void runAutoConnect(appSettings, [...remaining], null).catch(reportAutoConnectFailure);
       } else {
         applyConnectionPhase('idle');
       }
     },
-    [runAutoConnect, applyConnectionPhase],
+    [runAutoConnect, applyConnectionPhase, reportAutoConnectFailure],
   );
 
   useEffect(() => {
@@ -3648,7 +3763,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const reconnectLastKnownGateway = useCallback(async () => {
     const active = activeGatewayRef.current;
     if (!active) {
-      void runAutoConnectCycle();
+      void runAutoConnectCycle().catch(reportAutoConnectFailure);
       return;
     }
     if (active.kind === 'openclaw') {
@@ -3660,8 +3775,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       await connectGateway(active);
       return;
     }
-    void runAutoConnectCycle();
-  }, [connectGateway, runAutoConnectCycle]);
+    void runAutoConnectCycle().catch(reportAutoConnectFailure);
+  }, [connectGateway, runAutoConnectCycle, reportAutoConnectFailure]);
 
   // Foreground/background lifecycle: pause reconnection while backgrounded
   // (timers are throttled anyway), heal fast on return to foreground.
@@ -3686,7 +3801,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
       const client = clientRef.current;
       if (!client) {
-        if (activeGatewayRef.current) void reconnectLastKnownGateway();
+        if (activeGatewayRef.current) void reconnectLastKnownGateway().catch(reportAutoConnectFailure);
         return;
       }
 
@@ -3695,15 +3810,36 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      /**
+       * A health sample that missed while the client still claims 'connected'.
+       * The client owns that connection, so it re-verifies it in place:
+       * rebuilding it went through connectGateway, whose resets blanked a chat
+       * that was still there and replaced the live session with the stored pin
+       * — while attachClient returned at once and nothing put them back.
+       */
+      const healLiveClient = () => {
+        if (clientRef.current !== client) return;
+        if (client.forceReconnect) client.forceReconnect();
+        else client.resumeReconnect();
+        // An adapter that could not even start a re-verify leaves the fast
+        // path as the only way back.
+        if (client.connectionStatus === 'disconnected') {
+          void reconnectLastKnownGateway().catch(reportAutoConnectFailure);
+        }
+      };
+
       // We believe we are connected, but JS timers were frozen while
       // backgrounded — the last health sample may be arbitrarily old, and the
       // network may have changed underneath us. Verify before trusting it.
-      void client.healthCheck(6000).then((health) => {
-        if (!health && clientRef.current === client) void reconnectLastKnownGateway();
-      });
+      void client
+        .healthCheck(6000)
+        .then((health) => {
+          if (!health) healLiveClient();
+        })
+        .catch(() => healLiveClient());
     });
     return () => subscription.remove();
-  }, [reconnectLastKnownGateway]);
+  }, [reconnectLastKnownGateway, reportAutoConnectFailure]);
 
   const setAutoConnect = useCallback(async (enabled: boolean) => {
     if (enabled) {

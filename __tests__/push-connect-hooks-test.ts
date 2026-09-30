@@ -34,11 +34,21 @@ describe('push connect hooks', () => {
     expect(source).toContain('void syncPushRegistration(client)');
   });
 
-  test('removing the active custom gateway deregisters before disconnect', () => {
+  test('removing the active custom gateway starts the deregistration before disconnect', () => {
     const source = provider();
-    const deregisterAt = source.indexOf('await deregisterWithGate(leaving)');
+    const deletePath = source.slice(
+      source.indexOf('const deleteGateway = useCallback'),
+      source.indexOf('const disconnectGateway = useCallback'),
+    );
+    // Started, not awaited: the RPC goes out over the HTTP transport
+    // disconnect does not cancel, but an unreachable Gate must not hold the
+    // teardown for its whole request timeout while the deleted gateway still
+    // reads as the active one.
+    const deregisterAt = deletePath.indexOf('deregisterWithGate(leaving)');
     expect(deregisterAt).toBeGreaterThan(-1);
-    const disconnectAt = source.indexOf('leaving?.disconnect()');
+    expect(deletePath).toContain('Promise.race([');
+    expect(deletePath).not.toContain('await deregisterWithGate(leaving)');
+    const disconnectAt = deletePath.indexOf('leaving?.disconnect()');
     expect(disconnectAt).toBeGreaterThan(deregisterAt);
   });
 
