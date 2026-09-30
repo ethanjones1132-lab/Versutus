@@ -12,6 +12,7 @@ import { notifyApprovalDecided, notifyApprovalRefused } from '@/lib/notification
 
 jest.mock('expo-notifications', () => ({
   scheduleNotificationAsync: jest.fn(),
+  getPermissionsAsync: jest.fn(),
   requestPermissionsAsync: jest.fn(),
 }));
 
@@ -227,6 +228,7 @@ describe('notifyApprovalDecided', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     setAppState('background');
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue(grantedPermissions);
     (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue(grantedPermissions);
     mockSchedule.mockResolvedValue('notif-1');
   });
@@ -280,6 +282,7 @@ describe('notifyApprovalRefused', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     setAppState('background');
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue(grantedPermissions);
     (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue(grantedPermissions);
     mockSchedule.mockResolvedValue('notif-1');
   });

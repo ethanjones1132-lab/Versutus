@@ -5,6 +5,7 @@
 // `approval.required` contract first and only then falls back to loose
 // string matching across run statuses and event types.
 
+import { GatewayHttpError, isConnectionError } from '@/lib/gateway/errors';
 import type { RunEvent, RunResponse, RunStatus } from '@/lib/gateway/types';
 
 export type RunCapableClient = {
@@ -211,6 +212,50 @@ export function jitteredPollDelay(baseMs: number, sample: number = Math.random()
 }
 
 /**
+ * Backoff between status-read attempts: 500 ms, then 1500 ms. Two beats ride
+ * out a dropped request on a mobile radio without turning a short outage into
+ * a run that hangs for half a minute. Jittered like the poll delay, so runs
+ * that lost their gateway at the same moment do not retry in lockstep.
+ */
+const STATUS_RETRY_DELAYS_MS = [500, 1500];
+
+/**
+ * Whether a failed status read is worth repeating. A transport failure or a
+ * 5xx says the gateway never told us anything — the same read a moment later
+ * may well succeed. A 4xx is the gateway's own considered answer, and asking
+ * again only spends the backoff to be told the same thing.
+ */
+function isRetryableStatusError(error: unknown): boolean {
+  if (error instanceof GatewayHttpError) return error.status >= 500;
+  return isConnectionError(error);
+}
+
+/**
+ * Read a run's status, riding out a transient failure.
+ *
+ * One lost request used to end the driver on the spot: `executeRun` returned
+ * `{ status: 'unknown', unresolved: true }`, and only a full reconnect — the
+ * provider's `settleUnresolvedRuns` — ever read the run again, so a blip that
+ * never tripped the connection monitor left it unresolved for good. A 4xx is
+ * still returned to the caller immediately.
+ */
+async function readStatusWithRetry(
+  client: Pick<RunCapableClient, 'getRunStatus'>,
+  runId: string,
+  sleep: (ms: number) => Promise<void>,
+): Promise<RunStatus> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await client.getRunStatus(runId);
+    } catch (error) {
+      const backoff = STATUS_RETRY_DELAYS_MS[attempt];
+      if (backoff === undefined || !isRetryableStatusError(error)) throw error;
+      await sleep(jitteredPollDelay(backoff));
+    }
+  }
+}
+
+/**
  * Start a run and drive it to a terminal state, pausing for the user's
  * decision whenever the gateway requests approval.
  */
@@ -267,7 +312,7 @@ export async function executeRun(
   // reconnect settle path can re-read it.
   let status: string;
   try {
-    status = safeStatus(await client.getRunStatus(runId));
+    status = safeStatus(await readStatusWithRetry(client, runId, sleep));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
@@ -295,7 +340,7 @@ export async function executeRun(
       // Unlike a failed stop, this does not report an outcome that never happened.
       await client.resolveApproval(runId, decision.approved, decision.feedback).catch(() => undefined);
       try {
-        status = safeStatus(await client.getRunStatus(runId));
+        status = safeStatus(await readStatusWithRetry(client, runId, sleep));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return {
@@ -310,8 +355,15 @@ export async function executeRun(
       continue;
     }
 
-    await client
-      .streamRunEvents(
+    // A stream that ends on a failure is a transport fact about the event
+    // channel, not a verdict on the run: the status read below decides. The
+    // failure is remembered rather than swallowed, because the read that
+    // follows has to wait out the same first backoff a retry would — reading
+    // straight into the gap the drop just left is how one lost request ended
+    // the driver.
+    let streamFailed = false;
+    try {
+      await client.streamRunEvents(
         runId,
         (event) => {
           const data = event.data as Record<string, unknown> | undefined;
@@ -324,17 +376,23 @@ export async function executeRun(
           options.onEvent?.(event);
         },
         options.signal,
-      )
-      .catch(() => undefined);
+      );
+    } catch {
+      streamFailed = true;
+    }
 
     if (options.signal?.aborted) {
       const stop = await requestStop(client, runId);
       return { runId, status: 'cancelled', cancelled: true, approved, ...stop };
     }
 
+    // Asked after the abort check, so a run the user just stopped is never made
+    // to wait out a backoff on its way to being cancelled.
+    if (streamFailed) await sleep(jitteredPollDelay(STATUS_RETRY_DELAYS_MS[0]));
+
     const previousStatus = status;
     try {
-      status = safeStatus(await client.getRunStatus(runId));
+      status = safeStatus(await readStatusWithRetry(client, runId, sleep));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return {
@@ -355,7 +413,7 @@ export async function executeRun(
     }
   }
 
-  const final = await client.getRunStatus(runId).catch(() => null);
+  const final = await readStatusWithRetry(client, runId, sleep).catch(() => null);
   const finalStatus = safeStatus(final);
   const unresolved = !isTerminalRunStatus(finalStatus);
 

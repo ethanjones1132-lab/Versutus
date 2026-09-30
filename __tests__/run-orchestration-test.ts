@@ -80,7 +80,10 @@ describe('status read failure after run acceptance', () => {
       clientWith({
         getRunStatus: async () => {
           callCount += 1;
-          if (callCount === 2) throw new Error('gateway timeout');
+          // Every read from the second on fails, not just the first: a
+          // retryable failure is now read three times before the driver gives
+          // up, and the guarantee under test is what that give-up reports.
+          if (callCount >= 2) throw new Error('gateway timeout');
           return { status: 'running' };
         },
       }),
@@ -88,6 +91,7 @@ describe('status read failure after run acceptance', () => {
       { onApprovalRequired: async () => ({ approved: true }), sleep: async () => undefined, pollDelayMs: 0 },
     );
 
+    expect(callCount).toBe(4);
     expect(outcome.runId).toBe('run_1');
     expect(outcome.unresolved).toBe(true);
     expect(outcome.status).toBe('unknown');

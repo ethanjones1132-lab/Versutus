@@ -39,7 +39,6 @@ export default function RunsScreen() {
   const {
     activeGateway,
     status,
-    activityRuns,
     activityRunsForActiveGateway,
     stopActivityRun,
     connectGateway,

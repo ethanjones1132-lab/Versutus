@@ -1,3 +1,4 @@
+import { GatewayHttpError } from '@/lib/gateway/errors';
 import {
   executeRun,
   isTerminalRunStatus,
@@ -46,6 +47,190 @@ function scriptedClient(statuses: string[], overrides: Partial<RunCapableClient>
 }
 
 const noSleep = async () => {};
+
+/**
+ * A client whose status read is scripted call by call: `reads` counts the
+ * attempts, and a call whose index is in `fail` rejects with that attempt's
+ * error instead. Everything else answers `status` — the state after a
+ * transport failure on a phone that has not moved on.
+ */
+function countedStatusClient(plan: {
+  fail: Record<number, unknown>;
+  status: (reads: number) => string;
+  stream?: () => Promise<void>;
+}) {
+  let reads = 0;
+  const slept: number[] = [];
+  const stops = { count: 0 };
+
+  const client: RunCapableClient = {
+    async startRun(): Promise<RunResponse> {
+      return { run_id: 'run-1', status: plan.status(0) };
+    },
+    async getRunStatus(): Promise<RunStatus> {
+      reads += 1;
+      const failure = plan.fail[reads];
+      if (failure) throw failure;
+      const status = plan.status(reads);
+      return {
+        run_id: 'run-1',
+        status,
+        result: /complete/i.test(status) ? 'the answer' : undefined,
+      };
+    },
+    streamRunEvents: plan.stream ?? (async () => {}),
+    async resolveApproval() {},
+    async stopRun() {
+      stops.count += 1;
+    },
+  };
+
+  const sleep = async (ms: number) => {
+    slept.push(ms);
+  };
+
+  return { client, slept, sleep, stops, reads: () => reads };
+}
+
+/** The message a phone's fetch reports when the radio drops a request. */
+const RADIO_BLIP = new Error('Network request failed');
+
+describe('executeRun rides out a transient status failure', () => {
+  it('completes the run instead of abandoning it when one read is lost', async () => {
+    // The defect: a single dropped request ended the driver with
+    // `{ status: 'unknown', unresolved: true }`, and only a full reconnect
+    // (settleUnresolvedRuns) ever read the run again.
+    const { client, slept, sleep, reads } = countedStatusClient({
+      fail: { 1: RADIO_BLIP },
+      status: (n) => (n === 1 ? 'running' : 'completed'),
+    });
+
+    const outcome = await executeRun(client, 'do the thing', {
+      onApprovalRequired: async () => ({ approved: true }),
+      sleep,
+    });
+
+    // The lost read, its retry, and the final read executeRun closes with.
+    expect(reads()).toBe(3);
+    expect(outcome.status).toBe('completed');
+    expect(outcome.result).toBe('the answer');
+    expect(outcome.unresolved).toBeFalsy();
+    // One backoff before the retry, inside the ±POLL_JITTER_MS window around
+    // the first 500 ms beat.
+    expect(slept).toHaveLength(1);
+    expect(slept[0]).toBeGreaterThanOrEqual(300);
+    expect(slept[0]).toBeLessThanOrEqual(700);
+  });
+
+  it('retries the read after an approval, not only at the loop head', async () => {
+    const { client, sleep, reads } = countedStatusClient({
+      // The read that follows resolveApproval is its own call site, and it drops
+      // once like any other.
+      fail: { 2: RADIO_BLIP },
+      status: (n) => (n === 1 ? 'waiting-approval' : 'completed'),
+    });
+
+    const outcome = await executeRun(client, 'do the thing', {
+      onApprovalRequired: async () => ({ approved: true }),
+      sleep,
+    });
+
+    expect(reads()).toBe(4);
+    expect(outcome.approved).toBe(true);
+    expect(outcome.status).toBe('completed');
+    expect(outcome.unresolved).toBeFalsy();
+  });
+
+  it('waits the first backoff after the event stream drops, then polls once', async () => {
+    // The stream failure used to be swallowed and followed by exactly one poll
+    // — reading straight into the gap the drop had just left.
+    const { client, slept, sleep } = countedStatusClient({
+      fail: {},
+      status: () => 'running',
+      stream: async () => {
+        throw new Error('stream closed unexpectedly');
+      },
+    });
+
+    await executeRun(client, 'do the thing', {
+      onApprovalRequired: async () => ({ approved: true }),
+      sleep,
+    });
+
+    // The stream's backoff comes first, then the no-progress poll backoff — and
+    // no retry of its own, because a read that answers is never repeated.
+    expect(slept.length).toBeGreaterThanOrEqual(2);
+    expect(slept[0]).toBeGreaterThanOrEqual(300);
+    expect(slept[0]).toBeLessThanOrEqual(700);
+    expect(slept[1]).toBeGreaterThanOrEqual(800);
+    expect(slept[1]).toBeLessThanOrEqual(1200);
+  });
+
+  it('does not retry a 404 — the gateway answered, and will answer the same', async () => {
+    const { client, slept, sleep, reads } = countedStatusClient({
+      fail: { 1: new GatewayHttpError('run not found', 404) },
+      status: () => 'running',
+    });
+
+    const outcome = await executeRun(client, 'do the thing', {
+      onApprovalRequired: async () => ({ approved: true }),
+      sleep,
+    });
+
+    expect(reads()).toBe(1);
+    expect(slept).toHaveLength(0);
+    expect(outcome.unresolved).toBe(true);
+    expect(outcome.status).toBe('unknown');
+    expect(outcome.error).toMatch(/run not found/);
+  });
+
+  it('gives up after three attempts and stays unresolved, exactly as before', async () => {
+    const { client, slept, sleep, reads } = countedStatusClient({
+      fail: { 1: RADIO_BLIP, 2: RADIO_BLIP, 3: RADIO_BLIP },
+      status: () => 'running',
+    });
+
+    const outcome = await executeRun(client, 'do the thing', {
+      onApprovalRequired: async () => ({ approved: true }),
+      sleep,
+    });
+
+    expect(reads()).toBe(3);
+    // 500 ms then 1500 ms, both inside the jitter window.
+    expect(slept).toHaveLength(2);
+    expect(slept[1]).toBeGreaterThanOrEqual(1300);
+    expect(slept[1]).toBeLessThanOrEqual(1700);
+    expect(outcome.unresolved).toBe(true);
+    expect(outcome.status).toBe('unknown');
+    expect(outcome.error).toMatch(/Network request failed/);
+  });
+
+  it('still cancels when the abort lands during a retry backoff', async () => {
+    const controller = new AbortController();
+    // The loop's first read drops twice and succeeds on the retry, so the abort
+    // lands inside the backoff between them.
+    const { client, stops, reads } = countedStatusClient({
+      fail: { 2: RADIO_BLIP, 3: RADIO_BLIP },
+      status: () => 'running',
+    });
+
+    const outcome = await executeRun(client, 'do the thing', {
+      signal: controller.signal,
+      onApprovalRequired: async () => ({ approved: true }),
+      sleep: async () => {
+        controller.abort();
+      },
+    });
+
+    // The retry is what carried the driver back to the top of the loop to see
+    // the abort; without it the failed read would have returned unresolved.
+    expect(reads()).toBe(4);
+    expect(stops.count).toBe(1);
+    expect(outcome.cancelled).toBe(true);
+    expect(outcome.status).toBe('cancelled');
+    expect(outcome.unresolved).toBeFalsy();
+  });
+});
 
 describe('runNeedsApproval', () => {
   it('recognises the typed approval event from the normalized contract', () => {

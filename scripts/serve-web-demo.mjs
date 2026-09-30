@@ -31,7 +31,6 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 const argv = process.argv.slice(2);
-const hasFlag = (name) => argv.includes(name);
 const optValue = (name) => {
   const i = argv.indexOf(name);
   return i !== -1 && i + 1 < argv.length ? argv[i + 1] : undefined;

@@ -9,6 +9,7 @@ jest.mock('expo-notifications', () => ({
   scheduleNotificationAsync: jest.fn(),
   dismissNotificationAsync: jest.fn(),
   getPresentedNotificationsAsync: jest.fn(),
+  getPermissionsAsync: jest.fn(),
   requestPermissionsAsync: jest.fn(),
 }));
 
@@ -56,6 +57,7 @@ describe('gateway-down notification lifecycle', () => {
     mockDismiss.mockResolvedValue(undefined);
     mockPresented.mockResolvedValue([]);
     // Grant the permission flow so present() reaches scheduleNotificationAsync.
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true, status: 'granted' });
     (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
     mockSchedule.mockResolvedValue('notif-1');
   });

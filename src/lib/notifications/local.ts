@@ -25,6 +25,20 @@ import { RUN_NOTICE_DATA_KIND } from './tap-route';
 let permissionGranted = false;
 
 /**
+ * How long a refusal is remembered before the phone is read again.
+ *
+ * A denied permission is settled until the operator changes it in Settings, so
+ * re-reading it per notice buys a native round trip per notice and nothing
+ * else. Ten minutes is short enough that granting it in Settings and coming
+ * back to the app is not a restart's work, and long enough to cover the run
+ * that posted the notice.
+ */
+const PERMISSION_DENIAL_TTL_MS = 10 * 60 * 1000;
+
+/** Epoch ms until which this process takes the phone's refusal as final. */
+let permissionDeniedUntil = 0;
+
+/**
  * Identifier of the "gateway unreachable" notice this process last posted,
  * keyed by the gateway it belongs to, so recovery can retire exactly the
  * notice for the gateway that actually answered. Clearing a key on dismissal
@@ -32,11 +46,50 @@ let permissionGranted = false;
  */
 const gatewayDownNotificationIds = new Map<string, string>();
 
+/**
+ * Whether the phone has already refused, as this process last read it.
+ */
+function denialRemembered(): boolean {
+  return permissionDeniedUntil > Date.now();
+}
+
+function rememberDenial(): void {
+  permissionDeniedUntil = Date.now() + PERMISSION_DENIAL_TTL_MS;
+}
+
+/**
+ * Whether a notice may be drawn, asking the phone only when asking can work.
+ *
+ * This used to cache `granted === true` and call `requestPermissionsAsync()` on
+ * every notice otherwise, so a refusal re-asked for every single run — and did
+ * so from the backgrounded state most notices are posted in, where Android 13+
+ * cannot show the dialog at all. The phone is now read first: a grant is
+ * cached, a refusal is remembered for {@link PERMISSION_DENIAL_TTL_MS} without a
+ * re-ask, and the dialog is requested only from an undetermined state while the
+ * app is in the foreground, which is the one place it can be shown. Best-effort
+ * throughout — a notice is never worth an exception.
+ */
 async function ensurePermission(): Promise<boolean> {
   if (permissionGranted) return true;
+  if (denialRemembered()) return false;
   try {
-    const settings = await Notifications.requestPermissionsAsync();
-    permissionGranted = settings.granted;
+    const current = await Notifications.getPermissionsAsync();
+    if (current.granted) {
+      permissionGranted = true;
+      return true;
+    }
+    if (current.status === 'denied' || current.canAskAgain === false) {
+      rememberDenial();
+      return false;
+    }
+    // Undetermined, so the phone would still answer a dialog — but only a
+    // foregrounded app can be shown one. A notice that arrives while the app is
+    // pocketed waits for the next foregrounded one rather than asking into
+    // the void.
+    if (!isForegrounded()) return false;
+    const requested = await Notifications.requestPermissionsAsync();
+    permissionGranted = requested.granted;
+    if (!requested.granted) rememberDenial();
     return permissionGranted;
   } catch {
     return false;

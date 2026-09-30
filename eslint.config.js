@@ -18,9 +18,11 @@ module.exports = defineConfig([
     // bogus "'Buffer' is not defined" errors, and `expo lint` does not reach it
     // at all — so the component holding the shell endpoint, credential vault
     // and device tokens had no lint gate while `npm run verify` implied one.
-    // scripts/__tests__ pins repo scripts (node:test) and needs the same node
-    // globals — the RN tsconfig deliberately gives root .ts files no Node types.
-    files: ["gate/**/*.mjs", "gate/**/*.js", "scripts/__tests__/**/*.mjs"],
+    // The repo's own scripts are Node too, and `expo lint` reaches them no more
+    // than it reaches the Gate: without Node globals `scripts/` reported seven
+    // more. The RN tsconfig deliberately gives root .ts files no Node types, so
+    // nothing but this block can say so for a .mjs.
+    files: ["gate/**/*.mjs", "gate/**/*.js", "scripts/**/*.mjs", "scripts/**/*.js"],
     languageOptions: {
       globals: { ...globals.node },
       sourceType: "module",

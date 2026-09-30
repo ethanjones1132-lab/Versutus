@@ -8,6 +8,7 @@ import { notifyApprovalRequired } from '@/lib/notifications/local';
 
 jest.mock('expo-notifications', () => ({
   scheduleNotificationAsync: jest.fn(),
+  getPermissionsAsync: jest.fn(),
   requestPermissionsAsync: jest.fn(),
 }));
 
@@ -50,6 +51,7 @@ describe('the approval notice payload', () => {
     jest.clearAllMocks();
     setAppState('background');
     // Grant the permission flow so present() reaches scheduleNotificationAsync.
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true, status: 'granted' });
     (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
     mockSchedule.mockResolvedValue('notif-1');
   });

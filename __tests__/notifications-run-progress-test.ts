@@ -25,6 +25,7 @@ jest.mock('expo-notifications', () => ({
   scheduleNotificationAsync: jest.fn(),
   dismissNotificationAsync: jest.fn(),
   setNotificationChannelAsync: jest.fn(),
+  getPermissionsAsync: jest.fn(),
   requestPermissionsAsync: jest.fn(),
   // The channel is created from `AndroidImportance.LOW`, which the platform
   // defines as 4 (NotificationChannelManager.types.d.ts:22-30). The real enum is
@@ -117,6 +118,7 @@ describe('notifyRunProgress (the Android progress notice)', () => {
     jest.clearAllMocks();
     setAppState('background');
     mockDismiss.mockResolvedValue(undefined);
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true, status: 'granted' });
     (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
     mockSchedule.mockResolvedValue('notif-1');
   });
@@ -240,6 +242,7 @@ describe('dismissRunProgress', () => {
     jest.clearAllMocks();
     setAppState('background');
     mockDismiss.mockResolvedValue(undefined);
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true, status: 'granted' });
     (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
     mockSchedule.mockResolvedValue('notif-1');
   });
@@ -281,6 +284,7 @@ describe('the shipped presenters', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     setAppState('background');
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true, status: 'granted' });
     (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
     mockSchedule.mockResolvedValue('notif-1');
   });

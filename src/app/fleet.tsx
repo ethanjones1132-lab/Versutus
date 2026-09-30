@@ -37,7 +37,6 @@ export default function FleetScreen() {
     status,
     statusDetail,
     lastError,
-    activityRuns,
     activityRunsForActiveGateway,
     pendingRunApproval,
     capabilitySnapshot,
