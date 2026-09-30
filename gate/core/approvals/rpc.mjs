@@ -3,17 +3,20 @@
 // classified by the ApprovalService. This exposes them to a paired phone so an
 // approval can be triaged from an inbox, not only from the run that raised it.
 // Fail closed: the class is the Gate's own, an unknown id decides nothing, and
-// every method needs a paired-device grant.
+// every method needs an operator — a paired-device grant, or the Gate's own
+// (bootstrap) token. That token is already full operator access, so refusing
+// it the inbox protected nothing; it only left a phone holding it reading
+// "A paired device grant is required" under Needs you (push-rpc.mjs accepts
+// it for the same reason).
 
 function requireDevice(ctx) {
   const deviceId = ctx?.deviceId;
-  if (typeof deviceId !== 'string' || deviceId.length === 0) {
-    const error = new Error('A paired device grant is required');
-    error.status = 403;
-    error.code = 'pairing_required';
-    throw error;
-  }
-  return deviceId;
+  if (typeof deviceId === 'string' && deviceId.length > 0) return deviceId;
+  if (ctx?.bootstrap === true) return 'bootstrap';
+  const error = new Error('A paired device grant is required');
+  error.status = 403;
+  error.code = 'pairing_required';
+  throw error;
 }
 
 function rpcError(message, status, code) {

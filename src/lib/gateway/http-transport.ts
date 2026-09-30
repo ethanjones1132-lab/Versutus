@@ -116,7 +116,13 @@ export class HttpTransport {
           }
         } catch (error) {
           clearTimeout(timer);
-          if (error instanceof DOMException && error.name === 'AbortError') {
+          // Only the timer above aborts this controller, so an aborted signal
+          // is a timeout — whatever the fetch threw. Asking the error instead
+          // (DOMException AbortError) never matched on the phone: Expo installs
+          // its native fetch as the global one, and a cancelled native request
+          // rejects as "fetch failed: Fetch request has been canceled", which
+          // reached the roster banner raw and named no request.
+          if (controller.signal.aborted) {
             throw new Error(`Request timed out: ${method} ${path}`);
           }
           throw error;

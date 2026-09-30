@@ -48,7 +48,9 @@ export async function probeGatewayUrl(url: string, timeoutMs = GATEWAY_PROBE_TIM
     };
   } catch (error) {
     clearTimeout(timer);
-    if (error instanceof DOMException && error.name === 'AbortError') {
+    // The timer is the only thing that aborts this probe; Expo's native fetch
+    // rejects a cancelled request as a plain FetchError, never an AbortError.
+    if (controller.signal.aborted) {
       return { ok: false, url, error: 'Timed out waiting for gateway', code: 'timeout' };
     }
     const message = error instanceof Error ? error.message : String(error);

@@ -84,3 +84,28 @@ test('a read-only operation is auto-approved and never listed', async () => {
   const rpc = createApprovalRpc({ approvals });
   assert.equal((await rpc.methods['approvals.pending']({}, DEVICE)).approvals.length, 0);
 });
+
+// The phone holds the Gate's own (bootstrap) token, not a paired-device grant.
+// That token is already full operator access — push-rpc.mjs accepts it for the
+// same reason — so refusing it the approval inbox protected nothing and left
+// Activity's "Needs you" permanently reading "A paired device grant is required".
+const BOOTSTRAP = { deviceId: null, bootstrap: true };
+
+test('a caller holding the Gate\'s own token reads and decides approvals', async () => {
+  const approvals = new ApprovalService();
+  const entry = await approvals.normalize({ type: 'destructive', runId: 'r', environmentId: 'e', operation: 'rm' });
+  const rpc = createApprovalRpc({ approvals });
+  const pending = await rpc.methods['approvals.pending']({}, BOOTSTRAP);
+  assert.equal(pending.approvals.length, 1);
+  const waiting = approvals.waitForDecision(entry.approvalId);
+  const result = await rpc.methods['approval.deny']({ approvalId: entry.approvalId }, BOOTSTRAP);
+  assert.equal(result.decision, 'deny');
+  assert.equal((await waiting).decision, 'deny');
+});
+
+test('a caller with neither a grant nor the Gate\'s token is still refused', async () => {
+  const rpc = createApprovalRpc({ approvals: new ApprovalService() });
+  for (const ctx of [undefined, {}, { deviceId: null, bootstrap: false }, { deviceId: '' }]) {
+    await assert.rejects(rpc.methods['approvals.pending']({}, ctx), (error) => error.code === 'pairing_required' && error.status === 403);
+  }
+});

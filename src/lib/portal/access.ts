@@ -260,11 +260,13 @@ async function postSignedAccessRequest(
       configuredHosts: ipv4FromExpoExtra(Constants.expoConfig?.extra),
     });
 
-    const response = await withHostLookupRetry(url, alternateIpv4, (candidateUrl) => {
+    const response = await withHostLookupRetry(url, alternateIpv4, async (candidateUrl) => {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        return fetch(candidateUrl, {
+        // Awaited, so the timer outlives the request: returning the bare
+        // promise cleared it at once and the access request had no timeout.
+        return await fetch(candidateUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
