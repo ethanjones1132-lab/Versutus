@@ -10,8 +10,30 @@ function fakeChild() {
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.written = [];
-  child.stdin = { write: (text) => { child.written.push(JSON.parse(text)); return true; } };
+  const stdin = new EventEmitter();
+  stdin.writable = true;
+  stdin.write = (text) => { child.written.push(JSON.parse(text)); return true; };
+  child.stdin = stdin;
   child.reply = (message) => child.stdout.emit('data', `${JSON.stringify(message)}\n`);
+  return child;
+}
+
+/**
+ * Make the next write fail the way a pipe to a just-dying child fails: the
+ * write is accepted, then EPIPE arrives asynchronously with no 'exit' yet.
+ */
+function breakStdinOnNextWrite(child) {
+  const stdin = child.stdin;
+  const write = stdin.write.bind(stdin);
+  stdin.write = (text) => {
+    const ok = write(text);
+    queueMicrotask(() => {
+      stdin.writable = false;
+      stdin.destroyed = true;
+      stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    });
+    return ok;
+  };
   return child;
 }
 
@@ -101,4 +123,49 @@ test('pending requests reject when the process exits', async () => {
   const promise = rpc.request('turn/start');
   child.emit('exit', 1);
   await assert.rejects(promise, /exited with code 1/);
+});
+
+test('a broken pipe fails the in-flight request instead of crashing the Gate', async () => {
+  // With no 'error' listener on the child's stdin this 'error' event is an
+  // uncaught exception: the whole Gate exits and every phone stream, call and
+  // in-flight turn on it drops. A passing run is the proof nothing threw.
+  const child = breakStdinOnNextWrite(fakeChild());
+  const notes = [];
+  const rpc = createStdioJsonRpc({ child, onDiagnostic: (d) => notes.push(d.message) });
+
+  await assert.rejects(rpc.request('turn/start'), /EPIPE/);
+  assert.ok(
+    notes.some((note) => note.includes('EPIPE')),
+    'the dead pipe has to be reported, not just swallowed',
+  );
+});
+
+test('once the pipe is broken, the next request is refused immediately', async () => {
+  const child = breakStdinOnNextWrite(fakeChild());
+  const rpc = createStdioJsonRpc({ child });
+  await assert.rejects(rpc.request('turn/start'), /EPIPE/);
+
+  await assert.rejects(rpc.request('turn/start'), /app-server is not running/);
+  assert.throws(() => rpc.notify('turn/complete'), /app-server is not running/);
+});
+
+test('a request to a child with no stdin is refused rather than written', async () => {
+  // `closed` is only set once 'exit' arrives, which a spawn failure never does.
+  const child = fakeChild();
+  child.stdin = null;
+  const rpc = createStdioJsonRpc({ child });
+
+  await assert.rejects(rpc.request('turn/start'), /app-server is not running/);
+});
+
+test('a spawn failure fails pending requests the way an exit does', async () => {
+  // Node reports a missing binary as 'error' on the child, never 'exit'.
+  const child = fakeChild();
+  const rpc = createStdioJsonRpc({ child });
+  const promise = rpc.request('initialize');
+
+  child.emit('error', Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' }));
+
+  await assert.rejects(promise, /ENOENT/);
+  await assert.rejects(rpc.request('initialize'), /app-server is not running/);
 });

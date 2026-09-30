@@ -5,7 +5,6 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync, spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createGate } from './core/server.mjs';
 import { PairingStore } from './core/pairing.mjs';
 import { DeviceTokenStore } from './core/device-tokens.mjs';
 import { validateId, buildInstanceConfigTemplate, getKindTemplate, describeStartFailure, resolveStartPort, startFailureExitCode } from './core/cli-helpers.mjs';
@@ -18,6 +17,7 @@ import { TASK_NAME, buildTaskDefinition, writeTaskFile } from './core/service/wi
 import { acquireInstanceLock } from './core/service/instance-lock.mjs';
 import { RotatingLog } from './core/service/rotating-log.mjs';
 import { Supervisor } from './core/service/supervisor.mjs';
+import { installProcessGuards } from './core/process-guards.mjs';
 import { doctor } from './core/service/doctor.mjs';
 import { diagnoseBotGroupStore, diagnoseEnvironmentRecords, probeLocalGate } from './core/service/diagnostics.mjs';
 import { CredentialVault } from './core/credentials/vault.mjs';
@@ -351,6 +351,21 @@ async function handleStart(args = []) {
   }
   const port = portResolution.port;
 
+  // Preflight: gate/package.json declares no dependencies of its own, so `ws`
+  // (the voice media socket) resolves out of the repo root's node_modules, and
+  // the server graph that imports it is loaded below rather than at the top of
+  // this file — a load-time failure happens before any of this file's code
+  // runs, so nothing here could report it. Without that install the Gate died
+  // with a raw ERR_MODULE_NOT_FOUND stack; 78 (EX_CONFIG) says it is a setup
+  // problem and names the command to run, and leaves 75 to mean only the
+  // port/lock conflict it already means.
+  try {
+    await import('ws');
+  } catch {
+    console.error("Error starting gate: the Gate needs the repo's dependencies: run `npm install` in the repository root");
+    process.exit(78);
+  }
+
   console.log(`Starting ${gateName}...`);
   const gateHome = resolveGateHome();
   let lock;
@@ -384,8 +399,14 @@ async function handleStart(args = []) {
     });
     process.on('disconnect', supervisedShutdown);
   }
+  // From here on the process outlives a single call: without these two a
+  // rejected promise or a stream 'error' with no listener exits the Gate and
+  // takes every phone stream, call, terminal and in-flight turn with it.
+  installProcessGuards();
+
   try {
     await migrateLegacyProviders({ sourceRoot: __dirname, gateHome });
+    const { createGate } = await import('./core/server.mjs');
     gate = await createGate({
       root: __dirname,
       port,

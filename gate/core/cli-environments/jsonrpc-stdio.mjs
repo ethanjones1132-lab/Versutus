@@ -31,13 +31,25 @@ export function createStdioJsonRpc({ child, onNotification, onServerRequest, onD
   });
 
   child.stderr?.on('data', (chunk) => onDiagnostic?.({ message: String(chunk).trim() }));
-  child.on('exit', (code) => {
+
+  /**
+   * Every way this transport can die ends here. A dying child reports through
+   * an asynchronous 'error' on its own stdio — `exit` has not fired yet, and
+   * with no listener Node turns that into an uncaught exception that takes the
+   * whole Gate down and every stream on it with the Gate.
+   */
+  function fail(reason) {
+    if (closed) return;
     closed = true;
-    for (const { reject } of pending.values()) {
-      reject(new Error(`app-server exited with code ${code}`));
-    }
+    onDiagnostic?.({ message: reason });
+    for (const { reject } of pending.values()) reject(new Error(reason));
     pending.clear();
-  });
+  }
+
+  child.on('exit', (code) => fail(`app-server exited with code ${code}`));
+  // Spawn failure (a missing binary) reports 'error', never 'exit'.
+  child.on('error', (error) => fail(`app-server failed to start: ${error.message}`));
+  child.stdin?.on?.('error', (error) => fail(`app-server stdin failed: ${error.message}`));
 
   function dispatch(message) {
     // A response to something we asked.
@@ -61,8 +73,14 @@ export function createStdioJsonRpc({ child, onNotification, onServerRequest, onD
   }
 
   function write(payload) {
-    if (closed) throw new Error('app-server is not running');
-    child.stdin.write(`${JSON.stringify(payload)}\n`);
+    // `closed` is only set once 'exit' has been delivered, and a child can be
+    // gone with its stdin still present: that write fails asynchronously, which
+    // is the crash the stdin listener above exists to prevent.
+    const stdin = child.stdin;
+    if (closed || !stdin || stdin.destroyed || stdin.writable === false) {
+      throw new Error('app-server is not running');
+    }
+    stdin.write(`${JSON.stringify(payload)}\n`);
   }
 
   function respond(id, body) {

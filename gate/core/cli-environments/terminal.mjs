@@ -103,14 +103,22 @@ export function createTerminalSessions({
       child.stdout?.on('data', makeEmitter());
       child.stderr?.on('data', makeEmitter());
 
-      child.on('error', (error) => {
-        sessions.delete(sid);
-        onError?.(error.message);
-      });
+      // Two events mean the same thing — this shell is not coming back: a spawn
+      // failure, and a keystroke landing after it died (its stdin raises EPIPE,
+      // and with no listener that is an uncaught exception in the Gate).
+      // `sessions.delete` returning false means it was already torn down, which
+      // is what keeps onError to one call per session.
+      const closeWithError = (message) => {
+        if (!sessions.delete(sid)) return;
+        onError?.(message);
+      };
+
+      child.on('error', (error) => closeWithError(error.message));
       child.on('exit', (code) => {
         sessions.delete(sid);
         onExit?.(code ?? 0);
       });
+      child.stdin?.on?.('error', (error) => closeWithError(error.message));
 
       const session = {
         sid,
@@ -119,8 +127,14 @@ export function createTerminalSessions({
         // typing into one it did not open.
         owner,
         write(data) {
-          if (child.exitCode !== null) throw new Error('terminal session has exited');
-          child.stdin?.write(String(data));
+          const stdin = child.stdin;
+          // A shell that has just exited can still have a pipe, and one
+          // keystroke later it does not: the write would fail asynchronously,
+          // so refuse here with the same verdict the caller already handles.
+          if (child.exitCode !== null || !stdin || stdin.destroyed || stdin.writable === false) {
+            throw new Error('terminal session has exited');
+          }
+          stdin.write(String(data));
         },
         close() {
           sessions.delete(sid);

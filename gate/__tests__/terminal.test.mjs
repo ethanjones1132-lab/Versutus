@@ -14,8 +14,31 @@ function fakeChild() {
   child.killed = false;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
-  child.stdin = { written: [], write(data) { this.written.push(data); } };
+  const stdin = new EventEmitter();
+  stdin.writable = true;
+  stdin.written = [];
+  stdin.write = (data) => { stdin.written.push(data); return true; };
+  child.stdin = stdin;
   child.kill = () => { child.killed = true; child.exitCode = 0; };
+  return child;
+}
+
+/**
+ * A shell that exits after the write is accepted: the pipe reports EPIPE on
+ * the next tick, with `exitCode` still null, exactly as a closed pipe does.
+ */
+function breakStdinOnNextWrite(child) {
+  const { stdin } = child;
+  const write = stdin.write.bind(stdin);
+  stdin.write = (data) => {
+    const ok = write(data);
+    queueMicrotask(() => {
+      stdin.writable = false;
+      stdin.destroyed = true;
+      stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+    });
+    return ok;
+  };
   return child;
 }
 
@@ -110,6 +133,41 @@ test('writing to an exited session fails loudly', () => {
   spawned[0].child.exitCode = 0;
 
   assert.throws(() => session.write('ls\n'), /has exited/);
+});
+
+test('a keystroke into a shell that just died ends the session, not the Gate', async () => {
+  // The shell exits between one POST and the next: its stdin raises EPIPE with
+  // no 'exit' event delivered. With no 'error' listener that uncaught
+  // exception killed the Gate and every other session with it.
+  const { sessions, spawned } = harness();
+  const errors = [];
+  const session = sessions.open({ onChunk() {}, onExit() {}, onError: (m) => errors.push(m) });
+  breakStdinOnNextWrite(spawned[0].child);
+
+  session.write('ls\n');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.deepEqual(errors, ['write EPIPE'], 'the failure belongs to the session');
+  assert.equal(sessions.get(session.sid), null);
+  assert.equal(sessions.size, 0);
+  assert.throws(() => session.write('pwd\n'), /terminal session has exited/);
+});
+
+test('a dead pipe reports once, even when the exit it caused follows', async () => {
+  const { sessions, spawned } = harness();
+  const errors = [];
+  const exits = [];
+  sessions.open({ onChunk() {}, onExit: (c) => exits.push(c), onError: (m) => errors.push(m) });
+  breakStdinOnNextWrite(spawned[0].child);
+
+  spawned[0].child.stdin.write('ls\n');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  spawned[0].child.exitCode = 0;
+  spawned[0].child.emit('exit', 0);
+
+  assert.deepEqual(errors, ['write EPIPE'], 'one session reports one failure');
+  assert.deepEqual(exits, [0]);
+  assert.equal(sessions.size, 0);
 });
 
 test('session count is bounded so one client cannot exhaust the host', () => {

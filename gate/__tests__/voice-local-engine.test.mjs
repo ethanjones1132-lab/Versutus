@@ -9,10 +9,11 @@ class FakeChild extends EventEmitter {
     super();
     this.stdout = new EventEmitter();
     this.stderr = new EventEmitter();
-    this.stdin = {
-      write: (line) => record.push(JSON.parse(line)),
-      end: () => {},
-    };
+    const stdin = new EventEmitter();
+    stdin.writable = true;
+    stdin.write = (line) => record.push(JSON.parse(line));
+    stdin.end = () => {};
+    this.stdin = stdin;
     this.killed = false;
   }
 
@@ -158,4 +159,43 @@ test('close stops the worker without a restart', async () => {
   children[0].emit('exit', 0);
   assert.equal(scheduled.length, 0);
   assert.ok(children[0].killed);
+});
+
+test('a worker that cannot spawn is logged and restarted, not fatal to the Gate', async () => {
+  // Node reports a missing python as 'error' on the child and never 'exit'.
+  // With no listener that is an uncaught exception, so one missing dependency
+  // took the whole Gate down instead of this call's backoff.
+  const { engine, children, scheduled } = harness();
+  await engine.open({ voiceSessionId: 'vs-1' });
+  const logs = [];
+  const errors = [];
+  engine.on('log', (line) => logs.push(line));
+  engine.on('error', (event) => errors.push(event));
+
+  children[0].emit('error', Object.assign(new Error('spawn python ENOENT'), { code: 'ENOENT' }));
+
+  assert.ok(logs.some((line) => line.includes('ENOENT')), 'the cause must reach the log');
+  assert.deepEqual(errors, [], 'a spawn failure is a restart, not a dead call');
+  assert.equal(scheduled.length, 1, 'a dead worker must take the backoff path');
+
+  scheduled.shift()();
+  assert.equal(children.length, 2);
+  const reopened = children[1].record.find((message) => message.method === 'voice.open');
+  assert.deepEqual(reopened.params, { voiceSessionId: 'vs-1' });
+});
+
+test('a worker that never spawns ends the call once the restart budget is spent', async () => {
+  const { engine, children, scheduled } = harness({ maxRestarts: 1 });
+  await engine.open({ voiceSessionId: 'vs-1' });
+  const errors = [];
+  engine.on('error', (event) => errors.push(event));
+
+  const spawnFailure = () => Object.assign(new Error('spawn python ENOENT'), { code: 'ENOENT' });
+  children[0].emit('error', spawnFailure());
+  scheduled.shift()();
+  children[1].emit('error', spawnFailure());
+
+  assert.equal(scheduled.length, 0, 'a spent budget must not keep respawning');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].fatal, true);
 });

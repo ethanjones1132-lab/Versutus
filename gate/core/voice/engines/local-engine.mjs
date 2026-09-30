@@ -103,7 +103,21 @@ export class LocalEngine extends EventEmitter {
       onNotification: (message) => this._onNotification(message),
       onDiagnostic: (event) => this.emit('log', event?.message ?? String(event)),
     });
-    child.on('exit', (code) => this._onExit(code));
+    // A worker that cannot be spawned (no python) reports 'error' and then
+    // 'close', never 'exit' — with no listener that uncaught exception takes
+    // the whole Gate down instead of restarting this one call. Count the two
+    // events as one death so the restart budget is spent once per worker.
+    let died = false;
+    const onDeath = (code) => {
+      if (died) return;
+      died = true;
+      this._onExit(code);
+    };
+    child.on('exit', onDeath);
+    child.on('error', (error) => {
+      this.emit('log', `voice worker failed: ${error.message}`);
+      onDeath(null);
+    });
   }
 
   _openSession() {
