@@ -1,4 +1,9 @@
-import { probeGatewayCandidates, probeGatewayUrl, probeHighPriorityCandidates } from '@/lib/gateway/probe';
+import {
+  probeGatewayCandidates,
+  probeGatewayUrl,
+  probeHighPriorityCandidates,
+  PROBE_PRIORITY_GRACE_MS,
+} from '@/lib/gateway/probe';
 
 function okResponse() {
   return {
@@ -273,6 +278,14 @@ describe('probeHighPriorityCandidates first-success probing', () => {
     for (let i = 0; i < 10; i += 1) await Promise.resolve();
   }
 
+  function manifestResponse() {
+    return {
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ manifest: 'versutus-gateway/1.0' }),
+    } as unknown as Response;
+  }
+
   test('a fast success returns before a black-holed candidate settles', async () => {
     jest.useFakeTimers();
     const signals: AbortSignal[] = [];
@@ -319,12 +332,42 @@ describe('probeHighPriorityCandidates first-success probing', () => {
     await flushMicrotasks();
     gates.get('http://fast:8642')!.resolve(okResponse());
     await flushMicrotasks();
-    // The higher-priority one answers within the 400ms grace.
+    // The higher-priority one answers within the priority grace.
     gates.get('http://slow:8641')!.resolve(okResponse());
 
     const result = await run;
     expect(result?.ok).toBe(true);
     expect(result?.ok && result.url).toBe('http://slow:8641');
+  });
+
+  test('a priority-0 gate on a slow relay outranks a priority-1 /health that answers first', async () => {
+    jest.useFakeTimers();
+    const manifestHosts: string[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/.well-known/gateway.json')) {
+        manifestHosts.push(url.replace('/.well-known/gateway.json', ''));
+        return Promise.resolve(manifestResponse());
+      }
+      // A Tailscale/DERP hop measured at 0.9-1.7s RTT with loss, against a
+      // bare Hermes on a fast local address.
+      const delay = url.startsWith('http://slow-gate:8641') ? 1_500 : 50;
+      return new Promise<Response>((resolve) => setTimeout(() => resolve(okResponse()), delay));
+    });
+
+    const run = probeHighPriorityCandidates(
+      ['http://slow-gate:8641', 'http://bare:8642'],
+      undefined,
+      10_000,
+    );
+    await jest.advanceTimersByTimeAsync(1_600);
+
+    const result = await run;
+    expect(result?.ok).toBe(true);
+    expect(result?.ok && result.url).toBe('http://slow-gate:8641');
+    // The winning gate is manifest-checked, not skipped as an aborted probe.
+    expect(manifestHosts[0]).toBe('http://slow-gate:8641');
+    expect(result?.ok && result.hasManifest).toBe(true);
   });
 
   test('a lower-priority success stands when a higher-priority probe stays black-holed', async () => {
@@ -344,12 +387,21 @@ describe('probeHighPriorityCandidates first-success probing', () => {
       undefined,
       10_000,
     );
-    // Let the fast success land and start the 400ms grace.
+    // Let the fast success land and start the priority grace.
     await flushMicrotasks();
-    const assertion = expect(run).resolves.toMatchObject({ ok: true, url: 'http://fast:8642' });
-    // The grace expires with the higher-priority probe still black-holed.
-    await jest.advanceTimersByTimeAsync(500);
-    await assertion;
+    let settled = false;
+    void run.then(() => {
+      settled = true;
+    });
+    // The grace is a wait, not a guess: a black hole is still given the time a
+    // relay hop needs (measured at 0.9-1.7s RTT)...
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(settled).toBe(false);
+    // ...and it must not hold the wave for the full 10s probe timeout either.
+    await jest.advanceTimersByTimeAsync(PROBE_PRIORITY_GRACE_MS - 900);
+    const result = await run;
+    expect(result?.ok).toBe(true);
+    expect(result?.ok && result.url).toBe('http://fast:8642');
     expect(signals[0]?.aborted).toBe(true);
   });
 });

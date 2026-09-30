@@ -101,13 +101,25 @@ function rememberHostLookupFailure(hostname: string): void {
 }
 
 /**
+ * True when a failure carries an HTTP status: the gateway answered on that
+ * address, even to refuse. Such a rejection is not a transport fault, and the
+ * same request against the hostname would only be refused the same way.
+ */
+function isHttpRejection(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  return typeof (error as { status?: unknown }).status === 'number';
+}
+
+/**
  * Try `url`, then each advertised IPv4 rewrite, only when the failure is a
  * host lookup miss. https is never rewritten (rewriteHttpUrlHost returns null).
  * Exhausted lookup misses become HostLookupError, not the raw Java exception.
  *
  * After a hostname lookup failure the advertised IPv4 candidates are tried
  * FIRST and the hostname last, for two minutes; a hostname success clears the
- * mark.
+ * mark. An IPv4 that could not be reached at all (refused, unroutable, timed
+ * out) does not strand that reordered pass: the hostname is still tried, and
+ * only the last error surfaces if nothing answers.
  */
 export async function withHostLookupRetry<T>(
   url: string,
@@ -124,16 +136,32 @@ export async function withHostLookupRetry<T>(
   const rememberFailure =
     failed !== undefined && Date.now() - failed.failedAt < HOST_LOOKUP_FAILURE_MEMORY_MS;
   const candidates = rememberFailure ? [...ipv4Candidates, url] : [url, ...ipv4Candidates];
+  // True only in the reordered pass, where the hostname is still untried and a
+  // failed IPv4 therefore still owes the name a turn.
+  const hostnameStillToCome = rememberFailure && ipv4Candidates.length > 0;
+  let lastError: unknown;
   for (const candidate of candidates) {
     try {
       const result = await attempt(candidate);
       if (candidate === url) hostLookupFailures.delete(hostname);
       return result;
     } catch (error) {
-      if (!isHostLookupFailure(error)) throw error;
-      if (candidate === url) rememberHostLookupFailure(hostname);
+      if (isHostLookupFailure(error)) {
+        if (candidate === url) rememberHostLookupFailure(hostname);
+        continue;
+      }
+      // A non-lookup failure is final once the hostname has had its turn: DNS
+      // worked, so the error is the answer. It is also final when the gateway
+      // itself answered (a 401 carries a status) — retrying the same request
+      // against the hostname would only be refused the same way. Otherwise the
+      // failure is about the address rather than the name, and in the reordered
+      // pass the hostname still owes a turn: keep going, and throw the last
+      // error if nothing answers.
+      if (candidate === url || !hostnameStillToCome || isHttpRejection(error)) throw error;
+      lastError = error;
     }
   }
+  if (lastError !== undefined) throw lastError;
   throw new HostLookupError(hostname);
 }
 

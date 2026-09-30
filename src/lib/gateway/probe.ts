@@ -15,9 +15,13 @@ export const GATEWAY_MANIFEST_PROBE_TIMEOUT_MS = 8_000;
 
 /**
  * When a lower-priority candidate answers first, how long to keep waiting for
- * a higher-priority one to settle before taking the best success on hand.
+ * a higher-priority one to settle before taking the best success on hand. A
+ * healthy Versutus Gate reached over Tailscale was measured at 0.9–1.7s RTT
+ * with loss, so the wait has to outlast a relay hop without becoming a second
+ * copy of the 10s parallel timeout a black-holed candidate would otherwise sit
+ * through.
  */
-export const PROBE_PRIORITY_GRACE_MS = 400;
+export const PROBE_PRIORITY_GRACE_MS = 2500;
 
 /**
  * Probe a Hermes gateway by hitting the /health endpoint.
@@ -160,8 +164,8 @@ export async function probeHighPriorityCandidates(
 
     // Resolve as soon as a success arrives for the highest-priority candidate
     // still in the running (no higher-priority candidate pending). If a
-    // lower-priority one succeeds first, wait at most a short grace for the
-    // higher-priority ones to settle, then take the best success.
+    // lower-priority one succeeds first, wait out PROBE_PRIORITY_GRACE_MS for
+    // the higher-priority ones to settle, then take the best success.
     const evaluate = () => {
       for (let i = 0; i < top.length; i += 1) {
         if (results[i]?.ok && results.slice(0, i).every((r) => r !== undefined)) {

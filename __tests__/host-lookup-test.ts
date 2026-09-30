@@ -127,6 +127,8 @@ describe('withHostLookupRetry failure memory', () => {
   });
 
   const LOOKUP_MISS = 'fetch failed: getaddrinfo ENOTFOUND ethanspc.tail3a1a8a.ts.net';
+  const REFUSED = 'fetch failed: connect ECONNREFUSED 100.95.137.83:8760';
+  const UNREACHABLE = 'fetch failed: connect EHOSTUNREACH 192.168.4.30:8760';
 
   test('after a hostname failure the IPv4 is tried first', async () => {
     const calls: string[] = [];
@@ -218,6 +220,116 @@ describe('withHostLookupRetry failure memory', () => {
     calls.length = 0;
     await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
     expect(calls).toEqual(['http://ethanspc.tail3a1a8a.ts.net:8760/x']);
+  });
+
+  test('an advertised IPv4 that is unusable falls back to the hostname it skipped', async () => {
+    const calls: string[] = [];
+    let hostnameHealthy = false;
+    const attempt = (url: string) => {
+      calls.push(url);
+      const isHostname = url.includes('ethanspc.tail3a1a8a.ts.net');
+      if (isHostname) {
+        return hostnameHealthy
+          ? Promise.resolve('from hostname')
+          : Promise.reject(new Error(LOOKUP_MISS));
+      }
+      // MagicDNS recovered, the PC moved, the advertised IPv4 refuses.
+      return Promise.reject(new Error(REFUSED));
+    };
+    // A first pass in which every candidate is a DNS miss is what marks the
+    // hostname in the first place.
+    await expect(
+      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], () =>
+        Promise.reject(new Error(LOOKUP_MISS)),
+      ),
+    ).rejects.toBeInstanceOf(HostLookupError);
+
+    // The memory puts the (now dead) IPv4 first. Its refusal is not a
+    // statement about the name, so the hostname still gets its turn — and its
+    // success clears the mark.
+    hostnameHealthy = true;
+    calls.length = 0;
+    await expect(
+      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt),
+    ).resolves.toBe('from hostname');
+    expect(calls).toEqual([
+      'http://100.95.137.83:8760/x',
+      'http://ethanspc.tail3a1a8a.ts.net:8760/x',
+    ]);
+
+    // Call 3: mark cleared — hostname first again.
+    calls.length = 0;
+    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
+    expect(calls).toEqual(['http://ethanspc.tail3a1a8a.ts.net:8760/x']);
+    expect(hostLookupFailureCountForTests()).toBe(0);
+  });
+
+  test('the last error surfaces when no reordered candidate answers', async () => {
+    const markFailure = () =>
+      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', [], () =>
+        Promise.reject(new Error(LOOKUP_MISS)),
+      );
+    await expect(markFailure()).rejects.toBeInstanceOf(HostLookupError);
+
+    const calls: string[] = [];
+    const attempt = (url: string) => {
+      calls.push(url);
+      if (url.includes('100.95.137.83')) return Promise.reject(new Error(REFUSED));
+      if (url.includes('192.168.4.30')) return Promise.reject(new Error(UNREACHABLE));
+      return Promise.reject(new Error(LOOKUP_MISS));
+    };
+
+    // Neither IP is a DNS miss, so neither becomes HostLookupError: once the
+    // last candidate has also failed the last error is the honest answer.
+    await expect(
+      withHostLookupRetry(
+        'http://ethanspc.tail3a1a8a.ts.net:8760/x',
+        ['100.95.137.83', '192.168.4.30'],
+        attempt,
+      ),
+    ).rejects.toThrow(UNREACHABLE);
+    expect(calls).toEqual([
+      'http://100.95.137.83:8760/x',
+      'http://192.168.4.30:8760/x',
+      'http://ethanspc.tail3a1a8a.ts.net:8760/x',
+    ]);
+  });
+
+  test('an unmarked hostname that fails for real is never retried on an IPv4', async () => {
+    const calls: string[] = [];
+    const attempt = (url: string) => {
+      calls.push(url);
+      return Promise.reject(new Error(REFUSED));
+    };
+
+    // Hostname first, no memory: the refusal means DNS worked, so the IPv4
+    // rewrite is not worth a second round trip and the error stands.
+    await expect(
+      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt),
+    ).rejects.toThrow(REFUSED);
+    expect(calls).toEqual(['http://ethanspc.tail3a1a8a.ts.net:8760/x']);
+    expect(hostLookupFailureCountForTests()).toBe(0);
+  });
+
+  test('a rejection the gateway itself made is not retried on the hostname', async () => {
+    await expect(
+      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', [], () =>
+        Promise.reject(new Error(LOOKUP_MISS)),
+      ),
+    ).rejects.toBeInstanceOf(HostLookupError);
+
+    const calls: string[] = [];
+    const attempt = (url: string) => {
+      calls.push(url);
+      // The reordered pass reached the IPv4 and it answered 401. Something is
+      // listening there, so the hostname would be refused the same way.
+      return Promise.reject(Object.assign(new Error('Invalid API key'), { status: 401 }));
+    };
+
+    await expect(
+      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt),
+    ).rejects.toThrow('Invalid API key');
+    expect(calls).toEqual(['http://100.95.137.83:8760/x']);
   });
 
   test('marking a host prunes the marks that have expired', async () => {
