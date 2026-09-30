@@ -410,6 +410,40 @@ describe('ConnectionMonitor nudge', () => {
     monitor.stop();
   });
 
+  test('trouble reported by the monitor’s own probe does not chain more probes', async () => {
+    // The transport hook is wired to nudge(), so the monitor's own health probe
+    // (healthCheck -> transport.request) hands its own timeout straight back to
+    // the monitor that asked for it — 6s later, well past the cooldown, so the
+    // cooldown is not what stops the recursion. The nudge's budget is one probe
+    // plus one re-prove and nothing more.
+    const state = { healthy: false, probes: 0 };
+    const statuses: string[] = [];
+    const monitor = new ConnectionMonitor({
+      probe: () => {
+        state.probes += 1;
+        // A probe that takes real time: the transport budget outlives the
+        // cooldown window the nudge opened.
+        return new Promise<boolean>((resolve) => {
+          setTimeout(() => {
+            monitor.nudge('Request timed out: GET /health');
+            resolve(state.healthy);
+          }, NUDGE_COOLDOWN_MS + 1000);
+        });
+      },
+      recentlyServedUs: () => false,
+      onStatus: (status) => statuses.push(status),
+      reconnect: () => Promise.resolve(),
+    });
+    monitor.start();
+
+    monitor.nudge('stream stalled');
+    await jest.advanceTimersByTimeAsync(NUDGE_COOLDOWN_MS * 4);
+
+    expect(state.probes).toBe(2); // the nudge's probe and its one re-prove
+    expect(statuses).toContain('reconnecting');
+    monitor.stop();
+  });
+
   test('a gateway that still answered us is excused exactly as the interval excuses it', async () => {
     const { monitor, state, statuses } = build();
     monitor.start();

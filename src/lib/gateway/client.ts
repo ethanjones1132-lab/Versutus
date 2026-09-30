@@ -123,8 +123,11 @@ export class HermesGatewayClient {
       token: profile.token,
       sessionKey: profile.sessionKey,
       alternateIpv4: profile.alternateIpv4,
-      // onNetworkTrouble: (reason) => this.nudge(reason) — wired when
-      // HttpTransport grows onNetworkTrouble.
+      // A timed-out request, a refused connection or a stalled stream is
+      // evidence of a dead path that the 30s interval cannot act on for half a
+      // minute more. Hand it to the monitor instead: two quick probes reach
+      // `reconnecting` in ~2s.
+      onNetworkTrouble: (reason) => this.nudge(reason),
     });
     this.monitor = new ConnectionMonitor({
       probe: async () => (await this.healthCheck()) !== null,
@@ -167,6 +170,9 @@ export class HermesGatewayClient {
       token: profile.token,
       sessionKey: profile.sessionKey,
       alternateIpv4: profile.alternateIpv4,
+      // update() REPLACES the whole option set, so the hook has to be restated
+      // here or the first profile change silently drops trouble reporting.
+      onNetworkTrouble: (reason) => this.nudge(reason),
     });
     // A new endpoint may speak the other dialect; re-identify on next read.
     this.modelDialect = null;
