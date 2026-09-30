@@ -1,6 +1,8 @@
 import {
   ConnectionMonitor,
   HEALTH_INTERVAL_MS,
+  NUDGE_COOLDOWN_MS,
+  NUDGE_REPROBE_DELAY_MS,
   RECONNECT_ESCALATION_ATTEMPTS,
   hasRecentContact,
 } from '@/lib/gateway/connection-monitor';
@@ -275,6 +277,149 @@ describe('ConnectionMonitor retry ladder', () => {
     state.healthy = false;
     await jest.advanceTimersByTimeAsync(HEALTH_INTERVAL_MS * 2);
     expect(statuses.filter((s) => s === 'reconnecting').length).toBeGreaterThan(0);
+    monitor.stop();
+  });
+});
+
+describe('ConnectionMonitor nudge', () => {
+  // A dead path is otherwise only visible after two failed 30s samples —
+  // 42-72s. nudge() is the escape hatch: a caller holding evidence of trouble
+  // asks for a verdict now.
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  function build(overrides: Partial<ConnectionMonitorCallbacks> = {}) {
+    const state = { healthy: true, servedRecently: false, probes: 0, reconnects: 0 };
+    const statuses: string[] = [];
+    const monitor = new ConnectionMonitor({
+      probe: () => {
+        state.probes += 1;
+        return Promise.resolve(state.healthy);
+      },
+      recentlyServedUs: () => state.servedRecently,
+      onStatus: (status) => statuses.push(status),
+      reconnect: () => {
+        state.reconnects += 1;
+        return Promise.resolve();
+      },
+      ...overrides,
+    });
+    return { monitor, state, statuses };
+  }
+
+  test('a healthy gateway probed on demand changes nothing', async () => {
+    const { monitor, state, statuses } = build();
+    monitor.start();
+    const before = state.probes;
+
+    monitor.nudge('stream stalled');
+    await jest.advanceTimersByTimeAsync(NUDGE_REPROBE_DELAY_MS * 2);
+
+    // A success is not news: no status moved and no follow-up probe was
+    // scheduled, so a healthy connection is never disturbed by a nudge.
+    expect(state.probes).toBe(before + 1);
+    expect(statuses).toEqual([]);
+    monitor.stop();
+  });
+
+  test('two quick failures declare the gateway down in ~2s, not 72s', async () => {
+    const { monitor, state, statuses } = build();
+    monitor.start();
+    state.healthy = false;
+
+    monitor.nudge('stream stalled');
+    await jest.advanceTimersByTimeAsync(NUDGE_REPROBE_DELAY_MS - 1);
+    // Failure ONE is not a verdict — one lost sample must not tear down a
+    // working session — so nothing has moved a second before the re-probe.
+    expect(statuses).not.toContain('reconnecting');
+
+    await jest.advanceTimersByTimeAsync(1); // the 2s re-prove fires
+    expect(statuses).toContain('reconnecting');
+
+    // The 30s interval alone would not have fired a second sample yet: this is
+    // the whole point of the nudge.
+    expect(state.probes).toBe(2);
+    // Having declared the path down, the nudge hands recovery to the same
+    // ladder the interval uses — it does not invent a second policy.
+    expect(state.reconnects).toBe(0);
+    await jest.advanceTimersByTimeAsync(2_000);
+    expect(state.reconnects).toBe(1);
+    monitor.stop();
+  });
+
+  test('two nudges inside the cooldown probe once', async () => {
+    // A healthy gateway, so the only thing that could add a second probe is
+    // the second nudge: the re-probe is reserved for an unproven failure.
+    const { monitor, state } = build();
+    monitor.start();
+
+    monitor.nudge('stream stalled');
+    await jest.advanceTimersByTimeAsync(1);
+    expect(state.probes).toBe(1);
+
+    monitor.nudge('stream stalled again');
+    await jest.advanceTimersByTimeAsync(NUDGE_COOLDOWN_MS - 1);
+    expect(state.probes).toBe(1); // still inside the 5s window
+
+    monitor.nudge('and again');
+    await jest.advanceTimersByTimeAsync(1);
+    expect(state.probes).toBe(2); // the window has passed: answered again
+    monitor.stop();
+  });
+
+  test('a nudge while suspended is a no-op', async () => {
+    const { monitor, state, statuses } = build();
+    monitor.start();
+    monitor.suspend();
+    state.healthy = false;
+
+    monitor.nudge('stream stalled');
+    await jest.advanceTimersByTimeAsync(NUDGE_COOLDOWN_MS * 2);
+
+    expect(state.probes).toBe(0);
+    expect(statuses).not.toContain('reconnecting');
+    monitor.stop();
+  });
+
+  test('a nudge never starts an interval on a monitor nobody started', async () => {
+    const { monitor, state, statuses } = build();
+    state.healthy = false;
+
+    monitor.nudge('stream stalled');
+    await jest.advanceTimersByTimeAsync(HEALTH_INTERVAL_MS * 2);
+
+    // The app never connected this client: a nudge must not turn a dormant
+    // monitor into a poller against a gateway it was never pointed at.
+    expect(state.probes).toBe(0);
+    expect(statuses).toEqual([]);
+    monitor.stop();
+  });
+
+  test('a scheduler-only monitor with no probe cannot be nudged', async () => {
+    const statuses: string[] = [];
+    const monitor = new ConnectionMonitor({
+      onStatus: (status) => statuses.push(status),
+      reconnect: () => Promise.resolve(),
+    });
+    monitor.start();
+
+    monitor.nudge('stream stalled');
+    await jest.advanceTimersByTimeAsync(HEALTH_INTERVAL_MS * 2);
+
+    expect(statuses).toEqual([]);
+    monitor.stop();
+  });
+
+  test('a gateway that still answered us is excused exactly as the interval excuses it', async () => {
+    const { monitor, state, statuses } = build();
+    monitor.start();
+    state.healthy = false;
+    state.servedRecently = true;
+
+    monitor.nudge('stream stalled');
+    await jest.advanceTimersByTimeAsync(NUDGE_REPROBE_DELAY_MS * 3);
+
+    expect(statuses).not.toContain('reconnecting');
     monitor.stop();
   });
 });

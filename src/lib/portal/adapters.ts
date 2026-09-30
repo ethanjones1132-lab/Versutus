@@ -29,6 +29,13 @@ export interface PortalClient {
   disconnect(): void;
   readonly connectionStatus: ConnectionStatus;
   readonly statusDetail: string;
+  /**
+   * True while the last disconnect was the gateway refusing our credentials.
+   * The status callback fires before the connect() rejection reaches the
+   * provider, so this is how a "wrong key" tells itself apart from "gateway
+   * down" and refuses to schedule a retry that can never succeed.
+   */
+  readonly authRejected?: boolean;
   updateProfile(profile: GatewayProfile): void;
   get sessionId(): string | undefined;
   setSessionId(id: string | undefined): void;
@@ -54,8 +61,17 @@ export interface PortalClient {
        * the operator's own choice back at them.
        */
       onModelReport?: (report: import('@/lib/gateway/run-failures').ModelReport) => void;
+      /** The turn id minted for this send, so a cancel can name it. */
+      onTurnId?: (turnId: string) => void;
+      /** A session the gateway adopted for the turn, when it reports one. */
+      onSession?: (sessionId: string) => void;
     },
   ): Promise<string>;
+  /**
+   * Stop a turn server-side. Optional: a gateway that hosts no cancel route
+   * (a direct Hermes) omits it and the caller falls back to aborting locally.
+   */
+  cancelTurn?(turnId: string): Promise<void>;
   getModels(): Promise<ModelInfo[]>;
   getCapabilities(): Promise<GatewayCapabilities>;
   /** Whether the manifest explicitly offers session management. */
@@ -145,6 +161,18 @@ export interface PortalClient {
   suspendReconnect(): void;
   /** Resume automatic reconnect; attempts immediately if not connected. */
   resumeReconnect(): void;
+  /**
+   * Probe liveness NOW on the caller's own evidence of trouble, instead of
+   * waiting out the health interval. Optional: adapters without a health probe
+   * omit it and the caller keeps the interval's answer.
+   */
+  nudge?(reason: string): void;
+  /**
+   * Re-verify a client that still claims 'connected', in place. Preferred over
+   * rebuilding the client, which discards a live connection to re-earn the
+   * same answer. Optional: adapters that cannot re-verify omit it.
+   */
+  forceReconnect?(): void;
   /** Agentic runs with approval gates — Hermes adapters only. */
   startRun?(
     prompt: string,
@@ -161,7 +189,11 @@ export interface PortalClient {
 
 /** Callbacks accepted by every adapter (params kept loose on purpose). */
 export type PortalClientCallbacks = {
-  onStatus?: (status: ConnectionStatus, detail?: string) => void;
+  onStatus?: (
+    status: ConnectionStatus,
+    detail?: string,
+    info?: { authRejected?: boolean },
+  ) => void;
   onHello?: (hello: unknown) => void;
   onPairingRequired?: (details: unknown) => void;
   onChatEvent?: (payload: unknown) => void;

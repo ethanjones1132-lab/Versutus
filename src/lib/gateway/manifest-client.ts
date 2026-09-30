@@ -3,7 +3,7 @@ import type { PublicBot } from '@/lib/gateway/bots';
 import type { ChatContentPart } from '@/lib/gateway/chat-parts';
 import type { CronJob, CronRun, CronTurn } from '@/lib/gateway/cron';
 import type { BotGroupRoom, GroupReply, GroupTranscriptEntry, GroupTurnError } from '@/lib/gateway/groups';
-import { HEALTH_CHECK_TIMEOUT_MS } from '@/lib/gateway/client';
+import { HEALTH_CHECK_TIMEOUT_MS, CANCEL_TURN_TIMEOUT_MS, createTurnId } from '@/lib/gateway/client';
 import { isAuthRejection } from '@/lib/gateway/errors';
 import { gatewayRootUrl } from '@/lib/gateway/gateway-origin';
 import { withGetSessionsRetry } from '@/lib/gateway/get-sessions-retry';
@@ -48,6 +48,13 @@ function interpolatePath(path: string, vars: Record<string, string>): string {
  */
 export class ManifestClient implements PortalClient {
   private closed = false;
+  /**
+   * Bumped by disconnect(). An attemptConnect that started under an older
+   * epoch is talking to a gateway the provider has already discarded, so
+   * every await it resumes from has to be able to tell.
+   */
+  private connectEpoch = 0;
+  private authRejectedState = false;
   private status: ConnectionStatus = 'disconnected';
   private detail = '';
   private currentSessionId: string | undefined;
@@ -75,6 +82,8 @@ export class ManifestClient implements PortalClient {
       token: profile.token,
       sessionKey: profile.sessionKey,
       alternateIpv4,
+      // onNetworkTrouble: (reason) => this.nudge(reason) — wired when
+      // HttpTransport grows onNetworkTrouble.
     });
     this.rootTransport = new HttpTransport({
       baseUrl: gatewayRootUrl(profile.url),
@@ -106,6 +115,16 @@ export class ManifestClient implements PortalClient {
 
   get statusDetail(): string {
     return this.detail;
+  }
+
+  /**
+   * True while the last disconnect was the gate refusing our credentials.
+   * The provider's onStatus handler sees that status before the connect()
+   * rejection reaches it, so without this signal it cannot tell "wrong token"
+   * from "gate down" and schedules a retry that can never succeed.
+   */
+  get authRejected(): boolean {
+    return this.authRejectedState;
   }
 
   get sessionId(): string | undefined {
@@ -181,6 +200,7 @@ export class ManifestClient implements PortalClient {
   }
 
   private async attemptConnect(): Promise<void> {
+    const epoch = this.connectEpoch;
     this.closed = false;
     this.setStatus('connecting');
 
@@ -188,11 +208,13 @@ export class ManifestClient implements PortalClient {
     try {
       health = await this.healthCheck();
     } catch (error) {
+      if (this.connectEpoch !== epoch) return;
       const message = error instanceof Error ? error.message : String(error);
       this.callbacks.onError?.(message);
       this.monitor.scheduleReconnect(message);
       throw error;
     }
+    if (this.connectEpoch !== epoch) return;
 
     if (!health) {
       const reason = this.lastHealthError ?? 'no response';
@@ -204,20 +226,28 @@ export class ManifestClient implements PortalClient {
     let capabilities: GatewayCapabilities | null = null;
     try {
       capabilities = await this.getCapabilities();
+      if (this.connectEpoch !== epoch) return;
       // Prove the token by hitting an authenticated endpoint, mirroring
       // HermesGatewayClient's connect(): a manifest fetch alone is
       // unauthenticated, so it would never catch a rejected token.
-      if (this.endpoints.models) await this.getModels();
+      if (this.endpoints.models) {
+        await this.getModels();
+        if (this.connectEpoch !== epoch) return;
+      }
     } catch (error) {
+      if (this.connectEpoch !== epoch) return;
       if (isAuthRejection(error)) {
         this.monitor.suspend();
+        this.authRejectedState = true;
         const message = error instanceof Error ? error.message : String(error);
-        this.setStatus('disconnected', message);
+        this.setStatus('disconnected', message, { authRejected: true });
         throw error;
       }
       // A capability snapshot or model list failing otherwise doesn't block connect.
     }
+    if (this.connectEpoch !== epoch) return;
 
+    this.authRejectedState = false;
     this.setStatus('connected');
     this.callbacks.onHello?.({ type: 'hello-ok', protocol: 1, server: { version: this.identity.version } });
     if (capabilities) this.callbacks.onCapabilities?.(capabilities);
@@ -227,6 +257,7 @@ export class ManifestClient implements PortalClient {
   }
 
   disconnect() {
+    this.connectEpoch += 1;
     this.closed = true;
     this.monitor.stop();
     this.monitor.resume();
@@ -243,6 +274,26 @@ export class ManifestClient implements PortalClient {
     if (!this.closed && this.status !== 'connected') {
       void this.connect().catch(() => undefined);
     }
+  }
+
+  /**
+   * Ask the monitor for a health verdict now, on the caller's own evidence of
+   * trouble. Two quick failures reach `reconnecting` in ~2s instead of waiting
+   * out two 30s samples.
+   */
+  nudge(reason: string) {
+    this.monitor.nudge(reason);
+  }
+
+  /**
+   * Re-verify in place. For a caller that doubts a client which still claims
+   * 'connected': rebuilding the client throws away a live connection to
+   * re-earn the answer, and this runs the same connect() attempt on the
+   * existing one.
+   */
+  forceReconnect() {
+    this.setStatus('reconnecting', 'Checking the connection');
+    void this.connect().catch(() => undefined);
   }
 
   async healthCheck(timeoutMs = HEALTH_CHECK_TIMEOUT_MS): Promise<HealthResponse | null> {
@@ -356,6 +407,10 @@ export class ManifestClient implements PortalClient {
       onTelemetryWarning?: (message: string) => void;
       /** Which model actually served the turn, once the Gate reports it. */
       onModelReport?: (report: import('@/lib/gateway/run-failures').ModelReport) => void;
+      /** The turn id sent with the request, so a cancel can name it. */
+      onTurnId?: (turnId: string) => void;
+      /** A session the Gate adopted for the turn, when it reports one. */
+      onSession?: (sessionId: string) => void;
     },
   ): Promise<string> {
     const path = this.requireEndpoint('chat');
@@ -372,14 +427,14 @@ export class ManifestClient implements PortalClient {
     }
     const body: Record<string, unknown> = { messages, stream: true };
     if (model) body.model = model;
+    const sentSessionId = options?.sessionId ?? this.currentSessionId;
     if (backendId || this.botId) {
       // A Bot names its own environment (see withScope) — naming the thread's
       // backend too would send the turn to an environment with no Bots.
       if (this.botId) body.bot = this.botId;
       else body.backendId = backendId;
       // The native session holds the history; without it every turn is orphaned.
-      const sessionId = options?.sessionId ?? this.currentSessionId;
-      if (sessionId) body.sessionId = sessionId;
+      if (sentSessionId) body.sessionId = sentSessionId;
     } else if (options?.providerId) {
       // Unqualified, the Gate refuses to guess between providers that declare
       // the same model id (409 ambiguous_model) — a backend owns its catalog
@@ -387,12 +442,18 @@ export class ManifestClient implements PortalClient {
       body.providerId = options.providerId;
     }
 
+    // Named before the request so a caller can cancel the turn even if the
+    // POST itself never lands. The Gate correlates the streamed chat with this
+    // id for the server-side cancel.
+    const turnId = createTurnId();
+    options?.onTurnId?.(turnId);
+
     const controller = new AbortController();
     const signal = options?.signal || controller.signal;
 
     const response = await streamingFetch(`${this.transport.baseUrl}${path}`, {
       method: 'POST',
-      headers: this.transport.headers,
+      headers: { ...this.transport.headers, 'X-Versutus-Turn-Id': turnId },
       body: JSON.stringify(body),
       signal,
     });
@@ -406,6 +467,12 @@ export class ManifestClient implements PortalClient {
       const errorText = await response.text().catch(() => '');
       throw new Error(messageFromHttpErrorBody(errorText, response.status));
     }
+
+    // A turn the Gate opened for itself names its thread in the response, so
+    // the app can keep writing to the same session instead of forking a new
+    // one on every send.
+    const adopted = response.headers?.get('x-versutus-session-id');
+    if (adopted && adopted !== sentSessionId) options?.onSession?.(adopted);
 
     let fullText = '';
     // A failed turn arrives as an error frame inside an HTTP 200 stream, so
@@ -771,7 +838,8 @@ export class ManifestClient implements PortalClient {
   /**
    * List sessions via the advertised GET path, with the same bounded retry
    * HermesGatewayClient uses. A missing path throws immediately — that is a
-   * capability signal, not a blip, so it is not retried.
+   * capability signal, not a blip, so it is not retried. `limit` also decides
+   * the per-attempt budget: a bulk read is a different read.
    */
   async getSessions(limit = 20): Promise<HermesSession[]> {
     const path = this.endpoints.sessions;
@@ -781,13 +849,15 @@ export class ManifestClient implements PortalClient {
       );
     }
     const separator = path.includes('?') ? '&' : '?';
-    const result = await withGetSessionsRetry((timeoutMs) =>
-      this.rootTransport.request<SessionsResponse | HermesSession[]>(
-        'GET',
-        this.withScope(`${path}${separator}limit=${limit}`),
-        undefined,
-        timeoutMs,
-      ),
+    const result = await withGetSessionsRetry(
+      (timeoutMs) =>
+        this.rootTransport.request<SessionsResponse | HermesSession[]>(
+          'GET',
+          this.withScope(`${path}${separator}limit=${limit}`),
+          undefined,
+          timeoutMs,
+        ),
+      { limit },
     );
     return Array.isArray(result) ? result : result.data ?? [];
   }
@@ -812,13 +882,15 @@ export class ManifestClient implements PortalClient {
     }
     const separator = path.includes('?') ? '&' : '?';
     const query = `bot=${encodeURIComponent(botId)}&limit=${limit}`;
-    const result = await withGetSessionsRetry((timeoutMs) =>
-      this.rootTransport.request<SessionsResponse | HermesSession[]>(
-        'GET',
-        `${path}${separator}${query}`,
-        undefined,
-        timeoutMs,
-      ),
+    const result = await withGetSessionsRetry(
+      (timeoutMs) =>
+        this.rootTransport.request<SessionsResponse | HermesSession[]>(
+          'GET',
+          `${path}${separator}${query}`,
+          undefined,
+          timeoutMs,
+        ),
+      { limit },
     );
     return Array.isArray(result) ? result : result.data ?? [];
   }
@@ -1041,9 +1113,29 @@ export class ManifestClient implements PortalClient {
     await this.rootTransport.request<unknown>('POST', this.withScope(path), {});
   }
 
-  private setStatus(status: ConnectionStatus, detail = '') {
+  /**
+   * Stop a turn the Gate is still running.
+   *
+   * Aborting the phone's stream is not a cancel: the turn keeps burning a
+   * provider on the host, and the Gate only knows to stop it when told which
+   * turn — the id streamChat now sends. A gate whose manifest advertises no
+   * `chatCancel` has no such route (an older Gate), so the call returns
+   * without a request rather than guessing a path. Failures are swallowed: a
+   * cancel is a courtesy, and the turn is already lost to the user either way.
+   */
+  async cancelTurn(turnId: string): Promise<void> {
+    const path = this.endpoints.chatCancel;
+    if (!path) return;
+    try {
+      await this.rootTransport.request<unknown>('POST', path, { turnId }, CANCEL_TURN_TIMEOUT_MS);
+    } catch {
+      // best effort — the local abort already stopped the user's stream
+    }
+  }
+
+  private setStatus(status: ConnectionStatus, detail = '', info?: { authRejected?: boolean }) {
     this.status = status;
     this.detail = detail;
-    this.callbacks.onStatus?.(status, detail);
+    this.callbacks.onStatus?.(status, detail, info);
   }
 }

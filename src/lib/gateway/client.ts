@@ -8,6 +8,7 @@ import {
   hasRecentContact,
 } from '@/lib/gateway/connection-monitor';
 import { flattenHermesModelOptions, type HermesModelOptions } from '@/lib/gateway/model-selection';
+import { createMessageId } from '@/lib/gateway/messages';
 import { METHOD_GUIDANCE, METHOD_TO_ROUTE, resolveRoute } from '@/lib/gateway/rpc-routes';
 
 import { streamingFetch } from '@/lib/net/streaming-fetch';
@@ -29,7 +30,11 @@ import type {
 } from '@/lib/gateway/types';
 
 export type GatewayClientCallbacks = {
-  onStatus?: (status: ConnectionStatus, detail?: string) => void;
+  onStatus?: (
+    status: ConnectionStatus,
+    detail?: string,
+    info?: { authRejected?: boolean },
+  ) => void;
   onHello?: (hello: { type: 'hello-ok'; protocol: number; server: { version?: string } }) => void;
   onPairingRequired?: (details: unknown) => void;
   onChatEvent?: (payload: { deltaText?: string; state?: string; text?: string }) => void;
@@ -39,6 +44,20 @@ export type GatewayClientCallbacks = {
 };
 
 const LONG_TIMEOUT_MS = 120000;
+
+/** A cancel is a courtesy call; it must never hold a sheet open. */
+export const CANCEL_TURN_TIMEOUT_MS = 5_000;
+
+/**
+ * Turn id the Gate correlates a streamed chat with its server-side cancel.
+ *
+ * The protocol accepts 8–64 characters of `[A-Za-z0-9_-]`, which is exactly
+ * createMessageId's alphabet; the strip is there so a future prefix change
+ * cannot silently produce a header the Gate refuses.
+ */
+export function createTurnId(): string {
+  return createMessageId('turn').replace(/[^A-Za-z0-9_-]/g, '');
+}
 
 /**
  * Connect and the connection-monitor probe share this budget.
@@ -56,6 +75,7 @@ export const HEALTH_CHECK_TIMEOUT_MS = 12_000;
 
 export {
   GET_SESSIONS_ATTEMPT_TIMEOUT_MS,
+  GET_SESSIONS_LARGE_ATTEMPT_TIMEOUT_MS,
   GET_SESSIONS_MAX_RETRIES,
   GET_SESSIONS_RETRY_BACKOFF_MS,
 } from '@/lib/gateway/get-sessions-retry';
@@ -77,6 +97,13 @@ type PendingRun = {
  */
 export class HermesGatewayClient {
   private closed = false;
+  /**
+   * Bumped by disconnect(). An attemptConnect that started under an older
+   * epoch is talking to a gateway the provider has already discarded, so
+   * every await it resumes from has to be able to tell.
+   */
+  private connectEpoch = 0;
+  private authRejectedState = false;
   private lastHealthError: string | null = null;
   private status: ConnectionStatus = 'disconnected';
   private detail = '';
@@ -96,6 +123,8 @@ export class HermesGatewayClient {
       token: profile.token,
       sessionKey: profile.sessionKey,
       alternateIpv4: profile.alternateIpv4,
+      // onNetworkTrouble: (reason) => this.nudge(reason) — wired when
+      // HttpTransport grows onNetworkTrouble.
     });
     this.monitor = new ConnectionMonitor({
       probe: async () => (await this.healthCheck()) !== null,
@@ -111,6 +140,16 @@ export class HermesGatewayClient {
 
   get statusDetail(): string {
     return this.detail;
+  }
+
+  /**
+   * True while the last disconnect was the gateway refusing our credentials.
+   * The provider's onStatus handler sees that status before the connect()
+   * rejection reaches it, so without this signal it cannot tell "wrong key"
+   * from "gateway down" and schedules a retry that can never succeed.
+   */
+  get authRejected(): boolean {
+    return this.authRejectedState;
   }
 
   get sessionId(): string | undefined {
@@ -155,6 +194,7 @@ export class HermesGatewayClient {
   }
 
   private async attemptConnect(): Promise<void> {
+    const epoch = this.connectEpoch;
     this.closed = false;
     this.setStatus('connecting');
 
@@ -162,11 +202,13 @@ export class HermesGatewayClient {
     try {
       health = await this.healthCheck();
     } catch (error) {
+      if (this.connectEpoch !== epoch) return;
       const message = error instanceof Error ? error.message : String(error);
       this.callbacks.onError?.(message);
       this.monitor.scheduleReconnect(message);
       return;
     }
+    if (this.connectEpoch !== epoch) return;
 
     if (!health) {
       const reason = this.lastHealthError ?? 'no response';
@@ -179,10 +221,12 @@ export class HermesGatewayClient {
     try {
       capabilities = await this.getCapabilities();
     } catch (error) {
+      if (this.connectEpoch !== epoch) return;
       const message = error instanceof Error ? error.message : String(error);
       if (isAuthRejection(error)) {
         this.monitor.suspend();
-        this.setStatus('disconnected', message);
+        this.authRejectedState = true;
+        this.setStatus('disconnected', message, { authRejected: true });
         throw new Error(
           'Gateway rejected the API key. Enter API_SERVER_KEY from %LOCALAPPDATA%\\hermes\\.env.',
         );
@@ -190,7 +234,9 @@ export class HermesGatewayClient {
       // Capability catalog is optional; a gateway without it is still usable.
       this.callbacks.onError?.(message);
     }
+    if (this.connectEpoch !== epoch) return;
 
+    this.authRejectedState = false;
     this.setStatus('connected');
     this.callbacks.onHello?.({
       type: 'hello-ok',
@@ -204,6 +250,7 @@ export class HermesGatewayClient {
   }
 
   disconnect() {
+    this.connectEpoch += 1;
     this.closed = true;
     this.monitor.stop();
     this.abortAllRuns();
@@ -231,6 +278,26 @@ export class HermesGatewayClient {
     if (!this.closed && this.status !== 'connected') {
       void this.connect().catch(() => undefined);
     }
+  }
+
+  /**
+   * Ask the monitor for a health verdict now, on the caller's own evidence of
+   * trouble. Two quick failures reach `reconnecting` in ~2s instead of waiting
+   * out two 30s samples.
+   */
+  nudge(reason: string) {
+    this.monitor.nudge(reason);
+  }
+
+  /**
+   * Re-verify in place. For a caller that doubts a client which still claims
+   * 'connected': rebuilding the client throws away a live connection to
+   * re-earn the answer, and this runs the same connect() attempt on the
+   * existing one.
+   */
+  forceReconnect() {
+    this.setStatus('reconnecting', 'Checking the connection');
+    void this.connect().catch(() => undefined);
   }
 
 
@@ -352,7 +419,7 @@ export class HermesGatewayClient {
     // ~80ms). Try the Gate path first, keep the Hermes one for a direct
     // connection. Same shape either way: { object, data }.
     try {
-      const gate = await this.getSessionsFromPath(`/v1/sessions?limit=${limit}`);
+      const gate = await this.getSessionsFromPath(`/v1/sessions?limit=${limit}`, limit);
       if (Array.isArray(gate?.data)) return gate.data;
     } catch (error) {
       // A direct Hermes host answers the `/v1/*` path 404. Anything else is
@@ -366,11 +433,13 @@ export class HermesGatewayClient {
 
   /**
    * GET /v1/sessions with the shared bounded retry. 404 is not retried so
-   * the /api/sessions fallback stays a single extra request.
+   * the /api/sessions fallback stays a single extra request; `limit` decides
+   * the per-attempt budget, because a bulk read is a different read.
    */
-  private async getSessionsFromPath(path: string): Promise<SessionsResponse> {
-    return withGetSessionsRetry((timeoutMs) =>
-      this.transport.request<SessionsResponse>('GET', path, undefined, timeoutMs),
+  private async getSessionsFromPath(path: string, limit?: number): Promise<SessionsResponse> {
+    return withGetSessionsRetry(
+      (timeoutMs) => this.transport.request<SessionsResponse>('GET', path, undefined, timeoutMs),
+      { limit },
     );
   }
 
@@ -530,6 +599,10 @@ export class HermesGatewayClient {
       onReasoning?: (text: string) => void;
       onTelemetryWarning?: (message: string) => void;
       onModelReport?: (report: import('@/lib/gateway/run-failures').ModelReport) => void;
+      /** The turn id minted for this send, so a cancel can name it. */
+      onTurnId?: (turnId: string) => void;
+      /** A session the gateway adopted for the turn, when it reports one. */
+      onSession?: (sessionId: string) => void;
     },
   ): Promise<string> {
     const body: Record<string, unknown> = {
@@ -538,10 +611,18 @@ export class HermesGatewayClient {
       stream: true,
     };
 
+    const sessionId = options?.sessionId ?? this.currentSessionId;
     const extraHeaders: Record<string, string> = {};
-    if (options?.sessionId || this.currentSessionId) {
-      extraHeaders['X-Hermes-Session-Id'] = options?.sessionId ?? this.currentSessionId!;
+    if (sessionId) {
+      extraHeaders['X-Hermes-Session-Id'] = sessionId;
     }
+
+    // A turn id is minted even though a stock Hermes ignores it, so callers get
+    // one handle per send and a Gate that does read it can correlate the turn.
+    // The header itself stays off this request: an unknown header on a direct
+    // Hermes is a wire change we have no reason to make.
+    const turnId = createTurnId();
+    options?.onTurnId?.(turnId);
 
     const controller = new AbortController();
     const signal = options?.signal || controller.signal;
@@ -562,6 +643,9 @@ export class HermesGatewayClient {
       const errorText = await response.text().catch(() => '');
       throw new Error(messageFromHttpErrorBody(errorText, response.status));
     }
+
+    const adopted = response.headers?.get('x-versutus-session-id');
+    if (adopted && adopted !== sessionId) options?.onSession?.(adopted);
 
     let fullText = '';
     // A failed turn can arrive as an error frame inside an HTTP 200 stream,
@@ -740,11 +824,23 @@ export class HermesGatewayClient {
     this.pendingRuns.clear();
   }
 
+  /**
+   * Cancel a turn server-side.
+   *
+   * A direct Hermes hosts no cancel route, and aborting the stream is the only
+   * cancel it understands — so this is deliberately a no-op here. It exists so
+   * the provider can call cancel without first asking what kind of gateway it
+   * is holding.
+   */
+  async cancelTurn(_turnId: string): Promise<void> {
+    // no server-side cancel on a stock Hermes
+  }
+
   // ─── Utils ────────────────────────────────────────────────────
 
-  private setStatus(status: ConnectionStatus, detail = '') {
+  private setStatus(status: ConnectionStatus, detail = '', info?: { authRejected?: boolean }) {
     this.status = status;
     this.detail = detail;
-    this.callbacks.onStatus?.(status, detail);
+    this.callbacks.onStatus?.(status, detail, info);
   }
 }

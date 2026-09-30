@@ -1,10 +1,12 @@
 import {
   GET_SESSIONS_ATTEMPT_TIMEOUT_MS,
+  GET_SESSIONS_LARGE_ATTEMPT_TIMEOUT_MS,
   GET_SESSIONS_MAX_RETRIES,
   GET_SESSIONS_RETRY_BACKOFF_MS,
   HEALTH_CHECK_TIMEOUT_MS,
   HermesGatewayClient,
 } from '@/lib/gateway/client';
+import { withGetSessionsRetry } from '@/lib/gateway/get-sessions-retry';
 import { ManifestClient } from '@/lib/gateway/manifest-client';
 import { GATEWAY_PROBE_TIMEOUT_MS } from '@/lib/gateway/probe';
 import { resolveResumeSession } from '@/lib/gateway/session-resume';
@@ -178,6 +180,149 @@ describe('getSessions retries a transient Gate list read', () => {
     const src = readSource('src', 'lib', 'gateway', 'manifest-client.ts');
     expect(src).toMatch(/healthCheck\(timeoutMs = HEALTH_CHECK_TIMEOUT_MS\)/);
     expect(src).not.toMatch(/healthCheck\(timeoutMs = 12_000\)/);
+  });
+});
+
+describe('a session-list read is budgeted by how much it asks for', () => {
+  // The Gate's own ceiling for a session-list read is 30s and `limit=200`
+  // measures ~11s on the operator's host. The 8s ceiling therefore aborted
+  // every attempt of a legitimate large read, and each abandoned attempt kept
+  // running on the Gate — retries multiplying load on the read that was
+  // already slow.
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => {
+    jest.useRealTimers();
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+  });
+
+  /**
+   * A read that never answers: the transport's own abort timer is the only
+   * thing that ends it, exactly as a stalled state.db read ends one on the
+   * Gate. Counts the attempts so the clock alone shows the ceiling.
+   */
+  function hangingSessionList(): number[] {
+    const attempts: number[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.includes('/sessions')) return Promise.resolve(jsonResponse({}));
+      attempts.push(attempts.length);
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new TypeError('Aborted')));
+      });
+    });
+    return attempts;
+  }
+
+  test('the per-attempt ceiling turns on the limit, not on the caller', async () => {
+    // 50 is the last "picker refresh" size; 51 is a bulk read.
+    const budgets: number[] = [];
+    const record = (timeoutMs: number) => {
+      budgets.push(timeoutMs);
+      return Promise.resolve(1);
+    };
+    await withGetSessionsRetry(record, { limit: 50 });
+    await withGetSessionsRetry(record, { limit: 51 });
+    await withGetSessionsRetry(record);
+    expect(budgets).toEqual([
+      GET_SESSIONS_ATTEMPT_TIMEOUT_MS,
+      GET_SESSIONS_LARGE_ATTEMPT_TIMEOUT_MS,
+      GET_SESSIONS_ATTEMPT_TIMEOUT_MS, // an unknown limit is the small case
+    ]);
+  });
+
+  test('limit 20 still gives up at 8s, and retries that timeout once', async () => {
+    const attempts = hangingSessionList();
+    let settled = false;
+    const read = new HermesGatewayClient(PROFILE)
+      .getSessions(20)
+      .catch((error: unknown) => error)
+      .then((value) => {
+        settled = true;
+        return value;
+      });
+
+    await jest.advanceTimersByTimeAsync(GET_SESSIONS_ATTEMPT_TIMEOUT_MS);
+    expect(attempts).toHaveLength(1);
+    expect(settled).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(GET_SESSIONS_RETRY_BACKOFF_MS[0]);
+    expect(attempts).toHaveLength(2); // only the 8s ceiling ended the first
+
+    await jest.advanceTimersByTimeAsync(GET_SESSIONS_ATTEMPT_TIMEOUT_MS);
+    expect(String(await read)).toMatch(/timed out/i);
+    expect(attempts).toHaveLength(2); // a timeout is not retried twice
+  });
+
+  test('limit 200 waits the Gate-scale 30s before giving up', async () => {
+    const attempts = hangingSessionList();
+    let settled = false;
+    const read = new HermesGatewayClient(PROFILE)
+      .getSessions(200)
+      .catch((error: unknown) => error)
+      .then((value) => {
+        settled = true;
+        return value;
+      });
+
+    // Under the old 8s ceiling this read would already have burned both
+    // attempts and thrown by 16.5s. A read the Gate allows 30s for cannot be
+    // cut off at 8s or it can never succeed.
+    await jest.advanceTimersByTimeAsync(GET_SESSIONS_ATTEMPT_TIMEOUT_MS * 3); // 24s
+    expect(attempts).toHaveLength(1);
+    expect(settled).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(GET_SESSIONS_LARGE_ATTEMPT_TIMEOUT_MS);
+    expect(String(await read)).toMatch(/timed out/i);
+    expect(attempts).toHaveLength(1);
+  });
+
+  test('a 503 on a large read is still retried — a server error is a blip, not a slow read', async () => {
+    let hits = 0;
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.includes('/v1/sessions')) {
+        hits += 1;
+        return Promise.resolve(
+          hits === 1
+            ? jsonResponse({ error: { message: 'state.db is locked' } }, 503)
+            : jsonResponse(SESSIONS),
+        );
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+
+    const sessions = await withRetryClock(() => new HermesGatewayClient(PROFILE).getSessions(200));
+
+    expect(sessions).toHaveLength(2);
+    expect(hits).toBe(2);
+  });
+
+  test('ManifestClient reads a large list on the same budget, and never retries its timeout', async () => {
+    const attempts = hangingSessionList();
+    const read = manifestClient({ health: '/health', sessions: '/v1/sessions' })
+      .getSessions(200)
+      .catch((error: unknown) => error);
+
+    await jest.advanceTimersByTimeAsync(GET_SESSIONS_LARGE_ATTEMPT_TIMEOUT_MS);
+
+    expect(String(await read)).toMatch(/timed out/i);
+    // Same rule on the live Gate path: the abandoned attempt is still holding
+    // state.db, so a second one is not started.
+    expect(attempts).toHaveLength(1);
+  });
+
+  test('a small ManifestClient read keeps the 8s ceiling and its one timeout retry', async () => {
+    const attempts = hangingSessionList();
+    const read = manifestClient({ health: '/health', sessions: '/v1/sessions' })
+      .getSessions(20)
+      .catch((error: unknown) => error);
+
+    await jest.advanceTimersByTimeAsync(GET_SESSIONS_ATTEMPT_TIMEOUT_MS * 2 + GET_SESSIONS_RETRY_BACKOFF_MS[0]);
+
+    expect(String(await read)).toMatch(/timed out/i);
+    expect(attempts).toHaveLength(2);
   });
 });
 
