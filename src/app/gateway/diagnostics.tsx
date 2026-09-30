@@ -1,9 +1,15 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Badge, Button, Card, Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
+import {
+  clearFailures,
+  loadFailures,
+  type FailureEntry,
+} from '@/lib/diagnostics/failure-log';
+import { formatRelativeTime } from '@/lib/format';
 import {
   probeRuntimeGlobals,
   probeStreamingFetch,
@@ -23,8 +29,27 @@ export default function GatewayDiagnosticsScreen() {
   const { activeGateway } = useGateway();
   const [liveCheck, setLiveCheck] = useState<EnvironmentCheck | null>(null);
   const [running, setRunning] = useState(false);
+  const [failures, setFailures] = useState<FailureEntry[]>([]);
 
   const globals = useMemo(() => probeRuntimeGlobals(), []);
+
+  // What this phone has already failed at, read once on arrival. It is the
+  // section an operator opens this screen FOR after a crash: the probes above
+  // say what the engine can do, this says what actually went wrong here.
+  useEffect(() => {
+    let cancelled = false;
+    void loadFailures().then((loaded) => {
+      if (!cancelled) setFailures(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const clearRecorded = useCallback(async () => {
+    await clearFailures();
+    setFailures([]);
+  }, []);
 
   const healthUrl = activeGateway
     ? `${activeGateway.url.replace(/\/+$/, '')}/health`
@@ -92,6 +117,43 @@ export default function GatewayDiagnosticsScreen() {
             style={styles.button}
           />
         </Card>
+
+        <Card variant="inset" padding={Spacing.three} style={styles.card}>
+          <Text variant="headline">Recent failures</Text>
+          <Text variant="caption" color="secondary" style={styles.detail}>
+            Crashes, uncaught errors and rejected promises recorded on this phone. Kept
+            on the device only — nothing is sent anywhere.
+          </Text>
+          {failures.length === 0 ? (
+            <Text variant="caption" color="tertiary" style={styles.detail}>
+              No failures recorded
+            </Text>
+          ) : (
+            failures.map((failure, index) => (
+              <View key={`${failure.at}-${index}`} style={styles.failure}>
+                <View style={styles.row}>
+                  <Text variant="caption" color="tertiary" style={styles.failureKind}>
+                    {`${formatRelativeTime(failure.at)} · ${failure.kind}`}
+                  </Text>
+                  {failure.count > 1 ? (
+                    <Badge label={`×${failure.count}`} tone="neutral" />
+                  ) : null}
+                </View>
+                <Text variant="caption" color="secondary" numberOfLines={3}>
+                  {failure.message}
+                </Text>
+              </View>
+            ))
+          )}
+          <Button
+            label="Clear"
+            variant="secondary"
+            size="sm"
+            onPress={() => void clearRecorded()}
+            disabled={failures.length === 0}
+            style={styles.button}
+          />
+        </Card>
       </ScrollView>
     </Screen>
   );
@@ -106,4 +168,6 @@ const styles = StyleSheet.create({
   rowLabel: { flexShrink: 1 },
   detail: { marginTop: Spacing.one },
   button: { marginTop: Spacing.two },
+  failure: { marginTop: Spacing.two, gap: Spacing.one },
+  failureKind: { flexShrink: 1 },
 });

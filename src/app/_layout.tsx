@@ -4,7 +4,7 @@ import { fetch as expoFetch } from 'expo/fetch';
 
 import * as Notifications from 'expo-notifications';
 import * as Linking from 'expo-linking';
-import { Stack, ThemeProvider, useRouter } from 'expo-router';
+import { Stack, ThemeProvider, useRouter, type ErrorBoundaryProps } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -13,6 +13,7 @@ import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import { AppBootstrap } from '@/components/app-bootstrap';
 import { AppLockGate } from '@/components/app-lock-gate';
 import { ConnectedToast } from '@/components/connected-toast';
+import { ErrorFallback } from '@/components/error-fallback';
 import { FontProvider } from '@/components/font-provider';
 import { HandsfreeCallBanner } from '@/components/voice/handsfree-call-banner';
 import { TlsFingerprintGuard } from '@/components/gateway/tls-fingerprint-guard';
@@ -26,6 +27,7 @@ import {
 import { DemoGatewayProvider } from '@/context/demo-gateway-provider';
 import { HandsfreeVoiceProvider } from '@/context/handsfree-voice-provider';
 import { isShowcaseMode } from '@/lib/demo/showcase-mode';
+import { installGlobalFailureHandlers, recordFailure } from '@/lib/diagnostics/failure-log';
 import type { ChatSurface } from '@/lib/gateway/bots';
 import { deepLinkTarget } from '@/lib/gateway/deep-link';
 import { openSessionById, openSessionByIdFailureText } from '@/lib/gateway/session-open-by-id';
@@ -68,6 +70,12 @@ import { routeForTap } from '@/lib/notifications/tap-route';
 // client is constructed. See streaming-fetch.ts for why it is installed here
 // rather than imported by the transport.
 installStreamingFetch(expoFetch as unknown as typeof globalThis.fetch);
+
+// Installed at the same point, for the same reason: a failure before this
+// line has nothing watching it. Without it an uncaught error in an event
+// handler on a release build ends the app with no redbox and no record, and a
+// rejected promise nobody catches is invisible for good. See failure-log.ts.
+installGlobalFailureHandlers();
 
 /**
  * The provider calls a quick reply needs, narrowed to the shape the reply path
@@ -734,3 +742,30 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 });
+
+/**
+ * The boundary above the providers, which is the only place one can be.
+ *
+ * Expo Router wraps a route's own component in this export (`Try`), and for
+ * the root layout that component is `RootLayout` itself — so this catches a
+ * render error thrown by GatewayProvider, FontProvider or the voice provider,
+ * not only by the Stack below them. The four `componentDidCatch` classes in
+ * the app guard single canvases; nothing guarded this.
+ *
+ * The record is written from an effect rather than during render: the boundary
+ * is already the thing that failed, and its own work must not be the reason a
+ * retry fails again. `retry` is the router's own — it clears the error and
+ * re-renders, which is the only recovery that can still be right.
+ */
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  useEffect(() => {
+    void recordFailure({
+      kind: 'render',
+      message: error?.message ?? 'An unknown render error stopped the app.',
+      stack: error?.stack,
+      fatal: true,
+    });
+  }, [error]);
+
+  return <ErrorFallback error={error} retry={() => void retry()} />;
+}
