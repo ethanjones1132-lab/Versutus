@@ -12,6 +12,11 @@ const ACTIVITY_RUNS_KEY = 'versutus:activity-runs';
 /** Cap so a long-lived install does not grow unbounded. */
 export const ACTIVITY_RUNS_PERSIST_CAP = 40;
 
+/** What a refused read is named by, so a swallowed throw still says itself. */
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export type OfflineQueueItem = {
   id: string;
   text: string;
@@ -122,7 +127,16 @@ function isActivityRun(value: unknown): value is ActivityRun {
 }
 
 export async function loadOfflineQueue(): Promise<OfflineQueueItem[]> {
-  const raw = await keyValueStorage.getItem(OFFLINE_QUEUE_KEY);
+  let raw: string | null;
+  try {
+    raw = await keyValueStorage.getItem(OFFLINE_QUEUE_KEY);
+  } catch (error) {
+    // AsyncStorage can refuse a read (an Android row-size or SQLite fault), and
+    // this load is one of the four in the provider's `Promise.all` — a throw
+    // here fails the whole bootstrap rather than starting with an empty outbox.
+    console.warn(`[session-persistence] Could not read the offline queue: ${errorText(error)}`);
+    return [];
+  }
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -209,7 +223,15 @@ export function normalizeRestoredRuns(runs: ActivityRun[]): ActivityRun[] {
 }
 
 export async function loadActivityRuns(): Promise<ActivityRun[]> {
-  const raw = await keyValueStorage.getItem(ACTIVITY_RUNS_KEY);
+  let raw: string | null;
+  try {
+    raw = await keyValueStorage.getItem(ACTIVITY_RUNS_KEY);
+  } catch (error) {
+    // The other half of the same `Promise.all`: an unreadable run history is an
+    // empty Activity tab, not a bootstrap that never settles.
+    console.warn(`[session-persistence] Could not read activity runs: ${errorText(error)}`);
+    return [];
+  }
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as unknown;

@@ -1,12 +1,17 @@
 import { sanitizeHeaderValue } from '@/lib/gateway/http-transport';
 import { collapseDuplicateGateways, mergeIntoExistingGateway } from '@/lib/gateway/profile-dedupe';
 import { normalizeGatewayUrl } from '@/lib/gateway/url';
+import { keyValueStorage } from '@/lib/storage/key-value';
 import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
 
 import type { GatewayProfile } from '@/lib/gateway/types';
 
 const GATEWAYS_KEY = 'versutus:gateways';
 const ACTIVE_GATEWAY_KEY = 'versutus:active-gateway';
+
+/** Where an unparsable gateways blob is kept, and how many copies are kept. */
+const CORRUPT_GATEWAYS_PREFIX = 'versutus:gateways:corrupt-';
+const CORRUPT_GATEWAYS_KEPT = 3;
 
 // upsert/remove/save are read-modify-write over one JSON array. Two overlapping
 // mutations each load the same snapshot and the later write erases the earlier
@@ -46,15 +51,78 @@ function withCleanCredentials(profile: GatewayProfile): GatewayProfile {
   return { ...profile, token, sessionKey };
 }
 
+/**
+ * Two failures in the same millisecond must not write over each other's copy,
+ * so the stamp only ever moves forward.
+ */
+let lastCorruptStamp = 0;
+
+function nextCorruptStamp(): number {
+  lastCorruptStamp = Math.max(Date.now(), lastCorruptStamp + 1);
+  return lastCorruptStamp;
+}
+
+/** Keep the newest few rescue copies and drop the rest. */
+async function pruneCorruptGateways(): Promise<void> {
+  try {
+    const keys = await keyValueStorage.getAllKeys();
+    const copies = keys
+      .filter((key) => key.startsWith(CORRUPT_GATEWAYS_PREFIX))
+      // Numeric order, not the keys' own: `corrupt-9` sorts after
+      // `corrupt-10` as text, which would prune the newest copy first.
+      .sort((a, b) => Number(a.slice(CORRUPT_GATEWAYS_PREFIX.length)) - Number(b.slice(CORRUPT_GATEWAYS_PREFIX.length)));
+    const stale = copies.slice(0, Math.max(0, copies.length - CORRUPT_GATEWAYS_KEPT));
+    for (const key of stale) {
+      try {
+        await keyValueStorage.removeItem(key);
+      } catch {
+        // A copy that outlives its welcome is not worth failing a load over.
+      }
+    }
+  } catch {
+    // Nothing to prune from a store that will not list its keys.
+  }
+}
+
+/**
+ * An unparsable gateways blob is the one failed read whose bytes are worth more
+ * than the empty list this load answers with: they hold every saved gateway and
+ * every token, and the next `upsertGateway` overwrites whatever they came from.
+ * So the raw string is parked under its own key first — through plain storage,
+ * because a SecureStore that just failed to hand it over is the likeliest reason
+ * the read failed at all — and the operator is told where it went.
+ */
+async function preserveCorruptGateways(raw: string): Promise<void> {
+  const key = `${CORRUPT_GATEWAYS_PREFIX}${nextCorruptStamp()}`;
+  try {
+    await keyValueStorage.setItem(key, raw);
+  } catch {
+    console.warn(
+      `[gateway-storage] Stored gateways could not be parsed, and the raw copy for "${key}" could not be written.`,
+    );
+    return;
+  }
+  console.warn(
+    `[gateway-storage] Stored gateways could not be parsed — kept a copy at "${key}" and continuing with none.`,
+  );
+  await pruneCorruptGateways();
+}
+
 export async function loadGateways(): Promise<GatewayProfile[]> {
   const raw = await secureKeyValueStorage.getItem(GATEWAYS_KEY);
   if (!raw) return [];
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw) as GatewayProfile[];
-    return Array.isArray(parsed) ? parsed.map(withCleanCredentials) : [];
+    parsed = JSON.parse(raw);
   } catch {
+    await preserveCorruptGateways(raw);
     return [];
   }
+  if (!Array.isArray(parsed)) {
+    await preserveCorruptGateways(raw);
+    return [];
+  }
+  return parsed.map(withCleanCredentials);
 }
 
 export async function saveGateways(gateways: GatewayProfile[]): Promise<void> {
