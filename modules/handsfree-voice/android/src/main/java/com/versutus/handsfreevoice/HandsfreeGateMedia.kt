@@ -37,10 +37,19 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
     private const val CAPTURE_BYTES_PER_SAMPLE = 2
     private const val CAPTURE_FRAME_BYTES =
       CAPTURE_SAMPLE_RATE * CAPTURE_CHANNELS * CAPTURE_BYTES_PER_SAMPLE * FRAME_MS / 1000
+    private const val MEDIA_FAILED_MESSAGE =
+      "This phone could not open call audio capture or playback."
+    /** A read that returns nothing is usually a dead device, not a quiet one. */
+    private const val READ_FAILURE_BACKOFF_MS = 10L
+    private const val MAX_CONSECUTIVE_READ_FAILURES = 100
   }
 
   private val client = OkHttpClient.Builder()
     .readTimeout(0, TimeUnit.MILLISECONDS)
+    // A half-open link (Wi-Fi -> cellular) never trips a read timeout, so
+    // without a ping the phone only notices when the user speaks into nothing.
+    // A missed pong arrives as onFailure, which the reconnect path already owns.
+    .pingInterval(15, TimeUnit.SECONDS)
     .build()
 
   @Volatile private var running = false
@@ -77,7 +86,7 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
     // A call with no microphone or no speaker is failed at once instead of
     // idling until the Gate's no-audio timeout closes the socket silently.
     if (!startCapture(context) || !startPlayback()) {
-      onFrame("""{"t":"error","code":"media_failed","message":"This phone could not open call audio capture or playback.","fatal":true}""")
+      onFrame(errorFrame("media_failed", MEDIA_FAILED_MESSAGE))
       stop()
     }
   }
@@ -88,6 +97,8 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
     running = false
     socket?.close(1000, "call ended")
     socket = null
+    // Both loops end on `running`, so the interrupt is only a wake-up: they
+    // restore its flag and return rather than dying with it.
     captureThread?.interrupt()
     captureThread = null
     playbackThread?.interrupt()
@@ -134,15 +145,23 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
       // restart both close this way. Without a frame the banner would sit on
       // a dead call forever.
       if (running && !sawEnded) {
-        onFrame("""{"t":"error","code":"socket_closed","message":"The PC closed the call audio link.","fatal":true}""")
+        onFrame(errorFrame("socket_closed", "The PC closed the call audio link."))
       }
     }
 
     override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) {
       if (webSocket != socket) return
-      onFrame("""{"t":"error","code":"socket_failed","message":"${error.message ?: "socket failed"}","fatal":true}""")
+      onFrame(errorFrame("socket_failed", error.message ?: "socket failed"))
     }
   }
+
+  /**
+   * The phone's only hand-built frames. OkHttp's messages carry quotes and
+   * newlines, and JS only counts a `socket_failed` frame as retryable if it
+   * parses, so every value goes through [escapeJsonString].
+   */
+  private fun errorFrame(code: String, message: String): String =
+    """{"t":"error","code":"${escapeJsonString(code)}","message":"${escapeJsonString(message)}","fatal":true}"""
 
   private fun handleTextFrame(text: String) {
     onFrame(text)
@@ -196,10 +215,29 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
     record.startRecording()
     captureThread = Thread {
       val frame = ByteArray(CAPTURE_FRAME_BYTES)
-      while (running) {
-        val read = record.read(frame, 0, frame.size)
-        if (read <= 0) continue
-        socket?.send(ByteString.of(*frame.copyOf(read)))
+      var failedReads = 0
+      try {
+        while (running) {
+          val read = record.read(frame, 0, frame.size)
+          if (read <= 0) {
+            // A record whose mic was taken by another app, or that lost audio
+            // focus, fails every read at once: spinning on it burns the CPU for
+            // the rest of the call and sends the Gate silence.
+            Thread.sleep(READ_FAILURE_BACKOFF_MS)
+            failedReads += 1
+            if (failedReads >= MAX_CONSECUTIVE_READ_FAILURES) {
+              onFrame(errorFrame("media_failed", MEDIA_FAILED_MESSAGE))
+              break
+            }
+            continue
+          }
+          failedReads = 0
+          socket?.send(ByteString.of(*frame.copyOf(read)))
+        }
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+      } catch (_: Throwable) {
+        // The default handler would kill the app on a capture thread.
       }
     }.also { it.name = "gate-capture"; it.start() }
     return true
@@ -239,14 +277,11 @@ class HandsfreeGateMedia(private val onFrame: (String) -> Unit) {
     audioTrack = track
     track.play()
     playbackThread = Thread {
-      while (running) {
-        val pcm = buffer.drain()
-        if (pcm == null) {
-          Thread.sleep(5)
-          continue
-        }
-        track.write(pcm, 0, pcm.size)
-      }
+      PlaybackLoop(
+        isRunning = { running },
+        drain = { buffer.drain() },
+        write = { pcm -> track.write(pcm, 0, pcm.size) },
+      ).run()
     }.also { it.name = "gate-playback"; it.start() }
     return true
   }

@@ -764,41 +764,60 @@ class HandsfreeCallService : Service() {
     record.startRecording()
     val thread = Thread {
       val buffer = ShortArray(VAD_BLOCK_SAMPLES)
-      while (vadRunning) {
-        val read = try {
-          record.read(buffer, 0, buffer.size)
-        } catch (_: Exception) {
-          -1
-        }
-        if (read <= 0) continue
-        var sum = 0.0
-        for (i in 0 until read) {
-          val sample = buffer[i].toDouble()
-          sum += sample * sample
-        }
-        val rms = sqrt(sum / read)
-        val level = (rms / 32768.0).coerceIn(0.0, 1.0)
-        val now = SystemClock.elapsedRealtime()
-        if (noiseFloor == 0.0) {
-          noiseFloor = level.coerceAtLeast(MIN_FLOOR)
-        } else {
-          noiseFloor = noiseFloor * (1 - FLOOR_ADAPT) + level * FLOOR_ADAPT
-        }
-        val threshold = maxOf(noiseFloor * ONSET_FACTOR, MIN_FLOOR)
-        if (level > threshold) {
-          if (onsetMs == 0L) onsetMs = now
-          if (now - onsetMs >= ONSET_HOLD_MS) {
-            onsetMs = 0L
-            mainHandler.post { handleBargeIn() }
-            break
+      var failedReads = 0
+      try {
+        while (vadRunning) {
+          val read = try {
+            record.read(buffer, 0, buffer.size)
+          } catch (_: Exception) {
+            -1
           }
-        } else {
-          onsetMs = 0L
+          if (read <= 0) {
+            // A record whose mic was taken, or that lost focus, fails every
+            // read at once, so spinning on it would burn the CPU for the rest
+            // of the call while the barge-in tap can hear nothing anyway.
+            Thread.sleep(READ_FAILURE_BACKOFF_MS)
+            failedReads += 1
+            if (failedReads >= MAX_CONSECUTIVE_READ_FAILURES) {
+              vadRunning = false
+              break
+            }
+            continue
+          }
+          failedReads = 0
+          var sum = 0.0
+          for (i in 0 until read) {
+            val sample = buffer[i].toDouble()
+            sum += sample * sample
+          }
+          val rms = sqrt(sum / read)
+          val level = (rms / 32768.0).coerceIn(0.0, 1.0)
+          val now = SystemClock.elapsedRealtime()
+          if (noiseFloor == 0.0) {
+            noiseFloor = level.coerceAtLeast(MIN_FLOOR)
+          } else {
+            noiseFloor = noiseFloor * (1 - FLOOR_ADAPT) + level * FLOOR_ADAPT
+          }
+          val threshold = maxOf(noiseFloor * ONSET_FACTOR, MIN_FLOOR)
+          if (level > threshold) {
+            if (onsetMs == 0L) onsetMs = now
+            if (now - onsetMs >= ONSET_HOLD_MS) {
+              onsetMs = 0L
+              mainHandler.post { handleBargeIn() }
+              break
+            }
+          } else {
+            onsetMs = 0L
+          }
+          if (now - lastLevelAt >= LEVEL_INTERVAL_MS) {
+            lastLevelAt = now
+            emitLevel(level)
+          }
         }
-        if (now - lastLevelAt >= LEVEL_INTERVAL_MS) {
-          lastLevelAt = now
-          emitLevel(level)
-        }
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+      } catch (_: Exception) {
+        // A released AudioRecord throws here; the tap is already torn down.
       }
     }
     thread.isDaemon = true
@@ -967,6 +986,9 @@ class HandsfreeCallService : Service() {
     private const val FLOOR_ADAPT = 0.02
     private const val ONSET_FACTOR = 3.0
     private const val MIN_FLOOR = 0.01
+    /** Backoff between failed reads, and the run of them that ends the tap. */
+    private const val READ_FAILURE_BACKOFF_MS = 10L
+    private const val MAX_CONSECUTIVE_READ_FAILURES = 100
 
     private const val TAG = "HandsfreeCallService"
 
