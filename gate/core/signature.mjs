@@ -17,6 +17,51 @@ export function buildSignedPayload({ deviceId, clientId, role, scopes, signedAtM
   return ['v4', deviceId, clientId, role, scopes.join(','), String(signedAtMs)].join('|');
 }
 
+const DEFAULT_REPLAY_LIMIT = 10_000;
+
+/**
+ * Signature replay cache with the two properties a bare Set lacks: entries
+ * expire after the skew window (a signature seen once need not be remembered
+ * forever) and the cache is bounded (an unauthenticated endpoint must not be
+ * able to grow process memory without limit). Insertion order is preserved,
+ * so eviction and pruning always drop the oldest entries first.
+ */
+export class ReplayCache {
+  #entries = new Map();
+  #maxSkewMs;
+  #limit;
+
+  constructor({ maxSkewMs = 300_000, limit = DEFAULT_REPLAY_LIMIT } = {}) {
+    this.#maxSkewMs = maxSkewMs;
+    this.#limit = limit;
+  }
+
+  has(signature) {
+    const expiryMs = this.#entries.get(signature);
+    if (expiryMs === undefined) return false;
+    if (expiryMs <= Date.now()) {
+      this.#entries.delete(signature);
+      return false;
+    }
+    return true;
+  }
+
+  add(signature) {
+    const now = Date.now();
+    // Prune expired entries; the Map preserves insertion order, so the first
+    // unexpired entry means every later one is unexpired too.
+    for (const [key, expiryMs] of this.#entries) {
+      if (expiryMs <= now) this.#entries.delete(key);
+      else break;
+    }
+    this.#entries.delete(signature);
+    this.#entries.set(signature, now + this.#maxSkewMs);
+    while (this.#entries.size > this.#limit) {
+      this.#entries.delete(this.#entries.keys().next().value);
+    }
+  }
+}
+
 /**
  * Verify a signed access request from the app's device-pairing handshake.
  *

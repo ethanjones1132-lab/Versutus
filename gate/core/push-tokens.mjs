@@ -1,5 +1,11 @@
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+
+import { readJsonFile, writeFileAtomic } from './atomic-file.mjs';
+
+// A read that lands while another process is mid-write can catch a truncated
+// file; one short retry rides out that window before the file is called corrupt.
+const CORRUPT_RETRY_MS = 25;
 
 const DEFAULT_ROW = Object.freeze({
   enabled: false,
@@ -36,17 +42,20 @@ export class PushTokenStore {
   }
 
   async #readAll() {
-    try {
-      const parsed = JSON.parse(await readFile(this.path, 'utf8'));
-      return isRecord(parsed) ? parsed : {};
-    } catch {
+    const first = await readJsonFile(this.path);
+    if (first.state === 'corrupt') {
+      await new Promise((resolve) => setTimeout(resolve, CORRUPT_RETRY_MS));
+      const second = await readJsonFile(this.path);
+      if (second.state === 'ok') return isRecord(second.value) ? second.value : {};
       return {};
     }
+    if (first.state === 'missing') return {};
+    return isRecord(first.value) ? first.value : {};
   }
 
   async #writeAll(rows) {
     await mkdir(dirname(this.path), { recursive: true });
-    await writeFile(this.path, `${JSON.stringify(rows, null, 2)}\n`, {
+    await writeFileAtomic(this.path, `${JSON.stringify(rows, null, 2)}\n`, {
       encoding: 'utf8',
       mode: 0o600,
     });

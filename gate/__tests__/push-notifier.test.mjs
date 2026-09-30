@@ -563,6 +563,114 @@ test('removes a row when Expo reports DeviceNotRegistered', async () => {
   assert.deepEqual(removed, ['ExponentPushToken[token-1]']);
 });
 
+// Expo produces receipts asynchronously (~15 minutes), so the notifier
+// schedules one deferred collection per batch instead of polling inline.
+// This test wires the REAL createPushSend (fake fetch returning one
+// DeviceNotRegistered receipt) to the REAL PushTokenStore and the REAL
+// notifier: the receipt names a ticket id, and only the ticket-to-token map
+// from send() lets the prune find the stored expo push token. A fake
+// collectReceipts returning a token directly would hide a broken translation.
+test('deferred receipt collection prunes a dead device found by real receipts', async () => {
+  const { mkdtemp } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { PushTokenStore } = await import('../core/push-tokens.mjs');
+  const { createPushSend } = await import('../core/push-send.mjs');
+  const dir = await mkdtemp(join(tmpdir(), 'gate-push-notifier-receipts-'));
+  const tokens = new PushTokenStore(join(dir, 'push-tokens.json'));
+  await tokens.upsert('phone-1', { expoPushToken: 'ExponentPushToken[dead-1]', enabled: true });
+
+  const pushSend = createPushSend({
+    fetchImpl: async (url, init) => {
+      if (String(url).includes('getReceipts')) {
+        const { ids } = JSON.parse(init.body);
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return { data: Object.fromEntries(ids.map((id) => [id, { details: { error: 'DeviceNotRegistered' } }])) };
+          },
+        };
+      }
+      const messages = JSON.parse(init.body);
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { data: messages.map((entry, index) => ({ status: 'ok', id: `ticket-${index}` })) };
+        },
+      };
+    },
+  });
+
+  const collected = [];
+  const notifier = createPushNotifier({
+    tokens,
+    send: pushSend.send,
+    collectReceipts: async (ids, ticketTokens) => {
+      collected.push([ids, ticketTokens]);
+      return pushSend.collectReceipts(ids, ticketTokens);
+    },
+    receiptDelayMs: 10,
+  });
+
+  const result = await notifier.notify({ trigger: 'run', runId: 'run-1' });
+
+  assert.equal(result.ok, true);
+  assert.notEqual(await tokens.get('phone-1'), null, 'the dead device survives until the receipts exist');
+  assert.deepEqual(collected, [], 'receipts are not collected inline');
+
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(
+    collected,
+    [[['ticket-0'], { 'ticket-0': 'ExponentPushToken[dead-1]' }]],
+    'one deferred collection per batch, with the ticket-to-token map',
+  );
+  assert.equal(await tokens.get('phone-1'), null, 'the dead device is pruned after the deferred collection');
+});
+
+test('a failed send schedules no receipt collection', async () => {
+  const collected = [];
+  const notifier = createPushNotifier({
+    tokens: {
+      listEnabled: async () => [row()],
+      removeByToken: async () => false,
+    },
+    send: async () => ({ ok: false, error: new Error('offline') }),
+    collectReceipts: async (ids) => { collected.push(ids); return { ok: true, receipts: [], deadTokens: [] }; },
+    receiptDelayMs: 10,
+  });
+
+  const result = await notifier.notify({ trigger: 'run', runId: 'run-1' });
+
+  assert.equal(result.ok, false);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(collected, []);
+});
+
+test('a receipt collection failure is swallowed and logged', async () => {
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const notifier = createPushNotifier({
+      tokens: {
+        listEnabled: async () => [row()],
+        removeByToken: async () => false,
+      },
+      send: async () => ({ ok: true, tickets: [{ status: 'ok', id: 'ticket-1' }] }),
+      collectReceipts: async () => { throw new Error('receipts offline'); },
+      receiptDelayMs: 10,
+    });
+
+    await notifier.notify({ trigger: 'run', runId: 'run-1' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.ok(warnings.some((line) => line.includes('receipts offline')));
+});
+
 test('widgetSnapshot words the Gate state for the home-screen card', () => {
   assert.deepEqual(widgetSnapshot(), {
     connected: true,

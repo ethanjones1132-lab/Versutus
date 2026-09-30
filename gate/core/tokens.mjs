@@ -1,5 +1,7 @@
-import { randomBytes , timingSafeEqual } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { copyFile } from 'node:fs/promises';
+
+import { readJsonFile, writeFileAtomic } from './atomic-file.mjs';
 
 export class TokenStore {
   #path;
@@ -14,14 +16,35 @@ export class TokenStore {
       return this.#cached;
     }
 
-    try {
-      const data = await readFile(this.#path, 'utf-8');
-      const parsed = JSON.parse(data);
-      this.#cached = parsed.token;
-      return this.#cached;
-    } catch {
+    const result = await readJsonFile(this.#path);
+    if (result.state === 'missing') {
       return null;
     }
+    if (result.state === 'corrupt') {
+      // A corrupt file means the token on the phone no longer matches anything
+      // we can recover; minting a replacement is the only way forward, but it
+      // must be loud and the original must survive as the recovery path.
+      await this.#quarantineCorrupt(result.error);
+      return null;
+    }
+    this.#cached = result.value.token;
+    return this.#cached;
+  }
+
+  async #quarantineCorrupt(error) {
+    const backup = `${this.#path}.corrupt-${Date.now()}`;
+    let copied = false;
+    try {
+      await copyFile(this.#path, backup);
+      copied = true;
+    } catch {
+      // Best effort: the loud log below is the real signal.
+    }
+    console.error(
+      `Token store ${this.#path} is unreadable (${error?.message ?? error}); `
+      + `${copied ? `a copy was left at ${backup}` : 'it could not be copied'}. `
+      + 'Minting a new bootstrap token — the token on the phone will no longer authenticate.'
+    );
   }
 
   async ensureToken() {
@@ -37,8 +60,7 @@ export class TokenStore {
     const bytes = randomBytes(32);
     const token = bytes.toString('base64url');
 
-    const data = JSON.stringify({ token });
-    await writeFile(this.#path, data, { mode: 0o600 });
+    await writeFileAtomic(this.#path, JSON.stringify({ token }), { mode: 0o600 });
 
     this.#cached = token;
     return token;

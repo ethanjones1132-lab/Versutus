@@ -251,13 +251,15 @@ export function widgetSnapshot({ connected = true, busyRuns = 0, approvalsPendin
   };
 }
 
-export function createPushNotifier({ tokens, send, snapshot = null, now }) {
+export function createPushNotifier({ tokens, send, collectReceipts = null, snapshot = null, now, receiptDelayMs }) {
   if (!tokens || typeof tokens.listEnabled !== 'function' || typeof tokens.removeByToken !== 'function') {
     throw new Error('tokens must provide listEnabled() and removeByToken()');
   }
   if (typeof send !== 'function') throw new Error('send must be a function');
   // Injectable clock, so tests pin the minute of day; production reads the wall clock.
   const nowSource = typeof now === 'function' ? now : () => new Date();
+  // Expo needs ~15 minutes before receipts exist; tests inject a short delay.
+  const receiptDelay = typeof receiptDelayMs === 'number' ? receiptDelayMs : 15 * 60 * 1000;
 
   const seen = new Set();
 
@@ -266,6 +268,35 @@ export function createPushNotifier({ tokens, send, snapshot = null, now }) {
     if (seen.size >= DEDUPE_LIMIT) seen.delete(seen.values().next().value);
     seen.add(key);
     return true;
+  }
+
+  // One deferred receipt collection per batch, scheduled after a successful
+  // send: Expo produces receipts asynchronously, so polling inline would find
+  // nothing. Dead tokens found by the receipts prune through the same
+  // removeByToken path the ticket-level dead tokens already use. The send
+  // result's ticket-to-token map must travel with the ticket ids — a receipt
+  // names a ticket id, but the store prunes by push token.
+  function scheduleReceiptCollection(result) {
+    if (typeof collectReceipts !== 'function') return;
+    const ticketIds = (Array.isArray(result?.tickets) ? result.tickets : [])
+      .filter((ticket) => ticket?.status === 'ok' && typeof ticket.id === 'string')
+      .map((ticket) => ticket.id);
+    if (ticketIds.length === 0) return;
+    const ticketTokens = result?.ticketTokens && typeof result.ticketTokens === 'object' ? result.ticketTokens : {};
+    const timer = setTimeout(() => {
+      Promise.resolve()
+        .then(() => collectReceipts(ticketIds, ticketTokens))
+        .then((receiptResult) => {
+          if (receiptResult?.ok !== true) return;
+          const deadTokens = Array.isArray(receiptResult.deadTokens) ? receiptResult.deadTokens : [];
+          return Promise.all(deadTokens.map((token) => tokens.removeByToken(token)));
+        })
+        .catch((error) => {
+          console.warn('Deferred push receipt collection failed:', error?.message ?? error);
+        });
+    }, receiptDelay);
+    // A pending receipt collection must never hold the process open.
+    timer.unref?.();
   }
 
   async function notify(event) {
@@ -302,6 +333,7 @@ export function createPushNotifier({ tokens, send, snapshot = null, now }) {
     }
     const deadTokens = Array.isArray(result?.deadTokens) ? result.deadTokens : [];
     await Promise.all(deadTokens.map((token) => tokens.removeByToken(token)));
+    scheduleReceiptCollection(result);
     return result;
   }
 

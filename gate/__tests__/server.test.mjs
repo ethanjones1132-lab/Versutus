@@ -4,9 +4,31 @@ import { mkdir, writeFile, mkdtemp, readFile, rm, copyFile } from 'node:fs/promi
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { request as httpRequest } from 'node:http';
 import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 
 import { createGate } from '../core/server.mjs';
+
+// Raw POST that survives the server destroying an oversized request: the
+// 413 arrives on the response stream while the request stream is still
+// sending, so the request error is expected and swallowed.
+function postRaw(port, path, body, headers = {}) {
+  return new Promise((resolve) => {
+    const req = httpRequest({
+      host: 'localhost',
+      port,
+      path,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, body: data }));
+    });
+    req.on('error', () => { /* the server hangs up on an oversized body */ });
+    req.end(body);
+  });
+}
 
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 
@@ -254,6 +276,85 @@ test('a device token issued via pairing authenticates like the bootstrap token',
       headers: { Authorization: `Bearer ${token}` },
     });
     assert.equal(response.status, 200);
+  } finally {
+    await gate.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an oversized access body is rejected with 413, not buffered', async () => {
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
+  try {
+    // A signed access request is a few hundred bytes; 100 KiB of JSON is
+    // far past the 16 KiB limit and must be refused while it is still
+    // streaming, not after being buffered whole.
+    const body = JSON.stringify({ device: { id: 'device-1', publicKey: 'x'.repeat(100 * 1024) } });
+    const response = await postRaw(gate.port, '/.well-known/gateway/access', body);
+
+    assert.equal(response.status, 413);
+    assert.equal(JSON.parse(response.body).error.code, 'body_too_large');
+  } finally {
+    await gate.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an access body at exactly the 16 KiB limit is not a 413', async () => {
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
+  try {
+    // '{"pad":"' + N + '"}' is 10 + N bytes; 16384 bytes is exactly the limit.
+    const body = `{"pad":"${'a'.repeat(16384 - 10)}"}`;
+    assert.equal(Buffer.byteLength(body), 16 * 1024);
+    const response = await postRaw(gate.port, '/.well-known/gateway/access', body);
+
+    assert.notEqual(response.status, 413, 'a body at the limit is not oversized');
+    assert.equal(response.status, 400, 'it reaches the JSON/access validation instead');
+  } finally {
+    await gate.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an authenticated route still accepts a 1 MB body', async () => {
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
+  try {
+    const body = JSON.stringify({
+      method: 'device.list',
+      params: {},
+      pad: 'x'.repeat(1024 * 1024),
+    });
+    const response = await postRaw(gate.port, '/v1/capabilities/rpc', body, {
+      Authorization: `Bearer ${gate.token}`,
+    });
+
+    assert.equal(response.status, 200);
+    assert.ok(JSON.parse(response.body).result);
+  } finally {
+    await gate.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a fresh device is granted a token while the pairing window is open', async () => {
+  const root = await testSetup();
+  const gate = await createGate({ root, port: 0 });
+  try {
+    const { PairingStore } = await import('../core/pairing.mjs');
+    const pairing = new PairingStore(join(root, '.pairing.json'));
+    await pairing.openWindow(60_000);
+
+    const response = await fetch(`http://localhost:${gate.port}/.well-known/gateway/access`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(signedAccessBody()),
+    });
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    assert.equal(data.status, 'granted');
+    assert.ok(data.token);
   } finally {
     await gate.close();
     await rm(root, { recursive: true, force: true });

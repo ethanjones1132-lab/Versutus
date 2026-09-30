@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -60,4 +60,70 @@ test('list reports every device including revoked ones', async () => {
   const all = await tokens.list();
   assert.equal(all.length, 2);
   assert.equal(all.find((d) => d.deviceId === 'device-2')?.revoked, true);
+});
+
+test('a corrupt file is backed up, not silently emptied by issue', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gate-device-tokens-'));
+  const path = join(dir, 'devices.json');
+  await writeFile(path, '{ not json', 'utf8');
+  const tokens = new DeviceTokenStore(path);
+
+  const originalError = console.error;
+  const errors = [];
+  console.error = (...args) => errors.push(args.join(' '));
+  try {
+    await tokens.issue('device-1', { role: 'operator', scopes: [] });
+  } finally {
+    console.error = originalError;
+  }
+
+  const files = await readdir(dir);
+  const backup = files.find((name) => name.startsWith('devices.json.corrupt-'));
+  assert.ok(backup, 'the corrupt file must be copied aside');
+  assert.equal(await readFile(join(dir, backup), 'utf8'), '{ not json');
+  assert.ok(errors.some((line) => line.includes('unreadable')), 'the failure must be logged loudly');
+
+  // The store proceeded from an empty list: the new device is the only one.
+  const all = await tokens.list();
+  assert.equal(all.length, 1);
+  assert.equal(all[0].deviceId, 'device-1');
+});
+
+test('issue for device B keeps device A', async () => {
+  const tokens = await store();
+  await tokens.issue('device-A', { role: 'operator', scopes: [] });
+  await tokens.issue('device-B', { role: 'operator', scopes: [] });
+
+  const all = await tokens.list();
+  assert.equal(all.length, 2);
+  assert.ok(all.some((d) => d.deviceId === 'device-A'));
+  assert.ok(all.some((d) => d.deviceId === 'device-B'));
+});
+
+test('concurrent issue calls keep both devices', async () => {
+  const tokens = await store();
+  await Promise.all([
+    tokens.issue('device-A', { role: 'operator', scopes: [] }),
+    tokens.issue('device-B', { role: 'operator', scopes: [] }),
+    tokens.issue('device-C', { role: 'operator', scopes: [] }),
+  ]);
+
+  const all = await tokens.list();
+  assert.equal(all.length, 3);
+  const ids = all.map((d) => d.deviceId).sort();
+  assert.deepEqual(ids, ['device-A', 'device-B', 'device-C']);
+});
+
+test('revoke works across instances (separate process simulation)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'gate-device-tokens-'));
+  const path = join(dir, 'devices.json');
+  const first = new DeviceTokenStore(path);
+  const token = await first.issue('device-1', { role: 'operator', scopes: [] });
+
+  // A second instance over the same file stands in for `cli.mjs pair revoke`.
+  const second = new DeviceTokenStore(path);
+  assert.equal(await second.revoke('device-1'), true);
+
+  assert.equal(await first.verify(`Bearer ${token}`), null);
+  assert.equal(await second.verify(`Bearer ${token}`), null);
 });

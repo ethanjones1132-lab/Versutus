@@ -43,7 +43,7 @@ import { voicePaths, voiceStatus, installVoice, uvRunner } from './voice/runtime
 import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
 import { resolveVoiceBackend } from './voice/voice-backend.mjs';
 import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-engine.mjs';
-import { verifySignedAccessRequest } from './signature.mjs';
+import { verifySignedAccessRequest, ReplayCache } from './signature.mjs';
 import { describeAuthFailure } from './auth-failure.mjs';
 import { unresolvedBackendResponse } from './backend-resolution.mjs';
 import { backendUpstreamRefusal } from './upstream-refusal.mjs';
@@ -51,6 +51,13 @@ import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
 
 const FLAVOR_MODULES = { openai: openaiFlavor, anthropic: anthropicFlavor };
+
+// Body size limits (see readJsonBody): the unauthenticated access endpoint
+// gets a tight cap — anyone who can reach the port can POST to it — while
+// authenticated routes get a generous one, because chat turns can carry
+// base64 images.
+const ACCESS_MAX_BODY_BYTES = 16 * 1024;
+const AUTH_MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 /** The turn to send onward. A native session already holds the history. */
 function lastUserText(messages = []) {
@@ -527,6 +534,7 @@ export async function createGate(config = {}) {
   const pushNotifier = createPushNotifier({
     tokens: pushTokens,
     send: pushSend.send,
+    collectReceipts: pushSend.collectReceipts,
     snapshot: () => {
       const states = [...(environmentService.environmentState?.values?.() ?? [])];
       const busyRuns = states.filter((entry) => entry?.state === 'busy').length;
@@ -764,7 +772,7 @@ export async function createGate(config = {}) {
   const token = await tokenStore.ensureToken();
 
   const pairing = new PairingStore(join(root, '.pairing.json'));
-  const replayCache = new Set();
+  const replayCache = new ReplayCache();
 
   // Create HTTP server
   const server = createServer(async (req, res) => {
@@ -781,9 +789,25 @@ export async function createGate(config = {}) {
     const method = req.method;
 
     const invalidJsonBody = new Error('Request body must be valid JSON');
-    async function readJsonBody(req) {
+    const bodyTooLarge = new Error('Request body is too large');
+    // Count bytes as they arrive and stop at the limit: an unauthenticated
+    // caller must never be able to exhaust memory (or disk) by streaming a
+    // body no route could ever use.
+    async function readJsonBody(req, { maxBytes } = {}) {
       const chunks = [];
-      for await (const chunk of req) chunks.push(chunk);
+      let total = 0;
+      let exceeded = false;
+      for await (const chunk of req) {
+        total += chunk.length;
+        if (maxBytes !== undefined && total > maxBytes) {
+          exceeded = true;
+          break;
+        }
+        chunks.push(chunk);
+      }
+      if (exceeded) {
+        throw bodyTooLarge;
+      }
       const text = Buffer.concat(chunks).toString('utf8');
       // Bodyless Routine actions are valid; nonempty invalid JSON is not.
       if (text.length === 0) return null;
@@ -815,9 +839,11 @@ export async function createGate(config = {}) {
         return;
       }
 
-      // Pairing/access endpoint (unauthenticated)
+      // Pairing/access endpoint (unauthenticated). The tight limit is the
+      // point: this route is reachable by anyone who can hit the port, and a
+      // signed access request is a few hundred bytes.
       if (pathname === '/.well-known/gateway/access' && method === 'POST') {
-        const body = await readJsonBody(req);
+        const body = await readJsonBody(req, { maxBytes: ACCESS_MAX_BODY_BYTES });
         const device = body?.device;
         if (!body || !device?.id || !device?.publicKey || !body.signature || typeof body.signedAtMs !== 'number') {
           res.writeHead(400);
@@ -1229,7 +1255,7 @@ export async function createGate(config = {}) {
       }
 
       if (pathname === '/v1/runs' && method === 'POST') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const resolved = await resolveRunBackend(body.backendId, readBotId(url, body));
         if (!resolved) return;
         const { backend, backendId, botId } = resolved;
@@ -1390,7 +1416,7 @@ export async function createGate(config = {}) {
 
       const runApprovalMatch = pathname.match(/^\/v1\/runs\/([^/]+)\/approval$/);
       if (runApprovalMatch && method === 'POST') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const run = readRunHandle(runApprovalMatch[1]);
         if (!run) return;
         const backend = await resolveExistingRun(run);
@@ -1479,7 +1505,7 @@ export async function createGate(config = {}) {
       }
 
       if (pathname === '/v1/terminal/input' && method === 'POST') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const session = terminalSessions.get(body.sid);
         if (session && session.owner !== null && session.owner !== callerId) {
           // Answer as if it does not exist: confirming the id to a caller that
@@ -1521,7 +1547,7 @@ export async function createGate(config = {}) {
       }
 
       if (pathname === '/v1/bots/handoff' && method === 'POST') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const backend = await resolveBackendFor('handoffMention');
         if (!backend) return;
         try {
@@ -1552,7 +1578,7 @@ export async function createGate(config = {}) {
       }
 
       if (pathname === '/v1/jobs' && method === 'POST') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const botId = readBotId(url, body);
         const backend = botId
           ? await resolveConversationBackend(body.backendId ?? url.searchParams.get('backendId'), botId)
@@ -1584,7 +1610,7 @@ export async function createGate(config = {}) {
       }
 
       if (pathname === '/v1/bots' && method === 'POST') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const backend = await resolveBackendFor('createBot');
         if (!backend) return;
         try {
@@ -1632,7 +1658,7 @@ export async function createGate(config = {}) {
         // an unknown Bot is refused by name.
         const backend = await resolveBackendFor('setBotMemory');
         if (!backend) return;
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         try {
           const result = await backend.setBotMemory({
             id: decodeURIComponent(botMemoryWriteMatch[1]),
@@ -1672,7 +1698,7 @@ export async function createGate(config = {}) {
       }
 
       if (botEditMatch && method === 'PATCH') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const backend = await resolveBackendFor('updateBot');
         if (!backend) return;
         try {
@@ -1702,7 +1728,7 @@ export async function createGate(config = {}) {
       }
 
       if (pathname === '/v1/bot-groups' && method === 'POST') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         try {
           const group = await botGroups.create({ name: body.name, memberIds: body.memberIds });
           res.writeHead(200);
@@ -1716,7 +1742,7 @@ export async function createGate(config = {}) {
 
       const groupEditMatch = pathname.match(/^\/v1\/bot-groups\/([^/]+)$/);
       if (groupEditMatch && method === 'PATCH') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         // PATCH carries whichever room fields the caller is changing: name
         // (rename) and/or memberIds (append members). A request naming
         // neither is refused rather than answered with an unchanged room.
@@ -1765,7 +1791,7 @@ export async function createGate(config = {}) {
 
       const groupLeaveMatch = pathname.match(/^\/v1\/bot-groups\/([^/]+)\/leave$/);
       if (groupLeaveMatch && method === 'POST') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         try {
           const group = await botGroups.leave(decodeURIComponent(groupLeaveMatch[1]), body.memberId);
           res.writeHead(200);
@@ -1790,7 +1816,7 @@ export async function createGate(config = {}) {
         return;
       }
       if (groupMessageMatch && method === 'POST') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const group = await botGroups.get(decodeURIComponent(groupMessageMatch[1]));
         if (!group) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -1847,7 +1873,7 @@ export async function createGate(config = {}) {
       if (jobActionMatch && method === 'POST') {
         const [, rawJobId, action] = jobActionMatch;
         const jobId = decodeURIComponent(rawJobId);
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const botId = readBotId(url, body);
         const methodName = action === 'run' ? 'runJob' : 'setJobPaused';
         const backend = botId
@@ -1872,7 +1898,7 @@ export async function createGate(config = {}) {
       if (jobDeleteMatch && method === 'DELETE') {
         const [, rawJobId] = jobDeleteMatch;
         const jobId = decodeURIComponent(rawJobId);
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const botId = readBotId(url, body);
         const backend = botId
           ? await resolveConversationBackend(body.backendId ?? url.searchParams.get('backendId'), botId)
@@ -1907,7 +1933,7 @@ export async function createGate(config = {}) {
       }
 
       if (pathname === '/v1/sessions' && method === 'POST') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const backend = await resolveConversationBackend(body.backendId, readBotId(url, body));
         if (!backend) return;
         let created;
@@ -2003,7 +2029,7 @@ export async function createGate(config = {}) {
 
       const runStart = pathname.match(/^\/v1\/environments\/([^/]+)\/runs$/);
       if (runStart && method === 'POST') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         try {
           const handle = await environmentService.startRun({
             environmentId: decodeURIComponent(runStart[1]),
@@ -2066,7 +2092,7 @@ export async function createGate(config = {}) {
 
       const runApprove = pathname.match(/^\/v1\/environments\/([^/]+)\/runs\/([^/]+)\/approve$/);
       if (runApprove && method === 'POST') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
         const result = await environmentService.approve(
           decodeURIComponent(runApprove[2]),
           body.approvalId,
@@ -2203,7 +2229,7 @@ export async function createGate(config = {}) {
 
       // /v1/chat/completions - unscoped chat (resolves provider from model)
       if (pathname === '/v1/chat/completions' && method === 'POST') {
-        const body = (await readJsonBody(req)) ?? {};
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
 
         // A backend-addressed turn runs inside the native environment, which is
         // what gives it that platform's sessions, tools and approvals.
@@ -2347,7 +2373,7 @@ export async function createGate(config = {}) {
       // /p/{provider}/v1/chat/completions - scoped chat
       const scopedChatMatch = pathname.match(/^\/p\/([^/]+)\/v1\/chat\/completions$/);
       if (scopedChatMatch && method === 'POST') {
-        const body = await readJsonBody(req);
+        const body = await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES });
         await dispatchChat(decodeURIComponent(scopedChatMatch[1]), body ?? {}, res);
         return;
       }
@@ -2356,7 +2382,7 @@ export async function createGate(config = {}) {
       // profile whose baseUrl is /p/{id} can POST the advertised path.
       const rpcMatch = pathname === '/v1/capabilities/rpc' || /^\/p\/[^/]+\/v1\/capabilities\/rpc$/.test(pathname);
       if (rpcMatch && method === 'POST') {
-        const body = await readJsonBody(req);
+        const body = await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES });
         const rpcMethod = body?.method;
         const params = body?.params ?? {};
         if (typeof rpcMethod !== 'string' || !rpcMethod) {
@@ -2398,6 +2424,16 @@ export async function createGate(config = {}) {
       if (err === invalidJsonBody) {
         res.writeHead(400);
         res.end(JSON.stringify({ error: { message: err.message, code: 'bad_json' } }));
+        return;
+      }
+      if (err === bodyTooLarge) {
+        // The request stream is destroyed only after the 413 has flushed:
+        // destroying it first would take the socket (and the response) with
+        // it, and the caller would see a reset instead of the verdict.
+        res.writeHead(413);
+        res.end(JSON.stringify({ error: { message: err.message, code: 'body_too_large' } }), () => {
+          req.destroy();
+        });
         return;
       }
       console.error('Request handler error:', err);

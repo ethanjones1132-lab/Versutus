@@ -39,9 +39,17 @@ async function postJson(fetchImpl, url, body) {
 export function createPushSend({ fetchImpl = globalThis.fetch } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('fetchImpl must be a function');
 
-  async function collectReceipts(ticketIds = []) {
+  // `ticketTokens` maps a ticket id to the expo push token it was sent for
+  // (as returned by send): a receipt names a ticket id, but the store prunes
+  // by push token, so the id must be translated back before removeByToken.
+  async function collectReceipts(ticketIds = [], ticketTokens = null) {
     const ids = [...new Set((Array.isArray(ticketIds) ? ticketIds : []).filter((id) => typeof id === 'string' && id))];
     if (ids.length === 0) return { ok: true, receipts: [], deadTokens: [] };
+
+    const tokenForTicket = (id) => {
+      const token = ticketTokens && typeof ticketTokens === 'object' ? ticketTokens[id] : null;
+      return typeof token === 'string' && token ? token : null;
+    };
 
     try {
       const receipts = [];
@@ -55,20 +63,29 @@ export function createPushSend({ fetchImpl = globalThis.fetch } = {}) {
           const receipt = byId[id];
           if (!receipt) continue;
           receipts.push({ id, ...receipt });
-          if (receipt?.details?.error === 'DeviceNotRegistered') deadTokens.push(id);
+          if (receipt?.details?.error === 'DeviceNotRegistered') {
+            const token = tokenForTicket(id);
+            if (token) deadTokens.push(token);
+          }
         }
       }
-      return { ok: true, receipts, deadTokens };
+      return { ok: true, receipts, deadTokens: [...new Set(deadTokens)] };
     } catch (error) {
       return errorResult(error);
     }
   }
 
+  // Expo produces receipts asynchronously (its docs say to wait at least
+  // ~15 minutes), so collecting them inline would find nothing and cost a
+  // second round trip per notification. The caller schedules the receipt
+  // collection; send() only reports what the tickets themselves say. The
+  // ticket-to-token map rides along so the deferred collection can translate
+  // receipt ticket ids back to the push tokens the store prunes by.
   async function send(messages = []) {
     const list = Array.isArray(messages) ? messages : [];
     try {
       const tickets = [];
-      const ticketTokens = new Map();
+      const ticketTokens = {};
       const deadTokens = [];
 
       for (let index = 0; index < list.length; index += SEND_CHUNK_SIZE) {
@@ -80,29 +97,18 @@ export function createPushSend({ fetchImpl = globalThis.fetch } = {}) {
           const ticket = chunkTickets[messageIndex] ?? { status: 'error', message: 'Expo returned no ticket for this message' };
           tickets.push(ticket);
           const tokens = tokensForMessage(message);
-          for (const token of tokens) ticketTokens.set(ticket.id, token);
+          if (typeof ticket?.id === 'string' && ticket.id && tokens.length > 0) {
+            ticketTokens[ticket.id] = tokens[0];
+          }
           if (isDeviceNotRegistered(ticket)) deadTokens.push(...tokens);
         });
-      }
-
-      const successfulTicketIds = tickets
-        .filter((ticket) => ticket?.status === 'ok' && typeof ticket.id === 'string')
-        .map((ticket) => ticket.id);
-      const receiptResult = await collectReceipts(successfulTicketIds);
-      if (!receiptResult.ok) return receiptResult;
-
-      const receiptsByToken = new Map();
-      for (const receipt of receiptResult.receipts) {
-        const token = ticketTokens.get(receipt.id);
-        const enriched = token ? { ...receipt, to: token } : receipt;
-        receiptsByToken.set(receipt.id, enriched);
-        if (receipt?.details?.error === 'DeviceNotRegistered' && token) deadTokens.push(token);
       }
 
       return {
         ok: true,
         tickets,
-        receipts: [...receiptsByToken.values()],
+        ticketTokens,
+        receipts: [],
         deadTokens: [...new Set(deadTokens)],
       };
     } catch (error) {
