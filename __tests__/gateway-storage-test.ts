@@ -2,18 +2,9 @@ import { loadGateways, upsertGateway } from '@/lib/gateway/storage';
 import { secureKeyValueStorage } from '@/lib/storage/secure-key-value';
 import type { GatewayProfile } from '@/lib/gateway/types';
 
-// `storage.ts` parks an unparsable gateways blob in the plain store, so the
-// module under test now reaches the AsyncStorage-backed one too — mocked here so
-// the suite is not asking jest for a native module it has no handle for. Its
-// own assertions are about the SecureStore-backed side, so nothing here reads it.
-jest.mock('@react-native-async-storage/async-storage', () => ({
-  getItem: jest.fn(async () => null),
-  setItem: jest.fn(async () => undefined),
-  removeItem: jest.fn(async () => undefined),
-  getAllKeys: jest.fn(async () => []),
-  multiRemove: jest.fn(async () => undefined),
-}));
-
+// `storage.ts` reaches the SecureStore-backed store only — the corrupt-blob
+// rescue copy lives there too now — so nothing in this module wants a native
+// AsyncStorage handle. The secure store is mocked, per key, off a `backing` map.
 jest.mock('@/lib/storage/secure-key-value', () => ({
   secureKeyValueStorage: {
     getItem: jest.fn(),

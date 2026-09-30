@@ -4,6 +4,12 @@
 // to return `[]` and move on, and the next `upsertGateway` — which the operator
 // reaches for precisely because nothing loaded — overwrote whatever it came
 // from. So the raw string is parked under its own key first.
+//
+// It is parked in SecureStore, not in plaintext AsyncStorage: the same JSON
+// carries `GatewayProfile.token` and the session key, and a parse failure says
+// the store handed the value over perfectly well — only the contents are bad.
+// SecureStore cannot list its keys, so the copies live in a fixed ring of three
+// slots rather than a prefix that has to be pruned.
 
 const mockSecure = new Map<string, string>();
 const mockPlain = new Map<string, string>();
@@ -48,6 +54,8 @@ import type { GatewayProfile } from '@/lib/gateway/types';
 
 const GATEWAYS_KEY = 'versutus:gateways';
 const CORRUPT_PREFIX = 'versutus:gateways:corrupt-';
+const CORRUPT_NEXT_KEY = 'versutus:gateways:corrupt-next';
+const slotKey = (slot: number): string => `${CORRUPT_PREFIX}${slot}`;
 
 const profile = (overrides: Partial<GatewayProfile> & Pick<GatewayProfile, 'id'>): GatewayProfile => ({
   name: 'Gate',
@@ -56,8 +64,9 @@ const profile = (overrides: Partial<GatewayProfile> & Pick<GatewayProfile, 'id'>
   ...overrides,
 });
 
+/** The secure-store slots currently holding a rescue copy, by slot key. */
 const corruptCopies = (): Map<string, string> =>
-  new Map([...mockPlain].filter(([key]) => key.startsWith(CORRUPT_PREFIX)));
+  new Map([...mockSecure].filter(([key]) => key.startsWith(CORRUPT_PREFIX) && key !== CORRUPT_NEXT_KEY));
 
 describe('a gateways blob that will not parse', () => {
   let warnSpy: jest.SpyInstance;
@@ -65,6 +74,11 @@ describe('a gateways blob that will not parse', () => {
   beforeEach(() => {
     mockSecure.clear();
     mockPlain.clear();
+    mockPlainSet.mockClear();
+    mockSecureGet.mockImplementation(async (key: string) => mockSecure.get(key) ?? null);
+    mockSecureSet.mockImplementation(async (key: string, value: string) => {
+      mockSecure.set(key, value);
+    });
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
@@ -82,6 +96,19 @@ describe('a gateways blob that will not parse', () => {
     expect([...copies.values()]).toEqual([raw]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(String(warnSpy.mock.calls[0]?.[0] ?? '')).toContain([...copies.keys()][0]);
+  });
+
+  test('never reaches the plain store, which is where the tokens were audited out of', async () => {
+    const raw = '[{"id":"gw-1","token":"listen-hermes"}';
+    mockSecure.set(GATEWAYS_KEY, raw);
+
+    await loadGateways();
+
+    const plainKeysWritten = mockPlainSet.mock.calls.map(([key]) => String(key));
+    expect(plainKeysWritten.filter((key) => key.startsWith(CORRUPT_PREFIX))).toEqual([]);
+    expect([...mockPlain.values()]).not.toContain(raw);
+    // It did go somewhere, and that somewhere is the secure store.
+    expect([...corruptCopies().values()]).toEqual([raw]);
   });
 
   test('is kept for a value that parses but is not a list of profiles', async () => {
@@ -106,13 +133,31 @@ describe('a gateways blob that will not parse', () => {
     expect(mockSecure.get(GATEWAYS_KEY)).not.toBe(raw);
   });
 
-  test('keeps the three newest copies and drops the rest', async () => {
+  test('keeps the three newest copies and overwrites the rest of the ring', async () => {
     for (const attempt of ['one', 'two', 'three', 'four', 'five']) {
       mockSecure.set(GATEWAYS_KEY, `broken-${attempt}`);
       await loadGateways();
     }
 
-    expect([...corruptCopies().values()]).toEqual(['broken-three', 'broken-four', 'broken-five']);
+    // Slot order, not write order: the counter wraps, so `four` and `five` came
+    // after `three` and landed in the slots `three` left behind.
+    expect(mockSecure.get(slotKey(0))).toBe('broken-four');
+    expect(mockSecure.get(slotKey(1))).toBe('broken-five');
+    expect(mockSecure.get(slotKey(2))).toBe('broken-three');
+    expect(corruptCopies().size).toBe(3);
+  });
+
+  test('a rescue copy the secure store refuses does not break the load', async () => {
+    const raw = '[{"id":"gw-1","token":"listen-hermes"';
+    mockSecure.set(GATEWAYS_KEY, raw);
+    mockSecureSet.mockImplementation(async (key: string) => {
+      if (key.startsWith(CORRUPT_PREFIX)) throw new Error('secure store unavailable');
+      mockSecure.set(key, raw);
+    });
+
+    await expect(loadGateways()).resolves.toEqual([]);
+    expect(corruptCopies().size).toBe(0);
+    expect(String(warnSpy.mock.calls[0]?.[0] ?? '')).toContain('could not be written');
   });
 
   test('a list that parses is not copied anywhere', async () => {
