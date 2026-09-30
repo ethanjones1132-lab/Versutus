@@ -149,7 +149,7 @@ function stubTurnRegistry({ calls = [], sendMessage, streamEvents } = {}) {
   };
 }
 
-async function makeGate({ calls = [], provider, registry, terminalSessions, environments, pushFetch } = {}) {
+async function makeGate({ calls = [], provider, registry, terminalSessions, environments, pushFetch, backendServerFactory } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'gate-backend-'));
   roots.push(root);
   const gateHome = join(root, '.gate-home');
@@ -196,11 +196,11 @@ async function makeGate({ calls = [], provider, registry, terminalSessions, envi
     environmentRegistry: registry ?? stubRegistry(calls),
     ...(terminalSessions ? { terminalSessions } : {}),
     // The stub server needs no process: report it as already reachable.
-    backendServerFactory: () => ({
+    backendServerFactory: backendServerFactory ?? (() => ({
       ensureRunning: async () => ({ baseUrl: 'http://127.0.0.1:1', attached: true }),
       stop: async () => {},
       isOwned: () => false,
-    }),
+    })),
     ...(pushFetch ? { pushFetch } : {}),
   });
   return { gate, calls };
@@ -2758,6 +2758,121 @@ test('the bots.get RPC returns one Bot with its soul', async () => {
     assert.equal(body.result.id, 'researcher');
     assert.equal(body.result.soul, 'You are precise.');
     assert.ok(calls.includes('getBot:researcher'));
+  } finally {
+    await gate.close();
+  }
+});
+
+// ─── resolving a route by capability, without starting what cannot serve it ───
+// On a Gate with claude/codex/hermes/opencode attached, the first roster read
+// after a restart used to cold-start the Codex app-server (and every other
+// earlier backend) purely to learn that it has no listBots. Each of those
+// starts is a process, a handshake and up to 30 seconds.
+
+/** `a-plain` cannot serve bots; `b-capable` can. Records which one is started. */
+function mixedRosterRegistry(calls, { probeRefuses = false } = {}) {
+  const plain = stubRegistry(calls).get('stubcli');
+  const capable = {
+    ...plain,
+    adapterId: 'capablecli',
+    capabilities: [...plain.capabilities, 'bots'],
+    createBackend(options) {
+      if (probeRefuses && options?.baseUrl === 'http://127.0.0.1:0') {
+        throw new Error('this adapter cannot be probed');
+      }
+      return {
+        ...plain.createBackend(options),
+        async listBots() {
+          calls.push('listBots');
+          return { object: 'list', data: [{ id: 'researcher', displayName: 'researcher', routable: true }] };
+        },
+      };
+    },
+  };
+  return {
+    get(id) {
+      if (id === 'stubcli') return plain;
+      if (id === 'capablecli') return capable;
+      throw new Error(`unknown CLI adapter "${id}"`);
+    },
+    list() { return [plain, capable]; },
+  };
+}
+
+function recordingServerFactory(started) {
+  return ({ record }) => ({
+    ensureRunning: async () => {
+      started.push(record.id);
+      return { baseUrl: 'http://127.0.0.1:1', attached: true };
+    },
+    stop: async () => {},
+    isOwned: () => false,
+  });
+}
+
+const MIXED_ROSTER = [
+  { id: 'a-plain', adapterId: 'stubcli' },
+  { id: 'b-capable', adapterId: 'capablecli' },
+];
+
+test('a backend that cannot serve the route is never started', async () => {
+  const calls = [];
+  const started = [];
+  const { gate } = await makeGate({
+    calls,
+    registry: mixedRosterRegistry(calls),
+    environments: MIXED_ROSTER,
+    backendServerFactory: recordingServerFactory(started),
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/bots`, { headers: auth(gate) });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).data[0].id, 'researcher');
+    assert.ok(calls.includes('listBots'), 'the capable backend answered');
+    assert.deepEqual(started, ['b-capable'], 'the backend that cannot answer must never be started');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('an explicit backendId still starts the environment it names', async () => {
+  const calls = [];
+  const started = [];
+  const { gate } = await makeGate({
+    calls,
+    registry: mixedRosterRegistry(calls),
+    environments: MIXED_ROSTER,
+    backendServerFactory: recordingServerFactory(started),
+  });
+  try {
+    // A deliberate pin is still answered, still told the truth, and still costs
+    // the start the caller asked for.
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/bots?backendId=a-plain`, { headers: auth(gate) });
+    assert.equal(response.status, 501);
+    assert.equal((await response.json()).error.code, 'backend_unsupported');
+    assert.deepEqual(started, ['a-plain']);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a backend whose capability cannot be read is started and asked, as before', async () => {
+  const calls = [];
+  const started = [];
+  const { gate } = await makeGate({
+    calls,
+    registry: mixedRosterRegistry(calls, { probeRefuses: true }),
+    environments: MIXED_ROSTER,
+    backendServerFactory: recordingServerFactory(started),
+  });
+  try {
+    // `a-plain` answers with a known empty capability set; `b-capable` cannot be
+    // probed at all, which is unknown rather than empty — so it starts, as it
+    // always has, and the route is served.
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/bots`, { headers: auth(gate) });
+    assert.equal(response.status, 200, `the capable backend should have answered (${started.join(', ')})`);
+    assert.equal((await response.json()).data[0].id, 'researcher');
+    assert.deepEqual(started, ['b-capable']);
   } finally {
     await gate.close();
   }

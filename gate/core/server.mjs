@@ -431,6 +431,7 @@ export async function createGate(config = {}) {
   const botGroups = createBotGroupStore(gateHome, {
     listBotIds: async () => {
       for (const entry of await backendManager.list()) {
+        if (!await backendCanServe(entry, 'listBots')) continue;
         const backend = await backendManager.get(entry.id).catch(() => null);
         if (backend && typeof backend.listBots === 'function') {
           // listBots speaks the wire shape ({ object: 'list', data: [...] });
@@ -492,6 +493,22 @@ export async function createGate(config = {}) {
       }),
     createServer: backendServerFactory,
   });
+
+  /**
+   * Whether an environment's backend could serve `method`, answered without
+   * starting it.
+   *
+   * `get()` starts the environment's native server, so a walk that started every
+   * attached backend in order to ask whether it implements one method
+   * cold-started Codex and opencode on the first roster, skills or jobs read
+   * after a Gate restart — only to learn it does not. A `null` verdict means the
+   * answer is unknown, and unknown keeps the old behaviour: start it and let the
+   * method check decide.
+   */
+  async function backendCanServe(entry, method) {
+    const methods = await backendManager.methodsOf(entry.id);
+    return methods === null || methods.has(method);
+  }
 
   // Shell sessions for the app's Shell tab. See terminal.mjs for why this is a
   // piped shell rather than a PTY — it is what this client actually consumes.
@@ -604,6 +621,7 @@ export async function createGate(config = {}) {
         // than whichever happens to be attached first.
         if (method) {
           for (const entry of entries) {
+            if (!await backendCanServe(entry, method)) continue;
             const backend = await backendManager.get(entry.id).catch(() => null);
             if (backend && typeof backend[method] === 'function') return backend;
           }
@@ -1070,6 +1088,7 @@ export async function createGate(config = {}) {
         // ?backendId= still wins, so a deliberate pin is still told the truth.
         if (botId && !backendId) {
           for (const entry of await backendManager.list()) {
+            if (!await backendCanServe(entry, 'forBot')) continue;
             const candidate = await backendManager.get(entry.id).catch(() => null);
             if (candidate && typeof candidate.forBot === 'function') {
               return resolveForBot(candidate, botId);
@@ -1132,6 +1151,9 @@ export async function createGate(config = {}) {
         // "unsupported" (backend-resolution.mjs).
         const failures = [];
         for (const entry of await backendManager.list()) {
+          // A backend that is known not to implement the method is not evidence
+          // of an outage, so it never has to answer — or start — at all.
+          if (!await backendCanServe(entry, method)) continue;
           const backend = await backendManager.get(entry.id).catch((error) => {
             failures.push({ id: entry.id, error });
             return null;
@@ -1159,6 +1181,7 @@ export async function createGate(config = {}) {
           let selected = explicit;
           if (!selected) {
             for (const entry of await backendManager.list()) {
+              if (!await backendCanServe(entry, 'forBot')) continue;
               const candidate = await backendManager.get(entry.id).catch(() => null);
               if (typeof candidate?.forBot === 'function') {
                 selected = entry.id;
@@ -1184,6 +1207,7 @@ export async function createGate(config = {}) {
         }
         // No backend named: pick the first that can actually run one.
         for (const entry of await backendManager.list()) {
+          if (!await backendCanServe(entry, 'startRun')) continue;
           const backend = await backendManager.get(entry.id).catch(() => null);
           if (backend && typeof backend.startRun === 'function') return { backend, backendId: entry.id };
         }
@@ -2174,6 +2198,9 @@ export async function createGate(config = {}) {
         // Every model a native environment can reach, alongside direct
         // providers. Cold startup can be slow for a CLI environment, so let
         // independent backends load together while preserving catalog order.
+        // Every backend owns a model list, so none is skipped here; a backend
+        // that will not start is remembered by the manager and costs one attempt
+        // per backoff window rather than one 30s wait per request.
         const descriptors = await backendManager.list().catch(() => []);
         const backendModels = await Promise.all(descriptors.map(async (descriptor) => {
           try {

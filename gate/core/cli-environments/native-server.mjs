@@ -131,14 +131,32 @@ export function createNativeServer({
     let exited = null;
     child.on('exit', (code) => { exited = code; });
 
+    // A missing executable reports 'error' and never 'exit', so without this
+    // listener Node turns it into an uncaught exception that takes the Gate and
+    // every stream on it down — instead of the named refusal below. `wake` cuts
+    // the poll short so the refusal is immediate rather than one interval late.
+    let spawnError = null;
+    let wake;
+    const spawnFailed = new Promise((resolve) => { wake = resolve; });
+    child.on('error', (error) => {
+      spawnError = new Error(
+        `${adapter.adapterId} server could not start ${command}: ${error?.code ?? error?.message ?? error}`,
+      );
+      wake();
+    });
+
     const deadline = Date.now() + startTimeoutMs;
     while (Date.now() < deadline) {
+      if (spawnError) {
+        await stop();
+        throw spawnError;
+      }
       if (exited !== null) {
         throw new Error(`${adapter.adapterId} server exited with code ${exited} before becoming reachable.`);
       }
       const target = announced ?? (descriptor.defaultPort ? `http://127.0.0.1:${descriptor.defaultPort}` : null);
       if (target && (await isHealthy(target, descriptor))) return target;
-      await delay(POLL_INTERVAL_MS);
+      await Promise.race([delay(POLL_INTERVAL_MS), spawnFailed]);
     }
     await stop();
     throw new Error(`${adapter.adapterId} server did not become reachable within ${startTimeoutMs}ms.`);

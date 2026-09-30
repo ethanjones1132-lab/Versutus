@@ -26,10 +26,15 @@ export function createStdioServer({
   let handle = null;
   let starting = null;
   let child = null;
+  // Bumped on every exit so a respawn is distinguishable from the process that
+  // died; the manager keys its cached backend on it.
+  let generation = 0;
 
   return { ensureRunning, stop, isOwned: () => Boolean(child), current: () => handle };
 
   async function ensureRunning() {
+    // A dead child's handle is dropped by its own 'exit' listener below, so
+    // reaching here with a handle means the pipe is still live.
     if (handle) return handle;
     if (starting) return starting;
     starting = start().finally(() => { starting = null; });
@@ -47,15 +52,39 @@ export function createStdioServer({
       ? await buildEnvironment({ record, credentials })
       : { ...process.env, ...credentials };
 
-    child = spawnImpl(command, [...prefix, ...descriptor.args()], {
+    const spawned = spawnImpl(command, [...prefix, ...descriptor.args()], {
       cwd: record.workspacePolicy?.defaultRoot,
       env,
       windowsHide: true,
     });
-    job.add(child);
+    child = spawned;
+    job.add(spawned);
+
+    // A missing executable reports 'error' and never 'exit', so without this
+    // listener Node turns it into an uncaught exception that takes the Gate and
+    // every stream on it down. The rpc below adds its own listener; this one is
+    // what makes the failure a refusal of start() instead of a 30s handshake wait.
+    let spawnFailure = null;
+    let noteSpawnFailure;
+    const failed = new Promise((_, reject) => { noteSpawnFailure = reject; });
+    spawned.on('error', (error) => {
+      spawnFailure = new Error(
+        `${adapter?.adapterId ?? 'The CLI'} app-server could not start ${command}: ${error?.code ?? error?.message ?? error}`,
+      );
+      noteSpawnFailure(spawnFailure);
+    });
+
+    // The pipe is gone: the cached handle is dead and every later request would
+    // fail on it ("app-server is not running") until the Gate restarted.
+    spawned.on('exit', () => {
+      if (child !== spawned) return;
+      child = null;
+      handle = null;
+      generation += 1;
+    });
 
     const rpc = createStdioJsonRpc({
-      child,
+      child: spawned,
       onNotification,
       onServerRequest,
       onDiagnostic: (note) => onDiagnostic?.({ environmentId: record.id, ...note }),
@@ -63,11 +92,20 @@ export function createStdioServer({
 
     // The handshake is also the liveness check: a CLI that cannot start its
     // app-server fails here rather than on the first prompt.
-    if (descriptor.handshake) {
-      await rpc.request(descriptor.handshake.method, descriptor.handshake.params ?? {}, { timeoutMs: 30_000 });
+    const ready = descriptor.handshake
+      ? rpc.request(descriptor.handshake.method, descriptor.handshake.params ?? {}, { timeoutMs: 30_000 })
+      // Nothing to handshake against: give the spawn one turn to report itself,
+      // which is when Node delivers 'error'.
+      : new Promise((resolve) => { setImmediate(resolve); });
+    try {
+      await Promise.race([ready, failed]);
+    } catch (error) {
+      // A missing executable is reported twice — by the listener above and by
+      // the rpc's own — and the first is the one that names the executable.
+      throw spawnFailure ?? error;
     }
 
-    handle = { rpc, attached: false, transport: 'stdio' };
+    handle = { rpc, attached: false, transport: 'stdio', generation };
     return handle;
   }
 
