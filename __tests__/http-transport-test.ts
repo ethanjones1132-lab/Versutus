@@ -1,5 +1,5 @@
 import { HttpTransport } from '@/lib/gateway/http-transport';
-import { GatewayHttpError } from '@/lib/gateway/errors';
+import { GatewayHttpError, StreamStalledError, isConnectionError } from '@/lib/gateway/errors';
 import { messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 
 function jsonResponse(body: unknown, status = 200) {
@@ -409,6 +409,295 @@ describe('HttpTransport', () => {
       message: 'hermes: boom',
       status: 500,
     });
+  });
+
+  test('a body that never completes times out with the request message', async () => {
+    jest.useFakeTimers();
+    try {
+      (globalThis as { fetch: unknown }).fetch = jest.fn((_url: unknown, init: RequestInit) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () =>
+            new Promise<string>((_resolve, reject) => {
+              init.signal?.addEventListener('abort', () => reject(new Error('canceled')));
+            }),
+        } as unknown as Response),
+      );
+
+      const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+      const pending = transport.request('GET', '/x', undefined, 5000);
+      const assertion = expect(pending).rejects.toThrow('Request timed out: GET /x');
+      await jest.advanceTimersByTimeAsync(5000);
+      await assertion;
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('an aborted error body still reports the request timeout', async () => {
+    jest.useFakeTimers();
+    try {
+      // 500 headers arrive, then the body stalls: the timer is still armed, and
+      // an unreadable error body must not downgrade the diagnosis to a bare
+      // GatewayHttpError with no message.
+      (globalThis as { fetch: unknown }).fetch = jest.fn((_url: unknown, init: RequestInit) =>
+        Promise.resolve({
+          ok: false,
+          status: 500,
+          text: () =>
+            new Promise<string>((_resolve, reject) => {
+              init.signal?.addEventListener('abort', () => reject(new Error('canceled')));
+            }),
+        } as unknown as Response),
+      );
+
+      const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+      const pending = transport.request('GET', '/x', undefined, 5000);
+      const assertion = expect(pending).rejects.toThrow('Request timed out: GET /x');
+      await jest.advanceTimersByTimeAsync(5000);
+      await assertion;
+      await expect(pending).rejects.not.toBeInstanceOf(GatewayHttpError);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('an unreadable error body that is not a timeout still reports the status', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 502,
+        text: () => Promise.reject(new Error('body unreadable')),
+      } as unknown as Response),
+    );
+
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+    await expect(transport.request('GET', '/x')).rejects.toMatchObject({
+      name: 'GatewayHttpError',
+      status: 502,
+    });
+  });
+
+  test('the request timer is cleared once the body is read', async () => {
+    jest.useFakeTimers();
+    try {
+      (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+        Promise.resolve(jsonResponse({ ok: true })),
+      );
+
+      const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+      await transport.request('GET', '/health');
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('onNetworkTrouble fires when a request times out', async () => {
+    jest.useFakeTimers();
+    try {
+      const troubles: string[] = [];
+      (globalThis as { fetch: unknown }).fetch = jest.fn((_url: unknown, init: RequestInit) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () =>
+            new Promise<string>((_resolve, reject) => {
+              init.signal?.addEventListener('abort', () => reject(new Error('canceled')));
+            }),
+        } as unknown as Response),
+      );
+
+      const transport = new HttpTransport({
+        baseUrl: 'http://gateway.test:8642',
+        onNetworkTrouble: (reason) => troubles.push(reason),
+      });
+      const pending = transport.request('GET', '/x', undefined, 5000);
+      const assertion = expect(pending).rejects.toThrow('Request timed out: GET /x');
+      await jest.advanceTimersByTimeAsync(5000);
+      await assertion;
+      expect(troubles).toEqual(['Request timed out: GET /x']);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('onNetworkTrouble fires when a request fails with a connection error', async () => {
+    const troubles: string[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.reject(new TypeError('fetch failed: Network request failed')),
+    );
+    const transport = new HttpTransport({
+      baseUrl: 'http://gateway.test:8642',
+      onNetworkTrouble: (reason) => troubles.push(reason),
+    });
+    await expect(transport.request('GET', '/x')).rejects.toThrow('Network request failed');
+    expect(troubles).toEqual(['fetch failed: Network request failed']);
+  });
+
+  test('onNetworkTrouble never breaks the request when the hook throws', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.reject(new TypeError('fetch failed: Network request failed')),
+    );
+    const transport = new HttpTransport({
+      baseUrl: 'http://gateway.test:8642',
+      onNetworkTrouble: () => {
+        throw new Error('hook exploded');
+      },
+    });
+    await expect(transport.request('GET', '/x')).rejects.toThrow('Network request failed');
+  });
+});
+
+describe('streamSSE idle watchdog', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+    jest.useRealTimers();
+  });
+
+  /**
+   * A real WHATWG ReadableStream: expo/fetch, undici and browsers all build the
+   * response body this way, and its cancel() settles the pending read with
+   * { done: true }. A hand-rolled `{ read: () => new Promise(() => {}) }`
+   * fake cannot model that, and hides the bug the watchdog has to survive.
+   */
+  function stalledResponse(keepaliveMs: string | null) {
+    const body = new ReadableStream<Uint8Array>({
+      start() {
+        // A dead Wi-Fi path: the stream opens and then never yields a byte.
+      },
+    });
+    return {
+      headers: { get: () => keepaliveMs },
+      body,
+    } as unknown as Response;
+  }
+
+  test('silence past the keepalive watchdog rejects with StreamStalledError', async () => {
+    jest.useFakeTimers();
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+    const pending = transport.streamSSE(stalledResponse('15000'), () => undefined);
+    const assertion = expect(pending).rejects.toBeInstanceOf(StreamStalledError);
+    await jest.advanceTimersByTimeAsync(45_000);
+    await assertion;
+  });
+
+  test('the stall releases the real stream but still rejects with the stall error', async () => {
+    jest.useFakeTimers();
+    let released = false;
+    const body = new ReadableStream<Uint8Array>({
+      start() {
+        // Same dead path as above, but with a source that notices the release.
+      },
+      cancel() {
+        released = true;
+      },
+    });
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+    const pending = transport.streamSSE(
+      { headers: { get: () => '15000' }, body } as unknown as Response,
+      () => undefined,
+    );
+    const assertion = expect(pending).rejects.toThrow('The gateway stopped responding mid-stream.');
+    await jest.advanceTimersByTimeAsync(45_000);
+    await assertion;
+    // The socket is released, but a clean cancel() also settles the pending
+    // read with { done: true } — which must not be mistaken for a stream that
+    // simply ended and reported success-ish `false`.
+    expect(released).toBe(true);
+  });
+
+  test('comment-only keepalive frames reset the watchdog', async () => {
+    jest.useFakeTimers();
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+    // A comment every 15s for 75s, then a clean end: the 45s watchdog must be
+    // re-armed by each one, so the stream reaches its own EOF instead of
+    // stalling halfway through.
+    let sent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        setInterval(() => {
+          if (sent >= 5) {
+            controller.close();
+            return;
+          }
+          sent += 1;
+          controller.enqueue(new TextEncoder().encode(': keepalive\n\n'));
+        }, 15_000);
+      },
+    });
+    const response = {
+      headers: { get: () => '15000' },
+      body,
+    } as unknown as Response;
+
+    const chunks: string[] = [];
+    const pending = transport.streamSSE(response, (chunk) => chunks.push(chunk));
+    const assertion = expect(pending).resolves.toBe(false);
+    await jest.advanceTimersByTimeAsync(90_000);
+    await assertion;
+    expect(sent).toBe(5);
+    // Comment frames are liveness evidence, not tokens.
+    expect(chunks).toEqual([]);
+  });
+
+  test('a server without the keepalive header gets no watchdog', async () => {
+    jest.useFakeTimers();
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+    const pending = transport.streamSSE(stalledResponse(null), () => undefined);
+    await jest.advanceTimersByTimeAsync(120_000);
+    let settled = false;
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+  });
+
+  test('an idleTimeoutMs of zero arms no watchdog', async () => {
+    jest.useFakeTimers();
+    const transport = new HttpTransport({ baseUrl: 'http://gateway.test:8642' });
+    const pending = transport.streamSSE(stalledResponse('15000'), () => undefined, undefined, {
+      idleTimeoutMs: 0,
+    });
+    let settled = false;
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    // 0 means "caller did not ask for a watchdog", not "stall instantly".
+    await jest.advanceTimersByTimeAsync(120_000);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+  });
+
+  test('isConnectionError recognizes a stream stall', () => {
+    expect(isConnectionError(new StreamStalledError())).toBe(true);
+  });
+
+  test('onNetworkTrouble fires when a stream stalls', async () => {
+    jest.useFakeTimers();
+    const troubles: string[] = [];
+    const transport = new HttpTransport({
+      baseUrl: 'http://gateway.test:8642',
+      onNetworkTrouble: (reason) => troubles.push(reason),
+    });
+    const pending = transport.streamSSE(stalledResponse('15000'), () => undefined);
+    const assertion = expect(pending).rejects.toBeInstanceOf(StreamStalledError);
+    await jest.advanceTimersByTimeAsync(45_000);
+    await assertion;
+    expect(troubles).toEqual(['The gateway stopped responding mid-stream.']);
   });
 });
 

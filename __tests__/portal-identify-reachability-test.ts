@@ -6,6 +6,7 @@
 // folds in whatever IPv4s the served manifest advertised, and never rewrites
 // an https base or a URL that belongs to another gateway.
 
+import { resetHostLookupMemoryForTests } from '@/lib/gateway/host-lookup';
 import { identifyGateway } from '@/lib/portal/identify';
 
 const MANIFEST = {
@@ -54,9 +55,15 @@ function lookupMiss(): Error {
 
 const realFetch = globalThis.fetch;
 const realWebSocket: unknown = globalThis.WebSocket;
+beforeEach(() => {
+  // The host-lookup failure memory is module-level; without this a marked
+  // hostname from one test would reorder the next test's IPv4-first retry.
+  resetHostLookupMemoryForTests();
+});
 afterEach(() => {
   (globalThis as { fetch: unknown }).fetch = realFetch;
   (globalThis as { WebSocket?: unknown }).WebSocket = realWebSocket;
+  resetHostLookupMemoryForTests();
 });
 
 function withoutWebSocket() {
@@ -128,12 +135,11 @@ describe('identifyGateway retries a MagicDNS miss over tailnet IPv4s', () => {
 
     expect(identity.kind).toBe('hermes');
     expect(identity.source).toBe('probe-hermes');
-    // Hostname misses once for the manifest and once for the fingerprint; the
-    // IPv4 then serves the full Hermes read.
+    // The manifest miss marks the hostname, so the fingerprint (health) fetch
+    // goes straight to the IPv4; the IPv4 then serves the full Hermes read.
     expect(calls).toEqual([
       'http://gate.test/.well-known/gateway.json',
       'http://100.95.137.83/.well-known/gateway.json',
-      'http://gate.test/health',
       'http://100.95.137.83/health',
       'http://100.95.137.83/v1/capabilities',
     ]);

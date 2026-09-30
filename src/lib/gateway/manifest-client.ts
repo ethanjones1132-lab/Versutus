@@ -38,6 +38,9 @@ function interpolatePath(path: string, vars: Record<string, string>): string {
   });
 }
 
+/** How long authorizedFetch waits for response headers before aborting. */
+const AUTHORIZED_FETCH_HEADER_TIMEOUT_MS = 60_000;
+
 /**
  * A PortalClient for any gateway that serves the Open Gateway Manifest and
  * has no built-in adapter (spec: docs/superpowers/specs/2026-08-10-versutus-gate-design.md §7).
@@ -1010,7 +1013,30 @@ export class ManifestClient implements PortalClient {
     const headers = { ...this.rootTransport.headers, ...((init.headers as Record<string, string>) ?? {}) };
     // The transport sets JSON by default; a GET/SSE request should not claim one.
     if (!init.body) delete headers['Content-Type'];
-    return streamingFetch(`${this.rootTransport.baseUrl}${path}`, { ...init, headers });
+    // Bound only the wait for HEADERS: a stalled non-stream POST (CLI run
+    // submission) must settle, while the body stays unlimited because callers
+    // stream it. The timer clears once headers arrive.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AUTHORIZED_FETCH_HEADER_TIMEOUT_MS);
+    const callerSignal = init.signal;
+    // The caller's abort stays wired to the fetch signal for the WHOLE life of
+    // the response: the finally below runs at HEADERS, and a caller abort after
+    // that (the CLI run launcher cancelling a pending reader.read()) must still
+    // reach the body. Only the headers timer is cleared there.
+    const onCallerAbort = () => controller.abort();
+    if (callerSignal) {
+      if (callerSignal.aborted) controller.abort();
+      else callerSignal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+    try {
+      return await streamingFetch(`${this.rootTransport.baseUrl}${path}`, {
+        ...init,
+        headers,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**

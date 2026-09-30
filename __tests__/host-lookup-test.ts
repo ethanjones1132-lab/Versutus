@@ -1,10 +1,13 @@
 import {
   advertisedIpv4,
   HostLookupError,
+  hostLookupFailureCountForTests,
   ipv4FromExpoExtra,
   isHostLookupFailure,
+  resetHostLookupMemoryForTests,
   rewriteHttpBaseHost,
   rewriteHttpUrlHost,
+  withHostLookupRetry,
 } from '@/lib/gateway/host-lookup';
 
 describe('a DNS blip is a lookup failure, not a gateway crash', () => {
@@ -113,5 +116,125 @@ describe('HostLookupError', () => {
     expect(err.message).toMatch(/could not look up your PC's address/i);
     expect(err.message).toContain('ethanspc.tail3a1a8a.ts.net');
     expect(err.message).not.toMatch(/UnknownHostException/);
+  });
+});
+
+describe('withHostLookupRetry failure memory', () => {
+  beforeEach(() => resetHostLookupMemoryForTests());
+  afterEach(() => {
+    resetHostLookupMemoryForTests();
+    jest.useRealTimers();
+  });
+
+  const LOOKUP_MISS = 'fetch failed: getaddrinfo ENOTFOUND ethanspc.tail3a1a8a.ts.net';
+
+  test('after a hostname failure the IPv4 is tried first', async () => {
+    const calls: string[] = [];
+    const attempt = (url: string) => {
+      calls.push(url);
+      if (url.includes('ethanspc.tail3a1a8a.ts.net')) {
+        return Promise.reject(new Error(LOOKUP_MISS));
+      }
+      return Promise.resolve('ok');
+    };
+
+    // First call: no memory yet, so the hostname is tried first.
+    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
+    expect(calls).toEqual([
+      'http://ethanspc.tail3a1a8a.ts.net:8760/x',
+      'http://100.95.137.83:8760/x',
+    ]);
+
+    // Second call: within the 2-minute memory, the IPv4 goes first.
+    calls.length = 0;
+    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
+    expect(calls).toEqual(['http://100.95.137.83:8760/x']);
+  });
+
+  test('the IPv4-first memory expires after two minutes', async () => {
+    jest.useFakeTimers();
+    const calls: string[] = [];
+    const attempt = (url: string) => {
+      calls.push(url);
+      if (url.includes('ethanspc.tail3a1a8a.ts.net')) {
+        return Promise.reject(new Error(LOOKUP_MISS));
+      }
+      return Promise.resolve('ok');
+    };
+
+    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
+    expect(calls).toEqual([
+      'http://ethanspc.tail3a1a8a.ts.net:8760/x',
+      'http://100.95.137.83:8760/x',
+    ]);
+
+    // Just inside the window: still IPv4 first.
+    calls.length = 0;
+    await jest.advanceTimersByTimeAsync(119_000);
+    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
+    expect(calls).toEqual(['http://100.95.137.83:8760/x']);
+
+    // Past the window: hostname first again.
+    calls.length = 0;
+    await jest.advanceTimersByTimeAsync(2_000);
+    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
+    expect(calls).toEqual([
+      'http://ethanspc.tail3a1a8a.ts.net:8760/x',
+      'http://100.95.137.83:8760/x',
+    ]);
+  });
+
+  test('a hostname success clears the failure memory', async () => {
+    const calls: string[] = [];
+    let hostnameHealthy = false;
+    const attempt = (url: string) => {
+      calls.push(url);
+      const isHostname = url.includes('ethanspc.tail3a1a8a.ts.net');
+      if (isHostname && !hostnameHealthy) {
+        return Promise.reject(new Error(LOOKUP_MISS));
+      }
+      if (!isHostname) {
+        return Promise.reject(new Error('fetch failed: getaddrinfo ENOTFOUND 100.95.137.83'));
+      }
+      return Promise.resolve('ok');
+    };
+
+    // Call 1: hostname fails (mark set), IPv4 fails — HostLookupError.
+    await expect(
+      withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt),
+    ).rejects.toBeInstanceOf(HostLookupError);
+
+    // Call 2: hostname healthy. The mark puts the IPv4 first; it fails; the
+    // hostname succeeds and clears the mark.
+    hostnameHealthy = true;
+    calls.length = 0;
+    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
+    expect(calls).toEqual([
+      'http://100.95.137.83:8760/x',
+      'http://ethanspc.tail3a1a8a.ts.net:8760/x',
+    ]);
+
+    // Call 3: mark cleared — hostname first again.
+    calls.length = 0;
+    await withHostLookupRetry('http://ethanspc.tail3a1a8a.ts.net:8760/x', ['100.95.137.83'], attempt);
+    expect(calls).toEqual(['http://ethanspc.tail3a1a8a.ts.net:8760/x']);
+  });
+
+  test('marking a host prunes the marks that have expired', async () => {
+    jest.useFakeTimers();
+    const markFailure = (host: string) =>
+      withHostLookupRetry(`http://${host}/x`, [], () =>
+        Promise.reject(new Error(`fetch failed: getaddrinfo ENOTFOUND ${host}`)),
+      );
+
+    await expect(markFailure('a.ts.net')).rejects.toBeInstanceOf(HostLookupError);
+    await expect(markFailure('b.ts.net')).rejects.toBeInstanceOf(HostLookupError);
+    expect(hostLookupFailureCountForTests()).toBe(2);
+
+    // A gateway that stops being probed (deleted, or a rotating beacon host)
+    // must not keep its mark for the life of the process.
+    await jest.advanceTimersByTimeAsync(121_000);
+    await expect(markFailure('c.ts.net')).rejects.toBeInstanceOf(HostLookupError);
+    expect(hostLookupFailureCountForTests()).toBe(1);
   });
 });

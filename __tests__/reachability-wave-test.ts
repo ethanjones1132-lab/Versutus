@@ -201,6 +201,12 @@ describe('the reachability wave in the hook', () => {
     expect(hookSource).toContain('setResults((previous) => withWaveChecking(previous, due))');
     expect(hookSource).not.toContain("setReachability(gateway, 'checking')");
   });
+
+  test('the probe timeout leaves room for a lossy Tailscale relay hop', () => {
+    // A DERP/Tailscale path measures 0.9–1.7s RTT with loss; 3–3.5s already
+    // gives false negatives, so a reachable tailnet gateway is probed with 6s.
+    expect(hookSource).toContain('const PROBE_TIMEOUT_MS = 6000;');
+  });
 });
 
 describe('planProbeWave', () => {

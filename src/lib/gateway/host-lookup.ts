@@ -70,29 +70,71 @@ export function rewriteHttpBaseHost(baseUrl: string, ipv4: string): string | nul
   return new URL(rewritten).origin;
 }
 
+// A hostname whose lookup failed is remembered for two minutes: MagicDNS
+// blips are transient, and re-resolving a broken name on EVERY request stalls
+// each one for the resolver's timeout before the advertised IPv4 that already
+// proved itself gets a turn. A hostname success clears the mark.
+const HOST_LOOKUP_FAILURE_MEMORY_MS = 2 * 60 * 1000;
+const hostLookupFailures = new Map<string, { failedAt: number }>();
+
+/** Test escape hatch back to the pristine, nothing-remembered state. */
+export function resetHostLookupMemoryForTests(): void {
+  hostLookupFailures.clear();
+}
+
+/** Test escape hatch: how many hostnames are remembered as broken right now. */
+export function hostLookupFailureCountForTests(): number {
+  return hostLookupFailures.size;
+}
+
+/**
+ * Remember a hostname lookup miss, sweeping marks that have already expired.
+ * A host nobody probes any more (a deleted gateway, a rotating beacon host)
+ * would otherwise keep its entry for the life of the process.
+ */
+function rememberHostLookupFailure(hostname: string): void {
+  const now = Date.now();
+  for (const [key, mark] of hostLookupFailures) {
+    if (now - mark.failedAt >= HOST_LOOKUP_FAILURE_MEMORY_MS) hostLookupFailures.delete(key);
+  }
+  hostLookupFailures.set(hostname, { failedAt: now });
+}
+
 /**
  * Try `url`, then each advertised IPv4 rewrite, only when the failure is a
  * host lookup miss. https is never rewritten (rewriteHttpUrlHost returns null).
  * Exhausted lookup misses become HostLookupError, not the raw Java exception.
+ *
+ * After a hostname lookup failure the advertised IPv4 candidates are tried
+ * FIRST and the hostname last, for two minutes; a hostname success clears the
+ * mark.
  */
 export async function withHostLookupRetry<T>(
   url: string,
   alternateIpv4: string[],
   attempt: (candidateUrl: string) => Promise<T>,
 ): Promise<T> {
-  const candidates = [url];
+  const hostname = hostnameOf(url);
+  const ipv4Candidates: string[] = [];
   for (const ip of alternateIpv4) {
     const rewritten = rewriteHttpUrlHost(url, ip);
-    if (rewritten) candidates.push(rewritten);
+    if (rewritten) ipv4Candidates.push(rewritten);
   }
+  const failed = hostLookupFailures.get(hostname);
+  const rememberFailure =
+    failed !== undefined && Date.now() - failed.failedAt < HOST_LOOKUP_FAILURE_MEMORY_MS;
+  const candidates = rememberFailure ? [...ipv4Candidates, url] : [url, ...ipv4Candidates];
   for (const candidate of candidates) {
     try {
-      return await attempt(candidate);
+      const result = await attempt(candidate);
+      if (candidate === url) hostLookupFailures.delete(hostname);
+      return result;
     } catch (error) {
       if (!isHostLookupFailure(error)) throw error;
+      if (candidate === url) rememberHostLookupFailure(hostname);
     }
   }
-  throw new HostLookupError(hostnameOf(url));
+  throw new HostLookupError(hostname);
 }
 
 export function advertisedIpv4(input: {

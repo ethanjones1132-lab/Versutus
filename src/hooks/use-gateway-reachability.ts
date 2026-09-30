@@ -12,7 +12,9 @@ import type {
 } from '@/lib/gateway/dashboard';
 import type { ConnectionStatus, GatewayProfile } from '@/lib/gateway/types';
 
-const PROBE_TIMEOUT_MS = 1800;
+// A DERP/Tailscale path measures 0.9–1.7s RTT with loss; 3–3.5s already gives
+// false negatives, so a reachable tailnet gateway is probed with 6s.
+const PROBE_TIMEOUT_MS = 6000;
 const MIN_PROBE_INTERVAL_MS = 8000; // debounce for user-friendly automatic polling
 
 export function useGatewayReachability({
@@ -91,7 +93,7 @@ export function useGatewayReachability({
       setResults((previous) => withWaveChecking(previous, due));
 
       // Probes ride a small concurrency cap instead of one-at-a-time: the
-      // sequential wave held every row's verdict hostage to 1.8s x N of
+      // sequential wave held every row's verdict hostage to 6s x N of
       // lossy hops before it reached the end of the roster.
       await runCapped(due, PROBE_WAVE_CONCURRENCY, async (gateway) => {
         if (cancelled) return;

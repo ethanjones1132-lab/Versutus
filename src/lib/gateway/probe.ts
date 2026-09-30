@@ -14,13 +14,31 @@ export const GATEWAY_PROBE_PARALLEL_TIMEOUT_MS = 10_000;
 export const GATEWAY_MANIFEST_PROBE_TIMEOUT_MS = 8_000;
 
 /**
+ * When a lower-priority candidate answers first, how long to keep waiting for
+ * a higher-priority one to settle before taking the best success on hand.
+ */
+export const PROBE_PRIORITY_GRACE_MS = 400;
+
+/**
  * Probe a Hermes gateway by hitting the /health endpoint.
  * Hermes uses HTTP (not WebSocket), default port 8642.
+ *
+ * `signal` lets a caller abort an unsettled probe (a higher-priority candidate
+ * already won the wave); the probe then reports `closed`, not `timeout`.
  */
-export async function probeGatewayUrl(url: string, timeoutMs = GATEWAY_PROBE_TIMEOUT_MS): Promise<ProbeResult> {
+export async function probeGatewayUrl(
+  url: string,
+  timeoutMs = GATEWAY_PROBE_TIMEOUT_MS,
+  signal?: AbortSignal,
+): Promise<ProbeResult> {
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onCallerAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', onCallerAbort, { once: true });
+  }
 
   try {
     // Normalize URL to HTTP
@@ -37,6 +55,14 @@ export async function probeGatewayUrl(url: string, timeoutMs = GATEWAY_PROBE_TIM
     });
     clearTimeout(timer);
 
+    // Only the status was needed: release the body so the connection does not
+    // stay open until GC — on success and on refusal alike.
+    try {
+      const releasing = response.body?.cancel() as Promise<void> | undefined;
+      releasing?.catch?.(() => undefined);
+    } catch {
+      // cancel threw synchronously; there is nothing left to release.
+    }
     if (response.ok) {
       return { ok: true, url: baseUrl, latencyMs: Date.now() - started };
     }
@@ -48,6 +74,10 @@ export async function probeGatewayUrl(url: string, timeoutMs = GATEWAY_PROBE_TIM
     };
   } catch (error) {
     clearTimeout(timer);
+    // A caller abort means the wave already moved on, not a timeout.
+    if (signal?.aborted) {
+      return { ok: false, url, error: 'Probe cancelled', code: 'closed' };
+    }
     // The timer is the only thing that aborts this probe; Expo's native fetch
     // rejects a cancelled request as a plain FetchError, never an AbortError.
     if (controller.signal.aborted) {
@@ -60,6 +90,8 @@ export async function probeGatewayUrl(url: string, timeoutMs = GATEWAY_PROBE_TIM
       error: message,
       code: message.includes('connect') || message.includes('Network') ? 'connect-failed' : 'unreachable',
     };
+  } finally {
+    signal?.removeEventListener('abort', onCallerAbort);
   }
 }
 
@@ -100,38 +132,111 @@ export async function probeHighPriorityCandidates(
   if (urls.length === 0) return null;
 
   const top = urls.slice(0, HIGH_PRIORITY_WAVE_SIZE);
+  const controllers = top.map(() => new AbortController());
 
-  const results = await Promise.allSettled(
-    top.map(async (url) => {
+  return new Promise<ProbeResult | null>((resolve) => {
+    const results: (ProbeResult | undefined)[] = top.map(() => undefined);
+    let graceTimer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (graceTimer !== undefined) {
+        clearTimeout(graceTimer);
+        graceTimer = undefined;
+      }
+      // Unsettled probes must not be left running: abort them.
+      for (let i = 0; i < top.length; i += 1) {
+        if (results[i] === undefined) controllers[i].abort();
+      }
+      void preferManifest(results, timeoutMs).then(resolve).catch(() => {
+        // A throw in the manifest checks must neither leave the promise
+        // pending nor raise an unhandled rejection: fall back to the best
+        // success on hand.
+        resolve(results.find((r) => r?.ok === true) ?? null);
+      });
+    };
+
+    // Resolve as soon as a success arrives for the highest-priority candidate
+    // still in the running (no higher-priority candidate pending). If a
+    // lower-priority one succeeds first, wait at most a short grace for the
+    // higher-priority ones to settle, then take the best success.
+    const evaluate = () => {
+      for (let i = 0; i < top.length; i += 1) {
+        if (results[i]?.ok && results.slice(0, i).every((r) => r !== undefined)) {
+          finish();
+          return;
+        }
+      }
+      if (results.every((r) => r !== undefined)) {
+        finish();
+        return;
+      }
+      if (results.some((r) => r?.ok) && graceTimer === undefined) {
+        graceTimer = setTimeout(() => {
+          graceTimer = undefined;
+          finish();
+        }, PROBE_PRIORITY_GRACE_MS);
+      }
+    };
+
+    top.forEach((url, index) => {
       onProgress?.(describeProbeTarget(url));
-      const res = await probeGatewayUrl(url, timeoutMs);
-      return { url, res };
-    }),
-  );
+      probeGatewayUrl(url, timeoutMs, controllers[index].signal).then(
+        (result) => {
+          results[index] = result;
+          evaluate();
+        },
+        () => {
+          results[index] = { ok: false, url, error: 'Probe failed', code: 'unreachable' };
+          evaluate();
+        },
+      );
+    });
+  });
+}
 
-  const successes: Extract<ProbeResult, { ok: true }>[] = [];
-  for (const settled of results) {
-    if (settled.status === 'fulfilled' && settled.value.res.ok) {
-      successes.push(settled.value.res);
+/**
+ * Prefer a gate that advertises the Open Gateway Manifest (Versutus Gate) over
+ * a bare Hermes /health on :8642 when both answer. The manifest check runs on
+ * the chosen (highest-priority) success first; only when it lacks a manifest
+ * do the remaining successes get checked, and then all at once, so a fallback
+ * wave costs one manifest budget rather than one per success. The flag travels
+ * with the result — the connect path hands it to identifyGateway as
+ * skipManifest instead of replaying the same fetch.
+ */
+async function preferManifest(
+  results: (ProbeResult | undefined)[],
+  timeoutMs: number,
+): Promise<ProbeResult | null> {
+  const successes = () =>
+    results.filter((r): r is Extract<ProbeResult, { ok: true }> => r?.ok === true);
+  const best = successes()[0];
+  if (!best) return null;
+  if (await hasGatewayManifest(best.url, timeoutMs)) {
+    return { ...best, hasManifest: true };
+  }
+  // Re-read: more successes may have landed while the chosen's check ran. The
+  // remainder is RACED, not queued: a wave that fell back one manifest budget
+  // per success would cost the connect path seconds per dead candidate.
+  const rest = successes().slice(1);
+  if (rest.length > 0) {
+    try {
+      const winner = await Promise.any(
+        rest.map(async (candidate) => {
+          if (!(await hasGatewayManifest(candidate.url, timeoutMs))) {
+            throw new Error('no manifest');
+          }
+          return candidate;
+        }),
+      );
+      return { ...winner, hasManifest: true };
+    } catch {
+      // None of the fallbacks advertises a manifest either.
     }
   }
-  if (successes.length === 0) return null;
-
-  // Prefer a gate that advertises the Open Gateway Manifest (Versutus Gate)
-  // over a bare Hermes /health on :8642 when both answer. The manifest reads
-  // fan out together so the preference check costs one fetch budget instead
-  // of one per success; hits keep probe order, so the earliest
-  // manifest-bearing success still wins.
-  const manifestHits = await Promise.all(
-    successes.map((success) => hasGatewayManifest(success.url, timeoutMs)),
-  );
-  for (let i = 0; i < successes.length; i += 1) {
-    if (manifestHits[i]) return { ...successes[i], hasManifest: true };
-  }
-  // The wave just proved the manifest absent on the winner, so the flag
-  // travels with the result — the connect path hands it to identifyGateway
-  // as skipManifest instead of replaying the same fetch.
-  return { ...successes[0], hasManifest: false };
+  return { ...best, hasManifest: false };
 }
 
 async function hasGatewayManifest(baseUrl: string, timeoutMs: number): Promise<boolean> {
@@ -140,8 +245,9 @@ async function hasGatewayManifest(baseUrl: string, timeoutMs: number): Promise<b
     () => controller.abort(),
     Math.max(GATEWAY_MANIFEST_PROBE_TIMEOUT_MS, timeoutMs),
   );
+  let response: Response | undefined;
   try {
-    const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/.well-known/gateway.json`, {
+    response = await fetch(`${baseUrl.replace(/\/+$/, '')}/.well-known/gateway.json`, {
       method: 'GET',
       headers: { Accept: 'application/json' },
       signal: controller.signal,
@@ -153,6 +259,14 @@ async function hasGatewayManifest(baseUrl: string, timeoutMs: number): Promise<b
     return false;
   } finally {
     clearTimeout(timer);
+    // Only the status was needed: release the body so the connection does not
+    // stay open until GC.
+    try {
+      const releasing = response?.body?.cancel() as Promise<void> | undefined;
+      releasing?.catch?.(() => undefined);
+    } catch {
+      // cancel threw synchronously; there is nothing left to release.
+    }
   }
 }
 

@@ -1,3 +1,4 @@
+import { resetHostLookupMemoryForTests } from '@/lib/gateway/host-lookup';
 import { fetchGatewayManifest, fetchGatewayManifestWithLookupRetry } from '@/lib/portal/manifest';
 
 const MANIFEST = {
@@ -29,8 +30,14 @@ function lookupMiss(): Error {
 }
 
 const realFetch = globalThis.fetch;
+beforeEach(() => {
+  // The host-lookup failure memory is module-level; without this a marked
+  // hostname from one test would reorder the next test's IPv4-first retry.
+  resetHostLookupMemoryForTests();
+});
 afterEach(() => {
   (globalThis as { fetch: unknown }).fetch = realFetch;
+  resetHostLookupMemoryForTests();
 });
 
 describe('manifest fetch with the ordinary DNS fallback', () => {

@@ -1,5 +1,6 @@
 import { ManifestClient } from '@/lib/gateway/manifest-client';
 import { createEnvironmentClient } from '@/lib/gateway/environment-client';
+import { resetHostLookupMemoryForTests } from '@/lib/gateway/host-lookup';
 import {
   installStreamingFetch,
   installStreamingFetchHostFallback,
@@ -49,6 +50,12 @@ function sseResponse(frames: string[]): Response {
     },
   }), { status: 200 });
 }
+
+beforeEach(() => {
+  // The host-lookup failure memory is module-level; without this a marked
+  // hostname from one test would reorder the next test's IPv4-first retry.
+  resetHostLookupMemoryForTests();
+});
 
 afterEach(() => {
   // Back to the pristine state so tests cannot leak into each other. A bare

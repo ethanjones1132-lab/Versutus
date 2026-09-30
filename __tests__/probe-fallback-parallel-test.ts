@@ -1,4 +1,4 @@
-import { probeGatewayCandidates, probeHighPriorityCandidates } from '@/lib/gateway/probe';
+import { probeGatewayCandidates, probeGatewayUrl, probeHighPriorityCandidates } from '@/lib/gateway/probe';
 
 function okResponse() {
   return {
@@ -119,6 +119,7 @@ describe('probeHighPriorityCandidates manifest preference', () => {
   const realFetch = globalThis.fetch;
   afterEach(() => {
     (globalThis as { fetch: unknown }).fetch = realFetch;
+    jest.useRealTimers();
   });
 
   function manifestResponse() {
@@ -176,7 +177,7 @@ describe('probeHighPriorityCandidates manifest preference', () => {
     ).resolves.toBeNull();
   });
 
-  test('fires the manifest checks together instead of one at a time', async () => {
+  test('checks the chosen success’s manifest first, then falls back to another success', async () => {
     const gates = new Map([
       ['http://a:8641', deferred<Response>()],
       ['http://b:8642', deferred<Response>()],
@@ -189,18 +190,216 @@ describe('probeHighPriorityCandidates manifest preference', () => {
       undefined,
       2000,
     );
-    // Let the /health wave settle so both manifest reads are in flight.
-    // A serial walk would have started exactly one manifest fetch here.
+    // Let the /health wave settle so the chosen success's manifest read is in
+    // flight. The chosen (highest-priority) success is checked first — one
+    // manifest call, not a fan-out over every success.
     await new Promise((resolve) => setTimeout(resolve, 20));
-    const manifestCalls = fetchMock.mock.calls.filter((call: unknown[]) =>
-      String(call[0]).endsWith('/.well-known/gateway.json'),
-    );
-    expect(manifestCalls.length).toBe(2);
+    const manifestCalls = () =>
+      fetchMock.mock.calls.filter((call: unknown[]) =>
+        String(call[0]).endsWith('/.well-known/gateway.json'),
+      );
+    expect(manifestCalls().length).toBe(1);
+    expect(String(manifestCalls()[0][0])).toContain('a:8641');
 
+    // The chosen lacks a manifest; the fallback's manifest check fires next.
     gates.get('http://a:8641')!.resolve(okResponse());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(manifestCalls().length).toBe(2);
+    expect(String(manifestCalls()[1][0])).toContain('b:8642');
+
     gates.get('http://b:8642')!.resolve(manifestResponse());
     const result = await run;
     expect(result?.ok).toBe(true);
     expect(result?.ok && result.url).toBe('http://b:8642');
+    expect(result?.ok && result.hasManifest).toBe(true);
+  });
+
+  test('races the fallback manifest checks instead of asking one at a time', async () => {
+    jest.useFakeTimers();
+    const gates = new Map([
+      ['http://b:8642', deferred<Response>()],
+      ['http://c:8643', deferred<Response>()],
+      ['http://d:8644', deferred<Response>()],
+    ]);
+    const fetchMock = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/.well-known/gateway.json')) {
+        // The chosen success (a) answers at once, without a manifest; every
+        // other manifest read stays in flight until the test releases it.
+        const gate = gates.get(url.replace('/.well-known/gateway.json', ''));
+        return gate ? gate.promise : Promise.resolve(okResponse());
+      }
+      return Promise.resolve(okResponse());
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+    const manifestHosts = () =>
+      fetchMock.mock.calls
+        .map((call: unknown[]) => String(call[0]))
+        .filter((url) => url.endsWith('/.well-known/gateway.json'))
+        .map((url) => url.replace('/.well-known/gateway.json', ''));
+
+    const run = probeHighPriorityCandidates(
+      ['http://a:8641', 'http://b:8642', 'http://c:8643', 'http://d:8644'],
+      undefined,
+      10_000,
+    );
+    await jest.advanceTimersByTimeAsync(0);
+    // The chosen (highest-priority) success is asked first; every remaining
+    // check then goes out together. A serial loop would leave only b in flight
+    // and cost the wave one manifest budget per success.
+    expect(manifestHosts()).toEqual([
+      'http://a:8641',
+      'http://b:8642',
+      'http://c:8643',
+      'http://d:8644',
+    ]);
+
+    gates.get('http://b:8642')!.resolve(manifestResponse());
+    const result = await run;
+    expect(result?.ok).toBe(true);
+    expect(result?.ok && result.url).toBe('http://b:8642');
+    expect(result?.ok && result.hasManifest).toBe(true);
+  });
+});
+
+describe('probeHighPriorityCandidates first-success probing', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+    jest.useRealTimers();
+  });
+
+  async function flushMicrotasks() {
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  }
+
+  test('a fast success returns before a black-holed candidate settles', async () => {
+    jest.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init: RequestInit) => {
+      const url = String(input);
+      signals.push(init.signal!);
+      if (url.startsWith('http://fast:8641')) {
+        return Promise.resolve(okResponse());
+      }
+      return new Promise<Response>(() => {});
+    });
+
+    const result = await probeHighPriorityCandidates(
+      ['http://fast:8641', 'http://blackhole:8642'],
+      undefined,
+      10_000,
+    );
+
+    expect(result?.ok).toBe(true);
+    expect(result?.ok && result.url).toBe('http://fast:8641');
+    // The black-holed probe is aborted, not left running.
+    expect(signals[1]?.aborted).toBe(true);
+  });
+
+  test('a higher-priority success within the grace wins over an earlier lower one', async () => {
+    const gates = new Map([
+      ['http://slow:8641', deferred<Response>()],
+      ['http://fast:8642', deferred<Response>()],
+    ]);
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input).replace(/\/health$/, '');
+      const gate = gates.get(url);
+      if (!gate) return Promise.resolve(okResponse());
+      return gate.promise;
+    });
+
+    const run = probeHighPriorityCandidates(
+      ['http://slow:8641', 'http://fast:8642'],
+      undefined,
+      10_000,
+    );
+
+    // Let both /health probes start, then answer the lower-priority one first.
+    await flushMicrotasks();
+    gates.get('http://fast:8642')!.resolve(okResponse());
+    await flushMicrotasks();
+    // The higher-priority one answers within the 400ms grace.
+    gates.get('http://slow:8641')!.resolve(okResponse());
+
+    const result = await run;
+    expect(result?.ok).toBe(true);
+    expect(result?.ok && result.url).toBe('http://slow:8641');
+  });
+
+  test('a lower-priority success stands when a higher-priority probe stays black-holed', async () => {
+    jest.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init: RequestInit) => {
+      const url = String(input);
+      signals.push(init.signal!);
+      if (url.startsWith('http://fast:8642')) {
+        return Promise.resolve(okResponse());
+      }
+      return new Promise<Response>(() => {});
+    });
+
+    const run = probeHighPriorityCandidates(
+      ['http://blackhole:8641', 'http://fast:8642'],
+      undefined,
+      10_000,
+    );
+    // Let the fast success land and start the 400ms grace.
+    await flushMicrotasks();
+    const assertion = expect(run).resolves.toMatchObject({ ok: true, url: 'http://fast:8642' });
+    // The grace expires with the higher-priority probe still black-holed.
+    await jest.advanceTimersByTimeAsync(500);
+    await assertion;
+    expect(signals[0]?.aborted).toBe(true);
+  });
+});
+
+describe('probeGatewayUrl body release', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+  });
+
+  test('a successful probe cancels the response body', async () => {
+    let cancelled = false;
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        body: {
+          cancel: () => {
+            cancelled = true;
+            return Promise.resolve();
+          },
+        },
+      } as unknown as Response),
+    );
+
+    const result = await probeGatewayUrl('http://gate:8642', 2000);
+    expect(result.ok).toBe(true);
+    // Only the status was needed: the body is released, not left open until GC.
+    expect(cancelled).toBe(true);
+  });
+
+  test('a refused probe cancels the response body too', async () => {
+    let cancelled = false;
+    (globalThis as { fetch: unknown }).fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 500,
+        body: {
+          cancel: () => {
+            cancelled = true;
+            return Promise.resolve();
+          },
+        },
+      } as unknown as Response),
+    );
+
+    const result = await probeGatewayUrl('http://gate:8642', 2000);
+    expect(result.ok).toBe(false);
+    // A refusal only needed the status too: the body is released, not left
+    // open until GC.
+    expect(cancelled).toBe(true);
   });
 });

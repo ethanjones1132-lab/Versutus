@@ -58,6 +58,17 @@ export function isUserAbort(error: unknown, signal?: AbortSignal): boolean {
   return false;
 }
 
+/**
+ * The gateway went silent mid-stream and the idle watchdog fired. Chat marks
+ * the bubble interrupted (recoverable) rather than showing a raw failure.
+ */
+export class StreamStalledError extends Error {
+  constructor() {
+    super('The gateway stopped responding mid-stream.');
+    this.name = 'StreamStalledError';
+  }
+}
+
 const GATEWAY_TOKEN_REQUIRED_MARKERS = [
   'setup token required',
   'auth token missing',
@@ -77,6 +88,7 @@ export function isGatewayTokenRequiredMessage(message?: string | null): boolean 
  * should be marked as interrupted (recoverable) rather than failed.
  */
 export function isConnectionError(error: unknown): boolean {
+  if (error instanceof StreamStalledError) return true;
   const message = error instanceof Error ? error.message : String(error);
   return /(fetch|network|connection|reachable|timed out|timeout|econnrefused|ENOTFOUND|getaddrinfo|UnknownHostException|Unable to resolve host|failed to fetch|aborted by peer|network error|stream closed unexpectedly)/i.test(
     message,

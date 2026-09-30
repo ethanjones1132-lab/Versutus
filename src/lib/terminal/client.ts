@@ -1,7 +1,22 @@
 import { sanitizeHeaderValue } from '@/lib/gateway/http-transport';
+import { withHostLookupRetry } from '@/lib/gateway/host-lookup';
 import { httpToWsBase } from '@/lib/gateway/url';
 import { streamingFetch } from '@/lib/net/streaming-fetch';
 import { parseTerminalSseEvent, type TerminalSseFrame } from '@/lib/terminal/sse';
+
+const TERMINAL_INPUT_TIMEOUT_MS = 15_000;
+
+/**
+ * Terminal input sends are ordered per session: two quick submits are
+ * independent requests that can reorder on the wire, so each session's sends
+ * chain onto the previous one. A failed send does not block later ones — the
+ * chain swallows the rejection and the next send still dispatches.
+ */
+const inputQueues = new Map<string, Promise<void>>();
+
+function queueKey(gatewayWsUrl: string, sid: string): string {
+  return `${gatewayWsUrl}|${sid}`;
+}
 
 export type TerminalSession = {
   sid: string;
@@ -148,17 +163,64 @@ export async function openTerminalSession(
   };
 }
 
-export async function sendTerminalInput(
+export function sendTerminalInput(
+  gatewayWsUrl: string,
+  sid: string,
+  data: string,
+  token?: string,
+): Promise<void> {
+  const key = queueKey(gatewayWsUrl, sid);
+  const previous = inputQueues.get(key) ?? Promise.resolve();
+  // Chain off the settled promise (catch first) so a rejected send does not
+  // block the next one.
+  const send = previous.catch(() => undefined).then(() =>
+    dispatchTerminalInput(gatewayWsUrl, sid, data, token),
+  );
+  inputQueues.set(key, send);
+  // Drop the entry once settled so the map cannot grow without bound.
+  send.catch(() => undefined).finally(() => {
+    if (inputQueues.get(key) === send) inputQueues.delete(key);
+  });
+  return send;
+}
+
+async function dispatchTerminalInput(
   gatewayWsUrl: string,
   sid: string,
   data: string,
   token?: string,
 ): Promise<void> {
   const httpBase = httpToWsBase(gatewayWsUrl).replace(/^wss:/, "https://").replace(/^ws:/, "http://");
-  const response = await fetch(`${httpBase}/v1/terminal/input`, {
-    method: 'POST',
-    headers: authHeaders(token),
-    body: JSON.stringify({ sid, data }),
-  });
-  if (!response.ok) throw new Error(`Terminal input failed (${response.status})`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TERMINAL_INPUT_TIMEOUT_MS);
+  let response: Response | undefined;
+  try {
+    response = await withHostLookupRetry(
+      `${httpBase}/v1/terminal/input`,
+      [],
+      (url) =>
+        fetch(url, {
+          method: 'POST',
+          headers: authHeaders(token),
+          body: JSON.stringify({ sid, data }),
+          signal: controller.signal,
+        }),
+    );
+    if (!response.ok) throw new Error(`Terminal input failed (${response.status})`);
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`Terminal input timed out: POST /v1/terminal/input`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    // Only the status was needed: release the body so the connection does not
+    // stay open until GC — the 15s timer never covers it.
+    try {
+      const releasing = response?.body?.cancel() as Promise<void> | undefined;
+      releasing?.catch?.(() => undefined);
+    } catch {
+      // cancel threw synchronously; there is nothing left to release.
+    }
+  }
 }

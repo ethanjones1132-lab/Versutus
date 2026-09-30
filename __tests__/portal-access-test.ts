@@ -35,6 +35,7 @@ jest.mock('expo-constants', () => ({
   },
 }));
 
+import { resetHostLookupMemoryForTests } from '@/lib/gateway/host-lookup';
 import { requestGatewayAccess } from '@/lib/portal/access';
 import { loadOrCreateDeviceIdentity, signDevicePayload } from '@/lib/gateway/device-identity';
 import { DeviceIdentityError, DEVICE_IDENTITY_FAILURE } from '@/lib/gateway/errors';
@@ -84,9 +85,15 @@ function lookupMiss(): Error {
 }
 
 const realFetch = globalThis.fetch;
+beforeEach(() => {
+  // The host-lookup failure memory is module-level; without this a marked
+  // hostname from one test would reorder the next test's IPv4-first retry.
+  resetHostLookupMemoryForTests();
+});
 afterEach(() => {
   (globalThis as { fetch: unknown }).fetch = realFetch;
   jest.restoreAllMocks();
+  resetHostLookupMemoryForTests();
 });
 
 function recordCall(calls: { url: string; body: unknown }[], input: unknown, init: unknown) {

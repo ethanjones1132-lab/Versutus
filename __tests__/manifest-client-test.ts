@@ -1272,3 +1272,92 @@ describe('ManifestClient connect concurrency', () => {
     client.disconnect();
   });
 });
+
+describe('ManifestClient.authorizedFetch', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+    jest.useRealTimers();
+  });
+
+  function abortableFetchMock() {
+    const signals: AbortSignal[] = [];
+    const mock = jest.fn((_url: unknown, init: RequestInit) => {
+      signals.push(init.signal!);
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(new Error('canceled')));
+      });
+    });
+    (globalThis as { fetch: unknown }).fetch = mock;
+    return signals;
+  }
+
+  test('aborts when response headers do not arrive within 60s', async () => {
+    jest.useFakeTimers();
+    const signals = abortableFetchMock();
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    const pending = client.authorizedFetch('/v1/runs');
+    const assertion = expect(pending).rejects.toThrow();
+    await jest.advanceTimersByTimeAsync(60_000);
+    await assertion;
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  test('propagates the caller’s own signal', async () => {
+    const signals = abortableFetchMock();
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    const controller = new AbortController();
+    const pending = client.authorizedFetch('/v1/runs', { signal: controller.signal });
+    controller.abort();
+
+    await expect(pending).rejects.toThrow();
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  test('a caller abort after headers still aborts the response body', async () => {
+    const signals: AbortSignal[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((_url: unknown, init: RequestInit) => {
+      signals.push(init.signal!);
+      const body = new ReadableStream<Uint8Array>({
+        // Hold the stream open: read() stays pending until the fetch's signal
+        // aborts, which is what a real stalled body does.
+        pull() {
+          return new Promise<void>((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(new Error('canceled')), {
+              once: true,
+            });
+          });
+        },
+      });
+      return Promise.resolve({ ok: true, status: 200, body } as unknown as Response);
+    });
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    const controller = new AbortController();
+    const response = await client.authorizedFetch('/v1/runs', { signal: controller.signal });
+    const reader = response.body!.getReader();
+
+    const pending = reader.read();
+    const assertion = expect(pending).rejects.toThrow('canceled');
+    controller.abort();
+    await assertion;
+    // The caller's abort reached the fetch the response came from.
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  test('the headers timer does not fire once headers arrive', async () => {
+    jest.useFakeTimers();
+    const signals: AbortSignal[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((_url: unknown, init: RequestInit) => {
+      signals.push(init.signal!);
+      return Promise.resolve({ ok: true, status: 200 } as unknown as Response);
+    });
+
+    const client = new ManifestClient(PROFILE, IDENTITY, {});
+    await client.authorizedFetch('/v1/runs');
+    await jest.advanceTimersByTimeAsync(61_000);
+    expect(signals[0]?.aborted).toBe(false);
+  });
+});
