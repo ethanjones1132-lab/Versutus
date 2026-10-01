@@ -52,6 +52,7 @@ import {
   type SessionListState,
 } from '@/lib/gateway/session-list';
 import { readSessionList } from '@/lib/gateway/session-list-read';
+import { clearCachedForGateway, readCached, writeCached } from '@/lib/cache/swr-store';
 import { loadOrCreateDeviceIdentity } from '@/lib/gateway/device-identity';
 import { advertisedIpv4 } from '@/lib/gateway/host-lookup';
 import {
@@ -170,6 +171,7 @@ import type {
   HermesSession,
   PairingDetails,
   RunEvent,
+  SessionMessage,
 } from '@/lib/gateway/types';
 import {
   addGatewayProfile,
@@ -572,6 +574,28 @@ type GatewayContextValue = {
 const HISTORY_PAGE_SIZE = 80;
 
 /**
+ * Newest turns kept as a thread's last-known-good copy. Enough to open a thread
+ * on and read, small enough that one thread cannot crowd the roster and
+ * session lists out of the store.
+ */
+const HISTORY_CACHE_TURNS = 40;
+
+/**
+ * Which cached list belongs to the scope on screen: the gateway, plus the Bot
+ * or CLI environment and backend the reads are scoped to. Reads that are not
+ * scoped (a chat on the default Bot) use `cfg` and no backend, so the key they
+ * write is the key they read.
+ */
+function scopeCacheId(
+  gateway: GatewayProfile | null,
+  botId: string | undefined,
+  backendId: string | undefined,
+): string | undefined {
+  if (!gateway) return undefined;
+  return `${gateway.id}:${botId ?? 'cfg'}:${backendId ?? ''}`;
+}
+
+/**
  * How long a delete waits on the Gate's "forget this device" call before
  * giving up on it. Long enough for a tailnet round trip, short enough that a
  * Gate that is already gone cannot hold the teardown — and the screen it is
@@ -827,13 +851,16 @@ function isGatewayAuthFailure(error: unknown): boolean {
  * manifest sync (`syncChildProfiles` at both of its call sites) is a real,
  * connectable gateway — its transcript and session labels are keyed by that id
  * and would outlive the profile forever, exactly as a deleted profile's would.
- * These are the same two stores the delete path clears (`deleteGateway`), and a
- * sync that retired nothing is not a store call at all.
+ * These are the same three stores the delete path clears (`deleteGateway`): the
+ * transcripts, the labels, and the last-known-good cache a screen paints from
+ * before the network answers. A sync that retired nothing is not a store call
+ * at all.
  */
 async function clearRetiredGatewayStores(ids: readonly string[]): Promise<void> {
   if (ids.length === 0) return;
   await Promise.all(ids.map((id) => clearTranscriptsForGateway(id)));
   await Promise.all(ids.map((id) => clearSessionLabelsForGateway(id)));
+  await Promise.all(ids.map((id) => clearCachedForGateway(id)));
 }
 
 export function GatewayProvider({ children }: { children: React.ReactNode }) {
@@ -1279,10 +1306,76 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     const requestId = ++historyRequestRef.current;
     historyLoadedForRef.current = gateway.id;
     setHistoryLoading(true);
+    /**
+     * Set synchronously by the fresh read below, the moment it claims the live
+     * thread. `messagesRef` cannot stand in for it: it is only synced in an
+     * effect, so between `setMessages` and the next commit a slow cache read
+     * still sees an empty list, passes an emptiness guard, and paints the
+     * remembered turns over the ones the network just delivered. A boolean owned
+     * by THIS reload has no such window — the cache read is a promise of a
+     * request, and this flag says whether that request has already landed.
+     */
+    let liveHistoryPainted = false;
     // A fresh load starts a new page sequence for "load earlier".
     historyLimitRef.current = HISTORY_PAGE_SIZE;
     historyCursorRef.current = null;
     setHasMoreHistory(false);
+
+    /**
+     * Everything that puts a thread's turns on screen, in one place, so the
+     * cached paint below and the fresh read that follows it cannot drift.
+     * `historyLoading` stays true through the cached paint: the thread is not
+     * loaded yet, it is only no longer blank.
+     */
+    const paintThread = (gatewayHistory: SessionMessage[], localTrans: CommandTranscriptEntry[]) => {
+      const merged = [...historyToChatMessages(gatewayHistory)];
+      for (const cm of localTrans.map((t) => ({
+        id: t.id,
+        role: 'assistant' as const,
+        text: t.summary,
+        timestamp: t.createdAt,
+        command: {
+          input: t.input,
+          title: t.title,
+          raw: t.raw,
+          // A cancelled command is the operator's own stop, not a refusal. The
+          // bubble vocabulary has no 'cancelled', and dressing one as a failure
+          // showed a red Failed badge and a Retry on something that worked as
+          // asked; leaving it 'running' would wedge a spinner and a Cancel
+          // button nobody can use. No badge is the honest reading — the
+          // transcript keeps the real status.
+          status: t.status === 'cancelled' ? undefined : t.status,
+          ephemeral: t.ephemeral,
+          durationMs: t.durationMs,
+        },
+      }))) {
+        if (!merged.some((m) => m.id === cm.id)) {
+          merged.push(cm);
+        }
+      }
+
+      // Re-surface durable offline outbox items after history reload. Only the
+      // rows that belong on the thread just painted: a row that names a Bot
+      // Chat was typed for that Bot Chat, not for whichever one is on screen.
+      const pending = resurfaceOfflineQueue(offlineQueueRef.current, {
+        gatewayId: gateway.id,
+        botId: selectedBotIdRef.current,
+      });
+      for (const item of pending) {
+        if (!merged.some((m) => m.id === item.id)) {
+          merged.push({
+            id: item.id,
+            role: 'user',
+            text: item.text,
+            timestamp: item.createdAt,
+            queued: true,
+          });
+        }
+      }
+
+      setMessages(boundWindow(merged));
+    };
+
     try {
       // A deliberate session switch updates the ref; a deliberate release
       // (CLI environment switch) clears it. Stored is a reconnect pin, not
@@ -1324,6 +1417,28 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         setCurrentSessionId(sessionId);
       }
 
+      // Last-known-good first, keyed by BOTH gateway and session: a thread must
+      // never open showing another thread's turns. Only an empty thread is
+      // filled from disk — anything already on screen came from a live read and
+      // is newer than any copy on the device.
+      const historyCacheId = sessionId ? `${gateway.id}:${sessionId}` : undefined;
+      if (historyCacheId) {
+        void readCached<SessionMessage[]>('history', historyCacheId, 'last40')
+          .then((cached) => {
+            if (!cached || requestId !== historyRequestRef.current) return;
+            // The read that owns this thread has already painted it. This is
+            // checked with a flag rather than by looking at the list, because
+            // the flag is set in the same tick the read painted and the list is
+            // only observed a render later.
+            if (liveHistoryPainted) return;
+            // Anything else already on screen (a live stream's turns) is newer
+            // than a copy on the device; only a blank thread is filled.
+            if (messagesRef.current.length > 0) return;
+            paintThread(cached.value, []);
+          })
+          .catch(() => undefined);
+      }
+
       const sessionKey = gateway.sessionKey ?? sessionId ?? 'default';
       const [historyRead, localTrans] = await Promise.all([
         sessionId
@@ -1342,57 +1457,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // gateway with no message ids leaves it null, which sends
       // loadEarlierMessages down the limit-growing fallback.
       historyCursorRef.current = gatewayHistory[0]?.id ?? null;
-      const gatewayMessages = historyToChatMessages(gatewayHistory);
       setTranscripts(localTrans);
-
-      const commandMessages = localTrans.map((t) => ({
-        id: t.id,
-        role: 'assistant' as const,
-        text: t.summary,
-        timestamp: t.createdAt,
-        command: {
-          input: t.input,
-          title: t.title,
-          raw: t.raw,
-          // A cancelled command is the operator's own stop, not a refusal. The
-          // bubble vocabulary has no 'cancelled', and dressing one as a failure
-          // showed a red Failed badge and a Retry on something that worked as
-          // asked; leaving it 'running' would wedge a spinner and a Cancel
-          // button nobody can use. No badge is the honest reading — the
-          // transcript keeps the real status.
-          status: t.status === 'cancelled' ? undefined : t.status,
-          ephemeral: t.ephemeral,
-          durationMs: t.durationMs,
-        },
-      }));
-
-      const merged = [...gatewayMessages];
-      for (const cm of commandMessages) {
-        if (!merged.some((m) => m.id === cm.id)) {
-          merged.push(cm);
-        }
+      liveHistoryPainted = true;
+      paintThread(gatewayHistory, localTrans);
+      if (historyCacheId) {
+        void writeCached(
+          'history',
+          historyCacheId,
+          'last40',
+          gatewayHistory.slice(-HISTORY_CACHE_TURNS),
+        ).catch(() => undefined);
       }
-
-      // Re-surface durable offline outbox items after history reload. Only the
-      // rows that belong on the thread just painted: a row that names a Bot
-      // Chat was typed for that Bot Chat, not for whichever one is on screen.
-      const pending = resurfaceOfflineQueue(offlineQueueRef.current, {
-        gatewayId: gateway.id,
-        botId: selectedBotIdRef.current,
-      });
-      for (const item of pending) {
-        if (!merged.some((m) => m.id === item.id)) {
-          merged.push({
-            id: item.id,
-            role: 'user',
-            text: item.text,
-            timestamp: item.createdAt,
-            queued: true,
-          });
-        }
-      }
-
-      setMessages(boundWindow(merged));
       setLastError(null);
     } catch (error) {
       if (requestId !== historyRequestRef.current) return;
@@ -2823,13 +2898,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // Transcripts are keyed by gateway id and outlive the profile otherwise.
     // The cascade can take child profiles with it, so clear everything that
     // disappeared rather than only the id we were handed. A session's labels
-    // are keyed by the same gateway id and outlive it the same way.
+    // are keyed by the same gateway id and outlive it the same way, and so is
+    // the last-known-good roster/session/model/history cache.
     const removedIds = new Set<string>([id]);
     for (const gateway of before) {
       if (!next.some((remaining) => remaining.id === gateway.id)) removedIds.add(gateway.id);
     }
     await Promise.all([...removedIds].map((removedId) => clearTranscriptsForGateway(removedId)));
     await Promise.all([...removedIds].map((removedId) => clearSessionLabelsForGateway(removedId)));
+    await Promise.all([...removedIds].map((removedId) => clearCachedForGateway(removedId)));
     await Promise.all([...removedIds].map((removedId) => clearLastSeen(removedId)));
 
     // Cascade removes child profiles too — tear down if the active gateway
@@ -3910,12 +3987,35 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     modelReadSeqRef.current = seq;
     const generation = clientGenerationRef.current;
     const isCurrent = () => clientGenerationRef.current === generation;
+    /**
+     * Set synchronously the moment THIS open's read settles, either way. The
+     * sequence and generation checks cannot see a read landing — neither moves
+     * when it does — so a remembered catalog whose `getItem` the native side
+     * services last used to paint over the models the gateway had just
+     * returned, or cover a refusal with a catalogue that reads as delivered.
+     * A boolean owned by THIS open has no commit window.
+     */
+    let readSettled = false;
     setModelPicker({ visible: true, mode, agentId });
     // A fresh attempt drops the past refusal — reporting it before the new
     // read answers would be reporting the past as the present. The cached
     // catalog stays on screen while the re-read runs.
     setModelCatalogError(undefined);
     const client = clientRef.current;
+    const cacheId = scopeCacheId(activeGatewayRef.current, selectedBotIdRef.current, selectedBackendIdRef.current);
+    if (cacheId) {
+      // Last-known-good first, so a Gate that is slow or down still lists the
+      // models this scope really offered. `modelCatalogLoaded` stays false:
+      // the sheet has not heard from the gateway, it has only remembered it —
+      // and a remembered catalog never claims to be a delivered one, however
+      // late it arrives.
+      void readCached<unknown[]>('models', cacheId, 'catalog')
+        .then((cached) => {
+          if (!cached || readSettled || seq !== modelReadSeqRef.current || !isCurrent()) return;
+          setModelCatalog(cached.value);
+        })
+        .catch(() => undefined);
+    }
     if (!client) {
       setModelCatalogLoaded(true);
       return;
@@ -3923,11 +4023,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     try {
       const models = await client.getModels();
       if (seq !== modelReadSeqRef.current || !isCurrent()) return;
+      readSettled = true;
       setModelCatalog(models);
       setModelCatalogError(undefined);
       setModelCatalogLoaded(true);
+      if (cacheId) void writeCached('models', cacheId, 'catalog', models).catch(() => undefined);
     } catch (error) {
       if (seq !== modelReadSeqRef.current || !isCurrent()) return;
+      readSettled = true;
       // The sheet used to read a refused catalog as "never reported".
       const message = error instanceof Error ? error.message : String(error);
       setModelCatalogError(message || 'Model catalog could not be read.');
@@ -3960,17 +4063,49 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setSessionListState(beginSessionListRead);
     setSessionSelector({ visible: true });
     const client = clientRef.current;
-    if (!client) return;
-    const isCurrent = () => seq === sessionReadSeqRef.current && clientRef.current === client;
+    // With no client there is no read that can supersede the paint, so the
+    // identity check has nothing to guard: `clientRef` is nulled while
+    // attaching, on disconnect and on teardown, and an operator who opens the
+    // selector in one of those windows deserves the list this device remembers.
+    const isCurrent = () => seq === sessionReadSeqRef.current && (client === null || clientRef.current === client);
     // Each open replaces any widened window or in-flight older page.
     sessionListLimitRef.current = SESSION_LIST_PAGE_SIZE;
+    /**
+     * Set synchronously the moment this open's read settles, either way, for
+     * the same reason as the model picker's: neither the sequence nor the client
+     * identity moves when a read lands, so a remembered page that arrived after
+     * a REFUSAL used to convert "could not be read" into a loaded, untroubled
+     * list of threads whose freshness nothing claimed.
+     */
+    let readSettled = false;
+    const cacheId = scopeCacheId(activeGatewayRef.current, selectedBotIdRef.current, selectedBackendIdRef.current);
+    if (cacheId) {
+      // Last-known-good first: the newest page this scope really listed, so a
+      // Gateway that is slow or refused still shows the threads the operator
+      // had. A read that has landed owns the list — and a failed one keeps
+      // `loaded: false` on purpose (`applySessionListRead`), so `failed` has to
+      // be refused the same way `loaded` is.
+      void readCached<HermesSession[]>('sessions', cacheId, 'page1')
+        .then((cached) => {
+          if (!cached || readSettled || !isCurrent()) return;
+          setSessionListState((previous) =>
+            previous.loaded || previous.failed
+              ? previous
+              : { sessions: cached.value, loaded: true, failed: false },
+          );
+        })
+        .catch(() => undefined);
+    }
+    if (!client) return;
     await readSessionList(
       () => client.getSessions(SESSION_LIST_PAGE_SIZE),
       isCurrent,
       (result) => {
+        readSettled = true;
         setSessionListState((previous) => isCurrent() ? applySessionListRead(previous, result) : previous);
         if (result.ok) {
           setSessionListHasOlder(sessionListMayHaveOlder(result.sessions.length, SESSION_LIST_PAGE_SIZE));
+          if (cacheId) void writeCached('sessions', cacheId, 'page1', result.sessions).catch(() => undefined);
         }
       },
     );

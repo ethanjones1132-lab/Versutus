@@ -62,7 +62,10 @@ describe('sheet openers show the sheet before reading', () => {
 
   test('a superseded read is dropped instead of overwriting a fresher one', () => {
     const fn = provider.match(/const openSessionSelector = useCallback\([\s\S]*?\n  \}, \[\]\);/)?.[0];
-    expect(fn).toContain('seq === sessionReadSeqRef.current && clientRef.current === client');
+    // Both halves still guard the read: the same sequence, and the client
+    // identity. The identity clause is skipped only when there is no client at
+    // all, because then nothing is in flight that could supersede the paint.
+    expect(fn).toContain('seq === sessionReadSeqRef.current && (client === null || clientRef.current === client)');
     expect(fn).toMatch(/await readSessionList\(\s*\(\) => client\.getSessions\(SESSION_LIST_PAGE_SIZE\),\s*isCurrent,/);
     const reader = readSource('src', 'lib', 'gateway', 'session-list-read.ts');
     expect(reader).toContain('if (isCurrent()) apply(result);');

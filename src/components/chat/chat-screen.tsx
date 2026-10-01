@@ -56,7 +56,7 @@ import { openSessionById } from '@/lib/gateway/session-open-by-id';
 import type { ChatMessage, HermesSession } from '@/lib/gateway/types';
 import { botChromeCombined } from '@/lib/gateway/bot-chrome';
 import { composerFocusApplies } from '@/lib/gateway/composer-focus';
-import { applyRosterRead } from '@/lib/gateway/roster-read';
+import { applyRosterRead, type RosterRead } from '@/lib/gateway/roster-read';
 import { handoffShareAvailable, shareBotHandoff } from '@/lib/gateway/handoff-share';
 import { shareRefusalCopy } from '@/lib/gateway/transcript-export';
 import {
@@ -96,9 +96,14 @@ import {
   SESSION_SPEND_LIST_LIMIT,
   sessionSpendReadFromUnknown,
   threadSpendCopy,
+  threadSpendFinishedRead,
+  threadSpendNeedsWideRead,
   threadSpendRefreshKey,
+  THREAD_SPEND_GLANCE_LIMIT,
+  type SessionSpendRead,
   type SessionSpendState,
 } from '@/lib/gateway/session-analytics';
+import { readCached, writeCached } from '@/lib/cache/swr-store';
 import {
   applySkillsRead,
   EMPTY_SKILLS,
@@ -194,6 +199,70 @@ const JUMP_PILL_THRESHOLD_PX = 260;
 // gesture pages back instead of reloading the same window (bounce rounding
 // and the header button keep tiny offsets live).
 const AT_TOP_PX = 8;
+
+/**
+ * How long the roster mount read counts for. The effect below re-runs whenever
+ * `status` flips, and a reconnect storm (or a connect that settles twice) used
+ * to re-read the whole roster each time. The cached copy paints in the gap, and
+ * an explicit pull-to-refresh always reads.
+ */
+const ROSTER_REVALIDATE_MS = 20_000;
+
+/**
+ * The rows on screen belong to the gateway that produced them. "Keep the last
+ * good rows" is only ever true WITHIN one gateway: a refused read on gateway B
+ * must not leave gateway A's Bots on screen under B, and B's remembered copy
+ * has to be free to paint over them. Any other gateway starts from the bare
+ * navigation row, which claims nothing about the inventory.
+ *
+ * No active gateway is a DISCONNECT, not a switch: the same profile comes back
+ * a moment later, and resetting on the way out threw away a good roster twice —
+ * leaving the Bot's display name and pinned model to fall back to defaults.
+ */
+export function rosterRowsForGateway(
+  previousRows: RosterRow[],
+  previousGatewayId: string | undefined,
+  gatewayId: string | undefined,
+): RosterRow[] {
+  if (gatewayId === undefined) return previousRows;
+  return previousGatewayId === gatewayId ? previousRows : [{ kind: 'configurable' }];
+}
+
+/**
+ * A remembered roster may fill a blank thread of rows, or take over from ANOTHER
+ * gateway's; it never trades away rows a live read produced for this one.
+ *
+ * `liveAnswered` says a live read has ALREADY settled for this gateway. The
+ * rows it left may hold no Bots at all — an empty-but-ok read is the host
+ * telling the truth — and a remembered roster landing after it would put Bots
+ * back that were deleted. A failed read does not set this: a remembered
+ * inventory beside the error is exactly what SPD-5 is for.
+ */
+export function rosterRowsFromCache(
+  previousRows: RosterRow[],
+  previousGatewayId: string | undefined,
+  gatewayId: string,
+  cached: PublicBot[],
+  liveAnswered = false,
+): RosterRow[] {
+  const own = rosterRowsForGateway(previousRows, previousGatewayId, gatewayId);
+  if (liveAnswered) return own;
+  return own.some((row) => row.kind === 'bot') ? own : buildRoster(cached);
+}
+
+/**
+ * What any roster read does to the rows on screen, keyed to the gateway it was
+ * asked of. Same as `applyRosterRead`, plus the switch: a refused read never
+ * keeps another gateway's Bots, and a good read is believed either way.
+ */
+export function rosterRowsAfterRead(
+  previousRows: RosterRow[],
+  previousGatewayId: string | undefined,
+  gatewayId: string | undefined,
+  read: RosterRead,
+): RosterRow[] {
+  return applyRosterRead(rosterRowsForGateway(previousRows, previousGatewayId, gatewayId), read);
+}
 
 type SessionRecord = HermesSession & { sessionId?: string; name?: string };
 
@@ -533,6 +602,9 @@ export function ChatScreen() {
   // fully derived — so Retry bumps this tick, which is folded into the key
   // below and re-runs the spend effect with the same read.
   const [spendRetryTick, setSpendRetryTick] = useState(0);
+  // A finished turn bumps this tick instead, so the only re-read a chat turn
+  // still buys the glance is the one at its end.
+  const [spendFinishTick, setSpendFinishTick] = useState(0);
   const [groupsState, setGroupsState] = useState(EMPTY_GROUPS);
   const [newGroupVisible, setNewGroupVisible] = useState(false);
   const [newGroupBusy, setNewGroupBusy] = useState(false);
@@ -1394,26 +1466,94 @@ export function ChatScreen() {
     listRef.current?.scrollToEnd({ animated: true });
   }, []);
 
+  // When the roster mount read last ran, and for which gateway. A `status`
+  // flip re-runs the effect below; it must not re-read every time.
+  const rosterReadAtRef = useRef<{ gatewayId: string; at: number } | null>(null);
+  // Which gateway the rows on screen came from. Every read below is for the
+  // gateway that was active when it started, so this is stamped when the active
+  // gateway changes and stays true for the lifetime of those rows.
+  const rosterRowsGatewayRef = useRef<string | undefined>(undefined);
+  // Which gateway a live read has already answered for. A remembered roster
+  // whose storage read is slower than the network must not paint over the
+  // answer that came back first — the cached effect and the read effect are
+  // separate, so neither one's `cancelled` flag can see the other's ordering.
+  const rosterAnsweredRef = useRef<string | undefined>(undefined);
+
   useEffect(() => {
-    if (surface.kind !== 'roster' || status !== 'connected') return;
+    const gatewayId = activeGateway?.id;
+    // A disconnect is not a gateway switch: `activeGateway` goes null and comes
+    // back as the SAME profile, and resetting on the way out wiped a good roster
+    // twice — leaving the header with no Bot name and the mount read throttled.
+    if (!gatewayId) return;
+    const previousGatewayId = rosterRowsGatewayRef.current;
+    rosterRowsGatewayRef.current = gatewayId;
+    // Neither the previous gateway's read counts as this one's: the throttle
+    // exists to absorb a `status` flip, and a switch is a different inventory.
+    // Leaving the stamp behind meant a switch back inside 20s read nothing AND
+    // refused the remembered copy, which is an empty roster.
+    rosterReadAtRef.current = null;
+    rosterAnsweredRef.current = undefined;
+    setRosterRows((previous) => rosterRowsForGateway(previous, previousGatewayId, gatewayId));
+    // The error and the loading flag are about a read too: the old gateway's
+    // refusal is not this gateway's, and the new one has not been read yet.
+    setRosterError(undefined);
+    setRosterLoading(true);
+  }, [activeGateway?.id]);
+
+  // Last-known-good first: the roster this gateway really had, painted before
+  // any network call. A slow or refused first read used to be all the operator
+  // ever saw, even though this device had answered minutes ago.
+  useEffect(() => {
+    const gatewayId = activeGateway?.id;
+    if (surface.kind !== 'roster' || !gatewayId) return;
+    const previousGatewayId = rosterRowsGatewayRef.current;
+    let cancelled = false;
+    void readCached<PublicBot[]>('roster', gatewayId, 'bots')
+      .then((cached) => {
+        if (cancelled || !cached) return;
+        const liveAnswered = rosterAnsweredRef.current === gatewayId;
+        setRosterRows((previous) =>
+          rosterRowsFromCache(previous, previousGatewayId, gatewayId, cached.value, liveAnswered),
+        );
+        setRosterLoading(false);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [surface.kind, activeGateway?.id]);
+
+  useEffect(() => {
+    const gatewayId = activeGateway?.id;
+    if (surface.kind !== 'roster' || status !== 'connected' || !gatewayId) return;
+    const lastRead = rosterReadAtRef.current;
+    if (lastRead && lastRead.gatewayId === gatewayId && Date.now() - lastRead.at < ROSTER_REVALIDATE_MS) return;
+    rosterReadAtRef.current = { gatewayId, at: Date.now() };
+    const previousGatewayId = rosterRowsGatewayRef.current;
     let cancelled = false;
     void listBots()
       .then((bots) => {
         if (cancelled) return;
+        rosterAnsweredRef.current = gatewayId;
         setRosterRows(buildRoster(bots));
         setRosterError(undefined);
         setRosterLoading(false);
+        void writeCached('roster', gatewayId, 'bots', bots).catch(() => undefined);
       })
       .catch((error: unknown) => {
         if (cancelled) return;
+        // The same rule pull-to-refresh already follows: a failed RE-read keeps
+        // the rows the operator is looking at and names itself beside them.
+        // Only a first read that produced no rows at all falls back to the
+        // navigation row.
+        setRosterRows((previous) => rosterRowsAfterRead(previous, previousGatewayId, gatewayId, { ok: false }));
         setRosterError(error instanceof Error ? error.message : String(error));
-        setRosterRows([{ kind: 'configurable' }]);
         setRosterLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [surface.kind, status, listBots]);
+  }, [surface.kind, status, listBots, activeGateway?.id]);
 
   const spendSurfaceKey =
     surface.kind === 'bot'
@@ -1426,14 +1566,36 @@ export function ChatScreen() {
     sessionId: currentSessionId,
     sending: isSending,
   });
-  // The retry tick is the only non-derived input: bumping it re-runs the
-  // spend effect below with the same `sessions.list` read. A bump while
-  // disconnected is harmless — the effect early-returns and the new key
-  // re-reads on the next connect.
-  const spendEffectKey = spendRefreshKey ? `${spendRefreshKey}:retry${spendRetryTick}` : undefined;
+  // The finish tick and the retry tick are the only non-derived inputs: bumping
+  // either re-runs the spend effect below with the same `sessions.list` read. A
+  // bump while disconnected is harmless — the effect early-returns and the new
+  // key re-reads on the next connect.
+  const spendEffectKey = spendRefreshKey
+    ? `${spendRefreshKey}:finish${spendFinishTick}:retry${spendRetryTick}`
+    : undefined;
   const handleSpendRetry = useCallback(() => {
     setSpendRetryTick((tick) => tick + 1);
   }, []);
+
+  // A turn STARTING must cost nothing: it used to move `threadSpendRefreshKey`,
+  // which spent a 200-row catalogue read under the turn the operator was
+  // watching, on a single-threaded Gate. The one thing a turn still triggers is
+  // its finish, folded into the key above — and a second turn that ends inside
+  // the minimum gap is dropped rather than queued.
+  const spendWasSendingRef = useRef(false);
+  const spendLastReadRef = useRef<Record<string, number>>({});
+  useEffect(() => {
+    const finished = threadSpendFinishedRead({
+      surfaceKey: spendSurfaceKey,
+      wasSending: spendWasSendingRef.current,
+      sending: isSending,
+      lastReadAt: spendSurfaceKey ? spendLastReadRef.current[spendSurfaceKey] : undefined,
+      now: Date.now(),
+    });
+    spendWasSendingRef.current = isSending;
+    if (!finished) return;
+    setSpendFinishTick((tick) => tick + 1);
+  }, [isSending, spendSurfaceKey]);
   const toolsSurfaceKey = toolsetsVisibleOn(surface)
     ? surface.kind === 'configurable'
       ? `cfg:${selectedBackendId ?? ''}`
@@ -1684,35 +1846,50 @@ export function ChatScreen() {
     };
   }, [toolsSurfaceKey, status, surface.kind, selectedBackendId, gatewayRequest]);
 
+  // The glance's own read. A narrow window answers it for the thread that is
+  // open — the open thread is normally one of the newest sessions — and only a
+  // narrow window that does NOT hold it is worth the catalogue read. The last
+  // good answer is held per surface in memory so leaving and re-entering a
+  // thread paints instantly instead of blanking.
+  const spendGlanceRef = useRef<Record<string, SessionSpendRead>>({});
   useEffect(() => {
     if (!spendEffectKey || !spendSurfaceKey || status !== 'connected') return;
     let cancelled = false;
-    void gatewayRequest('sessions.list', { limit: SESSION_SPEND_LIST_LIMIT })
-      .then((payload) => {
-        if (cancelled) return;
-        const read = sessionSpendReadFromUnknown(payload);
-        setSpendState((prev) => {
-          const previous =
-            prev.surfaceKey === spendSurfaceKey
-              ? prev
-              : { ...EMPTY_SESSION_SPEND, surfaceKey: spendSurfaceKey };
-          return { surfaceKey: spendSurfaceKey, ...applySessionSpendRead(previous, read) };
-        });
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setSpendState((prev) => {
-          const previous =
-            prev.surfaceKey === spendSurfaceKey
-              ? prev
-              : { ...EMPTY_SESSION_SPEND, surfaceKey: spendSurfaceKey };
-          return { surfaceKey: spendSurfaceKey, ...applySessionSpendRead(previous, { ok: false }) };
-        });
+    spendLastReadRef.current[spendSurfaceKey] = Date.now();
+    const applyRead = (read: SessionSpendRead) => {
+      if (cancelled) return;
+      if (read.ok) spendGlanceRef.current[spendSurfaceKey] = read;
+      setSpendState((prev) => {
+        const previous =
+          prev.surfaceKey === spendSurfaceKey
+            ? prev
+            : { ...EMPTY_SESSION_SPEND, surfaceKey: spendSurfaceKey };
+        return { surfaceKey: spendSurfaceKey, ...applySessionSpendRead(previous, read) };
       });
+    };
+    const held = spendGlanceRef.current[spendSurfaceKey];
+    if (held) applyRead(held);
+    void gatewayRequest('sessions.list', { limit: THREAD_SPEND_GLANCE_LIMIT })
+      .then(async (payload) => {
+        const read = sessionSpendReadFromUnknown(payload);
+        if (!read.ok || !threadSpendNeedsWideRead(read, currentSessionId)) {
+          applyRead(read);
+          return;
+        }
+        // This thread is not in the newest 50. One wide read covers it; if that
+        // one fails the narrow read still stands, marked stale, rather than
+        // leaving the glance silent.
+        const wide = await gatewayRequest('sessions.list', { limit: SESSION_SPEND_LIST_LIMIT })
+          .then((payload) => sessionSpendReadFromUnknown(payload))
+          .catch(() => ({ ok: false as const }));
+        applyRead(wide.ok ? wide : read);
+        if (!wide.ok) applyRead({ ok: false });
+      })
+      .catch(() => applyRead({ ok: false }));
     return () => {
       cancelled = true;
     };
-  }, [spendEffectKey, spendSurfaceKey, status, gatewayRequest]);
+  }, [spendEffectKey, spendSurfaceKey, status, gatewayRequest, currentSessionId]);
 
   // Group rooms load alongside the roster. A gateway that does not advertise
   // them answers with an empty list — no error, just no section.
@@ -1743,6 +1920,8 @@ export function ChatScreen() {
   // the last good inventory; the error line explains the staleness). Only a
   // SUCCESSFUL read may clear or replace the list.
   const refreshRoster = useCallback(async () => {
+    const gatewayId = activeGateway?.id;
+    const previousGatewayId = rosterRowsGatewayRef.current;
     const [read] = await Promise.all([
       listBots()
         .then((bots) => ({ ok: true as const, bots }))
@@ -1752,10 +1931,21 @@ export function ChatScreen() {
         })),
       refreshGroups(),
     ]);
-    setRosterRows((previous) => applyRosterRead(previous, read));
-    if (read.ok) setRosterError(undefined);
-    else setRosterError(read.reason);
-  }, [listBots, refreshGroups]);
+    setRosterRows((previous) => rosterRowsAfterRead(previous, previousGatewayId, gatewayId, read));
+    if (read.ok) {
+      setRosterError(undefined);
+      if (gatewayId) {
+        // An explicit refresh is a real read: it counts against the mount
+        // throttle, becomes the copy a cold start paints from, and answers for
+        // this gateway as far as any in-flight cached paint is concerned.
+        rosterReadAtRef.current = { gatewayId, at: Date.now() };
+        rosterAnsweredRef.current = gatewayId;
+        void writeCached('roster', gatewayId, 'bots', read.bots).catch(() => undefined);
+      }
+    } else {
+      setRosterError(read.reason);
+    }
+  }, [listBots, refreshGroups, activeGateway?.id]);
 
   const rosterBots = useMemo(
     () =>
@@ -1973,6 +2163,12 @@ export function ChatScreen() {
               setEditingBot(null);
               const bots = await listBots();
               setRosterRows(buildRoster(bots));
+              // A good read is the last known good copy, whoever asked for it:
+              // a cold start right after a create must still find the new Bot.
+              if (activeGateway?.id) {
+                rosterAnsweredRef.current = activeGateway.id;
+                void writeCached('roster', activeGateway.id, 'bots', bots).catch(() => undefined);
+              }
               if (!target && bot.routable) {
                 await openBot(bot.id);
                 showSurface({ kind: 'bot', botId: bot.id });

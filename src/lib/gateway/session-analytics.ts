@@ -220,8 +220,15 @@ export function overflowSpendSession(
 
 /**
  * Effect identity for the open-thread spend glance. Surface and session
- * changes already re-read. A live send is a different key than idle, so the
- * glance also re-reads when the turn finishes.
+ * changes already re-read.
+ *
+ * `sending` is deliberately NOT part of the key. It used to be, so a turn
+ * STARTING re-read the whole session catalogue and the turn ENDING read it
+ * again — two 200-row reads (~141 KB, ~11s on the operator's host) racing the
+ * chat turn on a single-threaded `state.db`-bound Gate. The glance now asks
+ * for a 50-row window and widens once only if this thread is missing from it,
+ * and the one thing a turn still triggers is its FINISH, through
+ * `threadSpendFinishedRead`.
  */
 export function threadSpendRefreshKey(input: {
   surfaceKey: string | undefined;
@@ -230,7 +237,50 @@ export function threadSpendRefreshKey(input: {
 }): string | undefined {
   if (!input.surfaceKey) return undefined;
   const session = input.sessionId?.trim() ?? '';
-  return `${input.surfaceKey}:${session}:${input.sending ? 'sending' : 'idle'}`;
+  return `${input.surfaceKey}:${session}`;
+}
+
+/**
+ * The narrow window the glance asks for first. The open thread is normally one
+ * of the newest sessions, so 50 rows answers the question the glance asks; the
+ * wide catalogue read is the fallback, not the default.
+ */
+export const THREAD_SPEND_GLANCE_LIMIT = 50;
+
+/** Two glance reads on one surface are never closer together than this. */
+export const THREAD_SPEND_MIN_READ_MS = 10_000;
+
+/**
+ * Whether a narrow read missed this thread, and so owes the one wide read.
+ * A failed read owes nothing: there is no window to widen, only a failure.
+ */
+export function threadSpendNeedsWideRead(
+  read: SessionSpendRead,
+  sessionId: string | undefined,
+): boolean {
+  if (!read.ok) return false;
+  const wanted = sessionId?.trim();
+  if (!wanted) return false;
+  return !read.sessions.some((session) => session.id === wanted);
+}
+
+/**
+ * Whether this edge is a turn finishing, far enough from the last read of this
+ * surface. Two turns that end within `THREAD_SPEND_MIN_READ_MS` of each other
+ * are ONE re-read: the second one is dropped, not queued behind a timer, so a
+ * burst of short turns cannot turn the glance into a poll.
+ */
+export function threadSpendFinishedRead(input: {
+  surfaceKey: string | undefined;
+  wasSending: boolean;
+  sending: boolean;
+  lastReadAt: number | undefined;
+  now: number;
+}): boolean {
+  if (!input.surfaceKey) return false;
+  if (input.wasSending !== true || input.sending !== false) return false;
+  if (input.lastReadAt === undefined) return true;
+  return input.now - input.lastReadAt >= THREAD_SPEND_MIN_READ_MS;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -370,12 +370,16 @@ describe('overflowSpendSession', () => {
 describe('threadSpendRefreshKey', () => {
   const open = { surfaceKey: 'bot:research', sessionId: 's1' };
 
-  test('a finished send is a different key than the live send, so the glance re-reads', () => {
+  test('a send starting does NOT move the key — the glance is not re-read under the turn', () => {
+    // The key used to carry `sending`, so one turn paid two 200-row catalogue
+    // reads (~141 KB, ~11s on the operator's host) racing the turn itself. The
+    // finish is the one trigger a turn still has, through
+    // threadSpendFinishedRead.
     const live = threadSpendRefreshKey({ ...open, sending: true });
     const done = threadSpendRefreshKey({ ...open, sending: false });
     expect(live).toBeTruthy();
     expect(done).toBeTruthy();
-    expect(live).not.toBe(done);
+    expect(live).toBe(done);
   });
 
   test('the same idle thread keeps one key — navigation did not happen', () => {
