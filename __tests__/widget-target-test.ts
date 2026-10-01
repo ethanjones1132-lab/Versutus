@@ -26,6 +26,11 @@ const nodeFs = jest.requireActual('fs') as {
   readFileSync(path: string, encoding: string): string;
 };
 
+// The seam keeps the payload it last wrote in AsyncStorage, for the push merge.
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);
+
 function readSource(...parts: string[]): string {
   return nodeFs
     .readFileSync([__dirname, '..', ...parts].join(SEP), 'utf8')
@@ -221,7 +226,7 @@ describe('writeWidgetSnapshot', () => {
     const updateSnapshot = jest.fn();
     const snap = snapshot({ runsInFlight: 2, approvalsPending: 1 });
 
-    await writeWidgetSnapshot(snap, async () => target(updateSnapshot));
+    await expect(writeWidgetSnapshot(snap, async () => target(updateSnapshot))).resolves.toBe(true);
 
     expect(updateSnapshot).toHaveBeenCalledTimes(1);
     expect(updateSnapshot).toHaveBeenCalledWith(snap);
@@ -234,7 +239,7 @@ describe('writeWidgetSnapshot', () => {
       throw new Error('Cannot find native module ExpoWidgets');
     });
 
-    await expect(writeWidgetSnapshot(snapshot(), load)).resolves.toBeUndefined();
+    await expect(writeWidgetSnapshot(snapshot(), load)).resolves.toBe(false);
     expect(load).toHaveBeenCalledTimes(1);
   });
 
@@ -243,7 +248,7 @@ describe('writeWidgetSnapshot', () => {
     const load = jest.fn(async () => target(updateSnapshot));
     jest.replaceProperty(Platform, 'OS', 'web');
 
-    await expect(writeWidgetSnapshot(snapshot(), load)).resolves.toBeUndefined();
+    await expect(writeWidgetSnapshot(snapshot(), load)).resolves.toBe(false);
 
     expect(load).not.toHaveBeenCalled();
     expect(updateSnapshot).not.toHaveBeenCalled();
@@ -257,7 +262,7 @@ describe('writeWidgetSnapshot', () => {
     jest.replaceProperty(Platform, 'OS', 'android');
     const snap = snapshot({ runsInFlight: 1 });
 
-    await writeWidgetSnapshot(snap, load, loadAndroid);
+    await expect(writeWidgetSnapshot(snap, load, loadAndroid)).resolves.toBe(true);
 
     expect(setPayload).toHaveBeenCalledWith(JSON.stringify(androidWidgetPayload(snap)));
     expect(load).not.toHaveBeenCalled();
@@ -270,7 +275,7 @@ describe('writeWidgetSnapshot', () => {
     });
 
     await expect(writeWidgetSnapshot(snapshot(), async () => target(updateSnapshot))).resolves
-      .toBeUndefined();
+      .toBe(false);
     expect(updateSnapshot).toHaveBeenCalledTimes(1);
   });
 });
@@ -290,15 +295,23 @@ describe('the provider writes the snapshot as run state changes', () => {
     const effect = writeEffect();
     expect(effect).toContain('const snapshot = glanceableSnapshot(');
     expect(effect).toContain('const decision = widgetWriteGate(widgetWriteRef.current, snapshot, snapshot.writtenAt);');
-    expect(effect).toContain('if (!decision.write) return;');
+    expect(effect).toContain('if (!decision.write && !forced) {');
     expect(effect).toContain('widgetWriteRef.current = decision.last;');
-    expect(effect).toContain('void writeWidgetSnapshot(snapshot);');
-    expect(effect.indexOf('if (!decision.write) return;')).toBeLessThan(
+    expect(effect).toContain('void writeWidgetSnapshot(snapshot).then((accepted) => {');
+  });
+
+  test('the accepted state is committed only once the card took the write', () => {
+    // The order that cost a session its card: charging the gate for a payload the
+    // native module refused froze the card for five minutes, and for the whole
+    // session when no fact moved again to trigger the next write.
+    const effect = writeEffect();
+    expect(effect.indexOf('void writeWidgetSnapshot(snapshot).then((accepted) => {')).toBeLessThan(
       effect.indexOf('widgetWriteRef.current = decision.last;'),
     );
-    expect(effect.indexOf('widgetWriteRef.current = decision.last;')).toBeLessThan(
-      effect.indexOf('void writeWidgetSnapshot(snapshot);'),
-    );
+    expect(effect).toContain('if (!accepted) {');
+    // Two overlapping writes must never both commit: an older answer arriving
+    // late may not move the gate back to a state the card has already left.
+    expect(effect).toContain('if (run !== widgetWriteRunRef.current) return;');
   });
 
   test('the snapshot is item 4a fold, composed from the facts the provider holds', () => {
@@ -309,19 +322,84 @@ describe('the provider writes the snapshot as run state changes', () => {
     expect(writeEffect()).toContain('redact: widgetRedact');
   });
 
-  test('the write is driven by those facts, not by a poller of its own', () => {
+  test('the write is driven by those facts and by the clock the floor needs', () => {
     const effect = writeEffect();
-    // The dependency list IS the driver: every fact the snapshot carries, and
-    // nothing in the effect that ticks on its own.
-    expect(effect).toContain('}, [activityRunsForActiveGateway, routineRead, activeGateway?.id, status, widgetBots, widgetRedact]);');
-    expect(effect).not.toMatch(/setInterval|setTimeout/);
+    // The dependency list IS the driver: every fact the snapshot carries, the
+    // tick that moves `now` without a fact moving, and the timer helpers.
+    for (const dep of [
+      'activityRunsForActiveGateway',
+      'routineRead',
+      'activeGateway?.id',
+      'status',
+      'widgetBots',
+      'widgetRedact',
+      'widgetTick',
+      'isBootstrapped',
+      'armWidgetFloor',
+      'armWidgetRetry',
+      'dropWidgetRetry',
+    ]) {
+      expect(effect.slice(effect.lastIndexOf('}, ['))).toContain(dep);
+    }
+    // No poll of the facts: the floor is re-armed off the last accepted write
+    // and fires once, without reading anything back.
+    expect(effect).not.toMatch(/setInterval/);
+    expect(provider()).toContain('armWidgetFloor(decision.last.writtenAt);');
+    expect(provider()).toContain('const remaining = WIDGET_WRITE_FLOOR_MS - (Date.now() - from);');
+    expect(provider()).toContain('armWidgetRetry();');
+    // Dropped on unmount and before each re-arm, so no timer accumulates.
+    expect(provider()).toContain(
+      'if (widgetFloorTimerRef.current) clearTimeout(widgetFloorTimerRef.current);',
+    );
+  });
+
+  test('a refused write is re-offered on its own ladder, not only on the next change', () => {
+    const src = provider();
+    expect(src).toContain('WIDGET_WRITE_RETRY_MS');
+    expect(src).toContain('WIDGET_WRITE_RETRY_MAX_MS');
+    expect(src).toContain('widgetRetryDelayRef.current = Math.min(delay * 2, WIDGET_WRITE_RETRY_MAX_MS);');
+    // The facts may never move again, so the retry re-asks past the gate's own
+    // refusal; the first accepted write resets the ladder.
+    expect(src).toContain('widgetForcedRef.current = true;');
+    expect(src).toContain('widgetRetryDelayRef.current = WIDGET_WRITE_RETRY_MS;');
+  });
+
+  test('the foreground return re-decides the floor, on the one lifecycle listener', () => {
+    const src = provider();
+    // The card's stamp must not age into the native stale threshold while the app
+    // is open, and JS timers freeze while it is backgrounded — so the return to
+    // active is the second edge that moves `now`.
+    expect(src).toContain('if (state === \'active\') setWidgetTick((tick) => tick + 1);');
+    expect(src.match(/AppState\.addEventListener\('change'/g)).toHaveLength(1);
+  });
+
+  test('no active gateway clears the card once and resets the gate', () => {
+    const effect = writeEffect();
+    expect(provider()).toContain('void clearWidgetSnapshot();');
+    expect(effect).toContain('if (!gatewayId) {');
+    expect(effect).toContain('widgetWriteRef.current = null;');
+    // Once per absence: the effect re-fires on every unrelated fact change. And
+    // not before the profiles are read: a cold start must not wipe the card the
+    // operator left from the last session.
+    expect(effect).toContain('if (!isBootstrapped || widgetClearedRef.current) return undefined;');
+    expect(effect.indexOf('void clearWidgetSnapshot();')).toBeLessThan(
+      effect.indexOf('widgetClearedRef.current = false;'),
+    );
+  });
+
+  test('the roster is keyed by gateway, so a switch never writes the old Bot names', () => {
+    const src = provider();
+    expect(src).toContain('if (live && gatewayId === activeGateway?.id) setWidgetBotRead({ gatewayId, bots });');
+    expect(src.replace(/\s+/g, ' ')).toContain(
+      'activeGateway?.id && widgetBotRead.gatewayId === activeGateway?.id ? widgetBotRead.bots : []',
+    );
   });
 
   test('the seam is the only place the widget is touched', () => {
     const src = provider();
     // Not the component module and not the package: `widget-device.ts` is the
     // one file allowed to name either, and it names them lazily.
-    expect(src).toContain("import { writeWidgetSnapshot } from '@/lib/widget/widget-device';");
+    expect(src).toContain("import { clearWidgetSnapshot, writeWidgetSnapshot } from '@/lib/widget/widget-device';");
     expect(src).not.toMatch(/from '@\/components\/widget\//);
     expect(src).not.toMatch(/from 'expo-widgets'/);
     expect(src).not.toMatch(/updateSnapshot/);
@@ -354,7 +432,9 @@ describe('the provider writes the snapshot as run state changes', () => {
     expect(read).toBeDefined();
     expect(read).toContain('const gatewayId = activeGateway?.id;');
     expect(read).toContain('.then((bots) =>');
-    expect(read).toContain('if (live && gatewayId === activeGateway?.id) setWidgetBots(bots);');
+    // Keyed by the gateway that read it, so a switch cannot leave the previous
+    // gateway's Bot names on the card while the new roster is still in flight.
+    expect(read).toContain('if (live && gatewayId === activeGateway?.id) setWidgetBotRead({ gatewayId, bots });');
     expect(read).toContain('.catch(() => undefined);');
     expect(read).toContain('scheduleConnectedRead(CONNECTED_WIDGET_BOTS_DELAY_MS, () => {');
   });

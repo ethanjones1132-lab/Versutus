@@ -225,8 +225,14 @@ import { approvalRowsFromUnknown, type ApprovalRow } from '@/lib/gateway/approva
 import { buildChatContent, type ChatAttachment } from '@/lib/gateway/chat-parts';
 import { loadWorkflows, saveWorkflows, type Workflow } from '@/lib/gateway/workflows';
 import { glanceableSnapshot } from '@/lib/widget/snapshot';
-import { writeWidgetSnapshot } from '@/lib/widget/widget-device';
-import { widgetWriteGate, type WidgetWriteGateState } from '@/lib/widget/widget-write-gate';
+import { clearWidgetSnapshot, writeWidgetSnapshot } from '@/lib/widget/widget-device';
+import {
+  widgetWriteGate,
+  WIDGET_WRITE_FLOOR_MS,
+  WIDGET_WRITE_RETRY_MAX_MS,
+  WIDGET_WRITE_RETRY_MS,
+  type WidgetWriteGateState,
+} from '@/lib/widget/widget-write-gate';
 import { loadWidgetResultHidden, subscribeWidgetPrivacy } from '@/lib/settings/widget-privacy';
 export type ConnectionPhase =
   | 'idle'
@@ -4397,6 +4403,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     void runAutoConnectCycle().catch(reportAutoConnectFailure);
   }, [connectGateway, runAutoConnectCycle, reportAutoConnectFailure]);
 
+  // The widget write's clock, declared with the lifecycle listener that moves it:
+  // the floor needs a `now` that changed, and the foreground return is one of the
+  // two edges that changes it (the other is the floor's own timer, further down).
+  const [widgetTick, setWidgetTick] = useState(0);
+
   // Foreground/background lifecycle: pause reconnection while backgrounded
   // (timers are throttled anyway), heal fast on return to foreground.
   useEffect(() => {
@@ -4408,6 +4419,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // runs (`:125-127`) — so the re-fold's own `present` call reads the truth
       // rather than the state being left.
       setAppInForeground(state === 'active');
+      // The widget's floor needs a `now` that moved, and JS timers are frozen
+      // while the app is backgrounded — so the foreground return is the other
+      // edge that owes the card a fresh stamp. Folded into the one listener the
+      // process already has rather than subscribing a second time.
+      if (state === 'active') setWidgetTick((tick) => tick + 1);
       if (state !== 'active') {
         // Transcript writes are write-behind, and the process can be killed the
         // moment the app leaves the foreground. Flush what is owed now; a store
@@ -4902,8 +4918,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * failed read keeps the last list rather than emptying the rows. A late
    * result from an older Gateway is ignored so a connected-to-connected
    * replacement cannot leave the prior roster in the widget.
+   *
+   * The list is keyed by the Gateway that read it — the same way the routine read
+   * is — because a switch is two renders deep: the id changes before the new
+   * roster has landed, and an unkeyed list would spend that moment naming the
+   * old Gateway's Bots on the card.
    */
-  const [widgetBots, setWidgetBots] = useState<import('@/lib/gateway/bots').PublicBot[]>([]);
+  const [widgetBotRead, setWidgetBotRead] = useState<{
+    gatewayId?: string;
+    bots: import('@/lib/gateway/bots').PublicBot[];
+  }>({ bots: [] });
 
   useEffect(() => {
     if (status !== 'connected') return undefined;
@@ -4913,7 +4937,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (!connectedFanOutDueRef.current) return;
       void listBots()
         .then((bots) => {
-          if (live && gatewayId === activeGateway?.id) setWidgetBots(bots);
+          if (live && gatewayId === activeGateway?.id) setWidgetBotRead({ gatewayId, bots });
         })
         .catch(() => undefined);
     });
@@ -4922,6 +4946,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       cancelRead();
     };
   }, [activeGateway?.id, listBots, status, scheduleConnectedRead]);
+
+  /** Only the ACTIVE gateway's roster may name Bots; another's is not this card's. */
+  const widgetBots: import('@/lib/gateway/bots').PublicBot[] = useMemo(
+    () =>
+      activeGateway?.id && widgetBotRead.gatewayId === activeGateway?.id ? widgetBotRead.bots : [],
+    [activeGateway?.id, widgetBotRead],
+  );
 
   /**
    * The widget's privacy preference. Read on mount and again whenever the
@@ -4945,19 +4976,111 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  /**
+   * The widget write's own bookkeeping. The gate is a pure function of `now`,
+   * and its `now` is the snapshot's own stamp, so without a clock of its own the
+   * five-minute floor could never be reached by an app that sits still: the
+   * card's stamp would age into the native stale threshold with the gate
+   * declining to write. These refs are that clock, and `widgetTick` — declared
+   * with the lifecycle listener that moves it — is the one state value it turns.
+   */
   const widgetWriteRef = useRef<WidgetWriteGateState | null>(null);
+  /** The newest effect run; an older write's answer may not commit over it. */
+  const widgetWriteRunRef = useRef(0);
+  const widgetRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const widgetRetryDelayRef = useRef(WIDGET_WRITE_RETRY_MS);
+  const widgetFloorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Set by the retry ladder so the gate is re-asked past its own refusal. */
+  const widgetForcedRef = useRef(false);
+  /** The card is cleared once per absence, not once per re-render without one. */
+  const widgetClearedRef = useRef(false);
+
+  const dropWidgetRetry = useCallback(() => {
+    if (widgetRetryTimerRef.current) clearTimeout(widgetRetryTimerRef.current);
+    widgetRetryTimerRef.current = null;
+  }, []);
+
+  const armWidgetFloor = useCallback((from: number) => {
+    if (widgetFloorTimerRef.current) clearTimeout(widgetFloorTimerRef.current);
+    const remaining = WIDGET_WRITE_FLOOR_MS - (Date.now() - from);
+    widgetFloorTimerRef.current = setTimeout(
+      () => {
+        widgetFloorTimerRef.current = null;
+        setWidgetTick((tick) => tick + 1);
+      },
+      Math.max(0, remaining),
+    );
+  }, [setWidgetTick]);
+
+  const armWidgetRetry = useCallback(() => {
+    if (widgetRetryTimerRef.current) clearTimeout(widgetRetryTimerRef.current);
+    const delay = widgetRetryDelayRef.current;
+    widgetRetryTimerRef.current = setTimeout(
+      () => {
+        widgetRetryTimerRef.current = null;
+        // Doubled for a round that actually waited: a burst of refusals inside
+        // one write window is one round, not four.
+        widgetRetryDelayRef.current = Math.min(delay * 2, WIDGET_WRITE_RETRY_MAX_MS);
+        // The gate still holds the last ACCEPTED write, so it would decline this
+        // same snapshot again: the retry asks for it in spite of its answer.
+        widgetForcedRef.current = true;
+        setWidgetTick((tick) => tick + 1);
+      },
+      delay,
+    );
+  }, [setWidgetTick]);
+
+  // Timers outlive neither the provider nor the gateway they describe.
+  useEffect(
+    () => () => {
+      if (widgetRetryTimerRef.current) clearTimeout(widgetRetryTimerRef.current);
+      if (widgetFloorTimerRef.current) clearTimeout(widgetFloorTimerRef.current);
+      widgetRetryTimerRef.current = null;
+      widgetFloorTimerRef.current = null;
+    },
+    [],
+  );
 
   /**
    * Item 4a's fold, handed to item 4b's seam when the write gate accepts it.
    * The facts above trigger a decision on each change: a start, an
    * approval wait, a decision, a settle and the disconnect settle each move
    * `activityRuns`, `routineJobs` or `status`, and each is the write's own
-   * trigger — there is no poller of ours, and nothing here reads back. The
-   * approval count is not a fourth input because item 4a folds it from the run
-   * rows, which this effect already watches. A device with no widget target
-   * writes nothing at all.
+   * trigger. The approval count is not a fourth input because item 4a folds it
+   * from the run rows, which this effect already watches. A device with no
+   * widget target writes nothing at all.
+   *
+   * The accepted state is committed only once the seam says the card TOOK the
+   * write: a payload the native module refused, or a build with no widget
+   * module at all, is a card still holding the previous snapshot, and charging
+   * that against the floor would freeze it for five minutes — or, if nothing
+   * ever moved again, for the session. So a refusal commits nothing and is
+   * re-offered on the retry ladder instead.
    */
   useEffect(() => {
+    const gatewayId = activeGateway?.id ?? null;
+    if (!gatewayId) {
+      // The card's storage is app-private and outlives every session, so a
+      // removed gateway's names and last result would stand on the home screen
+      // with nothing left to write over them. One native function exists for
+      // this and nothing called it; it is called once per absence here.
+      widgetWriteRef.current = null;
+      widgetForcedRef.current = false;
+      dropWidgetRetry();
+      if (widgetFloorTimerRef.current) clearTimeout(widgetFloorTimerRef.current);
+      widgetFloorTimerRef.current = null;
+      // Before the saved profiles are read there is no answer yet: a cold start
+      // must not wipe the card the operator left from the last session.
+      if (!isBootstrapped || widgetClearedRef.current) return undefined;
+      widgetClearedRef.current = true;
+      void clearWidgetSnapshot();
+      return undefined;
+    }
+    widgetClearedRef.current = false;
+
+    const forced = widgetForcedRef.current;
+    widgetForcedRef.current = false;
+    const run = (widgetWriteRunRef.current += 1);
     const snapshot = glanceableSnapshot({
       status,
       runs: activityRunsForActiveGateway,
@@ -4966,10 +5089,40 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       redact: widgetRedact,
     });
     const decision = widgetWriteGate(widgetWriteRef.current, snapshot, snapshot.writtenAt);
-    if (!decision.write) return;
-    widgetWriteRef.current = decision.last;
-    void writeWidgetSnapshot(snapshot);
-  }, [activityRunsForActiveGateway, routineRead, activeGateway?.id, status, widgetBots, widgetRedact]);
+    if (!decision.write && !forced) {
+      // A quiet card still owes the floor; a refused one is on the ladder, and
+      // arming both would have the floor ask the same question twice.
+      if (decision.last && !widgetRetryTimerRef.current) armWidgetFloor(decision.last.writtenAt);
+      return undefined;
+    }
+
+    void writeWidgetSnapshot(snapshot).then((accepted) => {
+      // Only the newest run may commit: an older write that answers late must
+      // not move the gate back to a state the card has already left.
+      if (run !== widgetWriteRunRef.current) return;
+      if (!accepted) {
+        armWidgetRetry();
+        return;
+      }
+      dropWidgetRetry();
+      widgetRetryDelayRef.current = WIDGET_WRITE_RETRY_MS;
+      widgetWriteRef.current = decision.last;
+      if (decision.last) armWidgetFloor(decision.last.writtenAt);
+    });
+    return undefined;
+  }, [
+    activityRunsForActiveGateway,
+    routineRead,
+    activeGateway?.id,
+    status,
+    widgetBots,
+    widgetRedact,
+    widgetTick,
+    isBootstrapped,
+    armWidgetFloor,
+    armWidgetRetry,
+    dropWidgetRetry,
+  ]);
 
   const botGroups = useMemo(() => ({
     list: async () => {

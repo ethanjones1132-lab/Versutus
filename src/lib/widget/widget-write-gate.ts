@@ -16,13 +16,27 @@
 // The gate decides WHETHER `writeWidgetSnapshot` is called: the seam, the lines
 // and the Android payload are untouched. A refused write updates nothing — the
 // last state stays the one the last ACCEPTED write recorded — so a refused
-// write is retried on the next change rather than charged against the floor.
+// write is retried rather than charged against the floor: on the next change,
+// and on the retry ladder below for the sessions where no change ever comes.
 
 import { glanceableWidgetLines } from '@/lib/widget/widget-target';
 import type { GlanceableSnapshot } from '@/lib/widget/snapshot';
 
 /** How long an unchanged card may stand before the stamp is refreshed anyway. */
 export const WIDGET_WRITE_FLOOR_MS = 5 * 60 * 1000;
+
+/**
+ * The retry ladder for a REFUSED write. A refusal leaves the accepted state
+ * exactly where it was, so the same snapshot is the gate's next decision too —
+ * and the facts may never move again, which would leave the card on whatever it
+ * held until the operator happened to touch something. So the write is re-offered
+ * on a clock of its own, from here, doubling to the cap and reset by the first
+ * write the card accepts.
+ */
+export const WIDGET_WRITE_RETRY_MS = 30 * 1000;
+
+/** The ceiling the retry ladder stops doubling at. */
+export const WIDGET_WRITE_RETRY_MAX_MS = 5 * 60 * 1000;
 
 /**
  * The last write the gate accepted: the visible card it drew, and when it went
