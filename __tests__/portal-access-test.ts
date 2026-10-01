@@ -16,10 +16,20 @@ jest.mock('@/lib/gateway/device-identity', () => ({
 }));
 
 // access.ts also imports the OpenClaw client for the WS pairing dialect; its
-// storage chain pulls RN async-storage which has no jest shim here.
+// storage chain pulls RN async-storage which has no jest shim here. The fake
+// records the profile it was handed and answers the handshake, so the probe's
+// own wiring can be inspected without a socket.
+const mockOpenclawProfiles: Record<string, unknown>[] = [];
 jest.mock('@/lib/gateway/openclaw-client', () => ({
   OpenClawGatewayClient: class {
-    connect() {}
+    callbacks: { onHello?: (hello: unknown) => void };
+    constructor(profile: Record<string, unknown>, callbacks: { onHello?: (hello: unknown) => void }) {
+      mockOpenclawProfiles.push(profile);
+      this.callbacks = callbacks;
+    }
+    connect() {
+      this.callbacks.onHello?.({ auth: { deviceToken: 'device-token-1', role: 'operator' } });
+    }
     disconnect() {}
   },
 }));
@@ -84,11 +94,24 @@ function lookupMiss(): Error {
   });
 }
 
+function openclawIdentity(overrides: Partial<GatewayIdentity> = {}): GatewayIdentity {
+  return {
+    kind: 'openclaw',
+    kindLabel: 'OpenClaw',
+    auth: { schemes: ['challenge-response'], requiresToken: false, grantPath: undefined },
+    transportHint: 'ws',
+    source: 'probe-openclaw',
+    identifiedAt: Date.now(),
+    ...overrides,
+  };
+}
+
 const realFetch = globalThis.fetch;
 beforeEach(() => {
   // The host-lookup failure memory is module-level; without this a marked
   // hostname from one test would reorder the next test's IPv4-first retry.
   resetHostLookupMemoryForTests();
+  mockOpenclawProfiles.length = 0;
 });
 afterEach(() => {
   (globalThis as { fetch: unknown }).fetch = realFetch;
@@ -189,17 +212,19 @@ describe('a signed access request retries a lookup miss over the fallback IPv4s'
       identity: manifestIdentity(),
     });
 
-    expect(result.status).toBe('denied');
+    // The lookup itself failed — there is no answer to read, so this is a dead
+    // path, not a gate that answered to refuse.
+    expect(result.status).toBe('unreachable');
     expect(calls.map((c) => c.url)).toEqual(['https://gate.test/grant']);
     expect(calls.join()).not.toContain('100.95.137.83');
     expect(String((result as { reason: string }).reason)).toMatch(/could not look up/i);
   });
 
-  test('a non-lookup failure is not retried and resolves denied once', async () => {
+  test('a non-lookup failure is not retried and reports the dead path once', async () => {
     const calls: { url: string; body: unknown }[] = [];
     (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init: unknown) => {
       recordCall(calls, input, init);
-      throw new Error('invalid api key');
+      throw new Error('Network request failed');
     });
 
     const result = await requestGatewayAccess({
@@ -207,7 +232,7 @@ describe('a signed access request retries a lookup miss over the fallback IPv4s'
       identity: manifestIdentity(),
     });
 
-    expect(result).toEqual({ status: 'denied', reason: 'invalid api key' });
+    expect(result).toEqual({ status: 'unreachable', reason: 'Network request failed' });
     expect(calls).toHaveLength(1);
   });
 
@@ -261,6 +286,58 @@ describe('a denial or refusal is answered once, never written a second time', ()
     });
 
     expect(result).toEqual({ status: 'denied', reason: 'This device is not on the allowlist.' });
+    expect(calls).toHaveLength(1);
+  });
+
+  test('an explicit denied body is a denial whatever the status line says', async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init: unknown) => {
+      recordCall(calls, input, init);
+      return Promise.resolve(
+        response({ ok: false, status: 401, body: { status: 'denied', reason: 'Unknown device.' } }),
+      );
+    });
+
+    const result = await requestGatewayAccess({
+      baseUrl: 'http://gate.test',
+      identity: manifestIdentity(),
+    });
+
+    expect(result).toEqual({ status: 'denied', reason: 'Unknown device.' });
+    expect(calls).toHaveLength(1);
+  });
+
+  test('an unexpected status is a denial too — the gate answered, just not usefully', async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init: unknown) => {
+      recordCall(calls, input, init);
+      return Promise.resolve(response({ ok: false, status: 500, body: {} }));
+    });
+
+    const result = await requestGatewayAccess({
+      baseUrl: 'http://gate.test',
+      identity: manifestIdentity(),
+    });
+
+    expect(result).toEqual({ status: 'denied', reason: 'Unexpected access response (HTTP 500).' });
+    expect(calls).toHaveLength(1);
+  });
+
+  test('a timed-out (aborted) POST is a dead path, not a refusal', async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown, init: unknown) => {
+      recordCall(calls, input, init);
+      const aborted = new Error('Aborted');
+      aborted.name = 'AbortError';
+      throw aborted;
+    });
+
+    const result = await requestGatewayAccess({
+      baseUrl: 'http://gate.test',
+      identity: manifestIdentity(),
+    });
+
+    expect(result).toEqual({ status: 'unreachable', reason: 'Aborted' });
     expect(calls).toHaveLength(1);
   });
 
@@ -350,5 +427,41 @@ describe('a phone that cannot make its device identity is not read as a gateway 
 
     expect(result.status).toBe('device-identity');
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('the OpenClaw access probe is handed the tailnet fallbacks the POST retries over', () => {
+  test('the probe profile carries the advertised IPv4 and the configured hosts', async () => {
+    const result = await requestGatewayAccess({
+      baseUrl: 'http://gate.test',
+      identity: openclawIdentity({
+        manifest: {
+          manifest: 'versutus-gateway/v1',
+          kind: 'openclaw',
+          auth: { schemes: ['challenge-response'] },
+          transport: { ipv4: ['100.95.137.83'] },
+        },
+      }),
+    });
+
+    expect(result.status).toBe('granted');
+    expect(mockOpenclawProfiles).toHaveLength(1);
+    expect(mockOpenclawProfiles[0]).toMatchObject({
+      id: 'access-probe',
+      url: 'ws://gate.test/openclaw',
+      // The WS dial has no retry seam of its own; the client rotates onto one
+      // of these when the hostname misses MagicDNS.
+      alternateIpv4: ['100.95.137.83', '192.168.4.30'],
+    });
+  });
+
+  test('an explicit alternate-address set is used verbatim', async () => {
+    await requestGatewayAccess({
+      baseUrl: 'http://gate.test',
+      identity: openclawIdentity(),
+      alternateIpv4: ['10.9.9.9'],
+    });
+
+    expect(mockOpenclawProfiles[0]).toMatchObject({ alternateIpv4: ['10.9.9.9'] });
   });
 });

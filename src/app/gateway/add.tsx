@@ -81,6 +81,14 @@ export default function AddGatewayScreen() {
             setSaving(false);
             return;
           }
+          // A gateway that could not be reached did not refuse anything — the
+          // path is dead, not the credential. Render it as the error a failed
+          // attempt is, never as a warm "denied" note.
+          if (result.status === 'unreachable') {
+            setSaveError(result.reason);
+            setSaving(false);
+            return;
+          }
           // A phone that could not make its device identity is not a gateway
           // verdict — render the humanized identity failure instead of a warm
           // "denied" note.

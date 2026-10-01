@@ -6,7 +6,8 @@
 //   granted           → token returned (stored on the profile)
 //   pending-approval  → gateway-side approval required (OpenClaw pairing)
 //   token-required    → user must supply a token (Hermes API key today)
-//   denied            → gateway refused
+//   denied            → gateway refused — a verdict it actually gave
+//   unreachable       → nothing answered: a dead path, not a refusal
 //   device-identity   → this phone could not make its device identity
 
 import Constants from 'expo-constants';
@@ -24,6 +25,7 @@ export type AccessRequestResult =
   | { status: 'pending-approval'; requestId?: string; hint?: string }
   | { status: 'token-required'; hint?: string }
   | { status: 'denied'; reason: string }
+  | { status: 'unreachable'; reason: string }
   | { status: 'device-identity'; reason: string };
 
 export type RequestGatewayAccessOptions = {
@@ -34,6 +36,11 @@ export type RequestGatewayAccessOptions = {
   role?: string;
   scopes?: string[];
   timeoutMs?: number;
+  /**
+   * Tailnet IPv4s this gateway may answer on, when the caller holds a set the
+   * manifest and the configured hosts do not describe. Defaults to both.
+   */
+  alternateIpv4?: string[];
 };
 
 // ─── Pending-approval hint ────────────────────────────────────────
@@ -118,6 +125,23 @@ async function requestHermesAccess(
 
 // ─── OpenClaw (WS v4 pairing) ─────────────────────────────────────
 
+/**
+ * The tailnet addresses this gateway may answer on: what its manifest
+ * advertised, plus the configured hosts — the same set the signed POST retries
+ * over. A WebSocket dial has no retry seam of its own, so this list rides the
+ * probe profile and the client rotates onto an address of its own when the
+ * hostname misses MagicDNS.
+ */
+function fallbackIpv4(options: RequestGatewayAccessOptions): string[] {
+  return (
+    options.alternateIpv4 ??
+    advertisedIpv4({
+      advertised: options.identity.manifest?.transport?.ipv4,
+      configuredHosts: ipv4FromExpoExtra(Constants.expoConfig?.extra),
+    })
+  );
+}
+
 async function requestOpenClawAccess(options: RequestGatewayAccessOptions): Promise<AccessRequestResult> {
   const wsUrl = `${httpToWsBase(options.baseUrl)}/openclaw`;
   const profile = {
@@ -126,11 +150,21 @@ async function requestOpenClawAccess(options: RequestGatewayAccessOptions): Prom
     url: wsUrl,
     token: options.token,
     createdAt: Date.now(),
+    alternateIpv4: fallbackIpv4(options),
   };
 
   return new Promise<AccessRequestResult>((resolve) => {
     let settled = false;
     let client: OpenClawGatewayClient | null = null;
+    // The client publishes transport facts and gateway verdicts on one channel:
+    // onError fires for a dial that never reached the gateway ("Could not reach
+    // gateway at …", "closed before handshake completed", "handshake timed out")
+    // as well as for a gateway that answered and refused. The only verdict it
+    // flags is a rejected credential, so that flag — and nothing weaker — is
+    // what keeps a result filed as denied. A failure we cannot show to be the
+    // gateway's answer is a dead path: reporting it as a refusal sends the
+    // operator hunting for a credential problem they do not have.
+    let gatewayRefused = false;
 
     const finish = (result: AccessRequestResult) => {
       if (settled) return;
@@ -141,11 +175,16 @@ async function requestOpenClawAccess(options: RequestGatewayAccessOptions): Prom
     };
 
     const timer = setTimeout(
-      () => finish({ status: 'denied', reason: 'OpenClaw gateway did not answer the access request in time.' }),
+      () => finish({ status: 'unreachable', reason: 'OpenClaw gateway did not answer the access request in time.' }),
       options.timeoutMs ?? 15000,
     );
 
     client = new OpenClawGatewayClient(profile, {
+      onStatus: (_status, _detail, info) => {
+        // A refusal raises this one statement after onError returns, so it is
+        // read by the deferred classification below — never here.
+        if (info?.authRejected) gatewayRefused = true;
+      },
       onHello: (hello: GatewayHelloOk) => {
         if (hello.auth?.deviceToken) {
           finish({
@@ -166,7 +205,16 @@ async function requestOpenClawAccess(options: RequestGatewayAccessOptions): Prom
         });
       },
       onError: (message: string) => {
-        finish({ status: 'denied', reason: message });
+        // One microtask of patience: the client finishes classifying the
+        // failure after onError returns, so a verdict read synchronously here
+        // would always be the previous attempt's.
+        void Promise.resolve().then(() => {
+          finish(
+            gatewayRefused
+              ? { status: 'denied', reason: message }
+              : { status: 'unreachable', reason: message },
+          );
+        });
       },
     });
 
@@ -255,10 +303,7 @@ async function postSignedAccessRequest(
     // profile exists. A host lookup miss on the request is retried onto them;
     // https is never rewritten (withHostLookupRetry keeps an https host). The
     // body and device identity are identical on every attempt.
-    const alternateIpv4 = advertisedIpv4({
-      advertised: options.identity.manifest?.transport?.ipv4,
-      configuredHosts: ipv4FromExpoExtra(Constants.expoConfig?.extra),
-    });
+    const alternateIpv4 = fallbackIpv4(options);
 
     const response = await withHostLookupRetry(url, alternateIpv4, async (candidateUrl) => {
       const controller = new AbortController();
@@ -310,8 +355,11 @@ async function postSignedAccessRequest(
     }
     return { status: 'denied', reason: `Unexpected access response (HTTP ${response.status}).` };
   } catch (error) {
+    // Nothing answered: a name that will not resolve, a timeout, a dropped
+    // connection. Every verdict above is a response the gateway actually sent;
+    // this is the absence of one, which is not the same thing as a refusal.
     return {
-      status: 'denied',
+      status: 'unreachable',
       reason: error instanceof Error ? error.message : 'Access request failed.',
     };
   }

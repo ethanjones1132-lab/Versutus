@@ -8,7 +8,7 @@
 // See docs/portal-architecture.md §3.
 
 import { httpToWsBase } from '@/lib/gateway/url';
-import { isHostLookupFailure, withHostLookupRetry } from '@/lib/gateway/host-lookup';
+import { hostnameOf, isHostLookupFailure, withHostLookupRetry } from '@/lib/gateway/host-lookup';
 import type { GatewayKind } from '@/lib/gateway/types';
 import {
   fetchGatewayManifestWithLookupRetry,
@@ -137,8 +137,13 @@ export async function identifyGateway(options: IdentifyGatewayOptions): Promise<
   ).catch(() => null);
   if (hermes) return hermes;
 
-  // 4. OpenClaw fingerprint: bounded WS probe expecting connect.challenge.
-  const openclaw = await probeOpenClaw(baseUrl, Math.min(6000, remaining()));
+  // 4. OpenClaw fingerprint: bounded WS probe expecting connect.challenge. It
+  // rides the same tailnet-IPv4 rescue as the fingerprints above: a WS dial has
+  // no retry seam of its own, so a name that misses MagicDNS used to fail this
+  // probe alone and file a reachable WS-only gateway as unknown.
+  const openclaw = await withHostLookupRetry(baseUrl, alternateIpv4, (candidate) =>
+    probeOpenClaw(candidate, Math.min(6000, remaining())),
+  ).catch(() => null);
   if (openclaw) return openclaw;
 
   // 5. Unknown — but record whether HTTP answers at all.
@@ -251,11 +256,11 @@ async function probeOpenClaw(baseUrl: string, timeoutMs: number): Promise<Gatewa
   if (typeof globalThis.WebSocket !== 'function') return null;
   const wsUrl = `${httpToWsBase(baseUrl)}/openclaw`;
 
-  return new Promise<GatewayIdentity | null>((resolve) => {
+  return new Promise<GatewayIdentity | null>((resolve, reject) => {
     let settled = false;
     let socket: WebSocket | null = null;
 
-    const finish = (result: GatewayIdentity | null) => {
+    const close = (settle: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -264,8 +269,19 @@ async function probeOpenClaw(baseUrl: string, timeoutMs: number): Promise<Gatewa
       } catch {
         // ignore
       }
-      resolve(result);
+      settle();
     };
+
+    const finish = (result: GatewayIdentity | null) => close(() => resolve(result));
+
+    // A WS dial reports failure as a bare event with no error to inspect, so
+    // the probe cannot tell a dead name from a refused port — only that the
+    // socket never got off the ground. Hand withHostLookupRetry the wording it
+    // retries on so that candidate falls through to the advertised tailnet
+    // IPv4s like the HTTP fingerprints do; the caller's .catch(() => null) is
+    // what keeps an exhausted probe out of identifyGateway's result.
+    const unreachable = () =>
+      close(() => reject(new Error(`Unable to resolve host ${hostnameOf(baseUrl)}`)));
 
     const timer = setTimeout(() => finish(null), timeoutMs);
 
@@ -291,7 +307,7 @@ async function probeOpenClaw(baseUrl: string, timeoutMs: number): Promise<Gatewa
           // not JSON — not OpenClaw wire protocol
         }
       };
-      socket.onerror = () => finish(null);
+      socket.onerror = () => unreachable();
       socket.onclose = () => finish(null);
     } catch {
       finish(null);
