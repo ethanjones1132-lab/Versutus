@@ -1,18 +1,18 @@
-# Failure audit 2026-10-01 - second pass (scan results and landed fixes, work in progress)
+# Failure audit 2026-10-01 - second pass (scan results and fixes)
 
-Companion to [failure-audit-2026-09-30.md](failure-audit-2026-09-30.md) (round 1) and its [fix log](failure-audit-2026-09-30-fixes.md) / [final report](failure-audit-2026-09-30-report.md).
+Companion to [failure-audit-2026-09-30.md](failure-audit-2026-09-30.md) (round 1), its [fix log](failure-audit-2026-09-30-fixes.md) and [final report](failure-audit-2026-09-30-report.md).
+The per-finding diagnosis and fix is in [failure-audit-2026-10-01-second-pass-fixes.md](failure-audit-2026-10-01-second-pass-fixes.md); each finding below carries a *Fix status* line linking to it.
+
 Round 2 scanned the areas round 1 had not read: the OpenClaw client, the Gate's provider/OAuth/credential code, the rest of the Gate (CLI-environment backends, supervisor, Bots, voice worker, service),
-the hands-free voice module (Android Kotlin, iOS Swift, JS), the Android widget and config plugins, phone notifications, and the non-chat screens.
-Each scan was written by a free `opencode` model, then **independently verified by a second model session that re-read the cited code** (it confirmed 123 findings, corrected several and added the ones marked `-V`);
-refuted claims are not listed. Fixes were authored by free models behind a harness the authors cannot edit (typecheck, ESLint, related tests, diff guard) and then reviewed by a separate session;
-reviews failed several packages (a defect each reviewer reproduced), and each was repaired and re-reviewed before landing.
+the hands-free voice module (Android Kotlin, iOS Swift, JS), the Android widget and config plugins, phone notifications, and the non-chat screens (Home, Activity, Runs, Settings and gateway screens,
+Fleet, Council, Compose, Onboarding). Each scan was written by a free `opencode` model and, for nine of the ten areas, **independently verified by a second model session that re-read the cited code**
+(it corrected several claims, refuted none outright, and added the findings marked `-V`). The tenth area (Fleet / Council / Compose / Onboarding) could not be verified by the second model - its verifier timed out
+twice - so its findings are scan-only; the integrator re-read the code for CNCL-1, CNCL-2, FLEET-1 and ONB-2 and confirmed them, and each fix was still reviewed against the real code path. That makes **135 findings**.
 
-**Status of this document:** a checkpoint pushed while round 2 is still running. The scan list below is complete for the nine scanned areas (a tenth - Fleet/Council/Compose/Onboarding - and the per-finding
-diagnosis-and-fix log are still being written and will be added to this file). The commits listed here are what has landed so far; every one passed its harness gate and an independent review, and the whole branch was
-verified together (`verify-config`, `tsc`, ESLint, full jest with coverage and the ratchet, Gate suite) before this push. Nothing here has been run on a phone, and nothing has been deployed: the live Gate keeps running
-its old code until it is restarted from a checkout that has these commits.
+Fixes were authored by free models behind a harness the authors cannot edit (typecheck, ESLint, related tests, a diff guard) and then reviewed by a separate session that traced the real code path; reviews failed
+a number of packages with a reproduced defect, and each was repaired and re-reviewed before landing. Nothing here has been run on a phone and nothing has been deployed.
 
-## Landed so far
+## Commits (in landing order)
 
 | Commit | Package |
 |---|---|
@@ -41,12 +41,32 @@ its old code until it is restarted from a checkout that has these commits.
 | `f0fbdd1` | fix(ui): every haptic goes through the safe wrapper so feedback can never fail an action |
 | `1d89c50` | fix(screens): run sheet cancels on close, capability create cannot strand an instance, Pick file works on SDK 57 |
 | `e9a7a8b` | fix(settings): notification Bot filters use the shared cached roster read |
+| `c934a90` | test: integrate the widget and push-registration suites with the landed notification changes |
+| `1c84ad5` | docs: failure audit round 2 - scan results for nine areas and the fixes landed so far |
+| `0f3286b` | test(gate): the supervisor backoff test no longer races the newest spawn's own error |
+| `ad55c02` | fix(voice): Gate reconnect uses its window, refused speech retried, Mute in every phase, single start budget, linear speech planning |
+| `55c99a2` | fix(council): single in-flight comparison, unlock on answers, cancellable round, kept roster, no prompt-named leaked room |
+| `98347a8` | fix(gate): provider stream outcomes, serialised manifest reloads, disabled providers hidden from the model list, OAuth attempt cleanup |
+| `771616e` | fix(runs): single fold per visit, refresh and start outcomes reported honestly, retry shows its result |
+| `e93099f` | fix(fleet): handled connect/retry rejections, port validated up front, idle constellation rests, stale node taps explained |
 
 ## Findings (where / what fails / why)
 
 ### Area: OpenClaw client and portal layer
 
 #### R2-OC-1 · S1 · A turn whose `final` event never arrives hangs the composer forever
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-1)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-1)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-1)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-1)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-1)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-1)
 
 **Verification:** confirmed
 **Where:** `src/lib/portal/openclaw-adapter.ts:187-215`, `src/lib/portal/openclaw-adapter.ts:222-254`,
@@ -65,6 +85,18 @@ The provider's `finally` (`:3186-3187`) is what clears `isSending`, so a turn th
 holds the lock for the life of the process.
 
 #### R2-OC-2 · S1 · No `authRejected` on the WS dialect: a refused credential is retried forever and its message is erased each cycle
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-2)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-2)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-2)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-2)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-2)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-2)
 
 **Verification:** confirmed
 **Where:** `src/lib/gateway/openclaw-client.ts:407-411`, `src/lib/gateway/openclaw-client.ts:437-447`,
@@ -87,6 +119,18 @@ just set. This is LIFE-2's mechanism on the one dialect the `authRejected` fix (
 `19de6a2`) never reached.
 
 #### R2-OC-3 · S2 · `healthCheck()` fabricates "ok" without touching the socket, and the monitor is never started
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-3)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-3)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-3)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-3)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-3)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-3)
 
 **Verification:** confirmed
 **Where:** `src/lib/portal/openclaw-adapter.ts:103-106`, `src/lib/gateway/openclaw-client.ts:87-92`,
@@ -111,6 +155,18 @@ optional `nudge`/`forceReconnect`.)
 
 #### R2-OC-4 · S2 · `onHealthCheck` is never called on this dialect, so a reconnect reloads nothing
 
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-4)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-4)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-4)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-4)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-4)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-4)
+
 **Verification:** confirmed
 **Where:** `src/lib/gateway/openclaw-client.ts:378-383`, `src/lib/gateway/openclaw-client.ts:87-92`,
 `src/context/gateway-provider.tsx:2023-2033`, `src/context/gateway-provider.tsx:1958-1969`,
@@ -129,6 +185,18 @@ other history path) never runs either.
 
 #### R2-OC-5 · S2 · `chat.send` is given 120 s by the adapter but is bounded at 30 s by the client
 
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-5)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-5)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-5)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-5)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-5)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-5)
+
 **Verification:** confirmed
 **Where:** `src/lib/portal/openclaw-adapter.ts:200-208`, `src/lib/gateway/openclaw-client.ts:145-167`
 **What fails:** An agentic OpenClaw turn whose acknowledgement takes longer than 30 s to come back
@@ -143,6 +211,18 @@ with two arguments, so `openclaw-client.ts:145` applies its 30 000 ms default to
 `waitUntilConnected` wait and the response timer.
 
 #### R2-OC-6 · S2 · The device-identity promise is cached for the client's lifetime, so one failed read poisons every retry
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-6)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-6)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-6)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-6)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-6)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-6)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `src/lib/gateway/openclaw-client.ts:73`, `src/lib/gateway/openclaw-client.ts:449-452`,
@@ -172,6 +252,18 @@ app self-heals within ~45 s; no restart is required.
 
 #### R2-OC-7 · S2 · A failed session list reads as an empty list, so every failure opens a new session
 
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-7)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-7)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-7)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-7)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-7)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-7)
+
 **Verification:** confirmed
 **Where:** `src/lib/portal/openclaw-adapter.ts:127-137`, `src/lib/portal/openclaw-adapter.ts:158-168`,
 `src/lib/gateway/session-resume.ts:120-135`
@@ -188,6 +280,18 @@ gateway has no app session", `session-resume.ts:123-127`) — so a swallowed fai
 `reloadHistoryFor` folds as a successfully empty transcript rather than an error.
 
 #### R2-OC-8 · S2 · `source: 'openclaw'` can never match `pickAppSession`, so every connect opens a new session
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-8)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-8)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-8)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-8)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-8)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-8)
 
 **Verification:** confirmed
 **Where:** `src/lib/portal/openclaw-mapping.ts:57`, `src/lib/gateway/messages.ts:4`,
@@ -210,6 +314,18 @@ session onto the profile, `client.ts:265-267`) the OpenClaw client's `disconnect
 
 #### R2-ID-1 · S2 · The OpenClaw fingerprint is the only probe without the tailnet-IPv4 fallback
 
+> **Fix status:** Fixed - package(s) O2, commit(s) `4769620` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-id-1)
+
+> **Fix status:** Fixed - package(s) O2, commit(s) `4769620` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-id-1)
+
+> **Fix status:** Fixed - package(s) O2, commit(s) `4769620` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-id-1)
+
+> **Fix status:** Fixed - package(s) O2, commit(s) `4769620` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-id-1)
+
+> **Fix status:** Fixed - package(s) O2, commit(s) `4769620` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-id-1)
+
+> **Fix status:** Fixed - package(s) O2, commit(s) `4769620` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-id-1)
+
 **Verification:** confirmed
 **Where:** `src/lib/portal/identify.ts:135-142`, `src/lib/portal/identify.ts:145-147`,
 `src/lib/portal/identify.ts:250-300`, `src/lib/portal/manifest.ts:267-279`
@@ -225,6 +341,18 @@ despite holding an address that works for every other request.
 
 #### R2-OC-9 · S3 · The `runId` correlation in `handleChatEvent` is inert
 
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-9)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-9)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-9)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-9)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-9)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-9)
+
 **Verification:** confirmed
 **Where:** `src/lib/portal/openclaw-adapter.ts:27-35`, `src/lib/portal/openclaw-adapter.ts:188`,
 `src/lib/portal/openclaw-adapter.ts:231-234`
@@ -239,6 +367,18 @@ false. The correlation the check exists for cannot fire; `pendingChat` is a sing
 (`:41`, `:189`), so whatever run is in flight receives every frame.
 
 #### R2-OC-10 · S3 · The model the operator picked never reaches the OpenClaw wire
+
+> **Fix status:** Not fixed (needs protocol evidence) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-10)
+
+> **Fix status:** Not fixed (needs protocol evidence) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-10)
+
+> **Fix status:** Not fixed (needs protocol evidence) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-10)
+
+> **Fix status:** Not fixed (needs protocol evidence) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-10)
+
+> **Fix status:** Not fixed (needs protocol evidence) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-10)
+
+> **Fix status:** Not fixed (needs protocol evidence) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-10)
 
 **Verification:** confirmed
 **Where:** `src/lib/portal/openclaw-adapter.ts:170-215`, `src/lib/portal/openclaw-adapter.ts:148-156`,
@@ -256,6 +396,18 @@ The model can still reach the gateway one way only — a session created fresh c
 invisible on a brand-new thread.
 
 #### R2-ST-1 · S3 · Two fire-and-forget identity/token writes with no `.catch`
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-st-1)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-st-1)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-st-1)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-st-1)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-st-1)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-st-1)
 
 **Verification:** confirmed
 **Where:** `src/lib/gateway/openclaw-client.ts:382`, `src/lib/gateway/openclaw-client.ts:402-406`,
@@ -276,6 +428,18 @@ to the user and the work it represented is gone.
 
 #### R2-AC-1 · S3 · Every transport failure during an access request is reported to the user as "denied"
 
+> **Fix status:** Fixed - package(s) O2, commit(s) `4769620` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-ac-1)
+
+> **Fix status:** Fixed - package(s) O2, commit(s) `4769620` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-ac-1)
+
+> **Fix status:** Fixed - package(s) O2, commit(s) `4769620` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-ac-1)
+
+> **Fix status:** Fixed - package(s) O2, commit(s) `4769620` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-ac-1)
+
+> **Fix status:** Fixed - package(s) O2, commit(s) `4769620` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-ac-1)
+
+> **Fix status:** Fixed - package(s) O2, commit(s) `4769620` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-ac-1)
+
 **Verification:** confirmed
 **Where:** `src/lib/portal/access.ts:161-171`, `src/lib/portal/access.ts:143-146`,
 `src/lib/portal/access.ts:312-317`, `src/lib/gateway/openclaw-client.ts:202-217`
@@ -292,6 +456,18 @@ everything, including `HostLookupError`, `AbortError` and timeouts, and returns 
 
 #### R2-OC-V1 · S2 · The OpenClaw WebSocket dial ignores the tailnet-IPv4 fallback the profile already carries
 
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v1)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v1)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v1)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v1)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v1)
+
+> **Fix status:** Fixed - package(s) O1a, commit(s) `7f89ea0` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v1)
+
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `src/lib/portal/adapters.ts:231-241` computes `profileWithAlternateIpv4` for **every** kind and
 installs it before `new OpenClawAdapterClient(reachable, callbacks)` at `:250-253`, and both HTTP dialects consume
@@ -307,6 +483,18 @@ impossible, with the app reporting only "Could not connect to gateway at …". F
 candidates from `profile.alternateIpv4` and dial them on a lookup failure.
 
 #### R2-OC-V2 · S2 · The OpenClaw adapter accepts only a subset of the PortalClient send options, so onSession (and the detachable-turn plumbing) is inert on this dialect
+
+> **Fix status:** Partly fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v2)
+
+> **Fix status:** Partly fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v2)
+
+> **Fix status:** Partly fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v2)
+
+> **Fix status:** Partly fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v2)
+
+> **Fix status:** Partly fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v2)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v2)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `src/lib/portal/adapters.ts:44-69` declares the `streamChat` option surface the provider actually
@@ -325,6 +513,18 @@ Stop) and gateway-adopted session ids are all unavailable — with no error anyw
 is indistinguishable from a gateway that had nothing to report.
 
 #### R2-OC-V3 · S3 · The OpenClaw chat-event type disagrees with the only handler, so a change written against the type compiles and never settles
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v3)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v3)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v3)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v3)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v3)
+
+> **Fix status:** Fixed - package(s) O1b, commit(s) `00073d2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oc-v3)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `src/lib/gateway/openclaw-types.ts:40-49` declares
@@ -350,12 +550,36 @@ at `openclaw-client.ts:368` a typed parse that rejects an unrecognised state ins
 
 #### R2-PROV-1 · S2 · "Disable provider" does not disable anything, and the card keeps saying Ready
 
+> **Fix status:** Fixed - package(s) G10, G9, commit(s) `98347a8`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-1)
+
+> **Fix status:** Fixed - package(s) G10, G9, commit(s) `98347a8`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-1)
+
+> **Fix status:** Fixed - package(s) G10, G9, commit(s) `98347a8`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-1)
+
+> **Fix status:** Fixed - package(s) G10, G9, commit(s) `98347a8`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-1)
+
+> **Fix status:** Fixed - package(s) G10, G9, commit(s) `98347a8`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-1)
+
+> **Fix status:** Fixed - package(s) G10, G9, commit(s) `98347a8`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-1)
+
 **Verification:** confirmed
 **Where:** `gate/core/providers/service.mjs:62` (update merges `enabled` into config), `gate/core/providers/service.mjs:60-70` (update returns `existing.state` untouched), `gate/core/providers/service.mjs:84-95` (`check` is the only writer of `readiness`), `gate/core/providers/service.mjs:231-241` (`inspect` is the only place `enabled:false` becomes a `disabled` readiness), `gate/core/providers/service.mjs:224-228` (`chat` never reads `config.enabled`), `gate/core/server.mjs:2455-2466` (`/v1/models` lists a disabled provider's models), `src/components/gateway/providers-section.tsx:202`, `src/lib/gateway/provider-state.ts:20`, `src/lib/gateway/entity-actions.ts:19`.
 **What fails:** Operator taps Disable on a provider card (e.g. after a key leak, or to stop a flaky vendor being used). The card still reads "Ready", the primary action is still "Refresh catalog", the manifest still advertises `readiness.state: 'ready'`, `/v1/models` still offers its models — and a chat sent with that provider id is served normally. Only a separate "Check readiness" tap makes the card say Disabled; nothing at all stops the provider from answering.
 **Why:** `update()` writes the new config but carries `existing.state` through unchanged (`:62`, `:67`), so the readiness the UI reads is the pre-disable value; `enabled` is consulted in `inspect`/`refreshCatalogNow` only (`:181`, `:231`), and the chat path at `:224-228` goes `require()` → `adapterFor()` → `adapter.chat()` with no enabled check, so a disabled provider keeps proxying turns.
 
 #### R2-PROV-2 · S2 · A provider whose stream dies mid-turn is recorded as successfully ready
+
+> **Fix status:** Fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-2)
+
+> **Fix status:** Fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-2)
+
+> **Fix status:** Fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-2)
+
+> **Fix status:** Fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-2)
+
+> **Fix status:** Fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-2)
+
+> **Fix status:** Fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-2)
 
 **Verification:** confirmed
 **Where:** `gate/core/server.mjs:972` (success noted before any byte is relayed), `gate/core/server.mjs:994-1018` (local-interface relay), `gate/core/server.mjs:468-473` and `:410-418` (`relayNormalizedSse` failure → `endProviderStreamWithError`, no `noteChatOutcome`), `gate/core/providers/service.mjs:126-140` (`noteChatOutcomeNow` success branch), `src/lib/gateway/client.ts:617` (the app always sends `stream: true`).
@@ -364,6 +588,18 @@ at `openclaw-client.ts:368` a typed parse that rejects an unrecognised state ins
 
 #### R2-PROV-3 · S2 · Three unsynchronised read-modify-write paths on one provider record; the last writer erases the others
 
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-3)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-3)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-3)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-3)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-3)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-3)
+
 **Verification:** confirmed
 **Where:** `gate/core/providers/service.mjs:84-95` (`check`: read at `:85`, network probe, `put` at `:93` with no queue), `gate/core/providers/service.mjs:107-124` (per-provider queue for chat outcomes), `gate/core/providers/service.mjs:156-167` (a *separate* queue for catalog refreshes), `gate/core/providers/store.mjs:60-72` (`put` serialises the write, not the read-modify-write).
 **What fails:** A chat turn fails with 401 and writes `auth.state: 'needs_reauth'` / `lastError`; a concurrent "Check readiness" (which probes the vendor and succeeds) commits its own stale `record.state` and the needs-reauth flag vanishes. The app then shows "Ready" for a key the vendor is rejecting, and `/model auth` (which reads `auth.state`) shows nothing wrong. Symmetrically a catalog refresh's `put` (`:203-209`) can wipe a chat outcome's `lastError`, and a chat outcome can wipe a just-fetched catalog.
@@ -371,12 +607,36 @@ at `openclaw-client.ts:368` a typed parse that rejects an unrecognised state ins
 
 #### R2-PROV-4 · S2 · `requestPolicy.timeoutMs` is validated and stored but never applied to any provider fetch
 
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-4)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-4)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-4)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-4)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-4)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-4)
+
 **Verification:** confirmed
 **Where:** `gate/core/providers/schema.mjs:142-146` (required field, "must be a positive integer"), `gate/cli.mjs:104` and `src/lib/gateway/provider-client.ts:84` (both write `120000`), `gate/core/providers/rpc.mjs:57-58` (exposes check and catalog refresh), `gate/core/providers/service.mjs:178-187` (`inspect` then `listModels`, both unbounded), `gate/core/providers/profiles/registry.mjs:50-55` (`fetchImpl(url, { headers })` — no `signal`, no timeout), `gate/core/server.mjs:2746-2751` (the RPC route has no timeout of its own); `grep -rn requestPolicy gate/core` matches only the schema.
 **What fails:** A vendor (or a self-hosted OpenAI-compatible endpoint) that accepts the TCP connection and never answers leaves `providers.health.check` / `providers.catalog.refresh` hanging: the phone gives up at its 30 s request timeout, the Gate keeps the socket and the pending request for undici's ~5-minute default, and there is no in-flight cap, so a screen that retries (or two phones) stacks hung fetches. The declared 120 s budget is never honoured.
 **Why:** Nothing between the RPC dispatcher and `fetchImpl` reads `config.requestPolicy`, and the only timeout in this subtree is the chat path's `providerUpstreamCall` (`server.mjs:307-319`), which does not wrap `listModels`.
 
 #### R2-PROV-5 · S2 · Two disagreeing definitions of "the credential exists" leave migrated providers reporting missing credentials while chat works
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-5)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-5)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-5)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-5)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-5)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-5)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `gate/core/providers/service.mjs:281-287` (`credentialPresent` — vault only), `gate/core/providers/factory.mjs:53-63` (`resolveCredential` — vault, then `process.env[legacyApiKeyEnv]`), `gate/core/providers/migrate-v1.mjs:88-95` (v1 → v2 records `credentialRef: provider/<id>/api-key` and `legacyApiKeyEnv`, but writes no credential), `gate/core/providers/service.mjs:249-255` and `:181` (missing auth ⇒ `missing_credentials` and `listModels` skipped), `gate/core/server.mjs:2455-2466` (an empty catalog falls back to the legacy twin, else the provider contributes nothing to `/v1/models`).
@@ -391,12 +651,36 @@ Gate started over a v1 `registry/` directory whose keys live in the environment.
 
 #### R2-PROV-6 · S2 · Every vault read spawns a PowerShell process that compiles C#, with no timeout
 
+> **Fix status:** Fixed - package(s) G8, commit(s) `fae703a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-6)
+
+> **Fix status:** Fixed - package(s) G8, commit(s) `fae703a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-6)
+
+> **Fix status:** Fixed - package(s) G8, commit(s) `fae703a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-6)
+
+> **Fix status:** Fixed - package(s) G8, commit(s) `fae703a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-6)
+
+> **Fix status:** Fixed - package(s) G8, commit(s) `fae703a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-6)
+
+> **Fix status:** Fixed - package(s) G8, commit(s) `fae703a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-6)
+
 **Verification:** confirmed
 **Where:** `gate/core/credentials/windows-dpapi.mjs:53-73` (`runHelper` — `spawn('powershell.exe', …)` per call, no timeout, no kill), `gate/core/credentials/windows-dpapi.mjs:5-51` (`Add-Type -TypeDefinition` re-compiled in every fresh session), `gate/core/credentials/vault.mjs:37-46` (`get` → `unprotect`, no memoisation), `gate/core/providers/factory.mjs:15-16` and `:25-39` (`materialize()` is called once per adapter method), `gate/core/providers/service.mjs:257-260` (`inspect` calls `authenticate()` then `health()`).
 **What fails:** One "Check readiness" tap runs `authenticate()` and `health()` separately, so it spawns two `powershell.exe` processes that each JIT-compile a C# type before the vendor is even contacted; a "Refresh catalog" tap runs three (`inspect` ×2 plus `listModels`), and every chat turn runs one. On the operator's Windows PC that is hundreds of ms to ~1 s of process startup plus compilation each time, on top of the request, and if a PowerShell session hangs the promise never settles (`child.on('close')` is the only exit path).
 **Why:** The DPAPI helper is a per-call `powershell.exe -Command` with the type definition inline (`:55`), and neither `CredentialVault.get` nor the factory caches anything, so the cost is paid on each credential resolution.
 
 #### R2-OAUTH-1 · S3 · OAuth registration is inert end to end, and the attempt it leaks is never cleaned up
+
+> **Fix status:** Partly fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oauth-1)
+
+> **Fix status:** Partly fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oauth-1)
+
+> **Fix status:** Partly fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oauth-1)
+
+> **Fix status:** Partly fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oauth-1)
+
+> **Fix status:** Partly fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oauth-1)
+
+> **Fix status:** Fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-oauth-1)
 
 **Verification:** confirmed
 **Where:** `gate/core/providers/oauth/profiles.mjs:2` (`releaseOAuthProfiles` is empty) with `gate/core/server.mjs:619`, `gate/core/providers/oauth/pkce-callback.mjs:7-15` (the attempt has no `authorizationUrl` field), `gate/core/providers/rpc.mjs:70-78` (returns `authorizationUrl: attempt.authorizationUrl` ⇒ `undefined`), `src/lib/gateway/provider-oauth.ts:21-24` (no URL ⇒ no link, no attempt id ⇒ no poll), `gate/core/providers/oauth/pkce-callback.mjs:64-67` and `:75` (expiry rejects the callback but never closes the listener or deletes the attempt), `gate/core/providers/oauth/refresh.mjs:66-67` (`discoverIssuer(profile.issuer, …)` with no `allowedHosts`), `gate/core/providers/oauth/discovery.mjs:1-8` (default allow-list is loopback only), `gate/core/providers/service.mjs:283` (presence checked at `oauthProfileId`, tokens live at `oauth/<id>`, `refresh.mjs:51,93`).
@@ -405,12 +689,36 @@ Gate started over a v1 `registry/` directory whose keys live in the environment.
 
 #### R2-PROV-7 · S2 · Refresh is a no-op while fresh or backing off, and the backoff is invisible
 
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-7)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-7)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-7)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-7)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-7)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-7)
+
 **Verification:** confirmed
 **Where:** `gate/core/providers/service.mjs:169-177` (both early returns need `!force`), `gate/core/providers/rpc.mjs:58` (the RPC never passes `force`), `gate/core/providers/service.mjs:204-208` with `gate/core/providers/catalog.mjs:30-34` (30 s → 15 min), `gate/core/providers/service.mjs:60-70` (`update` carries `existing.state`, so `backoff` survives a fixed base URL), `gate/core/providers/rpc.mjs:96-117` (`sanitizeSnapshot` has no `backoff` field).
 **What fails:** After one failed refresh the user taps "Refresh catalog" — the control's whole purpose — and the Gate returns the identical stale snapshot without contacting the vendor, for up to 15 minutes, with no error and nothing on the card to explain it. The same happens within 300 s of a *successful* refresh. Correcting a wrong base URL through "Edit" does not clear the backoff, so the recovery path the user reaches for is the one that silently refuses.
 **Why:** `refreshCatalog` defaults `force = false` (`:156`) and `rpc.mjs:58` calls it with no arguments, so both guards at `:172` and `:175` apply to every user-initiated refresh; the resulting snapshot carries `catalog.state: 'stale'` (`catalog.mjs:13-18`) but the backoff that caused the no-op is not projected to the client.
 
 #### R2-STORE-1 · S3 · `atomicWrite` deletes the file before renaming it into place, so a concurrent read sees no provider
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-store-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-store-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-store-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-store-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-store-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-store-1)
 
 **Verification:** confirmed
 **Where:** `gate/core/providers/store.mjs:82-87` (`writeFile` → `rm(filePath)` → `rename`), `gate/core/providers/store.mjs:39-58` (`get` swallows every read error as `null`), `gate/core/providers/store.mjs:20-37` (`list` skips ids whose `get` returns `null`), `gate/core/providers/service.mjs:289-297` (`require` turns that `null` into `provider_not_found`), `gate/core/credentials/vault.mjs:30-33` (same rm-then-rename shape).
@@ -419,6 +727,18 @@ Gate started over a v1 `registry/` directory whose keys live in the environment.
 
 #### R2-CAP-1 · S3 · Capability instance files are written non-atomically, so a crash silently deletes the instance
 
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cap-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cap-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cap-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cap-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cap-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cap-1)
+
 **Verification:** confirmed
 **Where:** `gate/core/capabilities/registry-methods.mjs:25-29` (`writeInstanceFile` — plain `writeFile`, no tmp + rename), `gate/core/capabilities/registry-methods.mjs:81` (update writes it), `gate/core/capabilities/registry.mjs:100-111` (`JSON.parse` failure pushes to `skipped` and is otherwise ignored), `gate/core/capabilities/registry.mjs:113-118` (`unknown kind` likewise skipped), `gate/core/providers/store.mjs:82-87` (the provider store does it correctly, in the same process).
 **What fails:** If the Gate is killed (or the PC reboots) while an instance's `registry/<id>.json` is being written, the truncated file fails `JSON.parse` on the next boot: the instance is dropped from `state.instances`, its manifest entry and commands disappear, `buildInstanceHandlers` no longer registers its methods, and the phone's feature list silently shrinks — with the reason visible only in the discarded `skipped` array, which nothing logs. The same truncation loses every field the operator had configured for that instance.
@@ -426,12 +746,36 @@ Gate started over a v1 `registry/` directory whose keys live in the environment.
 
 #### R2-PROV-8 · S3 · Concurrent manifest reloads can overwrite newer state, hiding a provider or instance that was just created
 
+> **Fix status:** Fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-8)
+
+> **Fix status:** Fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-8)
+
+> **Fix status:** Fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-8)
+
+> **Fix status:** Fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-8)
+
+> **Fix status:** Fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-8)
+
+> **Fix status:** Fixed - package(s) G10, commit(s) `98347a8` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-8)
+
 **Verification:** confirmed
 **Where:** `gate/core/server.mjs:887-891` (`state = await computeState()`, no serialisation), `gate/core/providers/rpc.mjs:26-30` (`statusAndReload` → `reload()`), `gate/core/capabilities/registry-methods.mjs:43-48,71,83,93` (its own write queue covers only registry writes), `gate/core/server.mjs:854-885` (`computeState` re-reads the provider and registry directories from disk).
 **What fails:** A provider created at the same moment as a capability instance produces two overlapping `reload()`s. The one that read the disk earlier but finishes later assigns last, so the manifest the phone fetches for the next few minutes lacks the just-created entry — the provider card and the instance's commands are absent even though both writes returned `ok`.
 **Why:** Each `reload()` builds a complete snapshot from disk and assigns it wholesale (`:889`); the assignment order is completion order, not start order, and nothing serialises `reload` across the two RPC surfaces.
 
 #### R2-CRED-1 · S3 · A credential file that cannot be decrypted reports itself as a present, ready credential
+
+> **Fix status:** Fixed - package(s) G8, G9, commit(s) `fae703a`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cred-1)
+
+> **Fix status:** Fixed - package(s) G8, G9, commit(s) `fae703a`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cred-1)
+
+> **Fix status:** Fixed - package(s) G8, G9, commit(s) `fae703a`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cred-1)
+
+> **Fix status:** Fixed - package(s) G8, G9, commit(s) `fae703a`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cred-1)
+
+> **Fix status:** Fixed - package(s) G8, G9, commit(s) `fae703a`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cred-1)
+
+> **Fix status:** Fixed - package(s) G8, G9, commit(s) `fae703a`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cred-1)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `gate/core/credentials/vault.mjs:54-61` (`has` = `access()` only, no decrypt), `gate/core/providers/service.mjs:285` (`credentialPresent` returns `vault.has(ref)` when available), `gate/core/credentials/vault.mjs:44` (`get` propagates `unprotect` failure instead of returning `undefined`), `gate/core/credentials/windows-dpapi.mjs:64-67` (the PowerShell child exits non-zero on a DPAPI failure), `gate/core/providers/errors.mjs:92` (an unclassified error defaults to `transient_network`).
@@ -446,12 +790,36 @@ machine". Trigger: a vault file that exists but fails `CryptUnprotectData`.
 
 #### R2-CRED-2 · S3 · The Gate's only redaction helper misses the token field spellings its own code uses
 
+> **Fix status:** Fixed - package(s) G8, G9, commit(s) `fae703a`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cred-2)
+
+> **Fix status:** Fixed - package(s) G8, G9, commit(s) `fae703a`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cred-2)
+
+> **Fix status:** Fixed - package(s) G8, G9, commit(s) `fae703a`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cred-2)
+
+> **Fix status:** Partly fixed - package(s) G8, G9, commit(s) `fae703a`, `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cred-2)
+
+> **Fix status:** Partly fixed - package(s) G8, commit(s) `fae703a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cred-2)
+
+> **Fix status:** Fixed - package(s) G8, commit(s) `fae703a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cred-2)
+
 **Verification:** confirmed
 **Where:** `gate/core/credentials/redaction.mjs:1-13` (`access_token`/`refresh_token`/`id_token`, no camelCase entries; `authorization` is listed but `bearer`/`x-api-key` are not), `gate/core/providers/rpc.mjs:16` (the single call site, applied to `{ message, code }`, whose keys are not sensitive, so it is a no-op), `gate/core/providers/oauth/refresh.mjs:87-92` (the token object the Gate persists is spelled `accessToken`/`refreshToken`).
 **What fails:** Any future or incidental redaction of a token envelope passes `accessToken`, `refreshToken` and `idToken` through verbatim, and the one place it is used today only ever forwards an error `message` string — so a vendor error that quotes the credential reaches the phone unredacted. The helper reads as a safety net and provides none.
 **Why:** Matching is exact on the lower-cased key (`:24`) against a set written in one spelling convention, while the module that writes tokens uses the other (`:87-92`); and the call site passes a two-key object, which the key set never matches.
 
 #### R2-PROV-V1 · S2 · "Refresh catalog" on a disabled provider silently erases its model list
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v1)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v1)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v1)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v1)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v1)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v1)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `service.mjs:178-187` — for `enabled:false`, `inspect` returns `{ auth, readiness }` with
@@ -470,6 +838,18 @@ offered, `provider-actions-sheet.tsx:79`) more than `ttlSeconds` after the last 
 after a backoff window.
 
 #### R2-PROV-V2 · S2 · A missing API key is sent to the vendor as `Bearer undefined` and then reported as "Sign in again"
+
+> **Fix status:** Partly fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v2)
+
+> **Fix status:** Partly fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v2)
+
+> **Fix status:** Partly fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v2)
+
+> **Fix status:** Partly fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v2)
+
+> **Fix status:** Partly fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v2)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v2)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `service.chat` (`service.mjs:224-228`) never consults `credentialPresent` and never calls
@@ -496,6 +876,18 @@ Trigger: any turn sent before a key is set.
 
 #### R2-PROV-V3 · S2 · A health check or catalog refresh never rebuilds the manifest
 
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v3)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v3)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v3)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v3)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v3)
+
+> **Fix status:** Fixed - package(s) G9, commit(s) `360134c` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-prov-v3)
+
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** only `statusAndReload` (`rpc.mjs:26-30`) refreshes derived state, and it wraps just
 `providers.create/update/delete` (`:54-56`). `providers.health.check` (`:57`) and
@@ -515,6 +907,18 @@ its models. Trigger: any check/chat outcome/catalog refresh with no concurrent c
 ### Area: Gate CLI-environment backends, supervisor, Bots, voice worker, service
 
 #### R2-CLAUDE-1 · S1 · Stop never kills the Claude Code turn — the agent keeps working in the workspace
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-claude-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-claude-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-claude-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-claude-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-claude-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-claude-1)
 
 **Verification:** confirmed
 **Where:** `gate/core/cli-environments/backends/claude-code.mjs:275` (spawn), `:368-371`
@@ -540,6 +944,18 @@ handled by the job that owns it", but no job exists: `backend-manager.mjs:150` c
 
 #### R2-RUN-1 · S2 · The run archive prunes by a field it never writes, so it deletes the wrong runs
 
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-run-1)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-run-1)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-run-1)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-run-1)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-run-1)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-run-1)
+
 **Verification:** confirmed
 **Where:** `gate/core/cli-environments/run-archive.mjs:109` (`runs.sort((a, b) => a.meta.startedAtMs - b.meta.startedAtMs)`),
 `:110-113` (the prune), `gate/core/cli-environments/supervisor.mjs:295-302` (`record()` writes
@@ -557,6 +973,18 @@ not catch it because `gate/__tests__/run-archive.test.mjs:232-241` names its fix
 contrast case for GATE-6, "tmp-file + rename"; the `startedAtMs` key is a new defect in it.)
 
 #### R2-RUN-2 · S2 · Every run ever started is retained forever, with its output log and its decrypted credentials
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-run-2)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-run-2)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-run-2)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-run-2)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-run-2)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-run-2)
 
 **Verification:** confirmed
 **Where:** `gate/core/cli-environments/supervisor.mjs:151` (`this.runs = new Map()`), `:328` (`set`),
@@ -578,6 +1006,18 @@ in-memory map.
 
 #### R2-ENV-1 · S2 · Writing an environment record deletes the live file before the replacement exists
 
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-env-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-env-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-env-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-env-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-env-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-env-1)
+
 **Verification:** confirmed
 **Where:** `gate/core/cli-environments/store.mjs:50-53` (`writeFile(tmp)` → `rm(dest, {force:true})` →
 `rename(tmp, dest)`), read path `store.mjs:34-40` (`get` returns `null` for a missing file), consumers
@@ -595,6 +1035,18 @@ comment states the invariant ("never a truncated middle"). `providers/store.mjs:
 same `rm`, so the defect is duplicated there.
 
 #### R2-CLI-1 · S2 · A Codex app-server that fails its handshake is never killed, and every retry spawns another
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cli-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cli-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cli-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cli-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cli-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cli-1)
 
 **Verification:** confirmed
 **Where:** `gate/core/cli-environments/stdio-server.mjs:55-61` (spawn + `job.add`), `:95-106`
@@ -616,6 +1068,18 @@ timeout paths. `stopAll()` would eventually reap them, but it only runs at Gate 
 
 #### R2-SESS-1 · S2 · The Claude Code session list reads and parses every transcript in the project, then discards most of them
 
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sess-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sess-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sess-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sess-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sess-1)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sess-1)
+
 **Verification:** confirmed
 **Where:** `gate/core/cli-environments/backends/claude-code.mjs:156-205` — `:159-170` is the loop:
 for every `*.jsonl` in `~/.claude/projects/<flattened-cwd>/` it `stat`s the file and then
@@ -635,6 +1099,18 @@ materialises the entire `.jsonl` as one string plus a parsed array of every entr
 cache; `reserved` (`:131`) is folded in afterwards at `:200-203`.
 
 #### R2-HERMES-1 · S2 · Creating a Bot writes its listen key non-atomically, and the generated key exists nowhere else
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-hermes-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-hermes-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-hermes-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-hermes-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-hermes-1)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-hermes-1)
 
 **Verification:** confirmed
 **Where:** `gate/core/cli-environments/backends/hermes.mjs:691-692` (`ensureDistinctListenKey` then a
@@ -659,6 +1135,18 @@ half-written file" and does exactly that at `:286-288`. `updateBot`'s `SOUL.md` 
 
 #### R2-VOICE-1 · S3 · The voice-session registry is append-only for the life of the Gate
 
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-1)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-1)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-1)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-1)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-1)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-1)
+
 **Verification:** confirmed
 **Where:** `gate/core/voice/voice-rpc.mjs:45-56` (`create` → `this.sessions.set`), `:130-145`
 (`end` only sets `ended`/`endedReason` and fans out), `:102-117` (`liveForDevice` iterates every
@@ -674,6 +1162,18 @@ as ended (`media-socket.mjs:116-120`) — the memory is the price and it is neve
 also holds the whole `thread` object the phone sent (`voice-rpc.mjs:293`).
 
 #### R2-VOICE-2 · S3 · The voice worker appends every frame it writes to a list that is never cleared
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-2)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-2)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-2)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-2)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-2)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-2)
 
 **Verification:** confirmed
 **Where:** `gate/voice-worker/versutus_voice/server.py:276` (`self.written = []`), `:282-288`
@@ -691,6 +1191,18 @@ disables it, and there is no clear or cap. Everything else in this worker is car
 (`VAD_WINDOW_SAMPLES`, `PREROLL_MS`, `_PARTIAL_WINDOW_MS`), which is what makes this the odd one out.
 
 #### R2-VOICE-3 · S3 · Re-attaching a call leaks a no-audio timer that nothing ever clears
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-3)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-3)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-3)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-3)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-3)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-3)
 
 **Verification:** confirmed
 **Where:** `gate/core/voice/media-socket.mjs:456-461` (`attach` calls `clearResumeTimer()` then
@@ -711,6 +1223,18 @@ attach, the one case a lossy, relayed link produces. The intervals are `unref`'d
 not hold the process open; the cost is retained closures and duplicate `ws.close(1001,'idle')` work.
 
 #### R2-TOKEN-1 · S3 · Every spawned CLI is handed a chat endpoint with no port and a token nothing verifies
+
+> **Fix status:** Partly fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-token-1)
+
+> **Fix status:** Partly fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-token-1)
+
+> **Fix status:** Partly fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-token-1)
+
+> **Fix status:** Partly fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-token-1)
+
+> **Fix status:** Partly fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-token-1)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-token-1)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `gate/core/cli-environments/supervisor.mjs:313` (`endpoints` defaults to
@@ -743,6 +1267,18 @@ confined to `startRun`.
 
 #### R2-CLI-2 · S3 · `service run` — the process whose job is to survive crashes — has no guards and an unlistened child
 
+> **Fix status:** Fixed - package(s) G12, commit(s) `1825045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cli-2)
+
+> **Fix status:** Fixed - package(s) G12, commit(s) `1825045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cli-2)
+
+> **Fix status:** Fixed - package(s) G12, commit(s) `1825045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cli-2)
+
+> **Fix status:** Fixed - package(s) G12, commit(s) `1825045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cli-2)
+
+> **Fix status:** Fixed - package(s) G12, commit(s) `1825045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cli-2)
+
+> **Fix status:** Fixed - package(s) G12, commit(s) `1825045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cli-2)
+
 **Verification:** confirmed
 **Where:** `gate/cli.mjs:569-580` (`spawnGate`: `stdout`/`stderr` listeners only, no `'error'`),
 `:560-628` (`serviceRun`, which never calls `installProcessGuards` — `:405` is the only call site,
@@ -765,6 +1301,18 @@ headers hangs the command forever, so the `taskkill` at `:659` and the final "se
 happen.
 
 #### R2-HERMES-2 · S3 · Resolving a Bot re-reads every Hermes profile, once per speaker
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-hermes-2)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-hermes-2)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-hermes-2)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-hermes-2)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-hermes-2)
+
+> **Fix status:** Fixed - package(s) G7, commit(s) `37e3d56` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-hermes-2)
 
 **Verification:** confirmed
 **Where:** `gate/core/cli-environments/backends/hermes.mjs:600-644` — `:607`
@@ -790,6 +1338,18 @@ default key a *second* time (`:623`) because the first lookup already had it in 
 
 #### R2-VOICE-4 · S2 · A spoken turn resolves its backend from scratch on every turn, not once per call
 
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-4)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-4)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-4)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-4)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-4)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-4)
+
 **Verification:** confirmed
 **Where:** `gate/core/voice/voice-backend.mjs:11-24` (the `list()` + `get()` walk for a Bot-scoped
 thread), `:27-31` (the same walk for an unscoped one), `gate/core/server.mjs:2817` (`runTurn` →
@@ -813,6 +1373,18 @@ count only the per-turn repetition as new here.
 
 #### R2-GO-V1 · S3 · The run archive prunes by `startedAtMs` and its own hydrate path disagrees with the prune
 
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v1)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v1)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v1)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v1)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v1)
+
+> **Fix status:** Fixed - package(s) G6, commit(s) `563c335` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v1)
+
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `gate/core/cli-environments/run-archive.mjs:109` sorts on `meta.startedAtMs`, which
 `supervisor.mjs:293-306` never writes — that is RUN-1's mechanism, so this is not new on its own. What is new is the
@@ -828,6 +1400,18 @@ order the phone sees them in are produced by different keys.
 derived from different sources, so what survives the cap and how it is subsequently ordered are decided independently.
 
 #### R2-GO-V2 · S3 · `stdio-server` leaks its Job Object membership across respawns, so a later `terminate()` reaps children it no longer owns
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v2)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v2)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v2)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v2)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v2)
+
+> **Fix status:** Fixed - package(s) G5, commit(s) `c474fa6` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v2)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `gate/core/cli-environments/stdio-server.mjs:18` — `job = createWindowsJob()` is created **once** per
@@ -846,6 +1430,18 @@ Severity S3 (needs a pid recycle plus a stop/start cycle).
 
 #### R2-GO-V3 · S3 · A voice call's registry entry keeps the whole `thread` payload, and `liveForDevice` walks every one of them on the start path
 
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v3)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v3)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v3)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v3)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v3)
+
+> **Fix status:** Fixed - package(s) G11, commit(s) `7627c4a` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-go-v3)
+
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `gate/core/voice/voice-rpc.mjs:291-297` — `registry.create({ voiceSessionId, deviceId, engine: choice.engine, thread: params.thread, startedAt: now() })`.
 `thread` is the caller's own object, stored by reference with no projection or size bound.
@@ -863,12 +1459,36 @@ unbounded caller-supplied payloads. Severity S3.
 
 #### R2-VOICEANDROID-1 · S1 · The notification's Mute/Unmute action can never change the mute state
 
+> **Fix status:** Fixed - package(s) N1, commit(s) `0072f00` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voiceandroid-1)
+
+> **Fix status:** Fixed - package(s) N1, commit(s) `0072f00` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voiceandroid-1)
+
+> **Fix status:** Fixed - package(s) N1, commit(s) `0072f00` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voiceandroid-1)
+
+> **Fix status:** Fixed - package(s) N1, commit(s) `0072f00` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voiceandroid-1)
+
+> **Fix status:** Fixed - package(s) N1, commit(s) `0072f00` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voiceandroid-1)
+
+> **Fix status:** Fixed - package(s) N1, commit(s) `0072f00` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voiceandroid-1)
+
 **Verification:** confirmed
 **Where:** `modules/handsfree-voice/android/src/main/java/com/versutus/handsfreevoice/HandsfreeCallNotification.kt:62-66`, `modules/handsfree-voice/android/src/main/java/com/versutus/handsfreevoice/HandsfreeCallService.kt:224-225`, `:242`, `:126-129`, `modules/handsfree-voice/android/src/main/java/com/versutus/handsfreevoice/HandsfreeCallState.kt:39-43`; the mapping is pinned by `modules/handsfree-voice/android/src/test/java/com/versutus/handsfreevoice/HandsfreeCallNotificationTest.kt:87-88`
 **What fails:** A call is live. The user pulls down the ongoing notification and taps **Mute** to stop the microphone. Nothing happens: the recognizer keeps running, the body line still reads "Listening", and the label still reads "Mute". Tapping **Unmute** on an already-muted call is equally inert. The user believes the microphone is off when it is live — and the JS banner never learns anything, so the in-app state stays whatever it was.
 **Why:** The notification attaches the *opposite* intent from the label: `buildNotification` sets the action to `if (state.muted) ACTION_UNMUTE else ACTION_MUTE` (`HandsfreeCallService.kt:225`) and the label to `muteActionLabelFor(state.muted)`, so an unmuted call ships a "Mute" button carrying `ACTION_MUTE`. The handler at `HandsfreeCallService.kt:126-129` maps that intent through `HandsfreeCallNotification.mutedForAction`, whose table is inverted: `ACTION_MUTE -> false`, `ACTION_UNMUTE -> true` (`HandsfreeCallNotification.kt:63-65`). `setMuted(value)` assigns that value straight onto the state (`HandsfreeCallState.kt:39-43`, `HandsfreeCallService.kt:859-873`), so "Mute" writes `false` over `false` and "Unmute" writes `true` over `true` — both are no-ops in every state. The JVM test asserts the inverted table directly (`:87-88`) and then, at `:103-111`, asserts the *opposite* value is applied by the caller, so the suite passes while the wiring does nothing.
 
 #### R2-VOICE-6 · S2 · A call that ended while muted poisons the next one: it dies in 1.2 s with "recognition-failed"
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-6)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-6)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-6)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-6)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-6)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-6)
 
 **Verification:** confirmed
 **Where:** `modules/handsfree-voice/ios/HandsfreeVoiceModule.swift:33`, `:141`, `:167-177`, `:582-601`, `:348`; `src/context/handsfree-voice-provider.tsx:597-606`, `:1016-1018`; `src/lib/voice/handsfree-session.ts:213-218`
@@ -877,12 +1497,36 @@ unbounded caller-supplied payloads. Severity S3.
 
 #### R2-VOICE-7 · S2 · iOS progressive speech cuts the reply off mid-word; Android queues the same input correctly
 
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-7)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-7)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-7)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-7)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-7)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-7)
+
 **Verification:** confirmed
 **Where:** `modules/handsfree-voice/ios/HandsfreeVoiceModule.swift:437-456` (`:450`, `:453`), `:458-478`; `src/context/handsfree-voice-provider.tsx:527-549`, `:685`; `src/lib/voice/handsfree-reply.ts:140-150`; contrast `modules/handsfree-voice/android/src/main/java/com/versutus/handsfreevoice/HandsfreeCallService.kt:622-627`
 **What fails:** On iOS, a streaming reply is read aloud with every sentence truncated where the next one begins — "The build passed on the fir|st. The second thing to check is…". Whole clauses are never spoken, and the banner shows the full reply text the operator cannot hear. The same reply on Android is read complete.
 **Why:** `streamReplyText` is driven by an effect that re-runs on every streamed delta (`handsfree-voice-provider.tsx:657-686`, `:685`), and `planHandsfreeSpeech` emits only the *newly completed sentence* each time (`handsfree-reply.ts:140-150`; with iOS's `Double.greatestFiniteMagnitude` bound, one chunk per call). iOS's `speakLocked` treats each of those calls as a *new utterance*: it overwrites the queue (`pendingChunks = chunks`, `:450`) and hard-stops the synthesizer mid-word (`synthesizer.stopSpeaking(at: .immediate)`, `:453`). Progressive speech only works if the next sentence joins the one being spoken — which is exactly what the Android service does and documents (`speakInternal` appends to `queuedSpeech`, `HandsfreeCallService.kt:622-627`). The JS side compounds it: `spokenRef.current = plan.spoken` is committed *before* the native call (`:545-548`), so the truncated text is recorded as spoken and is never re-offered.
 
 #### R2-VOICE-8 · S2 · A native-side end that emits nothing leaves the call "live" forever
+
+> **Fix status:** Fixed - package(s) N1, N2, commit(s) `0072f00`, `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-8)
+
+> **Fix status:** Fixed - package(s) N1, N2, commit(s) `0072f00`, `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-8)
+
+> **Fix status:** Fixed - package(s) N1, N2, commit(s) `0072f00`, `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-8)
+
+> **Fix status:** Fixed - package(s) N1, N2, commit(s) `0072f00`, `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-8)
+
+> **Fix status:** Fixed - package(s) N1, N2, commit(s) `0072f00`, `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-8)
+
+> **Fix status:** Fixed - package(s) N1, N2, commit(s) `0072f00`, `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-8)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `src/context/handsfree-voice-provider.tsx:345-353`, `:514-525`, `:564`; `src/lib/voice/handsfree-session.ts:203-209`; `src/lib/voice/handsfree-call-copy.ts:124-125`; `src/lib/voice/speech.ts:48-52`; `modules/handsfree-voice/android/src/main/java/com/versutus/handsfreevoice/HandsfreeCallService.kt:139-143`, `:145-149`, `:902-941`
@@ -895,12 +1539,36 @@ session to idle.
 
 #### R2-GATEVOICE-1 · S2 · The media-socket reconnect spends the whole 20 s Gate window asleep and never takes its last shot
 
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-1)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-1)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-1)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-1)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-1)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-1)
+
 **Verification:** confirmed
 **Where:** `src/lib/voice/gate-reconnect.ts:20-34`, `:68-70`; `src/context/handsfree-voice-provider.tsx:398-413`; `gate/core/voice/media-socket.mjs:26`
 **What fails:** A Gate call's media socket drops once and the link recovers 2 s later. The phone still sits silent for the full 20 s resume window and then ends the call, because the attempt that would have re-attached is never issued.
 **Why:** The Gate holds the call for exactly `RESUME_TIMEOUT_MS = 20_000` (`media-socket.mjs:26`). `gateReconnectDelays` builds `[500, 1000, 2000, 4000, 8000]` (= 15 500 ms) and then, per its own comment "Always leave one shot for the last moment of the window", appends `windowMs - spent` = 4 500 ms (`gate-reconnect.ts:31-33`) — so the schedule sums to *exactly* the deadline. The loop sleeps first and checks afterwards (`await sleep(delay)` then `if (input.isAborted() || now() >= deadline) return false`, `:69-70`), so the final attempt always fires at `t ≥ 20 000` and is always refused. The last delay is 4.5 s of dead air and the last attempt is unreachable code; `attemptReconnect` then folds the original fatal frame and the call ends (`handsfree-voice-provider.tsx:411-412`).
 
 #### R2-HANDSFREE-1 · S2 · A sentence the platform refused is marked spoken and never retried, and the call parks in "Speaking"
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-1)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-1)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-1)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-1)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-1)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-1)
 
 **Verification:** confirmed
 **Where:** `src/context/handsfree-voice-provider.tsx:545-548`; `modules/handsfree-voice/android/src/main/java/com/versutus/handsfreevoice/HandsfreeVoiceModule.kt:141-147`; `src/lib/voice/handsfree-session.ts:332-338`
@@ -909,12 +1577,36 @@ session to idle.
 
 #### R2-HANDSFREE-2 · S3 · The banner's Mute button is inert while a turn is sending or waiting
 
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-2)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-2)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-2)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-2)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-2)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-2)
+
 **Verification:** confirmed
 **Where:** `src/lib/voice/handsfree-session.ts:293-309`, `:311-330`; `src/components/voice/handsfree-call-banner.tsx:127-135`; `src/context/handsfree-voice-provider.tsx:1033`
 **What fails:** Over the lossy Tailscale path a turn sits in "Sending" or "Waiting for reply" for tens of seconds — long enough that the banner itself grows a "Still waiting on the PC… 40s" line. The user taps Mute. The label does not change, the microphone stays live, and no message says the control is unavailable.
 **Why:** The banner draws Mute unconditionally, with no phase gate (`handsfree-call-banner.tsx:127-135`), and `mute()` dispatches `{ type: 'mute' }` (`handsfree-voice-provider.tsx:1033`). The reducer handles `mute` only from `listening` (`handsfree-session.ts:248-252`), `confirming` (`:278-289`), `speaking` (`:347-352`) and `muted` (`:360-370`); the `sending` and `waiting` cases fall through to `return stay(state)` (`:308`, `:329`), which changes nothing and asks for nothing. So the tap is a silent no-op in exactly the phases where a user is most likely to reach for it.
 
 #### R2-GATEVOICE-2 · S3 · A Gate start is bounded by three separate 45 s budgets, not the "one-shot budget" the code names
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-2)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-2)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-2)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-2)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-2)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-2)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `src/context/handsfree-voice-provider.tsx:804-813`, `:834`, `:836-854`, `:969-975`; `src/lib/voice/handsfree-start-attempt.ts:174`; `src/lib/voice/start-deadline.ts:25`, `:51-59`
@@ -927,12 +1619,36 @@ Severity S3 stands.
 
 #### R2-VOICE-9 · S3 · An iOS recognition task that errors immediately loops `noSpeech` → restart with no backoff
 
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-9)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-9)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-9)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-9)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-9)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-9)
+
 **Verification:** confirmed
 **Where:** `modules/handsfree-voice/ios/HandsfreeVoiceModule.swift:390-402`, `:405-423`, `:347-369`; `src/lib/voice/handsfree-session.ts:245-247`
 **What fails:** On iOS, if the recognizer starts failing the instant it is created (microphone access revoked mid-call, server-side recognition with no network, a wedged `SFSpeechRecognizer`), the module spins: a fresh `recognitionTask` is created and torn down as fast as the framework can answer, one `noSpeech` event per iteration crosses into JS, and the banner's `noSpeech` fold plus `setSession` run on every pass with the 10 s no-speech guard never given a chance to fire. The phone burns CPU and the transcript flickers for as long as the fault lasts.
 **Why:** `handleRecognition` treats any mid-turn error as silence — `if isListening { finishTurn(text: "") }` (`:390-394`) — rather than as a failure. `finishTurn` emits `noSpeech` and then unconditionally restarts recognition when nothing is speaking (`:405-423`), and `beginRecognition` creates a new request and task (`:347-369`). The loop has no counter, no delay and no escalation, and `endpointing.begin(at:)` (`:359`) resets the turn clock each pass so `noSpeechTimedOut` (10 s) can never trip. This is the iOS twin of the Kotlin `AudioRecord.read` spin recorded as VOICE-5, in a file VOICE-5 does not name.
 
 #### R2-GATEVOICE-3 · S3 · Gate-mode Mute/Unmute fold the banner optimistically and never roll back
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-3)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-3)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-3)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-3)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-3)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-gatevoice-3)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `src/context/handsfree-voice-provider.tsx:1025-1044`, `:416-424`; `src/lib/voice/gate-call.ts:139-146`; `modules/handsfree-voice/ios/HandsfreeVoiceModule.swift:205-207`
@@ -946,6 +1662,18 @@ is only started from `speakInternal`, `HandsfreeCallService.kt:632`, which gate 
 
 #### R2-VOICE-10 · S3 · iOS declares a `stateLock` it never uses, and three entry points read module state off the audio queue
 
+> **Fix status:** Partly fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-10)
+
+> **Fix status:** Partly fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-10)
+
+> **Fix status:** Partly fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-10)
+
+> **Fix status:** Partly fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-10)
+
+> **Fix status:** Partly fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-10)
+
+> **Fix status:** Fixed - package(s) N3, commit(s) `001fbc9` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-voice-10)
+
 **Verification:** confirmed
 **Where:** `modules/handsfree-voice/ios/HandsfreeVoiceModule.swift:17`, `:141`, `:156`, `:127-128`, `:170`, `:588`
 **What fails:** Undefined behaviour in the strict sense and a torn read in practice: `startListening` and `speak` evaluate their guards on the module's own queue while `audioQueue` is the only writer of `sessionActive` and `isMuted`. A `startListening` issued immediately after `startSession` resolved can read the pre-start value and answer `false`, which the JS retry ladder absorbs — so today the visible damage is nil, but any future reader of those fields inherits an unsynchronised access that a `stateLock` was clearly meant to guard.
@@ -953,12 +1681,36 @@ is only started from `speakInternal`, `HandsfreeCallService.kt:632`, which gate 
 
 #### R2-HANDSFREE-3 · S3 · Every streamed delta rescans the whole reply, making progressive speech O(n²) on the JS thread
 
+> **Fix status:** Partly fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-3)
+
+> **Fix status:** Partly fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-3)
+
+> **Fix status:** Partly fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-3)
+
+> **Fix status:** Partly fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-3)
+
+> **Fix status:** Partly fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-3)
+
+> **Fix status:** Fixed - package(s) N2, commit(s) `ad55c02` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-handsfree-3)
+
 **Verification:** confirmed
 **Where:** `src/context/handsfree-voice-provider.tsx:657-686`, `:527-549`; `src/lib/voice/handsfree-reply.ts:53-55`, `:70-105`
 **What fails:** During a call, a long reply (a code block, a long explanation — several thousand characters) makes the Hermes JS thread progressively busier as the reply grows, because the per-delta cost is proportional to the *whole* reply rather than to the new text. The visible effect is banner and indicator jank on the same thread that is dispatching the native `level` events.
 **Why:** The effect's dependency list includes `messages` (`handsfree-voice-provider.tsx:686`), and `messages` gets a new identity on every streamed delta, so the effect — and `streamReplyText` (`:685`) — runs once per delta. Each run calls `planHandsfreeSpeech`, which does `replyPrefixIntact(spoken, fullText)` (a `startsWith` over the whole spoken prefix, `handsfree-reply.ts:53-55`) and `completedSentenceText(fullText)` (a full scan from index 0, `:70-105`). Only the last few characters differ per delta, so the total work is quadratic in the reply length; nothing memoises the boundary or resumes the scan where the previous one stopped.
 
 #### R2-NV-V1 · S2 · Android speakInternal runs unguarded after teardown, resurrecting TTS and the barge-in microphone capture
+
+> **Fix status:** Fixed - package(s) N1, commit(s) `0072f00` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nv-v1)
+
+> **Fix status:** Fixed - package(s) N1, commit(s) `0072f00` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nv-v1)
+
+> **Fix status:** Fixed - package(s) N1, commit(s) `0072f00` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nv-v1)
+
+> **Fix status:** Fixed - package(s) N1, commit(s) `0072f00` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nv-v1)
+
+> **Fix status:** Fixed - package(s) N1, commit(s) `0072f00` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nv-v1)
+
+> **Fix status:** Fixed - package(s) N1, commit(s) `0072f00` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nv-v1)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** 
@@ -972,6 +1724,18 @@ the remainder of the reply after the call has ended, until the process dies. Fix
 ### Area: Android widget, config plugins, widget JS
 
 #### R2-WIDGET-1 · S2 · The write gate records the write before the write happens, so a refused write is charged as accepted
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-1)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-1)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-1)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-1)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-1)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-1)
 
 **Verification:** confirmed
 **Where:** `src/context/gateway-provider.tsx:4968-4971`, `src/lib/widget/widget-write-gate.ts:74-89`,
@@ -990,6 +1754,18 @@ and ignores the `false` the module returns (`VersutusWidgetModule.kt:21,25`) —
 
 #### R2-WIDGET-2 · S2 · Nothing ever re-evaluates the gate, so the five-minute floor that is supposed to refresh a frozen card never fires
 
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-2)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-2)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-2)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-2)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-2)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-2)
+
 **Verification:** confirmed
 **Where:** `src/lib/widget/widget-write-gate.ts:24-25,82-88`, `src/context/gateway-provider.tsx:4960-4972`
 **What fails:** Open the app, stay connected, start no runs, change no routines. `widgetWriteGate` is
@@ -1004,6 +1780,18 @@ later `now` into it — the only re-trigger in the whole path is the six-hourly 
 (`WidgetRefreshWorker.kt:31-35`), which redraws without re-reading and so cannot refresh the facts.
 
 #### R2-WIDGET-3 · S2 · A push companion is a whole-payload write, so every delivered push wipes the Bot rows, the roster and the privacy flag
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-3)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-3)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-3)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-3)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-3)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-3)
 
 **Verification:** confirmed
 **Where:** `gate/core/push-notifier.mjs:214-236`, `src/lib/widget/widget-push-task.ts:25-40`,
@@ -1022,6 +1810,18 @@ JSON verbatim (`widget-push-task.ts:34`) and never merges it into the snapshot t
 
 #### R2-WIDGET-4 · S2 · "Hide result text on the widget" is a device-local switch, so a push with rich bodies puts the text back on the card
 
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-4)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-4)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-4)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-4)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-4)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-4)
+
 **Verification:** confirmed
 **Where:** `src/lib/settings/widget-privacy.ts:30-49`, `src/app/gateway/settings.tsx:248-251`,
 `gate/core/push-notifier.mjs:221-231`, `src/lib/widget/widget-push-task.ts:29-35`
@@ -1037,6 +1837,18 @@ writes whatever string it is handed, and the companion's own `redact` is absent,
 defaults it to `false` (`WidgetPayload.kt:66`).
 
 #### R2-WIDGET-5 · S2 · `clearPayload` is never called: the last gateway's names and last result stay on the home screen after it is deleted
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-5)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-5)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-5)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-5)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-5)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-5)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `modules/versutus-widget/src/VersutusWidgetModule.ts:9`,
@@ -1060,6 +1872,18 @@ is any gateway removal or switch with `redact` off.
 
 #### R2-WIDGET-6 · S2 · The Gate's widget snapshot hard-codes `connected: true`, so a push-written card reads "Connected" whenever the Gate can reach Expo
 
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-6)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-6)
+
+> **Fix status:** Partly fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-6)
+
+> **Fix status:** Partly fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-6)
+
+> **Fix status:** Partly fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-6)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-6)
+
 **Verification:** confirmed
 **Where:** `gate/core/push-notifier.mjs:205-217,244-252`, `gate/core/server.mjs:767-771`
 **What fails:** The phone is on cellular, Tailscale is down and the app has been saying
@@ -1073,6 +1897,18 @@ only `busyRuns` and `approvalsPending`, so `resolveSnapshot`'s `snap?.connected 
 report and never had.
 
 #### R2-WIDGET-7 · S2 · A backend probe erases an environment's `busy` state, so a push-written card says "No runs in flight" during a run
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-7)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-7)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-7)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-7)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-7)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-7)
 
 **Verification:** confirmed
 **Where:** `gate/core/cli-environments/supervisor.mjs:212-219,324-329,641-645`,
@@ -1088,6 +1924,18 @@ settle (`:645`) write `busy`, so a probe in between wins.
 
 #### R2-WIDGET-8 · S3 · The pushed work line counts busy *environments* and words them as runs
 
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-8)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-8)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-8)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-8)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-8)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-widget-8)
+
 **Verification:** confirmed
 **Where:** `gate/core/server.mjs:764-771`, `gate/core/push-notifier.mjs:244-252`,
 `modules/versutus-widget/android/src/main/java/com/versutus/widget/WidgetPayloadStore.kt:8-14`
@@ -1100,6 +1948,18 @@ environment id (`supervisor.mjs:152,219,329`), which is per environment, and the
 number as `busyRuns`; nothing re-reads the run rows it would need to count runs.
 
 #### R2-NW-V1 · S3 · The pushed approvalsPending is host-global while the app's own count is per-gateway
+
+> **Fix status:** Not fixed (product decision) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v1)
+
+> **Fix status:** Not fixed (product decision) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v1)
+
+> **Fix status:** Not fixed (product decision) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v1)
+
+> **Fix status:** Not fixed (product decision) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v1)
+
+> **Fix status:** Not fixed (product decision) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v1)
+
+> **Fix status:** Not fixed (product decision) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v1)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `gate/core/server.mjs:768-770` counts
@@ -1117,6 +1977,18 @@ whatever the app's own per-gateway count was.
 
 #### R2-NW-V2 · S3 · Widget writes are fire-and-forget with no ordering guard, so a slow write can land after a newer one
 
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v2)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v2)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v2)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v2)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v2)
+
+> **Fix status:** Fixed - package(s) W2, commit(s) `0280cf2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v2)
+
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `src/context/gateway-provider.tsx:4971` — `void writeWidgetSnapshot(snapshot);` — and
 `src/lib/widget/widget-device.ts:60-79`, where each call independently awaits
@@ -1130,6 +2002,18 @@ completion order non-guaranteed, not provably reversed — and it is independent
 **What fails:** Widget writes are fire-and-forget with no ordering guard, so a slow write can land after a newer one
 
 #### R2-NW-V3 · S3 · A refused first widget write also means the six-hourly redraw worker is never scheduled
+
+> **Fix status:** Fixed - package(s) W3, commit(s) `4f9d1cf` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v3)
+
+> **Fix status:** Fixed - package(s) W3, commit(s) `4f9d1cf` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v3)
+
+> **Fix status:** Fixed - package(s) W3, commit(s) `4f9d1cf` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v3)
+
+> **Fix status:** Fixed - package(s) W3, commit(s) `4f9d1cf` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v3)
+
+> **Fix status:** Fixed - package(s) W3, commit(s) `4f9d1cf` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v3)
+
+> **Fix status:** Fixed - package(s) W3, commit(s) `4f9d1cf` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nw-v3)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `modules/versutus-widget/android/.../VersutusWidgetModule.kt:19-26` — the only
@@ -1145,6 +2029,18 @@ native-side consequence with its own lines, and it is unreported in the scan.
 ### Area: Phone notifications
 
 #### R2-NOTIF-01 · S2 · The push relay never sends a category, so no relayed notice has Approve/Deny
+
+> **Fix status:** Partly fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-01)
+
+> **Fix status:** Partly fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-01)
+
+> **Fix status:** Partly fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-01)
+
+> **Fix status:** Partly fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-01)
+
+> **Fix status:** Partly fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-01)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-01)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `src/lib/notifications/categories.ts:32,42-58,106-113`, `src/lib/notifications/local.ts:156-162`,
@@ -1168,6 +2064,18 @@ constraint is relaxed, and `categoryId: 'botmessage'` on the `kind:'reply'` mess
 
 #### R2-NOTIF-02 · S2 · Typing a quiet-hours change and touching any other switch silently discards it
 
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-02)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-02)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-02)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-02)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-02)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-02)
+
 **Verification:** confirmed
 **Where:** `src/components/gateway/notifications-section.tsx:66-72` (and the card layout at `:162-239`),
 `src/hooks/use-notification-preferences.ts:126`
@@ -1182,6 +2090,18 @@ identity and re-runs the seed, overwriting whatever the operator has typed. Ther
 separation between "the Gate's saved value" and "the text on screen".
 
 #### R2-NOTIF-03 · S2 · The routine-notice module re-requests notification permission on every routine, every sync
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-03)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-03)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-03)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-03)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-03)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-03)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `src/lib/notifications/routine-sync.ts:22,35-44,119,169-172`, callers: `src/context/gateway-provider.tsx:4807-4832`,
@@ -1205,6 +2125,18 @@ scheduled" sentence is withdrawn (`routine-schedule.ts:119-125`).
 
 #### R2-NOTIF-04 · S2 · Re-arming a routine's notice is not atomic, so collisions leak duplicate notices
 
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-04)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-04)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-04)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-04)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-04)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-04)
+
 **Verification:** confirmed
 **Where:** `src/lib/notifications/routine-sync.ts:51-66,118-138,169-172`; two independent re-arm callers,
 `src/context/gateway-provider.tsx:4807-4832` and `src/components/chat/chat-screen.tsx:1719`
@@ -1220,6 +2152,18 @@ already orphaned in `SharedPreferencesNotificationsStore` + `AlarmManager`. Noth
 notifications to reconcile them; only the single persisted id is ever cancelled.
 
 #### R2-NOTIF-05 · S2 · A run-progress notice left by a killed process is never retired — the tray keeps claiming a finished run is running
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-05)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-05)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-05)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-05)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-05)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-05)
 
 **Verification:** confirmed
 **Where:** `src/context/gateway-provider.tsx:1134-1157` (esp. `:1147-1149`, `:1153-1155`), `:2493` (runs restored),
@@ -1237,6 +2181,18 @@ so nothing replaces the stale copy either.
 
 #### R2-NOTIF-06 · S3 · Approve/Deny on a posted approval notice is dropped, with no fail-closed notice, if the process was killed
 
+> **Fix status:** Not fixed (design needed) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-06)
+
+> **Fix status:** Not fixed (design needed) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-06)
+
+> **Fix status:** Not fixed (design needed) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-06)
+
+> **Fix status:** Not fixed (design needed) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-06)
+
+> **Fix status:** Not fixed (design needed) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-06)
+
+> **Fix status:** Not fixed (design needed) - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-06)
+
 **Verification:** confirmed
 **Where:** `src/lib/notifications/categories.ts:47-58` (`opensAppToForeground: false`), `src/app/_layout.tsx:296-339`
 (the only decision path), `src/lib/notifications/local.ts:192-211` (the copy that would tell the operator)
@@ -1253,6 +2209,18 @@ action on a killed app is a headless TaskManager task, and the app's only such t
 
 #### R2-NOTIF-07 · S3 · A failed local write of the push token silently kills the Gate registration
 
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-07)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-07)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-07)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-07)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-07)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-07)
+
 **Verification:** confirmed
 **Where:** `src/lib/notifications/push-registration.ts:80-93` (esp. `:87-88`), `:157-169`, `:41-47`
 **What fails:** One Keystore hiccup while writing the Expo token to SecureStore, and the phone stops registering push
@@ -1266,6 +2234,18 @@ header states the token is persisted *only* so a rotation is noticed — a cache
 
 #### R2-NOTIF-08 · S3 · Push re-registration runs on every reconnect, including the monitor's silent self-heal
 
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-08)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-08)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-08)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-08)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-08)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-08)
+
 **Verification:** confirmed
 **Where:** `src/context/gateway-provider.tsx:2040-2049`, `src/lib/notifications/push-registration.ts:145-170`
 **What fails:** On a flapping Tailscale link, every `connected` transition — including the ones the health monitor
@@ -1278,6 +2258,18 @@ describes ("A `connected` the monitor earned back on its own repeats no fan-out"
 and it is `void`-ed so it overlaps whatever else the same transition starts.
 
 #### R2-NOTIF-09 · S3 · The Settings screen's notification permission is read once at mount, so it can claim push is on when the OS has switched it off
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-09)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-09)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-09)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-09)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-09)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-09)
 
 **Verification:** confirmed
 **Where:** `src/hooks/use-notification-preferences.ts:57,68-80,138-156`, `src/components/gateway/notifications-section.tsx:127-142`
@@ -1294,6 +2286,18 @@ foreground — the read answers the device that is there now, never a cached fir
 launch", which is true of asking and false of reporting.
 
 #### R2-NOTIF-10 · S3 · Preference writes are neither optimistic nor serialized: a switch can look dead for 30 s and the screen can repaint stale state
+
+> **Fix status:** Partly fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-10)
+
+> **Fix status:** Partly fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-10)
+
+> **Fix status:** Partly fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-10)
+
+> **Fix status:** Partly fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-10)
+
+> **Fix status:** Partly fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-10)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-10)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `src/hooks/use-notification-preferences.ts:113-135`, `src/components/gateway/notifications-section.tsx:165-233,247-268`,
@@ -1318,6 +2322,18 @@ switches mid-write. The two-Bot-switch lost-allowlist-update scenario is **withd
 
 #### R2-NOTIF-11 · S3 · Every run event re-posts the run-progress notice (and the Live Activity) with no throttle
 
+> **Fix status:** Partly fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-11)
+
+> **Fix status:** Partly fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-11)
+
+> **Fix status:** Partly fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-11)
+
+> **Fix status:** Partly fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-11)
+
+> **Fix status:** Partly fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-11)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-notif-11)
+
 **Verification:** confirmed
 **Where:** `src/context/gateway-provider.tsx:1134-1157` (`:1137`, `:1146`), driven by `:3481-3489`,
 `src/lib/notifications/local.ts:409-420`
@@ -1333,6 +2349,18 @@ least idempotent in the tray (expo notifies with the identifier as the tag, `Exp
 this is cost, not duplication — but it is unbounded in the event rate.
 
 #### R2-NN-V1 · S2 · No producer sets the bot-message category, so the built Reply quick-action is dead for every notice
+
+> **Fix status:** Partly fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v1)
+
+> **Fix status:** Partly fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v1)
+
+> **Fix status:** Partly fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v1)
+
+> **Fix status:** Partly fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v1)
+
+> **Fix status:** Partly fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v1)
+
+> **Fix status:** Fixed - package(s) G13, commit(s) `2ff377e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v1)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** The bot-message **Reply** action is unreachable from every notice that exists — not only from
@@ -1359,6 +2387,18 @@ bot-message notice button-less too.
 
 #### R2-NN-V2 · S3 · The two reply-failure notices can never be seen because notices are refused while the app is foregrounded
 
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v2)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v2)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v2)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v2)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v2)
+
+> **Fix status:** Fixed - package(s) NT1, commit(s) `afc3b82` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v2)
+
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** Three "fail-closed" notices are structurally suppressed by the very gate they are posted behind.
 `src/lib/notifications/local.ts:115-123` — `present()` returns `null` immediately when
@@ -1381,6 +2421,18 @@ operator's own tap has just foregrounded. Fix: pass `allowForeground = true` for
 to be read by the person holding the phone), or route them through an in-app banner.
 
 #### R2-NN-V3 · S3 · A fresh install opens Settings -> Notifications claiming the OS reports notifications as denied
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v3)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v3)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v3)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v3)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v3)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v3)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** The permission caption can state a denial that never happened, on the most common first-run path.
@@ -1405,6 +2457,18 @@ permission that was never asked.
 
 #### R2-NN-V4 · S3 · The notifications error card promises locked switches that a failed write does not lock
 
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v4)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v4)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v4)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v4)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v4)
+
+> **Fix status:** Fixed - package(s) NT2, commit(s) `94407e4` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-nn-v4)
+
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `src/components/gateway/notifications-section.tsx:107-114` renders one `ErrorCard` for **any**
 `error` from the hook with the fixed instruction
@@ -1421,6 +2485,18 @@ locked "until the Gate's own settings are read", but a failed *write* leaves the
 ### Area: Home and Activity screens
 
 #### R2-ACT-1 · S2 · Pause and Resume do the opposite of what they say: pausing a routine schedules its "due" notice, resuming cancels it
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-1)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-1)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-1)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-1)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-1)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-1)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `src/components/activity/cron-job-sheet.tsx:120-135`, `src/lib/notifications/routine-sync.ts:93-99,149-151`
@@ -1447,6 +2523,18 @@ with `paused` the post-toggle argument).
 
 #### R2-ACT-2 · S2 · Runs that were still going when the app closed are reported on Home as failed / ended without a result
 
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-2)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-2)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-2)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-2)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-2)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-2)
+
 **Verification:** confirmed
 **Where:** `src/lib/gateway/session-persistence.ts:211-223` (called from `:239`), `src/lib/home/briefing.ts:36-43,62-77,119-120`, `src/lib/activity/glance.ts:27-30`
 **What fails:** Start a run, lock the phone, kill the app. Reopen it. The Gate keeps the run going (audit
@@ -1465,6 +2553,18 @@ is then made permanent by the next `saveActivityRuns`.
 
 #### R2-ACT-3 · S2 · Two approvals decided at once race an unserialized audit write, and one decision is lost
 
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-3)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-3)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-3)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-3)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-3)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-3)
+
 **Verification:** confirmed
 **Where:** `src/lib/gateway/approval-policy.ts:234-244`, `src/context/gateway-provider.tsx:3347-3356`, `src/components/activity/approval-inbox.tsx:157,163`
 **What fails:** Approve row A and Deny row B within the same second on Activity's "Needs you" inbox. Both
@@ -1479,6 +2579,18 @@ only against *its own* id (`approval-inbox.tsx:157,163` — `approvalBusy === ro
 different rows are decided concurrently by design.
 
 #### R2-ACT-4 · S2 · "Approve/Deny all" is 3N serial round-trips that blank the inbox on every one of them
+
+> **Fix status:** Partly fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-4)
+
+> **Fix status:** Partly fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-4)
+
+> **Fix status:** Partly fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-4)
+
+> **Fix status:** Partly fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-4)
+
+> **Fix status:** Partly fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-4)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-4)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `src/components/activity/approval-inbox.tsx:76-86`, `src/context/gateway-provider.tsx:3339-3362,3325-3337`
@@ -1502,6 +2614,18 @@ indicator; a refusal at row 5 aborts the loop and leaves rows 6-8 undecided behi
 
 #### R2-ACT-5 · S2 · The "while you were away" window never advances, so news from the visit in progress is labelled as news from your absence
 
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-5)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-5)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-5)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-5)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-5)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-5)
+
 **Verification:** partly confirmed (corrected)
 **Where:** `src/app/(tabs)/home.tsx:32-45`, `src/components/home-briefing-card.tsx:25,30-46,48-54`
 **What fails:** The stamp is written only when the operator *leaves* — app background (`home.tsx:40-45`) or
@@ -1523,6 +2647,18 @@ focused the window stays the last background's, in-visit completions are labelle
 
 #### R2-ACT-6 · S2 · The digest disappears entirely when one storage read fails, with no error and no retry
 
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-6)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-6)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-6)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-6)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-6)
+
+> **Fix status:** Fixed - package(s) SC5, commit(s) `e82654f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-6)
+
 **Verification:** confirmed
 **Where:** `src/lib/home/last-seen.ts:47-56`, `src/components/home-briefing-card.tsx:30-46,54`, `src/lib/home/briefing.ts:56`
 **What fails:** On Android a bare `AsyncStorage.getItem` (`src/lib/storage/key-value.ts:41-44`, no timeout)
@@ -1535,6 +2671,18 @@ The card renders nothing — no news, no error, no empty state, no retry — an 
 so the digest stays gone for the rest of the visit and re-appears only if a later focus happens to succeed.
 
 #### R2-ACT-7 · S2 · Activity's pull-to-refresh fans out four Gate reads plus a fifth from the focus edge
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-7)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-7)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-7)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-7)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-7)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-7)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `src/app/(tabs)/activity.tsx:121-136,149-156`, `src/components/activity/cron-section.tsx:76-79,84-88`
@@ -1557,6 +2705,18 @@ host the repo documents as single-threaded the spinner waits on the sum of a con
 
 #### R2-ACT-8 · S3 · `CronSection` reads its list twice on mount and never guards against overlapping loads
 
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-8)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-8)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-8)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-8)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-8)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-8)
+
 **Verification:** confirmed
 **Where:** `src/components/activity/cron-section.tsx:61-79,84-88`
 **What fails:** On first visit to Activity two `cron.list()` calls are issued in the same tick (the mount
@@ -1569,6 +2729,18 @@ removed. `load()` has no request-generation guard, unlike `reloadHistoryFor` (`g
 (`cron-section.tsx:61-74`); nothing records which read owns the current rows.
 
 #### R2-ACT-9 · S3 · The cron transcript sheet polls every 3 s forever, with no backoff after a failure and no abort on close
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-9)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-9)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-9)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-9)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-9)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-act-9)
 
 **Verification:** confirmed
 **Where:** `src/components/activity/cron-run-sheet.tsx:36-50,56-71`, `src/context/gateway-provider.tsx:4849-4852`
@@ -1583,6 +2755,18 @@ occupying the Gate after the operator has gone.
 accepts no signal).
 
 #### R2-SH-V1 · S2 · recordApprovalDecision reads the audit leniently, so one failed read rewrites the key and erases the whole decision history
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sh-v1)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sh-v1)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sh-v1)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sh-v1)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sh-v1)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sh-v1)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** Found while verifying ACT-3. `src/lib/gateway/approval-policy.ts:211-217` is the lenient
@@ -1607,6 +2791,18 @@ what the operator answered. The strict loader that distinguishes the two (`:204-
 read surfaces but not by the writer.
 
 #### R2-SH-V2 · S3 · The Activity 'New scheduled job' form calls a routine-notice sync that can never schedule anything for a gateway-level job
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sh-v2)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sh-v2)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sh-v2)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sh-v2)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sh-v2)
+
+> **Fix status:** Fixed - package(s) SC6, commit(s) `bc44045` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sh-v2)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** Found while verifying ACT-1. `src/components/activity/cron-section.tsx:109-119` calls
@@ -1633,6 +2829,18 @@ either (`gateway-provider.tsx:4817`). The comment claiming the notice is schedul
 
 #### R2-HAPTIC-1 · S2 · Haptics rejection escapes the gate in three screens
 
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-haptic-1)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-haptic-1)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-haptic-1)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-haptic-1)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-haptic-1)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-haptic-1)
+
 **Verification:** partly confirmed (corrected)
 **Where:** `src/app/runs.tsx:146` (`await Haptics.impactAsync(...)` before `setStarting(true)`/`try`), `src/components/onboarding/onboarding-screen.tsx:50` (`await Haptics.impactAsync` before `setError(null); setWorking(true); try`), `src/app/runs.tsx:400` (`onPress={() => void startRun()}`)
 **What fails:** On an Android device with no vibrator, or with the expo-haptics native module unavailable (Expo Go on an unsupported config, a dev-client rebuild that dropped the module), `Haptics.impactAsync` throws `UnavailabilityError` / a native `ReactContextLost` / `VibratorManager` cast failure. In Runs, "Run task" appears dead: the rejection escapes `startRun` before `setStarting(true)`, and because the button calls `void startRun()` the throw becomes an unhandled rejection with nothing on screen — no run, no error, no haptic. In Onboarding the same throw happens before `setWorking(true)`, so the Connect button silently does nothing and `setError` never runs.
@@ -1652,6 +2860,18 @@ scan covers — see V-2.
 
 #### R2-RUNS-1 · S2 · The Runs scorecards fan out N+2 gateway reads on every focus and every pull-to-refresh
 
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-1)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-1)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-1)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-1)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-1)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-1)
+
 **Verification:** partly confirmed (corrected)
 **Where:** `src/app/runs.tsx:238` (`useFocusEffect(loadBotSpend)`), `src/app/runs.tsx:240-258` (a *second* effect that calls `loadBotSpend` again on `runsReloadSignal`), `src/app/runs.tsx:222-236` (`loadBotSpend` → `readBotSpend`), `src/lib/gateway/spend-report.ts:258-264`, `:229-256` (`readRosterByConcurrency`, `SESSION_SPEND_LIST_LIMIT = 200`), `src/app/runs.tsx:193-214` (same double-edge for `cron.list()`), `src/app/runs.tsx:240-251` (a third `listBots()`)
 **What fails:** Open the Runs screen with 10 Bots on the Gate. The per-Bot spend read fires **twice** on the mount/focus (once from `useFocusEffect`, once from the `runsReloadSignal` effect) and **again** on every pull-to-refresh. Each run is `listBots()` + one `sessions.list`-per-Bot at `limit=200`. That is 22 large catalogue reads for one screen open, plus 3 roster reads and 2 `cron.list()` reads — against a Gate this repo documents as single-threaded and `state.db`-bound, over a lossy relayed Tailscale path. On the host the repo measures, one 200-row read is ~11 s (`docs/failure-audit-2026-09-30.md`, NET-3), so the spend fold cannot land for minutes and the scorecards stay empty long after the screen opened. Pull-to-refresh multiplies all of it again.
@@ -1669,6 +2889,18 @@ reads; each return to the screen repeats 12. A focus *return* is one edge, not t
 specific to mount.
 
 #### R2-RUNS-2 · S3 · A run started from Runs reports no outcome on the Runs screen
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-2)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-2)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-2)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-2)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-2)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-2)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `src/app/runs.tsx:142-157` (`startRun`: `const outcome = await sendChatInput(...)`, `if (outcome === 'complete') setRunPrompt('')`, no other branch), `src/context/gateway-provider.tsx:3733-3739` (the pre-flight guard returns `'queued'`), `:3925` (`'complete'`), `:3943` (`'cancelled'`), `:3950` (`'error'`)
@@ -1688,12 +2920,36 @@ because both are `'complete' !== true`.
 
 #### R2-RUNS-3 · S3 · A failed refresh reports success: every gateway-side read is swallowed
 
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-3)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-3)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-3)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-3)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-3)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-runs-3)
+
 **Verification:** confirmed
 **Where:** `src/app/runs.tsx:174-188`, `src/context/gateway-provider.tsx:4548-4603` (`refreshCapabilities`, whole body in `try { … } catch { /* ignore */ }` and an early `return` when `!activeGateway`), `src/context/gateway-provider.tsx:2469-2475` (`refreshGateways`)
 **What fails:** Pull to refresh with no active gateway (or after `activeGateway` was cleared). `refreshCapabilities` returns immediately, `refreshGateways` resolves, the spinner ends — that path is fine. The real hole is the reverse: `refreshCapabilities` swallows **every** error, so `Promise.all` at `:178` only rejects when `refreshGateways` (a storage read) throws. A failed `/health`, a failed capability read, a failed manifest fetch and a failed child-profile sync all report as a *successful* refresh: `setRefreshError(null)` at `:179` clears whatever was there, the spinner ends cleanly, and the operator is told the data is fresh when none of it was re-read. That is the opposite of the comment at `:63-65`.
 **Why:** `refreshCapabilities` wraps everything in `catch { // ignore }` (`gateway-provider.tsx:4600-4602`) and does not rethrow, and `onRefresh`'s `catch` at `:180-182` therefore cannot see a gateway-side failure. Nothing in the screen distinguishes "refreshed" from "refresh attempted"; `setRefreshError(null)` runs unconditionally on the resolved path.
 
 #### R2-SR-V1 · S3 · retryRun discards its outcome and has no pending or error state
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v1)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v1)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v1)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v1)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v1)
+
+> **Fix status:** Fixed - package(s) SC8, commit(s) `771616e` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v1)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** Found while verifying RUNS-2. The same outcome-discarding shape as `startRun`, on the
@@ -1714,6 +2970,18 @@ Runs screen and is not guarded against repeat taps; a refusal, a queue, or a `bu
 visible only as a Chat-tab bubble.
 
 #### R2-SR-V2 · S2 · About 25 call sites await raw expo-haptics before the action they decorate (the four Home dashboard buttons are the only route into Fleet and Council)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v2)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v2)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v2)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v2)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v2)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v2)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** Found while verifying HAPTIC-1, and it is the wider blast radius of the same unguarded
@@ -1747,6 +3015,18 @@ and Council screens.
 
 #### R2-SR-V3 · S3 · Council shows loading skeletons forever when opened while disconnected
 
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v3)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v3)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v3)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v3)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v3)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sr-v3)
+
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** Found while verifying RUNS-1 by contrast with `fleet.tsx`. `src/app/council.tsx:37`
 initialises `const [rosterState, setRosterState] = useState<'loading' | 'ready' | 'failed'>('loading')`,
@@ -1775,12 +3055,36 @@ error, no retry, no offline message — and never shows the `rosterState === 're
 
 #### R2-LOCK-1 · S1 · The App-lock switch does nothing until the app is cold-started
 
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-lock-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-lock-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-lock-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-lock-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-lock-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-lock-1)
+
 **Verification:** confirmed
 **Where:** `src/components/app-lock-gate.tsx:96-108` (mount-only read), `:101` (`lockableRef.current = lockable`), `:115-120` (the only re-lock edge, gated on `lockableRef.current`), `src/app/gateway/settings.tsx:140-143` (`handleAppLock` → `saveAppLock`), `src/lib/settings/app-lock.ts:113-119`
 **What fails:** Turn the App lock ON in Settings, press Home, come back: no cover, ever. Turn it OFF, press Home, come back: still locked. The switch renders and writes, and the lock it names is inert for the rest of the process lifetime — a security control the operator believes is holding and is not, in both directions.
 **Why:** `AppLockGate` answers `deviceAppLockState()` exactly once, in an effect with `[]` deps (`:96-108`), and stores the verdict in `lockableRef` (`:101`). The only other place that verdict is used is the `AppState` listener (`:117`), which reads the ref and never re-asks. `saveAppLock` (app-lock.ts:113-119) has no notification channel, and `app-lock.ts` has no `subscribe*` at all — unlike `widget-privacy.ts:20-28`, which does exactly that. `grep -rn "deviceAppLockState|loadAppLock|saveAppLock" src/` shows only these two call sites, so nothing observes the write.
 
 #### R2-IMPORT-1 · S2 · "Pick file" always throws on SDK 57, and the attempt wipes a pasted packet
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-import-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-import-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-import-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-import-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-import-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-import-1)
 
 **Verification:** confirmed
 **Where:** `src/app/gateway/import.tsx:36-37` (`await import('expo-file-system')` then `FileSystem.readAsStringAsync`), `:83` (`setText(picked.content)`), `node_modules/expo-file-system/src/index.ts:45` (`export * from './legacyWarnings'`), `node_modules/expo-file-system/src/legacyWarnings.ts:34-39` (`readAsStringAsync` → `throw errorOnLegacyMethodUse(...)`), contrast `src/lib/gateway/handoff-share.ts:7` and `src/lib/gateway/transcript-share.ts:11` (both use the new `File`/`Paths` API)
@@ -1789,12 +3093,36 @@ error, no retry, no offline message — and never shows the `rosterState === 're
 
 #### R2-SRUN-1 · S2 · Closing the run sheet leaves the CLI stream and `running` flag alive; the next run bleeds into it
 
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-srun-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-srun-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-srun-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-srun-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-srun-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-srun-1)
+
 **Verification:** confirmed
 **Where:** `src/components/gateway/environment-run-launcher.tsx:139-167` (`follow`, controller created at `:143-144`), `:198-205` (`cancel` only aborts `abortRef.current`), `:332-343` (Close button, `onPress={onClose}` with no abort), `src/components/gateway/environments-section.tsx:184-189` (the launcher is rendered unconditionally, `visible={runTarget !== null}`)
 **What fails:** Start a CLI run in the run sheet, press Close while it is still streaming, then open the run sheet for a *different* environment: the sheet shows "Cancel run", "Start run" is unreachable, and the old environment's output keeps appending into the new run's reply bubble. Closing the sheet never stops the run or the socket; only a stream that ends on its own clears it.
 **Why:** `EnvironmentsSection` keeps one `EnvironmentRunLauncher` mounted for every environment, so `onClose` merely sets `runTarget` to null — the component holding `events`, `running` and `abortRef` survives (`environments-section.tsx:184-189`). Nothing aborts on close or on an environment change: the only abort is `cancel()`'s `abortRef.current?.abort()` (`:199`), and `start()` (`:176-181`) overwrites `abortRef.current` with the new run's controller, so after a second start the first stream is no longer reachable by any control. `follow`'s callback keeps doing `setEvents((current) => [...current, event])` (`:151`) with no cap, and its `finally` (`:162-166`) still sets `running` false and calls `refreshRuns()` against whatever `environment` is current.
 
 #### R2-REACH-1 · S2 · A cancelled probe wave strands saved gateways on "Checking" with nothing to re-probe
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-reach-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-reach-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-reach-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-reach-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-reach-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-reach-1)
 
 **Verification:** confirmed
 **Where:** `src/hooks/use-gateway-reachability.ts:74-93` (the debounce ledger is stamped for the whole wave at `:85-88`, the wave is marked `checking` at `:93`), `:98-102` (`if (cancelled) return` before *and* after the probe), `:132-135` (cleanup sets `cancelled`; the effect has no timer), `src/lib/gateway/reachability-wave.ts:22-38,50-70`, `src/components/gateway/compact-gateway-list.tsx:129,164-166` (the `checking` state renders the literal word "Checking")
@@ -1803,12 +3131,36 @@ error, no retry, no offline message — and never shows the `rosterState === 're
 
 #### R2-CAPS-1 · S2 · The capability create is not atomic: a refused secret leaves an instance the form can never finish
 
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-caps-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-caps-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-caps-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-caps-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-caps-1)
+
+> **Fix status:** Fixed - package(s) SC3, commit(s) `1d89c50` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-caps-1)
+
 **Verification:** confirmed
 **Where:** `src/components/gateway/capabilities-section.tsx:130-140` (the pre-flight check), `:141-157` (`registry.instances.create` / `.update` awaited first, `registry.secrets.set` awaited second), `gate/core/capabilities/registry-methods.mjs:65-67` (`instance "${id}" already exists`), `:108-129` (`registry.secrets.set`), `:114-118` (it refuses a `provider/…` ref), `src/lib/gateway/credential-shape.ts:11-17` (`looksLikeCredential` does not catch that case)
 **What fails:** Create a capability whose secret ref is `provider/my-provider/api-key` (a shape the CLI-environment form teaches at `environment-registration-form.tsx:254`). The instance is created, the secret write is refused, the error names the refusal — and the retry says `instance "x" already exists`, so the draft can never complete from the phone. The Gate keeps an instance whose config points at a secret that was never set.
 **Why:** The phone pre-validates only the *shape* of the ref (`:134`, `looksLikeCredential`), and that helper (credential-shape.ts:11-17) passes any ref containing `/`, `-`, `_` or `.` — so `provider/my-provider/api-key` sails through to the create at `:142`. The Gate's `registry.secrets.set` refuses that namespace (`registry-methods.mjs:114-118`) and the instance is already on disk. The catch at `:161-162` keeps `draft` open in `create` mode, so the operator's only retry re-enters `registry.instances.create` with the same id and hits the duplicate at `registry-methods.mjs:65-67`. The comment at `:131-133` claims the pre-check prevents "a refused save leav[ing] an instance behind"; it only covers one of the three ways `secrets.set` can refuse.
 
 #### R2-SETTINGS-1 · S2 · `saveAppSettings` is an unserialized read-modify-write with two independent writers
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-settings-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-settings-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-settings-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-settings-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-settings-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-settings-1)
 
 **Verification:** confirmed
 **Where:** `src/lib/settings/app-settings.ts:46-51` (`loadAppSettings()` → merge → `setItem`, no queue), `src/app/gateway/settings.tsx:209` (`void saveAppSettings({ voiceEngine: next })`), `src/context/gateway-provider.tsx:2459,4267` (`saveAppSettings({ lastSuccessfulUrl })` on the connect/probe path), `:2564` (`onboardingCompletionForAddedGateway` patch), `:4496` (`autoConnect`)
@@ -1817,12 +3169,36 @@ error, no retry, no offline message — and never shows the `rosterState === 're
 
 #### R2-SVOICE-1 · S2 · The voice-install poll is a 30-minute timer chain that outlives the screen
 
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-svoice-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-svoice-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-svoice-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-svoice-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-svoice-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-svoice-1)
+
 **Verification:** confirmed
 **Where:** `src/app/gateway/settings.tsx:224-234` (`for (let attempt = 0; attempt < 900; attempt++)` with a 2 s sleep and an RPC per iteration), `:244` (`setInstalling(false)` only at the end of the chain), `:447-455` (the "Installing on this PC…" block)
 **What fails:** Tap "Install on this PC" and leave Settings. For up to 30 minutes the phone keeps issuing a `voice.install.status` RPC every 2 s plus a `pushDeviceParams()` read against a Gate on a relayed, lossy path, with nothing on screen. If the Gate reports `installing` for the whole window the chain runs all 900 iterations.
 **Why:** `handleVoiceInstall` (`:214-245`) owns no cancellation: there is no `AbortController`, no `cancelled` flag, and no cleanup registered anywhere, so the `await` chain keeps running after the route unmounts and calls `setInstallNote` (`:232`) on a component that is gone. `setInstalling(false)` sits after the loop (`:244`), so the only exit is the loop's own `break` — a throw from `gatewayRequest` (`:230`) or a `state !== 'installing'` answer (`:233`). 900 × 2 s is the whole budget, and nothing bounds it by the screen's life, the app's foreground state, or the operator's patience.
 
 #### R2-SPEND-1 · S2 · The per-Bot spend fan-out re-fires on every status transition and the previous wave is never aborted
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-spend-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-spend-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-spend-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-spend-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-spend-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-spend-1)
 
 **Verification:** confirmed
 **Where:** `src/app/gateway/spend.tsx:164-186` (deps `[status, canReadBotSessions, listBots, readBotSessions]`; only a `cancelled` flag, no abort), `src/lib/gateway/spend-report.ts:222` (`READ_BOT_SPEND_CONCURRENCY = 2`), `:229-256` (`readRosterByConcurrency` — one `sessions.list` at `SESSION_SPEND_LIST_LIMIT` per Bot), `src/lib/gateway/get-sessions-retry.ts:21,24` (30 s per attempt above `limit=50`, 2 retries)
@@ -1831,12 +3207,36 @@ error, no retry, no offline message — and never shows the `rosterState === 're
 
 #### R2-DIAG-1 · S2 · The live runtime check has no timeout anywhere, so a silent Gate wedges the screen
 
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-diag-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-diag-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-diag-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-diag-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-diag-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-diag-1)
+
 **Verification:** confirmed
 **Where:** `src/lib/runtime-environment.ts:99-129` (`await streamingFetch(healthUrl)` at `:106`, `await reader.read()` at `:116`, no `AbortController` and no timer), `src/lib/net/streaming-fetch.ts:104-110` (no signal is passed into the fetch), `src/app/gateway/diagnostics.tsx:58-66` (`setRunning(true)` … `finally setRunning(false)`), `:112-118` (the button is `disabled={!healthUrl || running}`)
 **What fails:** A gateway whose `/health` accepts the connection and then never finishes answering — the shape a half-open Tailscale/DERP path produces — leaves the "Run live check" button spinning on "Checking…" for the rest of the session, disabled, with the operator unable to retry. The whole point of this screen is to be the one loop that works on a device, and it is the one with no bound.
 **Why:** `probeStreamingFetch` awaits two operations with no deadline: the headers (`:106`) and the first body chunk (`:116`). `streamingFetch` forwards `init` untouched and this call site passes none, so there is no signal to abort. The `finally` at diagnostics.tsx:63-65 only runs once the promise settles, so `running` stays true and the control stays disabled. This is the same class NET-1 closed for `http-transport.ts` — the fix was not applied to this path, and the surrounding code even argues the opposite way ("the globals above cannot answer it").
 
 #### R2-SVOICE-2 · S2 · Settings' voice check runs once and never re-runs after the connection comes up
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-svoice-2)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-svoice-2)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-svoice-2)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-svoice-2)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-svoice-2)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-svoice-2)
 
 **Verification:** confirmed
 **Where:** `src/app/gateway/settings.tsx:145-159` (`readVoiceCapabilities`, deps `[gatewayRequest]`), `:182-193` (the effect's deps are `[readVoiceCapabilities, applyVoiceRead]`), `src/context/gateway-provider.tsx:2574-2581` (`gatewayRequest` throws `'Gateway not connected'` unless `statusRef.current === 'connected'`, and is itself `useCallback([])`)
@@ -1845,6 +3245,18 @@ error, no retry, no offline message — and never shows the `rosterState === 're
 
 #### R2-LINK-1 · S3 · `void connectGateway(...)` / `void deleteGateway(...)` leave rejected promises unhandled and a delete sheet that lies
 
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-link-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-link-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-link-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-link-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-link-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-link-1)
+
 **Verification:** confirmed
 **Where:** `src/components/gateway/gateway-home-dashboard.tsx:411` (`onSelect={(gateway) => void connectGateway(gateway)}`), `src/hooks/use-gateway-settings-screen.ts:31` (`await connectGateway(gateway)` inside an `async` callback), `:43` (`void deleteGateway(deleteCandidateId)`), `src/components/gateway/gateway-management-section.tsx:115` (`onSelect={() => void handleConnect(gateway.id)}`), `src/context/gateway-provider.tsx:2152-2157` (`connectGateway` rethrows an auth rejection), `:2895` (`removeGateway` can reject — STORE-2's SecureStore refusal)
 **What fails:** Tap Connect on a gateway whose token the Gate has rotated: the rejection escapes into an unhandled rejection (recorded by the new global tracker, invisible otherwise) and the dashboard neither navigates nor explains. Tap Remove and confirm: the sheet closes as if it worked, and if the storage write fails the gateway is still listed with no message anywhere.
@@ -1852,12 +3264,36 @@ error, no retry, no offline message — and never shows the `rosterState === 're
 
 #### R2-PRIV-1 · S3 · `saveWidgetResultHidden` can reject into a `void`-ed write
 
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-priv-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-priv-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-priv-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-priv-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-priv-1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-priv-1)
+
 **Verification:** confirmed
 **Where:** `src/lib/settings/widget-privacy.ts:40-48` (`try { await keyValueStorage.setItem(...) } finally { notify }` — no `catch`), `src/app/gateway/settings.tsx:247-250` (`void saveWidgetResultHidden(next)`), `src/lib/storage/key-value.ts:49-55` (`AsyncStorage.setItem`, which rejects on a full/corrupt DB)
 **What fails:** Toggle "Hide result text on the widget" while AsyncStorage is unhappy: the write rejects, `void` lets it escape as an unhandled rejection, and the Switch is already flipped to the new value — the UI claims a preference that was never stored, and it reverts on the next launch.
 **Why:** Every sibling writer in this area is deliberately failure-proof: `saveAppLock` (app-lock.ts:113-119), `saveBudgets` (budgets.ts:173-179) and `recordApprovalDecision` (approval-policy.ts:234-244) all wrap the write in `try/catch` and swallow. This one has a `finally` instead, which notifies subscribers on the way out but lets the rejection through — and the only caller does not catch.
 
 #### R2-BUDGET-1 · S3 · A storage write runs inside a `setState` updater
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-budget-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-budget-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-budget-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-budget-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-budget-1)
+
+> **Fix status:** Fixed - package(s) SC2, commit(s) `958a455` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-budget-1)
 
 **Verification:** partly confirmed (corrected)
 **Where:** `src/app/gateway/spend.tsx:111-119` (`setBudgets((previous) => { …; void saveBudgets(next); return next; })`)
@@ -1872,12 +3308,36 @@ reachable. Fix is to move the write into a `useEffect` keyed on `budgets`.
 
 #### R2-DRAWER-1 · S3 · The app-wide drawer keeps its own uncached `/v1/bots` read and swallows every failure
 
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-drawer-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-drawer-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-drawer-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-drawer-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-drawer-1)
+
+> **Fix status:** Fixed - package(s) SC4, commit(s) `329962d` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-drawer-1)
+
 **Verification:** confirmed
 **Where:** `src/components/nav/side-drawer-content.tsx:206-217` (deps `[listBots, status]`, `.catch(() => undefined)`), `:229-233` (`openTeammate`'s `openBot` rejection also discarded), `src/context/gateway-provider.tsx:4731-4739` (`listBots` → `client.listBots()`)
 **What fails:** Every `status` transition while the app is open fires another roster read from the drawer — so each reconnect, and each monitor self-heal, adds a `/v1/bots` on top of the chat screen's own. When it fails the drawer's team list silently keeps whatever it last had, or stays empty, and a tap on a stale Bot closes the drawer and navigates to a chat that never opened.
 **Why:** The effect is keyed on `status` (`:217`) and the drawer content is mounted beside every screen, so a roster the audit already counts once per roster visit (SPD-6) is read again from a second place on every status flip, with no cache. The catch at `:213` is bare, so a refusal leaves `team` as-is and the operator sees an empty "Your team" section with no error — the same failure mode UI-1 was raised for, in a file the earlier audit did not cover. `openTeammate` (`:229-233`) closes the drawer and pushes `/chat` *before* awaiting `openBot`, so its `.catch(() => undefined)` produces a chat screen on the previous Bot with nothing said.
 
 #### R2-SG-V1 · S3 · saveAppSettings can reject into a void-ed write and the voice-engine row claims a preference that was never stored
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v1)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v1)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `src/lib/settings/app-settings.ts:46-51` has **no** `try/catch`
@@ -1893,6 +3353,18 @@ SETTINGS-1's lost-update twin; the scan covered only the race.
 **What fails:** `saveAppSettings` can reject into a `void`-ed write, and the voice-engine row claims a preference that was never stored - CONFIRMED
 
 #### R2-SG-V2 · S3 · A storage-read rejection in the Settings voice effect wedges the screen on 'Checking this PC...' forever
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v2)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v2)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v2)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v2)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v2)
+
+> **Fix status:** Fixed - package(s) SC1, commit(s) `f696847` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v2)
 
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `src/app/gateway/settings.tsx:182-193` awaits
@@ -1910,6 +3382,18 @@ one wedge VOICE-2's fix (adding `status` to the deps) would not close.
 
 #### R2-SG-V3 · S3 · A fourth uncached /v1/bots read on the Settings screen, keyed on connected
 
+> **Fix status:** Fixed - package(s) SC7, commit(s) `e9a7a8b` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v3)
+
+> **Fix status:** Fixed - package(s) SC7, commit(s) `e9a7a8b` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v3)
+
+> **Fix status:** Fixed - package(s) SC7, commit(s) `e9a7a8b` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v3)
+
+> **Fix status:** Fixed - package(s) SC7, commit(s) `e9a7a8b` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v3)
+
+> **Fix status:** Fixed - package(s) SC7, commit(s) `e9a7a8b` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v3)
+
+> **Fix status:** Fixed - package(s) SC7, commit(s) `e9a7a8b` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-sg-v3)
+
 **Verification:** found during independent verification (not in the first scan), read and confirmed there
 **Evidence:** `src/components/gateway/notifications-section.tsx:47-60` calls
 `listBots()` in its own effect with deps `[connected, listBots]` (`:60`) and no
@@ -1922,5 +3406,236 @@ is better than the drawer's (it clears to `[]` at `:55` and the comment at `:43-
 says so), which is why it is a duplicate-read finding rather than a silent-empty
 one.
 **What fails:** A fourth uncached `/v1/bots` read on the Settings screen, keyed on `connected` - CONFIRMED
+
+
+### Area: Fleet, Council, Compose, Onboarding screens
+
+#### R2-FLEET-1 · S2 · Tapping a saved gateway star produces an unhandled rejection when the key is refused
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-1)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-1)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-1)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-1)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-1)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-1)
+
+**Verification:** scan finding; the second-model verifier timed out twice on this area, the integrator re-read the code for CNCL-1, CNCL-2, FLEET-1 and ONB-2 and confirmed them
+**Where:** `src/app/fleet.tsx:210` (`void connectGateway(gateway);`), `src/context/gateway-provider.tsx:2231-2260` (`connectGateway`, no try/catch), `src/context/gateway-provider.tsx:2158-2163` (`catch (error) { … throw error; }` in `attachClient`)
+**What fails:** On the Fleet screen, tap a dimmed saved-gateway star whose stored API key the Gate refuses (rotated `.tokens.json`, a regenerated key). The star shows "Needs approval"/failure line from `handshakeStatus`, but nothing else happens on screen and Hermes records an unhandled promise rejection. The operator gets no message naming the refused key.
+**Why:** `connectGateway` awaits `attachClient` with no `try`/`catch` (`:2259`), and `attachClient` re-throws when `client.connect()` rejects (`:2158-2163`). The repo's own fix log states this explicitly: "**`connectGateway` still rejects on an auth refusal, so an awaiting UI caller must handle that rejection**" (`docs/failure-audit-2026-09-30-fixes.md:154`) — but `fleet.tsx:210` is `void connectGateway(gateway)` with no `.catch`, so the rejection escapes into nothing. The provider's `onStatus` callback does set `lastError`/`authFailureRef` (`:2110-2112`), so the truth is in provider state but no Fleet surface renders it. Same unguarded shape at `src/app/(tabs)/activity.tsx:276` and `src/app/runs.tsx:451`.
+
+#### R2-ONB-1 · S2 · The onboarding Retry button fires a rejecting promise with no handler
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-1)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-1)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-1)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-1)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-1)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-1)
+
+**Verification:** scan finding; the second-model verifier timed out twice on this area, the integrator re-read the code for CNCL-1, CNCL-2, FLEET-1 and ONB-2 and confirmed them
+**Where:** `src/components/onboarding/onboarding-screen.tsx:204` (`onPress={() => void retryAutoConnect()}`), `src/context/gateway-provider.tsx:4313-4321` (`retryAutoConnect`), `:4294-4311` (`runAutoConnectCycle`), `:2344`/`:2468-2470` (`runAutoConnect`'s `try { … } finally { … }` — no `catch`)
+**What fails:** On the onboarding screen, reach the "discovery-only failure" state (empty address field, `connectionPhase === 'failed'`, a probe message present) and tap **Retry**. The probe ladder runs; if the connect ends in a refusal or any throw, an unhandled rejection escapes. The button gives no busy state and no error — `probeMessage` keeps the last failure text, so the operator cannot tell a retry happened.
+**Why:** `retryAutoConnect` (`:4313`) clears the auth flags and then `await runAutoConnectCycle()`; `runAutoConnectCycle` (`:4294`) `await runAutoConnect(...)`; `runAutoConnect` wraps its body in `try { … } finally { autoConnectInFlightRef.current = false }` with **no `catch`** (`:2344`, `:2468-2470`). Every *internal* caller guards it (`void runAutoConnectCycle().catch(reportAutoConnectFailure)` at `:4340`, `:4391`, `:4403`), but the exported `retryAutoConnect` is what the screen calls, and the screen drops the rejection. The same unguarded call appears at `src/app/gateway/spend.tsx:160`/`:238` and `src/components/gateway/gateway-home-dashboard.tsx:130`/`:282`.
+
+#### R2-ONB-2 · S2 · A port that can never be probed passes validation, is saved, and is silently dropped from every candidate list
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-2)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-2)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-2)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-2)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-2)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-2)
+
+**Verification:** scan finding; the second-model verifier timed out twice on this area, the integrator re-read the code for CNCL-1, CNCL-2, FLEET-1 and ONB-2 and confirmed them
+**Where:** `src/lib/onboarding/validate-pc-address.ts:10` (`trimmed.replace(/:(\d{2,5})$/, '')`), `src/lib/gateway/candidates.ts:145-150` (`splitHostPort`), `:32-41` (`push` with `catch { /* skip invalid */ }`), `src/lib/gateway/url.ts:80-85` (`new URL` in a `try` that rejects)
+**What fails:** Type `100.95.137.83:99999` (any port 65536–99999) into onboarding. The field reads "Looks good — ready to connect." and Connect is enabled. The typed address is then **never probed**: the URL parser rejects it, `push` swallows that, the explicit wave has zero candidates, and after probing unrelated fallbacks the screen reports "Saved your address, but could not reach the gateway." The bad address is saved as `tailscaleHost`, so every later auto-connect wave drops it the same way — permanently.
+**Why:** `validatePcAddress` strips up to five port digits and validates only the host (`:10`, `:23-28`), never the numeric range. `buildGatewayCandidates` then re-derives the port with `splitHostPort` (`candidates.ts:145-150`), pushes `http://100.95.137.83:99999`, and `normalizeGatewayUrl` calls `new URL` (`url.ts:82`), which throws `Invalid URL` for any port above 65535 — swallowed by `push`'s empty `catch` (`candidates.ts:39-40`). Verified the parser behaviour directly: `new URL('http://1.2.3.4:99999')` throws, `:65535` does not.
+
+#### R2-CNCL-1 · S2 · The Compare button stays locked on "Asking…" for the room-delete round trip after the answers are already on screen
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-1)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-1)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-1)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-1)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-1)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-1)
+
+**Verification:** scan finding; the second-model verifier timed out twice on this area, the integrator re-read the code for CNCL-1, CNCL-2, FLEET-1 and ONB-2 and confirmed them
+**Where:** `src/app/council.tsx:130-133` (`finally { if (roomId) await botGroups.deleteGroup(roomId).catch(…); setSending(false); }`), `:127` (`setColumns(result)`), `:211-215` (the Button), `src/context/gateway-provider.tsx:5160-5164` (`botGroups.deleteGroup` → `client.deleteGroup`), `src/lib/gateway/http-transport.ts:6` (`DEFAULT_TIMEOUT_MS = 30000`)
+**What fails:** Run a comparison on a lossy Tailscale path. The three columns appear, then the button still reads "Asking…" and stays disabled — for as long as the DELETE takes. If the Gate has gone away mid-round, that is the full 30 s request timeout. The screen says it is still asking while the answers are legible two inches above the button.
+**Why:** `setSending(false)` is sequenced **after** the awaited cleanup, not before or in parallel with it. `deleteGroup` is a normal `gatewayRequest` with the 30 s default timeout and no shorter bound, so the delete — a bookkeeping call whose failure is deliberately swallowed by `.catch(() => undefined)` — holds the user-facing state hostage. The columns were already committed at `:127`, so the UI state contradicts what happened.
+
+#### R2-CNCL-2 · S2 · A double tap on Compare creates two rooms and sends the same prompt twice
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-2)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-2)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-2)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-2)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-2)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-2)
+
+**Verification:** scan finding; the second-model verifier timed out twice on this area, the integrator re-read the code for CNCL-1, CNCL-2, FLEET-1 and ONB-2 and confirmed them
+**Where:** `src/app/council.tsx:110-111` (`if (!text || targets.length < 2 || sending) return; setSending(true);`), `:211-215` (`onPress={() => void handleCompare()}`, `disabled={!canCompare}`), `:116-131` (room create → send → delete)
+**What fails:** Tap Compare twice quickly on a phone. Both taps read `sending === false` from the same render closure, so both run: two rooms are created on the Gate, the prompt is fanned out twice (up to six bot invocations), and two `deleteGroup` calls race. The operator is billed/charged twice for one comparison and sees one result.
+**Why:** The guard is React state read inside an `async` handler (`:110`); `setSending(true)` at `:111` does not update the closure that the second tap is already holding, and `disabled={!canCompare}` only takes effect after a re-render. `handleCompare` has no in-flight ref — unlike the provider, which uses `autoConnectInFlightRef` for exactly this (`gateway-provider.tsx:2323`). The same pattern is safe in the roster read (`:66-76`) but not here, where the handler performs side effects.
+
+#### R2-ONB-3 · S2 · A haptics rejection escapes `handleContinue` and skips both the error card and the busy reset
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-3)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-3)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-3)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-3)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-3)
+
+> **Fix status:** Fixed - package(s) H1, commit(s) `f0fbdd1` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-onb-3)
+
+**Verification:** scan finding; the second-model verifier timed out twice on this area, the integrator re-read the code for CNCL-1, CNCL-2, FLEET-1 and ONB-2 and confirmed them
+**Where:** `src/components/onboarding/onboarding-screen.tsx:50` (`await Haptics.impactAsync(…)` before the `try`), `:69-71` (`catch (err) { await Haptics.notificationAsync(…); setError(…); }`)
+**What fails:** On a device whose vibrator is unavailable or busy (Android emulator, a device with haptics disabled at the OS level), tapping **Connect gateway** produces an unhandled rejection: `setWorking(true)` never runs, `setError(null)` never runs, and nothing at all happens — the button looks dead. On the error path, a failing `notificationAsync` means `setError` at `:71` never executes, so a genuine connection failure is swallowed and the operator sees no message.
+**Why:** The `try` block opens at `:53`, **after** the awaited `Haptics.impactAsync` at `:50`. Inside `catch`, `setError` is the statement after an `await` (`:70-71`), so the error handler can itself fail before it records anything. Both haptics calls are awaited without a guard or a `.catch`, unlike `src/components/ui/BaseSheet.tsx:193` which uses `void Haptics.impactAsync(…)` for the fire-and-forget case. `app.json:21-25` does not request any haptic-specific permission, so the module's own failure path is live.
+
+#### R2-CNCL-3 · S3 · A failed roster re-read on Council discards the last-good Bot list
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-3)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-3)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-3)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-3)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-3)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-3)
+
+**Verification:** scan finding; the second-model verifier timed out twice on this area, the integrator re-read the code for CNCL-1, CNCL-2, FLEET-1 and ONB-2 and confirmed them
+**Where:** `src/app/council.tsx:54-59` (`catch (cause) { … setRoster([]); setRosterState('failed'); }`), `:172-178` (the ErrorCard replaces the chips), `:66-76` (the effect keyed on `[status, loadRoster]`)
+**What fails:** With three Bots selected on Council, let the connection blip (`connected → reconnecting → connected`) and let the re-read fail. The roster is emptied and every chip — including the three selected ones — is replaced by the error card. The selection state (`selected`) survives but has nothing to match, so `targets` collapses to 0 and Compare silently disables.
+**Why:** The mount read throws into a `catch` that calls `setRoster([])` — the same defect the earlier audit recorded as **UI-1** for `chat-screen.tsx:1407-1412` and fixed there. Council is a separate screen with the pre-fix shape: no last-good retention. The effect re-runs on every `status` transition (`:76`), so each blip re-arms the wipe.
+
+#### R2-CNCL-4 · S3 · A council round has no timeout and no cancel, so one stuck Bot locks the whole screen
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-4)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-4)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-4)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-4)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-4)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-4)
+
+**Verification:** scan finding; the second-model verifier timed out twice on this area, the integrator re-read the code for CNCL-1, CNCL-2, FLEET-1 and ONB-2 and confirmed them
+**Where:** `src/app/council.tsx:103-134` (`handleCompare`: `botGroups.create` → `botGroups.send` → `runCouncil`), `:211-215` (`label={sending ? 'Asking…' : 'Compare'}`, `disabled={!canCompare}` where `canCompare` requires `!sending`)
+**What fails:** Press Compare and have one of the three Bots hang (model still thinking, its Hermes profile wedged on the documented slow `state.db`). The Gate fans out one POST that waits for the slowest member; the phone has no Stop, no per-column timeout and no abort. `sending` stays true, so Compare stays disabled and the whole screen is inert until the Gate's own turn bound expires — with no indication that anything is wrong.
+**Why:** `canCompare` (`:95-101`) is the only gate and it is closed by `sending`; the screen exposes no cancellation, and the awaited chain (`:116-126`) has no `AbortSignal` anywhere. `runCouncil` (`src/lib/gateway/council.ts:49-66`) isolates a *rejection* per target, but the send it wraps has already returned by then (`:121-122`), so a member that never answers is not a failure — it is a wait. Compare with chat, which has an explicit Stop path.
+
+#### R2-CNCL-5 · S3 · The comparison's transient room is named after the prompt and leaks on the Gate if the app dies mid-round
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-5)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-5)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-5)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-5)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-5)
+
+> **Fix status:** Fixed - package(s) SC9, commit(s) `55c99a2` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-cncl-5)
+
+**Verification:** scan finding; the second-model verifier timed out twice on this area, the integrator re-read the code for CNCL-1, CNCL-2, FLEET-1 and ONB-2 and confirmed them
+**Where:** `src/app/council.tsx:116-120` (`botGroups.create({ name: councilRoomName(text), memberIds })`), `:131` (delete in `finally`), `src/lib/gateway/council.ts:88-94` (`councilRoomName` — the room name is the first ~34 characters of the operator's prompt)
+**What fails:** Start a comparison whose prompt is sensitive, then have Android kill the app (background it during a long round — the documented behaviour of this runtime, BG-1) or force-quit. The `finally` never runs, so the room survives on the Gate with the prompt text in its name and the three Bots as members. There is no sweep of stale `Council · …` rooms anywhere in the codebase.
+**Why:** Room creation and deletion are strictly paired inside one async function (`:116` / `:131`) with no persisted intent, no mount/unmount cleanup and no server-side expiry. The name is derived from operator input by design (`council.ts:88-94`, truncated to 50 chars), so every abandoned round leaves user-authored text on the host.
+
+#### R2-FLEET-2 · S3 · The constellation pulse animates forever even when nothing is running
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-2)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-2)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-2)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-2)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-2)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-2)
+
+**Verification:** scan finding; the second-model verifier timed out twice on this area, the integrator re-read the code for CNCL-1, CNCL-2, FLEET-1 and ONB-2 and confirmed them
+**Where:** `src/components/fleet/constellation-canvas.native.tsx:89-92` (`useEffect` starting `withRepeat(withTiming(1, {duration: 2600}), -1, true)`), `:95-96` (`edgeOpacity`, `runningGlow`), `:125` (every host edge inside `<Group opacity={edgeOpacity}>`)
+**What fails:** Open Fleet with a quiet fleet — no run in flight, no running Bot. The edges and stars keep breathing forever, driving a UI-thread animation and Skia redraws at frame rate for as long as the screen is mounted, for a picture that never changes.
+**Why:** The effect's only dependency is `pulse` (`:92`), so the repeat starts unconditionally on mount and is only stopped by unmount. Its comment says "One slow breath for every running star", but nothing gates it on a running star: `edgeOpacity` (`:95`) wraps *all* host edges (`:125-146`), and `runningGlow` (`:96`) is applied per running node (`:202-210`) — so even a fleet with zero running nodes pays a 60 Hz UI-thread animation for the edge opacity alone.
+
+#### R2-FLEET-3 · S3 · The Fleet roster read is not cancelled, so a gateway switch leaves two concurrent `/v1/bots` reads
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-3)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-3)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-3)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-3)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-3)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-3)
+
+**Verification:** scan finding; the second-model verifier timed out twice on this area, the integrator re-read the code for CNCL-1, CNCL-2, FLEET-1 and ONB-2 and confirmed them
+**Where:** `src/app/fleet.tsx:57-71` (effect with `cancelled` flag only), `:61` (`void listBots()`), `src/context/gateway-provider.tsx:4747-4756` (`listBots` → `client.listBots()`)
+**What fails:** Tap gateway A's star on Fleet, then quickly tap gateway B's. Both reads are in flight; A's answer is discarded by the `cancelled` flag but the request itself is not aborted, so the Gate serves two full `/v1/bots` enumerations (which enumerate Hermes profiles — the expensive read the audit calls out at SPD-7). On the slow host this serialises behind the connect's own fan-out.
+**Why:** The effect's cleanup (`:68-70`) only flips a boolean; nothing passes an `AbortSignal` to `listBots`, and `listBots` has no such parameter. `rosterRequest` changes identity on every `status`/`activeGateway` change (`:50-53`), so a switch is always a new un-abortable read.
+
+#### R2-FLEET-4 · S3 · A gateway node tap is a silent no-op when the profile disappeared
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-4)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-4)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-4)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-4)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-4)
+
+> **Fix status:** Fixed - package(s) SC10, commit(s) `e93099f` - [diagnosis and fix](failure-audit-2026-10-01-second-pass-fixes.md#r2-fleet-4)
+
+**Verification:** scan finding; the second-model verifier timed out twice on this area, the integrator re-read the code for CNCL-1, CNCL-2, FLEET-1 and ONB-2 and confirmed them
+**Where:** `src/app/fleet.tsx:200-209` (`const gateway = gateways.find(…); … if (!gateway || !handshake.canConnect) return;`)
+**What fails:** Delete a saved gateway from Settings while Fleet is mounted (or land on a stale `model.nodes` for one render). Tapping that star does nothing at all — no toast, no error, no navigation — on a screen whose own comments promise "never a silent no-op".
+**Why:** `handlePressNode` returns without a handler when the node names a profile that is no longer in `gateways` (`:209`). `ConstellationView`'s `onPressNode?.(node)` (`src/components/fleet/constellation-view.tsx:97`) has no fallback, and `model` is memoized from `gateways` (`:123-163`) so a deletion can leave one render's node set ahead of the profile list. The Bot branch handles a missing row honestly (`bot ?? { id: botId }` at `:177`); the gateway branch does not.
 
 

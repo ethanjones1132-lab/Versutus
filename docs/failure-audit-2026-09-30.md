@@ -860,6 +860,8 @@ auto-discovered and this code is untested by reality.
 
 ## 14. Not yet scanned (the list continues here)
 
+> **Update 2026-10-01:** the second pass covered the OpenClaw client, the Gate's provider/OAuth/credential code, the rest of the Gate, the iOS module, the widget and plugins, phone notifications and the non-chat screens - see [failure-audit-2026-10-01-second-pass.md](failure-audit-2026-10-01-second-pass.md) (135 findings) and its [fix log](failure-audit-2026-10-01-second-pass-fixes.md). The bullets below are what remained unscanned after round 1; the device pass and the accessibility / dark-mode / worklet items are still open.
+
 - `src/lib/gateway/openclaw-client.ts` (WebSocket dialect) and `src/lib/portal/identify.ts`.
 - `gate/core/providers/**` (OAuth refresh, catalogs), `hermes-profiles.mjs`, `bot-groups.mjs` beyond the store, `voice-worker/` (Python), `voice/runtime.mjs` (installer).
 - iOS Swift module (`HandsfreeVoiceModule.swift`), the widget module, `plugins/`.
