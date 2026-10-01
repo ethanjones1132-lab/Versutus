@@ -43,6 +43,15 @@ class HandsfreeCallState {
   }
 
   /**
+   * Whether the call may speak right now. [destroyed] is the service's teardown
+   * flag, passed in so the decision stays a pure read of this machine: work
+   * queued on the service's main handler can land after teardown, and by then
+   * this call may still read active on paper while its TTS engine and its
+   * barge-in microphone have been released. Speech must not be rebuilt for it.
+   */
+  fun canSpeak(destroyed: Boolean): Boolean = !destroyed && isActive
+
+  /**
    * Request the single terminal transition. Answers `true` exactly once — for
    * the first End to arrive — and `false` for every later End, for an End
    * before Start, and for an End after termination.

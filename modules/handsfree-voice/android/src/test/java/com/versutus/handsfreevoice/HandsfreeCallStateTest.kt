@@ -59,6 +59,34 @@ class HandsfreeCallStateTest {
   }
 
   @Test
+  fun unmuteAfterEndIsRefusedToo() {
+    // End is terminal, so neither direction of mute is left to answer: a muted
+    // call that ends stays muted as far as the machine is concerned, and a tap
+    // on Unmute after the end writes nothing.
+    val state = HandsfreeCallState()
+    state.start()
+    assertTrue(state.setMuted(true))
+    state.requestEnd("user")
+    assertFalse(state.setMuted(false))
+    assertTrue(state.muted)
+  }
+
+  @Test
+  fun speechIsRefusedOnceTheCallEndsOrTheServiceTearsDown() {
+    // Work queued on the service's main handler can land after teardown. The
+    // call may still read active on paper at that point, so the service passes
+    // its own teardown flag in: speech must not be rebuilt — a TTS engine and a
+    // barge-in microphone — for a call that is over.
+    val state = HandsfreeCallState()
+    assertFalse(state.canSpeak(false))
+    assertTrue(state.start())
+    assertTrue(state.canSpeak(false))
+    assertFalse(state.canSpeak(true))
+    assertTrue(state.requestEnd("user"))
+    assertFalse(state.canSpeak(false))
+  }
+
+  @Test
   fun focusLossAndTaskRemovalBothReachTheTerminalPhase() {
     val focus = HandsfreeCallState().apply { start() }
     assertTrue(focus.requestEnd("focus-loss"))

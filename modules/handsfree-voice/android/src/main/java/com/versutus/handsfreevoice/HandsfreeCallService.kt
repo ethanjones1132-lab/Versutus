@@ -121,8 +121,10 @@ class HandsfreeCallService : Service() {
       // The notification's Mute/Unmute reach the same state the UI's mute
       // control holds: judged against the machine (a mute on an already-ended
       // call is refused like a second End) and reposted so the next label and
-      // body follow. Unmuting does not itself start a turn — the JS reducer
-      // decides which phase asks for recognition.
+      // body follow. The state asked for is `mutedForAction`'s answer, never a
+      // value of our own, so the tap reaches the state its label promised.
+      // Unmuting does not itself start a turn — the JS reducer decides which
+      // phase asks for recognition.
       ACTION_MUTE, ACTION_UNMUTE -> {
         val muted = HandsfreeCallNotification.mutedForAction(intent.action)
         if (muted != null) setMuted(muted)
@@ -138,12 +140,12 @@ class HandsfreeCallService : Service() {
 
   override fun onTaskRemoved(rootIntent: Intent?) {
     // A swipe away ends the call and removes the notification; nothing resumes.
-    end("app-killed")
+    endFromPlatform("app-killed")
     super.onTaskRemoved(rootIntent)
   }
 
   override fun onDestroy() {
-    end("app-killed")
+    endFromPlatform("app-killed")
     current = null
     super.onDestroy()
   }
@@ -222,7 +224,7 @@ class HandsfreeCallService : Service() {
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
     val muteIntent = Intent(this, HandsfreeCallService::class.java)
-      .setAction(if (state.muted) ACTION_UNMUTE else ACTION_MUTE)
+      .setAction(HandsfreeCallNotification.muteActionFor(state.muted))
     val mutePending = PendingIntent.getService(
       this,
       REQUEST_CODE_MUTE,
@@ -565,7 +567,11 @@ class HandsfreeCallService : Service() {
   // ── Speech ───────────────────────────────────────────────────────────────
 
   fun speak(chunks: List<String>, voiceIdentifier: String?, rate: Double?, pitch: Double?): Boolean {
-    if (!state.isActive) return false
+    // Refused here as well as in the posted block: an End that already tore the
+    // service down has no TTS left to speak through, and JS is told `false`
+    // rather than an acceptance nothing will carry out. The block's own check
+    // is the one that binds — this thread's read of `destroyed` is not ordered.
+    if (!state.canSpeak(destroyed)) return false
     val usable = chunks.filter { it.isNotBlank() }
     if (usable.isEmpty()) return false
     mainHandler.post { speakInternal(usable, voiceIdentifier, rate, pitch) }
@@ -576,6 +582,10 @@ class HandsfreeCallService : Service() {
     tts?.let { return it }
     val created = TextToSpeech(this) { status ->
       mainHandler.post {
+        // A cold engine can finish binding after the call ended; the teardown
+        // released everything, and this must not mark an engine ready or speak
+        // a queued sentence against a call that no longer exists.
+        if (destroyed) return@post
         ttsReady = status == TextToSpeech.SUCCESS
         if (!ttsReady) {
           if (speaking) {
@@ -613,6 +623,13 @@ class HandsfreeCallService : Service() {
   }
 
   private fun speakInternal(chunks: List<String>, voiceIdentifier: String?, rate: Double?, pitch: Double?) {
+    // The post above can land after End ran its teardown, and this is the one
+    // entry point that rebuilds what teardown released: without the guard a
+    // reply that was streaming when the operator tapped End re-creates the TTS
+    // engine, re-opens the barge-in microphone and speaks on after the call is
+    // over — with nothing left to release it. Same check `startListeningInternal`
+    // makes, for the same reason.
+    if (!state.canSpeak(destroyed)) return
     // Recognition must be off before speech so the reply is not heard back.
     if (listening) stopListening()
     pendingVoiceIdentifier = voiceIdentifier
@@ -638,6 +655,9 @@ class HandsfreeCallService : Service() {
   }
 
   private fun playChunk(engine: TextToSpeech, generation: Long, index: Int) {
+    // A teardown between an utterance finishing and its successor starting must
+    // not speak, and must not emit `speechFinished` for a call JS has ended.
+    if (destroyed) return
     if (generation != speechGeneration) return
     nextChunkIndex = index
     if (index >= queuedSpeech.size) {
@@ -655,6 +675,7 @@ class HandsfreeCallService : Service() {
     override fun onStart(utteranceId: String?) {}
     override fun onError(utteranceId: String?) {
       mainHandler.post {
+        if (destroyed) return@post
         if (!speaking) return@post
         speaking = false
         stopBargeIn()
@@ -665,6 +686,7 @@ class HandsfreeCallService : Service() {
 
     override fun onDone(utteranceId: String?) {
       mainHandler.post {
+        if (destroyed) return@post
         val parts = utteranceId?.split(":")
         if (parts == null || parts.size != 2) return@post
         val generation = parts[0].toLongOrNull() ?: return@post
@@ -697,6 +719,9 @@ class HandsfreeCallService : Service() {
 
   fun playSendEarcon() {
     mainHandler.post {
+      // The teardown released the pool; a queued earcon must not rebuild one
+      // for a call that is over.
+      if (destroyed) return@post
       val pool = soundPool ?: run {
         val created = SoundPool.Builder()
           .setMaxStreams(1)
@@ -728,6 +753,10 @@ class HandsfreeCallService : Service() {
   // ── Barge-in voice-activity detection ────────────────────────────────────
 
   private fun startBargeIn() {
+    // Opening the microphone is the one thing a late speech effect must never
+    // do: teardown released the tap, and nothing but teardown, a barge-in or the
+    // tap's own give-up would ever close one opened here.
+    if (destroyed) return
     if (vadRunning) return
     if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
       PackageManager.PERMISSION_GRANTED
@@ -826,7 +855,9 @@ class HandsfreeCallService : Service() {
   }
 
   private fun handleBargeIn() {
-    if (!speaking) return
+    // A tap post can still be queued when the call ends; the onset belongs to
+    // speech, and there is none to interrupt afterwards.
+    if (destroyed || !speaking) return
     // Flush the queue through the same path stopSpeaking uses, then report.
     speechGeneration += 1
     speaking = false
@@ -883,6 +914,32 @@ class HandsfreeCallService : Service() {
   }
 
   /**
+   * Ends a call the platform took away rather than one the operator asked to
+   * end — task removed, service destroyed — telling JS first while its runtime
+   * may still be alive. [end] emits nothing, and a JS runtime that outlives the
+   * service (the OS reclaimed the foreground microphone service) has no probe
+   * and no timer to notice: without this event the banner keeps showing
+   * "Listening" with Mute/Skip/End that do nothing, for the rest of the app's
+   * life.
+   *
+   * The same [HandsfreeCallState.requestEnd] that ends the call decides whether
+   * to speak, so there is no new flag to keep in step: the first end wins, and a
+   * call the operator (or focus loss) already ended is never announced twice.
+   */
+  private fun endFromPlatform(reason: String) {
+    mainHandler.post {
+      if (!state.requestEnd(reason)) return@post
+      try {
+        emit("endRequested", mapOf("reason" to reason))
+      } catch (_: Exception) {
+        // No JS runtime is listening here in the common case, and one that
+        // cannot take the event must not stop the teardown below.
+      }
+      teardown()
+    }
+  }
+
+  /**
    * Ends the call only if the service still booted for [attemptId]. A module
    * cleanup queues this when JS abandons ONE attempt; by the time it runs a
    * newer retry may already own the service, and a queued old teardown must
@@ -900,6 +957,10 @@ class HandsfreeCallService : Service() {
   }
 
   private fun teardown() {
+    // One-shot, and now genuinely so: every path that could rebuild what this
+    // releases — speak, a binding TTS engine, the barge-in tap, the earcon pool
+    // — refuses once `destroyed` is set, so a late one has nothing to undo and a
+    // second pass has nothing left to do.
     if (destroyed) return
     destroyed = true
     listening = false

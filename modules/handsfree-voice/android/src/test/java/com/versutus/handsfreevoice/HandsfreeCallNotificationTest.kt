@@ -83,9 +83,10 @@ class HandsfreeCallNotificationTest {
   @Test
   fun theMuteIntentNamesTheStateItWants() {
     // Each action names exactly one state, so a tap cannot silently ask for
-    // what the service already holds.
-    assertEquals(false, HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_MUTE))
-    assertEquals(true, HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_UNMUTE))
+    // what the service already holds: Mute asks for a muted call, Unmute for a
+    // live microphone.
+    assertEquals(true, HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_MUTE))
+    assertEquals(false, HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_UNMUTE))
     // An End or unknown action is not a mute request, not a mute-to-false.
     assertEquals(null, HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_END))
     assertEquals(null, HandsfreeCallNotification.mutedForAction("junk"))
@@ -93,22 +94,82 @@ class HandsfreeCallNotificationTest {
   }
 
   @Test
+  fun theMuteIntentAttachedAsksForTheStateItsLabelNames() {
+    // The label and the intent the notification attaches are one decision, and
+    // the intent asks for the state the label NAMES — the opposite of the state
+    // the label was drawn from.
+    assertEquals("Mute", HandsfreeCallNotification.muteActionLabelFor(false))
+    assertEquals(HandsfreeCallService.ACTION_MUTE, HandsfreeCallNotification.muteActionFor(false))
+    assertEquals(
+      true,
+      HandsfreeCallNotification.mutedForAction(HandsfreeCallNotification.muteActionFor(false)),
+    )
+
+    assertEquals("Unmute", HandsfreeCallNotification.muteActionLabelFor(true))
+    assertEquals(HandsfreeCallService.ACTION_UNMUTE, HandsfreeCallNotification.muteActionFor(true))
+    assertEquals(
+      false,
+      HandsfreeCallNotification.mutedForAction(HandsfreeCallNotification.muteActionFor(true)),
+    )
+  }
+
+  @Test
+  fun everyMuteActionTheNotificationAttachesFlipsTheMuteState() {
+    // The tap end to end, driven the way buildNotification builds it and
+    // onStartCommand handles it: the label and the intent it attaches, the
+    // intent through mutedForAction, and that answer applied to the machine.
+    // Invert either step — the table, or the intent attached — and the state
+    // stays where it was, which is how a "Mute" button shipped that left the
+    // microphone live.
+    for (muted in listOf(false, true)) {
+      val state = HandsfreeCallState()
+      assertTrue(state.start())
+      assertTrue(state.setMuted(muted))
+      val label = HandsfreeCallNotification.muteActionLabelFor(state.muted)
+      val action = HandsfreeCallNotification.muteActionFor(state.muted)
+      assertEquals(if (muted) "Unmute" else "Mute", label)
+      assertTrue(HandsfreeCallNotification.isMuteAction(action))
+
+      // The tap, as the service performs it, reaches the state the label named.
+      val asked = HandsfreeCallNotification.mutedForAction(action)!!
+      assertTrue(state.setMuted(asked))
+      assertEquals(!muted, state.muted)
+      // The reposted label offers the way back, and taking it returns the call
+      // to the state it started in: neither direction is ever a no-op.
+      assertEquals(if (muted) "Mute" else "Unmute", HandsfreeCallNotification.muteActionLabelFor(state.muted))
+      assertTrue(
+        state.setMuted(
+          HandsfreeCallNotification.mutedForAction(
+            HandsfreeCallNotification.muteActionFor(state.muted),
+          )!!,
+        ),
+      )
+      assertEquals(muted, state.muted)
+    }
+  }
+
+  @Test
   fun theMuteActionDrivesTheSameStateTheServiceHolds() {
-    // The path the notification's Mute drives: the judged action names a
-    // state, the machine mutes only a live call, and the label the next
-    // repost draws offers the state the call will reach — so a muted call
-    // offers Unmute without a second tap guessing.
+    // The path the notification's Mute drives: the judged action names a state,
+    // and that state — the mapping's own answer, never a value supplied by hand
+    // — is what the machine is given. The machine mutes only a live call, and
+    // the label the next repost draws offers the state the call will reach, so
+    // a muted call offers Unmute without a second tap guessing.
     val state = HandsfreeCallState()
     assertTrue(state.start())
-    assertTrue(HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_MUTE) == false)
-    assertTrue(state.setMuted(true))
+    assertTrue(
+      state.setMuted(HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_MUTE)!!),
+    )
+    assertTrue(state.muted)
     assertEquals(
       "Unmute",
       HandsfreeCallNotification.muteActionLabelFor(state.muted),
     )
     // Unmuting from the notification asks for false and lands there.
-    assertTrue(HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_UNMUTE) == true)
-    assertTrue(state.setMuted(false))
+    assertTrue(
+      state.setMuted(HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_UNMUTE)!!),
+    )
+    assertFalse(state.muted)
     assertEquals(
       "Mute",
       HandsfreeCallNotification.muteActionLabelFor(state.muted),
@@ -116,7 +177,7 @@ class HandsfreeCallNotificationTest {
     // After End the mute actions do nothing: only End is terminal, and it
     // already happened — the second ask is refused like the second End.
     assertTrue(state.requestEnd("user"))
-    assertFalse(state.setMuted(true))
-    assertFalse(state.setMuted(false))
+    assertFalse(state.setMuted(HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_MUTE)!!))
+    assertFalse(state.setMuted(HandsfreeCallNotification.mutedForAction(HandsfreeCallService.ACTION_UNMUTE)!!))
   }
 }

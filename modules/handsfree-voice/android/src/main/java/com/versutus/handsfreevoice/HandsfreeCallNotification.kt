@@ -51,6 +51,15 @@ internal object HandsfreeCallNotification {
    */
   fun muteActionLabelFor(muted: Boolean): String = if (muted) "Unmute" else "Mute"
 
+  /**
+   * The intent the notification attaches beside [muteActionLabelFor]'s label:
+   * the action that asks for the state that label names, so a tap carries the
+   * intent its own label promises. Kept here, next to the label, so the pair
+   * the service renders is one decision rather than two that can disagree.
+   */
+  fun muteActionFor(muted: Boolean): String =
+    if (muted) HandsfreeCallService.ACTION_UNMUTE else HandsfreeCallService.ACTION_MUTE
+
   /** Whether an incoming service intent is the notification's End action. */
   fun isEndAction(action: String?): Boolean = action == HandsfreeCallService.ACTION_END
 
@@ -61,8 +70,12 @@ internal object HandsfreeCallNotification {
   /** The state an incoming Mute/Unmute intent asks for; null is not a mute request. */
   fun mutedForAction(action: String?): Boolean? =
     when (action) {
-      HandsfreeCallService.ACTION_MUTE -> false
-      HandsfreeCallService.ACTION_UNMUTE -> true
+      // The other half of [muteActionFor], and the reason the two live side by
+      // side: the action the notification attaches for a state must ask for
+      // that state. Inverted here, a tap writes the value the call already
+      // holds — the microphone stays live under a "Mute" button.
+      HandsfreeCallService.ACTION_MUTE -> true
+      HandsfreeCallService.ACTION_UNMUTE -> false
       else -> null
     }
 }
