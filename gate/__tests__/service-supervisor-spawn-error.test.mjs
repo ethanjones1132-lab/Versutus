@@ -100,16 +100,20 @@ test('a repeated spawn failure follows the backoff instead of spinning', async (
     h.sup.start();
     const deadline = Date.now() + 2000;
     while (h.children.length < 4 && Date.now() < deadline) await sleep(5);
-    // Read both together: a fifth retry may land between the two reads.
+    // Read both together: a fifth retry may land between the two reads, and the
+    // newest child's own 'error' (a 1 ms timer) may not have fired yet.
     const spawned = h.children.length;
     const restarts = h.states.at(-1).restarts;
-    assert.equal(spawned, 4, 'each failed attempt is retried');
+    assert.ok(spawned >= 4, 'each failed attempt is retried');
     assert.deepEqual(
       h.delays.filter((ms) => ms >= 10).slice(0, 3),
       [10, 20, 40],
       `backoff must escalate per attempt, delays were ${h.delays}`,
     );
-    assert.equal(restarts, spawned, 'one restart recorded per failed attempt');
+    assert.ok(
+      restarts === spawned || restarts === spawned - 1,
+      `one restart per FAILED attempt (the newest spawn may not have failed yet): spawned ${spawned}, restarts ${restarts}`,
+    );
   } finally {
     await h.sup.stop();
   }
