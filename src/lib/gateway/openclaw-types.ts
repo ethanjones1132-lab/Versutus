@@ -37,11 +37,31 @@ export type GatewayFrame =
       payload?: Record<string, unknown>;
     };
 
+/**
+ * One OpenClaw `chat` push frame.
+ *
+ * This is the VERIFIED dialect (docs/audit-bugs-architecture.md P1-1, from the
+ * pre-migration handler): `state` is one of started/delta/final/error, the text
+ * rides either on `deltaText` or nested under `message.content`, and an error
+ * carries `errorMessage`. The union used to read 'streaming'|'complete'|'error'
+ * with none of `runId`, `message` or `errorMessage` — vocabulary no handler
+ * branch matched — while the frame reached the handler through an
+ * `as ChatEventPayload` cast, so anything written against this type compiled and
+ * then silently never settled a turn.
+ */
 export type ChatEventPayload = {
   sessionId?: string;
+  /**
+   * Which turn produced this frame. Present on every frame of an agentic run,
+   * and the only thing that tells a stopped run's late frames from the run that
+   * replaced it.
+   */
+  runId?: string;
   deltaText?: string;
   text?: string;
-  state?: 'streaming' | 'complete' | 'error';
+  message?: { content?: unknown };
+  state?: 'started' | 'delta' | 'final' | 'error';
+  errorMessage?: string;
   error?: string;
   command?: {
     input?: string;

@@ -248,8 +248,23 @@ export class OpenClawGatewayClient {
     });
   }
 
-  async request<T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs = 30000): Promise<T> {
-    await this.waitUntilConnected(timeoutMs);
+  /**
+   * One RPC round trip.
+   *
+   * `timeoutMs` is the answer budget. The wait for a live socket is bounded
+   * SEPARATELY (`connectTimeoutMs`, defaulting to the lesser of the two): an
+   * acknowledged `chat.send` is worth 120s of answer time, but a request issued
+   * into a dead path must still fail in seconds — one number for both meant
+   * either a slow gateway lost a working run or a dead path hung for two
+   * minutes.
+   */
+  async request<T = unknown>(
+    method: string,
+    params: Record<string, unknown> = {},
+    timeoutMs = 30000,
+    options: { connectTimeoutMs?: number } = {},
+  ): Promise<T> {
+    await this.waitUntilConnected(options.connectTimeoutMs ?? Math.min(timeoutMs, 30000));
     const id = randomId('req');
     const frame = { type: 'req', id, method, params };
     return new Promise<T>((resolve, reject) => {

@@ -5,6 +5,12 @@
 // kept auto-retrying forever, and each new attempt erased the message that
 // named the cause.
 
+// The adapter remembers the sessions it owns through key-value storage, and
+// key-value pulls in AsyncStorage's native module.
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);
+
 jest.mock('@/lib/gateway/device-auth-token', () => ({
   loadDeviceAuthToken: jest.fn(),
   saveDeviceAuthToken: jest.fn(() => Promise.resolve()),
