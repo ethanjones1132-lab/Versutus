@@ -102,7 +102,9 @@ describe('every gateway and settings flow the tone pass left alone', () => {
       'onSelect={(gateway) => void handleConnect(gateway.id)}',
       'onDelete={(gateway) => handleDelete(gateway.id)}',
       'label="Refresh saved profiles"',
-      'onConfirm={confirmDelete}',
+      // The remove confirm is now `async` (it awaits the storage write so the
+      // sheet can stay up when the write fails), so the call site voids it.
+      'onConfirm={() => void confirmDelete()}',
     ]) {
       expect(source).toContain(needle);
     }

@@ -17,8 +17,10 @@ describe('home dashboard derived values are memoized', () => {
     // The dashboard re-derived its gateway list, run filter, capability count,
     // channel glance and runs-supported flag on every render — including each
     // streamed frame — even though those inputs rarely change mid-turn.
+    // Matched on the name rather than the whole list: the dashboard also
+    // imports `useRef` for the remove sheet's in-flight write.
     const src = readSource();
-    expect(src).toMatch(/import \{ useCallback, useMemo, useState \} from 'react'/);
+    expect(src).toMatch(/import \{[^}]*\buseMemo\b[^}]*\} from 'react'/);
   });
 
   test('activeRuns is inside a useMemo keyed on activityRuns', () => {

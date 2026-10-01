@@ -1,5 +1,5 @@
 import { Link, useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import * as Haptics from 'expo-haptics';
@@ -57,10 +57,32 @@ export function GatewayHomeDashboard() {
   const reachability = useGatewayReachability({ gateways, activeGateway, status });
   const discovery = useGatewayDiscovery(true);
   const [deleteCandidate, setDeleteCandidate] = useState<GatewayProfile | null>(null);
+  // `connectGateway` rethrows an auth refusal on purpose and `deleteGateway`
+  // can reject on the storage write, so both used to fire a promise nobody
+  // handled: an unhandled rejection, no navigation, and no word on screen.
+  const [connectFailure, setConnectFailure] = useState<unknown>(null);
+  const [deleteFailure, setDeleteFailure] = useState<string | null>(null);
+  const [deletePending, setDeletePending] = useState(false);
+  // The in-flight write, in a ref: two taps inside one frame come off the same
+  // rendered closure, and `setDeletePending` has not landed yet, so the state
+  // read alone cannot tell the second press from the first.
+  const deletePendingRef = useRef(false);
   // Default collapsed keeps the disconnected card slim; a tap on either hero
   // line reveals the full reason it gave up / the backoff schedule.
   const [statusExpanded, setStatusExpanded] = useState(false);
   const [retryExpanded, setRetryExpanded] = useState(false);
+
+  // A refused connect is a connection failure, so it follows the same rule as
+  // every other one (stale-error.ts): a gateway that is answering has refused
+  // nothing, and the card would send the operator to replace a token that
+  // works. Adjusted while rendering rather than in an effect — an effect that
+  // clears state re-renders for nothing — so the provider's own 18s auto-retry
+  // after an auth refusal is enough to make this card go away on its own.
+  const [failureStatus, setFailureStatus] = useState(status);
+  if (status !== failureStatus) {
+    setFailureStatus(status);
+    if (status === 'connected') setConnectFailure(null);
+  }
 
   // Derived dashboard values — memoized so a streamed frame that only changed
   // messages does not re-run the gateway list, run filter, capability count,
@@ -99,10 +121,26 @@ export function GatewayHomeDashboard() {
         tlsFingerprint: beacon.tlsFingerprint,
         discoverySource: beacon.source === 'local' ? 'local' : 'tailscale',
       });
-      await connectGateway(profile);
+      setConnectFailure(null);
+      try {
+        await connectGateway(profile);
+      } catch (error) {
+        setConnectFailure(error);
+        return;
+      }
       router.push('/chat');
     },
     [addGateway, connectGateway, discovery.gateways, router],
+  );
+
+  // Tapping Connect on a row: the refusal is the answer, so it gets a handler
+  // instead of an unhandled rejection, and it never opens the chat over it.
+  const handleSelect = useCallback(
+    (gateway: GatewayProfile) => {
+      setConnectFailure(null);
+      void connectGateway(gateway).catch((error: unknown) => setConnectFailure(error));
+    },
+    [connectGateway],
   );
 
   // One surface rule: with nothing saved yet this component is STILL the home
@@ -181,6 +219,16 @@ export function GatewayHomeDashboard() {
 
   const activeLabel = activeGateway?.name ?? 'No active gateway';
   const shownConnectionError = connectionErrorShown(status, lastError);
+  // A refused connect obeys the same rule as every other connection failure: a
+  // gateway that is answering has refused nothing. Judged at render as well as
+  // dropped above, so the card follows the live connection rather than the
+  // order in which two states happen to settle.
+  const shownConnectFailure = connectFailure
+    ? connectionErrorShown(
+        status,
+        connectFailure instanceof Error ? connectFailure.message : String(connectFailure),
+      )
+    : null;
   const orbColor = statusColor(tokens, status);
   const statusLabel = connected
     ? 'Connected'
@@ -191,14 +239,35 @@ export function GatewayHomeDashboard() {
         : 'Disconnected';
 
   function confirmDelete(gateway: GatewayProfile) {
+    setDeleteFailure(null);
     setDeleteCandidate(gateway);
   }
 
-  function executeDelete() {
-    if (deleteCandidate) {
-      void deleteGateway(deleteCandidate.id);
+  async function executeDelete() {
+    const target = deleteCandidate;
+    // A second press while the write is in flight is not a second remove. The
+    // ref, not the state: two taps inside one frame both come off this same
+    // closure, and `setDeletePending` has not re-rendered anything yet.
+    if (!target || deletePendingRef.current) return;
+    deletePendingRef.current = true;
+    setDeletePending(true);
+    setDeleteFailure(null);
+    try {
+      await deleteGateway(target.id);
+      setDeleteCandidate(null);
+    } catch (error) {
+      // The profile is still saved, so the sheet stays up and says why
+      // instead of dismissing as if the removal had worked.
+      setDeleteFailure(error instanceof Error ? error.message : String(error));
+    } finally {
+      deletePendingRef.current = false;
+      setDeletePending(false);
     }
+  }
+
+  function cancelDelete() {
     setDeleteCandidate(null);
+    setDeleteFailure(null);
   }
 
   return (
@@ -402,13 +471,25 @@ export function GatewayHomeDashboard() {
       <HomeBriefingCard />
 
       <SectionHeader title="Gateways" actionLabel="Add gateway" onAction={() => router.push('/gateway/add')} />
+
+      {/* A connect this row refused names itself here, rather than leaving an
+          unhandled rejection behind and the row looking untouched — and only
+          while the connection has not disproved it (stale-error.ts). */}
+      {shownConnectFailure ? (
+        <ErrorCard
+          {...humanizeGatewayError(connectFailure)}
+          onDismiss={() => setConnectFailure(null)}
+          dismissLabel="Dismiss"
+        />
+      ) : null}
+
       <CompactGatewayList
         gateways={gateways}
         activeGatewayId={activeGateway?.id}
         status={status}
         statusDetail={statusDetail}
         reachability={reachability}
-        onSelect={(gateway) => void connectGateway(gateway)}
+        onSelect={handleSelect}
         onDelete={confirmDelete}
       />
 
@@ -434,11 +515,16 @@ export function GatewayHomeDashboard() {
       <ConfirmSheet
         visible={deleteCandidate !== null}
         title="Remove gateway?"
-        message={`${deleteCandidate?.name ?? 'This gateway'} will stay available if discovered again.`}
+        message={
+          deleteFailure
+            ? `${deleteCandidate?.name ?? 'This gateway'} is still saved. ${deleteFailure}`
+            : `${deleteCandidate?.name ?? 'This gateway'} will stay available if discovered again.`
+        }
         confirmLabel="Remove"
         danger
-        onCancel={() => setDeleteCandidate(null)}
-        onConfirm={executeDelete}
+        busy={deletePending}
+        onCancel={cancelDelete}
+        onConfirm={() => void executeDelete()}
       />
     </>
   );

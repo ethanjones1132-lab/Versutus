@@ -68,16 +68,20 @@ describe('saved-gateway remove hint', () => {
     expect(connectBlock!).not.toMatch(/accessibilityHint/);
   });
 
-  test('the destructive ConfirmSheet stays byte-identical', () => {
-    // The on-tap wording already names the consequence for sighted
-    // users. The hint is for before the tap; the sheet must not change.
+  test('the destructive ConfirmSheet keeps its wording, and adds only the failure branch', () => {
+    // The on-tap wording already names the consequence for sighted users, and
+    // the hint is for before the tap, so the sheet's own words stay. What did
+    // change is the one thing the sheet used to get wrong: the confirm now
+    // awaits the storage write, so the message gains a branch that says the
+    // profile is STILL saved when that write refuses, and the sheet stays up.
     const src = readSectionSource();
     expect(src).toMatch(/title="Remove gateway\?"/);
-    expect(src).toMatch(
-      /message=\{`\$\{deleteCandidate\?\.name \?\? 'This gateway'\} will stay available if discovered again\.`\}/,
+    expect(src).toContain(
+      "const removeMessage = `${deleteCandidate?.name ?? 'This gateway'} will stay available if discovered again.`;",
     );
+    expect(src).toMatch(/is still saved\. \$\{deleteFailure\}/);
     expect(src).toMatch(/confirmLabel="Remove"/);
-    expect(src).toMatch(/danger\s*\n\s*onCancel=/);
+    expect(src).toMatch(/danger\s*\n\s*busy=\{deletePending\}\s*\n\s*onCancel=/);
   });
 
   test('both CompactGatewayList call sites stay untouched', () => {

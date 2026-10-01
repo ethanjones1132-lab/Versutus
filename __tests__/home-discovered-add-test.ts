@@ -99,8 +99,13 @@ describe('Home empty discovered gateways offer Add', () => {
     expect(hook).toContain('const handleAddDiscovered = useCallback(');
     expect(hook).toContain('const beacon = discovery.gateways.find((item) => item.id === beaconId);');
     expect(hook).toContain('const profile = await addGateway({');
-    expect(hook).toContain('await connectGateway(profile);');
+    // This one moved: the connect is routed through `connectThenOpenChat`, so a
+    // refusal is returned for the screen to name and the push is conditional on
+    // a connection that answered. The path it pins — add, connect, open Chat —
+    // is the same; the unhandled-rejection hole is closed.
+    expect(hook).toContain('await connectThenOpenChat(profile, connectGateway, () =>');
     expect(hook).toContain("router.push('/chat')");
+    expect(hook).not.toMatch(/await connectGateway\(profile\);\s*\n\s*router\.push/);
   });
 
   test('the nearby caption still names auto-connect', () => {

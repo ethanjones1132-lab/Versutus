@@ -3,10 +3,12 @@ import { Pressable, StyleSheet, Switch, View } from 'react-native';
 
 import { DiscoveredGatewayRow } from '@/components/discovered-gateway-row';
 import { CompactGatewayList } from '@/components/gateway/compact-gateway-list';
-import { Button, Card, ConfirmSheet, Divider, Text } from '@/components/ui';
+import { Button, Card, ConfirmSheet, Divider, ErrorCard, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useGatewaySettingsScreen } from '@/hooks/use-gateway-settings-screen';
 import { useTokens } from '@/hooks/use-tokens';
+import { connectionErrorShown } from '@/lib/connection/stale-error';
+import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 
 export function GatewayManagementSection() {
   const tokens = useTokens();
@@ -26,7 +28,23 @@ export function GatewayManagementSection() {
     deleteCandidate,
     confirmDelete,
     cancelDelete,
+    connectFailure,
+    clearConnectFailure,
+    deleteFailure,
+    deletePending,
   } = useGatewaySettingsScreen();
+
+  const removeMessage = `${deleteCandidate?.name ?? 'This gateway'} will stay available if discovered again.`;
+  // The same rule the Home dashboard's cards follow (stale-error.ts): a gateway
+  // that is answering has refused nothing, so a refusal the live connection has
+  // disproved is not shown here either. This is the only gateway error on this
+  // screen, which is exactly why it must not outlive the failure.
+  const shownConnectFailure = connectFailure
+    ? connectionErrorShown(
+        status,
+        connectFailure instanceof Error ? connectFailure.message : String(connectFailure),
+      )
+    : null;
 
   return (
     <View style={styles.container}>
@@ -106,6 +124,13 @@ export function GatewayManagementSection() {
         </Link>
       </View>
 
+      {/* A connect that was refused says so here rather than escaping the tap
+          as an unhandled rejection with nothing on screen — and stops saying it
+          once the connection proves otherwise (stale-error.ts). */}
+      {shownConnectFailure ? (
+        <ErrorCard {...humanizeGatewayError(connectFailure)} onDismiss={clearConnectFailure} />
+      ) : null}
+
       <CompactGatewayList
         gateways={gateways}
         activeGatewayId={activeGateway?.id}
@@ -121,11 +146,16 @@ export function GatewayManagementSection() {
       <ConfirmSheet
         visible={deleteCandidate !== null}
         title="Remove gateway?"
-        message={`${deleteCandidate?.name ?? 'This gateway'} will stay available if discovered again.`}
+        message={
+          deleteFailure
+            ? `${deleteCandidate?.name ?? 'This gateway'} is still saved. ${deleteFailure}`
+            : removeMessage
+        }
         confirmLabel="Remove"
         danger
+        busy={deletePending}
         onCancel={cancelDelete}
-        onConfirm={confirmDelete}
+        onConfirm={() => void confirmDelete()}
       />
     </View>
   );

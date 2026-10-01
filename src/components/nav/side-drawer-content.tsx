@@ -3,7 +3,7 @@ import {
   type DrawerContentComponentProps,
 } from 'expo-router/drawer';
 import { useRouter } from 'expo-router';
-import { useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Svg, { Defs, LinearGradient, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,9 +16,11 @@ import type { IconName } from '@/components/ui/Icon';
 import { Palette, Radius, Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
+import { readCached, writeCached } from '@/lib/cache/swr-store';
 import type { PublicBot } from '@/lib/gateway/bots';
 import { teamPresence, type TeamPresence } from '@/lib/activity/presence';
 import { botReportedRoutable } from '@/lib/gateway/roster-tap';
+import type { ConnectionStatus } from '@/lib/gateway/types';
 import { haptics } from '@/lib/haptics';
 
 type NavHref = '/chat' | '/activity' | '/terminal' | '/gateway/settings' | '/home';
@@ -68,6 +70,90 @@ const SETTINGS: NavTarget = {
 
 /** How many Bots the drawer lists before the roster takes over. */
 const DRAWER_TEAM_LIMIT = 6;
+
+/**
+ * How long the connection has to have been down before a `connected` again is
+ * treated as news rather than a monitor self-heal. Below this the cached roster
+ * is painted as it stands.
+ */
+export const DRAWER_ROSTER_OFFLINE_REVALIDATE_MS = 10_000;
+
+/**
+ * Past this age the drawer's copy of the roster is the drawer's problem. It is
+ * the same namespace and key the Chat roster writes, so the two surfaces age
+ * one copy instead of each keeping their own.
+ */
+export const DRAWER_ROSTER_STALE_MS = 20_000;
+
+/**
+ * Whether the drawer owes the Gate a roster read right now.
+ *
+ * The drawer content is mounted beside every screen in the `(tabs)` group, so
+ * an effect keyed on `status` alone read the whole roster on every transition —
+ * a reconnect and a monitor self-heal each added a `/v1/bots` on top of the one
+ * the Chat screen already makes. The rules now:
+ * - not connected, or no gateway to read for: nothing to do;
+ * - a different gateway than the last read, or no read yet: read;
+ * - back from an outage longer than `offlineForMs`: read, because the roster may
+ *   have moved while the connection was gone;
+ * - otherwise the cached copy decides — read only once it has aged past
+ *   `staleAfterMs`, and there is no cached copy to age, so read.
+ */
+export function drawerRosterReadDue({
+  status,
+  gatewayId,
+  lastRead,
+  offlineSinceAt,
+  cachedSavedAt,
+  now,
+  offlineForMs = DRAWER_ROSTER_OFFLINE_REVALIDATE_MS,
+  staleAfterMs = DRAWER_ROSTER_STALE_MS,
+}: {
+  status: ConnectionStatus;
+  gatewayId: string | null;
+  lastRead: { gatewayId: string; at: number } | null;
+  /** When the connection last left `connected`, or null if it never has. */
+  offlineSinceAt: number | null;
+  /** `savedAt` of the cached copy currently painted, or null if there is none. */
+  cachedSavedAt: number | null;
+  now: number;
+  offlineForMs?: number;
+  staleAfterMs?: number;
+}): boolean {
+  if (status !== 'connected' || !gatewayId) return false;
+  if (!lastRead || lastRead.gatewayId !== gatewayId) return true;
+  if (offlineSinceAt !== null && now - offlineSinceAt >= offlineForMs) return true;
+  if (cachedSavedAt === null) return true;
+  return now - cachedSavedAt >= staleAfterMs;
+}
+
+export type TeammateOpenOutcome = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Open a teammate's chat, and report whether the drawer may let go of the
+ * screen. The open is awaited FIRST: closing the drawer and pushing `/chat`
+ * before it answered left a failed tap on the previous Bot's chat with nothing
+ * said about it. `openBot` answers `false` for a refusal it handled itself (a
+ * gateway that does not expose bots, a session list that came back empty), so
+ * that is a failure too and not only a thrown one.
+ */
+export async function openTeammateChat(
+  bot: Pick<PublicBot, 'id' | 'displayName'>,
+  openBot: (botId: string) => Promise<boolean>,
+  onOpened: (botId: string) => void,
+): Promise<TeammateOpenOutcome> {
+  try {
+    if (!(await openBot(bot.id))) return { ok: false, reason: `Couldn't open ${bot.displayName}.` };
+  } catch {
+    // The reason is the provider's own, already on its status line.
+    return { ok: false, reason: `Couldn't open ${bot.displayName}.` };
+  }
+  // Outside the try on purpose: the Bot IS open by now, so a throw from asking
+  // the Chat surface for it must not be reported as a failed open — the session
+  // has already switched underneath the operator.
+  onOpened(bot.id);
+  return { ok: true };
+}
 
 /**
  * The drawer is part of the lit room: the house violet pools behind the mark
@@ -200,37 +286,123 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
   const presence = teamPresence(activityRunsForActiveGateway);
   const routeName = props.state.routes[props.state.index]?.name;
   const [team, setTeam] = useState<PublicBot[]>([]);
+  // The line under the team list: a refused read keeps the last roster and says
+  // so instead of leaving an empty section, and a refused tap says which Bot
+  // would not open. Only the read carries a retry, because the row itself is
+  // the retry for a tap.
+  const [teamNote, setTeamNote] = useState<{ message: string; retryable: boolean } | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
+  // When this drawer's last live read ran, and for which gateway — the ledger
+  // `status` flips are throttled against.
+  const rosterReadAtRef = useRef<{ gatewayId: string; at: number } | null>(null);
+  // When the connection last left `connected`, so a real outage can be told
+  // from a monitor self-heal that never really dropped.
+  const offlineSinceAtRef = useRef<number | null>(null);
+  // `savedAt` of the copy currently painted, from the shared roster cache.
+  const cachedAtRef = useRef<number | null>(null);
+  // Which gateway a LIVE read has already answered for. Both effects below
+  // start in the same commit, so on a cold start (AsyncStorage opening its
+  // SQLite DB) the `/v1/bots` answer can land first — and a remembered roster
+  // arriving after it would paint the older copy over the fresher one. Same
+  // guard the roster screen uses (`rosterAnsweredRef`, chat-screen.tsx): an
+  // empty-but-ok live read still counts, because it is the host telling the
+  // truth. A FAILED live read does not count — a remembered inventory beside
+  // the error is the point of painting one at all.
+  const liveAnsweredRef = useRef<string | null>(null);
+  const gatewayId = activeGateway?.id ?? null;
 
-  // The drawer keeps its own short read of the team: it is mounted beside
-  // every screen, so it cannot borrow the Chat screen's roster.
+  // When the connection last left `connected`, stamped the first time it is
+  // seen down. It is NOT cleared on the way back up: this effect is declared
+  // before the read effect, so clearing here would throw away the outage length
+  // before the read that has to judge it. The read effect consumes the stamp.
   useEffect(() => {
-    if (status !== 'connected') return;
+    if (status === 'connected') return;
+    if (offlineSinceAtRef.current === null) offlineSinceAtRef.current = Date.now();
+  }, [status]);
+
+  // Last-known-good first, through the same cache the Chat roster writes. The
+  // drawer is mounted beside every screen, so it paints this device's copy
+  // instead of waiting on its own `/v1/bots` — or showing nothing at all when
+  // that read is refused.
+  useEffect(() => {
+    if (!gatewayId) return;
     let cancelled = false;
-    void listBots()
-      .then((bots) => {
-        if (!cancelled) setTeam(bots);
+    void readCached<PublicBot[]>('roster', gatewayId, 'bots')
+      .then((cached) => {
+        if (cancelled || !cached) return;
+        // Never over a live answer that already landed for this gateway.
+        if (liveAnsweredRef.current === gatewayId) return;
+        cachedAtRef.current = cached.savedAt;
+        setTeam(cached.value);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [listBots, status]);
+  }, [gatewayId]);
+
+  useEffect(() => {
+    if (!gatewayId) return;
+    const now = Date.now();
+    const offlineSinceAt = offlineSinceAtRef.current;
+    const due = drawerRosterReadDue({
+      status,
+      gatewayId,
+      lastRead: rosterReadAtRef.current,
+      offlineSinceAt,
+      cachedSavedAt: cachedAtRef.current,
+      now,
+    });
+    // Judged once per arrival at `connected`: an outage stamp is about that
+    // transition, and keeping it would make every later wave read.
+    if (status === 'connected') offlineSinceAtRef.current = null;
+    if (!due) return;
+    rosterReadAtRef.current = { gatewayId, at: now };
+    let cancelled = false;
+    void listBots()
+      .then((bots) => {
+        if (cancelled || !gatewayId) return;
+        liveAnsweredRef.current = gatewayId;
+        setTeam(bots);
+        setTeamNote(null);
+        cachedAtRef.current = Date.now();
+        void writeCached('roster', gatewayId, 'bots', bots).catch(() => undefined);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // The same rule the roster screen follows: a failed re-read keeps the
+        // rows the operator is looking at and names itself beside them. The
+        // reason stays on the provider's own status line; this line is the
+        // drawer admitting it is out of date.
+        setTeamNote({ message: "Couldn't refresh your team", retryable: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gatewayId, listBots, retryTick, status]);
+
+  const retryTeam = useCallback(() => {
+    rosterReadAtRef.current = null;
+    setRetryTick((tick) => tick + 1);
+  }, []);
 
   const go = (href: NavHref) => {
     props.navigation.closeDrawer();
     router.push(href);
   };
 
-  const openTeammate = (bot: PublicBot) => {
+  const openTeammate = async (bot: PublicBot) => {
+    const outcome = await openTeammateChat(bot, openBot, (botId) =>
+      requestSurface({ kind: 'bot', botId }),
+    );
+    if (!outcome.ok) {
+      // The drawer stays open: a failed tap used to leave the operator on the
+      // previous Bot's chat with nothing said.
+      setTeamNote({ message: outcome.reason, retryable: false });
+      return;
+    }
     props.navigation.closeDrawer();
     router.push('/chat');
-    // The same two steps a quick reply takes: open the Bot's chat, then ask
-    // the Chat screen to move onto it. A failed open leaves the roster up.
-    void openBot(bot.id)
-      .then((opened) => {
-        if (opened) requestSurface({ kind: 'bot', botId: bot.id });
-      })
-      .catch(() => undefined);
   };
 
   // A fresh conversation with no Bot in between — the drawer's first answer
@@ -303,7 +475,10 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
           ))}
         </View>
 
-        {routableTeam.length > 0 ? (
+        {/* The team block appears for the roster OR for the line that admits the
+            roster could not be refreshed — a failed first read used to leave
+            nothing at all on screen. */}
+        {routableTeam.length > 0 || teamNote ? (
           <View style={styles.section}>
             <Text variant="eyebrow" color="tertiary" style={styles.sectionLabel}>
               Your team
@@ -324,6 +499,23 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
                 onPress={() => openTeammate(bot)}
               />
             ))}
+            {teamNote ? (
+              teamNote.retryable ? (
+                <PressableScale
+                  onPress={retryTeam}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${teamNote.message}. Tap to retry.`}
+                  style={styles.teamNote}>
+                  <Text variant="caption" color="secondary">
+                    {teamNote.message} · tap to retry
+                  </Text>
+                </PressableScale>
+              ) : (
+                <Text variant="caption" color="secondary" style={styles.teamNote}>
+                  {teamNote.message}
+                </Text>
+              )
+            ) : null}
           </View>
         ) : null}
       </DrawerContentScrollView>
@@ -407,6 +599,10 @@ const styles = StyleSheet.create({
   sectionLabel: {
     paddingHorizontal: Spacing.three - 4,
     paddingBottom: Spacing.one,
+  },
+  teamNote: {
+    paddingHorizontal: Spacing.three - 4,
+    paddingVertical: Spacing.two,
   },
   row: {
     flexDirection: 'row',
