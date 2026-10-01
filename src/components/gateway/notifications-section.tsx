@@ -39,6 +39,11 @@ export function NotificationsSection() {
   const [quietStart, setQuietStart] = useState('');
   const [quietEnd, setQuietEnd] = useState('');
   const [quietError, setQuietError] = useState<string | null>(null);
+  // Whether the fields hold an edit the Gate has not taken. While it does, they
+  // are the operator's: a stored window arriving from anywhere — another switch
+  // on this card, another device, the Gate's own default — must not land on top
+  // of what is being typed.
+  const [quietDirty, setQuietDirty] = useState(false);
 
   // The roster feeds the switch rows; a failed read shows the stored ids as
   // unknowns rather than an empty filter that reads as "no Bots".
@@ -61,15 +66,25 @@ export function NotificationsSection() {
 
   const filterRows = botFilterRows(rosterBots, prefs.botIds);
 
-  // The Gate is the authority: seed the fields from what it reports. Deferred
-  // past the effect (the section pattern) so the seed cannot cascade renders.
+  // What the Gate has stored, as text. The hook answers every read and every
+  // write with a FRESH row, so these are the window's VALUES and not the row's
+  // identity: an identity dependency re-seeded the fields from any other switch
+  // on this card and threw away what the operator was typing.
+  const storedStart = prefs.quietHours ? formatMinutes(prefs.quietHours.startMinutes) : '';
+  const storedEnd = prefs.quietHours ? formatMinutes(prefs.quietHours.endMinutes) : '';
+
+  // The Gate is the authority for the window it HOLDS; the fields are the
+  // operator's until a save takes it. So a stored change re-seeds only while
+  // there is no unsaved edit — after a save, and after a change made elsewhere
+  // while the draft is clean.
   useEffect(() => {
+    if (quietDirty) return;
     const timer = setTimeout(() => {
-      setQuietStart(prefs.quietHours ? formatMinutes(prefs.quietHours.startMinutes) : '');
-      setQuietEnd(prefs.quietHours ? formatMinutes(prefs.quietHours.endMinutes) : '');
+      setQuietStart(storedStart);
+      setQuietEnd(storedEnd);
     }, 0);
     return () => clearTimeout(timer);
-  }, [prefs.quietHours]);
+  }, [quietDirty, storedStart, storedEnd]);
 
   if (!connected) {
     return (
@@ -90,7 +105,11 @@ export function NotificationsSection() {
       return;
     }
     setQuietError(null);
-    void setPatch({ quietHours: parsed.quietHours });
+    // The typed window is the operator's until the Gate takes it: a refusal
+    // leaves it on screen to try again, and a taken save hands the fields back.
+    void setPatch({ quietHours: parsed.quietHours }).then((saved) => {
+      if (saved) setQuietDirty(false);
+    });
   };
 
   const saveBotFilter = (rows: Parameters<typeof toggleBotFilter>[0]) => {
@@ -201,7 +220,10 @@ export function NotificationsSection() {
                 </Text>
                 <TextField
                   value={quietStart}
-                  onChangeText={setQuietStart}
+                  onChangeText={(text) => {
+                    setQuietStart(text);
+                    setQuietDirty(true);
+                  }}
                   placeholder="22:00"
                   accessibilityLabel="Quiet hours start, HH:MM"
                 />
@@ -212,7 +234,10 @@ export function NotificationsSection() {
                 </Text>
                 <TextField
                   value={quietEnd}
-                  onChangeText={setQuietEnd}
+                  onChangeText={(text) => {
+                    setQuietEnd(text);
+                    setQuietDirty(true);
+                  }}
                   placeholder="07:00"
                   accessibilityLabel="Quiet hours end, HH:MM"
                 />
