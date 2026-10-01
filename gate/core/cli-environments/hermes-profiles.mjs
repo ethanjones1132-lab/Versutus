@@ -288,12 +288,34 @@ export async function writeHermesMemory(hermesHome, id, name, text, io = {}) {
   await rename(tmp, dest);
 }
 
+/**
+ * One Bot, by id.
+ *
+ * A named id addresses exactly one directory, so only that profile is read.
+ * This used to fall through to the roster walk, which read three files from
+ * every profile on the host — once per Bot of every group turn, and again for
+ * the default key. `default` is the Hermes home itself, exactly as the roster
+ * models it, and an id that is not a profile directory is an unknown Bot.
+ */
 export async function getHermesBot(hermesHome, id, io = {}) {
   if (!id) return null;
-  if (id === 'default') {
-    const readFile = io.readFile ?? defaultReadFile;
-    return botAt('default', hermesHome, readFile);
+  const readFile = io.readFile ?? defaultReadFile;
+  if (id === 'default') return botAt('default', hermesHome, readFile);
+  if (typeof id !== 'string' || id.startsWith('.') || /[/\\]/.test(id)) return null;
+  const readdir = io.readdir ?? defaultReaddir;
+  // Matched against the entry name readdir reports, never against `stat`:
+  // stat resolves case-insensitively on NTFS and APFS, so `Worker-1` would find
+  // the `worker-1` profile and route to an address no Bot answers to. The roster
+  // walk compared names, so a differently cased id stays an unknown id here too.
+  let names = [];
+  try {
+    names = await readdir(join(hermesHome, 'profiles'), { withFileTypes: true });
+  } catch {
+    return null;
   }
-  const bots = await listHermesBots(hermesHome, io);
-  return bots.find((bot) => bot.id === id) ?? null;
+  const entry = names.find((candidate) => (candidate.name ?? candidate) === id);
+  if (!entry) return null;
+  const isDirectory = typeof entry.isDirectory === 'function' ? entry.isDirectory() : true;
+  if (!isDirectory) return null;
+  return botAt(id, join(hermesHome, 'profiles', id), readFile);
 }

@@ -16,9 +16,10 @@
  * Verified against Hermes 0.20.3.
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { writeFileAtomic } from '../../atomic-file.mjs';
 import { runCli } from '../adapters/shared.mjs';
 import { createBotArgs, ensureDistinctListenKey, validateBotId } from '../hermes-bot-create.mjs';
 import { upsertProfileDescription, withBotEditRollback } from '../hermes-bot-edit.mjs';
@@ -689,9 +690,16 @@ export function createHermesBackend({
         envText = '';
       }
       const ensured = ensureDistinctListenKey(envText, defaultKey);
-      await writeFile(join(botHome, '.env'), ensured.envText, 'utf8');
+      // Temp copy, then a rename onto the live .env. This file carries the key
+      // just minted and every inherited provider key, and it is the only place
+      // any of them exist: a truncating write that a kill interrupted left a
+      // Bot with no API_SERVER_KEY and no way to restore one. The rename lands a
+      // fresh temp file, so the mode is stated rather than inherited from
+      // whatever Hermes created — same convention as the other secret files
+      // (tokens.mjs, pairing.mjs, device-tokens.mjs).
+      await writeFileAtomic(join(botHome, '.env'), ensured.envText, { encoding: 'utf8', mode: 0o600 });
       if (typeof soul === 'string' && soul.trim()) {
-        await writeFile(join(botHome, 'SOUL.md'), soul, 'utf8');
+        await writeFileAtomic(join(botHome, 'SOUL.md'), soul, { encoding: 'utf8' });
       }
       if (modelId) {
         await runCreateCommand(
@@ -766,13 +774,13 @@ export function createHermesBackend({
           }
           const next = upsertProfileDescription(yamlText, description);
           if (next !== yamlText) {
-            await writeFile(profilePath, next, 'utf8');
+            await writeFileAtomic(profilePath, next, { encoding: 'utf8' });
           }
         }
 
         if (typeof soul === 'string') {
           await mkdir(botHome, { recursive: true });
-          await writeFile(join(botHome, 'SOUL.md'), soul, 'utf8');
+          await writeFileAtomic(join(botHome, 'SOUL.md'), soul, { encoding: 'utf8' });
         }
 
         const clearFields = [
@@ -783,7 +791,12 @@ export function createHermesBackend({
           const configPath = join(botHome, 'config.yaml');
           const configText = await readFile(configPath, 'utf8').catch(() => '');
           const nextConfig = removeModelPins(configText, clearFields);
-          if (nextConfig !== configText) await writeFile(configPath, nextConfig, 'utf8');
+          if (nextConfig !== configText) {
+            // config.yaml also carries the provider API keys Hermes put there,
+            // so it gets the same stated 0600 as .env rather than whatever mode
+            // the file it replaces happened to have.
+            await writeFileAtomic(configPath, nextConfig, { encoding: 'utf8', mode: 0o600 });
+          }
         }
 
         if (typeof modelId === 'string' && modelId.trim()) {

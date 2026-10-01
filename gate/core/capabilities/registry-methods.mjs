@@ -1,6 +1,7 @@
-import { mkdir, writeFile, unlink } from 'node:fs/promises';
+import { mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { writeFileAtomic } from '../atomic-file.mjs';
 import { describeKinds } from './registry.mjs';
 import { looksLikeCredential, setSecret } from './secrets.mjs';
 
@@ -25,7 +26,12 @@ function assertValid(validation) {
 async function writeInstanceFile(root, id, kind, label, config) {
   const filePath = join(root, 'registry', `${id}.json`);
   await mkdir(join(root, 'registry'), { recursive: true });
-  await writeFile(filePath, JSON.stringify({ kind, label, config }, null, 2) + '\n', 'utf8');
+  // Temp copy, then a rename onto the live file. A truncating write left a
+  // half-written instance behind when the Gate was killed mid-write, and
+  // loadInstances answers a parse error by dropping the instance — so the whole
+  // instance, and every field the operator configured in it, disappeared with
+  // no error anywhere.
+  await writeFileAtomic(filePath, JSON.stringify({ kind, label, config }, null, 2) + '\n', { encoding: 'utf8' });
 }
 
 /**

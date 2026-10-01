@@ -10,7 +10,9 @@
  * whole-file re-serialisation would churn unrelated history.
  */
 
-import { readFile, unlink, writeFile } from 'node:fs/promises';
+import { readFile, unlink } from 'node:fs/promises';
+
+import { writeFileAtomic } from '../atomic-file.mjs';
 
 const pendingEdits = new Map();
 
@@ -30,7 +32,10 @@ export async function withBotEditRollback(botHome, paths, edit) {
       return await edit();
     } catch (error) {
       const restored = await Promise.allSettled(originals.map(async ({ path, bytes }) => {
-        if (bytes !== null) await writeFile(path, bytes);
+        // Restored the same way the edit wrote it: a temp copy renamed onto the
+        // live file. A truncating restore would throw away the very bytes this
+        // rollback exists to bring back.
+        if (bytes !== null) await writeFileAtomic(path, bytes);
         else await unlink(path).catch((failure) => {
           if (failure.code !== 'ENOENT') throw failure;
         });
