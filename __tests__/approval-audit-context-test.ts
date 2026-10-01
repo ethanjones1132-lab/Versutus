@@ -21,7 +21,7 @@ describe('the approval audit carries decision context', () => {
     const provider = readSource(['src', 'context', 'gateway-provider.tsx']);
     const operatorSite = provider.slice(
       provider.indexOf("decision === 'approve' ? 'approval.approve' : 'approval.deny'"),
-      provider.indexOf("await refreshPendingApprovals();"),
+      provider.indexOf('await refreshPendingApprovals({ silent: true });'),
     );
     expect(operatorSite).toContain("source: 'operator'");
     expect(operatorSite).toMatch(/\boperation:\s*row/);

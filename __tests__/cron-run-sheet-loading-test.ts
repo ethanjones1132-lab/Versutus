@@ -41,12 +41,16 @@ describe('cron run sheet loading', () => {
     expect(src).toContain('turns.map((turn)');
   });
 
-  test('the 3s poll cadence is untouched', () => {
-    // The skeletons change only what the sheet shows while it waits; the
-    // deferred first poll and the 3s interval still drive the reads.
+  test('the 3s cadence is untouched, and only one read is ever outstanding', () => {
+    // The skeletons change only what the sheet shows while it waits: the
+    // deferred first poll and the 3s cadence still drive the reads. What is NOT
+    // untouched is the interval that used to arm a read every 3s whatever the
+    // last one was doing — the next read is now armed by the one that settled,
+    // so a slow link cannot pile reads onto a single-threaded Gate.
     const src = readSource('src', 'components', 'activity', 'cron-run-sheet.tsx');
     expect(src).toContain('const POLL_MS = 3000;');
-    expect(src).toContain('setTimeout(() => { void poll(); }, 0)');
-    expect(src).toContain('setInterval(() => { void poll(); }, POLL_MS)');
+    expect(src).toContain('const first = setTimeout(() => {');
+    expect(src).not.toContain('setInterval(');
+    expect(src).toContain('void poll().then(scheduleNext, scheduleNext);');
   });
 });

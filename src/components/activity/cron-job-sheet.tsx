@@ -119,16 +119,18 @@ export function CronJobSheet({ job, onClose, onOpenRun, onRemoved, onChanged }: 
     try {
       await botJobs.pause(jobId, !paused);
       setPausedOverride(!paused);
-      // The host took the pause/resume: retire the held notice on a pause
-      // (the sync would schedule nothing anyway) and rebuild it on a resume
-      // from the record the host reports. Fire-and-forget — a locked
-      // scheduler must never read as a refused control call.
-      if (!paused) {
+      // `paused` is the state BEFORE the toggle above, so it reads true exactly
+      // when the host has just resumed this job. A resume rebuilds the held
+      // notice from the record the host reports; a pause retires it, because a
+      // routine that will not run must not ring the phone. Fire-and-forget — a
+      // locked scheduler must never read as a refused control call.
+      if (paused) {
         void syncRoutineNotification({
           id: jobId,
           name: job?.name ?? undefined,
           schedule: job?.schedule ?? undefined,
           nextRunAt: job?.nextRunAt ?? undefined,
+          paused: false,
         });
       } else {
         void cancelRoutineNotification(jobId);

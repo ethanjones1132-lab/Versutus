@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 
@@ -19,7 +19,6 @@ import {
 } from '@/lib/gateway/cron';
 import { canCreateGatewayJob, gatewayJobInput } from '@/lib/gateway/cron-create';
 import { applyRoutineCreate, DEFAULT_ROUTINE_SCHEDULE } from '@/lib/gateway/routines';
-import { syncRoutineNotification } from '@/lib/notifications/routine-sync';
 
 import type { TextColor } from '@/components/ui/types';
 
@@ -58,22 +57,59 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
 
   const available = cron.available;
 
-  const load = useCallback(async () => {
-    if (status !== 'connected' || !available) {
-      setLoaded(true);
-      return;
-    }
-    try {
-      setJobs(await cron.list());
-      setError(null);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setLoaded(true);
-    }
+  // One read at a time. Two callers asking in the same tick — the focus read
+  // and a pull-to-refresh's reload signal — used to issue two `cron.list()`
+  // calls for the same list, and a Gate that serves one request at a time has
+  // to answer both. The second caller now JOINS the read in flight; `settled`
+  // is what keeps a caller arriving in the same turn a read answers in from
+  // joining one that has already finished.
+  const inFlight = useRef<{ settled: boolean; promise: Promise<void> } | null>(null);
+  // Which read owns the rows on screen. A slow read that a newer one has
+  // superseded must not paint: its list is older than what the operator just
+  // did (a job paused, run or removed since it went out).
+  const requestId = useRef(0);
+
+  const load = useCallback((): Promise<void> => {
+    const running = inFlight.current;
+    if (running && !running.settled) return running.promise;
+    const id = ++requestId.current;
+    const ticket = { settled: false, promise: Promise.resolve() };
+    inFlight.current = ticket;
+    ticket.promise = (async () => {
+      try {
+        if (status !== 'connected' || !available) {
+          setLoaded(true);
+          return;
+        }
+        try {
+          const next = await cron.list();
+          if (id !== requestId.current) return;
+          setJobs(next);
+          setError(null);
+        } catch (caught) {
+          if (id !== requestId.current) return;
+          setError(caught instanceof Error ? caught.message : String(caught));
+        } finally {
+          if (id === requestId.current) setLoaded(true);
+        }
+      } finally {
+        // Released on both outcomes, so a refused read never wedges the section
+        // against every later read.
+        ticket.settled = true;
+        if (inFlight.current === ticket) inFlight.current = null;
+      }
+    })();
+    return ticket.promise;
   }, [available, cron, status]);
 
+  // The focus effect below already reads on the first focus, so this one must
+  // not repeat it — two `cron.list()` calls in the same tick is the duplicate
+  // this file exists without. It is here for the pull's reload signal, and
+  // only for changes to that signal after the first read.
+  const mountedSignal = useRef(cronReloadSignal);
   useEffect(() => {
+    if (cronReloadSignal === mountedSignal.current) return undefined;
+    mountedSignal.current = cronReloadSignal;
     const timer = setTimeout(() => { void load(); }, 0);
     return () => clearTimeout(timer);
   }, [load, cronReloadSignal]);
@@ -101,22 +137,16 @@ export function CronSection({ cronReloadSignal = 0 }: { cronReloadSignal?: numbe
     setCreating(true);
     setCreateError(undefined);
     void Promise.resolve(botJobs.create(gatewayJobInput(submitted)))
-      .then((created) => {
+      .then(() => {
         const next = applyRoutineCreate(submitted, { ok: true });
         setTitle(next.draft.title);
         setPrompt(next.draft.prompt);
         setSchedule(next.draft.schedule);
-        // The create landed: schedule the phone-side notice under the id the
-        // gateway returned (fall back to the name when no id comes back).
-        // Fire-and-forget — a locked scheduler never reads as a refused job.
-        const jobId = created?.id;
-        if (jobId) {
-          void syncRoutineNotification({
-            id: jobId,
-            name: created?.name,
-            schedule: submitted.schedule,
-          });
-        }
+        // No phone-side notice, and none is possible: a routine notice is
+        // Bot-bound by design (it opens that Bot's chat), and this form files a
+        // gateway-level job whose unprefixed title names no Bot — so the sync
+        // would withhold the notice and retire any held one. The job still runs
+        // on the gateway and its roster still shows it.
         void load();
       })
       .catch((cause: unknown) => {

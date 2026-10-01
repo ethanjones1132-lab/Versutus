@@ -258,6 +258,11 @@ function mockMakeClient(callbacks: PortalClientCallbacks): FakeClient {
     healthCheck: async () => HEALTHY,
     rpcRequest: async (method: string) => {
       client.rpcMethods.push(method);
+      if (method === 'approvals.pending' && approvalsReadHold) {
+        const hold = approvalsReadHold;
+        approvalsReadHold = null;
+        return hold;
+      }
       return { data: [] };
     },
     streamChat: async () => 'pong',
@@ -294,14 +299,26 @@ function mockMakeClient(callbacks: PortalClientCallbacks): FakeClient {
 /** What `getModels` answers; a promise that never settles stalls the whole point. */
 let modelsAnswer: (() => Promise<unknown[]>) | null = null;
 
+/**
+ * Parks the next `approvals.pending` read until the test releases it, so the
+ * pending list's phase can be observed while that read is genuinely in flight.
+ */
+let approvalsReadHold: Promise<unknown> | null = null;
+
 const observed: { gateway: GatewayContextValue | null; chat: ChatSurfaceContextValue | null } = {
   gateway: null,
   chat: null,
 };
 
+/** `pendingApprovalsState` on every commit since the last reset. */
+const pendingStatesSeen: GatewayContextValue['pendingApprovalsState'][] = [];
+
 function recordContexts(gateway: GatewayContextValue, chat: ChatSurfaceContextValue): null {
   observed.gateway = gateway;
   observed.chat = chat;
+  // Every commit's pending-read phase, so a test can tell a read that kept the
+  // list on screen from one that swapped it for the inbox's skeleton.
+  pendingStatesSeen.push(gateway.pendingApprovalsState);
   return null;
 }
 
@@ -375,9 +392,11 @@ beforeEach(async () => {
   cronAvailable = true;
   mockProbeOk = true;
   modelsAnswer = null;
+  approvalsReadHold = null;
   appStateListeners = [];
   observed.gateway = null;
   observed.chat = null;
+  pendingStatesSeen.length = 0;
   jest.spyOn(AppState, 'addEventListener').mockImplementation(((
     _type: string,
     listener: (state: AppStateStatus) => void,
@@ -646,5 +665,89 @@ describe('the connected-time reads take their turn', () => {
     expect(mockClients[1].listCronJobsCalls).toBe(1);
     expect(mockClients[1].listBotsCalls).toBe(1);
     expect(client.listCronJobsCalls).toBe(1);
+  });
+});
+
+// Deciding a row re-reads the Gate's inbox. That read used to flip
+// `pendingApprovalsState` to `loading`, which the inbox paints as a skeleton
+// over every row the operator still has to work through — once per row in a
+// batch, and once per tap even for a single row.
+describe('a decided row re-reads the inbox without blanking it', () => {
+  async function connectAlphaWithRows(): Promise<FakeClient> {
+    const alpha = profile({ id: 'alpha', url: 'http://alpha.test:8642', kind: 'custom' });
+    mockState.gateways = [alpha];
+    mockState.activeId = alpha.id;
+    mockState.manifests.set(alpha.url, GATE_MANIFEST);
+    await mount();
+    await settle(4, 2_000);
+    pendingStatesSeen.length = 0;
+    return mockClients[0];
+  }
+
+  test('one decision issues one approvals.pending read and no loading flip', async () => {
+    const client = await connectAlphaWithRows();
+    const before = approvalsReads(client);
+
+    await act(async () => {
+      await gatewayApi().decideApproval('a1', 'approve');
+    });
+
+    expect(client.rpcMethods).toContain('approval.approve');
+    expect(approvalsReads(client) - before).toBe(1);
+    expect(gatewayApi().pendingApprovalsState).toBe('ready');
+  });
+
+  test('the rows stay on screen while the post-decision read is in flight', async () => {
+    const client = await connectAlphaWithRows();
+    const before = approvalsReads(client);
+    let release = (): void => undefined;
+    approvalsReadHold = new Promise<unknown>((resolve) => {
+      release = () => resolve({ data: [] });
+    });
+
+    let deciding: Promise<void> | null = null;
+    await act(async () => {
+      deciding = gatewayApi().decideApproval('a1', 'approve');
+      await advance(0);
+    });
+
+    // The read the decision issues is outstanding: this is the window in which
+    // the inbox used to paint its skeleton over every row still to be decided.
+    expect(approvalsReads(client) - before).toBe(1);
+    expect(pendingStatesSeen).not.toContain('loading');
+    expect(gatewayApi().pendingApprovalsState).toBe('ready');
+
+    await act(async () => {
+      release();
+      await deciding;
+    });
+    expect(pendingStatesSeen).not.toContain('loading');
+  });
+
+  test('refresh: false skips the re-read entirely', async () => {
+    const client = await connectAlphaWithRows();
+    const before = approvalsReads(client);
+
+    await act(async () => {
+      await gatewayApi().decideApproval('a1', 'deny', { refresh: false });
+    });
+
+    expect(client.rpcMethods).toContain('approval.deny');
+    // A batch decides N rows and re-reads once at the end: this call's own
+    // re-read is the one it must not make.
+    expect(approvalsReads(client) - before).toBe(0);
+    expect(pendingStatesSeen).not.toContain('loading');
+  });
+
+  test('the decision is written to the durable audit either way', async () => {
+    await connectAlphaWithRows();
+
+    await act(async () => {
+      await gatewayApi().decideApproval('audit-row', 'deny', { refresh: false });
+    });
+    await settle(2);
+
+    const stored = await keyValueStorage.getItem('versutus:approval-audit');
+    expect(stored).toContain('audit-row');
   });
 });

@@ -216,6 +216,57 @@ export async function loadApprovalAudit(): Promise<ApprovalAuditEntry[]> {
   }
 }
 
+/**
+ * Where an unparsable audit blob is parked before the log restarts. One slot,
+ * best-effort: key-value storage cannot be listed, so the newest copy is simply
+ * overwritten by the next one. It exists because the log is the only durable
+ * record of what the operator answered, and a value we cannot parse is still
+ * bytes we were handed — not something to overwrite silently.
+ */
+export const APPROVAL_AUDIT_CORRUPT_STORAGE_KEY = `${APPROVAL_AUDIT_STORAGE_KEY}:corrupt`;
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * An audit row is a whole-array write to one key, computed from a read of that
+ * same key. Two rows decided at once — the inbox disables a row's buttons only
+ * against its own approvalId, so two rows are decidable together by design —
+ * each read the same snapshot, and whichever write landed second was computed
+ * from a log that did not hold the other decision: one answer vanished from the
+ * only durable record the device keeps. Serialize through a single promise
+ * chain so every decision reads what the previous one wrote. Reads stay off the
+ * queue, like every other load in this folder: a load racing a write may
+ * observe the pre-write state, which is acceptable, while keeping the read out
+ * of the queue avoids delaying the UI's own refresh on a write's account.
+ */
+let auditWriteTail: Promise<void> = Promise.resolve();
+
+function enqueueAuditWrite<T>(task: () => Promise<T>): Promise<T> {
+  const result = auditWriteTail.then(task);
+  // A failed write must reject its own caller without poisoning the queue: the
+  // tail always settles resolved so the next decision still records.
+  auditWriteTail = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+/**
+ * Park an unparsable audit blob before the writer restarts the log, so the
+ * history stays recoverable. Best-effort in both directions: a store that
+ * refuses the copy costs the recovery, never the decision being recorded.
+ */
+async function preserveCorruptApprovalAudit(raw: string): Promise<void> {
+  try {
+    await keyValueStorage.setItem(APPROVAL_AUDIT_CORRUPT_STORAGE_KEY, raw);
+  } catch {
+    // best-effort
+  }
+}
+
 /** One audit row's line: what happened, to which class, decided how. */
 export function approvalAuditCopy(entry: ApprovalAuditEntry): string {
   const verb =
@@ -232,13 +283,41 @@ export function approvalAuditSummaryCopy(count: number): string {
 
 /** Append one decision. Best-effort: an audit write must never block a call. */
 export async function recordApprovalDecision(entry: ApprovalAuditEntry): Promise<void> {
-  try {
-    const log = await loadApprovalAudit();
-    await keyValueStorage.setItem(
-      APPROVAL_AUDIT_STORAGE_KEY,
-      JSON.stringify(appendApprovalAudit(log, entry)),
-    );
-  } catch {
-    // best-effort
-  }
+  await enqueueAuditWrite(async () => {
+    let raw: string | null;
+    try {
+      raw = await keyValueStorage.getItem(APPROVAL_AUDIT_STORAGE_KEY);
+    } catch (caught) {
+      // A refused read is NOT an empty log — that is the whole point of the
+      // strict loader. Writing on top of it would replace the operator's whole
+      // decision history with this one entry, so leave the stored value alone
+      // and drop just this row.
+      console.warn(
+        `[approval-policy] Could not read the approval audit; decision "${entry.approvalId}" was not recorded: ${errorText(caught)}`,
+      );
+      return;
+    }
+
+    let log: ApprovalAuditEntry[] = [];
+    if (raw) {
+      try {
+        log = approvalAuditFromUnknown(JSON.parse(raw) as unknown);
+      } catch {
+        // Unparsable bytes are worth more than the empty log this writer would
+        // otherwise start from, so park them before a fresh log overwrites them.
+        await preserveCorruptApprovalAudit(raw);
+      }
+    }
+
+    try {
+      await keyValueStorage.setItem(
+        APPROVAL_AUDIT_STORAGE_KEY,
+        JSON.stringify(appendApprovalAudit(log, entry)),
+      );
+    } catch (caught) {
+      console.warn(
+        `[approval-policy] Could not write the approval audit for "${entry.approvalId}": ${errorText(caught)}`,
+      );
+    }
+  });
 }

@@ -56,6 +56,14 @@ export function ApprovalInbox() {
   } = useGateway();
   const tokens = useTokens();
   const [batchBusy, setBatchBusy] = useState(false);
+  // How far a batch has got. A decision per row used to blank the whole inbox
+  // into its own skeleton, N times for N rows, so a long batch showed no sign
+  // of moving at all.
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
+  // What a batch left behind: how many rows it decided, how many the Gate
+  // refused, and the first refusal's own message. A refusal is per-row now, so
+  // the rows that failed stay in the list and can be tapped again.
+  const [batchFailure, setBatchFailure] = useState<{ decided: number; failed: number; reason: string } | null>(null);
   // A refused Approve/Deny (single or batch) names the failure here instead
   // of vanishing: decideApproval rejects with no catch at the provider, so
   // the card catches it, keeps the still-pending rows, and says why nothing
@@ -65,6 +73,7 @@ export function ApprovalInbox() {
   const approvable = batchApprovableRows(pendingApprovals);
 
   const decide = async (approvalId: string, decision: 'approve' | 'deny') => {
+    setBatchFailure(null);
     try {
       await decideApproval(approvalId, decision);
       setDecideError(null);
@@ -75,14 +84,32 @@ export function ApprovalInbox() {
 
   const decideAll = async (ids: string[], decision: 'approve' | 'deny') => {
     setBatchBusy(true);
-    try {
-      for (const id of ids) await decideApproval(id, decision);
-      setDecideError(null);
-    } catch (caught) {
-      setDecideError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setBatchBusy(false);
+    setBatchFailure(null);
+    setBatchProgress({ done: 0, total: ids.length });
+    let decided = 0;
+    const failures: string[] = [];
+    for (const id of ids) {
+      try {
+        // No per-row re-read: the Gate has one answer to give for the whole
+        // batch, and the list must stay visible under the progress line.
+        await decideApproval(id, decision, { refresh: false });
+        decided += 1;
+      } catch (caught) {
+        // Keep going. One refusal must not leave the rows behind it undecided.
+        failures.push(caught instanceof Error ? caught.message : String(caught));
+      }
+      setBatchProgress({ done: decided + failures.length, total: ids.length });
     }
+    // One re-read at the end, silent: the rows that refused are still pending
+    // on the Gate, so the list that lands still shows them.
+    await refreshPendingApprovals({ silent: true });
+    setBatchProgress(null);
+    setBatchBusy(false);
+    if (failures.length === 0) {
+      setDecideError(null);
+      return;
+    }
+    setBatchFailure({ decided, failed: failures.length, reason: failures[0] ?? 'The Gate refused this decision.' });
   };
 
   return (
@@ -93,6 +120,15 @@ export function ApprovalInbox() {
           affected="This approval decision"
           next="Try the decision again."
           onDismiss={() => setDecideError(null)}
+        />
+      ) : null}
+
+      {batchFailure ? (
+        <ErrorCard
+          cause={batchFailure.reason}
+          affected={`${batchFailure.decided} decided, ${batchFailure.failed} failed`}
+          next="The rows below are still waiting — decide them again."
+          onDismiss={() => setBatchFailure(null)}
         />
       ) : null}
 
@@ -122,6 +158,13 @@ export function ApprovalInbox() {
           </View>
         ) : (
           <>
+            {batchProgress ? (
+              <View style={styles.quiet}>
+                <Text variant="caption" color="secondary">
+                  {`Deciding ${batchProgress.done} of ${batchProgress.total}…`}
+                </Text>
+              </View>
+            ) : null}
             {pendingApprovals.map((row, index) => (
               <View
                 key={row.approvalId}

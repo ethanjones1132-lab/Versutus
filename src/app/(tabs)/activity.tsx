@@ -59,9 +59,10 @@ export default function ActivityScreen() {
   // A refused refresh read is named below the header instead of ending the
   // spinner as if the pull succeeded; cleared by the next success.
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  // A pull-to-refresh re-reads capabilities + gateways but not cron jobs
-  // (CronSection loads once per connection); bumping this signal reaches
-  // the section's re-list without remounting the tab.
+  // A pull-to-refresh re-reads the gateway reads above and signals the cron
+  // section to re-list; bumping this signal reaches the section's re-list
+  // without remounting the tab, and the section coalesces it with a read
+  // already in flight.
   const [cronReloadSignal, setCronReloadSignal] = useState(0);
   // Decision history is this device's key-value audit, not a Gateway read:
   // loaded once, and re-read alongside the pulls so a fresh decision shows.
@@ -122,12 +123,21 @@ export default function ActivityScreen() {
     setRefreshing(true);
     const started = Date.now();
     try {
-      await Promise.all([refreshCapabilities(), refreshGateways(), refreshPendingApprovals()]);
+      // Sequentially, in the order the tab is actually read: the approvals are
+      // what Activity is opened for, then what the gateway can do, then the
+      // local roster. Fanned out in one `Promise.all` these three went to a
+      // host the repo documents as serving one request at a time, so the
+      // spinner waited on a concurrent pile rather than on the work.
+      await refreshPendingApprovals();
+      await refreshCapabilities();
+      await refreshGateways();
       setRefreshError(null);
     } catch (caught) {
       setRefreshError(caught instanceof Error ? caught.message : String(caught));
     }
     await readAudit();
+    // The section's own `load` coalesces with a read already in flight, so
+    // this bump costs at most the one read that is still running.
     setCronReloadSignal((n) => n + 1);
     // Hold the spinner briefly so recovery isn't a disorienting flash.
     const elapsed = Date.now() - started;

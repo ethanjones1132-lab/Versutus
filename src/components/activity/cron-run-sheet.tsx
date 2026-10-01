@@ -9,6 +9,13 @@ import { useNow } from '@/hooks/use-now';
 
 /** How often the open view asks the host for new turns. */
 const POLL_MS = 3000;
+/**
+ * The wait before the next read, by consecutive refusals: a Gate that is not
+ * answering does not get re-asked on the same cadence as a healthy one, and the
+ * last rung repeats. Indexed by the failure count, so the first refusal waits
+ * `POLL_BACKOFF_MS[1]` and a healthy read waits `POLL_MS`.
+ */
+const POLL_BACKOFF_MS = [POLL_MS, 6_000, 12_000, 30_000] as const;
 
 export type CronRunSheetProps = {
   /** The run's id; null renders nothing (sheet dismissed). */
@@ -32,17 +39,22 @@ export function CronRunSheet({ runId, onClose }: CronRunSheetProps) {
   const [error, setError] = useState<string | null>(null);
   const [polledAt, setPolledAt] = useState<number | null>(null);
   const cancelled = useRef(false);
+  // Consecutive refusals — the last error stays on screen while this climbs,
+  // and a healthy read drops it back to zero.
+  const refusals = useRef(0);
 
   const poll = useCallback(async () => {
-    if (!runId) return;
+    if (!runId || cancelled.current) return;
     try {
       const next = await cron.transcript(runId);
       if (cancelled.current) return;
+      refusals.current = 0;
       setTurns(next);
       setPolledAt(Date.now());
       setError(null);
     } catch (caught) {
       if (cancelled.current) return;
+      refusals.current += 1;
       // Keep the last good transcript: a poll failure is a gap in freshness,
       // not evidence that the run produced nothing.
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -55,18 +67,38 @@ export function CronRunSheet({ runId, onClose }: CronRunSheetProps) {
   // react-hooks/set-state-in-effect for exactly that reason.
   useEffect(() => {
     cancelled.current = false;
+    refusals.current = 0;
     if (!runId) return undefined;
+
+    /**
+     * The next read is armed by the one that just settled, never on a tick of
+     * its own: one read outstanding at a time, and a refusal buys a longer wait
+     * before the Gate is asked again. `setInterval` armed a read every 3s
+     * whatever the last one was doing, so a link slow enough to sit on the
+     * transport's 30s ceiling piled ten reads onto a Gate that serves one
+     * request at a time.
+     */
+    let pending: ReturnType<typeof setTimeout> | null = null;
+    const scheduleNext = () => {
+      if (cancelled.current || pending !== null) return;
+      const rung = POLL_BACKOFF_MS[Math.min(refusals.current, POLL_BACKOFF_MS.length - 1)];
+      pending = setTimeout(() => {
+        pending = null;
+        void poll().then(scheduleNext, scheduleNext);
+      }, rung ?? POLL_MS);
+    };
 
     // First poll is deferred a tick, same as every other loader in the app:
     // starting it synchronously would write state during the effect body.
-    const first = setTimeout(() => { void poll(); }, 0);
-    const timer = setInterval(() => { void poll(); }, POLL_MS);
+    const first = setTimeout(() => {
+      void poll().then(scheduleNext, scheduleNext);
+    }, 0);
     // The freshness stamp (FreshnessLabel below) owns its own per-second tick,
     // so the turn list and the rest of the sheet stay still between polls.
     return () => {
       cancelled.current = true;
       clearTimeout(first);
-      clearInterval(timer);
+      if (pending !== null) clearTimeout(pending);
     };
   }, [poll, runId]);
 

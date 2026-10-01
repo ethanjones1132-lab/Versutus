@@ -503,8 +503,21 @@ type GatewayContextValue = {
   pendingApprovalsState: 'loading' | 'ready' | 'failed';
   /** Why the last pending read failed; null unless `pendingApprovalsState` is `failed`. */
   pendingApprovalsError: string | null;
-  refreshPendingApprovals: () => Promise<void>;
-  decideApproval: (approvalId: string, decision: 'approve' | 'deny') => Promise<void>;
+  /**
+   * `silent` re-reads without flipping `pendingApprovalsState` to `loading`, so
+   * the rows stay on screen instead of being replaced by the inbox's skeleton
+   * for the duration of the read.
+   */
+  refreshPendingApprovals: (options?: { silent?: boolean }) => Promise<void>;
+  /**
+   * `refresh: false` skips the re-read that follows a decision, for callers
+   * that decide several rows and re-read once at the end.
+   */
+  decideApproval: (
+    approvalId: string,
+    decision: 'approve' | 'deny',
+    options?: { refresh?: boolean },
+  ) => Promise<void>;
   approvalBusy: string | null;
   tlsFingerprintChange: {
     previousFingerprint: string;
@@ -3325,11 +3338,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * tell them apart: `loading` while in flight, `ready` when a completed
    * read lands (rows or a genuinely empty list), `failed` with the caught
    * message when the Gate refuses — never a silent empty list that claims
-   * nothing is waiting. An approval decided here is written to the durable
-   * audit before the list is re-read.
+   * nothing is waiting. `silent` keeps the current list on screen through the
+   * read (the post-decision re-reads below and a batch's single closing read):
+   * a `loading` flip there replaces rows the operator is still working through
+   * with a skeleton, N times for N decisions.
    */
-  const refreshPendingApprovals = useCallback(async () => {
-    setPendingApprovalsState('loading');
+  const refreshPendingApprovals = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) setPendingApprovalsState('loading');
     setPendingApprovalsError(null);
     try {
       const payload = await gatewayRequest<unknown>('approvals.pending', {});
@@ -3343,7 +3358,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [gatewayRequest]);
 
   const decideApproval = useCallback(
-    async (approvalId: string, decision: 'approve' | 'deny') => {
+    async (approvalId: string, decision: 'approve' | 'deny', options?: { refresh?: boolean }) => {
       setApprovalBusy(approvalId);
       try {
         await gatewayRequest(decision === 'approve' ? 'approval.approve' : 'approval.deny', { approvalId });
@@ -3360,7 +3375,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           operation: row?.operation,
           summary: row?.summary,
         });
-        await refreshPendingApprovals();
+        // Silent even for one row: the decision already moved this list, and a
+        // skeleton flash between a tap and its result reads as the list failing.
+        if (options?.refresh !== false) await refreshPendingApprovals({ silent: true });
       } finally {
         setApprovalBusy(null);
       }
