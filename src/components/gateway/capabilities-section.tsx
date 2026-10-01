@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { Button, Card, ConfirmSheet, Skeleton, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
-import { looksLikeCredential } from '@/lib/gateway/credential-shape';
+import { looksLikeCredential, isProviderCredentialRef } from '@/lib/gateway/credential-shape';
 import {
   defaultConfigForFields,
   isValidInstanceId,
@@ -28,6 +28,10 @@ type Draft = {
   values: Record<string, string>;
   secretValue: string;
 };
+
+function errorText(caught: unknown): string {
+  return caught instanceof Error ? caught.message : String(caught);
+}
 
 /**
  * The capability-registry body: list, add, edit, delete, secrets. Rendered
@@ -128,8 +132,8 @@ export function CapabilitiesSection() {
       const refName = secretField ? String(config[secretField.key] ?? '') : '';
       const hasSecret = !!refName && !!draft.secretValue.trim();
       if (hasSecret) {
-        // The Gate refuses this too, but catching it here can name the field —
-        // and it must run before create/update so a refused save leaves no
+        // The Gate refuses these too, but catching them here can name the field —
+        // and they must run before create/update so a refused save leaves no
         // instance behind that a retry then cannot re-create.
         if (looksLikeCredential(refName)) {
           setError(
@@ -137,14 +141,35 @@ export function CapabilitiesSection() {
           );
           return;
         }
+        if (isProviderCredentialRef(refName)) {
+          setError(
+            `"${secretField?.label ?? 'Secret ref'}" cannot be "${refName}": that is a provider credential — set it with providers.auth.setApiKey on the Providers screen so the provider's adapter can read it.`,
+          );
+          return;
+        }
+        // The secret goes FIRST. An instance written before a refused secret is
+        // an orphan the open draft can never fix: the retry hits "already exists".
+        await gatewayRequest('registry.secrets.set', { refName, value: draft.secretValue.trim() });
       }
       if (draft.mode === 'create') {
-        await gatewayRequest('registry.instances.create', {
-          id: draft.id,
-          kind: draft.kind,
-          label: draft.label || draft.id,
-          config,
-        });
+        try {
+          await gatewayRequest('registry.instances.create', {
+            id: draft.id,
+            kind: draft.kind,
+            label: draft.label || draft.id,
+            config,
+          });
+        } catch (caught) {
+          // "already exists" is the one create refusal an update can finish, and
+          // a draft left in create mode makes every retry hit it again — a dead
+          // end the operator cannot leave.
+          if (!/already exists/.test(errorText(caught))) throw caught;
+          await gatewayRequest('registry.instances.update', {
+            id: draft.id,
+            label: draft.label || draft.id,
+            config,
+          });
+        }
       } else {
         await gatewayRequest('registry.instances.update', {
           id: draft.id,
@@ -152,13 +177,21 @@ export function CapabilitiesSection() {
           config,
         });
       }
-      if (hasSecret) {
-        await gatewayRequest('registry.secrets.set', { refName, value: draft.secretValue.trim() });
-      }
+      // The instance is on the Gate from here. Close the draft BEFORE the
+      // refresh: a refresh that fails must not leave an open create-mode draft,
+      // because the operator's retry would then hit "already exists" for a save
+      // that actually landed.
       setDraft(null);
-      await refreshCapabilities();
-      await load();
+      try {
+        await refreshCapabilities();
+        await load();
+      } catch (caught) {
+        setError(`Saved, but the capability list could not be refreshed: ${errorText(caught)}`);
+      }
     } catch (caught) {
+      // The instance write refused. A secret set above stays — unreferenced, and
+      // overwritten by the retry — while the draft stays open so a corrected save
+      // has somewhere to go.
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setBusy(false);

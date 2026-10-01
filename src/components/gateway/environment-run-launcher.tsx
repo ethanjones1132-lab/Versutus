@@ -17,6 +17,23 @@ type Client = ReturnType<typeof createEnvironmentClient>;
 
 const TERMINAL_EVENT = /^run\.(completed|failed|cancelled)$/;
 
+/**
+ * How many streamed events one run may keep in memory. A chatty CLI can emit
+ * thousands of frames in a single run; the sheet folds them into one reply, so
+ * the tail is what matters and the head can go.
+ */
+export const MAX_RUN_EVENTS = 2000;
+
+/** Keep the newest MAX_RUN_EVENTS, plus the `run.started` marker if the tail
+ *  has already dropped it, so the bubble still says the run opened. */
+export function capRunEvents(events: EnvironmentRunEvent[]): EnvironmentRunEvent[] {
+  if (events.length <= MAX_RUN_EVENTS) return events;
+  const kept = events.slice(-MAX_RUN_EVENTS);
+  const opened = events.find((event) => event.type === 'run.started');
+  if (!opened || kept.includes(opened)) return kept;
+  return [opened, ...kept.slice(-(MAX_RUN_EVENTS - 1))];
+}
+
 function approvalFrom(event: EnvironmentRunEvent): { id: string; summary: string } | null {
   if (!/approval/i.test(event.type)) return null;
   const payload = (event.payload ?? {}) as Record<string, unknown>;
@@ -83,6 +100,10 @@ export function EnvironmentRunLauncher({
   // over a connection that is gone; offer reattachment instead.
   const [detached, setDetached] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  // Which follow owns the sheet right now. A run's callbacks and its `finally`
+  // compare against it and do nothing once it has moved on, so a stream that
+  // outlives its sheet can never write into the next run's bubble.
+  const runTokenRef = useRef(0);
   const lastEventTypeRef = useRef<string | null>(null);
 
   const view = useMemo(() => environmentRunView(events), [events]);
@@ -135,8 +156,63 @@ export function EnvironmentRunLauncher({
   const effectiveOperation = operations.includes(operation) ? operation : operations[0];
   const needsPromptInput = operationNeedsPromptInput(effectiveOperation);
 
+  /**
+   * Retire the run the phone was following: abort its stream and move the run
+   * token on, so its callbacks and `finally` are inert even if the abort lands
+   * late. Returns the token the next follow may claim.
+   */
+  const retire = useCallback((): number => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    runTokenRef.current += 1;
+    return runTokenRef.current;
+  }, []);
+
+  /**
+   * Leaving the sheet — Close, a hardware back, or the section pointing it at
+   * another environment — ends the phone's side of the run. The Gate-side run
+   * keeps going: that is what Cancel run is for, and the run stays in Recent
+   * runs so Reopen replays it.
+   */
+  const dismiss = useCallback((): void => {
+    retire();
+    lastEventTypeRef.current = null;
+    setEvents([]);
+    setApproval(null);
+    setActiveRunId(null);
+    setDetached(false);
+    setRunning(false);
+    onClose();
+  }, [onClose, retire]);
+
+  /**
+   * The transcript belongs to the sheet it was streamed into. Closing the sheet
+   * — or aiming it at another environment — starts a blank one, derived during
+   * render rather than from an effect: React re-renders before committing, so
+   * the old run's output can never appear under a new target and no effect has
+   * to set state to get there.
+   */
+  const sheetKey = `${environment?.id ?? ''}|${visible}`;
+  const [streamedFor, setStreamedFor] = useState(sheetKey);
+  if (streamedFor !== sheetKey) {
+    setStreamedFor(sheetKey);
+    setEvents([]);
+    setApproval(null);
+    setActiveRunId(null);
+    setDetached(false);
+    setRunning(false);
+  }
+
+  useEffect(() => {
+    // The external half of the same change: abort the stream the phone was
+    // following and move the run token on, so its callbacks and `finally` stay
+    // inert even if the abort lands late. No state is written here — the reset
+    // above is derived during render.
+    retire();
+  }, [environment?.id, retire, visible]);
+
   /** Stream a run to its end — or to whatever the connection leaves us with. */
-  async function follow(environmentId: string, runId: string) {
+  async function follow(environmentId: string, runId: string, token: number) {
     lastEventTypeRef.current = null;
     setDetached(false);
     setRunning(true);
@@ -147,27 +223,35 @@ export function EnvironmentRunLauncher({
         environmentId,
         runId,
         (event) => {
+          if (runTokenRef.current !== token) return;
           lastEventTypeRef.current = event.type;
-          setEvents((current) => [...current, event]);
+          setEvents((current) => capRunEvents([...current, event]));
           const pending = approvalFrom(event);
           if (pending) setApproval(pending);
         },
         controller.signal,
       );
+      if (runTokenRef.current !== token) return;
       if (!controller.signal.aborted && !TERMINAL_EVENT.test(lastEventTypeRef.current ?? '')) {
         setDetached(true);
       }
     } catch (caught) {
+      if (runTokenRef.current !== token) return;
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setRunning(false);
-      abortRef.current = null;
-      refreshRuns();
+      if (runTokenRef.current === token) {
+        setRunning(false);
+        abortRef.current = null;
+        refreshRuns();
+      }
     }
   }
 
   async function start() {
     if (!environment) return;
+    // Retire any earlier run before claiming the sheet: the second start used
+    // to overwrite abortRef and leave the first stream unreachable.
+    const token = retire();
     setError(null);
     setEvents([]);
     setApproval(null);
@@ -177,9 +261,11 @@ export function EnvironmentRunLauncher({
         operation: effectiveOperation,
         input: operationNeedsPromptInput(effectiveOperation) ? { prompt } : {},
       });
+      if (runTokenRef.current !== token) return;
       setActiveRunId(runId);
-      await follow(environment.id, runId);
+      await follow(environment.id, runId, token);
     } catch (caught) {
+      if (runTokenRef.current !== token) return;
       setError(caught instanceof Error ? caught.message : String(caught));
       setRunning(false);
     }
@@ -192,11 +278,13 @@ export function EnvironmentRunLauncher({
     setEvents([]);
     setApproval(null);
     setActiveRunId(runId);
-    await follow(environment.id, runId);
+    await follow(environment.id, runId, retire());
   }
 
   async function cancel() {
-    abortRef.current?.abort();
+    // Retire first so the dying stream cannot keep appending, then ask the Gate
+    // to stop the run itself — the only place a Gate-side cancel belongs.
+    retire();
     if (environment && activeRunId) {
       await client.cancelRun(environment.id, activeRunId).catch(() => undefined);
     }
@@ -217,7 +305,7 @@ export function EnvironmentRunLauncher({
   const badge = detached ? { label: 'Detached', tone: 'neutral' as const } : environmentRunBadge(view, { starting: running && events.length === 0 });
 
   return (
-    <BaseSheet visible={visible} onClose={onClose}>
+    <BaseSheet visible={visible} onClose={dismiss}>
       <Text variant="title">{environment ? `Run · ${environment.label}` : 'Run'}</Text>
       {environment ? (
         <Text variant="caption">
@@ -339,7 +427,7 @@ export function EnvironmentRunLauncher({
               disabled={!environment || (needsPromptInput && !prompt.trim())}
             />
           )}
-          <Button label="Close" variant="secondary" onPress={onClose} />
+          <Button label="Close" variant="secondary" onPress={dismiss} />
         </View>
       </ScrollView>
     </BaseSheet>

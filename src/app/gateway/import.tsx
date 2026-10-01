@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
+import { File } from 'expo-file-system';
 import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
@@ -22,10 +23,11 @@ type ImportFailure = { source: 'clipboard' | 'file' | 'import'; message: string 
 /**
  * Open the document picker for the packet file and read it as text. A
  * cancelled picker answers `undefined` so the pasted field is left alone.
- * `expo-file-system` reads the picked URI; a read or decode failure becomes
- * the refusal the card shows, not a crash.
+ * The SDK 57 file API reads the picked URI through the `File` class — the
+ * root module's `readAsStringAsync` is a deprecation shim that throws. A read
+ * or decode failure becomes the refusal the card shows, not a crash.
  */
-async function pickHandoffFile(): Promise<PickedHandoffFile | undefined> {
+export async function pickHandoffFile(): Promise<PickedHandoffFile | undefined> {
   const result = await DocumentPicker.getDocumentAsync({
     type: 'application/json',
     copyToCacheDirectory: true,
@@ -33,8 +35,7 @@ async function pickHandoffFile(): Promise<PickedHandoffFile | undefined> {
   if (result.canceled || result.assets.length === 0) return undefined;
   const asset = result.assets[0];
   try {
-    const FileSystem = await import('expo-file-system');
-    const content = await FileSystem.readAsStringAsync(asset.uri);
+    const content = await new File(asset.uri).text();
     return { name: asset.name ?? 'packet.json', content };
   } catch {
     return { name: asset.name ?? 'packet.json', content: '', error: 'The picked file could not be read.' };
@@ -80,14 +81,17 @@ export default function ImportBotScreen() {
     void pickHandoffFile()
       .then((picked) => {
         if (picked === undefined) return; // picker cancelled: leave the field alone
-        setText(picked.content);
-        clearFailure();
+        // Judge the refusal BEFORE touching the field: a failed read answers
+        // with an empty string, and writing that would destroy the packet the
+        // operator already pasted.
         if (picked.error) {
           setFailure({ source: 'file', message: picked.error });
           setFileNote(undefined);
-        } else {
-          setFileNote(`Read ${picked.name}: ${picked.content.toLocaleString()} characters.`);
+          return;
         }
+        setText(picked.content);
+        clearFailure();
+        setFileNote(`Read ${picked.name}: ${picked.content.toLocaleString()} characters.`);
       })
       .catch(() => setFailure({ source: 'file', message: 'The file could not be read.' }));
   };

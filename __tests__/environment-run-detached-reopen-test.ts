@@ -57,12 +57,15 @@ describe('CLI run launcher offers Reopen on a detached run', () => {
     expect(src).toContain('onPress={running ? undefined : () => void attach(run.runId)}');
   });
 
-  test('Start run, Cancel run, and Close stay untouched', () => {
+  test('Start run, Cancel run, and Close stay reachable', () => {
     const src = readLauncher();
     expect(src).toContain('label="Start run"');
     expect(src).toContain('label="Cancel run"');
     expect(src).toContain('onPress={() => void cancel()}');
-    expect(src).toContain('<Button label="Close" variant="secondary" onPress={onClose} />');
+    // Close dismisses the sheet AND retires the run it was following — the
+    // launcher owns the stream, so a bare `onPress={onClose}` left it running.
+    expect(src).toContain('<Button label="Close" variant="secondary" onPress={dismiss} />');
+    expect(src).toContain('<BaseSheet visible={visible} onClose={dismiss}>');
   });
 
   test('the attach guard stays untouched', () => {

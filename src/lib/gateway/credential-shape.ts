@@ -16,3 +16,15 @@ export function looksLikeCredential(refName: string | undefined | null): boolean
   // A real ref is a path or a phrase; an unbroken 32+ character run is a token.
   return value.length >= 32 && !/[/\-_.:]/.test(value);
 }
+
+/**
+ * Mirrors the Gate's other `registry.secrets.set` guard: a `provider/…` ref
+ * belongs to a provider's own credential (`providers.auth.setApiKey`), and the
+ * registry vault refuses to store one — a provider's key lives in the Gate-home
+ * vault under its `credentialRef`. `looksLikeCredential` cannot see this (the
+ * shape is legal), so without this check the phone sends a save the Gate will
+ * always refuse, after the instance has already been written.
+ */
+export function isProviderCredentialRef(refName: string | undefined | null): boolean {
+  return String(refName ?? '').trim().startsWith('provider/');
+}
