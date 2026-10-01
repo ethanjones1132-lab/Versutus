@@ -1,6 +1,9 @@
+import { collapseDuplicateGateways, gatewayIdentityKey } from '@/lib/gateway/profile-dedupe';
 import { isPrivateOrLanHost, isTailnetHost, normalizeGatewayUrl } from '@/lib/gateway/url';
 
+import type { CollapsedGateways } from '@/lib/gateway/profile-dedupe';
 import type { DiscoveredGateway } from '@/lib/discovery/types';
+import type { GatewayProfile } from '@/lib/gateway/types';
 
 export function normalizePcAddress(input: string): string {
   return input.trim().toLowerCase().replace(/\.$/, '');
@@ -140,6 +143,197 @@ export function beaconKindForUrl(
 ): string | undefined {
   const kind = discovered.find((item) => item.url === url)?.kind?.trim();
   return kind ? kind : undefined;
+}
+
+/** Host, effective port and base path of a gateway URL, or null when it is not one. */
+type GatewayEndpoint = { host: string; port: string; path: string };
+
+function endpointOf(url: string): GatewayEndpoint | null {
+  try {
+    const parsed = new URL(url.trim());
+    return {
+      host: parsed.hostname.toLowerCase(),
+      port: parsed.port || (parsed.protocol === 'https:' ? '443' : '80'),
+      path: parsed.pathname.replace(/\/+$/, ''),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function listsHost(hosts: readonly string[] | undefined, host: string): boolean {
+  return (hosts ?? []).some((entry) => normalizePcAddress(entry) === host);
+}
+
+export type SavedGatewayMatchOptions = {
+  /** The address the operator configured, as `appSettings.tailscaleHost` holds it. */
+  tailscaleHost?: string;
+  /** `transport.ipv4` of each saved profile's last cached manifest, by profile id. */
+  cachedIpv4ByProfileId?: Record<string, readonly string[] | undefined>;
+  /** The profile id this device last connected to. */
+  activeId?: string | null;
+};
+
+/**
+ * The saved profile a probe winner belongs to, or undefined for a gateway that
+ * is genuinely new.
+ *
+ * A wave winner matched a saved profile by exact URL only, so one Gate reached
+ * under a second host form — the MagicDNS name while the tailnet IP answers, or
+ * a LAN address for the same PC — became a brand-new profile with no token. Its
+ * connect fan-out then went out unauthenticated, and the Gate's 401 read as
+ * "the key was refused" (AUTH-1).
+ *
+ * Same Gate when any of: the same identity key (scheme + host + port + path);
+ * the winner's host is one this profile's alternate IPv4s or its last cached
+ * manifest advertised; or the winner is the configured `tailscaleHost` and the
+ * profile is the active (or only) Gate profile. The port always has to match —
+ * a second listener on one host (Gate :8760, Hermes :8642) is a different
+ * service, and borrowing the Gate's token for it would earn the very refusal
+ * this exists to prevent. Child profiles are skipped: they are materialised
+ * under their parent and follow it.
+ */
+export function matchSavedGateway(
+  url: string,
+  saved: readonly GatewayProfile[],
+  options: SavedGatewayMatchOptions = {},
+): GatewayProfile | undefined {
+  return savedGatewayMatches(url, saved, options)[0]?.profile;
+}
+
+/**
+ * The address a wave winner adds to a saved profile's alternate IPv4s: the host
+ * it answered on, when the profile does not already name it and the port still
+ * matches (a second listener on one host is a different service). Empty when
+ * there is nothing new to remember, so the caller can leave storage alone.
+ *
+ * This — not a rewritten URL — is how a wave reaches a Gate this device is
+ * paired with while its MagicDNS name is in a blip: the saved URL stays the
+ * operator's, and every request falls back to the advertised address (the same
+ * mechanism a Gate's own manifest uses), instead of the roster learning an
+ * address that one lucky wave happened to win on.
+ */
+export function reachableAlternateIpv4(
+  winnerUrl: string,
+  saved: Pick<GatewayProfile, 'url' | 'alternateIpv4'>,
+): string[] {
+  const winner = endpointOf(winnerUrl);
+  const profile = endpointOf(saved.url);
+  if (!winner || !profile || winner.host === profile.host || winner.port !== profile.port) return [];
+  const known = saved.alternateIpv4 ?? [];
+  return listsHost(known, winner.host) ? [] : [...known, winner.host];
+}
+
+/** Every saved profile this winner could be, best first. */
+function savedGatewayMatches(
+  url: string,
+  saved: readonly GatewayProfile[],
+  options: SavedGatewayMatchOptions = {},
+): { profile: GatewayProfile; rank: number }[] {
+  const winner = endpointOf(url);
+  if (!winner) return [];
+  const configuredHost = options.tailscaleHost ? normalizePcAddress(options.tailscaleHost) : '';
+  // The Gate profiles that could be this address's Gate, which is what the
+  // configured-host rule below counts. A profile that carries no key is not one
+  // of them: it cannot be the Gateway this device is paired with, and the
+  // token-less copy a bad wave saved would otherwise block the very match that
+  // heals it.
+  const gateProfilesOnPort = saved.filter(
+    (profile) =>
+      !profile.parentId &&
+      profile.kind === 'custom' &&
+      Boolean(profile.token) &&
+      endpointOf(profile.url)?.port === winner.port,
+  );
+
+  const rank = (profile: GatewayProfile): number => {
+    if (gatewayIdentityKey(profile.url) === gatewayIdentityKey(url)) return 0;
+    const endpoint = endpointOf(profile.url);
+    if (!endpoint || endpoint.port !== winner.port) return -1;
+    // A profile below a base path is a provider child; a winner that carries one
+    // is that child, not the Gate's own listener.
+    if (endpoint.path !== '' || winner.path !== '') return -1;
+    // The winner's host is an address this profile already knows as its own —
+    // the one it was last reached on, or one the Gate advertised for itself.
+    if (
+      listsHost(profile.alternateIpv4, winner.host) ||
+      listsHost(options.cachedIpv4ByProfileId?.[profile.id], winner.host)
+    ) {
+      return 1;
+    }
+    // The winner is the configured address, and this is the only Gate profile
+    // that can hold it.
+    if (
+      configuredHost &&
+      winner.host === configuredHost &&
+      profile.kind === 'custom' &&
+      (profile.id === options.activeId ||
+        gateProfilesOnPort.every((gate) => gate.id === profile.id))
+    ) {
+      return 2;
+    }
+    return -1;
+  };
+
+  const matches = saved
+    .filter((profile) => !profile.parentId)
+    .map((profile) => ({ profile, rank: rank(profile) }))
+    .filter((entry) => entry.rank >= 0)
+    // A profile that can authenticate is the one worth reconnecting, so it wins
+    // over a token-less twin whatever else it matched on; the profile this
+    // device last used breaks the remaining ties.
+    .sort((a, b) => {
+      const token = Number(Boolean(b.profile.token)) - Number(Boolean(a.profile.token));
+      if (token !== 0) return token;
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      return Number(b.profile.id === options.activeId) - Number(a.profile.id === options.activeId);
+    });
+  return matches;
+}
+
+/**
+ * Fold the token-less twins of a Gate into the saved profile that can
+ * authenticate, the way a probe winner now resolves to it.
+ *
+ * A phone that ran the fan-out bug for days already holds one: a Gate saved
+ * twice, the paired copy under its MagicDNS name and a second copy created
+ * without a token under the tailnet IP one wave happened to win on — often the
+ * ACTIVE one, since that is the copy the connect picked. Left alone it keeps
+ * winning every wave, so the roster heals it once at startup instead.
+ *
+ * Same Gate by the rule above, and only when exactly one saved profile can
+ * authenticate for it — a second claimant makes the merge a guess, and a guess
+ * that drops a profile takes a reachable gateway with it. The surviving profile
+ * keeps its own id, URL, token and pins; the twin only fills its gaps, exactly
+ * as collapsing two exact duplicates does.
+ */
+export function mergeTokenlessTwinGateways(
+  gateways: readonly GatewayProfile[],
+  activeId: string | null | undefined,
+  options: SavedGatewayMatchOptions = {},
+): CollapsedGateways {
+  const survivorUrlByTwin = new Map<string, string>();
+  for (const twin of gateways) {
+    if (twin.parentId || twin.token) continue;
+    const claimants = savedGatewayMatches(twin.url, gateways, options)
+      .map((match) => match.profile)
+      .filter((profile) => profile.id !== twin.id && profile.token);
+    if (claimants.length !== 1) continue;
+    survivorUrlByTwin.set(twin.id, claimants[0].url);
+  }
+  if (survivorUrlByTwin.size === 0) {
+    return { gateways: [...gateways], idMap: {}, activeId: activeId ?? null, changed: false };
+  }
+  // The twin is rewritten onto the survivor's URL so the existing collapse does
+  // the merging — and its filling — by the rule it already applies to two saved
+  // copies of one gateway.
+  return collapseDuplicateGateways(
+    gateways.map((gateway) => {
+      const survivorUrl = survivorUrlByTwin.get(gateway.id);
+      return survivorUrl ? { ...gateway, url: survivorUrl } : gateway;
+    }),
+    activeId,
+  );
 }
 
 /**

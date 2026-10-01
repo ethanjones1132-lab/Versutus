@@ -4,7 +4,7 @@ import { AppState, Platform } from 'react-native';
 
 import { registerCrestFleet } from '@/lib/bot-avatar';
 import { GatewayDiscoveryScanner, isNativeDiscoveryAvailable } from '@/lib/discovery/scanner';
-import { beaconKindForUrl, buildExplicitHostCandidates, buildGatewayCandidates, friendlyPcName, normalizePcAddress } from '@/lib/gateway/candidates';
+import { beaconKindForUrl, buildExplicitHostCandidates, buildGatewayCandidates, friendlyPcName, matchSavedGateway, mergeTokenlessTwinGateways, normalizePcAddress, reachableAlternateIpv4 } from '@/lib/gateway/candidates';
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
 import { decideConnectionPhase } from '@/lib/connection/phase';
 import {
@@ -184,6 +184,7 @@ import {
   removeGateway,
   repairDuplicateGateways,
   saveActiveGatewayId,
+  saveGateways,
   upsertGateway,
 } from '@/lib/gateway/storage';
 import {
@@ -198,6 +199,7 @@ import {
   type GatewayManifest,
 } from '@/lib/portal/manifest';
 import {
+  cachedManifestIpv4ByProfileId,
   lateManifestUpgradesClient,
   loadCachedGateManifest,
   manifestForAttach,
@@ -871,6 +873,15 @@ async function discoverForProbe(timeoutMs = 4200): Promise<import('@/lib/discove
   });
 }
 
+/**
+ * What an attach stops on when a Gate profile has no token yet. Nothing was
+ * refused — no request carrying a key ever went out — so it must not borrow the
+ * refusal's wording. It carries the Gate's own "token required" marker, which is
+ * what the existing Home empty state and error humanizer already read to offer
+ * the setup action (errors.ts `isGatewayTokenRequiredMessage`).
+ */
+const GATEWAY_TOKEN_REQUIRED = 'Setup token required for this gateway. Add it in gateway settings.';
+
 function isGatewayAuthFailure(error: unknown): boolean {
   // Both shapes of the same refusal: a gateway that answered 401/403 (which
   // carries the status, not a wording), and the Hermes client's own wording,
@@ -1258,6 +1269,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // manifest answers (attach-manifest.ts). attachClient reaches itself
   // through this ref, the way the other late callbacks here do.
   const upgradeClientRef = useRef<(gateway: GatewayProfile) => Promise<void>>(async () => undefined);
+  /**
+   * `connectGateway`, for the attach that has to hand its profile over: a Gate
+   * whose token is missing while the paired copy sits in the roster connects that
+   * copy instead, and that IS a connect — the paired profile becomes the active
+   * gateway and the saved active id follows it, so the roster stops naming the
+   * copy that cannot authenticate. Held in a ref because the choice needs
+   * `connectGateway`, declared below the attach that makes it — the same
+   * hand-off `scheduleAutoRetryRef` uses.
+   */
+  const connectGatewayRef = useRef<(gateway: GatewayProfile) => Promise<void>>(async () => undefined);
   const repairStalePinRef = useRef<
     ((client: PortalClient, isCurrent: () => boolean, fallbackGateway: GatewayProfile | undefined) => Promise<void>) | null
   >(null);
@@ -1866,6 +1887,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const attachClient = useCallback(
     async (gatewayInput: GatewayProfile, options: { upgrade?: boolean } = {}) => {
       let gateway = gatewayInput;
+      // The kind storage holds for this profile. The manifest block below rewrites
+      // it to 'custom' for anything that serves a document, and the token guard
+      // further down must read what was saved, not that rewrite.
+      const savedKind = gatewayInput.kind;
       // A refused key is remembered with the token that earned it. Only the
       // operator replacing that token re-opens the ladder — every later attach
       // carrying the same one is the same dead end, and forgetting the flag
@@ -2078,6 +2103,46 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (!isCurrent()) return;
+
+      /**
+       * Defence in depth (AUTH-1): a Gate profile whose token is still empty
+       * must never reach a client. Every request such a client sends is
+       * anonymous, and the Gate's 401 cannot be told apart from a refused key
+       * from here — which raises the refused-key flag and stops auto-retry for a
+       * key that was never sent. A Gate says so twice over: the profile was
+       * saved as one (`kind: 'custom'`), and its manifest — live or the one this
+       * device cached — declares a bearer scheme. Either is enough, because
+       * either is what turns the fan-out into refusals. A gateway that needs no
+       * key (a bare Hermes, a manifest that declares no bearer scheme) is
+       * neither, so it connects exactly as before.
+       */
+      const wantsToken = savedKind === 'custom' || (identityForClient?.auth.requiresToken ?? false);
+      if (wantsToken && !gateway.token) {
+        // The roster can still hold the paired profile for this very Gate: the
+        // token-less twin this bug created is a copy of a gateway this device can
+        // authenticate to, and reconnecting that copy is what earns the refusal.
+        // The startup repair heals the roster, but a twin saved after it, or one
+        // it could not match, must not leave the operator on a dead end either.
+        const savedRoster = await loadGateways();
+        const paired = matchSavedGateway(gateway.url, savedRoster, {
+          tailscaleHost: settingsRef.current.tailscaleHost,
+          cachedIpv4ByProfileId: await cachedManifestIpv4ByProfileId(savedRoster),
+          activeId: activeGatewayRef.current?.id ?? null,
+        });
+        if (paired?.token) {
+          if (!isCurrent()) return;
+          // A connect, not a rebuild: this profile is abandoned and the paired
+          // one takes over as the gateway this device is on.
+          await connectGatewayRef.current(paired);
+          return;
+        }
+        if (!isCurrent()) return;
+        abandonAttach();
+        setStatusDetail('');
+        setProbeMessage(GATEWAY_TOKEN_REQUIRED);
+        setLastError(GATEWAY_TOKEN_REQUIRED);
+        return;
+      }
 
       const client = createClientForKind(
         clientKind,
@@ -2356,6 +2421,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [attachClient],
   );
 
+  useEffect(() => {
+    connectGatewayRef.current = connectGateway;
+  }, [connectGateway]);
+
   const resolveGatewayForUrl = useCallback(
     async (
       url: string,
@@ -2365,14 +2434,49 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       token?: string,
       skipManifest?: boolean,
     ) => {
+      // A profile saved under exactly this URL. When it carries a key there is
+      // nothing to reconcile — but a token-less one does NOT settle the question:
+      // that is the copy this bug created, and it is usually the active gateway.
       const existing = currentGateways.find((item) => item.url === url);
-      if (existing) {
+      if (existing?.token) {
         if (!token || existing.token === token) return existing;
         const nextProfile = { ...existing, token };
         const next = await upsertGateway(nextProfile);
         setGateways(next);
         return nextProfile;
       }
+
+      // The same Gate reached under a second host form — the MagicDNS name
+      // while its tailnet IP answers, or a LAN address for the same PC — is not
+      // a new gateway. Reconnecting the saved profile is what keeps its token:
+      // a fresh profile here is created without one, and its connect fan-out
+      // then goes out with no Authorization at all, which the Gate answers 401
+      // and the app reads as "the key was refused" (AUTH-1). Asked before the
+      // exact-URL branch above can stop on that token-less copy, so the paired
+      // profile wins over its own poisoned twin.
+      const sameGate = matchSavedGateway(url, currentGateways, {
+        tailscaleHost: appSettings.tailscaleHost,
+        cachedIpv4ByProfileId: await cachedManifestIpv4ByProfileId(currentGateways),
+        activeId: activeGatewayRef.current?.id ?? null,
+      });
+      if (sameGate && sameGate !== existing) {
+        const paired = token && sameGate.token !== token ? { ...sameGate, token } : sameGate;
+        // The address that answered joins the saved profile's alternate IPv4s —
+        // what a request falls back to when the name misses, and what the
+        // connect is reaching this Gate on. The URL the operator saved is NOT
+        // rewritten: one wave's winning address is not a new address for their
+        // gateway, and every later persist would carry it otherwise.
+        const alternateIpv4 = reachableAlternateIpv4(url, paired);
+        const nextProfile = alternateIpv4.length ? { ...paired, alternateIpv4 } : paired;
+        if (nextProfile !== sameGate) {
+          const next = await upsertGateway(nextProfile);
+          setGateways(next);
+        }
+        return nextProfile;
+      }
+      // Saved under this exact URL, and nothing else in the roster can
+      // authenticate for that Gate: connect the copy that is there.
+      if (existing) return existing;
 
       const discoveredMatch = discovered.find((item) => item.url === url);
       let kind: GatewayProfile['kind'] =
@@ -2588,8 +2692,30 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const loadedGateways = repairedGateways.gateways;
       const activeId = repairedGateways.activeId;
 
+      /**
+       * The roster the connect fan-out leaves behind (AUTH-1), healed before
+       * anything connects: this Gate saved a SECOND time under the address one
+       * wave reached it on, with no key — and that copy is usually the ACTIVE
+       * one, because it is the copy the connect picked, so it goes on winning
+       * every wave and connecting anonymously. The profile that can
+       * authenticate survives with its own id, URL, token and pins, the twin
+       * fills only its gaps, and the saved active id follows — writes only when
+       * something actually changed.
+       */
+      const healedRoster = mergeTokenlessTwinGateways(loadedGateways, activeId, {
+        tailscaleHost: loadedSettings.tailscaleHost,
+        cachedIpv4ByProfileId: await cachedManifestIpv4ByProfileId(loadedGateways),
+        activeId,
+      });
+      if (healedRoster.changed) {
+        await saveGateways(healedRoster.gateways);
+        if (healedRoster.activeId) await saveActiveGatewayId(healedRoster.activeId);
+      }
+      const roster = healedRoster.gateways;
+      const rosterActiveId = healedRoster.activeId;
+
       setSettings(loadedSettings);
-      setGateways(loadedGateways);
+      setGateways(roster);
       offlineQueueRef.current = restoredQueue;
       setActivityRuns(restoredRuns);
       // One sweep at mount: a run-progress notice posted by a process that was
@@ -2602,11 +2728,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // refusal settles failed with its cause so the card can name it and retry.
       void readDeviceIdentity().then(applyDeviceIdentityRead);
 
-      const active = activeId ? (loadedGateways.find((item) => item.id === activeId) ?? null) : null;
+      const active = rosterActiveId ? (roster.find((item) => item.id === rosterActiveId) ?? null) : null;
       setActiveGateway(active);
 
       const onboardingNeeded =
-        !loadedSettings.onboardingComplete && loadedGateways.length === 0 && !loadedSettings.tailscaleHost;
+        !loadedSettings.onboardingComplete && roster.length === 0 && !loadedSettings.tailscaleHost;
       setIsBootstrapped(true);
 
       if (!loadedSettings.autoConnect) {
@@ -2617,7 +2743,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
       setNeedsOnboarding(false);
 
-      void runAutoConnect(loadedSettings, loadedGateways, activeId).catch((error) => {
+      void runAutoConnect(loadedSettings, roster, rosterActiveId).catch((error) => {
         applyConnectionPhase('failed');
         setNeedsOnboarding(onboardingNeeded);
         setProbeMessage(

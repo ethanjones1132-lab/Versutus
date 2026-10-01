@@ -118,3 +118,23 @@ export async function loadCachedGateManifest(gatewayId: string): Promise<Gateway
 export async function saveCachedGateManifest(gatewayId: string, manifest: GatewayManifest): Promise<void> {
   await keyValueStorage.setItem(gateManifestCacheKey(gatewayId), JSON.stringify(manifest));
 }
+
+/**
+ * `transport.ipv4` out of each saved top-level profile's last cached manifest,
+ * keyed by profile id: the evidence that a host which just answered a probe is
+ * the one that profile was talking to under its MagicDNS name. Child profiles
+ * are skipped — they share the parent's cache and answer on their parent's URL.
+ */
+export async function cachedManifestIpv4ByProfileId(
+  gateways: readonly { id: string; parentId?: string }[],
+): Promise<Record<string, string[] | undefined>> {
+  const entries = await Promise.all(
+    gateways
+      .filter((gateway) => !gateway.parentId)
+      .map(async (gateway) => {
+        const manifest = await loadCachedGateManifest(gateway.id).catch(() => null);
+        return [gateway.id, manifest?.transport?.ipv4 ?? []] as const;
+      }),
+  );
+  return Object.fromEntries(entries);
+}
