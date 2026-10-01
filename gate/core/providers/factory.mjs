@@ -10,6 +10,9 @@ export function profileIdFor(providerType) {
   return 'openai';
 }
 
+// The shipped default for a registration that carries no `requestPolicy`.
+const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
+
 export function createProviderAdapter(config, { vault, store } = {}) {
   return {
     authenticate: async () => (await materialize()).authenticate(),
@@ -46,6 +49,10 @@ export function createProviderAdapter(config, { vault, store } = {}) {
       baseUrl: registration.baseUrl || registration.resourceBaseUrl,
       credential,
       allowedOrigins: [origin, ...profile.origins],
+      // The registration's own budget, which nothing used to read: a vendor
+      // that accepts the connection and never answers held a Gate socket for
+      // minutes while the phone had already given up at 30s.
+      timeoutMs: config.requestPolicy?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
   }
 }

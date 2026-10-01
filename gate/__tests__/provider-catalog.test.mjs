@@ -106,7 +106,34 @@ test('failure keeps last-known-good when the policy allows it', () => {
   assert.equal(next.models[0].id, 'kept');
 });
 
-test('a delayed older refresh cannot overwrite a newer forced refresh with stale failure state', async () => {
+test('overlapping forced refreshes join one vendor call instead of racing two', async () => {
+  let calls = 0;
+  const slow = new Promise((resolve) => setTimeout(resolve, 60));
+  const { service, store } = await makeService({
+    authenticate: async () => ({ state: 'ready' }),
+    health: async () => ({ state: 'ready' }),
+    listModels: async () => {
+      calls += 1;
+      await slow;
+      return [{ providerId: 'nvidia', id: 'live-model', available: true }];
+    },
+    chat: async () => ({ choices: [] }),
+    disconnect: async () => {},
+  });
+  const [first, second] = await Promise.all([
+    service.refreshCatalog('nvidia', { force: true }),
+    service.refreshCatalog('nvidia', { force: true }),
+  ]);
+  assert.equal(calls, 1, 'the second refresh must join the one already in flight');
+  assert.deepEqual(second.catalog, first.catalog);
+  const record = await store.get('nvidia');
+  assert.equal(record.state.catalog.source, 'live');
+  assert.equal(record.state.catalog.state, 'fresh');
+  assert.equal(record.state.catalog.models[0].id, 'live-model');
+  assert.equal(record.state.backoff, undefined);
+});
+
+test('a refresh after a failed one re-reads the record that failure committed', async () => {
   let calls = 0;
   const slow = new Promise((resolve) => setTimeout(resolve, 60));
   const { service, store } = await makeService({
@@ -125,11 +152,12 @@ test('a delayed older refresh cannot overwrite a newer forced refresh with stale
     chat: async () => ({ choices: [] }),
     disconnect: async () => {},
   });
-  const [first, second] = await Promise.all([
-    service.refreshCatalog('nvidia', { force: true }),
-    service.refreshCatalog('nvidia', { force: true }),
-  ]);
+  // Sequential, because a refresh that overlaps one already in flight joins it
+  // (above): the question here is what a later refresh does with what the
+  // earlier one committed.
+  const first = await service.refreshCatalog('nvidia', { force: true });
   assert.equal(first.catalog.state, 'stale');
+  const second = await service.refreshCatalog('nvidia', { force: true });
   assert.equal(second.catalog.source, 'live');
   assert.equal(second.catalog.state, 'fresh');
   const record = await store.get('nvidia');
@@ -139,7 +167,7 @@ test('a delayed older refresh cannot overwrite a newer forced refresh with stale
   assert.equal(record.state.backoff, undefined);
 });
 
-test('serialized forced refreshes each re-read so catalog generations advance in start order', async () => {
+test('each refresh re-reads the record, so catalog generations advance', async () => {
   let calls = 0;
   const slow = new Promise((resolve) => setTimeout(resolve, 60));
   const { service, store } = await makeService({
@@ -153,10 +181,8 @@ test('serialized forced refreshes each re-read so catalog generations advance in
     chat: async () => ({ choices: [] }),
     disconnect: async () => {},
   });
-  const [first, second] = await Promise.all([
-    service.refreshCatalog('nvidia', { force: true }),
-    service.refreshCatalog('nvidia', { force: true }),
-  ]);
+  const first = await service.refreshCatalog('nvidia', { force: true });
+  const second = await service.refreshCatalog('nvidia', { force: true });
   assert.equal(first.catalog.generation, 2);
   assert.equal(second.catalog.generation, 3);
   assert.equal(second.catalog.models[0].id, 'model-2');

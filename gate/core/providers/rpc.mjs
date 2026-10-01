@@ -1,4 +1,4 @@
-import { redactSensitive } from '../credentials/redaction.mjs';
+import { redactSensitive, redactSensitiveText } from '../credentials/redaction.mjs';
 import { releaseProfiles } from './profiles/registry.mjs';
 
 /**
@@ -13,8 +13,10 @@ export function createProviderRpc({ service, vault, oauth, onChanged }) {
       await fn();
       return { ok: true };
     } catch (error) {
+      // A vendor is free to quote what it was sent in its own error text, and
+      // that text is what the RPC route puts in the response body.
       const safe = redactSensitive({ message: error.message, code: error.code });
-      const wrapped = new Error(safe.message || 'provider operation failed');
+      const wrapped = new Error(redactSensitiveText(safe.message) || 'provider operation failed');
       wrapped.code = safe.code || 'provider_error';
       throw wrapped;
     }
@@ -27,6 +29,16 @@ export function createProviderRpc({ service, vault, oauth, onChanged }) {
     const result = await status(fn);
     await onChanged?.().catch(() => undefined);
     return result;
+  }
+
+  // A check and a catalog refresh move exactly what the manifest advertises --
+  // auth, readiness and models -- so they reload it too. Without this the
+  // manifest kept telling a freshly connected phone that a provider which just
+  // failed its check was ready, and still offered its models.
+  async function snapshotAndReload(run) {
+    const snapshot = sanitizeSnapshot(await run());
+    await onChanged?.().catch(() => undefined);
+    return snapshot;
   }
 
   return {
@@ -54,8 +66,11 @@ export function createProviderRpc({ service, vault, oauth, onChanged }) {
     'providers.create': async (input = {}) => statusAndReload(() => service.create(input)),
     'providers.update': async ({ id, ...input } = {}) => statusAndReload(() => service.update(id, input)),
     'providers.delete': async ({ id } = {}) => statusAndReload(() => service.delete(id)),
-    'providers.health.check': async ({ id } = {}) => service.check(id).then(sanitizeSnapshot),
-    'providers.catalog.refresh': async ({ id } = {}) => service.refreshCatalog(id).then(sanitizeSnapshot),
+    'providers.health.check': async ({ id } = {}) => snapshotAndReload(() => service.check(id)),
+    // The only client of this method is the explicit "Refresh catalog" control,
+    // so it forces: a tap that lands inside the TTL or inside a failure backoff
+    // is exactly the tap that means "I do not believe you, ask again".
+    'providers.catalog.refresh': async ({ id } = {}) => snapshotAndReload(() => service.refreshCatalog(id, { force: true })),
     'providers.auth.setApiKey': async ({ id, value } = {}) => status(async () => {
       const snapshot = await service.get(id);
       if (snapshot.mode !== 'api_key') {
@@ -105,7 +120,12 @@ export function sanitizeSnapshot(snapshot) {
       scopes: snapshot.auth?.scopes,
       credentialCustodian: snapshot.auth?.credentialCustodian,
     },
-    readiness: snapshot.readiness,
+    readiness: {
+      ...snapshot.readiness,
+      // A vendor quotes the key it was given in its own words often enough that
+      // the reason on the card has to be scrubbed before it leaves the Gate.
+      ...(snapshot.readiness?.message ? { message: redactSensitiveText(snapshot.readiness.message) } : {}),
+    },
     catalog: {
       state: snapshot.catalog?.state,
       source: snapshot.catalog?.source,
@@ -113,5 +133,8 @@ export function sanitizeSnapshot(snapshot) {
       generation: snapshot.catalog?.generation,
       models: snapshot.catalog?.models ?? [],
     },
+    // Only while a failure backoff is running, so the client can say "retrying
+    // at ..." instead of handing back an unchanged card that looks ignored.
+    ...(snapshot.backoff?.nextRetryAt ? { backoff: { nextRetryAt: snapshot.backoff.nextRetryAt } } : {}),
   };
 }

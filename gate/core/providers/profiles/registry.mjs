@@ -20,6 +20,9 @@ export function getProfile(id) {
   return profile;
 }
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
+const MAX_REQUEST_TIMEOUT_MS = 30_000;
+
 export function createProfileAdapter({
   profileId,
   providerId,
@@ -27,6 +30,7 @@ export function createProfileAdapter({
   credential,
   allowedOrigins,
   fetchImpl = fetch,
+  timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
 }) {
   const profile = getProfile(profileId);
   const origins = allowedOrigins ?? profile.origins;
@@ -47,19 +51,37 @@ export function createProfileAdapter({
     async listModels() {
       assertAllowedOrigin(baseUrl, origins);
       const url = new URL(profile.modelsPath.replace(/^\//, ''), `${baseUrl.replace(/\/+$/, '')}/`);
-      const response = await fetchImpl(url, {
-        headers: {
-          accept: 'application/json',
-          ...profile.authHeaders(credential),
-        },
-      });
-      if (!response.ok) {
-        const error = new Error(`models request failed: ${response.status}`);
-        error.status = response.status;
-        if (profile.keepBootstrapIfEmpty) error.code = 'catalog_timeout';
-        throw error;
+      // A catalog probe has to end: fetch has no timeout of its own, so a
+      // vendor that accepts the socket and says nothing held this request --
+      // and the provider's commit queue behind it -- until the process did.
+      const bounded = boundedRequest(timeoutMs);
+      let response;
+      try {
+        response = await fetchImpl(url, {
+          headers: {
+            accept: 'application/json',
+            ...profile.authHeaders(credential),
+          },
+          signal: bounded.signal,
+        });
+        if (!response.ok) {
+          const error = new Error(`models request failed: ${response.status}`);
+          error.status = response.status;
+          if (profile.keepBootstrapIfEmpty) error.code = 'catalog_timeout';
+          throw error;
+        }
+        return profile.parseModels(await response.json(), providerId);
+      } catch (error) {
+        // Reported as ETIMEDOUT so it classifies as a transient network fault
+        // instead of as an unknown error the same code path would also file
+        // under "transient_network" for the wrong reason.
+        if (!bounded.expired) throw error;
+        const timeout = new Error(`models request timed out after ${bounded.budgetMs}ms`);
+        timeout.code = 'ETIMEDOUT';
+        throw timeout;
+      } finally {
+        bounded.clear();
       }
-      return profile.parseModels(await response.json(), providerId);
     },
     async chat(request, signal) {
       assertAllowedOrigin(baseUrl, origins);
@@ -104,4 +126,33 @@ function assertAllowedOrigin(baseUrl, origins) {
   if (!allowed) {
     throw new Error(`origin ${parsed.origin} is not allowed`);
   }
+}
+
+/**
+ * A signal that ends the request it was given to, on a budget that is never
+ * longer than the ceiling below -- a registration's own `timeoutMs` is what the
+ * operator chose, and the phone gives up at 30s, so nothing here may hold a
+ * socket for minutes. The timer is unref'd (a pending budget must not keep the
+ * Gate alive) and cleared by the caller as soon as the request settles, so a
+ * fast answer leaves nothing behind.
+ */
+function boundedRequest(timeoutMs) {
+  const budgetMs = Math.min(Number(timeoutMs) || DEFAULT_REQUEST_TIMEOUT_MS, MAX_REQUEST_TIMEOUT_MS);
+  const controller = new AbortController();
+  let expired = false;
+  const timer = setTimeout(() => {
+    expired = true;
+    controller.abort();
+  }, budgetMs);
+  timer.unref?.();
+  return {
+    signal: controller.signal,
+    budgetMs,
+    get expired() {
+      return expired;
+    },
+    clear() {
+      clearTimeout(timer);
+    },
+  };
 }

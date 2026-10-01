@@ -5,11 +5,22 @@ export function readinessFromAuthAndError({ enabled, authState, error, gateHealt
   if (!enabled) {
     return { state: 'disabled', code: ProviderErrorCodes.disabled, checkedAt };
   }
+  const code = error ? classifyProviderError(error) : undefined;
+  if (code === ProviderErrorCodes.credential_unreadable) {
+    // Ahead of the plain "missing" branch below: `auth` is already `missing`
+    // here, and the operator needs to know this is a stored key they must set
+    // again on this machine, not one they never configured.
+    return {
+      state: 'unavailable',
+      code,
+      message: 'the stored credential cannot be decrypted on this machine (it is protected per Windows account) — set the key again',
+      checkedAt,
+    };
+  }
   if (authState === 'missing') {
     return { state: 'unavailable', code: ProviderErrorCodes.missing_credentials, checkedAt };
   }
   if (error) {
-    const code = classifyProviderError(error);
     const degraded = code === ProviderErrorCodes.rate_limited
       || code === ProviderErrorCodes.overloaded
       || code === ProviderErrorCodes.transient_network

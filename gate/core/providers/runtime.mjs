@@ -25,6 +25,9 @@ export function toSnapshot(config, state = {}, extras = {}) {
     auth,
     readiness,
     catalog,
+    // Carried so a client can be told when the next refresh is allowed to try
+    // again, instead of handing back an unchanged card that looks ignored.
+    backoff: state.backoff,
   };
 }
 
