@@ -14,6 +14,9 @@
 //   not changed now stands for the next six hours; a rotation, a gateway change
 //   or a refused register still registers.
 
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);
 jest.mock('expo-notifications', () => ({
   getPermissionsAsync: jest.fn(),
   getExpoPushTokenAsync: jest.fn(),

@@ -135,6 +135,8 @@ jest.mock('@/lib/notifications/push-registration', () => ({
 jest.mock('@/lib/notifications/local', () => ({
   dismissGatewayDown: jest.fn(async () => undefined),
   dismissRunProgress: jest.fn(async () => undefined),
+  dismissStaleRunProgress: jest.fn(async () => undefined),
+  clearRunProgressThrottles: jest.fn(),
   notifyApprovalRequired: jest.fn(async () => undefined),
   notifyGatewayDown: jest.fn(async () => undefined),
   notifyRunComplete: jest.fn(async () => undefined),
