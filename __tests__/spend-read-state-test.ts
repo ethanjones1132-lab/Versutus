@@ -137,7 +137,10 @@ describe('what must keep working', () => {
     expect(failureBranch).toContain('setBotReport(null);');
     expect(failureBranch).not.toContain('rows:');
     expect(src).toContain('loadBudgets()');
-    expect(src).toContain('saveBudgets(next)');
+    // The persistence is outside the updater: an updater React may replay or
+    // discard must not be what writes a cap to storage.
+    expect(src).toContain('void saveBudgets(budgets)');
+    expect(src).not.toContain('saveBudgets(next)');
     expect(src).toContain('onSetBudget={activeGateway ? handleSetBudget : undefined}');
   });
 });

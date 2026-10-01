@@ -1,4 +1,5 @@
 import { ManifestClient } from '@/lib/gateway/manifest-client';
+import { GET_SESSIONS_MAX_RETRIES, GET_SESSIONS_RETRY_BACKOFF_MS } from '@/lib/gateway/get-sessions-retry';
 import {
   botSpendRowCopy,
   readBotSpend,
@@ -272,5 +273,106 @@ describe('the read the per-Bot report consumes is the client method, not a secon
   test('the client method is declared optional on PortalClient so other adapters degrade', () => {
     const source = readSource('src', 'lib', 'portal', 'adapters.ts');
     expect(source).toContain('listBotSessionCatalogue?(botId: string, limit?: number)');
+  });
+});
+
+// The walk-away has to reach the retry ladder, and the ladder is two layers
+// below `readBotSpend`: the pool calls the provider's reader, which calls the
+// client method, which wraps the request in `withGetSessionsRetry`. A test of
+// the ladder alone passes even when the fan-out is wired to nothing at all, so
+// these count the requests that actually leave the device through the whole
+// chain, over a Gate answering 503 — the retriable blip, not a refusal.
+describe('an abandoned wave stops the retry ladder behind it', () => {
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+  });
+
+  /** A Gate that answers 503 every time; `onRequest` fires as each one lands. */
+  function busyGate(onRequest: () => void): string[] {
+    const requests: string[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn(async (url: string) => {
+      requests.push(String(url));
+      onRequest();
+      return {
+        ok: false,
+        status: 503,
+        text: async () => JSON.stringify({ error: { message: 'busy' } }),
+      };
+    });
+    return requests;
+  }
+
+  /**
+   * The wave the Spend screen runs: the roster, the provider's reader in the
+   * shape it exposes it, and the signal the screen cancels on.
+   */
+  function spendWave(controller: AbortController): Promise<unknown> {
+    const client = new ManifestClient(PROFILE, IDENTITY);
+    const readBotSessions = (botId: string, limit: number, signal?: AbortSignal) =>
+      client.listBotSessionCatalogue(botId, limit, { signal });
+    const outcome = readBotSpend(
+      { listBots: async () => [{ id: 'alpha', displayName: 'Alpha' }], readBotSessions },
+      { signal: controller.signal },
+    ).then(
+      (report) => report,
+      (error: unknown) => error,
+    );
+    return outcome;
+  }
+
+  /** Long enough to spend the whole ladder: 500 ms + 1500 ms of backoff. */
+  const wholeLadderMs = GET_SESSIONS_RETRY_BACKOFF_MS[0] + GET_SESSIONS_RETRY_BACKOFF_MS[1];
+
+  test('without a walk-away the 503 ladder retries, so this fixture is retriable', async () => {
+    const requests = busyGate(() => undefined);
+    const controller = new AbortController();
+
+    const outcome = spendWave(controller);
+    await jest.advanceTimersByTimeAsync(wholeLadderMs);
+
+    // One attempt plus both retries, and the lane kept as a named failure — the
+    // row below is about the walk-away, not about a Gate that gave up quietly.
+    expect(requests).toHaveLength(1 + GET_SESSIONS_MAX_RETRIES);
+    expect(await outcome).toMatchObject({
+      degraded: false,
+      rows: [{ botId: 'alpha', failed: true }],
+    });
+  });
+
+  test('an abort while the first attempt is in flight issues no second attempt', async () => {
+    const controller = new AbortController();
+    // The operator leaves (or a new gateway supersedes the wave) with the
+    // request already on the wire: the answer still comes, and still fails.
+    const requests = busyGate(() => controller.abort());
+
+    const outcome = spendWave(controller);
+    await jest.advanceTimersByTimeAsync(wholeLadderMs);
+
+    expect(requests).toHaveLength(1);
+    expect(String(await outcome)).toMatch(/stopped before it finished/i);
+  });
+
+  test('an abort during the backoff sleep ends the lane without a second attempt', async () => {
+    const controller = new AbortController();
+    const requests = busyGate(() => undefined);
+
+    const outcome = spendWave(controller);
+    await jest.advanceTimersByTimeAsync(GET_SESSIONS_RETRY_BACKOFF_MS[0] / 2);
+    expect(requests).toHaveLength(1);
+
+    // Mid-sleep is the case a signal that stops only at the next attempt
+    // cannot: the timer is already counting towards a request nobody wants.
+    controller.abort();
+    await jest.advanceTimersByTimeAsync(wholeLadderMs);
+
+    expect(requests).toHaveLength(1);
+    expect(String(await outcome)).toMatch(/stopped before it finished/i);
   });
 });

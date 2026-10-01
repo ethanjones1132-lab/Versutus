@@ -179,10 +179,14 @@ export type BotSpendRosterEntry = { id: string; displayName?: string };
  * cannot scope a catalogue by Bot omits it, and that absence — known before
  * a request that could only be refused — is what makes the report degrade
  * to the gateway total alone rather than provoke an error.
+ *
+ * Its third argument is the wave's own `AbortSignal`, handed down rather than
+ * kept at this module: the read is where the retry ladder lives, so a signal
+ * that stops here would stop only half of the load it exists to stop.
  */
 export type BotSpendSource = {
   listBots: () => Promise<BotSpendRosterEntry[]>;
-  readBotSessions?: (botId: string, limit: number) => Promise<unknown>;
+  readBotSessions?: (botId: string, limit: number, signal?: AbortSignal) => Promise<unknown>;
 };
 
 export type BotSpendReport = {
@@ -222,29 +226,56 @@ export type BotSpendReport = {
 export const READ_BOT_SPEND_CONCURRENCY = 2;
 
 /**
+ * The rejection an aborted fan-out carries. A cancelled wave is not a failure
+ * to report: the caller asked for it to stop, so it is named so nothing can
+ * mistake the refusal for a gateway that answered with nothing.
+ */
+export const BOT_SPEND_ABORTED_MESSAGE = 'Bot spend read stopped before it finished.';
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error(BOT_SPEND_ABORTED_MESSAGE);
+}
+
+/**
  * Run each roster Bot's read through a `READ_BOT_SPEND_CONCURRENCY`-wide
  * worker pool, preserving roster order in the result regardless of which
  * read finished first.
+ *
+ * `signal` ends the pool: no further Bot read is started once it is aborted,
+ * and the read a lane already had in flight is discarded rather than folded —
+ * a half-read roster would print half the spend as if it were all of it. It is
+ * handed to `read` itself as well, because each read carries its own retry
+ * ladder: without it an abandoned lane still grows a second and third 200-row
+ * request behind the one the caller walked away from. What it cannot stop is
+ * the request already on the wire — the transport owns that abort — so one
+ * attempt per lane may still finish on the Gate.
  */
 async function readRosterByConcurrency(
   roster: BotSpendRosterEntry[],
-  read: (botId: string, limit: number) => Promise<unknown>,
+  read: (botId: string, limit: number, signal?: AbortSignal) => Promise<unknown>,
+  signal?: AbortSignal,
 ): Promise<BotSpendRead[]> {
   const results: BotSpendRead[] = new Array(roster.length);
   let next = 0;
   async function worker(): Promise<void> {
     while (next < roster.length) {
+      throwIfAborted(signal);
       const index = next;
       next += 1;
       const bot = roster[index];
       try {
-        const payload = await read(bot.id, SESSION_SPEND_LIST_LIMIT);
+        const payload = await read(bot.id, SESSION_SPEND_LIST_LIMIT, signal);
+        // An abort that landed while this lane waited leaves a hole no row may
+        // stand in for, so the whole read is abandoned instead.
+        throwIfAborted(signal);
         results[index] = {
           botId: bot.id,
           label: bot.displayName,
           read: sessionSpendReadFromUnknown(payload),
         };
       } catch {
+        // A cancelled lane is not a Bot that could not be read.
+        throwIfAborted(signal);
         results[index] = { botId: bot.id, label: bot.displayName, read: { ok: false } };
       }
     }
@@ -255,11 +286,16 @@ async function readRosterByConcurrency(
   return results;
 }
 
-export async function readBotSpend(source: BotSpendSource): Promise<BotSpendReport> {
+export async function readBotSpend(
+  source: BotSpendSource,
+  options: { signal?: AbortSignal } = {},
+): Promise<BotSpendReport> {
   const readBotSessions = source.readBotSessions;
   if (!readBotSessions) return { rows: [], degraded: true };
+  throwIfAborted(options.signal);
   const roster = await source.listBots();
-  const reads = await readRosterByConcurrency(roster, readBotSessions);
+  throwIfAborted(options.signal);
+  const reads = await readRosterByConcurrency(roster, readBotSessions, options.signal);
   return { rows: botSpendRows(reads), degraded: false };
 }
 

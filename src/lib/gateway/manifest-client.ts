@@ -902,8 +902,16 @@ export class ManifestClient implements PortalClient {
    * own Hermes profile — so this names the Bot in the query instead of taking
    * whatever `setBotId` holds. A read of one Bot must not move the app's
    * scope: `openBot` and the Bot Chat pinning both depend on it staying.
+   *
+   * `options.signal` is the spend fan-out's walk-away: it reaches the retry
+   * ladder, so a Bot the operator stopped reading grows no further attempt.
+   * The attempt already sent is still the Gate's to finish.
    */
-  async listBotSessionCatalogue(botId: string, limit = 20): Promise<HermesSession[]> {
+  async listBotSessionCatalogue(
+    botId: string,
+    limit = 20,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<HermesSession[]> {
     const path = this.endpoints.sessions;
     if (!path) {
       throw new Error(
@@ -920,7 +928,7 @@ export class ManifestClient implements PortalClient {
           undefined,
           timeoutMs,
         ),
-      { limit },
+      { limit, signal: options.signal },
     );
     return Array.isArray(result) ? result : result.data ?? [];
   }

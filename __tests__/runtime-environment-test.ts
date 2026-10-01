@@ -1,4 +1,9 @@
-import { probeRuntimeGlobals, probeStreamingFetch } from '@/lib/runtime-environment';
+import {
+  PROBE_FIRST_CHUNK_TIMEOUT_MS,
+  PROBE_HEADER_TIMEOUT_MS,
+  probeRuntimeGlobals,
+  probeStreamingFetch,
+} from '@/lib/runtime-environment';
 import { installStreamingFetch } from '@/lib/net/streaming-fetch';
 
 afterEach(() => installStreamingFetch(globalThis.fetch));
@@ -73,5 +78,95 @@ describe('probeStreamingFetch', () => {
     const check = await probeStreamingFetch('http://gate.test/health');
     expect(check.ok).toBe(false);
     expect(check.detail).toMatch(/ECONNREFUSED/);
+  });
+});
+
+// The half-open path: a gateway that accepts the connection and then says
+// nothing — what a Tailscale/DERP route that has gone bad looks like from the
+// phone. This screen exists to diagnose exactly that, so a probe that hangs on
+// it reproduces the failure it was opened to name. Both awaits (headers, first
+// chunk) are therefore bounded, and the bound is reported as a failed check.
+describe('probeStreamingFetch is bounded on both awaits', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => {
+    jest.useRealTimers();
+    installStreamingFetch(globalThis.fetch);
+  });
+
+  test('headers that never arrive fail at the header deadline', async () => {
+    // The engine ignores the signal entirely here, so only the probe's own
+    // rejection can settle it.
+    installStreamingFetch((() => new Promise(() => {})) as unknown as typeof globalThis.fetch);
+
+    const probe = probeStreamingFetch('http://gate.test/health');
+    await jest.advanceTimersByTimeAsync(PROBE_HEADER_TIMEOUT_MS);
+
+    const check = await probe;
+    expect(check.ok).toBe(false);
+    expect(check.critical).toBe(true);
+    expect(check.detail).toBe('The gateway did not answer within 8 s');
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  test('an engine that honours the abort still reports the deadline, not the AbortError', async () => {
+    // The message an operator reads must name the timeout. A raw AbortError
+    // ("The user aborted a request") names a cancellation nobody performed.
+    let signal: AbortSignal | undefined;
+    installStreamingFetch(((_url: string, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new Error('The user aborted a request.')));
+      });
+    }) as unknown as typeof globalThis.fetch);
+
+    const probe = probeStreamingFetch('http://gate.test/health');
+    await jest.advanceTimersByTimeAsync(PROBE_HEADER_TIMEOUT_MS);
+
+    const check = await probe;
+    expect(signal?.aborted).toBe(true);
+    expect(check.detail).toBe('The gateway did not answer within 8 s');
+  });
+
+  test('headers that arrive and then silence fail at the first-chunk deadline', async () => {
+    installStreamingFetch((async () =>
+      new Response(new ReadableStream({
+        start() {
+          // Accepts the connection, sends nothing, never closes.
+        },
+      }))) as unknown as typeof globalThis.fetch);
+
+    const probe = probeStreamingFetch('http://gate.test/health');
+    await jest.advanceTimersByTimeAsync(PROBE_HEADER_TIMEOUT_MS + PROBE_FIRST_CHUNK_TIMEOUT_MS);
+
+    const check = await probe;
+    expect(check.ok).toBe(false);
+    expect(check.detail).toBe('The gateway did not answer within 8 s');
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  test('the deadlines are injectable, so the bounds can be tested without spending them', async () => {
+    installStreamingFetch((() => new Promise(() => {})) as unknown as typeof globalThis.fetch);
+
+    const probe = probeStreamingFetch('http://gate.test/health', { headerTimeoutMs: 250 });
+    await jest.advanceTimersByTimeAsync(250);
+
+    expect((await probe).detail).toBe('The gateway did not answer within 0.25 s');
+  });
+
+  test('a normal answer is unchanged, and the header timer is cleared behind it', async () => {
+    installStreamingFetch((async (_url: string, init?: RequestInit) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"status":"ok"}'));
+          controller.close();
+        },
+      }));
+    }) as unknown as typeof globalThis.fetch);
+
+    const check = await probeStreamingFetch('http://gate.test/health');
+    expect(check.ok).toBe(true);
+    expect(check.detail).toMatch(/incrementally/);
+    expect(jest.getTimerCount()).toBe(0);
   });
 });

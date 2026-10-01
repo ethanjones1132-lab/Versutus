@@ -215,7 +215,11 @@ describe('the cap editor and the pre-run hard stop are wired', () => {
   test('the Spend screen owns the cap store', () => {
     const screen = readSource('src', 'app', 'gateway', 'spend.tsx');
     expect(screen).toContain('loadBudgets()');
-    expect(screen).toContain('saveBudgets(next)');
+    // The write is keyed on committed state, not issued from the updater: React
+    // may replay or discard an updater, and a write inside one goes out for a
+    // cap that never became state.
+    expect(screen).toContain('void saveBudgets(budgets)');
+    expect(screen).not.toContain('saveBudgets(next)');
     expect(screen).toContain('onSetBudget={activeGateway ? handleSetBudget : undefined}');
   });
 

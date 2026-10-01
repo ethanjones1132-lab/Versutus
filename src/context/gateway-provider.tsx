@@ -344,9 +344,11 @@ type GatewayContextValue = {
    * One Bot's own catalogue, with the Bot named in the query rather than taken
    * from the app's stored Bot scope — the per-Bot spend read. The capability
    * gate is `canReadBotSessions`; a client without the scoped read makes this
-   * throw rather than answer.
+   * throw rather than answer. `signal` is the spend fan-out's walk-away: it
+   * travels on into the client's retry ladder, so a Bot the caller stopped
+   * reading grows no further attempt.
    */
-  readBotSessions: (botId: string, limit: number) => Promise<unknown>;
+  readBotSessions: (botId: string, limit: number, signal?: AbortSignal) => Promise<unknown>;
   createBot: (input: {
     name: string;
     soul?: string;
@@ -979,7 +981,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // through refs: both are defined below `runTask`, and a dependency array
   // would evaluate them before initialization.
   const canReadBotSessionsRef = useRef(false);
-  const readBotSessionsRef = useRef<((botId: string, limit: number) => Promise<unknown>) | null>(null);
+  const readBotSessionsRef = useRef<
+    ((botId: string, limit: number, signal?: AbortSignal) => Promise<unknown>) | null
+  >(null);
   // Id already probed for this activation. Cleared when backends disappear
   // so a reconnect re-probes the same backend once, not on every render.
   const lastProbedBackendRef = useRef<string | undefined>(undefined);
@@ -4802,14 +4806,32 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * `canReadBotSessions` first, so the throw below is the belt to that
    * braces — a call that slips past the gate fails as a named refusal
    * instead of silently reading the wrong scope.
+   *
+   * `signal` is forwarded, not consumed: the client's retry ladder is the only
+   * thing that can stop a 200-row read from being attempted again, and a
+   * cancellation that never reaches it stops nothing.
    */
-  const readBotSessions = useCallback(async (botId: string, limit: number): Promise<unknown> => {
-    const client = clientRef.current;
-    if (!client?.listBotSessionCatalogue) {
-      throw new Error('This gateway cannot scope a session read by Bot.');
-    }
-    return client.listBotSessionCatalogue(botId, limit);
-  }, []);
+  const readBotSessions = useCallback(
+    async (botId: string, limit: number, signal?: AbortSignal): Promise<unknown> => {
+      // `PortalClient` declares the two-argument shape every adapter answers;
+      // the third argument belongs to the client that implements the scoped
+      // read at all, which is the one this gate decides on.
+      const client = clientRef.current as
+        | (PortalClient & {
+            listBotSessionCatalogue?: (
+              botId: string,
+              limit?: number,
+              options?: { signal?: AbortSignal },
+            ) => Promise<HermesSession[]>;
+          })
+        | null;
+      if (!client?.listBotSessionCatalogue) {
+        throw new Error('This gateway cannot scope a session read by Bot.');
+      }
+      return client.listBotSessionCatalogue(botId, limit, { signal });
+    },
+    [],
+  );
   useEffect(() => {
     readBotSessionsRef.current = readBotSessions;
   }, [readBotSessions]);

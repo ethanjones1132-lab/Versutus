@@ -219,6 +219,12 @@ type FakeClient = PortalClient & {
   listCronJobsCalls: number;
   listBotsCalls: number;
   listJobsCalls: number;
+  /**
+   * The signal each scoped catalogue read was handed — or `null` when the
+   * caller passed none, so "no walk-away" and "the walk-away never arrived"
+   * cannot be confused for one another.
+   */
+  catalogueCalls: (AbortSignal | null)[];
 };
 
 function mockMakeClient(callbacks: PortalClientCallbacks): FakeClient {
@@ -234,6 +240,7 @@ function mockMakeClient(callbacks: PortalClientCallbacks): FakeClient {
     listCronJobsCalls: 0,
     listBotsCalls: 0,
     listJobsCalls: 0,
+    catalogueCalls: [] as (AbortSignal | null)[],
     ...(cronAvailable
       ? {
           listCronJobs: async () => {
@@ -275,6 +282,14 @@ function mockMakeClient(callbacks: PortalClientCallbacks): FakeClient {
     },
     getCapabilities: async () => ({ chat: true, models: true }),
     getSessions: async () => [SESSION],
+    listBotSessionCatalogue: async (
+      _botId: string,
+      _limit?: number,
+      options?: { signal?: AbortSignal },
+    ) => {
+      client.catalogueCalls.push(options?.signal ?? null);
+      return [SESSION];
+    },
     createSession: async () => SESSION,
     getSessionMessages: async () => HISTORY,
     stopRun: async () => undefined,
@@ -793,5 +808,59 @@ describe('a decided row re-reads the inbox without blanking it', () => {
 
     const stored = await keyValueStorage.getItem('versutus:approval-audit');
     expect(stored).toContain('audit-row');
+  });
+});
+// The spend fan-out's cancellation is only worth anything if it reaches the
+// client's retry ladder, and the provider is the seam in the middle: a signal
+// consumed here instead of forwarded stops the pool and leaves every 200-row
+// read to retry twice behind a caller that walked away.
+describe('the per-Bot read carries the spend fan-out\'s walk-away', () => {
+  async function connectedClient(): Promise<FakeClient> {
+    const alpha = profile({ id: 'alpha', url: 'http://alpha.test:8642', kind: 'custom' });
+    mockState.gateways = [alpha];
+    mockState.activeId = alpha.id;
+    mockState.manifests.set(alpha.url, GATE_MANIFEST);
+    await mount();
+    await settle(4, 2_000);
+    return mockClients[0];
+  }
+
+  test('the signal a caller cancels on is the one the client is given', async () => {
+    const client = await connectedClient();
+    expect(gatewayApi().canReadBotSessions).toBe(true);
+
+    const controller = new AbortController();
+    await act(async () => {
+      await gatewayApi().readBotSessions('scout', 200, controller.signal);
+    });
+
+    expect(client.catalogueCalls).toHaveLength(1);
+    expect(client.catalogueCalls[0]).toBe(controller.signal);
+  });
+
+  test('a caller with no signal is unchanged — the read still goes out', async () => {
+    const client = await connectedClient();
+
+    await act(async () => {
+      await gatewayApi().readBotSessions('scout', 200);
+    });
+
+    expect(client.catalogueCalls).toHaveLength(1);
+    expect(client.catalogueCalls[0]).toBeNull();
+  });
+
+  test('a client with no scoped read still refuses by name, signal or not', async () => {
+    const alpha = profile({ id: 'alpha', url: 'http://alpha.test:8642', kind: 'custom' });
+    mockState.gateways = [alpha];
+    mockState.activeId = alpha.id;
+    mockState.manifests.set(alpha.url, GATE_MANIFEST);
+    await mount();
+    await settle(4, 2_000);
+    const client = mockClients[0];
+    delete (client as Partial<FakeClient>).listBotSessionCatalogue;
+
+    await expect(gatewayApi().readBotSessions('scout', 200)).rejects.toThrow(
+      /cannot scope a session read by Bot/,
+    );
   });
 });

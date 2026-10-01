@@ -24,8 +24,30 @@ export const GET_SESSIONS_LARGE_LIMIT = 50;
 export const GET_SESSIONS_MAX_RETRIES = 2;
 export const GET_SESSIONS_RETRY_BACKOFF_MS = [500, 1_500] as const;
 
-function waitMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * The rejection an abandoned retry ladder carries. Retrying a read the caller
+ * gave up on is exactly the load this policy exists to avoid — the attempt we
+ * walked away from still holds state.db on the Gate — so the walk-away is named
+ * rather than surfacing as another read failure.
+ */
+export const SESSIONS_RETRY_ABORTED_MESSAGE = 'Session list read stopped before it finished.';
+
+function waitMs(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error(SESSIONS_RETRY_ABORTED_MESSAGE));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error(SESSIONS_RETRY_ABORTED_MESSAGE));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function isRetriableSessionListError(error: unknown): boolean {
@@ -48,18 +70,23 @@ function isAttemptTimeout(error: unknown): boolean {
  * Run `getOnce` with the session-list retry policy. `getOnce` receives the
  * per-attempt timeout so callers cannot forget the ceiling. Pass `options.limit`
  * when the caller knows how many rows it asked for: a large read needs the
- * Gate-scale budget and must not be retried after a timeout.
+ * Gate-scale budget and must not be retried after a timeout. Pass
+ * `options.signal` when the caller may walk away — the ladder then stops before
+ * the next attempt and during its backoff sleep, so an abandoned read never
+ * grows a second or third request behind it on the Gate.
  */
 export async function withGetSessionsRetry<T>(
   getOnce: (timeoutMs: number) => Promise<T>,
-  options: { limit?: number } = {},
+  options: { limit?: number; signal?: AbortSignal } = {},
 ): Promise<T> {
   const large = typeof options.limit === 'number' && options.limit > GET_SESSIONS_LARGE_LIMIT;
   const attemptTimeoutMs = large
     ? GET_SESSIONS_LARGE_ATTEMPT_TIMEOUT_MS
     : GET_SESSIONS_ATTEMPT_TIMEOUT_MS;
+  const { signal } = options;
   let attempt = 0;
   while (true) {
+    if (signal?.aborted) throw new Error(SESSIONS_RETRY_ABORTED_MESSAGE);
     try {
       return await getOnce(attemptTimeoutMs);
     } catch (error) {
@@ -74,7 +101,7 @@ export async function withGetSessionsRetry<T>(
       if (attempt >= maxRetries) throw error;
       const backoffMs = GET_SESSIONS_RETRY_BACKOFF_MS[attempt];
       if (typeof backoffMs !== 'number') throw error;
-      await waitMs(backoffMs);
+      await waitMs(backoffMs, signal);
       attempt += 1;
     }
   }

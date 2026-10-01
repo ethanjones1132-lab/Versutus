@@ -348,8 +348,10 @@ describe('the capability gate is decided before a request that could only be ref
     expect(src).toContain('setCanReadBotSessions(probeBotSessionScoping(client))');
     expect(src).toContain('canReadBotSessions: boolean;');
     expect(src).toContain('setCanReadBotSessions(false);');
-    expect(src).toContain('readBotSessions: (botId: string, limit: number) => Promise<unknown>;');
-    expect(src).toContain('client.listBotSessionCatalogue(botId, limit)');
+    expect(src).toContain(
+      'readBotSessions: (botId: string, limit: number, signal?: AbortSignal) => Promise<unknown>;',
+    );
+    expect(src).toContain('client.listBotSessionCatalogue(botId, limit, { signal })');
   });
 });
 

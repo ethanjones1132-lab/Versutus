@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { Badge, Button, Card, Screen, Text } from '@/components/ui';
@@ -55,13 +55,31 @@ export default function GatewayDiagnosticsScreen() {
     ? `${activeGateway.url.replace(/\/+$/, '')}/health`
     : null;
 
+  // Two guards the probe's bound makes necessary rather than optional. The
+  // probe now always settles, so the button always comes back — but a second
+  // tap that lands before the first settles would still start a second probe
+  // against the same half-open path, and an answer that arrives after the
+  // operator has left the screen must not write into an unmounted one.
+  const inFlight = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   const runLive = useCallback(async () => {
-    if (!healthUrl) return;
+    if (!healthUrl || inFlight.current) return;
+    inFlight.current = true;
     setRunning(true);
     try {
-      setLiveCheck(await probeStreamingFetch(healthUrl));
+      const check = await probeStreamingFetch(healthUrl);
+      if (!mounted.current) return;
+      setLiveCheck(check);
     } finally {
-      setRunning(false);
+      inFlight.current = false;
+      if (mounted.current) setRunning(false);
     }
   }, [healthUrl]);
 

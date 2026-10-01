@@ -397,6 +397,92 @@ describe('ManifestClient.getSessions retries a transient list read', () => {
     expect(sessionCalls(fetchMock)).toHaveLength(2);
   });
 
+  // The ladder's job is load, not just latency: an abandoned read still holds
+  // state.db on the Gate, so growing a second and third attempt behind a caller
+  // that walked away multiplies exactly the load the backoff exists to absorb.
+  test('an aborted ladder stops before the next attempt', async () => {
+    let attempts = 0;
+    const controller = new AbortController();
+    const ladder = withGetSessionsRetry(
+      async () => {
+        attempts += 1;
+        throw new TypeError('Network request failed');
+      },
+      { signal: controller.signal },
+    );
+    // Attach the observer before the rejection so it is never unhandled.
+    const outcome = ladder.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, value: error }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(attempts).toBe(1);
+
+    controller.abort();
+
+    const result = await outcome;
+    expect(result.ok).toBe(false);
+    expect(String(result.value)).toMatch(/stopped before it finished/i);
+    expect(attempts).toBe(1);
+  });
+
+  test('an abort during the backoff sleep ends the ladder without a third attempt', async () => {
+    let attempts = 0;
+    const controller = new AbortController();
+    const outcome = withGetSessionsRetry(
+      async () => {
+        attempts += 1;
+        throw new TypeError('Network request failed');
+      },
+      { signal: controller.signal },
+    ).then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, value: error }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Mid-sleep is the case a deadline-free ladder loses: the timer is already
+    // counting down towards an attempt the caller no longer wants.
+    await jest.advanceTimersByTimeAsync(GET_SESSIONS_RETRY_BACKOFF_MS[0] / 2);
+    controller.abort();
+    await jest.advanceTimersByTimeAsync(GET_SESSIONS_RETRY_BACKOFF_MS[0]);
+
+    expect(attempts).toBe(1);
+    expect((await outcome).ok).toBe(false);
+  });
+
+  test('a signal already aborted never issues a single request', async () => {
+    let attempts = 0;
+    const controller = new AbortController();
+    controller.abort();
+    const outcome = withGetSessionsRetry(
+      async () => {
+        attempts += 1;
+        return [];
+      },
+      { signal: controller.signal },
+    ).catch((error: unknown) => error);
+
+    expect(String(await outcome)).toMatch(/stopped before it finished/i);
+    expect(attempts).toBe(0);
+  });
+
+  test('no signal is still the shipped behaviour — the ladder retries as it always did', async () => {
+    let attempts = 0;
+    const read = withGetSessionsRetry(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new TypeError('Network request failed');
+      return ['s-1'];
+    });
+    // This suite runs on fake timers, so the backoff is spent explicitly.
+    await jest.advanceTimersByTimeAsync(GET_SESSIONS_RETRY_BACKOFF_MS[0]);
+
+    expect(await read).toEqual(['s-1']);
+    expect(attempts).toBe(2);
+  });
+
   test('a 5xx then a success retries the advertised path, never a guessed one', async () => {
     let hits = 0;
     const fetchMock = jest.fn((input: unknown) => {

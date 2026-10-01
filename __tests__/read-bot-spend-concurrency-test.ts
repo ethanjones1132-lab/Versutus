@@ -116,6 +116,104 @@ describe('readBotSpend runs the roster bounded-concurrent', () => {
   });
 });
 
+// A caller that walks away must stop the app issuing more of the fan-out, and
+// must stop the lane it left behind from growing another attempt: `signal`
+// reaches the reader itself, which is where the retry ladder lives. What no
+// signal can do is recall the request already on the wire, so the pool refuses
+// to start the next Bot and discards the lane that was in flight — a half-read
+// roster must never be returned as if it were the whole thing.
+describe('readBotSpend honours an abort', () => {
+  /**
+   * The wave's outcome, observed rather than awaited at the point of failure:
+   * an unhandled rejection here would be reported as a Node warning and hide
+   * the assertion that matters.
+   */
+  function watch(promise: Promise<unknown>): { settled: () => Promise<{ ok: boolean; value: unknown }> } {
+    const outcome = promise.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, value: error }),
+    );
+    return { settled: () => outcome };
+  }
+
+  test('an abort mid-roster starts no further Bot read and rejects the wave', async () => {
+    const log: string[] = [];
+    const { source, settle } = deferredSource({ log });
+    const controller = new AbortController();
+    const wave = watch(readBotSpend(source, { signal: controller.signal }));
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(log).toEqual(['a', 'b']);
+
+    controller.abort();
+    settle('a');
+    settle('b');
+    await new Promise((r) => setTimeout(r, 0));
+
+    // a and b answered into an aborted wave: c must never be started.
+    expect(log).toEqual(['a', 'b']);
+    const outcome = await wave.settled();
+    expect(outcome.ok).toBe(false);
+    expect(String(outcome.value)).toMatch(/stopped before it finished/i);
+  });
+
+  test('a lane that answers after the abort cannot fill a row', async () => {
+    const log: string[] = [];
+    const { source, settle } = deferredSource({ log });
+    const controller = new AbortController();
+    const wave = watch(readBotSpend(source, { signal: controller.signal }));
+
+    await new Promise((r) => setTimeout(r, 0));
+    controller.abort();
+    // The abort lands first; the answers follow, as they would from a Gate
+    // already mid-read.
+    settle('a');
+    settle('b');
+
+    expect((await wave.settled()).ok).toBe(false);
+  });
+
+  test('a signal already aborted never asks for the roster', async () => {
+    const calls: string[] = [];
+    const source: BotSpendSource = {
+      listBots: async () => {
+        calls.push('listBots');
+        return [{ id: 'a' }];
+      },
+      readBotSessions: async () => {
+        calls.push('read');
+        return catalogued('a');
+      },
+    };
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(readBotSpend(source, { signal: controller.signal })).rejects.toThrow(
+      /stopped before it finished/i,
+    );
+    expect(calls).toEqual([]);
+  });
+
+  test('an aborted wave is never mistaken for a Bot that could not be read', async () => {
+    // The aborted rejection is a walk-away, not a failure row: `degraded` and
+    // `{ ok: false }` both make claims about the gateway, and an abandoned read
+    // has observed neither.
+    const log: string[] = [];
+    const { source, settle } = deferredSource({ log });
+    const controller = new AbortController();
+    const done = readBotSpend(source, { signal: controller.signal }).catch((error) => error);
+
+    await new Promise((r) => setTimeout(r, 0));
+    controller.abort();
+    settle('a');
+    settle('b');
+
+    const outcome = await done;
+    expect(outcome).not.toHaveProperty('rows');
+    expect(String(outcome)).not.toMatch(/degraded/);
+  });
+});
+
 describe('readBotSpend still answers as it always has', () => {
   test('no per-Bot capability stays degraded with no rows', async () => {
     const source: BotSpendSource = { listBots: async () => [{ id: 'a' }] };

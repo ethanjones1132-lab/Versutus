@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollView, StyleSheet } from 'react-native';
 
 import { SpendChart } from '@/components/gateway/spend-chart';
@@ -32,7 +32,20 @@ import {
   spendCostBasis,
   spendSessionRows,
   type BotSpendReport,
+  type BotSpendSource,
 } from '@/lib/gateway/spend-report';
+
+/**
+ * How long a completed per-Bot fan-out keeps this screen from asking again.
+ *
+ * `status` flips on every connection-monitor self-heal as well as on every real
+ * connect, so keying the fan-out on it re-ran the whole roster — one 200-row
+ * scoped catalogue read per Bot, two at a time, each with its own retry ladder —
+ * per transition, on a Gate the repo documents as single-threaded and
+ * state.db-bound. One wave per visit; a reconnect earns a new wave only once the
+ * last complete one is this old.
+ */
+const BOT_SPEND_WAVE_MIN_INTERVAL_MS = 60_000;
 
 /**
  * P5's screen: what this gateway's sessions have cost.
@@ -56,10 +69,13 @@ import {
  * EmptyState naming the wait. A stale re-read keeps the last total above and
  * announces itself through that same ErrorCard.
  *
- * The per-Bot rows are a second, additional read (`readBotSpend`): one scoped
- * catalogue read per roster Bot, never a replacement for the total above. The
- * section is offered only when the connected client can scope a catalogue by
- * Bot, so a gateway that could only refuse is never asked.
+ * The per-Bot rows are one additional fan-out per visit (`readBotSpend`): one
+ * scoped catalogue read per roster Bot, started once when the screen mounts
+ * connected and never a second time while the previous wave is still running.
+ * A `status` flap back to connected re-reads only when the last COMPLETE wave is
+ * more than a minute old, and leaving the screen aborts the wave. The section
+ * is offered only when the connected client can scope a catalogue by Bot, so a
+ * gateway that could only refuse is never asked.
  *
  * The per-session table is the total's own read again, sorted by cost
  * (`spendSessionRows`) — the same rows, once, in the read the screen already
@@ -95,13 +111,21 @@ export default function GatewaySpendScreen() {
   const [readError, setReadError] = useState<string | null>(null);
   const [botReport, setBotReport] = useState<BotSpendReport | null>(null);
   const [budgets, setBudgets] = useState<BotBudgets>({});
+  const [budgetsLoaded, setBudgetsLoaded] = useState(false);
   const [now] = useState(() => Date.now());
+
+  // What the read below found in storage, kept so the writer can tell a cap
+  // that was just read back from one the operator set.
+  const loadedBudgets = useRef<BotBudgets | null>(null);
 
   // D5's caps are this device's; read them once for the budget rows.
   useEffect(() => {
     let cancelled = false;
     void loadBudgets().then((stored) => {
-      if (!cancelled) setBudgets(stored);
+      if (cancelled) return;
+      loadedBudgets.current = stored;
+      setBudgets(stored);
+      setBudgetsLoaded(true);
     });
     return () => {
       cancelled = true;
@@ -111,12 +135,18 @@ export default function GatewaySpendScreen() {
   const handleSetBudget = (botId: string, cap: number | undefined) => {
     const gatewayId = activeGateway?.id;
     if (!gatewayId) return;
-    setBudgets((previous) => {
-      const next = setBotBudget(previous, gatewayId, botId, cap);
-      void saveBudgets(next);
-      return next;
-    });
+    setBudgets((previous) => setBotBudget(previous, gatewayId, botId, cap));
   };
+
+  // The one writer, and deliberately outside every state updater: React may
+  // invoke an updater more than once or discard it, so a write issued from one
+  // is not tied to a state that ever committed. Keyed on `budgets`, this sees
+  // only what committed — and the value just read back from storage is not a
+  // change, so the load above writes nothing.
+  useEffect(() => {
+    if (!budgetsLoaded || loadedBudgets.current === budgets) return;
+    void saveBudgets(budgets);
+  }, [budgets, budgetsLoaded]);
 
   // The one catalogue read, shared by the connection effect and the
   // ErrorCard's Retry: a refusal keeps its caught message as the cause
@@ -161,29 +191,85 @@ export default function GatewaySpendScreen() {
     }
   };
 
-  useEffect(() => {
-    if (status !== 'connected') return;
-    let cancelled = false;
-    // The scoped read joins the source only when the client advertises it:
-    // its absence is what makes the report `degraded`, and the roster is not
-    // asked at all on that path.
-    void readBotSpend(canReadBotSessions ? { listBots, readBotSessions } : { listBots })
+  // The per-Bot fan-out's ledger, held outside state because it is bookkeeping
+  // about the wave rather than anything this screen paints: which controller is
+  // in charge, whether one is still running, when the last COMPLETE one ended,
+  // and which gateway those answers belong to.
+  const botWave = useRef<{
+    controller: AbortController | null;
+    running: boolean;
+    completedAt: number;
+    gatewayId: string | undefined;
+  }>({ controller: null, running: false, completedAt: 0, gatewayId: undefined });
+  const gatewayId = activeGateway?.id;
+
+  const runBotSpendWave = useCallback(() => {
+    const ledger = botWave.current;
+    // Caps and rows are per gateway, so a different gateway starts its own
+    // ledger rather than inheriting the previous PC's freshness claim.
+    if (ledger.gatewayId !== gatewayId) {
+      ledger.gatewayId = gatewayId;
+      ledger.completedAt = 0;
+      ledger.running = false;
+    }
+    // Never two waves at once, and a reconnect earns a new wave only once the
+    // last complete one is stale.
+    if (ledger.running) return;
+    if (ledger.completedAt !== 0 && Date.now() - ledger.completedAt < BOT_SPEND_WAVE_MIN_INTERVAL_MS) {
+      return;
+    }
+    // A newer wave supersedes whatever was running: its lanes stop issuing
+    // reads and its result is discarded rather than written over this one.
+    ledger.controller?.abort();
+    const controller = new AbortController();
+    ledger.controller = controller;
+    ledger.running = true;
+    // The scoped read joins the source only when the client advertises it: its
+    // absence is what makes the report `degraded`, and the roster is not asked
+    // at all on that path.
+    const source: BotSpendSource = canReadBotSessions ? { listBots, readBotSessions } : { listBots };
+    void readBotSpend(source, { signal: controller.signal })
       .then((report) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         setBotReport(report);
       })
       .catch(() => {
-        if (cancelled) return;
-        // A thrown roster read is NOT the `degraded` fact: that line claims
-        // this gateway cannot split spend by Bot, which is a different — and
+        if (controller.signal.aborted) return;
+        // A thrown roster read is NOT the `degraded` fact: that line claims this
+        // gateway cannot split spend by Bot, which is a different — and
         // possibly false — statement about a gateway that merely went quiet.
         // Nothing is claimed instead, and the section is withdrawn.
         setBotReport(null);
+      })
+      .finally(() => {
+        // Only the wave still in charge may clear the ledger: a superseded
+        // wave must not free the slot the newer one is holding.
+        if (ledger.controller !== controller) return;
+        ledger.controller = null;
+        ledger.running = false;
+        // Only a wave that finished its roster has said anything about how
+        // fresh these rows are; an abandoned one claims nothing.
+        if (!controller.signal.aborted) ledger.completedAt = Date.now();
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [status, canReadBotSessions, listBots, readBotSessions]);
+  }, [canReadBotSessions, gatewayId, listBots, readBotSessions]);
+
+  const connected = status === 'connected';
+
+  // One fan-out per visit. The keys are what really changes the data — the
+  // gateway, the per-Bot capability, and whether a connection is live at all —
+  // never `status` itself, which moves on every monitor self-heal; the runner
+  // decides whether a reconnect deserves a wave of its own.
+  useEffect(() => {
+    if (!connected) return;
+    runBotSpendWave();
+  }, [connected, gatewayId, runBotSpendWave]);
+
+  // Leaving the screen ends the wave. The signal travels the whole way down —
+  // into each Bot read's retry ladder — so no further lane is issued and a
+  // lane already failing with a 5xx grows no second attempt. What it cannot
+  // recall is the request already on the wire; the transport owns that abort,
+  // and that answer is discarded rather than written.
+  useEffect(() => () => botWave.current.controller?.abort(), []);
 
   const spend = useMemo(() => totalUsage(state.sessions), [state.sessions]);
   const basis = useMemo(() => spendCostBasis(state.sessions), [state.sessions]);
