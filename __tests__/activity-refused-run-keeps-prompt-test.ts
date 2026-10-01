@@ -62,8 +62,16 @@ describe('activity refused run keeps the typed prompt', () => {
     expect(src).toContain('void updateTranscript(');
   });
 
-  test('the retry-run card path still fires without reading the outcome', () => {
+  test('the retry-run card path still fires the same slash command, and now reads its answer', () => {
+    // The send itself is unchanged. What this assertion used to pin — a retry
+    // that fires and forgets the outcome — WAS the V-1 defect: a retry that
+    // refused, queued or collided with a running command reported nothing here
+    // and a second tap fired a second `/run`. The guard in front of the send
+    // and the two lines written from its answer are now part of this contract.
     const src = readRuns();
-    expect(src).toMatch(/void sendChatInput\(`\/run \$\{prompt\}`\);/);
+    expect(src).toMatch(/void sendChatInput\(`\/run \$\{prompt\}`\)/);
+    expect(src).toMatch(/if \(retryingRef\.current\) return;/);
+    expect(src).toMatch(/\.then\(\(outcome\) => \{\s*\n\s*if \(outcome === 'complete'\) return;/);
+    expect(src).toContain('RETRY_REFUSED_COPY');
   });
 });

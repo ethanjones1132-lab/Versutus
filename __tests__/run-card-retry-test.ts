@@ -81,11 +81,12 @@ describe('runs screen retry wiring', () => {
     // sendChatInput(`/run ${run.prompt}`) — the same path the Start-a-run
     // card uses. The arrow's body must call retryRun with item.run (and the
     // prompt it received from the card) so a future swap of the callback
-    // signature still fires the same slash command.
+    // signature still fires the same slash command. V-1 since added the pending
+    // guard in front of that arrow, so the prop is now conditional on it.
     expect(screen).toMatch(
-      /case 'finished':\s*return \([\s\S]*?<RunCard[\s\S]*?onOpenTranscript=\{setOpenAgenticRunId\}[\s\S]*?onRetry=\{\s*\(prompt\)\s*=>\s*retryRun\(\{\s*\.\.\.item\.run,\s*prompt\s*\}\)\s*\}\s*\/>/,
+      /case 'finished':[\s\S]*?<RunCard[\s\S]*?onOpenTranscript=\{setOpenAgenticRunId\}[\s\S]*?onRetry=\{[^}]*\(prompt\)\s*=>\s*retryRun\(\{\s*\.\.\.item\.run,\s*prompt\s*\}\)[^}]*\}\s*\/>/,
     );
-    expect(screen).toMatch(/\[stopActivityRun, retryRun, focusedRunId\]/);
+    expect(screen).toMatch(/\[stopActivityRun, retryRun, focusedRunId, retryingRunId, retryNotes\]/);
   });
 
   test('retryRun trims an empty or whitespace-only prompt and never fires sendChatInput', () => {
@@ -94,10 +95,14 @@ describe('runs screen retry wiring', () => {
     // run row whose prompt was somehow lost (the ActivityRun shape makes
     // prompt: string required but a future test or migration might leave it
     // empty) would send `/run  ` and the gateway would reply with its usage
-    // line — visibly noise in chat.
+    // line — visibly noise in chat. V-1 added the pending guard after it, so
+    // the second early return is the same guard as the button's.
     const screen = readSource('src', 'app', 'runs.tsx');
     expect(screen).toMatch(
-      /const retryRun = useCallback\(\s*\n\s*\(run: ActivityRun\) => \{\s*\n\s*const prompt = run\.prompt\.trim\(\);\s*\n\s*if \(!prompt\) return;\s*\n\s*void sendChatInput\(`\/run \$\{prompt\}`\);\s*\n\s*\},/,
+      /const retryRun = useCallback\(\s*\n\s*\(run: ActivityRun\) => \{\s*\n\s*const prompt = run\.prompt\.trim\(\);\s*\n\s*if \(!prompt\) return;\s*\n\s*if \(retryingRef\.current\) return;\s*\n\s*retryingRef\.current = run\.id;/,
+    );
+    expect(screen.indexOf('if (!prompt) return;')).toBeLessThan(
+      screen.indexOf('void sendChatInput(`/run ${prompt}`)'),
     );
   });
 

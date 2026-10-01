@@ -28,6 +28,13 @@ jest.mock('expo-constants', () => ({
   default: { easConfig: { projectId: '52545800-300a-4bbc-a2b9-7e412d9c217e' } },
 }));
 
+// The registration reaches the widget's redraw worker, which reads its privacy
+// preference out of AsyncStorage, so the chain ends at the native module. The
+// official jest mock is what every other provider-driving suite uses here.
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);
+
 jest.mock('@/lib/storage/secure-key-value', () => ({
   secureKeyValueStorage: {
     getItem: jest.fn(),

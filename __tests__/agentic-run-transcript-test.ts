@@ -140,8 +140,11 @@ describe('agentic-run transcript wiring', () => {
     // the Stop-run affordance is unchanged. Only the finished card gains the
     // new View transcript handler.
     const screen = readSource('src', 'app', 'runs.tsx');
+    // The finished branch grew a block since (V-1 put the retry's pending state
+    // and its result line under the card), so the handler is pinned by what the
+    // card still carries rather than by the branch's shape.
     expect(screen).toMatch(
-      /case 'finished':\s*return \([\s\S]*?<RunCard\s+run=\{item\.run\}\s+highlighted=\{item\.id === focusedRunId\}\s+onOpenTranscript=\{setOpenAgenticRunId\}/,
+      /case 'finished':[\s\S]*?<RunCard\s+run=\{item\.run\}\s+highlighted=\{item\.id === focusedRunId\}\s+onOpenTranscript=\{setOpenAgenticRunId\}/,
     );
     // Live cards keep the original shape — no onOpenTranscript passed.
     // A live card may carry the focus highlight (a notice or an Activity tap

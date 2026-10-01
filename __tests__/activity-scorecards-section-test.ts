@@ -506,8 +506,10 @@ describe('the Runs destination reads the gateway’s jobs, so a card can carry i
     expect(src).toContain('cron.list()');
     expect(src).toContain('cron.available');
     // The same two edges CronSection hangs its own re-list off, so a routine
-    // that fails while Runs is backgrounded is caught on the way back in.
-    expect(src).toContain('useFocusEffect(loadRoutineJobs)');
+    // that fails while Runs is backgrounded is caught on the way back in. The
+    // focus call is a wrapper since RUNS-1: it also carries the walk-away and
+    // calls the coalescing loader, so a caller arriving twice joins one read.
+    expect(src).toMatch(/useFocusEffect\(\s*useCallback\(\(\) => \{\s*\n\s*void loadRoutineJobs\(\);/);
     expect(src).toContain('runsReloadSignal');
   });
 });
@@ -525,19 +527,33 @@ describe('the Runs destination reads P5’s per-Bot spend, so a card can carry w
     const src = runs();
 
     // The Spend screen's own read, so a card and that screen word one read the
-    // same way — and the scoped read joins the source only where the client
-    // advertises it.
+    // same way — and the scoped read is asked only where the client advertises
+    // it. A gateway without it has its roster read for the names instead, since
+    // `readBotSpend` degrades there without asking the roster at all.
     expect(src).toContain('readBotSpend(');
-    expect(src).toContain('canReadBotSessions ? { listBots, readBotSessions } : { listBots }');
-    expect(src).toContain('useFocusEffect(loadBotSpend)');
+    expect(src).toMatch(/if \(canReadBotSessions\) \{\s*\n\s*const report = await readBotSpend\(/);
+    expect(src).not.toMatch(/readBotSpend\(\s*\{\s*listBots\s*\}/);
+    expect(src).toMatch(/const roster = await listBots\(\);/);
+    // The focus edge, since RUNS-1: one trigger per fold, and the blur is the
+    // wave's walk-away (the signal `readBotSpend` is handed).
+    expect(src).toMatch(
+      /useFocusEffect\(\s*useCallback\(\(\) => \{\s*\n\s*void loadBotSpend\(\);\s*\n\s*return stopSpendWave;/,
+    );
     expect(src).toContain('runsReloadSignal');
   });
 
-  test('a read that fails leaves no rows, so no card claims a spend nobody read', () => {
+  test('a read that fails claims nothing and blanks nothing, so no card is told a zero', () => {
     const src = runs();
 
     expect(src).toContain('status === \'connected\'');
-    expect(src).toContain('.catch(() => [] as BotSpendRow[])');
+    // The refusal path is the wave's own catch, and it neither blanks what the
+    // last complete wave read nor claims the window — a Gate that went quiet is
+    // not a Bot that spent nothing, and the next focus asks again at once
+    // instead of after the minute.
+    const caught = /catch \{([\s\S]*?)\n {8}\} finally \{/.exec(src)?.[1] ?? '';
+    expect(caught).not.toContain('setSpendRows');
+    expect(src).toContain('let read = false;');
+    expect(src).toContain('if (read && !controller.signal.aborted) ledger.completedAt = Date.now();');
     expect(src).toContain('useState<BotSpendRow[]>([])');
   });
 });
@@ -556,7 +572,9 @@ describe('what must keep working', () => {
 
     expect(src).toContain('<RunCard run={item.run} highlighted={item.id === focusedRunId} onStop={stopActivityRun} />');
     expect(src).toContain('onOpenTranscript={setOpenAgenticRunId}');
-    expect(src).toContain('onRetry={(prompt) => retryRun({ ...item.run, prompt })}');
+    // The retry affordance, withdrawn while that card's retry is still in flight
+    // (V-1) rather than left live behind a guard.
+    expect(src).toContain('onRetry={retrying ? undefined : (prompt) => retryRun({ ...item.run, prompt })}');
     expect(src).toContain('activityRunsForActiveGateway.length === 0');
   });
 

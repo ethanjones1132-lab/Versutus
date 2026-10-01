@@ -39,7 +39,10 @@ describe('capability and manifest refresh is scoped to the Gateway that started 
   });
 
   test('a capabilities answer only lands while the client that asked is still current', () => {
-    expect(refresh).toContain('void client\n          .getCapabilities()\n          .then((capabilities) => {');
+    // RUNS-3 made the catalog read part of what the refresh ANSWERS for, so it is
+    // awaited rather than left in flight: a refresh cannot report on a read it
+    // has not waited for. The currency guard inside is unchanged.
+    expect(refresh).toContain('await client\n          .getCapabilities()\n          .then((capabilities) => {');
     expect(refresh).toContain('if (isCurrent()) setLiveCapabilities(capabilities);');
     expect(refresh).not.toContain('then(setLiveCapabilities)');
   });
@@ -47,32 +50,32 @@ describe('capability and manifest refresh is scoped to the Gateway that started 
   test('every await re-checks currency before its commit point', () => {
     // healthCheck, loadGateways, the manifest read, the child-profile sync, the
     // retired-store clear, and the final checked stamp each sit behind a guard.
-    const guards = refresh.match(/if \(!isCurrent\(\)\) return;/g) ?? [];
+    const guards = refresh.match(/if \(!isCurrent\(\)\) return \w+;/g) ?? [];
     expect(guards.length).toBeGreaterThanOrEqual(5);
   });
 
   test('a manifest read that completes after a Gateway replacement is discarded', () => {
-    expect(refresh).toMatch(/\)\.catch\(\(\) => null\);\s*if \(!isCurrent\(\)\) return;\s*if \(manifest\) \{/);
+    expect(refresh).toMatch(/\)\.catch\(\(\) => null\);\s*if \(!isCurrent\(\)\) return \w+;\s*if \(manifest\) \{/);
     const write = refresh.indexOf('setActiveManifest(manifest);');
     expect(write).toBeGreaterThan(-1);
     // The currency check sits between the manifest read and its commit, so a
     // read finishing after a replacement never reaches the write.
     const head = refresh.slice(refresh.indexOf('.catch(() => null);') + '.catch(() => null);'.length, write);
-    expect(head).toMatch(/if \(!isCurrent\(\)\) return;/);
+    expect(head).toMatch(/if \(!isCurrent\(\)\) return \w+;/);
   });
 
   test('a child-profile sync for a superseded Gateway is never committed', () => {
     const syncAt = refresh.indexOf('const retirement = await syncChildProfiles(activeGateway, manifestProviders(manifest));');
     expect(syncAt).toBeGreaterThan(-1);
     const after = refresh.slice(syncAt, refresh.indexOf('setGateways(retirement.gateways);'));
-    expect(after).toContain('if (!isCurrent()) return;');
+    expect(after).toMatch(/if \(!isCurrent\(\)\) return \w+;/);
   });
 
   test('the retired-store clear and roster install only run for a still-current sync', () => {
     const storeAt = refresh.indexOf('await clearRetiredGatewayStores(retirement.removedIds);');
     expect(storeAt).toBeGreaterThan(-1);
     const after = refresh.slice(storeAt, refresh.indexOf('setGateways(retirement.gateways);'));
-    expect(after).toContain('if (!isCurrent()) return;');
+    expect(after).toMatch(/if \(!isCurrent\(\)\) return \w+;/);
   });
 
   test('a successful current refresh still updates capabilities, manifest, child Bots, and the roster', () => {
@@ -80,8 +83,21 @@ describe('capability and manifest refresh is scoped to the Gateway that started 
     expect(refresh).toContain('const retirement = await syncChildProfiles(activeGateway, manifestProviders(manifest));');
     expect(refresh).toContain('teardownRetiredActiveGateway(retirement.removedIds, retirement.gateways);');
     expect(refresh).toContain('setGateways(retirement.gateways);');
-    expect(refresh).toMatch(/if \(!isCurrent\(\)\) return;\s*setCapabilityCheckedAt\(Date\.now\(\)\);/);
+    expect(refresh).toMatch(/if \(!isCurrent\(\)\) return \w+;\s*setCapabilityCheckedAt\(Date\.now\(\)\);/);
     expect(refresh.match(/setActiveManifest\(/g)).toHaveLength(1);
+  });
+
+  test('the refresh answers for its own reads, and still throws nothing', () => {
+    // RUNS-3: the value callers read, and every way one read is refused. A
+    // caller with a refresh surface of its own can now tell "re-read" from
+    // "attempted", and no refusal escapes through a caller that cannot say
+    // anything about it.
+    expect(refresh).toContain('const refreshCapabilities = useCallback(async (): Promise<boolean> => {');
+    expect(refresh).toContain('if (!activeGateway) return true;');
+    expect(refresh).toContain('.catch(() => {\n            landed = false;\n          });');
+    expect(refresh).toContain('        landed = false;\n      }\n      if (!isCurrent())');
+    expect(refresh).toMatch(/catch \{\n      \/\/ Recorded, not rethrown[\s\S]*?landed = false;\n    \}\n    return landed;/);
+    expect(refresh).not.toContain('throw ');
   });
 
   test('a failed refresh preserves the last known manifest', () => {

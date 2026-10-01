@@ -52,8 +52,10 @@ test('a failed refresh cannot clear the last known manifest', () => {
   // resolves null (like the plain fetch) when the retries are exhausted, so a
   // MagicDNS blip during refresh leaves the last known manifest in place. The
   // currency guard between the read and the write only refuses a superseded
-  // Gateway's manifest; it does not change the failure handling.
-  expect(refresh).toMatch(/\)\.catch\(\(\) => null\);\s*if \(!isCurrent\(\)\) return;\s*if \(manifest\) \{/);
+  // Gateway's manifest; it does not change the failure handling. (RUNS-3 moved
+  // that guard's `return` to `return landed`, so the refresh can report the
+  // failure as well as survive it.)
+  expect(refresh).toMatch(/\)\.catch\(\(\) => null\);\s*if \(!isCurrent\(\)\) return \w+;\s*if \(manifest\) \{/);
   expect(refresh.match(/setActiveManifest\(/g)).toHaveLength(1);
   expect(refresh).toMatch(/if \(manifest\) \{\s*\n\s*setActiveManifest\(manifest\);/);
 });

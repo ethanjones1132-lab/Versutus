@@ -495,7 +495,17 @@ type GatewayContextValue = {
   retryCommand: (entry: Partial<CommandTranscriptEntry> & { input: string }) => void;
   cancelCommand: (id: string) => void;
   capabilitySnapshot: GatewayCapabilitySnapshot;
-  refreshCapabilities: () => void;
+  /**
+   * Re-read what the gateway can do, resolving whether the reads landed.
+   *
+   * `false` means at least one gateway-side read was refused — `/health`, the
+   * capability catalog, the manifest or a child-profile sync — so a caller with
+   * its own refresh surface can say the data on screen was not re-read. Never
+   * rejects: an individual refusal is swallowed, as it always was, and only
+   * recorded. `undefined` is the demo gateway's answer (it reads nothing) and
+   * is not a refusal — only `false` is.
+   */
+  refreshCapabilities: () => Promise<boolean> | undefined;
   pendingConfirmation: GatewayActionPreview | null;
   confirmPendingAction: () => void;
   cancelPendingConfirmation: () => void;
@@ -4608,8 +4618,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     disconnectGateway();
   }, [disconnectGateway, updateTlsFingerprintChange]);
 
-  const refreshCapabilities = useCallback(async () => {
-    if (!activeGateway) return;
+  /**
+   * Re-read what this gateway can do, and ANSWER whether the reads landed.
+   *
+   * The body still swallows every individual refusal — a gateway that cannot
+   * answer one read must not throw through callers with no way to say anything
+   * about it — but a refusal is now recorded, and `false` tells the caller's
+   * own refresh surface that what is on screen was not re-read. Without it a
+   * dead `/health`, a refused capability read and a failed manifest fetch all
+   * reached a pull-to-refresh as a fulfilled promise, and the operator was told
+   * the data was fresh when none of it had been read.
+   *
+   * `true` when nothing was refused — and `true` with no active gateway, where
+   * there was nothing to refresh rather than a refresh that failed.
+   */
+  const refreshCapabilities = useCallback(async (): Promise<boolean> => {
+    if (!activeGateway) return true;
     // The refresh answers for the client/Gateway it started against only. A
     // replacement — attachClient supersede, disconnect, delete, or a retirement
     // teardown — bumps the generation, so a slow catalog or manifest read for a
@@ -4617,6 +4641,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // surface with the old one's catalog or commands.
     const generation = clientGenerationRef.current;
     const isCurrent = () => clientGenerationRef.current === generation;
+    let landed = true;
     try {
       const client = clientRef.current;
       // Pre-flight guard: a stale read only skips a retryable refresh.
@@ -4624,16 +4649,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // verification because it changes when this effect/callback re-runs.
       if (client && status === 'connected') {
         await client.healthCheck();
-        if (!isCurrent()) return;
-        void client
+        if (!isCurrent()) return landed;
+        // Awaited rather than left in flight: a refresh that reports on its own
+        // reads cannot report on one it has not waited for, and a refused
+        // catalog is exactly the case the answer exists for. The reads it
+        // already landed keep their answers either way.
+        await client
           .getCapabilities()
           .then((capabilities) => {
             if (isCurrent()) setLiveCapabilities(capabilities);
           })
-          .catch(() => undefined);
+          .catch(() => {
+            landed = false;
+          });
       }
       const known = await loadGateways();
-      if (!isCurrent()) return;
+      if (!isCurrent()) return landed;
       const parent = activeGateway.parentId
         ? known.find((item) => item.id === activeGateway.parentId)
         : undefined;
@@ -4641,28 +4672,36 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         manifestUrlForGateway(activeGateway, parent?.url),
         manifestAlternateIpv4(activeGateway, activeManifest),
       ).catch(() => null);
-      if (!isCurrent()) return;
+      if (!isCurrent()) return landed;
       if (manifest) {
         setActiveManifest(manifest);
         if (!activeGateway.parentId) {
           const retirement = await syncChildProfiles(activeGateway, manifestProviders(manifest));
-          if (!isCurrent()) return;
+          if (!isCurrent()) return landed;
           if (retirement) {
             // Same rule as the connect path: the profile and the stores keyed
             // by its id leave together, before the roster changes — and a
             // session still up on a retired profile comes down with it.
             await clearRetiredGatewayStores(retirement.removedIds);
-            if (!isCurrent()) return;
+            if (!isCurrent()) return landed;
             teardownRetiredActiveGateway(retirement.removedIds, retirement.gateways);
             setGateways(retirement.gateways);
           }
         }
+      } else {
+        // Nothing was served. That is a failed read rather than a gateway that
+        // advertises no manifest — the last known one is kept above either way,
+        // so a MagicDNS blip cannot blank the surface.
+        landed = false;
       }
-      if (!isCurrent()) return;
+      if (!isCurrent()) return landed;
       setCapabilityCheckedAt(Date.now());
     } catch {
-      // ignore
+      // Recorded, not rethrown: the answers already landed stay landed, and
+      // every existing caller ignores the value and keeps working.
+      landed = false;
     }
+    return landed;
   }, [activeGateway, status, teardownRetiredActiveGateway, activeManifest]);
 
   const confirmPendingAction = useCallback(() => {
