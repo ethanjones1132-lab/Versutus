@@ -48,6 +48,33 @@ describe('the day ribbon', () => {
     expect(recent).toBeGreaterThan(0.1); // a tenth of the line apart, not a pixel
   });
 
+  test('a restored run whose fate this device never learned counts as working', () => {
+    // `unresolved` with no finish of its own: the gateway may still be running
+    // it, so it belongs in "working", not in "done today" and not in "failed".
+    const restored = run('restored', 'unresolved', 5 * 60_000, { finishedAt: undefined });
+    const figures = glanceFigures(0, [restored], NOW);
+    expect(figures.find((figure) => figure.key === 'working')?.value).toBe(1);
+    expect(figures.find((figure) => figure.key === 'done')?.value).toBe(0);
+    expect(figures.some((figure) => figure.key === 'failed')).toBe(false);
+    // And the ribbon draws it live rather than as a dim settled bead.
+    expect(dayRibbon([restored], NOW)[0].state).toBe('working');
+  });
+
+  test('only the run with no real finish counts as working beside one the settle finished', () => {
+    // Both rows are `unresolved`; only the finish the settle re-poll learned
+    // separates an in-flight row from an ended one, so the rule has to read
+    // `finishedAt` and not the status.
+    const restored = run('restored', 'unresolved', 5 * 60_000, { finishedAt: undefined });
+    const settled = run('settled', 'unresolved', 4 * 60_000, { finishedAt: NOW - 60_000 });
+    const figures = glanceFigures(0, [restored, settled], NOW);
+    expect(figures.find((figure) => figure.key === 'working')?.value).toBe(1);
+    // The one that really ended draws as the dim settled bead it is.
+    expect(dayRibbon([restored, settled], NOW).map((bead) => [bead.id, bead.state])).toEqual([
+      ['restored', 'working'],
+      ['settled', 'settled'],
+    ]);
+  });
+
   test('beads are the last day of runs, oldest first, each marked by what it needs', () => {
     const beads = dayRibbon(
       [

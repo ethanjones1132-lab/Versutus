@@ -12,6 +12,7 @@ import {
   LAST_SEEN_KEY_PREFIX,
   clearLastSeen,
   loadLastSeen,
+  readLastSeen,
   stampAllLastSeen,
   stampLastSeen,
 } from '@/lib/home/last-seen';
@@ -71,6 +72,36 @@ describe('loadLastSeen', () => {
 
   test('returns null on zero — epoch is not a visit', async () => {
     (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce('0');
+    expect(await loadLastSeen('gw-1')).toBeNull();
+  });
+});
+
+describe('readLastSeen', () => {
+  test('names the stamped timestamp', async () => {
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce('1757400000000');
+    expect(await readLastSeen('gw-1')).toEqual({ state: 'ok', at: 1757400000000 });
+  });
+
+  test('never stamped is its own outcome', async () => {
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce(null);
+    expect(await readLastSeen('gw-never')).toEqual({ state: 'never' });
+  });
+
+  test('a corrupt value is never, not a stamp of zero', async () => {
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce('not-a-number');
+    expect(await readLastSeen('gw-1')).toEqual({ state: 'never' });
+  });
+
+  test('a refused read is an error, not an empty window', async () => {
+    // The whole point of the new function: a rejected AsyncStorage read must
+    // not answer the same value as "nothing was ever stamped", or a failed
+    // read renders as an empty digest.
+    (AsyncStorage.getItem as jest.Mock).mockRejectedValueOnce(new Error('sqlite fault'));
+    expect(await readLastSeen('gw-1')).toEqual({ state: 'error' });
+  });
+
+  test('loadLastSeen keeps its old shape over a refused read', async () => {
+    (AsyncStorage.getItem as jest.Mock).mockRejectedValueOnce(new Error('sqlite fault'));
     expect(await loadLastSeen('gw-1')).toBeNull();
   });
 });

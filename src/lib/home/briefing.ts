@@ -43,6 +43,18 @@ function terminalFate(status: ActivityRun['status']): keyof HomeBriefingFinished
 }
 
 /**
+ * A run this device stopped watching and never learned the end of: it is over
+ * as far as this phone knows, but it carries no finish, so nothing was ever
+ * ended. The gateway may still be executing it, so the digest carries it over
+ * as live rather than reporting it as news — the header rule above, applied to
+ * a restored row. Once the settle re-poll learns a real fate it carries a
+ * `finishedAt` of its own and is ordinary news again.
+ */
+function isUnwatchedStillGoing(run: ActivityRun): boolean {
+  return run.status === 'unresolved' && typeof run.finishedAt !== 'number';
+}
+
+/**
  * Select what Home should show since the operator's last visit.
  * `now` is injectable for tests; in production a finish timestamp is never
  * trusted past it (an unsettled record may carry a placeholder), so such a
@@ -62,7 +74,7 @@ export function buildHomeBriefing(
   for (const run of runs) {
     const finishedAfterLeave =
       typeof run.finishedAt === 'number' && run.finishedAt > lastSeenAt && run.finishedAt <= now;
-    const carriedOver = LIVE_RUN_STATUSES.has(run.status);
+    const carriedOver = LIVE_RUN_STATUSES.has(run.status) || isUnwatchedStillGoing(run);
 
     if (carriedOver) {
       if (run.status === 'waiting-approval') pendingApprovals += 1;

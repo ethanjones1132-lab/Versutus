@@ -99,7 +99,10 @@ describe('HomeBriefingCard', () => {
   test('folds the active gateway stamp with the persisted runs', () => {
     const src = card();
     expect(src).toContain('activeGateway');
-    expect(src).toContain('loadLastSeen');
+    // The read that names its own outcome, and the arrival write that advances
+    // the window once this visit's digest has been read.
+    expect(src).toContain('readLastSeen');
+    expect(src).toContain('stampLastSeen');
     expect(src).toContain('buildHomeBriefing');
     expect(src).toContain('homeBriefingSummary');
   });

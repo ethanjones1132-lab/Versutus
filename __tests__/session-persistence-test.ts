@@ -29,7 +29,10 @@ describe('normalizeRestoredRuns', () => {
     expect(next[1].status).toBe('unresolved');
     expect(next[0].summary).toMatch(/Interrupted/i);
     expect(next[1].summary).toMatch(/Interrupted/i);
-    expect(next[0].finishedAt).toEqual(expect.any(Number));
+    // No load-time finish: the run may still be executing on the gateway, and
+    // a stamp here is what let Home report it as ended.
+    expect(next[0].finishedAt).toBeUndefined();
+    expect(next[1].finishedAt).toBeUndefined();
   });
 
   test('keeps a local- provisional run cancelled — the gateway never saw it', () => {
@@ -40,6 +43,9 @@ describe('normalizeRestoredRuns', () => {
     expect(next[0].status).toBe('cancelled');
     expect(next[1].status).toBe('cancelled');
     expect(next[0].summary).toMatch(/Interrupted/i);
+    // The app closing genuinely ended these, so they do carry a finish.
+    expect(next[0].finishedAt).toEqual(expect.any(Number));
+    expect(next[1].finishedAt).toEqual(expect.any(Number));
   });
 
   test('keeps an existing summary and finishedAt on a restored run', () => {

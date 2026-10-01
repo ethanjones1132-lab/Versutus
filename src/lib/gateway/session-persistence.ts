@@ -205,20 +205,27 @@ export function resurfaceOfflineQueue(
  * Runs interrupted mid-flight are re-marked on load — the app process is
  * gone, so local drivers and approval resolvers cannot resume them. A run
  * the gateway accepted may still have finished upstream, so it restores as
- * unresolved (the reconnect settle re-poll then learns its real fate);
- * only `local-` provisionals the gateway never saw restore as cancelled.
+ * unresolved (the reconnect settle re-poll then learns its real fate) and
+ * keeps whatever finish it already had — none, if it had none. A load time is
+ * not an end: stamping one here is what let Home call work the gateway is
+ * still executing a finished run.
+ *
+ * Only `local-` provisionals the gateway never saw restore as cancelled, and
+ * those do carry the load stamp — the app closing genuinely ended them.
  */
 export function normalizeRestoredRuns(runs: ActivityRun[]): ActivityRun[] {
   return runs.map((run) => {
-    if (run.status === 'running' || run.status === 'waiting-approval') {
+    if (run.status !== 'running' && run.status !== 'waiting-approval') return run;
+    const summary = run.summary ?? 'Interrupted when the app closed';
+    if (isLocalProvisionalRunId(run.id)) {
       return {
         ...run,
-        status: (isLocalProvisionalRunId(run.id) ? 'cancelled' : 'unresolved') as ActivityRun['status'],
+        status: 'cancelled' as ActivityRun['status'],
         finishedAt: run.finishedAt ?? Date.now(),
-        summary: run.summary ?? 'Interrupted when the app closed',
+        summary,
       };
     }
-    return run;
+    return { ...run, status: 'unresolved' as ActivityRun['status'], summary };
   });
 }
 

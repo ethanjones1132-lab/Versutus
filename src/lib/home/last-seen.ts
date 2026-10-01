@@ -40,19 +40,40 @@ export async function stampAllLastSeen(gatewayIds: readonly string[], now = Date
 }
 
 /**
- * Read back one gateway's last-seen timestamp, or null when nothing was
- * ever stamped. A corrupt stored value is unknown, not zero — "away since
+ * What one gateway's stamp read as. "Never stamped" and "could not be read"
+ * are different facts and must not share a value: the first means the digest
+ * has no window, the second means this device does not know whether it has
+ * one — and a UI that cannot tell them apart renders "nothing happened" for a
+ * read that failed, which is the one claim the digest may not make.
+ */
+export type LastSeenRead =
+  | { state: 'never' }
+  | { state: 'ok'; at: number }
+  | { state: 'error' };
+
+/**
+ * Read back one gateway's last-seen timestamp, naming a refused read as its
+ * own outcome. A corrupt stored value is unknown, not zero — "away since
  * the epoch" would make every run look overdue.
  */
-export async function loadLastSeen(gatewayId: string): Promise<number | null> {
+export async function readLastSeen(gatewayId: string): Promise<LastSeenRead> {
   try {
     const raw = await keyValueStorage.getItem(lastSeenKey(gatewayId));
-    if (raw === null) return null;
+    if (raw === null) return { state: 'never' };
     const value = Number(raw);
-    return Number.isFinite(value) && value > 0 ? value : null;
+    return Number.isFinite(value) && value > 0 ? { state: 'ok', at: value } : { state: 'never' };
   } catch {
-    return null;
+    return { state: 'error' };
   }
+}
+
+/**
+ * The timestamp alone, for callers that have no way to say "unknown" — a
+ * refused read answers null here, exactly as it always has.
+ */
+export async function loadLastSeen(gatewayId: string): Promise<number | null> {
+  const read = await readLastSeen(gatewayId);
+  return read.state === 'ok' ? read.at : null;
 }
 
 /** Clear one gateway's stamp — used when its gateway profile is deleted. */
