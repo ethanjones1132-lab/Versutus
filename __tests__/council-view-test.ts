@@ -16,16 +16,15 @@ function readSource(...parts: string[]): string {
 const councilRoute = () => readSource('src', 'app', 'council.tsx');
 const compareView = () => readSource('src', 'components', 'chat', 'council-compare-view.tsx');
 
-describe('the council room name is short and named', () => {
-  test('it names the prompt, and falls back when the prompt is blank', () => {
-    expect(councilRoomName('Compare notes.')).toBe('Council · Compare notes.');
-    expect(councilRoomName('   ')).toBe(`${COUNCIL_ROOM_PREFIX}comparison`);
+describe('the council room name is short and opaque', () => {
+  test("it is the prefix and a token, never the operator's prompt", () => {
+    const name = councilRoomName();
+    expect(name.startsWith(COUNCIL_ROOM_PREFIX)).toBe(true);
+    expect(name.slice(COUNCIL_ROOM_PREFIX.length)).toMatch(/^[0-9a-f]{4}$/);
   });
 
-  test('a long prompt is capped so the transient room name stays a label', () => {
-    const name = councilRoomName('x'.repeat(200));
-    expect(name.length).toBeLessThanOrEqual(50);
-    expect(name.startsWith(COUNCIL_ROOM_PREFIX)).toBe(true);
+  test('it stays a label the Gate can hold', () => {
+    expect(councilRoomName().length).toBeLessThanOrEqual(50);
   });
 });
 
