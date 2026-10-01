@@ -13,6 +13,8 @@ import { getSecret } from './capabilities/secrets.mjs';
 import { buildManifest } from './manifest.mjs';
 import { tailnetIpv4FromInterfaces } from './reachability.mjs';
 import { createSerialReload, createDebouncedReload } from './serial-reload.mjs';
+import { createSessionIndex, sessionIndexKey } from './session-index.mjs';
+import { toGatewaySession } from './cli-environments/backends/hermes.mjs';
 import { ProviderStore } from './providers/store.mjs';
 import { migrateLegacyProviders } from './providers/migrate-v1.mjs';
 import { ProviderService } from './providers/service.mjs';
@@ -85,6 +87,26 @@ const CONFIGURATION_ERROR_CODES = new Set(['disabled', 'missing_credentials', 'c
 // How long a burst of chat outcomes is allowed to wait before the manifest is
 // rebuilt to match. Injected so the tests do not have to wait a real second.
 const DEFAULT_OUTCOME_RELOAD_DELAY_MS = 1000;
+// The Gate's own copy of a session list, and the bounds around it
+// (session-index.mjs, hermes.mjs). A Hermes list is answered from the copy and
+// refilled in the background, because the read it saves is one that measured
+// 3-38 s against a 6.2 GB `state.db` on 2026-10-01. A screen waits
+// DEFAULT_SESSION_READ_BOUND_MS for that refill — the same 30 s the read bound
+// has always been — while the refill itself is given the long bound a cold read
+// needs to finish at all, and the copy is refilled once it is older than
+// DEFAULT_SESSION_INDEX_STALE_MS. Injected so a test can watch each one fire in
+// milliseconds.
+const DEFAULT_SESSION_READ_BOUND_MS = 30_000;
+const DEFAULT_SESSION_REFRESH_TIMEOUT_MS = 180_000;
+const DEFAULT_SESSION_INDEX_STALE_MS = 30_000;
+// How long a shutdown waits for the copy's coalesced write to land before it
+// stops caring. The write is a small JSON file, so this is only reached by a
+// filesystem that has stopped answering.
+const DEFAULT_SESSION_INDEX_FLUSH_MS = 2_000;
+// What a caller sees when the copy is empty AND the refill is still running.
+// The read is not abandoned — it keeps going and fills the copy — so the honest
+// answer names that rather than reporting a failure the operator cannot act on.
+const SESSION_LIST_SLOW_MESSAGE = 'Hermes is slow to list sessions right now. The Gate is still reading them in the background - try again in a moment.';
 
 /** The caller's turn id, or null when it sent none (or an unusable one). */
 function readTurnId(value) {
@@ -631,6 +653,24 @@ export async function runVoiceTurn(backendManager, session, text, handlers = {})
 }
 
 /**
+ * The Gate's own copy of every backend's session list, under the Gate home.
+ *
+ * Exported so a test that needs to drive the copy's clock builds it exactly the
+ * way the Gate does — including `rowTemplate`, which is what a session the Gate
+ * heard about from its own action is stored as: the keys a live Hermes row has,
+ * with honest empties for the values nobody has measured. The app reads those
+ * keys, and a missing one is not a zero, it is a hole in the list.
+ */
+export function createGateSessionIndex({ gateHome, now, writeDelayMs } = {}) {
+  return createSessionIndex({
+    dir: join(gateHome, 'state', 'session-index'),
+    ...(now ? { now } : {}),
+    ...(writeDelayMs ? { writeDelayMs } : {}),
+    rowTemplate: (id) => toGatewaySession({ id, started_at: Date.now(), last_active: Date.now(), preview: '' }),
+  });
+}
+
+/**
  * Create and configure a Versutus Gate HTTP server
  * @param {Object} config
  * @param {string} config.root - Root directory for the Gate (capabilities and token store location)
@@ -659,6 +699,13 @@ export async function createGate(config = {}) {
     keepaliveIntervalMs,
     upstreamHeadersTimeoutMs = DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS,
     outcomeReloadDelayMs = DEFAULT_OUTCOME_RELOAD_DELAY_MS,
+    // The Gate's own copy of every backend's session list. Injected whole so a
+    // test can drive its clock and its bounds; the three below are the bounds
+    // a screen waits, a refill is given, and a copy goes stale after.
+    sessionIndex,
+    sessionReadBoundMs = DEFAULT_SESSION_READ_BOUND_MS,
+    sessionRefreshTimeoutMs = DEFAULT_SESSION_REFRESH_TIMEOUT_MS,
+    sessionIndexStaleMs = DEFAULT_SESSION_INDEX_STALE_MS,
   } = config;
 
   await migrateLegacyProviders({ sourceRoot: root, gateHome });
@@ -718,6 +765,11 @@ export async function createGate(config = {}) {
   // that one is JSONL keyed by environment, this one is raw SSE bytes keyed
   // by run id.
   const runStreams = createBackendRunStreams(join(gateHome, 'run-streams'));
+  // Gate-owned, like the run streams: a Hermes session list is answered from
+  // this copy and refilled in the background, so Hermes's own data is never
+  // written to and its state.db is never opened. Under <gateHome>/state, apart
+  // from the other config, because it is state rather than a registration.
+  const sessionListIndex = sessionIndex ?? createGateSessionIndex({ gateHome });
   const environmentRegistry = injectedRegistry ?? new CliAdapterRegistry();
   const environmentService = new CliEnvironmentService({
     store: environmentStore,
@@ -1418,7 +1470,7 @@ export async function createGate(config = {}) {
         return requestUrl.searchParams.get('bot') || body?.bot || undefined;
       }
 
-      async function resolveConversationBackend(backendId, botId) {
+      async function resolveConversationScope(backendId, botId) {
         // Naming a Bot names the environment: a Bot is a Hermes profile, and
         // Claude Code / Codex / OpenCode have no notion of one. Falling back
         // to the *first* attached environment — which sorts before Hermes on a
@@ -1426,19 +1478,29 @@ export async function createGate(config = {}) {
         // environment that owned the Bot sat right there. Same capability-first
         // rule resolveBackendFor and resolveRunBackend already use; an explicit
         // ?backendId= still wins, so a deliberate pin is still told the truth.
+        //
+        // The environment id comes back with the backend because the session
+        // index is keyed by it: a copy of "the sessions" only means something
+        // next to the environment and the Bot it was read from.
         if (botId && !backendId) {
           for (const entry of await backendManager.list()) {
             if (!await backendCanServe(entry, 'forBot')) continue;
             const candidate = await backendManager.get(entry.id).catch(() => null);
             if (candidate && typeof candidate.forBot === 'function') {
-              return resolveForBot(candidate, botId);
+              return { backend: await resolveForBot(candidate, botId), environmentId: entry.id };
             }
           }
         }
-        const backend = await resolveBackend(backendId);
+        const environmentId = backendId ?? (await backendManager.list())[0]?.id;
+        const backend = await resolveBackend(environmentId);
         if (!backend) return null;
-        if (!botId) return backend;
-        return resolveForBot(backend, botId);
+        if (!botId) return { backend, environmentId };
+        return { backend: await resolveForBot(backend, botId), environmentId };
+      }
+
+      async function resolveConversationBackend(backendId, botId) {
+        const scope = await resolveConversationScope(backendId, botId);
+        return scope?.backend ?? null;
       }
 
       function sessionReadError(error, botId, fallbackCode) {
@@ -1458,6 +1520,143 @@ export async function createGate(config = {}) {
         res.end(JSON.stringify({
           error: { message: botId ? `Bot ${botId}: ${message}` : message, code, ...(botId ? { botId } : {}) },
         }));
+      }
+
+      /**
+       * Whether the Gate keeps its own copy of this backend's sessions.
+       *
+       * Only a Hermes list is copied: its backend answers the query out of one
+       * SQLite `state.db` that measured 3-38 s at 6.2 GB (2026-10-01), while
+       * opencode answers in 0.03 s. Every other kind stays live, because a copy
+       * of a cheap read is a cost with no read saved.
+       */
+      function indexesSessions(backend) {
+        return backend?.kind === 'hermes';
+      }
+
+      /**
+       * Whether a list read may be answered out of that copy.
+       *
+       * The copy holds one contiguous newest-first window per key, so a request
+       * that carries a cursor or an offset the Gate does not understand as a page
+       * bound cannot be served from it: it would silently answer the newest page
+       * again. The route reads `limit`, `bot` and `backendId`; anything else
+       * stays live.
+       */
+      function readIsIndexable(requestUrl) {
+        for (const name of requestUrl.searchParams.keys()) {
+          if (name !== 'limit' && name !== 'bot' && name !== 'backendId') return false;
+        }
+        return true;
+      }
+
+      /**
+       * Answer a session list from the Gate's own copy, refilling it when the
+       * copy cannot cover what was asked.
+       *
+       * A read the copy can cover is answered from it in microseconds and only
+       * starts a refill — one the caller never waits for — when the copy has
+       * gone stale. A read it cannot cover (a bigger page, or no copy at all)
+       * joins a refill and waits for it up to the screen bound, because a caller
+       * asking for rows the copy has never held deserves the real thing.
+       *
+       * The refill is NOT the screen's read: it keeps running past the bound
+       * that made the screen give up, which is the whole point of the copy. A
+       * cold read that needs longer than a screen will wait still lands and
+       * serves every later read.
+       */
+      async function readIndexedSessions(backend, environmentId, botId, requestedLimit) {
+        const key = sessionIndexKey(environmentId, botId);
+        const cached = await sessionListIndex.get(key);
+        const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : null;
+        const isStale = (refreshedAt) => Date.now() - refreshedAt > sessionIndexStaleMs;
+        const page = (sessions) => sessions.slice(0, limit ?? sessions.length);
+        // Rows served out of a window narrower than the ask are a SHORT page, and
+        // the caller has to be able to tell: the app compares the rows it got
+        // with the limit it sent (sessionListMayHaveOlder) and concludes there is
+        // nothing older when the page is short — so an unmarked short page hides a
+        // Bot Chat that is really there, and the caller opens a second one.
+        const isShort = (fetchedLimit) => limit !== null && limit > fetchedLimit;
+        const refreshWindow = (window) => sessionListIndex.refresh(
+          key,
+          // The long bound belongs to the copy's own refill, not to the screen:
+          // a cold read that needs 38 s is one this route is happy to keep
+          // running after the screen has been answered.
+          (asked) => backend.listSessions(asked, { timeoutMs: sessionRefreshTimeoutMs }),
+          { limit: window },
+        );
+        // `index` is additive: `object` and `data` keep their meaning, and the
+        // app's parser reads only `data` (manifest-client.ts getSessions).
+        const answer = (sessions, { refreshedAt, stale = false, partial = false } = {}) => {
+          res.writeHead(200);
+          res.end(JSON.stringify({
+            object: 'list',
+            data: sessions,
+            ...(partial ? { partial: true } : {}),
+            index: { refreshedAt: refreshedAt ?? null, stale },
+          }));
+        };
+
+        // The copy can answer this read. A stale one refills in the background;
+        // a fresh one is not asked again, which is what makes a warm list free.
+        if (cached && cached.fetchedLimit > 0 && (limit === null || limit <= cached.fetchedLimit)) {
+          const stale = isStale(cached.refreshedAt);
+          if (stale) void refreshWindow(cached.fetchedLimit).catch(() => undefined);
+          answer(page(cached.sessions), { refreshedAt: cached.refreshedAt, stale });
+          return;
+        }
+
+        // It cannot: wait for a real read, bounded by what a screen will wait.
+        // The window asked for is the caller's, capped at what the copy keeps.
+        const outcome = await boundedOutcome(
+          refreshWindow(Math.min(limit ?? sessionListIndex.maxRows, sessionListIndex.maxRows)),
+          sessionReadBoundMs,
+        );
+        if (outcome.settled) {
+          if (outcome.error) {
+            sessionReadError(outcome.error, botId, 'session_list_failed');
+            return;
+          }
+          answer(page(outcome.value.sessions), {
+            refreshedAt: outcome.value.refreshedAt,
+            partial: isShort(outcome.value.fetchedLimit),
+          });
+          return;
+        }
+        // Out of time with the read still running. Whatever the copy holds is
+        // true and worth showing; an empty copy has nothing to say but the wait.
+        const held = await sessionListIndex.get(key);
+        if (held?.sessions.length) {
+          answer(page(held.sessions), {
+            refreshedAt: held.refreshedAt,
+            stale: true,
+            partial: isShort(held.fetchedLimit),
+          });
+          return;
+        }
+        sessionReadError(
+          Object.assign(new Error(SESSION_LIST_SLOW_MESSAGE), { code: 'backend_timeout' }),
+          botId,
+          'session_list_failed',
+        );
+      }
+
+      /**
+       * Wait for `promise` up to `boundMs`, as a value rather than a race.
+       *
+       * Never rejects: a caller that walked away at the bound still needs the
+       * read's own failure to reach it, and a read nobody awaits any more must
+       * not surface as an unhandled rejection in the Gate's own process.
+       */
+      function boundedOutcome(promise, boundMs) {
+        return new Promise((resolve) => {
+          const timer = setTimeout(() => resolve({ settled: false }), boundMs);
+          timer.unref?.();
+          promise.then(
+            (value) => { clearTimeout(timer); resolve({ settled: true, value }); },
+            (error) => { clearTimeout(timer); resolve({ settled: true, error }); },
+          );
+        });
       }
 
       /**
@@ -2304,19 +2503,33 @@ export async function createGate(config = {}) {
       }
 
       if (pathname === '/v1/sessions' && method === 'GET') {
-        const backend = await resolveConversationBackend(url.searchParams.get('backendId'), readBotId(url));
-        if (!backend) return;
+        const botId = readBotId(url);
+        const scope = await resolveConversationScope(url.searchParams.get('backendId'), botId);
+        // `scope?.backend`, not `scope`: a Bot that cannot be resolved leaves a
+        // scope whose backend is null AND has already written the refusal. Using
+        // the scope alone fell through to `backend.listSessions`, threw, and the
+        // catch answered a second time over a response that was already sent.
+        if (!scope?.backend) return;
+        const { backend, environmentId } = scope;
         const limit = Number(url.searchParams.get('limit')) || undefined;
         // The limit must travel: slicing here cannot recover rows the backend
         // never returned. Hermes answers /api/sessions with its own default
         // page, so a request for 200 quietly meant 50 — and a Bot Chat older
         // than that window read as absent, which sent the caller off to create
         // a second one that Hermes then refused by title.
+        //
+        // A Hermes list is answered from the Gate's own copy of it (SPD-1/2):
+        // that query costs 3-38 s against a 6.2 GB state.db, and this is the
+        // read every screen that lists threads waits on.
+        if (indexesSessions(backend) && readIsIndexable(url)) {
+          await readIndexedSessions(backend, environmentId, botId, limit);
+          return;
+        }
         let sessions;
         try {
           sessions = await backend.listSessions(limit);
         } catch (error) {
-          sessionReadError(error, readBotId(url), 'session_list_failed');
+          sessionReadError(error, botId, 'session_list_failed');
           return;
         }
         res.writeHead(200);
@@ -2326,8 +2539,10 @@ export async function createGate(config = {}) {
 
       if (pathname === '/v1/sessions' && method === 'POST') {
         const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
-        const backend = await resolveConversationBackend(body.backendId, readBotId(url, body));
-        if (!backend) return;
+        const botId = readBotId(url, body);
+        const scope = await resolveConversationScope(body.backendId, botId);
+        if (!scope?.backend) return;
+        const { backend, environmentId } = scope;
         let created;
         try {
           created = await backend.createSession({ title: body.title, model: body.model });
@@ -2341,6 +2556,11 @@ export async function createGate(config = {}) {
             error: { message: error?.message ?? 'Could not create a session', code: error?.code ?? 'session_create_failed' },
           }));
           return;
+        }
+        // Written through to the Gate's own copy, so the new session is the
+        // newest row of the very next list instead of one more slow read away.
+        if (indexesSessions(backend)) {
+          await sessionListIndex.upsert(sessionIndexKey(environmentId, botId), created);
         }
         res.writeHead(200);
         res.end(JSON.stringify(created));
@@ -2399,13 +2619,21 @@ export async function createGate(config = {}) {
 
       const sessionMatch = pathname.match(/^\/v1\/sessions\/([^/]+)$/);
       if (sessionMatch && method === 'DELETE') {
-        const backend = await resolveConversationBackend(url.searchParams.get('backendId'), readBotId(url));
-        if (!backend) return;
+        const botId = readBotId(url);
+        const scope = await resolveConversationScope(url.searchParams.get('backendId'), botId);
+        if (!scope?.backend) return;
+        const { backend, environmentId } = scope;
+        const sessionId = decodeURIComponent(sessionMatch[1]);
         try {
-          await backend.deleteSession(decodeURIComponent(sessionMatch[1]));
+          await backend.deleteSession(sessionId);
         } catch (error) {
           deleteRefusal(error, 'session_delete_failed');
           return;
+        }
+        // Gone upstream, so gone from the copy too — otherwise the next list
+        // would answer from the Gate's own rows and show a deleted session.
+        if (indexesSessions(backend)) {
+          await sessionListIndex.remove(sessionIndexKey(environmentId, botId), sessionId);
         }
         res.writeHead(200);
         res.end(JSON.stringify({ deleted: true }));
@@ -2675,8 +2903,9 @@ export async function createGate(config = {}) {
           ? undefined
           : await modelRouter.backendFor(body.model, body.providerId);
         if (body.backendId || botForTurn || routedBackendId) {
-          const backend = await resolveConversationBackend(body.backendId || routedBackendId, botForTurn);
-          if (!backend) return;
+          const scope = await resolveConversationScope(body.backendId || routedBackendId, botForTurn);
+          if (!scope?.backend) return;
+          const { backend, environmentId } = scope;
           try {
             const text = lastUserText(body.messages);
             const model = body.model ? parseQualifiedModel(body.model) : undefined;
@@ -2687,8 +2916,23 @@ export async function createGate(config = {}) {
             // below cannot override it — which is how a thread asked for one
             // model and was answered by another, and why the operator had to
             // pick a model, lose the session, and send again to be heard.
-            const sessionId = body.sessionId
-              ?? (await backend.createSession({ title: newThreadTitle(), model })).id;
+            const opened = body.sessionId ? null : await backend.createSession({ title: newThreadTitle(), model });
+            const sessionId = body.sessionId ?? opened.id;
+            // The turn just touched this session, so it is the newest row of the
+            // Gate's own copy of the list — so the next list shows the thread at
+            // the top without waiting on the query that costs 3-38 s. A turn is
+            // not a read: it knows the id and the time, and passes only those,
+            // because the index merges field by field and a field it invents
+            // (a null title, a `started_at` of now) would overwrite what the
+            // copy's own read measured.
+            if (indexesSessions(backend)) {
+              await sessionListIndex.upsert(sessionIndexKey(environmentId, botForTurn), {
+                id: sessionId,
+                last_active: Date.now(),
+                ...(opened ? { title: opened.title } : {}),
+                ...(model?.modelId ? { model: model.modelId } : {}),
+              });
+            }
 
             if (body.stream === true) {
               const streamed = await streamBackendTurn(backend, sessionId, { text, model }, res, {
@@ -2970,6 +3214,17 @@ export async function createGate(config = {}) {
       });
     },
     async close() {
+      // A coalesced index write must not be lost to a restart: a delete the
+      // operator just made would otherwise live only in this process, and the
+      // next list would answer from the copy and show it again. Bounded, because
+      // a filesystem that will not answer must not hold a shutdown open.
+      await Promise.race([
+        sessionListIndex.flush(),
+        new Promise((resolve) => {
+          const timer = setTimeout(resolve, DEFAULT_SESSION_INDEX_FLUSH_MS);
+          timer.unref?.();
+        }),
+      ]);
       // Kill any live shells before the listener goes away, or they outlive it,
       // and end their streams or `server.close()` waits on them forever.
       terminalSessions.closeAll();

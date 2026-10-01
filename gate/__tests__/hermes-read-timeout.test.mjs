@@ -186,3 +186,73 @@ test('a healthy read still returns its sessions', async () => {
   assert.equal(sessions.length, 1);
   assert.equal(sessions[0].id, 'sess_1');
 });
+
+test('a session listing given the long bound waits for it instead of failing', async () => {
+  // Measured 2026-10-01: a cold `GET /api/sessions?limit=50` on the 6.2 GB host
+  // took 38.5 s. Aborted at 30 s, it could never succeed at all — so the Gate's
+  // own copy of the list refills with a bound that lets it finish.
+  const slowFetch = async (_url, init) => {
+    // A host that answers, but late: the signal is what decides whether the
+    // answer is ever read, exactly as it is for a real fetch.
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, 120);
+      init?.signal?.addEventListener('abort', () => {
+        clearTimeout(timer);
+        reject(Object.assign(new Error('aborted'), { name: init.signal.reason?.name ?? 'TimeoutError' }));
+      });
+    });
+    return new Response(JSON.stringify({ data: [{ id: 'sess_1' }] }), { status: 200 });
+  };
+  const backend = createHermesBackend({
+    baseUrl: 'http://127.0.0.1:8642',
+    apiKey: 'k',
+    fetchImpl: slowFetch,
+    readTimeoutMs: 40,
+  });
+
+  const sessions = await backend.listSessions(5, { timeoutMs: 2_000 });
+  assert.equal(sessions.length, 1, 'a read slower than the screen bound is still allowed to land');
+
+  // The same read without that per-call bound is the failure it always was: the
+  // screen bound is unchanged for every other caller.
+  await assert.rejects(
+    () => createHermesBackend({
+      baseUrl: 'http://127.0.0.1:8642',
+      apiKey: 'k',
+      fetchImpl: slowFetch,
+      readTimeoutMs: 40,
+    }).listSessions(5),
+    (error) => {
+      assert.equal(error.code, 'backend_timeout');
+      return true;
+    },
+  );
+});
+
+test('the read bound is 30 s by default, and only a caller may move it', async () => {
+  // A fetch that refuses exactly as an expired AbortSignal.timeout() would, so
+  // the ceiling can be read off the message without waiting for it.
+  const fetchImpl = async (_url, init) => {
+    assert.ok(init?.signal, 'a read must still pass a signal');
+    throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+  };
+  const backend = createHermesBackend({ baseUrl: 'http://127.0.0.1:8642', apiKey: 'k', fetchImpl });
+
+  await assert.rejects(
+    () => backend.listSessions(200),
+    (error) => {
+      assert.equal(error.code, 'backend_timeout');
+      assert.match(error.message, /within 30s/, 'the screen bound is unchanged');
+      return true;
+    },
+  );
+  await assert.rejects(
+    () => backend.listSessions(200, { timeoutMs: 180_000 }),
+    (error) => {
+      // The refill's own bound is named, so a 3-minute wait is never mistaken
+      // for a hung host.
+      assert.match(error.message, /within 180s/);
+      return true;
+    },
+  );
+});

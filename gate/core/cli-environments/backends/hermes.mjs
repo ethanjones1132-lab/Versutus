@@ -154,15 +154,21 @@ export function createHermesBackend({
    * A metadata read that fails honestly instead of hanging. Any other error is
    * passed through untouched — only the timeout is reworded, because an
    * AbortError alone reads like a bug rather than a slow host.
+   *
+   * `timeoutMs` overrides the ceiling for the one caller that is not a screen:
+   * the Gate's session index refills itself in the background, where a read
+   * that needs 38 s is a read that SHOULD finish (measured 2026-10-01, cold,
+   * 6.2 GB `state.db`). The screen bound still applies to every other caller,
+   * and the Gate's own wait is the shorter one.
    */
-  async function readCall(path, what) {
+  async function readCall(path, what, { timeoutMs = READ_TIMEOUT_MS } = {}) {
     try {
-      return await call(path, { signal: AbortSignal.timeout(READ_TIMEOUT_MS) });
+      return await call(path, { signal: AbortSignal.timeout(timeoutMs) });
     } catch (error) {
       const aborted = error?.name === 'TimeoutError' || error?.name === 'AbortError';
       if (!aborted) throw error;
       const timeout = new Error(
-        `hermes did not answer "${what}" within ${Math.round(READ_TIMEOUT_MS / 1000)}s — the host is reachable but its state database is not answering queries`,
+        `hermes did not answer "${what}" within ${Math.round(timeoutMs / 1000)}s — the host is reachable but its state database is not answering queries`,
       );
       timeout.code = 'backend_timeout';
       throw timeout;
@@ -209,12 +215,12 @@ export function createHermesBackend({
   return {
     kind: 'hermes',
 
-    async listSessions(limit) {
+    async listSessions(limit, { timeoutMs } = {}) {
       // Without an explicit limit Hermes serves its own default page, so a
       // caller asking for more silently got less — and anything past that
       // window looked like it did not exist.
       const query = typeof limit === 'number' && limit > 0 ? `?limit=${encodeURIComponent(limit)}` : '';
-      const body = await readCall(`/api/sessions${query}`, 'list sessions');
+      const body = await readCall(`/api/sessions${query}`, 'list sessions', { timeoutMs });
       return (body.data ?? []).map(toGatewaySession);
     },
 
