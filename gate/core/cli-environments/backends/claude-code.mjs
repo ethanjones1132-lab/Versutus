@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { spawnCommand } from '../adapters/shared.mjs';
+import { createWindowsJob } from '../windows-job.mjs';
 
 /**
  * Claude Code as a chat backend.
@@ -19,6 +20,12 @@ import { spawnCommand } from '../adapters/shared.mjs';
 export function transcriptDirFor(claudeHome, cwd) {
   return join(claudeHome, 'projects', String(cwd).replace(/[:\\/.]/g, '-'));
 }
+
+// Listing hundreds of transcripts one at a time is the serial read that made
+// /v1/sessions miss its budget; a few in flight keeps the disk busy without
+// opening a file descriptor per transcript.
+const STAT_CONCURRENCY = 8;
+const READ_CONCURRENCY = 4;
 
 /** Map a transcript entry onto the app's message shape. */
 export function toGatewayMessage(entry) {
@@ -110,6 +117,7 @@ export function createClaudeCodeBackend({
   claudeHome,
   model: defaultModel,
   spawnImpl = nodeSpawn,
+  jobFactory = createWindowsJob,
   permissionMode = 'default',
 } = {}) {
   const dir = transcriptDirFor(claudeHome, cwd);
@@ -129,6 +137,23 @@ export function createClaudeCodeBackend({
    * losing them across a Gate restart costs nothing.
    */
   const reserved = new Map();
+
+  /**
+   * The turn in flight, so `abort()` has something to stop.
+   *
+   * A per-turn backend has no pipe to drop and no server to interrupt: the turn
+   * *is* the process, so this is the only handle that can end one. Held as a
+   * slot rather than a stack because a turn is the only one that can be running.
+   */
+  let inflight = null;
+
+  /** What a stopped turn rejects with: a cancellation, not a failed run. */
+  function stoppedError() {
+    const error = new Error('claude-code: turn stopped');
+    error.name = 'AbortError';
+    error.code = 'aborted';
+    return error;
+  }
 
   async function transcripts() {
     try {
@@ -153,27 +178,37 @@ export function createClaudeCodeBackend({
   return {
     kind: 'claude-code',
 
-    async listSessions() {
+    async listSessions(limit = 50) {
       const files = await transcripts();
-      const sessions = [];
-      for (const file of files) {
-        const id = file.slice(0, -'.jsonl'.length);
-        const info = await stat(join(dir, file)).catch(() => null);
-        if (!info) continue;
-        let preview = null;
+      // `stat` is cheap; reading a transcript is not. A project grows one file
+      // per conversation and nothing prunes them, so the files are ranked on
+      // their mtime first and only the rows the caller asked for are opened —
+      // parsing all of them serialised is what blew the phone's read budget.
+      const infos = await mapConcurrently(files, STAT_CONCURRENCY, (file) =>
+        stat(join(dir, file)).catch(() => null));
+      const newest = files
+        .map((file, index) => ({ file, info: infos[index] }))
+        .filter((entry) => entry.info)
+        .sort((a, b) => b.info.mtimeMs - a.info.mtimeMs)
+        .slice(0, limit);
+      const previews = await mapConcurrently(newest, READ_CONCURRENCY, async ({ file }) => {
         try {
-          const entries = await readTranscript(id);
+          const entries = await readTranscript(file.slice(0, -'.jsonl'.length));
           const firstUser = entries.find((e) => e.type === 'user' && e.message);
-          preview = toGatewayMessage(firstUser ?? {}).content[0]?.text?.slice(0, 80) ?? null;
+          return toGatewayMessage(firstUser ?? {}).content[0]?.text?.slice(0, 80) ?? null;
         } catch {
           // an unreadable transcript still lists, just without a preview
+          return null;
         }
-        sessions.push({
+      });
+      const sessions = newest.map(({ file, info }, index) => {
+        const id = file.slice(0, -'.jsonl'.length);
+        return {
           id,
           source: 'claude-code',
           user_id: null,
           model: null,
-          title: preview,
+          title: previews[index],
           started_at: info.birthtimeMs || info.mtimeMs,
           ended_at: null,
           end_reason: null,
@@ -189,11 +224,11 @@ export function createClaudeCodeBackend({
           api_call_count: 0,
           parent_session_id: null,
           last_active: info.mtimeMs,
-          preview,
+          preview: previews[index],
           has_system_prompt: false,
           has_model_config: false,
-        });
-      }
+        };
+      });
       // Reserved-but-unbound ids belong in the list too: a session the caller
       // just created must be findable, or it cannot tell its own thread from
       // one the Gate never issued.
@@ -258,7 +293,7 @@ export function createClaudeCodeBackend({
     },
 
     /** One process per turn; `--session-id` is what makes it a conversation. */
-    async sendMessage(sessionId, { text, model } = {}, onEvent) {
+    async sendMessage(sessionId, { text, model, signal } = {}, onEvent) {
       const args = [
         '--print',
         '--output-format', 'stream-json',
@@ -273,6 +308,25 @@ export function createClaudeCodeBackend({
 
       const { command, prefix } = spawnCommand(executablePath);
       const child = spawnImpl(command, [...prefix, ...args], { cwd, windowsHide: true });
+      // A job per turn, not per backend: a stop must take the tools this turn
+      // spawned with it, and must never reach a pid an earlier turn registered.
+      const job = jobFactory();
+      job.add(child);
+      const turn = { cancelled: false };
+      inflight = turn;
+      /**
+       * Kill the tree, then reject — in that order. Stop is a promise to the
+       * operator that the agent stops working in the workspace, so a rejection
+       * that outran the kill would be a lie.
+       */
+      const cancel = (reject) => {
+        if (turn.cancelled) return;
+        turn.cancelled = true;
+        Promise.resolve()
+          .then(() => job.terminate())
+          .catch(() => undefined)
+          .then(() => reject(stoppedError()));
+      };
 
       let buffer = '';
       let assembled = '';
@@ -365,10 +419,32 @@ export function createClaudeCodeBackend({
         for (const line of lines) if (line.trim()) handle(line.trim());
       });
 
-      const exitCode = await new Promise((resolve, reject) => {
-        child.on('error', reject);
-        child.on('close', resolve);
-      });
+      let onAbort = null;
+      let exitCode;
+      try {
+        exitCode = await new Promise((resolve, reject) => {
+          // A cancelled turn settles as a cancellation however its child dies:
+          // the exit code of a process that was killed is not the turn's
+          // outcome, and neither is a stdin error on the way down.
+          child.on('error', (error) => { if (!turn.cancelled) reject(error); });
+          child.on('close', (code) => { if (!turn.cancelled) resolve(code); });
+          // `signal` is how the runner hands the turn's cancellation down: the
+          // runner's own race settles the HTTP turn, but only this kills the
+          // agent still reading the workspace and calling the vendor.
+          if (signal) {
+            onAbort = () => cancel(reject);
+            if (signal.aborted) onAbort();
+            else signal.addEventListener('abort', onAbort, { once: true });
+          }
+          turn.cancel = () => cancel(reject);
+        });
+      } finally {
+        // A turn that ended on its own leaves nothing on the caller's signal:
+        // hundreds of turns would otherwise stack listeners on it, and a late
+        // abort would try to kill a process that already exited.
+        if (onAbort) signal.removeEventListener('abort', onAbort);
+        if (inflight === turn) inflight = null;
+      }
       if (buffer.trim()) handle(buffer.trim());
 
       if (failure) throw new Error(`claude-code: ${failure}`);
@@ -379,8 +455,12 @@ export function createClaudeCodeBackend({
       };
     },
 
+    /**
+     * Stop the turn in flight. A per-turn backend has nothing to drop but the
+     * process, so this terminates it; between turns there is nothing to stop.
+     */
     async abort() {
-      // A turn is a process; cancellation is handled by the job that owns it.
+      await inflight?.cancel?.();
     },
 
     async replyApproval() {
@@ -401,4 +481,17 @@ export function createClaudeCodeBackend({
       }));
     },
   };
+}
+
+/** `Promise.all` over a long list, with at most `limit` in flight. */
+async function mapConcurrently(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (let index = next++; index < items.length; index = next++) {
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
 }

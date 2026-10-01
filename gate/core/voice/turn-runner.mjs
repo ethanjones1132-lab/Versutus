@@ -610,8 +610,14 @@ export async function runBackendTurn(backend, sessionId, { text, model } = {}, {
       armStall('the backend turn');
       sent = true;
       stage('turn.send', { path: turnPath });
+      // The signal travels with the turn, not only around it. A backend whose
+      // turn *is* a process (Claude Code spawns `claude --print` and parks on
+      // its exit) cannot be reclaimed by the race below: that race ends the
+      // HTTP turn and leaves the agent running. Backends that take no signal
+      // ignore the extra key, and their turn is still released by the race.
       const result = await raceStop(backend.sendMessage(
-        sessionId, { text, model }, typeof backend.streamEvents === 'function' ? undefined : handleEvent,
+        sessionId, { text, model, signal: controller.signal },
+        typeof backend.streamEvents === 'function' ? undefined : handleEvent,
       ));
       if (result === ABORTED_OUTCOME) return ABORTED_OUTCOME;
       // The send answered, or the feed already proved the backend was working:

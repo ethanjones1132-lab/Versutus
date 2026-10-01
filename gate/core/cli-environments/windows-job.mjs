@@ -20,6 +20,18 @@ export function createWindowsJob({ killTree = killProcessTree, platform = proces
       children.push(child);
     },
     /**
+     * Forget the current generation of children.
+     *
+     * A supervisor that stops and starts again keeps one job for its whole life,
+     * and terminate() keeps every pid it was ever handed — so without this the
+     * second stop taskkills the first generation's pids, which are dead and may
+     * since have been handed to an unrelated process.
+     */
+    reset() {
+      children.length = 0;
+      this.terminated = false;
+    },
+    /**
      * Stop every child this job holds. On Windows the registered executable is
      * usually a launcher — pip console scripts (`hermes.exe`) spawn python.exe,
      * npm global bins spawn node — so killing the launcher alone orphans the

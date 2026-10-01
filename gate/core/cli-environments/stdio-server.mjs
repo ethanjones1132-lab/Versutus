@@ -4,6 +4,8 @@ import { spawnCommand } from './adapters/shared.mjs';
 import { createStdioJsonRpc } from './jsonrpc-stdio.mjs';
 import { createWindowsJob } from './windows-job.mjs';
 
+const DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000;
+
 /**
  * Supervise a CLI whose native server speaks JSON-RPC over stdio rather than
  * HTTP (Codex's `app-server`).
@@ -19,6 +21,7 @@ export function createStdioServer({
   credentials = {},
   buildEnvironment,
   spawnImpl = nodeSpawn,
+  handshakeTimeoutMs = DEFAULT_HANDSHAKE_TIMEOUT_MS,
   onDiagnostic,
   onNotification,
   onServerRequest,
@@ -93,13 +96,19 @@ export function createStdioServer({
     // The handshake is also the liveness check: a CLI that cannot start its
     // app-server fails here rather than on the first prompt.
     const ready = descriptor.handshake
-      ? rpc.request(descriptor.handshake.method, descriptor.handshake.params ?? {}, { timeoutMs: 30_000 })
+      ? rpc.request(descriptor.handshake.method, descriptor.handshake.params ?? {}, { timeoutMs: handshakeTimeoutMs })
       // Nothing to handshake against: give the spawn one turn to report itself,
       // which is when Node delivers 'error'.
       : new Promise((resolve) => { setImmediate(resolve); });
     try {
       await Promise.race([ready, failed]);
     } catch (error) {
+      // A handshake that fails or times out leaves behind a child nothing can
+      // reach: `handle` was never assigned, so the next ensureRunning() spawns
+      // another one — and the manager's backoff makes it spawn sooner, not later,
+      // until the host is carrying a dozen silent app-servers. Reap this one
+      // before the refusal leaves; the retry then starts from nothing.
+      await stop();
       // A missing executable is reported twice — by the listener above and by
       // the rpc's own — and the first is the one that names the executable.
       throw spawnFailure ?? error;
@@ -120,5 +129,9 @@ export function createStdioServer({
     }
     child = null;
     handle = null;
+    // A terminate latches and keeps every pid it was given, so without this the
+    // next generation's terminate would taskkill the pids of the last one —
+    // dead pids, which Windows recycles.
+    job.reset?.();
   }
 }

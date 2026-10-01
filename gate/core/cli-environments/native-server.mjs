@@ -175,6 +175,10 @@ export function createNativeServer({
     child = null;
     handle = null;
     owned = false;
+    // A terminate latches and keeps every pid it was given, so without this the
+    // next generation's terminate would taskkill the pids of the last one —
+    // dead pids, which Windows recycles.
+    job.reset?.();
   }
 
   function authHeaders() {
