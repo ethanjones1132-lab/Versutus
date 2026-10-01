@@ -1,7 +1,26 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const SECRET = process.env.VERSUTUS_CLI_TOKEN_SECRET || randomBytes(32).toString('hex');
-const seen = new Set();
+
+/**
+ * Nonces already spent, with the instant each token expires. A replay is only
+ * meaningful inside the token's own lifetime — once the token would verify as
+ * `expired` anyway, holding its nonce protects nothing — so entries are dropped
+ * as they expire. The hard cap is the backstop for a caller that verifies with
+ * a clock far behind the one it issued with, which would keep every entry alive.
+ * Map order is insertion order, so the cap sheds the oldest first.
+ */
+const MAX_SEEN_TOKENS = 10_000;
+const seen = new Map();
+
+function pruneSeen(now) {
+  for (const [nonce, expiresAtMs] of seen) {
+    if (expiresAtMs <= now) seen.delete(nonce);
+  }
+  while (seen.size > MAX_SEEN_TOKENS) {
+    seen.delete(seen.keys().next().value);
+  }
+}
 
 function encode(value) {
   return Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -53,10 +72,11 @@ export function verifyInvocationToken(token, { audience, runId, now = Date.now()
     if (claims.exp <= now) {
       return { ok: false, code: 'expired' };
     }
+    pruneSeen(now);
     if (seen.has(claims.nonce)) {
       return { ok: false, code: 'replay' };
     }
-    seen.add(claims.nonce);
+    seen.set(claims.nonce, typeof claims.exp === 'number' ? claims.exp : 0);
     return { ok: true, claims };
   } catch {
     return { ok: false, code: 'invalid_token' };

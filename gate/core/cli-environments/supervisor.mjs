@@ -6,7 +6,7 @@ import { assertWorkspaceAccess } from './workspace-policy.mjs';
 import { ApprovalService } from './approvals.mjs';
 import { createWindowsJob } from './windows-job.mjs';
 import { createEventLog } from './run-protocol.mjs';
-import { createRunArchive } from './run-archive.mjs';
+import { createRunArchive, runStartedAtMs } from './run-archive.mjs';
 import { buildCliEnvironment } from './process-environment.mjs';
 import { spawnCommand } from './adapters/shared.mjs';
 
@@ -18,6 +18,46 @@ import { spawnCommand } from './adapters/shared.mjs';
  * events so the split point never becomes U+FFFD.
  */
 const MAX_OUTPUT_CHARS = 16_000;
+
+/**
+ * How many finished runs stay answerable in memory per environment. The disk
+ * archive is the durable copy — it keeps its own wider tail and every event of
+ * every run — so what this bounds is only the heap a long-lived Gate would
+ * otherwise grow forever: the event log, the workspace and, until the verdict,
+ * the child environment holding the operator's decrypted provider keys.
+ */
+const DEFAULT_MAX_RETAINED_RUNS = 100;
+
+/**
+ * Which run is newer, for the retention and listing orders. `startedAtMs` is
+ * millisecond-resolution, so a burst of runs shares it and a bare time compare
+ * leaves the order to insertion; the monotonic start counter is what makes
+ * "newest first" mean the same thing on every call. Run ids break a full tie so
+ * hydrated history (which has no counter of its own) still orders stably.
+ */
+function newestFirst(a, b) {
+  if (a.startedAtMs !== b.startedAtMs) return b.startedAtMs - a.startedAtMs;
+  const byStart = (b.startSeq ?? 0) - (a.startSeq ?? 0);
+  if (byStart !== 0) return byStart;
+  return a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0;
+}
+
+function oldestFirst(a, b) {
+  return -newestFirst(a, b);
+}
+
+/**
+ * The chat endpoint a run gets when the caller names none. The Gate's own port
+ * is the only one that can work, and a portless `http://127.0.0.1/...` resolves
+ * to port 80 — a URL that is silently wrong rather than absent, so a CLI
+ * following it fails somewhere else entirely. Returns null for anything that is
+ * not a usable port.
+ */
+function chatEndpointForPort(value) {
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) return null;
+  return { chat: `http://127.0.0.1:${port}/v1/chat/completions` };
+}
 
 /**
  * Why startRun refused a start on an environment at its concurrency limit.
@@ -137,6 +177,13 @@ export class CliEnvironmentService {
     // Fire-and-forget — a throwing or rejecting observer must never break
     // the run it reports on.
     onRunEvent = null,
+    // Finished runs kept answerable in memory per environment; older ones are
+    // evicted and their events keep replaying from the archive.
+    maxRetainedRuns = DEFAULT_MAX_RETAINED_RUNS,
+    // Endpoints for a run whose caller names none. VERSUTUS_GATE_PORT wins when
+    // it names a real port; this is the escape hatch for a caller that knows
+    // the port the Gate actually bound (an ephemeral one) and can say so.
+    defaultEndpoints = null,
   } = {}) {
     this.store = store;
     this.registry = registry;
@@ -149,6 +196,14 @@ export class CliEnvironmentService {
     // it is ruled denied and its slot freed.
     this.approvalTimeoutMs = approvalTimeoutMs;
     this.runs = new Map();
+    // Live (not yet finished) run ids per environment. The runs map answers
+    // history questions; this one answers "is the slot free" and "is the
+    // environment still busy", and both are on the start/finish path — so
+    // neither may cost a walk over every run this process ever started.
+    this.liveRuns = new Map();
+    this.runSeq = 0;
+    this.maxRetainedRuns = Math.max(1, Number(maxRetainedRuns) || 0);
+    this.defaultEndpoints = defaultEndpoints;
     this.environmentState = new Map();
     this.archive = archiveDir ? createRunArchive(archiveDir) : null;
     this.initPromise = null;
@@ -201,7 +256,8 @@ export class CliEnvironmentService {
         },
         record: null,
         log: createEventLog(meta.runId, { events: logEvents }),
-        startedAtMs: Number.isFinite(Date.parse(meta.startedAt)) ? Date.parse(meta.startedAt) : 0,
+        startedAtMs: runStartedAtMs(meta),
+        startSeq: (this.runSeq += 1),
         done: true,
         archived: true,
       });
@@ -228,17 +284,32 @@ export class CliEnvironmentService {
 
   async stop(id) {
     this.environmentState.set(id, { state: 'stopped' });
-    for (const run of this.runs.values()) {
-      if (run.request.environmentId === id && !run.done) {
-        await this.cancel(run.runId);
-      }
+    for (const run of this.activeRuns(id)) {
+      await this.cancel(run.runId);
     }
     return { id, state: 'stopped' };
   }
 
+  /**
+   * The runs still in flight on one environment, in start order. Sourced from
+   * the live index rather than by filtering the whole runs map: a Gate with
+   * weeks of history answers "is this environment busy" on every start, and
+   * that question is about live runs only.
+   */
+  activeRuns(environmentId) {
+    const ids = this.liveRuns.get(environmentId);
+    if (!ids || ids.size === 0) return [];
+    const runs = [];
+    for (const runId of ids) {
+      const run = this.runs.get(runId);
+      if (run && !run.done) runs.push(run);
+    }
+    return runs;
+  }
+
   async startRun(request) {
     const record = await this.require(request.environmentId);
-    const active = [...this.runs.values()].filter((run) => run.request.environmentId === request.environmentId && !run.done);
+    const active = this.activeRuns(request.environmentId);
     if (active.length >= (record.lifecycle?.maxConcurrentRuns ?? 1)) {
       const error = new Error(describeBusy(active));
       error.code = 'busy';
@@ -299,6 +370,7 @@ export class CliEnvironmentService {
           input: request.input,
           sandbox: request.sandbox,
           startedAt: new Date(startedAtMs).toISOString(),
+          startedAtMs,
         });
       } catch {
         // Persistence must never block starting a run.
@@ -310,7 +382,7 @@ export class CliEnvironmentService {
       runId,
       providerRef: request.providerRef,
       audience: 'versutus-gate',
-      endpoints: request.endpoints ?? { chat: 'http://127.0.0.1/v1/chat/completions' },
+      endpoints: this.endpointsFor(request),
       credentials,
     });
     const run = {
@@ -323,9 +395,11 @@ export class CliEnvironmentService {
       workspace,
       adapter,
       startedAtMs,
+      startSeq: (this.runSeq += 1),
       done: false,
     };
     this.runs.set(runId, run);
+    this.trackLive(run);
     this.environmentState.set(record.id, { state: 'busy' });
     log.emit({ type: 'run.started', payload: { operation: request.operation, sandbox: request.sandbox } });
     // A dead binding is not fatal (model routing can ride invocation tokens)
@@ -548,8 +622,13 @@ export class CliEnvironmentService {
    */
   events(runId, { signal } = {}) {
     const run = this.runs.get(runId);
-    if (!run) throw new Error(`unknown run ${runId}`);
-    return run.log.stream(signal);
+    if (run) return run.log.stream(signal);
+    // Retention only drops a run from memory, never from the archive, so a
+    // replay of an evicted run is answered from disk. An id that is in neither
+    // is still an unknown run, exactly as before.
+    const evicted = this.archive?.readRun(runId);
+    if (!evicted) throw new Error(`unknown run ${runId}`);
+    return createEventLog(runId, { events: evicted.events }).stream(signal);
   }
 
   /**
@@ -561,29 +640,33 @@ export class CliEnvironmentService {
    * the disk archive by init(), so history survives a restart.
    */
   listRuns(environmentId, limit = 50) {
-    return [...this.runs.values()]
-      .filter((run) => run.request.environmentId === environmentId)
-      .sort((a, b) => b.startedAtMs - a.startedAtMs)
-      .slice(0, limit)
-      .map((run) => {
-        const events = run.log.events();
-        const last = events.at(-1);
-        const terminal = last && /^run\.(completed|failed|cancelled)$/.test(last.type) ? last : null;
-        const exitCode =
-          terminal && typeof terminal.payload.exitCode === 'number' ? terminal.payload.exitCode : null;
-        return {
-          runId: run.runId,
-          environmentId: run.request.environmentId,
-          operation: run.request.operation,
-          state: terminal ? terminal.type.slice(4) : events.length ? 'running' : 'starting',
-          startedAt: new Date(run.startedAtMs).toISOString(),
-          endedAt: terminal ? terminal.timestamp : null,
-          exitCode,
-          // OS pid of the spawned CLI while the run is mid-flight; null once
-          // finished so a stale pid is never mistaken for a live one.
-          pid: !run.done && run.child?.pid ? run.child.pid : null,
-        };
-      });
+    // One pass, and only this environment's runs are ever copied: the map holds
+    // every run this process remembers, and a phone asking for the newest page
+    // has no use for the rest. Each summary reads just its run's last event
+    // rather than copying its whole log.
+    const matching = [];
+    for (const run of this.runs.values()) {
+      if (run.request.environmentId === environmentId) matching.push(run);
+    }
+    matching.sort(newestFirst);
+    return matching.slice(0, limit).map((run) => {
+      const last = run.log.lastEvent();
+      const terminal = last && /^run\.(completed|failed|cancelled)$/.test(last.type) ? last : null;
+      const exitCode =
+        terminal && typeof terminal.payload.exitCode === 'number' ? terminal.payload.exitCode : null;
+      return {
+        runId: run.runId,
+        environmentId: run.request.environmentId,
+        operation: run.request.operation,
+        state: terminal ? terminal.type.slice(4) : last ? 'running' : 'starting',
+        startedAt: new Date(run.startedAtMs).toISOString(),
+        endedAt: terminal ? terminal.timestamp : null,
+        exitCode,
+        // OS pid of the spawned CLI while the run is mid-flight; null once
+        // finished so a stale pid is never mistaken for a live one.
+        pid: !run.done && run.child?.pid ? run.child.pid : null,
+      };
+    });
   }
 
   async approve(runId, approvalId, decision) {
@@ -631,6 +714,51 @@ export class CliEnvironmentService {
     return events.at(-1);
   }
 
+  /**
+   * The endpoints a run is told to route its model call through. Absent ones
+   * are derived from the port the Gate is actually listening on, and when
+   * nothing names one the chat variable is left out entirely: a CLI that finds
+   * no endpoint stops, while one handed a portless URL believes the Gate is on
+   * port 80 and fails somewhere else entirely.
+   */
+  endpointsFor(request) {
+    return request.endpoints ?? chatEndpointForPort(process.env.VERSUTUS_GATE_PORT) ?? this.defaultEndpoints ?? undefined;
+  }
+
+  trackLive(run) {
+    const environmentId = run.request.environmentId;
+    let ids = this.liveRuns.get(environmentId);
+    if (!ids) {
+      ids = new Set();
+      this.liveRuns.set(environmentId, ids);
+    }
+    ids.add(run.runId);
+  }
+
+  untrackLive(run) {
+    const ids = this.liveRuns.get(run.request.environmentId);
+    if (!ids) return;
+    ids.delete(run.runId);
+    if (ids.size === 0) this.liveRuns.delete(run.request.environmentId);
+  }
+
+  /**
+   * Evict the oldest finished runs once an environment has more of them than
+   * the retention cap. A live run is never evicted — its slot, its child and
+   * its stream are still live — and an evicted run keeps replaying from the
+   * archive, which holds every event of every run it kept.
+   */
+  retainFinishedRuns(environmentId) {
+    const finished = [];
+    for (const run of this.runs.values()) {
+      if (run.request.environmentId === environmentId && run.done) finished.push(run);
+    }
+    const excess = finished.length - this.maxRetainedRuns;
+    if (excess <= 0) return;
+    finished.sort(oldestFirst);
+    for (const stale of finished.slice(0, excess)) this.runs.delete(stale.runId);
+  }
+
   finish(run, type, payload) {
     if (run.done) return;
     // The run reached a verdict before its time budget: disarm the watchdog
@@ -640,9 +768,11 @@ export class CliEnvironmentService {
       run.timeLimitTimer = null;
     }
     run.done = true;
+    this.untrackLive(run);
     run.log.emit({ type, payload });
-    const remaining = [...this.runs.values()].filter((item) => item.request.environmentId === run.request.environmentId && !item.done);
-    this.environmentState.set(run.request.environmentId, { state: remaining.length ? 'busy' : 'ready' });
+    this.environmentState.set(run.request.environmentId, {
+      state: this.activeRuns(run.request.environmentId).length ? 'busy' : 'ready',
+    });
     // A verdict the operator did not watch happen locally still deserves a
     // tray notice: completed, failed and cancelled all report here.
     const state = type === 'run.completed' ? 'completed'
@@ -658,6 +788,16 @@ export class CliEnvironmentService {
         ...(text ? { text } : {}),
       });
     }
+    // Only now, with the verdict emitted and every observer notified: the run
+    // needs nothing more, and `childEnv` is the operator's decrypted provider
+    // keys. Nothing reads these after finish() — the child is either gone or
+    // unreachable, cancel() and the watchdog return early on a finished run,
+    // and listRuns reports no pid for one — so a run that finished last month
+    // stops holding its secrets in the heap.
+    run.childEnv = null;
+    run.child = null;
+    run.job = null;
+    this.retainFinishedRuns(run.request.environmentId);
   }
 
   /** Fire-and-forget report to the push observer; never throws. */

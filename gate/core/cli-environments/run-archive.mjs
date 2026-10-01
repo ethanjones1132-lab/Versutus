@@ -1,5 +1,5 @@
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { readdir, readFile, rm } from 'node:fs/promises';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -18,6 +18,33 @@ function safeSegment(value, fallback = 'unnamed') {
   const cleaned = String(value ?? '').replace(/[^A-Za-z0-9._-]/g, '_');
   const trimmed = cleaned.slice(0, 120);
   return trimmed.length > 0 ? trimmed : fallback;
+}
+
+/**
+ * The single key every layer orders runs by: this file's prune, the
+ * supervisor's hydration and its runs list. It used to be `meta.startedAtMs`,
+ * a field no writer ever produced — every comparison was NaN, the sort was a
+ * no-op, and "the newest N runs" was really "the last N file names" out of
+ * `readdir().sort()`. The start time is therefore derived from the ISO string
+ * the writer does emit, with an explicitly recorded `startedAtMs` honoured for
+ * callers that supply one, and 0 for a file that has neither.
+ */
+export function runStartedAtMs(meta) {
+  const parsed = Date.parse(meta?.startedAt);
+  if (Number.isFinite(parsed)) return parsed;
+  const recorded = Number(meta?.startedAtMs);
+  return Number.isFinite(recorded) ? recorded : 0;
+}
+
+/**
+ * Oldest first, with the run id breaking ties: runs can share a millisecond,
+ * and a prune whose order depends on readdir would delete an arbitrary one.
+ */
+function olderRunFirst(a, b) {
+  const byTime = runStartedAtMs(a.meta) - runStartedAtMs(b.meta);
+  if (byTime !== 0) return byTime;
+  if (a.meta.runId === b.meta.runId) return 0;
+  return a.meta.runId < b.meta.runId ? -1 : 1;
 }
 
 /**
@@ -54,7 +81,7 @@ export function createRunArchive(dir, { maxRunsPerEnvironment = DEFAULT_MAX_RUNS
     return path;
   }
 
-  function fileFor(environmentId, runId) {
+function fileFor(environmentId, runId) {
     return join(environmentDir(environmentId), `${safeSegment(runId)}.json`);
   }
 
@@ -100,13 +127,13 @@ export function createRunArchive(dir, { maxRunsPerEnvironment = DEFAULT_MAX_RUNS
         for (const name of files) {
           const path = join(environmentPath, name);
           try {
-            const parsed = await readRunFile(path);
+            const parsed = readRunFile(path);
             if (parsed) runs.push(parsed);
           } catch {
             // An unreadable file must never keep the Gate from starting.
           }
         }
-        runs.sort((a, b) => a.meta.startedAtMs - b.meta.startedAtMs);
+        runs.sort(olderRunFirst);
         const excess = runs.slice(0, Math.max(0, runs.length - maxRunsPerEnvironment));
         for (const stale of excess) {
           await rm(stale.path, { force: true }).catch(() => {});
@@ -115,11 +142,42 @@ export function createRunArchive(dir, { maxRunsPerEnvironment = DEFAULT_MAX_RUNS
       }
       return restored;
     },
+
+    /**
+     * One archived run, read back on demand. The supervisor evicts finished
+     * runs from memory to bound its own growth, and the disk copy is what makes
+     * that safe: a replay of an evicted run answers from here instead of
+     * pretending the id was never issued. Returns null when no environment
+     * holds the run, which is the same answer a run that never existed gets.
+     * Synchronous, like the writes above — it serves one small file on the
+     * phone's "Recent runs" replay path, whose caller is not async. Only the
+     * environment directories are scanned, since the caller knows the run id
+     * alone.
+     */
+    readRun(runId) {
+      const name = `${safeSegment(runId)}.json`;
+      let entries;
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return null;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        try {
+          const found = readRunFile(join(dir, entry.name, name));
+          if (found) return found;
+        } catch {
+          // Unreadable here: another environment may still hold it.
+        }
+      }
+      return null;
+    },
   };
 }
 
-async function readRunFile(path) {
-  const text = await readFile(path, 'utf8');
+function readRunFile(path) {
+  const text = readFileSync(path, 'utf8');
   const lines = text.split('\n').filter((line) => line.trim().length > 0);
   if (lines.length === 0) return null;
   const meta = JSON.parse(lines[0]);

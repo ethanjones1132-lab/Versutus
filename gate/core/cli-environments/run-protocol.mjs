@@ -1,4 +1,17 @@
 /**
+ * Upper bound on one run's retained in-memory events. A chatty CLI can emit
+ * tens of thousands of run.output frames, and a log that grew with the task
+ * kept every one of them for the life of the Gate. The disk archive receives
+ * all of them through onEmit regardless; what is capped here is the in-memory
+ * replay buffer. The first event and the terminal verdict are never dropped —
+ * they are what identifies the run and how it ended — so the surplus is taken
+ * from the middle.
+ */
+const MAX_RETAINED_EVENTS = 5000;
+
+const TERMINAL = /^run\.(completed|failed|cancelled)$/;
+
+/**
  * The per-run event log: an ordered, replayable record of everything that
  * happened to one run.
  *
@@ -15,7 +28,23 @@ export function createEventLog(runId, { events: seeded, onEmit } = {}) {
   const events = seeded ? [...seeded] : [];
   const waiters = [];
   let sequence = events.length ? events.at(-1).sequence : 0;
-  let terminal = events.some((event) => /^run\.(completed|failed|cancelled)$/.test(event.type));
+  let terminal = events.some((event) => TERMINAL.test(event.type));
+  // How many events the retention cap has taken off the front, so a
+  // subscriber parked mid-run resumes at the event it never saw rather than
+  // `dropped` events further along — or off the end of the log.
+  let dropped = 0;
+
+  function retain() {
+    const excess = events.length - MAX_RETAINED_EVENTS;
+    if (excess <= 0) return;
+    // Index 0 and the last event stay: the run's first event and its verdict.
+    const take = Math.min(excess, Math.max(0, events.length - 2));
+    if (take <= 0) return;
+    events.splice(1, take);
+    dropped += take;
+  }
+
+  retain();
 
   function emit(partial) {
     if (terminal) return null;
@@ -28,7 +57,8 @@ export function createEventLog(runId, { events: seeded, onEmit } = {}) {
       payload: partial.payload ?? {},
     };
     events.push(event);
-    if (/^run\.(completed|failed|cancelled)$/.test(event.type)) {
+    retain();
+    if (TERMINAL.test(event.type)) {
       terminal = true;
     }
     try {
@@ -43,6 +73,26 @@ export function createEventLog(runId, { events: seeded, onEmit } = {}) {
   async function* stream(signal) {
     let index = 0;
     let released = false;
+    let seenDropped = dropped;
+    let delivered = 0;
+    // The cap can take events off the front while this generator is parked (or
+    // while its consumer is handling one), so the position is re-based against
+    // the number dropped before every read. A subscriber that fell further
+    // behind than the cap removed cannot get those events back, so anything
+    // already delivered is skipped by sequence rather than replayed.
+    const takeNext = () => {
+      const taken = dropped - seenDropped;
+      seenDropped = dropped;
+      index = Math.max(0, index - taken);
+      while (index < events.length) {
+        const event = events[index];
+        index += 1;
+        if (event.sequence <= delivered) continue;
+        delivered = event.sequence;
+        return event;
+      }
+      return null;
+    };
     // A parked waiter is the only thing holding a subscription to a quiet run,
     // and a queued `return()` cannot take it: the loop re-parks at a fresh
     // await every time round, so a return waiting behind an in-flight `next()`
@@ -62,12 +112,12 @@ export function createEventLog(runId, { events: seeded, onEmit } = {}) {
     signal?.addEventListener('abort', release, { once: true });
     try {
       for (;;) {
-        while (index < events.length) {
-          if (released) return;
-          const event = events[index];
-          index += 1;
+        if (released) return;
+        const event = takeNext();
+        if (event) {
           yield event;
-          if (/^run\.(completed|failed|cancelled)$/.test(event.type)) return;
+          if (TERMINAL.test(event.type)) return;
+          continue;
         }
         if (terminal || released) return;
         await new Promise((resolve) => {
@@ -90,5 +140,13 @@ export function createEventLog(runId, { events: seeded, onEmit } = {}) {
     return waiters.length;
   }
 
-  return { emit, stream, events: () => events.slice(), pendingWaiters };
+  return {
+    emit,
+    stream,
+    events: () => events.slice(),
+    // The retained log's last event, without copying the log to find it: the
+    // runs list asks this of every run it summarizes.
+    lastEvent: () => events.at(-1) ?? null,
+    pendingWaiters,
+  };
 }

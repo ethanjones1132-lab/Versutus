@@ -37,6 +37,9 @@ export function buildCliEnvironment(parentEnvironment = {}, request) {
 
   const issued = issueInvocationToken(request);
   child.VERSUTUS_CLI_INVOCATION_TOKEN = issued.token;
-  child.VERSUTUS_GATE_CHAT = request.endpoints?.chat;
+  // Omitted rather than set to nothing when no endpoint is known: a CLI that
+  // finds no VERSUTUS_GATE_CHAT knows it has no route back to the Gate, while
+  // an empty one reads as a URL that cannot work.
+  if (request.endpoints?.chat) child.VERSUTUS_GATE_CHAT = request.endpoints.chat;
   return child;
 }
