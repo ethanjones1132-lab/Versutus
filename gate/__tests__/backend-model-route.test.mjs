@@ -379,3 +379,139 @@ test('a catalogue read that refuses is not served either', async () => {
   assert.equal(reads, 1);
   assert.equal(CATALOGUE_READ_TIMEOUT_MS, 5_000);
 });
+
+test('a catalogue read that hangs does not hold the slot past its bound', async () => {
+  // The slot is only released when the shared read settles. A `listModels` that
+  // never settles would otherwise hold it for the life of the process, so every
+  // later request joins a read that can only 502 — even after the environment
+  // recovers and would answer the next read.
+  let reads = 0;
+  const router = createBackendModelRouter({
+    listBackends: async () => [],
+    listModels: () => {
+      reads += 1;
+      return reads === 1 ? new Promise(() => {}) : [{ id: 'kilo/kilo-auto/free' }];
+    },
+    responseTimeoutMs: 40,
+  });
+
+  const first = await router.cataloguesFor([{ id: 'hermes-local' }]);
+  assert.equal(first.has('hermes-local'), false, 'the hung read is reported as the failure it is');
+  assert.equal(reads, 1);
+
+  // The environment recovered. The bound released the slot, so the next read
+  // starts a fresh one and is answered from it.
+  const second = await router.cataloguesFor([{ id: 'hermes-local' }]);
+  assert.deepEqual(second.get('hermes-local'), [{ id: 'kilo/kilo-auto/free' }]);
+  assert.equal(reads, 2, 'the second read was a fresh read, not a join on the hung one');
+});
+
+test('one environment that throws does not blank the rest of the catalogue', async () => {
+  // `/v1/models` reads every environment at once, so one that will not start —
+  // which throws rather than refusing — must cost only its own rows. It is left
+  // OUT of the map rather than answered as an empty list: an empty list says
+  // "this environment serves nothing", which is not what a failed read knows.
+  let reads = 0;
+  const router = createBackendModelRouter({
+    listBackends: async () => [],
+    listModels: (entry) => {
+      reads += 1;
+      if (entry.id === 'dead-local') throw new Error('codex: executable vanished');
+      return [{ id: 'kilo/kilo-auto/free' }];
+    },
+  });
+
+  const catalogues = await router.cataloguesFor([{ id: 'dead-local' }, { id: 'hermes-local' }]);
+  assert.equal(catalogues.has('dead-local'), false);
+  assert.deepEqual(catalogues.get('hermes-local'), [{ id: 'kilo/kilo-auto/free' }]);
+  assert.equal(reads, 2);
+  // Nothing was cached as an empty catalogue, so the next read tries again
+  // rather than repeating the blank for the rest of the window.
+  const again = await router.cataloguesFor([{ id: 'dead-local' }]);
+  assert.equal(again.has('dead-local'), false);
+  assert.equal(reads, 3);
+});
+
+test('a background refresh that fails keeps the copy the picker already has', async () => {
+  // Hermes being briefly unreachable must not empty a picker the operator is
+  // looking at, and must not cost the next read a re-read.
+  let reads = 0;
+  let clock = 1_000;
+  const router = createBackendModelRouter({
+    listBackends: async () => [],
+    listModels: () => {
+      reads += 1;
+      if (reads > 1) return Promise.reject(new Error('hermes: unreachable'));
+      return [{ id: 'kilo/kilo-auto/free' }];
+    },
+    now: () => clock,
+    ttlMs: 10,
+    staleMs: 10_000,
+  });
+
+  assert.equal((await router.cataloguesFor([{ id: 'hermes-local' }])).get('hermes-local').length, 1);
+  clock += 100;
+  assert.equal((await router.cataloguesFor([{ id: 'hermes-local' }])).get('hermes-local').length, 1);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  clock += 100;
+  // The failed refresh did not replace the copy, so the picker is still served
+  // from it rather than answering with an empty list.
+  assert.equal((await router.cataloguesFor([{ id: 'hermes-local' }])).get('hermes-local').length, 1);
+  assert.equal(reads >= 2, true);
+});
+
+test('a background refresh slower than the routing bound still moves the copy on', async () => {
+  // A stale copy is refreshed behind the request. Bounded by the 5 s ROUTING
+  // bound, a Hermes catalogue read that takes ~4 s on the live host (and longer
+  // on a busy one) timed out every time, so the copy never moved past its first
+  // generation and every open past the window fired another doomed read.
+  let generation = 0;
+  let clock = 1_000;
+  const router = createBackendModelRouter({
+    listBackends: async () => [],
+    listModels: async () => {
+      generation += 1;
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      return [{ id: `kilo/gen-${generation}` }];
+    },
+    now: () => clock,
+    ttlMs: 10,
+    staleMs: 10_000,
+    readTimeoutMs: 20,
+    responseTimeoutMs: 1_000,
+  });
+
+  const first = await router.cataloguesFor([{ id: 'hermes-local' }]);
+  assert.deepEqual(first.get('hermes-local'), [{ id: 'kilo/gen-1' }]);
+  clock += 100;
+  // Past the window: answered from the copy at once, refreshed behind.
+  const stale = await router.cataloguesFor([{ id: 'hermes-local' }]);
+  assert.deepEqual(stale.get('hermes-local'), [{ id: 'kilo/gen-1' }]);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const refreshed = await router.cataloguesFor([{ id: 'hermes-local' }]);
+  assert.deepEqual(refreshed.get('hermes-local'), [{ id: 'kilo/gen-2' }], 'the refresh landed instead of timing out');
+});
+
+test('an entry that brings its own read is read through it and cached under its own id', async () => {
+  // A Bot's catalogue is read through the Bot's own backend, and must never be
+  // answered from (or poison) the environment's copy.
+  let environmentReads = 0;
+  let botReads = 0;
+  const router = createBackendModelRouter({
+    listBackends: async () => [],
+    listModels: async () => {
+      environmentReads += 1;
+      return [{ id: 'kilo/env-model' }];
+    },
+  });
+  const botEntry = { id: 'hermes-local@bot:anvil', read: async () => { botReads += 1; return [{ id: 'kilo/bot-model' }]; } };
+
+  const bot = await router.cataloguesFor([botEntry]);
+  assert.deepEqual(bot.get('hermes-local@bot:anvil'), [{ id: 'kilo/bot-model' }]);
+  const again = await router.cataloguesFor([botEntry]);
+  assert.deepEqual(again.get('hermes-local@bot:anvil'), [{ id: 'kilo/bot-model' }]);
+  assert.equal(botReads, 1, 'the second open was answered from the cache');
+  const environment = await router.cataloguesFor([{ id: 'hermes-local' }]);
+  assert.deepEqual(environment.get('hermes-local'), [{ id: 'kilo/env-model' }]);
+  assert.equal(environmentReads, 1);
+});

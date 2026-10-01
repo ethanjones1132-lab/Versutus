@@ -46,9 +46,14 @@ describe('the lock is recorded on the send-failure path', () => {
 });
 
 describe('the picker renders the lock', () => {
-  test('chat-screen stamps each row with the lock on this device', () => {
+  test('chat-screen stamps each row with this device’s lock, or the Gate’s reason', () => {
     const screen = readSource('components/chat/chat-screen.tsx');
-    expect(screen).toMatch(/modelLock: modelLockFor\(activeGateway\?\.modelLocks,/);
+    // The device lock is consulted first; `catalogueLock` falls back to the
+    // Gate's `hiddenReason` when this device recorded nothing, so the one
+    // reason slot the sheet renders always has something to say.
+    expect(screen).toMatch(
+      /modelLock: catalogueLock\(model, modelLockFor\(activeGateway\?\.modelLocks,/,
+    );
   });
 
   test('thread-config-sheet disables, dims and names a locked row', () => {

@@ -51,7 +51,15 @@ import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-
 import { verifySignedAccessRequest, ReplayCache } from './signature.mjs';
 import { describeAuthFailure } from './auth-failure.mjs';
 import { unresolvedBackendResponse } from './backend-resolution.mjs';
-import { createBackendModelRouter } from './backend-model-route.mjs';
+import {
+  createBackendModelRouter,
+  CATALOGUE_TTL_MS,
+  CATALOGUE_STALE_MS,
+  CATALOGUE_RESPONSE_TIMEOUT_MS,
+  qualifiedModelId,
+} from './backend-model-route.mjs';
+import { createModelHealth, healthScopeId, modelHealthKey } from './model-health.mjs';
+import { curateModels } from './model-curation.mjs';
 import { backendUpstreamRefusal } from './upstream-refusal.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
@@ -149,6 +157,11 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res, {
   inFlightTurns,
   keepaliveIntervalMs,
   detachedTurnMaxMs = DEFAULT_DETACHED_TURN_MAX_MS,
+  // How this turn's verdict reaches the model-health table, and under which
+  // qualifier (see createGate). Optional: a caller with no table to write
+  // passes neither and the turn is scored by nobody.
+  recordOutcome,
+  healthKey,
 } = {}) {
   // One turn per turn id, per caller. The id is how Stop finds this turn, so a
   // second turn claiming an id that is still in use would take the entry with
@@ -252,6 +265,13 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res, {
     // the only thing left to say is that the stream is over.
     const stopped = aborted === true || controller.signal.aborted;
 
+    // What this turn says about the model. Nothing is recorded for a turn the
+    // caller ended or walked away from — Stop, a dropped phone, or the Gate's
+    // own bound on an unseen turn are the caller's business, not evidence
+    // about the model. A refusal or an empty turn is a failure; an answer
+    // clears it.
+    if (!stopped && !clientDisconnected) recordOutcome?.(healthKey, { text: collected, hasContent });
+
     // Same truth the non-streaming path reports: which model actually ran.
     if (!clientDisconnected && report.model) {
       res.write(`data: ${JSON.stringify({ ...report, choices: [] })}\n\n`);
@@ -269,6 +289,10 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res, {
     // Same truth as above, from the other direction: an abort that surfaced as
     // a throw is still the caller's stop, not a backend failure to report.
     if (!clientDisconnected && !controller.signal.aborted) {
+      // A throw is where the app's turns actually end: it always streams, so a
+      // backend that refuses a turn outright (non-2xx, 429, 5xx, a stall) never
+      // reaches the outcome recorded above and would otherwise never be scored.
+      recordOutcome?.(healthKey, { reason: error?.message });
       const code = typeof error?.code === 'string' && /^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(error.code)
         ? error.code : 'backend_error';
       res.write(`data: ${JSON.stringify({ error: { message: error.message, code } })}\n\n`);
@@ -706,6 +730,16 @@ export async function createGate(config = {}) {
     sessionReadBoundMs = DEFAULT_SESSION_READ_BOUND_MS,
     sessionRefreshTimeoutMs = DEFAULT_SESSION_REFRESH_TIMEOUT_MS,
     sessionIndexStaleMs = DEFAULT_SESSION_INDEX_STALE_MS,
+    // The two catalogue-cache windows, injected so the tests can watch the
+    // stale-while-refresh answer fire in milliseconds instead of waiting a
+    // minute for the live one.
+    catalogueTtlMs = CATALOGUE_TTL_MS,
+    catalogueStaleMs = CATALOGUE_STALE_MS,
+    // The bound on a `/v1/models` cold read, separate from the routing lookup's
+    // 5 s because one Hermes `/api/model/options` measures 3.9 s on the live
+    // host. Injected with the two windows above for the same reason.
+    catalogueResponseTimeoutMs = CATALOGUE_RESPONSE_TIMEOUT_MS,
+    modelHealthFile = join(gateHome, 'model-health.json'),
   } = config;
 
   await migrateLegacyProviders({ sourceRoot: root, gateHome });
@@ -837,7 +871,8 @@ export async function createGate(config = {}) {
    * Only ever asked for such a turn: an id the Gate holds a record for is that
    * provider's turn to answer, and the app now sends this thread's environment
    * with every turn. Catalogs are cached per environment for a minute, so the
-   * burst of turns a retry storm produces costs one read each.
+   * burst of turns a retry storm produces costs one read each. `/v1/models`
+   * reads the same cache, so opening the picker warms the routing lookup too.
    */
   const modelRouter = createBackendModelRouter({
     listBackends: () => backendManager.list(),
@@ -845,7 +880,30 @@ export async function createGate(config = {}) {
       const backend = await backendManager.get(entry.id);
       return backend.listModels();
     },
+    ttlMs: catalogueTtlMs,
+    staleMs: catalogueStaleMs,
+    responseTimeoutMs: catalogueResponseTimeoutMs,
   });
+
+  /**
+   * How the models on this host have actually behaved. Judged from real turns
+   * only — a catalogue says what an environment claims to serve, and two
+   * refused turns say whether it can (see core/model-health.mjs).
+   */
+  const modelHealth = createModelHealth({ file: modelHealthFile });
+
+  /**
+   * One turn's verdict, as the catalogue reads it: an upstream refusal or a
+   * turn that completed with nothing to show is a failure, an answer clears
+   * the model, and a turn the caller stopped says nothing at all about it.
+   */
+  function recordTurnOutcome(key, { text = '', hasContent = false, reason = '' } = {}) {
+    if (!key) return;
+    const refusal = backendUpstreamRefusal(text);
+    if (refusal) modelHealth.recordFailure(key, refusal);
+    else if (hasContent) modelHealth.recordSuccess(key);
+    else modelHealth.recordFailure(key, reason || 'the backend completed the turn with no assistant content');
+  }
 
   // Shell sessions for the app's Shell tab. See terminal.mjs for why this is a
   // piped shell rather than a PTY — it is what this client actually consumes.
@@ -2759,20 +2817,49 @@ export async function createGate(config = {}) {
         // (2026-09-16).
         const requestedBackendId = url.searchParams.get('backendId');
         const requestedBotId = readBotId(url);
+        // `?refresh=1` is the operator (or a caller that just fixed a provider)
+        // saying they asked for it now. Everything else is answered from the
+        // router's cache, which answers a stale copy immediately and refreshes
+        // it behind the request -- see backend-model-route.mjs.
+        const forceRefresh = url.searchParams.get('refresh') === '1';
         if (requestedBackendId || requestedBotId) {
-          const backend = await resolveConversationBackend(requestedBackendId, requestedBotId);
-          if (!backend) return;
+          const scope = await resolveConversationScope(requestedBackendId, requestedBotId);
+          if (!scope?.backend) return;
+          const { backend, environmentId } = scope;
           try {
-            const models = await backend.listModels();
+            // Read through the router's cache: an environment under its own id,
+            // a Bot under its own key and through its own profile-scoped backend
+            // (`forBot` answers `/p/<bot>`), so a Bot's copy can never be another
+            // Bot's list. A Bot picker is the operator's everyday path, and an
+            // uncached Hermes catalogue costs ~4 s per open. The routing lookup
+            // only walks the environment roster, so it never sees the Bot keys.
+            const catalogueId = requestedBotId ? `${environmentId}@bot:${requestedBotId}` : requestedBackendId;
+            const catalogues = await modelRouter.cataloguesFor(
+              [requestedBotId ? { id: catalogueId, read: () => backend.listModels() } : { id: catalogueId }],
+              { refresh: forceRefresh },
+            );
+            // No copy and no answer means the read failed or overran its
+            // bound. That is the 502 this route answered with before the
+            // catalogue was cached — not an empty list, which would tell the
+            // picker this environment serves nothing and say nothing about
+            // why.
+            if (!catalogues.has(catalogueId)) {
+              throw new Error(
+                requestedBotId
+                  ? `Bot "${requestedBotId}" did not answer with a model list.`
+                  : `Environment "${requestedBackendId}" did not answer with a model list.`,
+              );
+            }
+            const models = catalogues.get(catalogueId);
             res.writeHead(200);
             res.end(JSON.stringify({
               object: 'list',
-              data: models.map((model) => ({
+              data: curateModels(models.map((model) => ({
                 ...model,
                 object: 'model',
                 ...(requestedBackendId ? { backendId: requestedBackendId } : {}),
                 ...(requestedBotId ? { bot: requestedBotId } : {}),
-              })),
+              })), { health: modelHealth, scopeId: healthScopeId(environmentId, requestedBotId) }),
             }));
           } catch (error) {
             // The streaming branch above may already have sent headers.
@@ -2824,25 +2911,33 @@ export async function createGate(config = {}) {
         // independent backends load together while preserving catalog order.
         // Every backend owns a model list, so none is skipped here; a backend
         // that will not start is remembered by the manager and costs one attempt
-        // per backoff window rather than one 30s wait per request.
+        // per backoff window rather than one 30s wait per request. The read
+        // itself is the router's cached one, so the whole aggregate is answered
+        // from whatever is already in hand — and an environment whose read
+        // failed is left out of the map and so contributes no rows, exactly as
+        // the per-descriptor try/catch this replaced did.
         const descriptors = await backendManager.list().catch(() => []);
-        const backendModels = await Promise.all(descriptors.map(async (descriptor) => {
-          try {
-            const backend = await backendManager.get(descriptor.id);
-            return (await backend.listModels()).map((model) => ({
-              ...model, object: 'model', backendId: descriptor.id,
-            }));
-          } catch {
-            // A backend that will not start must not blank the model list.
-            return [];
-          }
-        }));
+        const catalogues = await modelRouter
+          .cataloguesFor(descriptors, { refresh: forceRefresh })
+          .catch(() => new Map());
+        const backendModels = descriptors.map((descriptor) =>
+          (catalogues.get(descriptor.id) ?? []).map((model) => ({
+            ...model, object: 'model', backendId: descriptor.id,
+          })));
         for (const models of backendModels) allModels.push(...models);
 
+        // Curation runs on every response, not on every read: a model that
+        // started failing is hidden the next time the catalogue is asked for,
+        // however fresh the copy behind it is. The Gate's own provider rows go
+        // through the same pass and are hidden only by what a model IS (they
+        // carry no provider metadata to merge on and no sign-in flag), plus the
+        // failing-turn verdict IF one exists for their key — the provider path
+        // (`chatViaProviderService` / `proxyChat`) records none today, so a Gate
+        // provider model is never hidden for having refused here.
         res.writeHead(200);
         res.end(JSON.stringify({
           object: 'list',
-          data: allModels,
+          data: curateModels(allModels, { health: modelHealth }),
         }));
         return;
       }
@@ -2906,6 +3001,17 @@ export async function createGate(config = {}) {
           const scope = await resolveConversationScope(body.backendId || routedBackendId, botForTurn);
           if (!scope?.backend) return;
           const { backend, environmentId } = scope;
+          // The qualifier this turn's model is judged under: the environment
+          // that answered it, and the Bot when there is one (a Bot is its own
+          // Hermes profile, with its own provider keys), so a failure is only
+          // ever held against the catalogue that offered the model. The
+          // catalogue files its rows under the same scope (curateModels'
+          // `scopeId`), and nothing here is filed under the Gate's own
+          // providers' `gate` namespace.
+          const healthKey = modelHealthKey(
+            healthScopeId(environmentId, botForTurn),
+            qualifiedModelId(body.model, body.providerId),
+          );
           try {
             const text = lastUserText(body.messages);
             const model = body.model ? parseQualifiedModel(body.model) : undefined;
@@ -2941,6 +3047,8 @@ export async function createGate(config = {}) {
                 inFlightTurns,
                 keepaliveIntervalMs,
                 detachedTurnMaxMs,
+                recordOutcome: recordTurnOutcome,
+                healthKey,
               });
               // A completed turn reports as a Bot reply (a cron routine
               // session classifies to `routine` inside the notifier). A turn
@@ -2965,6 +3073,8 @@ export async function createGate(config = {}) {
             // it is a refusal, and it answers as one.
             const refusal = backendUpstreamRefusal(result?.text);
             if (refusal) {
+              // A phone that has gone is not evidence about the model.
+              if (!res.destroyed) recordTurnOutcome(healthKey, { text: refusal });
               res.writeHead(502, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({ error: { message: refusal, code: 'upstream_error' } }));
               return;
@@ -2974,12 +3084,14 @@ export async function createGate(config = {}) {
             if (!hasContent) {
               // Same failure the streaming path guards against: the backend
               // says the turn is done, but there is nothing to show for it.
+              if (!res.destroyed) recordTurnOutcome(healthKey, {});
               res.writeHead(502, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({
                 error: { message: 'The backend completed the turn with no assistant content.', code: 'empty_turn' },
               }));
               return;
             }
+            if (!res.destroyed) recordTurnOutcome(healthKey, { hasContent: true });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
               id: `gate-${Date.now()}`,
@@ -2998,6 +3110,10 @@ export async function createGate(config = {}) {
               });
             }
           } catch (error) {
+            // Thrown after the answer went out (the push notice, say): the turn
+            // answered, so it is neither a failure nor a second response.
+            if (res.headersSent) return;
+            if (!res.destroyed) recordTurnOutcome(healthKey, { reason: error?.message });
             res.writeHead(502, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: { message: error.message, code: 'backend_error' } }));
           }

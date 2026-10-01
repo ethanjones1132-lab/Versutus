@@ -39,7 +39,7 @@ import { entering } from '@/lib/motion/presets';
 import { useChatSurface, useGateway } from '@/context/gateway-provider';
 import { useHandsfreeVoice } from '@/context/handsfree-voice-provider';
 import { describeGatewayError, errorBannerButton, humanizeGatewayError } from '@/lib/gateway/error-humanizer';
-import { modelLockFor } from '@/lib/gateway/run-failures';
+import { modelLockFor, type ModelTurnLock } from '@/lib/gateway/run-failures';
 import { useTokens } from '@/hooks/use-tokens';
 import { getSlashCommandSuggestions } from '@/lib/gateway/slash-commands';
 import { formatDayDividerCached } from '@/lib/format';
@@ -130,7 +130,7 @@ import {
   spokenDraftText,
 } from '@/lib/gateway/composer-draft';
 import { composeRequestApplies, composeRequestHoldCopy } from '@/lib/gateway/compose-request';
-import { effectiveModel, resolveSendModel, scopeModelsToBackend } from '@/lib/gateway/model-selection';
+import { effectiveModel, resolveSendModel, scopeModelsToBackend, visibleModelRows } from '@/lib/gateway/model-selection';
 import {
   chatAttachmentsFromPicker,
   supportsImageInput,
@@ -1115,14 +1115,33 @@ export function ChatScreen() {
       }
     : null;
 
+  // A Bot with no explicit pick answers on the model its Hermes profile
+  // carries, so name that rather than falling back to a generic label — and
+  // never to configurable chat's model, which is not what this thread runs on.
+  const botOwnModel = selectedBotId
+    ? rosterRows.find(
+        (row): row is Extract<RosterRow, { kind: 'bot' }> =>
+          row.kind === 'bot' && row.bot.id === selectedBotId,
+      )?.bot.model?.default ?? undefined
+    : undefined;
+  const threadModel = effectiveModel(activeGateway, selectedBackendId, selectedBotId) ?? botOwnModel;
+  // The header's name for the thread, through the store's own fold: the
+  // operator's name when the store holds one for this gateway + session, and
+  // the shipped gateway-title rule when it does not.
+  const sessionLabel = currentSessionId
+    ? sessionLabelTitle(
+        currentSession?.title,
+        activeGateway ? sessionLabels[sessionLabelKey(activeGateway.id, currentSessionId)] : undefined,
+      )
+    : undefined;
   // The model SectionList in the config sheet re-renders its visible rows on
-  // every new array identity. The gateway only changes the catalog when models
-  // are added, removed, or re-priced, so memoize on `modelCatalog` and let the
-  // streamed frames that churn the rest of this screen reuse the same rows.
+  // every new array identity, so memoize on `modelCatalog`; a row the Gate
+  // flagged is dropped before it is mapped, except the row this thread is
+  // pinned to — which has to stay visible and say why it cannot be picked.
   const modelRows = useMemo(
     () =>
       scopeModelsToBackend(
-        modelCatalog.map((model: Record<string, unknown>) => ({
+        visibleModelRows(modelCatalog, threadModel).map((model: Record<string, unknown>) => ({
           id: String(model.id || model.model || model.name || ''),
           provider: model.provider as string | undefined,
           providerId: (model.providerId ?? model.provider) as string | undefined,
@@ -1136,34 +1155,15 @@ export function ChatScreen() {
           backendId: model.backendId as string | undefined,
           // This device's recorded turn failure for the row, when one exists —
           // the picker renders the row locked with its reason.
-          modelLock: modelLockFor(activeGateway?.modelLocks, String(
+          modelLock: catalogueLock(model, modelLockFor(activeGateway?.modelLocks, String(
             model.id || model.model || model.name || '',
-          )),
+          ))),
         })),
         selectedBackendId,
       ),
-    [modelCatalog, selectedBackendId, activeGateway?.modelLocks],
+    [modelCatalog, selectedBackendId, threadModel, activeGateway?.modelLocks],
   );
 
-  // The header's name for the thread, through the store's own fold: the
-  // operator's name when the store holds one for this gateway + session, and
-  // the shipped gateway-title rule when it does not.
-  const sessionLabel = currentSessionId
-    ? sessionLabelTitle(
-        currentSession?.title,
-        activeGateway ? sessionLabels[sessionLabelKey(activeGateway.id, currentSessionId)] : undefined,
-      )
-    : undefined;
-  // A Bot with no explicit pick answers on the model its Hermes profile
-  // carries, so name that rather than falling back to a generic label — and
-  // never to configurable chat's model, which is not what this thread runs on.
-  const botOwnModel = selectedBotId
-    ? rosterRows.find(
-        (row): row is Extract<RosterRow, { kind: 'bot' }> =>
-          row.kind === 'bot' && row.bot.id === selectedBotId,
-      )?.bot.model?.default ?? undefined
-    : undefined;
-  const threadModel = effectiveModel(activeGateway, selectedBackendId, selectedBotId) ?? botOwnModel;
   const modelLabel = threadModel ?? 'Default model';
   // Only the backend actually routing this thread. The `?? backends[0]`
   // fallback that used to be here labelled the chip "Claude Code" whenever the
@@ -2851,6 +2851,31 @@ export function ChatScreen() {
       />
     </Screen>
   );
+}
+
+/**
+ * The lock a catalogue row is drawn with: this device's recorded turn failure
+ * when there is one, and otherwise the Gate's own verdict on the row.
+ *
+ * `thread-config-sheet` renders exactly one reason for a locked row, and
+ * `hiddenReason` is exactly that — why this row cannot be picked — so it rides
+ * the slot that already exists rather than the sheet growing a second one.
+ * `recordedAt: 0` because the Gate's verdict is standing, not a turn this device
+ * watched fail, and a clock call inside the memo would make every re-render
+ * build new rows.
+ */
+function catalogueLock(
+  model: Record<string, unknown>,
+  deviceLock: ModelTurnLock | undefined,
+): ModelTurnLock | undefined {
+  if (deviceLock) return deviceLock;
+  const reason = typeof model.hiddenReason === 'string' ? model.hiddenReason : '';
+  if (!reason) return undefined;
+  return {
+    model: String(model.id || model.model || model.name || ''),
+    reason,
+    recordedAt: 0,
+  };
 }
 
 const styles = StyleSheet.create({

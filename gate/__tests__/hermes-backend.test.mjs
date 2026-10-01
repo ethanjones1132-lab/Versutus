@@ -963,6 +963,18 @@ test('listModels reads /api/model/options and does not mark unsigned-in provider
   assert.equal(qwen.available, false);
 });
 
+/**
+ * The provider facts every row now carries (core/model-curation.mjs needs them
+ * to tell a configured provider from the built-in twin it replaces).
+ */
+const providerFacts = (over = {}) => ({
+  providerSource: undefined,
+  providerUserDefined: false,
+  providerAliases: [],
+  providerCurrent: false,
+  ...over,
+});
+
 for (const shape of ['array', 'object']) {
   test(`listModels keeps valid rows in a ${shape} catalog containing malformed providers`, async () => {
     const rows = [
@@ -981,14 +993,45 @@ for (const shape of ['array', 'object']) {
     const providers = shape === 'array' ? rows : Object.fromEntries(rows.map((row, index) => [index, row]));
     const { calls, hermes } = backend(() => Response.json({ providers }));
     assert.deepEqual(await hermes.listModels(), [
-      { id: 'nous/poolside/laguna-xs-2.1:free', providerId: 'nous', modelId: 'poolside/laguna-xs-2.1:free', provider: 'Nous Portal', label: 'Nous Portal · poolside/laguna-xs-2.1:free', available: true },
-      { id: 'qwen-oauth/qwen3', providerId: 'qwen-oauth', modelId: 'qwen3', provider: 'Qwen', label: 'Qwen · qwen3', available: false },
-      { id: 'local/local/model', providerId: 'local', modelId: 'local/model', provider: 'local', label: 'local · local/model', available: true },
+      { id: 'nous/poolside/laguna-xs-2.1:free', providerId: 'nous', modelId: 'poolside/laguna-xs-2.1:free', provider: 'Nous Portal', label: 'Nous Portal · poolside/laguna-xs-2.1:free', available: true, ...providerFacts() },
+      { id: 'qwen-oauth/qwen3', providerId: 'qwen-oauth', modelId: 'qwen3', provider: 'Qwen', label: 'Qwen · qwen3', available: false, ...providerFacts() },
+      { id: 'local/local/model', providerId: 'local', modelId: 'local/model', provider: 'local', label: 'local · local/model', available: true, ...providerFacts() },
     ]);
     assert.equal(calls[0].url, 'http://h:8642/api/model/options');
     assert.equal(calls[0].init.headers.Authorization, 'Bearer k');
   });
 }
+
+test('listModels carries the provider metadata curation needs to spot a shadowed twin', async () => {
+  // 2026-10-01, live host: `/api/model/options` returns 55 providers, and the
+  // only thing that says user-config `kilo` REPLACES built-in `kilocode` is the
+  // metadata this used to drop on the floor. `opencode-go-session` is the same
+  // story with a slug instead of an alias, and it is the only provider that
+  // sends the session header the built-in `opencode-go` now needs.
+  const { hermes } = backend(() => Response.json({ providers: [
+    {
+      slug: 'kilo', name: 'KiloCode', authenticated: true, source: 'user-config',
+      is_user_defined: true, is_current: true, aliases: ['custom:kilo', 'custom:kilocode', 'kilo', 'kilocode'],
+      api_url: 'https://kilo.example/v1', models: ['kilo-auto/free', 'google/gemini-3.1-flash-image'],
+    },
+    { slug: 'kilocode', name: 'KiloCode (built-in)', authenticated: true, source: 'built-in', models: ['kilo-auto/free'] },
+    { slug: 'opencode-go-session', name: 'OpenCode Go session header', source: 'user-config', models: ['deepseek-v4.1-flash'] },
+    { slug: 'not-connected', name: 'Not connected', authenticated: false, source: 'built-in', models: [] },
+  ] }));
+  const models = await hermes.listModels();
+
+  assert.deepEqual(models.find((m) => m.id === 'kilo/kilo-auto/free'), {
+    id: 'kilo/kilo-auto/free', providerId: 'kilo', modelId: 'kilo-auto/free',
+    provider: 'KiloCode', label: 'KiloCode · kilo-auto/free', available: true,
+    providerSource: 'user-config', providerUserDefined: true,
+    providerAliases: ['custom:kilo', 'custom:kilocode', 'kilo', 'kilocode'], providerCurrent: true,
+  });
+  // The built-in twin keeps its own honest `source`, which is what tells it
+  // apart from the configured provider that shadows it.
+  assert.equal(models.find((m) => m.id === 'kilocode/kilo-auto/free').providerSource, 'built-in');
+  assert.deepEqual(models.find((m) => m.id === 'opencode-go-session/deepseek-v4.1-flash').providerAliases, []);
+  assert.equal(models.find((m) => m.id === 'opencode-go-session/deepseek-v4.1-flash').providerCurrent, false);
+});
 
 test('listModels discards invalid model ids without changing valid qualified ids', async () => {
   const { hermes } = backend(() => Response.json({ providers: [
@@ -996,9 +1039,9 @@ test('listModels discards invalid model ids without changing valid qualified ids
     { slug: 'local', name: {}, models: ['after'] },
   ] }));
   assert.deepEqual(await hermes.listModels(), [
-    { id: 'nous/before', providerId: 'nous', modelId: 'before', provider: 'nous', label: 'nous · before', available: true },
-    { id: 'nous/vendor/model:free', providerId: 'nous', modelId: 'vendor/model:free', provider: 'nous', label: 'nous · vendor/model:free', available: true },
-    { id: 'local/after', providerId: 'local', modelId: 'after', provider: 'local', label: 'local · after', available: true },
+    { id: 'nous/before', providerId: 'nous', modelId: 'before', provider: 'nous', label: 'nous · before', available: true, ...providerFacts() },
+    { id: 'nous/vendor/model:free', providerId: 'nous', modelId: 'vendor/model:free', provider: 'nous', label: 'nous · vendor/model:free', available: true, ...providerFacts() },
+    { id: 'local/after', providerId: 'local', modelId: 'after', provider: 'local', label: 'local · after', available: true, ...providerFacts() },
   ]);
 });
 

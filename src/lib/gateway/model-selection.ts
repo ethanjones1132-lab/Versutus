@@ -42,6 +42,32 @@ export function scopeModelsToBackend<T extends { backendId?: string }>(
 }
 
 /**
+ * What the picker offers out of a curated catalogue.
+ *
+ * The Gate flags a row it does not want picked — a provider the host is not
+ * signed into, a built-in a configured provider has replaced, an image model, a
+ * model that failed its last two turns — with `hidden`, and the phone drops
+ * those rows instead of sending the operator to something that refuses. The
+ * thread's own pinned model is kept whatever it says: it is what the thread is
+ * running on, so hiding it would leave the operator with a lock they cannot see
+ * or explain.
+ *
+ * Identity is compared the way `staleModelPin` and the sheet compare it, so a
+ * pin stored as `omen-alpha` still keeps the row filed as
+ * `opencode-go/omen-alpha`.
+ */
+export function visibleModelRows<T extends { id: string; hidden?: boolean }>(
+  models: T[],
+  pinnedModel: string | undefined,
+): T[] {
+  // Same reference when the Gate flagged nothing — no needless re-render.
+  if (!models.some((model) => model.hidden === true)) return models;
+  return models.filter(
+    (model) => model.hidden !== true || sameModelId(model.id, pinnedModel),
+  );
+}
+
+/**
  * Whether two model ids name the same model under different qualification.
  *
  * The picker stores `providerId/modelId` (and Hermes `/api/model/options`
@@ -226,15 +252,15 @@ export function resolveSendModel(
  * the next send goes to the dead model and the backend completes the turn
  * with no assistant content.
  *
- * Returns the stale pin and the first available catalog entry to fall back
- * to, or null when the pin is still good — including when the catalog simply
- * does not list it. An absent match proves nothing (an older Hermes can
- * answer a partial catalog), so only an explicit `available: false` on the
- * matching row condemns a pin. Entries without the field at all predate the
- * signal and count as available.
+ * Returns the stale pin and the first entry worth falling back to, or null when
+ * the pin is still good — including when the catalog simply does not list it.
+ * An absent match proves nothing (an older Hermes can answer a partial
+ * catalog), so only an explicit `available: false` on the matching row
+ * condemns a pin. Entries without the field at all predate the signal and count
+ * as available.
  */
 export function staleModelPin(
-  catalog: readonly { id: string; available?: boolean; providerId?: string }[],
+  catalog: readonly { id: string; available?: boolean; hidden?: boolean; providerId?: string }[],
   pinnedModel: string | undefined,
   options: {
     /**
@@ -248,8 +274,14 @@ export function staleModelPin(
 ): { pinned: string; fallback?: string; reason: 'unavailable' | 'unknown-provider' } | null {
   const pinned = pinnedModel?.trim();
   if (!pinned) return null;
+  // A fallback the picker would not offer is not a fallback. `hidden` is the
+  // Gate's standing verdict — a signed-out provider, a replaced built-in, an
+  // image model, a model that failed its last two turns — so switching the
+  // thread onto it moves the pin from a lock it explains to one it cannot.
   const fallbackFor = () =>
-    catalog.find((entry) => entry.available !== false && !sameModelId(entry.id, pinned))?.id;
+    catalog.find(
+      (entry) => entry.available !== false && !entry.hidden && !sameModelId(entry.id, pinned),
+    )?.id;
   const match = catalog.find((entry) => sameModelId(entry.id, pinned));
   if (match) {
     return match.available === false ? { pinned, fallback: fallbackFor(), reason: 'unavailable' } : null;

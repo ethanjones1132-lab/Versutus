@@ -28,12 +28,16 @@ describe('chat-screen session and model derivations', () => {
     // The inline `models={modelCatalog.map(...)}` prop must be gone; the rows
     // are now computed once into a stable `modelRows` and passed by identity.
     expect(screen).not.toMatch(/models=\{\s*modelCatalog\.map\(/);
-    // The catalog is still mapped, but inside a useMemo keyed by `modelCatalog`.
+    // The catalog is still mapped, but inside a useMemo keyed by `modelCatalog` —
+    // after `visibleModelRows` has dropped the rows the Gate hid.
     expect(screen).toMatch(/const modelRows = useMemo\(/);
-    expect(screen).toMatch(/modelCatalog\.map\(/);
+    expect(screen).toMatch(/visibleModelRows\(modelCatalog, threadModel\)\.map\(/);
     // The rows are scoped to the selected backend, so the key carries it too —
-    // plus the model locks the 2026-09-16 turn-failure feature reads.
-    expect(screen).toMatch(/\[modelCatalog, selectedBackendId, activeGateway\?\.modelLocks\]/);
+    // plus the model locks the 2026-09-16 turn-failure feature reads, and the
+    // pinned model, because a row the Gate hid is still this thread's row.
+    expect(screen).toMatch(
+      /\[modelCatalog, selectedBackendId, threadModel, activeGateway\?\.modelLocks\]/,
+    );
     // The prop reads the memoized array by name.
     expect(screen).toMatch(/models=\{\s*modelRows\s*\}/);
   });

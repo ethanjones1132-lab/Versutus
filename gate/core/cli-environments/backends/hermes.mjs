@@ -289,6 +289,14 @@ export function createHermesBackend({
      * the OpenAI contract (Hermes *is* the model from a caller's view) but
      * useless for a picker. The real catalog is `/api/model/options`: the
      * providers Hermes can route to, each with its own model list.
+     *
+     * The provider's own facts travel with every row (`providerSource`,
+     * `providerUserDefined`, `providerAliases`, `providerCurrent`) because
+     * they are the only way to tell a provider the operator configured on
+     * purpose from the built-in twin it replaces -- `kilo` shadows
+     * `kilocode`, `opencode-go-session` shadows `opencode-go` and is the only
+     * one that sends the session header the built-in now needs. Curation
+     * (core/model-curation.mjs) reads those, not this file.
      */
     async listModels() {
       const body = await call('/api/model/options');
@@ -304,6 +312,9 @@ export function createHermesBackend({
         if (typeof providerId !== 'string' || !providerId.trim() || !Array.isArray(provider.models)) continue;
         const providerName = typeof provider.name === 'string' ? provider.name : providerId;
         const available = provider.authenticated !== false;
+        const aliases = Array.isArray(provider.aliases)
+          ? provider.aliases.filter((alias) => typeof alias === 'string')
+          : [];
         for (const modelId of provider.models) {
           if (typeof modelId !== 'string' || !modelId.trim()) continue;
           models.push({
@@ -313,6 +324,10 @@ export function createHermesBackend({
             provider: providerName,
             label: `${providerName} · ${modelId}`,
             available,
+            providerSource: typeof provider.source === 'string' ? provider.source : undefined,
+            providerUserDefined: provider.is_user_defined === true,
+            providerAliases: aliases,
+            providerCurrent: provider.is_current === true,
           });
         }
       }
