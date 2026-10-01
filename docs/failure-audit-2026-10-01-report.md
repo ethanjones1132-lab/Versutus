@@ -33,7 +33,7 @@ On the tip: `verify-config`, `tsc`, ESLint (0 errors), the full jest suite with 
 
 ## Build
 
-`C:\Projects\Versutus-apk-outersutus-round2-90e9b1c-20261001-1355.apk` (154 MB, debug-signed release build, built from `90e9b1c` = the pushed tip, which contains round 1 and round 2). SHA-256 `CAECB21181ADEC66AFF8D5DABE34D13712EA4BE8242E4B5826662DB2ED`. Release build: successful. Not sent to the phone.
+`C:\Projects\Versutus-apk-out\versutus-round2-90e9b1c-20261001-1355.apk` (154 MB, debug-signed release build, built from `90e9b1c` = the pushed tip, which contains round 1 and round 2). SHA-256 `CAECB21181ADEC66AFF8D5DAA356DABE34D13712EA4BE8242E4B5826662DB2ED`. Release build: successful. Not sent to the phone.
 
 ## What still needs a device
 
