@@ -39,7 +39,7 @@ async function vaultFor(user = 'current') {
 test('vault status never returns the value', async () => {
   const { vault } = await vaultFor();
   await vault.set('provider/openai/api-key', 'secret-value');
-  assert.deepEqual(await vault.describe('provider/openai/api-key'), { present: true });
+  assert.deepEqual(await vault.describe('provider/openai/api-key'), { present: true, readable: true });
 });
 
 test('round-trips a credential and deletes it', async () => {

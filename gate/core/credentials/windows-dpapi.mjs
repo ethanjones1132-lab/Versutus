@@ -50,35 +50,58 @@ $output = if ($env:VERSUTUS_DPAPI_OP -eq 'protect') { [VersutusDpapi]::Protect($
 [Console]::Out.Write([Convert]::ToBase64String($output))
 `;
 
-function runHelper(op, payload) {
+function runHelper(op, payload, { timeoutMs, spawnImpl }) {
   return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', HELPER], {
+    let settled = false;
+    let timer = null;
+    const child = spawnImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', HELPER], {
       env: { ...process.env, VERSUTUS_DPAPI_OP: op },
       windowsHide: true,
     });
     const chunks = [];
     const errors = [];
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      reject(error);
+    };
+    const succeed = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(value);
+    };
+    timer = setTimeout(() => {
+      child.kill();
+      if (process.platform === 'win32' && child.pid) {
+        spawnImpl('taskkill', ['/T', '/F', '/PID', String(child.pid)]).on('error', () => {});
+      }
+      fail(Object.assign(new Error(`DPAPI ${op} timed out after ${timeoutMs} ms`), { code: 'dpapi_timeout' }));
+    }, timeoutMs);
     child.stdout.on('data', (chunk) => chunks.push(chunk));
     child.stderr.on('data', (chunk) => errors.push(chunk));
-    child.on('error', reject);
+    child.on('error', fail);
     child.on('close', (code) => {
       if (code !== 0) {
-        reject(new Error(`DPAPI ${op} failed: ${Buffer.concat(errors).toString('utf8') || code}`));
+        const message = `DPAPI ${op} failed: ${Buffer.concat(errors).toString('utf8') || code}`;
+        const failureCode = op === 'unprotect' ? 'credential_unreadable' : 'credential_protect_failed';
+        fail(Object.assign(new Error(message), { code: failureCode }));
         return;
       }
-      resolve(Buffer.from(Buffer.concat(chunks).toString('utf8'), 'base64'));
+      succeed(Buffer.from(Buffer.concat(chunks).toString('utf8'), 'base64'));
     });
     child.stdin.end(Buffer.from(payload).toString('base64'));
   });
 }
 
-export function createWindowsDpapi() {
+export function createWindowsDpapi({ timeoutMs = 20000, spawnImpl = spawn } = {}) {
   return {
     protect(plain) {
-      return runHelper('protect', plain);
+      return runHelper('protect', plain, { timeoutMs, spawnImpl });
     },
     unprotect(cipher) {
-      return runHelper('unprotect', cipher);
+      return runHelper('unprotect', cipher, { timeoutMs, spawnImpl });
     },
   };
 }
