@@ -3,7 +3,7 @@ import {
   type DrawerContentComponentProps,
 } from 'expo-router/drawer';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Svg, { Defs, LinearGradient, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,12 +18,16 @@ import { useGateway } from '@/context/gateway-provider';
 import { useTokens } from '@/hooks/use-tokens';
 import { readCached, writeCached } from '@/lib/cache/swr-store';
 import type { PublicBot } from '@/lib/gateway/bots';
-import { teamPresence, type TeamPresence } from '@/lib/activity/presence';
+import { teamPresence, samePresence, type TeamPresence } from '@/lib/activity/presence';
 import { botReportedRoutable } from '@/lib/gateway/roster-tap';
+import type { ActivityRun } from '@/lib/gateway/runs';
 import type { ConnectionStatus } from '@/lib/gateway/types';
 import { haptics } from '@/lib/haptics';
 
 type NavHref = '/chat' | '/activity' | '/terminal' | '/gateway/settings' | '/home';
+
+/** One press per destination, created once and handed down whole. */
+type NavPresses = Record<NavHref, () => void>;
 
 type NavTarget = {
   key: string;
@@ -156,10 +160,51 @@ export async function openTeammateChat(
 }
 
 /**
+ * The same roster, in the same order, saying the same things — so a Gate that
+ * answers a re-read with the list the drawer is already showing must not
+ * repaint its rows. Compared on what the drawer draws: the name on the row, and
+ * the two fields `botReportedRoutable` reads.
+ */
+function sameRoster(a: readonly PublicBot[], b: readonly PublicBot[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((bot, index) => {
+    const other = b[index];
+    return (
+      bot.id === other.id &&
+      bot.displayName === other.displayName &&
+      Boolean(bot.routable) === Boolean(other.routable) &&
+      bot.routingIssue === other.routingIssue
+    );
+  });
+}
+
+/**
+ * Presence folded from the runs, KEPT as the same map whenever the answer did
+ * not change. `teamPresence` builds a fresh map per call, so without this a run
+ * event that moves no Bot between "working" and "needs you" would arrive as a
+ * new map and redraw every teammate's figure on a phone that is already busy.
+ */
+function useStablePresence(runs: readonly ActivityRun[]): ReadonlyMap<string, TeamPresence> {
+  const folded = useMemo(() => teamPresence(runs), [runs]);
+  const [held, setHeld] = useState<ReadonlyMap<string, TeamPresence>>(folded);
+  // Adjusting state while rendering (rather than in an effect) is what lets this
+  // hand back the map it already had: an effect would paint one stale frame
+  // first, and a run event lands on this far too often for that.
+  if (samePresence(held, folded)) return held;
+  setHeld(folded);
+  return folded;
+}
+
+/**
  * The drawer is part of the lit room: the house violet pools behind the mark
  * at the top, and the panel's leading edge catches a hairline of light.
+ *
+ * Memoised, and it takes no props: it reads nothing but the tokens, so neither
+ * an OPEN_DRAWER nor a gateway update has any business redrawing two gradient
+ * canvases while the slide animation is trying to start.
  */
-function DrawerLight() {
+const DrawerLight = memo(function DrawerLight() {
   const tokens = useTokens();
   const id = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   return (
@@ -186,7 +231,44 @@ function DrawerLight() {
       </Svg>
     </View>
   );
-}
+});
+
+/** The mark and the wordmark. Constant chrome: nothing below can move them. */
+const BrandBlock = memo(function BrandBlock() {
+  return (
+    <View style={styles.brand}>
+      <VersutusMark size={28} />
+      <Text variant="title" style={styles.wordmark}>
+        Versutus
+      </Text>
+    </View>
+  );
+});
+
+/** The drawer's first answer to "I want to ask something", drawn once. */
+const NewChatButton = memo(function NewChatButton({ onStart }: { onStart: () => void }) {
+  const tokens = useTokens();
+  return (
+    <PressableScale
+      onPress={async () => {
+        await haptics.selection();
+        onStart();
+      }}
+      accessibilityRole="button"
+      accessibilityLabel="New chat"
+      accessibilityHint="Talk to any model, no Bot in between"
+      style={[styles.newChat, { backgroundColor: tokens.backgroundRaised, borderTopColor: tokens.specular }]}>
+      <Icon
+        name={{ ios: 'square.and.pencil', android: 'edit_square', web: 'edit_square' }}
+        size={17}
+        color="textPrimary"
+      />
+      <Text variant="callout" style={styles.newChatLabel}>
+        New chat
+      </Text>
+    </PressableScale>
+  );
+});
 
 function PresenceNote({ presence }: { presence: TeamPresence }) {
   const tokens = useTokens();
@@ -201,7 +283,13 @@ function PresenceNote({ presence }: { presence: TeamPresence }) {
   );
 }
 
-function DrawerRow({
+/**
+ * One row, memoised: the drawer's cheapest leaf is still a `PressableScale`
+ * with a haptics wait in it, and there are ten of them on screen at once. Its
+ * callers therefore hand it primitive or referentially stable props — a press
+ * is one of the shared `presses`, never a closure built inline.
+ */
+const DrawerRow = memo(function DrawerRow({
   title,
   icon,
   leading,
@@ -255,7 +343,160 @@ function DrawerRow({
       ) : null}
     </PressableScale>
   );
-}
+});
+
+/**
+ * Chats, Activity, Tools — the three pillars. Only two things about them can
+ * move: which one is where the operator is, and how many approvals are waiting.
+ */
+const PrimaryNavSection = memo(function PrimaryNavSection({
+  routeName,
+  pendingCount,
+  presses,
+}: {
+  routeName: string;
+  pendingCount: number;
+  presses: NavPresses;
+}) {
+  return (
+    <View style={styles.section}>
+      {PRIMARY.map((item) => (
+        <DrawerRow
+          key={item.key}
+          title={item.title}
+          icon={item.icon}
+          active={item.routeNames?.includes(routeName) ?? false}
+          count={item.key === 'activity' ? pendingCount : undefined}
+          accessibilityLabel={
+            item.key === 'activity' && pendingCount > 0
+              ? `Activity, ${pendingCount} waiting for you`
+              : item.title
+          }
+          onPress={presses[item.href]}
+        />
+      ))}
+    </View>
+  );
+});
+
+/**
+ * One teammate. Its own memo boundary on purpose: a presence change is the one
+ * thing that redraws a single row here, and the others must not come with it.
+ */
+const TeamRow = memo(function TeamRow({
+  bot,
+  presence,
+  onPress,
+}: {
+  bot: PublicBot;
+  presence: TeamPresence | undefined;
+  onPress: (bot: PublicBot) => void;
+}) {
+  return (
+    <DrawerRow
+      title={bot.displayName}
+      leading={<BotAvatar botId={bot.id} name={bot.displayName} size={26} />}
+      note={presence ? <PresenceNote presence={presence} /> : undefined}
+      accessibilityLabel={`Chat with ${bot.displayName}${
+        presence === 'needs-you' ? ', needs you' : presence === 'working' ? ', working' : ''
+      }`}
+      onPress={() => onPress(bot)}
+    />
+  );
+});
+
+/**
+ * The team block: the roster the drawer's own read painted, what each Bot is
+ * doing right now, and the one line that admits the list could not be refreshed
+ * — a failed first read used to leave nothing at all on screen.
+ */
+const TeamSection = memo(function TeamSection({
+  team,
+  presence,
+  note,
+  onPressBot,
+  onRetry,
+}: {
+  team: readonly PublicBot[];
+  /** Stable across activity events that change nobody's presence. */
+  presence: ReadonlyMap<string, TeamPresence>;
+  note: { message: string; retryable: boolean } | null;
+  onPressBot: (bot: PublicBot) => void;
+  onRetry: () => void;
+}) {
+  return (
+    <View style={styles.section}>
+      <Text variant="eyebrow" color="tertiary" style={styles.sectionLabel}>
+        Your team
+      </Text>
+      {team.map((bot) => (
+        <TeamRow key={bot.id} bot={bot} presence={presence.get(bot.id)} onPress={onPressBot} />
+      ))}
+      {note ? (
+        note.retryable ? (
+          <PressableScale
+            onPress={onRetry}
+            accessibilityRole="button"
+            accessibilityLabel={`${note.message}. Tap to retry.`}
+            style={styles.teamNote}>
+            <Text variant="caption" color="secondary">
+              {note.message} · tap to retry
+            </Text>
+          </PressableScale>
+        ) : (
+          <Text variant="caption" color="secondary" style={styles.teamNote}>
+            {note.message}
+          </Text>
+        )
+      ) : null}
+    </View>
+  );
+});
+
+/** Settings, and the thin Gate line. The only chrome that reads the status. */
+const DrawerFooter = memo(function DrawerFooter({
+  status,
+  gateName,
+  gateSubtitle,
+  bottomInset,
+  presses,
+}: {
+  status: ConnectionStatus;
+  gateName: string | undefined;
+  gateSubtitle: string;
+  bottomInset: number;
+  presses: NavPresses;
+}) {
+  const tokens = useTokens();
+  return (
+    <View style={[styles.foot, { paddingBottom: bottomInset + Spacing.three }]}>
+      <DrawerRow title={SETTINGS.title} icon={SETTINGS.icon} onPress={presses['/gateway/settings']} />
+      <PressableScale
+        onPress={async () => {
+          await haptics.selection();
+          presses['/home']();
+        }}
+        accessibilityRole="button"
+        accessibilityLabel={`Gate status: ${statusLabel(status)}. ${gateName ?? gateSubtitle}. Open Gate details.`}
+        style={[styles.gate, { backgroundColor: tokens.backgroundRaised }]}>
+        <PulsingDot color={statusColor(tokens, status)} active={status === 'connecting' || status === 'reconnecting'} />
+        <View style={styles.gateText}>
+          <Text variant="callout" numberOfLines={1}>
+            {gateName ?? 'Gate'}
+          </Text>
+          <Text variant="caption" color="secondary" numberOfLines={1}>
+            {gateSubtitle}
+          </Text>
+        </View>
+        <Icon
+          name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
+          size={14}
+          color="textTertiary"
+        />
+      </PressableScale>
+    </View>
+  );
+});
 
 /**
  * Side drawer IA per CHARTER / visual-direction (LOCKED): chats, Activity,
@@ -265,11 +506,17 @@ function DrawerRow({
  *
  * Nocturne adds the team: the Bots the operator talks to are one tap from
  * anywhere, the way a messages app keeps your people in its sidebar.
+ *
+ * This component is the drawer's one unmemoised node, and that is the point:
+ * it re-renders on every navigator state change and every gateway update, and
+ * hands each piece below only what that piece draws. The drawer is mounted
+ * beside every screen for the life of the app, so on the operator's phone all
+ * of this work used to land on an OPEN_DRAWER — the one moment the slide
+ * animation is trying to start.
  */
 export function SideDrawerContent(props: DrawerContentComponentProps) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const tokens = useTokens();
   const {
     status,
     statusDetail,
@@ -283,7 +530,15 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
     pendingApprovals,
     activityRunsForActiveGateway,
   } = useGateway();
-  const presence = teamPresence(activityRunsForActiveGateway);
+  // The navigator hands the drawer a fresh `props` object every time the drawer
+  // state moves, and opening the drawer is one such move. The presses read it
+  // from here instead of taking it as a dependency, so their own identity never
+  // has to change — and with it, no row below has to redraw.
+  const propsRef = useRef(props);
+  useEffect(() => {
+    propsRef.current = props;
+  });
+  const presence = useStablePresence(activityRunsForActiveGateway);
   const routeName = props.state.routes[props.state.index]?.name;
   const [team, setTeam] = useState<PublicBot[]>([]);
   // The line under the team list: a refused read keeps the last roster and says
@@ -333,7 +588,7 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
         // Never over a live answer that already landed for this gateway.
         if (liveAnsweredRef.current === gatewayId) return;
         cachedAtRef.current = cached.savedAt;
-        setTeam(cached.value);
+        setTeam((painted) => (sameRoster(painted, cached.value) ? painted : cached.value));
       })
       .catch(() => undefined);
     return () => {
@@ -363,7 +618,10 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
       .then((bots) => {
         if (cancelled || !gatewayId) return;
         liveAnsweredRef.current = gatewayId;
-        setTeam(bots);
+        // An identical roster is still a fresh answer: it ages the cache below
+        // and it clears the retry line, but it must not repaint rows that
+        // already say exactly this.
+        setTeam((painted) => (sameRoster(painted, bots) ? painted : bots));
         setTeamNote(null);
         cachedAtRef.current = Date.now();
         void writeCached('roster', gatewayId, 'bots', bots).catch(() => undefined);
@@ -386,33 +644,52 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
     setRetryTick((tick) => tick + 1);
   }, []);
 
-  const go = (href: NavHref) => {
-    props.navigation.closeDrawer();
-    router.push(href);
-  };
+  const go = useCallback(
+    (href: NavHref) => {
+      propsRef.current.navigation.closeDrawer();
+      router.push(href);
+    },
+    [router],
+  );
 
-  const openTeammate = async (bot: PublicBot) => {
-    const outcome = await openTeammateChat(bot, openBot, (botId) =>
-      requestSurface({ kind: 'bot', botId }),
-    );
-    if (!outcome.ok) {
-      // The drawer stays open: a failed tap used to leave the operator on the
-      // previous Bot's chat with nothing said.
-      setTeamNote({ message: outcome.reason, retryable: false });
-      return;
-    }
-    props.navigation.closeDrawer();
-    router.push('/chat');
-  };
+  // One press per destination, made once. `PRIMARY` and `SETTINGS` are module
+  // constants, so their rows can hold these for the life of the drawer.
+  const presses = useMemo<NavPresses>(
+    () => ({
+      '/chat': () => go('/chat'),
+      '/activity': () => go('/activity'),
+      '/terminal': () => go('/terminal'),
+      '/gateway/settings': () => go('/gateway/settings'),
+      '/home': () => go('/home'),
+    }),
+    [go],
+  );
+
+  const openTeammate = useCallback(
+    async (bot: PublicBot) => {
+      const outcome = await openTeammateChat(bot, openBot, (botId) =>
+        requestSurface({ kind: 'bot', botId }),
+      );
+      if (!outcome.ok) {
+        // The drawer stays open: a failed tap used to leave the operator on the
+        // previous Bot's chat with nothing said.
+        setTeamNote({ message: outcome.reason, retryable: false });
+        return;
+      }
+      propsRef.current.navigation.closeDrawer();
+      router.push('/chat');
+    },
+    [openBot, requestSurface, router],
+  );
 
   // A fresh conversation with no Bot in between — the drawer's first answer
   // to "I want to ask something", the way every assistant's sidebar opens.
-  const startNewChat = () => {
-    props.navigation.closeDrawer();
+  const startNewChat = useCallback(() => {
+    propsRef.current.navigation.closeDrawer();
     router.push('/chat');
     clearBot();
     requestSurface({ kind: 'configurable' });
-  };
+  }, [clearBot, requestSurface, router]);
 
   const gateName = settings.pcName ?? activeGateway?.name;
   const gateSubtitle =
@@ -421,134 +698,50 @@ export function SideDrawerContent(props: DrawerContentComponentProps) {
       : gateways.length === 0
         ? 'No gateway yet'
         : statusDetail || statusLabel(status);
-  const routableTeam = team.filter(botReportedRoutable).slice(0, DRAWER_TEAM_LIMIT);
+  const routableTeam = useMemo(
+    () => team.filter(botReportedRoutable).slice(0, DRAWER_TEAM_LIMIT),
+    [team],
+  );
 
   return (
     <View style={[styles.root, { paddingTop: Math.max(insets.top, Spacing.two) + Spacing.three }]}>
       <DrawerLight />
-      <View style={styles.brand}>
-        <VersutusMark size={28} />
-        <Text variant="title" style={styles.wordmark}>
-          Versutus
-        </Text>
-      </View>
+      <BrandBlock />
 
-      <PressableScale
-        onPress={async () => {
-          await haptics.selection();
-          startNewChat();
-        }}
-        accessibilityRole="button"
-        accessibilityLabel="New chat"
-        accessibilityHint="Talk to any model, no Bot in between"
-        style={[styles.newChat, { backgroundColor: tokens.backgroundRaised, borderTopColor: tokens.specular }]}>
-        <Icon
-          name={{ ios: 'square.and.pencil', android: 'edit_square', web: 'edit_square' }}
-          size={17}
-          color="textPrimary"
-        />
-        <Text variant="callout" style={styles.newChatLabel}>
-          New chat
-        </Text>
-      </PressableScale>
+      <NewChatButton onStart={startNewChat} />
 
       <DrawerContentScrollView
         {...props}
         contentContainerStyle={styles.scroll}
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}>
-        <View style={styles.section}>
-          {PRIMARY.map((item) => (
-            <DrawerRow
-              key={item.key}
-              title={item.title}
-              icon={item.icon}
-              active={item.routeNames?.includes(routeName) ?? false}
-              count={item.key === 'activity' ? pendingApprovals.length : undefined}
-              accessibilityLabel={
-                item.key === 'activity' && pendingApprovals.length > 0
-                  ? `Activity, ${pendingApprovals.length} waiting for you`
-                  : item.title
-              }
-              onPress={() => go(item.href)}
-            />
-          ))}
-        </View>
+        <PrimaryNavSection
+          routeName={routeName}
+          pendingCount={pendingApprovals.length}
+          presses={presses}
+        />
 
         {/* The team block appears for the roster OR for the line that admits the
             roster could not be refreshed — a failed first read used to leave
             nothing at all on screen. */}
         {routableTeam.length > 0 || teamNote ? (
-          <View style={styles.section}>
-            <Text variant="eyebrow" color="tertiary" style={styles.sectionLabel}>
-              Your team
-            </Text>
-            {routableTeam.map((bot) => (
-              <DrawerRow
-                key={bot.id}
-                title={bot.displayName}
-                leading={<BotAvatar botId={bot.id} name={bot.displayName} size={26} />}
-                note={presence.get(bot.id) ? <PresenceNote presence={presence.get(bot.id)!} /> : undefined}
-                accessibilityLabel={`Chat with ${bot.displayName}${
-                  presence.get(bot.id) === 'needs-you'
-                    ? ', needs you'
-                    : presence.get(bot.id) === 'working'
-                      ? ', working'
-                      : ''
-                }`}
-                onPress={() => openTeammate(bot)}
-              />
-            ))}
-            {teamNote ? (
-              teamNote.retryable ? (
-                <PressableScale
-                  onPress={retryTeam}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${teamNote.message}. Tap to retry.`}
-                  style={styles.teamNote}>
-                  <Text variant="caption" color="secondary">
-                    {teamNote.message} · tap to retry
-                  </Text>
-                </PressableScale>
-              ) : (
-                <Text variant="caption" color="secondary" style={styles.teamNote}>
-                  {teamNote.message}
-                </Text>
-              )
-            ) : null}
-          </View>
+          <TeamSection
+            team={routableTeam}
+            presence={presence}
+            note={teamNote}
+            onPressBot={openTeammate}
+            onRetry={retryTeam}
+          />
         ) : null}
       </DrawerContentScrollView>
 
-      <View style={[styles.foot, { paddingBottom: insets.bottom + Spacing.three }]}>
-        <DrawerRow title={SETTINGS.title} icon={SETTINGS.icon} onPress={() => go(SETTINGS.href)} />
-        <PressableScale
-          onPress={async () => {
-            await haptics.selection();
-            go('/home');
-          }}
-          accessibilityRole="button"
-          accessibilityLabel={`Gate status: ${statusLabel(status)}. ${gateName ?? gateSubtitle}. Open Gate details.`}
-          style={[styles.gate, { backgroundColor: tokens.backgroundRaised }]}>
-          <PulsingDot
-            color={statusColor(tokens, status)}
-            active={status === 'connecting' || status === 'reconnecting'}
-          />
-          <View style={styles.gateText}>
-            <Text variant="callout" numberOfLines={1}>
-              {gateName ?? 'Gate'}
-            </Text>
-            <Text variant="caption" color="secondary" numberOfLines={1}>
-              {gateSubtitle}
-            </Text>
-          </View>
-          <Icon
-            name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
-            size={14}
-            color="textTertiary"
-          />
-        </PressableScale>
-      </View>
+      <DrawerFooter
+        status={status}
+        gateName={gateName}
+        gateSubtitle={gateSubtitle}
+        bottomInset={insets.bottom}
+        presses={presses}
+      />
     </View>
   );
 }

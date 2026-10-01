@@ -18,3 +18,23 @@ export function teamPresence(runs: readonly ActivityRun[]): ReadonlyMap<string, 
   }
   return presence;
 }
+
+/**
+ * Whether two presence maps say the same thing about the same teammates.
+ *
+ * `teamPresence` folds a NEW map on every call, so a run event that moves no
+ * Bot between "working" and "needs you" still arrives as a different object —
+ * and a surface that memoises its rows on the map cannot tell that from a real
+ * change. This is the comparison that lets it keep the copy it already has.
+ */
+export function samePresence(
+  a: ReadonlyMap<string, TeamPresence>,
+  b: ReadonlyMap<string, TeamPresence>,
+): boolean {
+  if (a === b) return true;
+  if (a.size !== b.size) return false;
+  for (const [botId, state] of a) {
+    if (b.get(botId) !== state) return false;
+  }
+  return true;
+}

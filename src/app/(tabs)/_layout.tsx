@@ -1,7 +1,14 @@
-import { Drawer } from 'expo-router/drawer';
+import { Drawer, type DrawerContentComponentProps } from 'expo-router/drawer';
 
 import { SideDrawerContent } from '@/components/nav/side-drawer-content';
 import { Palette } from '@/constants/tokens';
+
+/**
+ * The drawer's content renderer, built once at module level: a fresh function
+ * identity on every render of this layout is one more reason the navigator
+ * rebuilds a drawer that is usually closed.
+ */
+const renderDrawerContent = (props: DrawerContentComponentProps) => <SideDrawerContent {...props} />;
 
 /**
  * Navigation IA per docs/visual-direction-2026-09.md + CHARTER (LOCKED
@@ -17,7 +24,7 @@ export default function TabsLayout() {
   return (
     <Drawer
       initialRouteName="chat"
-      drawerContent={(props) => <SideDrawerContent {...props} />}
+      drawerContent={renderDrawerContent}
       screenOptions={{
         headerShown: false,
         drawerType: 'front',
