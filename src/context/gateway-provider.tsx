@@ -23,9 +23,11 @@ import {
   convertStreamError,
   finalizeStreamingMessage,
   interruptedRunIds,
+  isStoppedTurn,
   markInterrupted,
   preserveInterruptedAfterReload,
   settleInterruptedFromRuns,
+  stopStreamedTurns,
 } from '@/lib/gateway/message-reducer';
 import { createStreamBatcher } from '@/lib/gateway/stream-batching';
 import { readHistory } from '@/lib/gateway/history-read';
@@ -202,6 +204,7 @@ import { loadAppSettings, saveAppSettings, type AppSettings } from '@/lib/settin
 import {
   appendTranscript,
   clearTranscriptsForGateway,
+  flushTranscripts,
   loadTranscripts,
   updateTranscript,
 } from '@/lib/gateway/transcript';
@@ -238,6 +241,7 @@ export type ConnectionPhase =
  * Activity Start-a-run) can keep it when nothing actually ran. Only
  * `complete` means the command finished — every other outcome left the
  * draft unsent, queued, or refused, and the caller should not clear it.
+ * `cancelled` is the operator's own stop, not a refusal.
  */
 export type SendChatInputOutcome =
   | 'empty'
@@ -247,6 +251,7 @@ export type SendChatInputOutcome =
   | 'offline'
   | 'confirmation'
   | 'complete'
+  | 'cancelled'
   | 'error';
 
 type PcAddressSetupResult =
@@ -575,6 +580,14 @@ const HISTORY_PAGE_SIZE = 80;
 const DEREGISTER_TIMEOUT_MS = 3000;
 
 /**
+ * Windows at which a turn interrupted by a dropped connection is looked for on
+ * the Gate. The first is a radio that has only just dropped; the last is a Gate
+ * that was restarted under the phone. Every window re-checks first, so the
+ * ladder stops the moment the reply is home.
+ */
+const INTERRUPTED_RECOVERY_DELAYS_MS = [2_000, 8_000, 20_000];
+
+/**
  * Transcript and send state, split out of the shared gateway value so a
  * streamed frame re-renders only the chat surface that reads them instead
  * of the whole mounted tab tree.
@@ -598,6 +611,22 @@ function getDiscoveryScanner() {
 function readCommandLabel(input: string): string {
   const [command, subcommand] = input.trim().split(/\s+/, 2);
   return [command, subcommand && !subcommand.startsWith('{') ? subcommand : undefined].filter(Boolean).join(' ');
+}
+
+/**
+ * A cancelled command's failure, re-thrown as the abort it was.
+ *
+ * The transports do not name an operator's stop: a stopped chat stream is
+ * rejected as `Chat stream stopped`, an ordinary `Error`. `isUserAbort` can only
+ * see that through the signal that fired, and by the time the rejection reaches
+ * `sendChatInput` the controller is back in its place — so the cancel is named
+ * here, at the one place that still holds the signal, rather than guessed from
+ * whatever happens to be in the shared ref at the catch.
+ */
+function asCommandAbort(error: unknown): Error {
+  const aborted = new Error(error instanceof Error ? error.message : 'Command cancelled');
+  aborted.name = 'AbortError';
+  return aborted;
 }
 
 function gatewayHostForDisplay(url: string): string {
@@ -823,6 +852,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     messagesRef.current = messages;
   }, [messages]);
   const [isSending, setIsSending] = useState(false);
+  /** Mirrors `isSending` for callbacks that must read it without a re-render. */
+  const isSendingRef = useRef(false);
   const [isCommandRunning, setIsCommandRunning] = useState(false);
   // Tracks the running command's label so a second slash command can be told
   // which command it must wait for. Kept as state (not a ref) because the
@@ -1134,6 +1165,33 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   );
   const commandStartTimeRef = useRef<number>(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  /**
+   * The controllers whose owner has not unwound yet.
+   *
+   * `abortControllerRef` is one slot shared by a chat send and an agent
+   * command, so whoever displaces the incumbent has to say in its `finally`
+   * what the slot goes back to. Restoring the controller it found there is
+   * only honest while that turn is still in flight: a send that had already
+   * unwound is dead, and a dead controller left in the slot reads as "busy"
+   * to every guard that asks the slot instead of the owner — the recovery
+   * ladder above, which then stands down for the rest of the session and never
+   * reconciles the interrupted bubble. So liveness is tracked here, by the
+   * owner, rather than inferred from the slot.
+   */
+  const liveControllersRef = useRef<WeakSet<AbortController>>(new WeakSet());
+  /**
+   * The turn id the Gate minted for the send in flight. A detachable turn
+   * outlives the phone's connection, so Stop has to name it to the Gate
+   * (`cancelTurn`) — the abort below only stops what this phone is listening
+   * to. Null whenever no turn of ours is in flight.
+   */
+  const turnIdRef = useRef<string | null>(null);
+  /**
+   * Pending interrupted-turn recovery windows (see
+   * `scheduleInterruptedRecovery`). Held so a gateway switch, a new send or an
+   * unmount can cancel the ladder instead of reconciling a thread that is gone.
+   */
+  const interruptedRecoveryRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const offlineQueueRef = useRef<OfflineQueueItem[]>([]);
   const flushingOfflineRef = useRef(false);
   /**
@@ -1160,6 +1218,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       void saveActivityRuns(next);
       return next;
     });
+  }, []);
+
+  /**
+   * Write a profile to storage and adopt the roster it answers with.
+   *
+   * Every profile write outside the connect path is fire-and-forget, so a
+   * rejected write left an unhandled rejection and a change that was never
+   * saved — the picker showed a pin the next launch had forgotten, with
+   * nothing on screen saying so. The failure is named instead of swallowed.
+   */
+  const persistGateway = useCallback((next: GatewayProfile) => {
+    void upsertGateway(next)
+      .then(setGateways)
+      .catch((error) => {
+        setLastError(`Could not save gateway settings: ${error instanceof Error ? error.message : String(error)}`);
+      });
   }, []);
 
   /**
@@ -1259,7 +1333,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           input: t.input,
           title: t.title,
           raw: t.raw,
-          status: t.status === 'cancelled' ? 'error' : t.status,
+          // A cancelled command is the operator's own stop, not a refusal. The
+          // bubble vocabulary has no 'cancelled', and dressing one as a failure
+          // showed a red Failed badge and a Retry on something that worked as
+          // asked; leaving it 'running' would wedge a spinner and a Cancel
+          // button nobody can use. No badge is the honest reading — the
+          // transcript keeps the real status.
+          status: t.status === 'cancelled' ? undefined : t.status,
           ephemeral: t.ephemeral,
           durationMs: t.durationMs,
         },
@@ -1300,6 +1380,136 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (requestId === historyRequestRef.current) setHistoryLoading(false);
     }
   }, []);
+
+  /**
+   * Freeze whatever was streaming, re-read history, and settle every
+   * interrupted bubble from what the gateway now says about it.
+   *
+   * Shared by the two paths that discover a finished-but-unseen reply: the
+   * reconnect health check, and the interrupted-turn recovery ladder the send
+   * path arms when the connection drops mid-reply (the Gate keeps such a turn
+   * running, so the answer lands on the Gate while the phone has already given
+   * up on the stream).
+   */
+  const reconcileInterrupted = useCallback(
+    async (gateway: GatewayProfile) => {
+      // A turn in flight owns the message list: `reloadHistoryFor` replaces it
+      // wholesale, so reconciling on top of a live stream destroys the
+      // placeholder the deltas are still being written into, and every one of
+      // those deltas is dropped afterwards (they find no id to match). Standing
+      // down here is the same call the recovery ladder makes, kept in the
+      // helper so no caller has to remember it.
+      if (isSendingRef.current || abortControllerRef.current) return;
+      // A bubble still marked streaming belongs to a stream whose connection is
+      // gone; freeze it before the reload so it is not thrown away with the
+      // list it was in.
+      const activeRunId = activeRunIdRef.current;
+      if (activeRunId) {
+        setMessages((prev) => markInterrupted(prev, activeRunId, 'Connection lost'));
+      }
+      const previousMessages = messagesRef.current;
+      await reloadHistoryFor(gateway);
+      setMessages((history) => preserveInterruptedAfterReload(history, previousMessages));
+
+      // Settle interrupted bubbles from their own run, not just from
+      // history: a run that finished *after* the disconnect is often
+      // absent from the history page just reloaded, which left the
+      // bubble stuck as interrupted until a manual reload.
+      const streamClient = clientRef.current;
+      if (streamClient?.getRunStatus) {
+        const pending = interruptedRunIds(messagesRef.current);
+        if (pending.length > 0) {
+          const resolutions = await Promise.all(
+            pending.map(async (runId) => {
+              const result = await streamClient.getRunStatus!(runId).catch(() => null);
+              if (!result || !isTerminalRunStatus(result.status)) return null;
+              return {
+                runId,
+                text: result.result ?? result.error,
+                failed: runStatusToActivityStatus(result.status) === 'failed',
+              };
+            }),
+          );
+          const settled = resolutions.filter(
+            (item): item is NonNullable<typeof item> => item !== null,
+          );
+          if (settled.length > 0) {
+            setMessages((prev) => settleInterruptedFromRuns(prev, settled));
+          }
+        }
+      }
+
+      // Settle any runs left unresolved by the disconnect.
+      const client = clientRef.current;
+      if (client?.getRunStatus) {
+        const currentRuns = activityRunsRef.current;
+        const unresolved = currentRuns.filter((run) => run.status === 'unresolved');
+        if (unresolved.length > 0) {
+          const { runs: settled, changed } = await settleUnresolvedRuns(
+            client as unknown as RunCapableClient,
+            currentRuns,
+          );
+          if (changed.length > 0) {
+            patchActivityRuns(() => settled);
+            for (const run of changed) {
+              void notifyRunComplete(
+                run.status === 'complete' ? 'Run complete' : 'Run finished',
+                run.summary ?? run.status,
+                run.id,
+              );
+            }
+          }
+        }
+      }
+    },
+    [reloadHistoryFor, patchActivityRuns],
+  );
+
+  const clearInterruptedRecovery = useCallback(() => {
+    for (const timer of interruptedRecoveryRef.current) clearTimeout(timer);
+    interruptedRecoveryRef.current = [];
+  }, []);
+
+  /**
+   * Look for a reply the Gate finished after this phone's connection dropped.
+   *
+   * Nothing else re-reads history in that window: the reconnect health check
+   * only runs when the client itself reconnects, and a phone that was merely
+   * backgrounded (locked, radio switched) never loses `connected`. Three
+   * widening windows cover a Gate that is still coming back; each re-checks
+   * and the ladder stops as soon as no interrupted bubble is left. It stands
+   * down while a new send is in flight — that turn's own history reload is the
+   * one that matters.
+   */
+  const scheduleInterruptedRecovery = useCallback(
+    (gateway: GatewayProfile) => {
+      clearInterruptedRecovery();
+      for (const delayMs of INTERRUPTED_RECOVERY_DELAYS_MS) {
+        const timer = setTimeout(() => {
+          interruptedRecoveryRef.current = interruptedRecoveryRef.current.filter((id) => id !== timer);
+          const client = clientRef.current;
+          if (!client || client.connectionStatus !== 'connected') return;
+          if (isSendingRef.current || abortControllerRef.current) return;
+          if (!messagesRef.current.some((message) => message.interrupted)) return;
+          void reconcileInterrupted(gateway);
+        }, delayMs);
+        interruptedRecoveryRef.current.push(timer);
+      }
+    },
+    [clearInterruptedRecovery, reconcileInterrupted],
+  );
+
+  /** Whether any bubble is still waiting to be reconciled. */
+  const hasInterruptedMessage = useCallback(
+    () => messagesRef.current.some((message) => message.interrupted),
+    [],
+  );
+
+  useEffect(() => {
+    // A gateway the operator has left, or an unmounted provider, must not be
+    // reconciled by a ladder armed for the previous thread.
+    return () => clearInterruptedRecovery();
+  }, [activeGateway?.id, clearInterruptedRecovery]);
 
   const loadEarlierMessages = useCallback(async () => {
     const client = clientRef.current;
@@ -1527,7 +1737,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             };
             gateway = corrected;
             setActiveGateway(corrected);
-            void upsertGateway(corrected).then(setGateways);
+            persistGateway(corrected);
           }
         }
       }
@@ -1640,66 +1850,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             // Reconnect: freeze any still-streaming placeholder as interrupted,
             // reload history, and reconcile interrupted bubbles with authoritative
             // turns so a mid-stream disconnect does not leave a ghost message.
-            const activeRunId = activeRunIdRef.current;
-            if (activeRunId) {
-              setMessages((prev) => markInterrupted(prev, activeRunId, 'Connection lost'));
-            }
-            const previousMessages = messagesRef.current;
-            void (async () => {
-              await reloadHistoryFor(gateway);
-              setMessages((history) => preserveInterruptedAfterReload(history, previousMessages));
-
-              // Settle interrupted bubbles from their own run, not just from
-              // history: a run that finished *after* the disconnect is often
-              // absent from the history page just reloaded, which left the
-              // bubble stuck as interrupted until a manual reload.
-              const streamClient = clientRef.current;
-              if (streamClient?.getRunStatus) {
-                const pending = interruptedRunIds(messagesRef.current);
-                if (pending.length > 0) {
-                  const resolutions = await Promise.all(
-                    pending.map(async (runId) => {
-                      const result = await streamClient.getRunStatus!(runId).catch(() => null);
-                      if (!result || !isTerminalRunStatus(result.status)) return null;
-                      return {
-                        runId,
-                        text: result.result ?? result.error,
-                        failed: runStatusToActivityStatus(result.status) === 'failed',
-                      };
-                    }),
-                  );
-                  const settled = resolutions.filter(
-                    (item): item is NonNullable<typeof item> => item !== null,
-                  );
-                  if (settled.length > 0) {
-                    setMessages((prev) => settleInterruptedFromRuns(prev, settled));
-                  }
-                }
-              }
-
-              // Settle any runs left unresolved by the disconnect.
-              const client = clientRef.current;
-              if (client?.getRunStatus) {
-                const currentRuns = activityRunsRef.current;
-                const unresolved = currentRuns.filter((run) => run.status === 'unresolved');
-                if (unresolved.length > 0) {
-                  const { runs: settled, changed } = await settleUnresolvedRuns(
-                    client as unknown as RunCapableClient,
-                    currentRuns,
-                  );
-                  if (changed.length > 0) {
-                    patchActivityRuns(() => settled);
-                    for (const run of changed) {
-                      void notifyRunComplete(
-                        run.status === 'complete' ? 'Run complete' : 'Run finished',
-                        run.summary ?? run.status,
-                        run.id,
-                      );
-                    }
-                  }
-                }
-              }
-            })();
+            void reconcileInterrupted(gateway);
           },
           onError: (message) => {
             if (isCurrent()) setLastError(message);
@@ -1719,7 +1870,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         };
         gateway = updated;
         setActiveGateway(updated);
-        void upsertGateway(updated).then(setGateways);
+        persistGateway(updated);
       } else if (tofu.kind === 'changed') {
         updateTlsFingerprintChange({
           gateway,
@@ -1761,7 +1912,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           if (first && isCurrent()) {
             const withModel = { ...gateway, model: first };
             setActiveGateway(withModel);
-            void upsertGateway(withModel).then(setGateways);
+            persistGateway(withModel);
           }
         } catch {
           // optional
@@ -1814,7 +1965,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // patchActivityRuns is a useCallback with [] deps, so its identity is stable
     // for the provider's lifetime; listing it satisfies exhaustive-deps without
     // changing when this callback is rebuilt.
-    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns, teardownRetiredActiveGateway, resetSessionSelector, updateTlsFingerprintChange],
+    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns, persistGateway, reconcileInterrupted, teardownRetiredActiveGateway, resetSessionSelector, updateTlsFingerprintChange],
   );
 
   useEffect(() => {
@@ -2207,6 +2358,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     (backendId: string | undefined) => {
       ++botOpenRequestRef.current;
       resetSessionSelector();
+      // The ladder reloads a thread; this switch has left that thread for
+      // another one, so nothing it still holds belongs on screen.
+      clearInterruptedRecovery();
       const client = clientRef.current as (PortalClient & { setBackendId?: (id: string | undefined) => void }) | null;
       client?.setBackendId?.(backendId);
       client?.setBotId?.(undefined);
@@ -2233,11 +2387,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           ...(restored && restored !== activeGateway.model ? { model: restored } : {}),
         };
         setActiveGateway(updated);
-        void upsertGateway(updated).then(setGateways);
+        persistGateway(updated);
         void reloadHistoryFor(updated);
       }
     },
-    [activeGateway, reloadHistoryFor, resetSessionSelector],
+    [activeGateway, clearInterruptedRecovery, persistGateway, reloadHistoryFor, resetSessionSelector],
   );
 
   /**
@@ -2279,7 +2433,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (gateway && gateway.backendId !== resolved) {
           const updated = { ...gateway, backendId: resolved };
           setActiveGateway(updated);
-          void upsertGateway(updated).then(setGateways);
+          persistGateway(updated);
         }
 
         // The connect path already loaded history, but it did so before this
@@ -2314,7 +2468,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       });
     }, 0);
     return () => clearTimeout(timer);
-  }, [backends, gatewayRequest, reloadHistoryFor, selectedBackendId, status, resetSessionSelector]);
+  }, [backends, gatewayRequest, persistGateway, reloadHistoryFor, selectedBackendId, status, resetSessionSelector]);
 
 
   const runAgentCommand = useCallback(
@@ -2333,21 +2487,53 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const runId = createMessageId('cmd');
       activeRunIdRef.current = runId;
 
-      let fullText = '';
-      const messages = [{ role: 'user', content: trimmed }];
-      await client.streamChat(
-        messages,
-        (delta) => {
-          fullText += delta;
-          options?.onDelta?.(delta);
-        },
-        {
-          sessionId: sessionIdRef.current,
-          ...resolveSendModel(gateway, selectedBackendId, selectedBotId),
-          providerId: selectedBotId ? undefined : gateway.providerId,
-        },
-      );
-      return fullText;
+      // Cancelling a command has to reach the work: `cancelCommand` aborts
+      // this ref, and a stream started without a signal could not be stopped
+      // by it — the transcript said "cancelled" while the gateway kept working.
+      const abortController = new AbortController();
+      const previousController = abortControllerRef.current;
+      abortControllerRef.current = abortController;
+      liveControllersRef.current.add(abortController);
+
+      try {
+        let fullText = '';
+        const messages = [{ role: 'user', content: trimmed }];
+        await client.streamChat(
+          messages,
+          (delta) => {
+            fullText += delta;
+            options?.onDelta?.(delta);
+          },
+          {
+            sessionId: sessionIdRef.current,
+            ...resolveSendModel(gateway, selectedBackendId, selectedBotId),
+            providerId: selectedBotId ? undefined : gateway.providerId,
+            signal: abortController.signal,
+          },
+        );
+        return fullText;
+      } catch (error) {
+        // Cancelling is not a failure: re-throw it named, so the caller can
+        // present the operator's stop as one (see `asCommandAbort`).
+        if (isUserAbort(error, abortController.signal)) throw asCommandAbort(error);
+        throw error;
+      } finally {
+        // Whatever still held the ref before this command owns it again — but
+        // only while it is still ours, and only while that owner is still in
+        // flight: a chat send that started meanwhile put its own controller
+        // there (restoring over it would leave that turn unstoppable), and one
+        // that had already unwound is dead, so the slot goes back to empty
+        // rather than to a controller nothing can cancel. The run id is dropped
+        // on the same terms.
+        liveControllersRef.current.delete(abortController);
+        if (abortControllerRef.current === abortController) {
+          abortControllerRef.current =
+            previousController && liveControllersRef.current.has(previousController)
+              ? previousController
+              : null;
+        }
+        if (activeRunIdRef.current === runId) activeRunIdRef.current = null;
+      }
     },
     [activeGateway, status, selectedBackendId, selectedBotId],
   );
@@ -2586,10 +2772,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         setMessages((prev) => addUserMessage(prev, trimmed, undefined, files));
       }
       setIsSending(true);
+      isSendingRef.current = true;
       setLastError(null);
+      // This send's own history read is the one that matters now: an armed
+      // recovery ladder would reload underneath it.
+      clearInterruptedRecovery();
 
       const runId = createMessageId('run');
       activeRunIdRef.current = runId;
+      turnIdRef.current = null;
+      // The turn id this send is the owner of, so its `finally` can leave a
+      // later send's id alone.
+      let ownTurnId: string | null = null;
 
       // Add streaming placeholder
       setMessages((prev) => addStreamingPlaceholder(prev, runId));
@@ -2598,6 +2792,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // whether this failure was the user cancelling.
       const abortController = new AbortController();
       abortControllerRef.current = abortController;
+      liveControllersRef.current.add(abortController);
 
       // Coalesce per-chunk `setMessages` to at most one per frame.
       // Before: each SSE `data:` line triggered its own state write and FlatList pass.
@@ -2674,6 +2869,33 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
                 setMessages((prev) => appendSystemNote(prev, note));
               }
             },
+            // The turn's own id, so Stop can name it to the Gate: a detached
+            // turn keeps running after this phone stops listening.
+            onTurnId: (turnId) => {
+              ownTurnId = turnId;
+              turnIdRef.current = turnId;
+            },
+            onSession: (sessionId) => {
+              // A turn sent without a session makes the Gate create one. Not
+              // adopting its id left the phone holding no thread: the next turn
+              // created another, and this one was only reachable by history.
+              if (sessionIdRef.current) return;
+              sessionIdRef.current = sessionId;
+              setCurrentSessionId(sessionId);
+              // Pinning the client is not enough: connect copies stored onto
+              // live before disconnect can rewrite it. Same persist as
+              // createNewSession.
+              const pinned = pinLiveSession({
+                client,
+                sessionId,
+                profile: activeGatewayRef.current ?? undefined,
+              });
+              if (pinned && pinned !== activeGatewayRef.current) {
+                activeGatewayRef.current = pinned;
+                setActiveGateway(pinned);
+                persistGateway(pinned);
+              }
+            },
           },
         );
 
@@ -2692,13 +2914,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             ? modelLockFor(activeGatewayRef.current?.modelLocks, sentModel)
             : undefined;
           if (held) {
+            // Built on the profile as it is NOW: a turn can run for minutes,
+            // and a pin or session the operator changed meanwhile must not be
+            // reverted by this write.
             const next = {
-              ...gateway,
+              ...(activeGatewayRef.current ?? gateway),
               modelLocks: clearModelLockFn(activeGatewayRef.current?.modelLocks, sentModel!),
             };
             activeGatewayRef.current = next;
             setActiveGateway(next);
-            void upsertGateway(next).then(setGateways);
+            persistGateway(next);
           }
         }
         // Bot-to-bot handoff after a successful reply: deliver @mentions of
@@ -2745,20 +2970,34 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             { model: sentModel, profileId: gateway.id },
           );
           if (updated !== activeGatewayRef.current?.modelLocks) {
-            const next = { ...gateway, modelLocks: updated };
+            // The same live base as the arm above: the profile this turn
+            // started with is older than the operator's own edits.
+            const next = { ...(activeGatewayRef.current ?? gateway), modelLocks: updated };
             activeGatewayRef.current = next;
             setActiveGateway(next);
-            void upsertGateway(next).then(setGateways);
+            persistGateway(next);
           }
         }
         const aborted = isUserAbort(error, abortController.signal);
         if (aborted) {
           batcher.cancel();
-          setMessages((prev) => convertStreamError(prev, runId, message, true));
+          setMessages((prev) =>
+            // Stop already settled this bubble and kept the text it had. The
+            // removal an aborted turn gets must not run over the top of it —
+            // and the bubble itself is the record, so a send starting in the
+            // meantime cannot change the answer.
+            prev.some((bubble) => bubble.id === `run-${runId}` && isStoppedTurn(bubble))
+              ? prev
+              : convertStreamError(prev, runId, message, true),
+          );
         } else if (isConnectionError(error)) {
           batcher.flush();
           setMessages((prev) => markInterrupted(prev, runId, message));
           setLastError(message);
+          // The Gate keeps a turn running once this phone stops listening, so
+          // the answer may well land there without the phone ever seeing it
+          // stream. Look for it on the recovery ladder.
+          scheduleInterruptedRecovery(gateway);
         } else {
           // Desktop-parity failure state: when the Gate names the host state
           // (multiplex off, refused key, dead environment, spent budget), the
@@ -2771,11 +3010,31 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         }
       } finally {
         setIsSending(false);
+        isSendingRef.current = false;
         activeRunIdRef.current = null;
-        abortControllerRef.current = null;
+        // Only this send's own controller: an agent command parks its controller
+        // in the same slot, and clearing it here would leave that command's
+        // Cancel doing nothing. Dropping out of the live set is what lets that
+        // command put the slot back to empty instead of to this dead one.
+        liveControllersRef.current.delete(abortController);
+        if (abortControllerRef.current === abortController) {
+          abortControllerRef.current = null;
+        }
+        // The turn id on the same terms: a second send in the same tick has its
+        // own id in the slot, and clearing it here would leave Stop unable to
+        // cancel that turn on the Gate.
+        if (ownTurnId && turnIdRef.current === ownTurnId) turnIdRef.current = null;
       }
     },
-    [activeGateway, isSending, selectedBackendId, selectedBotId],
+    [
+      activeGateway,
+      clearInterruptedRecovery,
+      isSending,
+      persistGateway,
+      scheduleInterruptedRecovery,
+      selectedBackendId,
+      selectedBotId,
+    ],
   );
 
   /**
@@ -2789,12 +3048,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (!gateway || !modelId.trim()) return;
       const updated = clearModelLockFn(activeGatewayRef.current?.modelLocks, modelId.trim());
       if (updated === activeGatewayRef.current?.modelLocks) return;
-      const next = { ...gateway, modelLocks: updated };
+      const next = { ...(activeGatewayRef.current ?? gateway), modelLocks: updated };
       activeGatewayRef.current = next;
       setActiveGateway(next);
-      void upsertGateway(next).then(setGateways);
+      persistGateway(next);
     },
-    [activeGateway],
+    [activeGateway, persistGateway],
   );
 
   const resolveRunApproval = useCallback((approved: boolean, feedback?: string) => {
@@ -3045,11 +3304,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // later in the drive (trackedId is the real id by then), which
         // stranded the same ghost for the same reason.
         const message = error instanceof Error ? error.message : String(error);
+        const aborted = isUserAbort(error, abortController.signal);
         patchRun(trackedId.current, {
-          status: 'failed',
+          // A run the operator stopped is cancelled, not failed — same
+          // distinction the transcript and the chat bubble make.
+          status: aborted ? 'cancelled' : 'failed',
           summary: message.slice(0, 160) || undefined,
           finishedAt: Date.now(),
         });
+        if (aborted) throw asCommandAbort(error);
         throw error;
       } finally {
         runAbortControllerRef.current = null;
@@ -3394,6 +3657,23 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         return 'complete';
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        // Cancelling is not a failure. The operator pressed Cancel, so there is
+        // nothing to report: no banner, no red Failed badge, and — the part
+        // that used to be lost — no transcript status, so the 'cancelled' one
+        // `cancelCommand` recorded is the record that stands. A status is the
+        // only thing here that reaches the transcript, which is why the bubble's
+        // is cleared rather than patched to another value.
+        if (isUserAbort(error)) {
+          // Whatever the command streamed is the operator's to keep; only the
+          // untouched placeholder would still read as work in flight.
+          const placeholder = `Running ${commandLabel}...`;
+          const bubble = messagesRef.current.find((item) => item.id === commandMessageId);
+          updateLocalMessage(commandMessageId, {
+            ...(bubble?.text === placeholder ? { text: `Cancelled: ${commandLabel}` } : {}),
+            command: { input: trimmed, title: commandLabel, status: undefined, ephemeral: true },
+          });
+          return 'cancelled';
+        }
         setLastError(message);
         updateLocalMessage(commandMessageId, {
           text: `Command failed: ${message}`,
@@ -3543,7 +3823,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const stopStreaming = useCallback(async () => {
     setIsSending(false);
+    isSendingRef.current = false;
+    // Nothing of ours is in flight on the Gate any more, so a later reconcile
+    // must not freeze a bubble Stop is about to settle.
     activeRunIdRef.current = null;
+
+    // A detachable turn keeps running on the Gate once the phone stops
+    // listening, so aborting the local fetch no longer stops the work: the
+    // turn is cancelled server-side first. Fire-and-forget — an older Gate has
+    // no cancel route and must not turn Stop into an error.
+    const turnId = turnIdRef.current;
+    if (turnId) void clientRef.current?.cancelTurn?.(turnId)?.catch?.(() => undefined);
 
     // Abort the fetch controller — this stops the local stream; the adapter
     // (OpenClaw) additionally issues session.abort via the signal listener.
@@ -3551,8 +3841,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // Abort an in-flight agentic run (denies any pending approval).
     abortAndClear(runAbortControllerRef);
 
-    // Remove streaming placeholders
-    setMessages((prev) => prev.filter((m) => !m.streaming));
+    // Keep the reply that was already on screen, finalized and marked stopped;
+    // only a turn that streamed nothing at all leaves nothing behind. EVERY
+    // placeholder is settled, the way the old filter removed every streaming
+    // message — naming one run left any other orb wedged forever.
+    setMessages((prev) => stopStreamedTurns(prev));
   }, []);
 
   const reloadHistory = useCallback(async () => {
@@ -3790,6 +4083,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // rather than the state being left.
       setAppInForeground(state === 'active');
       if (state !== 'active') {
+        // Transcript writes are write-behind, and the process can be killed the
+        // moment the app leaves the foreground. Flush what is owed now; a store
+        // that refuses is reported by the transcript store itself, never here.
+        void flushTranscripts().catch(() => undefined);
         clientRef.current?.suspendReconnect();
         if (autoRetryTimerRef.current) {
           clearTimeout(autoRetryTimerRef.current);
@@ -3834,12 +4131,29 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       void client
         .healthCheck(6000)
         .then((health) => {
-          if (!health) healLiveClient();
+          if (!health) {
+            healLiveClient();
+            return;
+          }
+          // The locked-phone return: a turn the Gate finished while the app was
+          // away left an interrupted bubble behind, and a client that never
+          // lost `connected` fires no health-check branch to settle it. One
+          // reconcile on the way back in is what surfaces the reply.
+          const gateway = activeGatewayRef.current;
+          if (gateway && hasInterruptedMessage()) {
+            // The ladder's guard, in the arm that needed it too: a turn streaming
+            // right now would lose its placeholder to the reload. An interrupted
+            // bubble outlives the session (a Gate that never persisted it is
+            // re-added on every reload), so without this every foreground
+            // return would repaint the thread under a live turn.
+            if (isSendingRef.current || abortControllerRef.current) return;
+            void reconcileInterrupted(gateway);
+          }
         })
         .catch(() => healLiveClient());
     });
     return () => subscription.remove();
-  }, [reconnectLastKnownGateway, reportAutoConnectFailure]);
+  }, [reconnectLastKnownGateway, reportAutoConnectFailure, hasInterruptedMessage, reconcileInterrupted]);
 
   const setAutoConnect = useCallback(async (enabled: boolean) => {
     if (enabled) {
@@ -4037,13 +4351,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (next !== activeGateway) {
         activeGatewayRef.current = next;
       }
-      void upsertGateway(next).then(setGateways);
+      persistGateway(next);
     },
-    [activeGateway, closeModelPicker, sendChatInput, selectedBackendId, selectedBotId],
+    [activeGateway, closeModelPicker, persistGateway, sendChatInput, selectedBackendId, selectedBotId],
   );
 
   const selectSession = useCallback(async (sessionId: string) => {
     closeSessionSelector();
+    // The ladder reloads the thread its interrupted turn belonged to; a switch
+    // away from it leaves that thread behind, so nothing it still holds is
+    // wanted here.
+    clearInterruptedRecovery();
     const client = clientRef.current;
     // The slash path reads `session.restore` and switches only after it
     // resolves; the tap used to pin first and fail at the history read
@@ -4072,13 +4390,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     if (pinned && pinned !== activeGateway) {
       activeGatewayRef.current = pinned;
       setActiveGateway(pinned);
-      void upsertGateway(pinned).then(setGateways);
+      persistGateway(pinned);
     }
     const gateway = pinned ?? activeGateway;
     if (gateway) {
       void reloadHistoryFor(gateway);
     }
-  }, [closeSessionSelector, activeGateway, reloadHistoryFor]);
+  }, [clearInterruptedRecovery, closeSessionSelector, activeGateway, persistGateway, reloadHistoryFor]);
 
   useEffect(() => {
     selectSessionRef.current = selectSession;
@@ -4431,6 +4749,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const openBot = useCallback(async (botId: string): Promise<boolean> => {
     const requestId = ++botOpenRequestRef.current;
+    // A Bot Chat is a different thread: the ladder's interrupted turn belongs
+    // to the one being left, so its windows are dropped here.
+    clearInterruptedRecovery();
     const client = clientRef.current;
     const isCurrent = () =>
       requestId === botOpenRequestRef.current && clientRef.current === client;
@@ -4471,7 +4792,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (pinned && pinned !== activeGateway) {
         activeGatewayRef.current = pinned;
         setActiveGateway(pinned);
-        void upsertGateway(pinned).then(setGateways);
+        persistGateway(pinned);
       }
       if (activeGateway) void reloadHistoryFor(activeGateway);
       // A Bot's pin is only checkable once the Bot is selected: its catalogue is
@@ -4496,7 +4817,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLastError(error instanceof Error ? error.message : String(error));
       throw error;
     }
-  }, [activeGateway, reloadHistoryFor, resetSessionSelector]);
+  }, [activeGateway, clearInterruptedRecovery, persistGateway, reloadHistoryFor, resetSessionSelector]);
 
   useEffect(() => {
     repairStalePinRef.current = async (client, isCurrent, fallbackGateway) => {
@@ -4549,7 +4870,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         const next = pinnedProfile ?? updated;
         activeGatewayRef.current = next;
         setActiveGateway(next);
-        void upsertGateway(next).then(setGateways);
+        persistGateway(next);
         setMessages((prev) => appendSystemNote(prev, stalePinNote(stale)));
         return;
       }
@@ -4577,7 +4898,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const next = pinnedProfile ?? updated;
       activeGatewayRef.current = next;
       setActiveGateway(next);
-      void upsertGateway(next).then(setGateways);
+      persistGateway(next);
       setMessages((prev) => appendSystemNote(prev, stalePinNote(stale)));
     };
   });
@@ -4742,6 +5063,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const createNewSession = useCallback(async (title?: string) => {
     const client = clientRef.current;
     if (!client?.createSession) return;
+    // The thread is being replaced under the ladder's feet; its windows reload
+    // the thread that was just left.
+    clearInterruptedRecovery();
     try {
       // Pin the operator's model as the session is opened. A Hermes session's
       // model cannot be changed afterwards, so a session created bare is
@@ -4768,13 +5092,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (pinned && pinned !== activeGateway) {
         activeGatewayRef.current = pinned;
         setActiveGateway(pinned);
-        void upsertGateway(pinned).then(setGateways);
+        persistGateway(pinned);
       }
     } catch (error) {
       setLastError(error instanceof Error ? error.message : String(error));
     }
     closeSessionSelector();
-  }, [activeGateway, closeSessionSelector, selectedBackendId, selectedBotId]);
+  }, [activeGateway, clearInterruptedRecovery, closeSessionSelector, persistGateway, selectedBackendId, selectedBotId]);
   useEffect(() => {
     createNewSessionRef.current = createNewSession;
   }, [createNewSession]);

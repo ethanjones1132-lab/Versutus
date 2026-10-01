@@ -31,7 +31,9 @@ describe('selectModel writes the announcement onto the fresh transcript', () => 
     const src = nodeFs
       .readFileSync([__dirname, '..', 'src', 'context', 'gateway-provider.tsx'].join(SEP), 'utf8')
       .replace(/\r\n/g, '\n');
-    const select = src.match(/const selectModel = useCallback\([\s\S]*?\[activeGateway, closeModelPicker, sendChatInput, selectedBackendId, selectedBotId\],\n  \);/)?.[0];
+    // The block runs to the useCallback's own close, so its dependency list may
+    // name whatever else the callback has come to read.
+    const select = src.match(/const selectModel = useCallback\([\s\S]*?\n  \);/)?.[0];
     expect(select).toBeDefined();
     expect(select).toMatch(/appendSystemNote/);
     expect(select).toMatch(/modelSwitchAnnouncement/);

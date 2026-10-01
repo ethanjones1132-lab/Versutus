@@ -36,8 +36,12 @@ describe('the lock is recorded on the send-failure path', () => {
 
   test('the lock persists through the same upsert the picker writes do', () => {
     // Inside the record arm, the next profile carries modelLocks and is
-    // persisted like every other profile write.
-    expect(provider).toMatch(/const next = \{ \.\.\.gateway, modelLocks: updated \};[\s\S]{0,400}?upsertGateway\(next\)/);
+    // persisted like every other profile write. The base is the LIVE profile,
+    // not the one this turn started with: a turn can run for minutes, and a
+    // model the operator re-pinned meanwhile must survive this write.
+    expect(provider).toMatch(
+      /const next = \{ \.\.\.\(activeGatewayRef\.current \?\? gateway\), modelLocks: updated \};\s*activeGatewayRef\.current = next;\s*setActiveGateway\(next\);\s*persistGateway\(next\)/,
+    );
   });
 });
 

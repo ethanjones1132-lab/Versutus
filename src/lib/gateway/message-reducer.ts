@@ -52,7 +52,11 @@ export function appendStreamDelta(
   const idx = findStreamingIndex(messages, runId);
   if (idx < 0) return [...messages];
   const copy = [...messages];
-  copy[idx] = { ...copy[idx], text: copy[idx].text + delta, streaming: true };
+  // The transport keeps delivering for a tick after the abort lands, and a
+  // delta that arrives after Stop settled the bubble must not put its orb back:
+  // the turn is over as far as this thread is concerned, and `stopped` is the
+  // only record of that once the streaming flag is gone.
+  copy[idx] = { ...copy[idx], text: copy[idx].text + delta, streaming: !isStoppedTurn(copy[idx]) };
   return copy;
 }
 
@@ -66,7 +70,7 @@ export function appendReasoningDelta(
   if (idx < 0) return [...messages];
   const copy = [...messages];
   const prev = copy[idx].reasoning ?? '';
-  copy[idx] = { ...copy[idx], reasoning: prev + delta, streaming: true };
+  copy[idx] = { ...copy[idx], reasoning: prev + delta, streaming: !isStoppedTurn(copy[idx]) };
   return copy;
 }
 
@@ -87,7 +91,7 @@ export function appendToolCallDelta(
     match >= 0
       ? existing.map((item, i) => (i === match ? { ...item, ...toolCall } : item))
       : [...existing, toolCall];
-  copy[idx] = { ...copy[idx], toolCalls: nextTools, streaming: true };
+  copy[idx] = { ...copy[idx], toolCalls: nextTools, streaming: !isStoppedTurn(copy[idx]) };
   return copy;
 }
 
@@ -150,6 +154,69 @@ export function markInterrupted(messages: readonly ChatMessage[], runId: string,
   const copy = [...messages];
   copy[idx] = { ...copy[idx], streaming: false, interrupted: true, interruptedReason: reason?.trim() || undefined };
   return copy;
+}
+
+/**
+ * The marker a bubble the operator stopped with Stop carries.
+ *
+ * Deliberately not `interrupted`: an interruption is a turn whose connection
+ * died and whose outcome the gateway may still be holding, and every reader of
+ * that flag treats it as work still outstanding — the foreground reconcile, the
+ * recovery ladder, and the per-run `getRunStatus` poll. A Stop is the operator's
+ * own decision with nothing left to fetch, so dressing it as an interruption
+ * bought one wasted history reload per deliberate stop.
+ *
+ * `ChatMessage` has no field for this and `types.ts` is outside this package's
+ * allowed files, so the marker rides as an extra property and `isStoppedTurn`
+ * is how anything reads it.
+ */
+export type StoppedTurnMarker = { stopped?: boolean; stoppedReason?: string };
+
+/** Whether the operator stopped this turn themselves (see `stopStreamedTurns`). */
+export function isStoppedTurn(message: ChatMessage): boolean {
+  return (message as StoppedTurnMarker).stopped === true;
+}
+
+/**
+ * Settle every in-flight bubble for the turns the operator stopped with Stop.
+ *
+ * Stopping is not failing: whatever already streamed is text the operator can
+ * read, and throwing it away left an empty thread where an answer had been
+ * half-written. A kept bubble is finalized — never left streaming, its running
+ * tool cards promoted the way a finished turn promotes them — and carries the
+ * stopped marker rather than `interrupted`.
+ *
+ * A turn that streamed nothing has nothing worth keeping and is removed,
+ * exactly as an aborted turn always was. Every placeholder is settled, the way
+ * the old filter removed every streaming message: naming one run left any other
+ * orb wedged forever.
+ */
+export function stopStreamedTurns(
+  messages: readonly ChatMessage[],
+  reason = 'Stopped',
+): ChatMessage[] {
+  if (!messages.some((message) => message.streaming)) return [...messages];
+  const trimmed = reason.trim() || undefined;
+  const settled: ChatMessage[] = [];
+  for (const message of messages) {
+    if (!message.streaming) {
+      settled.push(message);
+      continue;
+    }
+    if (!message.text.trim()) continue;
+    const tools = message.toolCalls?.map((tool) =>
+      tool.status === 'running' ? { ...tool, status: 'complete' as const } : tool,
+    );
+    const kept: ChatMessage & StoppedTurnMarker = {
+      ...message,
+      streaming: false,
+      stopped: true,
+      stoppedReason: trimmed,
+      toolCalls: tools,
+    };
+    settled.push(kept);
+  }
+  return settled;
 }
 
 /**

@@ -67,14 +67,20 @@ describe('restored unresolved runs settle on first connect', () => {
     );
     const firstConnectGuard = healthCheckBlock.indexOf('firstConnect');
     expect(firstConnectGuard).toBeGreaterThan(-1);
-    // The firstConnect path should return early without calling settleUnresolvedRuns
     const firstConnectBlock = healthCheckBlock.slice(firstConnectGuard);
     const earlyReturn = firstConnectBlock.indexOf('return;');
     expect(earlyReturn).toBeGreaterThan(-1);
-    const settleCall = firstConnectBlock.indexOf('settleUnresolvedRuns');
-    // settleUnresolvedRuns should only appear after the firstConnect early return
-    // (in the reconnect section), not in the firstConnect block itself
+    // Nothing settles before that early return.
+    expect(firstConnectBlock.slice(0, earlyReturn)).not.toContain('reconcileInterrupted');
+    // The reconnect arm hands the settle to the shared helper — the one the
+    // interrupted-turn recovery ladder and the foreground return call too.
     const reconnectSection = firstConnectBlock.slice(earlyReturn);
-    expect(reconnectSection).toContain('settleUnresolvedRuns');
+    expect(reconnectSection).toContain('reconcileInterrupted');
+    const helper = provider.slice(
+      provider.indexOf('const reconcileInterrupted = useCallback'),
+      provider.indexOf('const clearInterruptedRecovery'),
+    );
+    expect(helper).toContain('settleUnresolvedRuns');
+    expect(helper).toContain('activityRunsRef.current');
   });
 });

@@ -56,11 +56,11 @@ describe('chat surface context split', () => {
 
   test('sendMessage reads the latest transcript through a ref so its identity does not churn per streamed frame', () => {
     // sendMessage feeds sendChatInput, which is in the outer memo deps — if
-    // its identity churned with `messages`, the split would be pointless.
+    // its identity churned with `messages`, the split would be pointless. The
+    // block runs to the useCallback's own close, so its dependency list may
+    // name whatever else the callback has come to read.
     const src = readProviderSource();
-    const send = src.match(
-      /const sendMessage = useCallback\([\s\S]*?\[activeGateway, isSending, selectedBackendId, selectedBotId\],\n  \);/,
-    )?.[0];
+    const send = src.match(/const sendMessage = useCallback\([\s\S]*?\n  \);/)?.[0];
     expect(send).toBeDefined();
     expect(send).toMatch(/messagesRef\.current/);
     expect(send).not.toMatch(/\bmessages\b/);
