@@ -106,14 +106,32 @@ export async function loadAppLock(): Promise<boolean> {
   }
 }
 
+const listeners = new Set<() => void>();
+
+/**
+ * Subscribe to opt-in changes; returns the unsubscribe. The lock gate lives for
+ * the whole process, so without a channel a switch written from Settings could
+ * not reach it and the switch would only take effect at the next cold start.
+ */
+export function subscribeAppLock(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
 /**
  * Store this device's opt-in. Written as a JSON boolean rather than a delete
  * on the way off, so the stored shape never depends on which value came last.
+ * Subscribers are notified on the way out whatever the write did, so the gate
+ * re-reads the flag itself rather than trusting the value handed to the switch.
  */
 export async function saveAppLock(enabled: boolean): Promise<void> {
   try {
     await keyValueStorage.setItem(APP_LOCK_STORAGE_KEY, JSON.stringify(appLockFromStored(enabled)));
   } catch {
     // best-effort: a failed write means the lock is off, never a lockout.
+  } finally {
+    for (const listener of listeners) listener();
   }
 }

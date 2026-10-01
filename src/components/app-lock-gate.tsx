@@ -49,6 +49,7 @@ import {
   APP_LOCK_COVER_TITLE,
   APP_LOCK_UNLOCK_LABEL,
   heldRouteHref,
+  subscribeAppLock,
 } from '@/lib/settings/app-lock';
 import { deviceAppLockState } from '@/lib/settings/app-lock-device';
 
@@ -76,8 +77,9 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
   // the read can settle, and that window is where a cold-start link's push
   // lands.
   const [phase, setPhase] = useState<LockPhase>('pending');
-  // The read settles once; the background listener below needs the answer
-  // without re-asking the device on every app-state change.
+  // The device's answer, and the background listener below's only source of
+  // truth: the verdict is refreshed on every write to the opt-in rather than
+  // read once, so the switch in Settings takes effect without a cold start.
   const lockableRef = useRef(false);
   // The route this gate last accounted for. A route that differs from it is
   // one that arrived since the gate last had an answer, which is the one to
@@ -93,31 +95,61 @@ export function AppLockGate({ children }: { children: React.ReactNode }) {
   // — nor may it be lost to the renders the dismissal itself causes.
   const heldRouteRef = useRef<string | null>(null);
 
+  // The one place this device is asked whether the lock holds. A verdict that
+  // cannot be read keeps the previous one: a storage read that throws must
+  // never read as "not locked" on the next background edge, and must never
+  // seal a device out of its own gateways either.
+  const readLockable = useCallback(async (): Promise<boolean> => {
+    try {
+      const state = await deviceAppLockState();
+      const lockable = state.enabled && state.reason === null;
+      lockableRef.current = lockable;
+      return lockable;
+    } catch {
+      return lockableRef.current;
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const state = await deviceAppLockState();
+      const lockable = await readLockable();
       if (cancelled) return;
-      const lockable = state.enabled && state.reason === null;
-      lockableRef.current = lockable;
       setPhase(lockable ? 'locked' : 'open');
     })();
+    // Settings is the only writer, and it writes from another screen, so the
+    // gate takes the notification rather than waiting for a cold start. The
+    // refresh deliberately does NOT settle the phase: the operator who just
+    // turned the lock on is in Settings with work in hand, and the cover goes
+    // up on the next background edge — which is the edge that already exists
+    // for exactly this.
+    const unsubscribe = subscribeAppLock(() => {
+      void readLockable();
+    });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
-  }, []);
+  }, [readLockable]);
 
   // Leaving the app locks it again: a cover that only appeared at launch would
   // leave the app readable in the switcher. 'background' and not 'inactive': a
   // system prompt over the app reports 'inactive', and relocking on that risks
   // dropping a second cover the moment the operator unlocks, so the gate takes
-  // the one edge that only a real leave produces.
+  // the one edge that only a real leave produces. Coming back is the other
+  // cheap place to refresh the verdict: the flag can have changed while the app
+  // was away, and a cover already drawn is never lifted by this — only the
+  // operator's unlock is.
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'background' && lockableRef.current) setPhase('locked');
+      if (state === 'background') {
+        if (lockableRef.current) setPhase('locked');
+        return;
+      }
+      if (state === 'active') void readLockable();
     });
     return () => subscription.remove();
-  }, []);
+  }, [readLockable]);
 
   // The lock, and only the lock, brings the presented routes down: the lock
   // edge, and any route that arrives while it is up. Being a Modal puts the

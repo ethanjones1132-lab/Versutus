@@ -1,7 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { Link, useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 
 import { DeviceIdRow } from '@/components/device-id-row';
@@ -48,6 +48,7 @@ import {
   loadApprovalAudit,
   type ApprovalAuditEntry,
 } from '@/lib/gateway/approval-policy';
+import { isAuthRejection, isDeviceIdentityError } from '@/lib/gateway/errors';
 import type { VoiceEngineCapabilities, VoiceEnginePreference } from '@/lib/voice/voice-engine-choice';
 import {
   GROK_DISABLED_REASON,
@@ -56,6 +57,17 @@ import {
   voiceEngineReadinessCopy,
   voiceUsageCopy,
 } from '@/lib/voice/voice-engine-copy';
+
+/**
+ * The install watch's wait, and the cap its backoff grows to. A 2 GB download on
+ * a relayed path does not report progress every two seconds, and polling a Gate
+ * that busy for thirty minutes is the phone's work, not the operator's.
+ */
+const INSTALL_POLL_FIRST_DELAY_MS = 2_000;
+const INSTALL_POLL_MAX_DELAY_MS = 10_000;
+
+/** How long the phone keeps watching before it hands the wait back. */
+const INSTALL_POLL_BUDGET_MS = 10 * 60_000;
 
 /** The readiness sentence for one Settings row. */
 function voiceReadiness(
@@ -104,6 +116,25 @@ export default function GatewaySettingsScreen() {
   const [voiceCheckError, setVoiceCheckError] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installNote, setInstallNote] = useState<string | null>(null);
+  // The install watch's own cancellation. The chain outlives the screen by
+  // nature — leaving Settings must stop the RPCs, not just hide the rows.
+  const installCancelRef = useRef<AbortController | null>(null);
+  // The wait the watch is parked on, so leaving the screen does not leave a
+  // ten-second timer behind to wake the JS thread for nobody. The poll itself
+  // stops on the abort; this is the timer that outlived it.
+  const installWaitRef = useRef<(() => void) | null>(null);
+  // Which voice read is the newest. A slow answer from before a reconnect must
+  // never land on top of a newer one, so each run takes a number.
+  const voiceReadRef = useRef(0);
+  // How many engine writes are on their way to the store. The connected edge
+  // re-reads the stored blob to show what this phone holds, and while a write is
+  // in flight that blob is the OLD one: re-asserting it would snap the row back
+  // under the operator's finger, and the write's own success path never undoes it.
+  const voiceEngineWritesRef = useRef(0);
+  // A preference whose write did not land is named where the control is, not
+  // left as a control claiming a value this phone does not hold.
+  const [widgetPrivacyError, setWidgetPrivacyError] = useState<string | null>(null);
+  const [voiceEngineError, setVoiceEngineError] = useState<string | null>(null);
   // D1: this device's durable approval decisions (newest first). The loaded
   // gate keeps first paint from asserting the empty claim before the deferred
   // read lands (the lie Activity's card closed with auditState in iter-322).
@@ -174,23 +205,57 @@ export default function GatewaySettingsScreen() {
   );
 
   const retryVoiceCapabilities = useCallback(() => {
+    // The Retry joins the same numbered race as the effect below: a slow
+    // answer from the read it replaced may not land on top of this one.
+    voiceReadRef.current += 1;
     setVoiceCheckState('checking');
     setVoiceCheckError(null);
-    void readVoiceCapabilities().then(applyVoiceRead);
+    const ticket = voiceReadRef.current;
+    void readVoiceCapabilities().then((result) => {
+      if (voiceReadRef.current !== ticket) return;
+      applyVoiceRead(result);
+    });
   }, [readVoiceCapabilities, applyVoiceRead]);
 
+  // The voice check follows the connection: the rows are read when the Gate is
+  // there, and the connection is the only thing that can change the answer. It
+  // is keyed on the connected/not-connected edge rather than on `status` itself,
+  // because a monitor self-heal walks the intermediate statuses without the
+  // Gate's voice readiness having changed. A read issued while the Gate is away
+  // costs nothing: `gatewayRequest` refuses before it reaches the network, and
+  // the rows then name that refusal instead of keeping the last "ready".
+  const connected = status === 'connected';
   useEffect(() => {
     let cancelled = false;
+    const ticket = (voiceReadRef.current += 1);
     void (async () => {
-      const stored = await loadAppSettings();
-      if (!cancelled) setVoiceEngine(stored.voiceEngine);
-      const result = await readVoiceCapabilities();
-      if (!cancelled) applyVoiceRead(result);
+      setVoiceCheckState('checking');
+      setVoiceCheckError(null);
+      try {
+        const stored = await loadAppSettings();
+        // Only while nothing is in flight: a write's own value is the one this
+        // row should show, and re-asserting the blob it has not reached yet is
+        // how the row ends up naming an engine the store no longer holds.
+        if (!cancelled && voiceReadRef.current === ticket && voiceEngineWritesRef.current === 0) {
+          setVoiceEngine(stored.voiceEngine);
+        }
+        const result = await readVoiceCapabilities();
+        if (cancelled || voiceReadRef.current !== ticket) return;
+        applyVoiceRead(result);
+      } catch (caught) {
+        // Every exit from here is terminal. A throw from either awaited read —
+        // the settings blob above most of all — used to leave the rows on
+        // "Checking this PC…" for the rest of the session, with no Retry
+        // because the ErrorCard that offers one only renders once the check has
+        // failed.
+        if (cancelled || voiceReadRef.current !== ticket) return;
+        applyVoiceRead({ ok: false, error: caught instanceof Error ? caught.message : String(caught) });
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [readVoiceCapabilities, applyVoiceRead]);
+  }, [connected, readVoiceCapabilities, applyVoiceRead]);
 
   useEffect(() => {
     let cancelled = false;
@@ -204,50 +269,170 @@ export default function GatewaySettingsScreen() {
     };
   }, []);
 
-  const handleVoiceEngine = useCallback((next: VoiceEnginePreference) => {
-    setVoiceEngine(next);
-    void saveAppSettings({ voiceEngine: next });
-  }, []);
+  // The unmount edge is the cancellation: the poll is phone work against a
+  // relayed path, and a screen nobody is looking at has no reason to keep it.
+  // The pending wait is dropped with it, so no timer outlives the screen.
+  useEffect(
+    () => () => {
+      installCancelRef.current?.abort();
+      installWaitRef.current?.();
+      installWaitRef.current = null;
+    },
+    [],
+  );
+
+  const handleVoiceEngine = useCallback(
+    async (next: VoiceEnginePreference) => {
+      const previous = voiceEngine;
+      setVoiceEngine(next);
+      setVoiceEngineError(null);
+      voiceEngineWritesRef.current += 1;
+      try {
+        await saveAppSettings({ voiceEngine: next });
+      } catch {
+        // The row put itself on an engine this phone did not manage to store.
+        // It goes back to the one that IS stored, and says why: a preference
+        // that reverts on the next launch must not look kept.
+        setVoiceEngine(previous);
+        setVoiceEngineError('This phone could not store that choice, so it is not kept.');
+      } finally {
+        voiceEngineWritesRef.current -= 1;
+      }
+    },
+    [voiceEngine],
+  );
 
   // Install the PC voice models from the phone: start the Gate's install, then
-  // watch its status until it leaves `installing` and refresh capabilities.
+  // watch its status until it leaves `installing` and refresh capabilities. The
+  // watch is cancellable (leaving the screen ends it), backs off so a busy Gate
+  // is not polled at a fixed rate, and is bounded: a 2 GB download this phone
+  // stops watching is still a download the PC finishes.
   const handleVoiceInstall = useCallback(async () => {
+    installCancelRef.current?.abort();
+    // A watch already parked on a wait is released rather than left holding the
+    // old watch's timer: the abort stops its RPCs, this drops its clock.
+    installWaitRef.current?.();
+    installWaitRef.current = null;
+    const controller = new AbortController();
+    installCancelRef.current = controller;
+    const cancelled = () => controller.signal.aborted;
+    // A cancellable wait. The timer is owned by the screen, so the unmount edge
+    // clears it instead of waking the JS thread up to ten seconds later for a
+    // poll that will not happen.
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          installWaitRef.current = null;
+          resolve();
+        }, ms);
+        installWaitRef.current = () => clearTimeout(timer);
+      });
     setInstalling(true);
     setInstallNote('Downloading the PC voice models…');
     try {
-      await gatewayRequest('voice.install.start', await pushDeviceParams());
-    } catch {
-      setInstalling(false);
-      setInstallNote('The Gate could not start the install.');
-      return;
-    }
-    for (let attempt = 0; attempt < 900; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      let status: { state?: string; reason?: string } | null = null;
+      // The device params are read once for the whole watch: `pushDeviceParams`
+      // reads SecureStore and re-derives the ed25519 public key, which is far
+      // too much work to repeat every poll for an id that changes only when the
+      // identity is re-made — and a refusal from the Gate is the one thing that
+      // says it is stale. The read itself can refuse (an identity this phone
+      // cannot name or re-make), and then there is no install to start at all:
+      // the row must say that rather than keep claiming a download the PC never
+      // began, and the refusal must not escape a handler nothing catches.
+      let params: { deviceId: string };
       try {
-        status = await gatewayRequest<{ state?: string; reason?: string }>('voice.install.status', await pushDeviceParams());
-      } catch {
-        break;
+        params = await pushDeviceParams();
+      } catch (caught) {
+        if (!cancelled()) {
+          setInstallNote(
+            isDeviceIdentityError(caught)
+              ? 'This phone could not make its device identity, so the Gate could not start the install.'
+              : 'The Gate could not start the install.',
+          );
+        }
+        return;
       }
-      setInstallNote(status?.reason ?? null);
-      if (status?.state !== 'installing') break;
-    }
-    try {
-      const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', await pushDeviceParams());
-      // The refresh after an install publishes the SAME read state as the
-      // first read, so a Gate that once refused does not stay "failed" while
-      // freshly readable rows sit beneath the error card.
-      applyVoiceRead({ ok: true, capabilities: read });
+      if (cancelled()) return;
+      try {
+        await gatewayRequest('voice.install.start', params);
+      } catch {
+        if (!cancelled()) setInstallNote('The Gate could not start the install.');
+        return;
+      }
+      let waited = 0;
+      let delay = INSTALL_POLL_FIRST_DELAY_MS;
+      while (true) {
+        await wait(delay);
+        if (cancelled()) return;
+        waited += delay;
+        delay = Math.min(delay * 2, INSTALL_POLL_MAX_DELAY_MS);
+        if (waited >= INSTALL_POLL_BUDGET_MS) {
+          setInstallNote('Still installing on the PC — this phone stopped watching, check back later.');
+          break;
+        }
+        let install: { state?: string; reason?: string } | null = null;
+        try {
+          install = await gatewayRequest<{ state?: string; reason?: string }>(
+            'voice.install.status',
+            params,
+          );
+        } catch (caught) {
+          if (isAuthRejection(caught)) {
+            try {
+              params = await pushDeviceParams();
+            } catch {
+              // Keep the params this watch already has: there is no next poll,
+              // and the closing capabilities read can still use a fresh one.
+            }
+          }
+          break;
+        }
+        if (cancelled()) return;
+        setInstallNote(install?.reason ?? null);
+        if (install?.state !== 'installing') break;
+      }
+      if (cancelled()) return;
+      try {
+        const read = await gatewayRequest<VoiceEngineCapabilities>('voice.capabilities', params);
+        // The refresh after an install publishes the SAME read state as the
+        // first read, so a Gate that once refused does not stay "failed" while
+        // freshly readable rows sit beneath the error card.
+        if (!cancelled()) applyVoiceRead({ ok: true, capabilities: read });
+      } catch {
+        // keep the last known capabilities
+      }
     } catch {
-      // keep the last known capabilities
+      // The handler's promise is what `onPress` calls, with nothing attached to
+      // it, so no rejection may leave here: one that does is an unhandled
+      // rejection AND a note still claiming a download that never started. Every
+      // read below handles its own refusal; this is the backstop for anything
+      // unforeseen in the watch, and it names the same refusal the Gate does.
+      if (!cancelled()) setInstallNote('The Gate could not start the install.');
+    } finally {
+      // Every exit — success, refusal, budget, cancellation — clears the row, so
+      // "Installing on this PC…" cannot outlive the watch that drew it.
+      if (installCancelRef.current === controller) installCancelRef.current = null;
+      installWaitRef.current = null;
+      if (!cancelled()) setInstalling(false);
     }
-    setInstalling(false);
   }, [gatewayRequest, applyVoiceRead]);
 
-  const handleWidgetPrivacy = useCallback((next: boolean) => {
-    setHideWidgetResult(next);
-    void saveWidgetResultHidden(next);
-  }, []);
+  const handleWidgetPrivacy = useCallback(
+    async (next: boolean) => {
+      const previous = hideWidgetResult;
+      setHideWidgetResult(next);
+      const stored = await saveWidgetResultHidden(next);
+      if (stored) {
+        setWidgetPrivacyError(null);
+        return;
+      }
+      // The write did not land. The switch goes back to what this phone holds
+      // and the row names the refusal: the widget fold reads the stored value
+      // either way, so a switch left on a value that is not there is a lie.
+      setHideWidgetResult(previous);
+      setWidgetPrivacyError('This phone could not store that preference, so it is not kept.');
+    },
+    [hideWidgetResult],
+  );
 
   const copyText = useCallback(async (text: string) => {
     await Clipboard.setStringAsync(text);
@@ -351,7 +536,7 @@ export default function GatewaySettingsScreen() {
             />
             <RowGroupRow
               title={WIDGET_PRIVACY_LABEL}
-              detail={WIDGET_PRIVACY_SUMMARY}
+              detail={widgetPrivacyError ?? WIDGET_PRIVACY_SUMMARY}
               icon={{ ios: 'rectangle.stack', android: 'widgets', web: 'widgets' }}
               chevron={false}
               trailing={
@@ -432,6 +617,11 @@ export default function GatewaySettingsScreen() {
                 <Badge label="Unavailable" tone="neutral" dot={false} />
               </View>
             </View>
+            {voiceEngineError ? (
+              <Text variant="caption" color="tertiary">
+                {voiceEngineError}
+              </Text>
+            ) : null}
             <View style={styles.voiceMeta}>
               <Text variant="caption" color="secondary">
                 Today

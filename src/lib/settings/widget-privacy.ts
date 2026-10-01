@@ -37,12 +37,23 @@ export async function loadWidgetResultHidden(): Promise<boolean> {
   }
 }
 
-export async function saveWidgetResultHidden(hidden: boolean): Promise<void> {
+/**
+ * Store the fold's preference, and report whether it is stored. The Settings
+ * switch has already moved by the time this settles, so it is handed the
+ * outcome rather than a rejection to swallow: a write that failed must put the
+ * switch back rather than claim a preference this device does not hold.
+ * Subscribers are woken either way, since the widget fold must re-read whatever
+ * the store actually holds.
+ */
+export async function saveWidgetResultHidden(hidden: boolean): Promise<boolean> {
   try {
     await keyValueStorage.setItem(
       WIDGET_RESULT_HIDDEN_STORAGE_KEY,
       JSON.stringify(widgetResultHiddenFromStored(hidden)),
     );
+    return true;
+  } catch {
+    return false;
   } finally {
     for (const listener of listeners) listener();
   }
