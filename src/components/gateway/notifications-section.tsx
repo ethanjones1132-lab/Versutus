@@ -18,6 +18,49 @@ import {
 } from '@/lib/notifications/preference-forms';
 import { Spacing } from '@/constants/tokens';
 
+/** What the filter rows need of a Bot; the rest of the roster DTO is not drawn. */
+type RosterBot = { id: string; displayName: string };
+
+/**
+ * How long a roster this device has already read stands as the answer. A connect
+ * inside this window is the same Gate coming back — a blip, a resume, a screen
+ * that remounted — and re-reading it spends a `/v1/bots` on an inventory nothing
+ * has had the chance to change. Past it the list is revalidated, and only then.
+ */
+const ROSTER_REVALIDATE_MS = 30_000;
+
+/**
+ * The last good roster per gateway, and the reads still in the air.
+ *
+ * FALLBACK, and it is a real limitation: the app's shared roster cache is Chat's
+ * (`readCached('roster', …)` in `@/lib/cache/swr-store`), and it is not reachable
+ * from this card — the provider hands out an uncached `listBots` and no roster
+ * field, so there is nothing to borrow. Until the provider can serve that read,
+ * the minimum is kept here: module-level so two mounted copies of this card, and
+ * a re-render that re-runs the effect, spend ONE read between them.
+ */
+const rosterCache = new Map<string, { bots: RosterBot[]; readAt: number }>();
+const rosterReads = new Map<string, Promise<RosterBot[]>>();
+/** The filter before anything has been read: no roster, only the stored ids. */
+const NO_BOTS: RosterBot[] = [];
+
+/** One `/v1/bots` per gateway, shared by everything waiting on it. */
+function readRoster(gatewayId: string, listBots: () => Promise<{ id: string; displayName: string }[]>): Promise<RosterBot[]> {
+  const inFlight = rosterReads.get(gatewayId);
+  if (inFlight) return inFlight;
+  const read: Promise<RosterBot[]> = listBots()
+    .then((bots) => {
+      const named = bots.map(({ id, displayName }) => ({ id, displayName }));
+      rosterCache.set(gatewayId, { bots: named, readAt: Date.now() });
+      return named;
+    })
+    .finally(() => {
+      if (rosterReads.get(gatewayId) === read) rosterReads.delete(gatewayId);
+    });
+  rosterReads.set(gatewayId, read);
+  return read;
+}
+
 export function NotificationsSection() {
   const tokens = useTokens();
   const {
@@ -45,24 +88,41 @@ export function NotificationsSection() {
   // of what is being typed.
   const [quietDirty, setQuietDirty] = useState(false);
 
-  // The roster feeds the switch rows; a failed read shows the stored ids as
-  // unknowns rather than an empty filter that reads as "no Bots".
-  const { listBots } = useGateway();
-  const [rosterBots, setRosterBots] = useState<{ id: string; displayName: string }[]>([]);
+  // The roster feeds the switch rows. It is the last known good one: the card
+  // paints it before the network is asked, a connect inside the freshness window
+  // asks nothing, and a refused read keeps what the operator was looking at —
+  // a failed read used to clear the filter to `[]`, which reads as "no Bots"
+  // about a Gate that had one a moment ago.
+  const { listBots, activeGateway } = useGateway();
+  // The cache is keyed by gateway, and so is the answer a live read produced: a
+  // switch is a different inventory, and one Gate's Bots must never be named for
+  // another's. No id means no second Gate to confuse it with.
+  const gatewayId = activeGateway?.id ?? '';
+  // Two lists, in order of authority: what a read really answered for THIS
+  // gateway, and what this device already had. The remembered one is what paints
+  // before the network is asked — deriving it here is the paint, with no effect
+  // and no extra render in between.
+  const remembered = rosterCache.get(gatewayId);
+  const [answered, setAnswered] = useState<{ gatewayId: string; bots: RosterBot[] } | null>(null);
+  const rosterBots = answered?.gatewayId === gatewayId ? answered.bots : remembered?.bots ?? NO_BOTS;
   useEffect(() => {
-    if (!connected) return;
-    let cancelled = false;
-    void listBots()
+    if (!connected) return undefined;
+    let live = true;
+    const held = rosterCache.get(gatewayId);
+    // Fresh enough is already the answer: this connect reads nothing.
+    if (held && Date.now() - held.readAt < ROSTER_REVALIDATE_MS) return undefined;
+    void readRoster(gatewayId, listBots)
       .then((bots) => {
-        if (!cancelled) setRosterBots(bots.map(({ id, displayName }) => ({ id, displayName })));
+        if (live) setAnswered({ gatewayId, bots });
       })
       .catch(() => {
-        if (!cancelled) setRosterBots([]);
+        // Only a landed read may replace the list. A refusal keeps what is on
+        // screen, and an empty-but-ok answer is the Gate telling the truth.
       });
     return () => {
-      cancelled = true;
+      live = false;
     };
-  }, [connected, listBots]);
+  }, [connected, gatewayId, listBots]);
 
   const filterRows = botFilterRows(rosterBots, prefs.botIds);
 
