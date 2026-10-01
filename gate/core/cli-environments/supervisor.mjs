@@ -264,6 +264,20 @@ export class CliEnvironmentService {
     }
   }
 
+  /**
+   * The coarse state of one environment, with the probe that last saw it.
+   * A probe merges rather than replaces: it reports what the CLI is, and says
+   * nothing about the run holding the environment's slot. Overwriting `busy`
+   * made a probe mid-run (`environments.check` from the phone, `start()` on a
+   * reconnect) read as idle, and every reader of this Map believed it — the
+   * app's Environments screen, `/env`, the manifest. A broken or missing CLI is
+   * a fact about the environment itself and still wins.
+   */
+  recordState(id, state, probe) {
+    const busy = state === 'ready' && this.activeRuns(id).length > 0;
+    this.environmentState.set(id, { state: busy ? 'busy' : state, probe });
+  }
+
   async check(id) {
     const record = await this.require(id);
     const adapter = this.registry.get(record.adapterId);
@@ -272,13 +286,13 @@ export class CliEnvironmentService {
     // The manifest and the app's backend picker (backend-manager.describe())
     // read this Map for both the coarse state and the probed CLI version, so
     // the probe travels with the state rather than being discarded.
-    this.environmentState.set(id, { state, probe });
+    this.recordState(id, state, probe);
     return { id, state, probe, record };
   }
 
   async start(id) {
     const checked = await this.check(id);
-    if (checked.state === 'ready') this.environmentState.set(id, { state: 'ready', probe: checked.probe });
+    if (checked.state === 'ready') this.recordState(id, 'ready', checked.probe);
     return checked;
   }
 
@@ -305,6 +319,19 @@ export class CliEnvironmentService {
       if (run && !run.done) runs.push(run);
     }
     return runs;
+  }
+
+  /**
+   * How many runs are in flight on this Gate, across every environment. The
+   * widget's work line words this as runs, so it has to be counted as runs:
+   * `environmentState` is keyed by environment, and three concurrent runs on
+   * one environment are one entry there. Every environment that holds live runs
+   * holds at least one id, so the count never over-reports.
+   */
+  liveRunCount() {
+    let total = 0;
+    for (const ids of this.liveRuns.values()) total += ids.size;
+    return total;
   }
 
   async startRun(request) {
@@ -335,7 +362,7 @@ export class CliEnvironmentService {
     const adapter = this.registry.get(record.adapterId);
     const probe = await adapter.probe(record.executable.path);
     if (probe.state !== 'ready') {
-      this.environmentState.set(record.id, { state: probe.state, probe });
+      this.recordState(record.id, probe.state, probe);
       // A bare state word ("environment not_installed") reads as a mystery on
       // the phone exactly when the operator must fix it blind. The probe
       // already named the reason — say it, plus the path it refers to.

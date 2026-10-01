@@ -763,8 +763,8 @@ export async function createGate(config = {}) {
     send: pushSend.send,
     collectReceipts: pushSend.collectReceipts,
     snapshot: () => {
-      const states = [...(environmentService.environmentState?.values?.() ?? [])];
-      const busyRuns = states.filter((entry) => entry?.state === 'busy').length;
+      // Runs, not environments: the card words this as "N runs in flight".
+      const busyRuns = environmentService.liveRunCount();
       const pending = environmentService.approvals && typeof environmentService.approvals.list === 'function'
         ? environmentService.approvals.list().length
         : 0;

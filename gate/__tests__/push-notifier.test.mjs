@@ -483,20 +483,21 @@ test('the widget companion reports the Gate snapshot instead of hard-coded idle'
   const notifier = createPushNotifier({
     tokens,
     send: async (messages) => { sent.push(...messages); return { ok: true }; },
-    snapshot: () => ({ connected: true, work: '2 runs in flight', approvalsPending: 3 }),
+    snapshot: () => ({ work: '2 runs in flight', approvalsPending: 3 }),
   });
 
   await notifier.notify({ trigger: 'run', runId: 'run-1', state: 'completed', text: 'done' });
 
   const widget = sent.find((message) => message.data?.kind === 'widget');
   assert.ok(widget, 'a widget companion must be sent');
-  assert.equal(widget.data.widget.status, 'Connected');
-  assert.equal(widget.data.widget.connected, true);
+  // No connection word: the Gate has no reading of the phone's link to it, so
+  // a push-written card says only that the Gate updated it (WIDGET-6).
+  assert.equal(widget.data.widget.status, 'Updated');
   assert.equal(widget.data.widget.work, '2 runs in flight');
   assert.equal(widget.data.widget.approvalsPending, 3);
 });
 
-test('a disconnected Gate reads as disconnected on the widget', async () => {
+test('a snapshot provider claiming a connection cannot put that claim on the card', async () => {
   const tokens = {
     listEnabled: async () => [row({ widgetUpdates: true, richBody: true })],
     removeByToken: async () => false,
@@ -512,8 +513,9 @@ test('a disconnected Gate reads as disconnected on the widget', async () => {
 
   const widget = sent.find((message) => message.data?.kind === 'widget');
   assert.ok(widget, 'a widget companion must be sent');
-  assert.equal(widget.data.widget.status, 'Disconnected');
-  assert.equal(widget.data.widget.connected, false);
+  assert.equal('connected' in widget.data.widget, false);
+  assert.notEqual(widget.data.widget.status, 'Disconnected');
+  assert.notEqual(widget.data.widget.status, 'Connected');
 });
 
 test('the widget withholds the newest result when the device declined rich bodies', async () => {
@@ -611,7 +613,10 @@ test('deferred receipt collection prunes a dead device found by real receipts', 
       collected.push([ids, ticketTokens]);
       return pushSend.collectReceipts(ids, ticketTokens);
     },
-    receiptDelayMs: 10,
+    // The deferral has to outlive this test's own awaits, or the "not inline"
+    // assertion below measures how fast the machine read a file rather than
+    // whether the collection was deferred at all.
+    receiptDelayMs: 250,
   });
 
   const result = await notifier.notify({ trigger: 'run', runId: 'run-1' });
@@ -620,7 +625,7 @@ test('deferred receipt collection prunes a dead device found by real receipts', 
   assert.notEqual(await tokens.get('phone-1'), null, 'the dead device survives until the receipts exist');
   assert.deepEqual(collected, [], 'receipts are not collected inline');
 
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => setTimeout(resolve, 600));
   assert.deepEqual(
     collected,
     [[['ticket-0'], { 'ticket-0': 'ExponentPushToken[dead-1]' }]],
@@ -660,11 +665,11 @@ test('a receipt collection failure is swallowed and logged', async () => {
       },
       send: async () => ({ ok: true, tickets: [{ status: 'ok', id: 'ticket-1' }] }),
       collectReceipts: async () => { throw new Error('receipts offline'); },
-      receiptDelayMs: 10,
+      receiptDelayMs: 250,
     });
 
     await notifier.notify({ trigger: 'run', runId: 'run-1' });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 600));
   } finally {
     console.warn = originalWarn;
   }
@@ -672,20 +677,18 @@ test('a receipt collection failure is swallowed and logged', async () => {
 });
 
 test('widgetSnapshot words the Gate state for the home-screen card', () => {
+  // No `connected` key: the Gate cannot see the phone's link to it (WIDGET-6).
   assert.deepEqual(widgetSnapshot(), {
-    connected: true,
     work: 'No runs in flight',
     approvalsPending: 0,
   });
   assert.deepEqual(widgetSnapshot({ busyRuns: 1, approvalsPending: 2 }), {
-    connected: true,
     work: '1 run in flight',
     approvalsPending: 2,
   });
   assert.deepEqual(widgetSnapshot({ busyRuns: 3, approvalsPending: 0 }), {
-    connected: true,
     work: '3 runs in flight',
     approvalsPending: 0,
   });
-  assert.equal(widgetSnapshot({ connected: false }).connected, false);
+  assert.equal('connected' in widgetSnapshot({ connected: true }), false);
 });

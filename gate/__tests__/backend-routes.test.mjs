@@ -2732,6 +2732,11 @@ test('two final responses with identical text in one Session each push their own
       assert.equal(batch.length, 1, 'one reply notice per turn');
       assert.equal(batch[0].data.kind, 'reply');
       assert.equal(batch[0].data.sessionId, 'ses_1');
+      // This turn named no Bot, so the notice it produces names none: the
+      // Reply action posts into a Bot's chat and `botReplyFromResponse`
+      // refuses a payload without `botId`, so the category is withheld
+      // (`push-notifier-category.test.mjs` covers the Bot-named case).
+      assert.equal('categoryId' in batch[0], false);
     }
   } finally {
     await gate.close();

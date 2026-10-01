@@ -2,6 +2,21 @@ import { parseCronSessionId } from './cron-view.mjs';
 
 const DEDUPE_LIMIT = 1000;
 
+/**
+ * The category the phone registers for a bot-message notice, named by
+ * `BOT_MESSAGE_CATEGORY_ID` in `src/lib/notifications/categories.ts` — the one
+ * poster there is a TypeScript module the Gate cannot import, so the string is
+ * repeated here and pinned against that file by
+ * `__tests__/push-notifier-category.test.mjs`.
+ *
+ * Android attaches action rows only when the notification content carries a
+ * category, and for a push that content field is the FCM data key `categoryId`
+ * — a documented field of the Expo push message ("Message request format",
+ * https://docs.expo.dev/push-notifications/sending-notifications/). Without it
+ * no relayed notice ever shows the Reply button the app registered for it.
+ */
+const BOT_MESSAGE_CATEGORY_ID = 'botmessage';
+
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -154,6 +169,14 @@ function messageFor(classified, event, row) {
       data: classified.data,
       channelId: 'model-replies',
       sound: 'default',
+      // Only a reply that names a Bot carries a category, and that is the whole
+      // point of one: the Reply action posts into the Bot's chat, and
+      // bot-reply.ts's `botReplyFromResponse` refuses a payload without both
+      // `botId` and `sessionId`. A turn posted with no Bot (server.mjs makes
+      // `botId` conditional on `?bot=`/`body.bot`) would therefore show a
+      // button whose tap sends nothing. A run, approval or routine notice
+      // names no destination an action could serve, so they carry none either.
+      ...(nonEmptyString(classified.data.botId) ? { categoryId: BOT_MESSAGE_CATEGORY_ID } : {}),
     };
   }
   if (classified.data.kind === 'run') {
@@ -198,9 +221,9 @@ function messageFor(classified, event, row) {
  * for it, and never a tray notice — no title, no body.
  *
  * `snapshot` is the Gate's live state (or a function returning it):
- * `{ connected, work, approvalsPending }`. Absent providers keep the
- * historical defaults so a notifier constructed without one still reports a
- * connected, idle Gate with nothing awaiting triage.
+ * `{ work, approvalsPending }`. Absent providers keep the historical defaults,
+ * so a notifier constructed without one still reports an idle Gate with
+ * nothing awaiting triage.
  */
 function resolveSnapshot(snapshot) {
   try {
@@ -211,10 +234,27 @@ function resolveSnapshot(snapshot) {
   }
 }
 
+/** The word the card leads with when the Gate — not the phone — wrote it. */
+const GATE_STATUS_WORD = 'Updated';
+
+/**
+ * The companion claims nothing about the phone's link to the Gate: the Gate has
+ * no reading of it — it reaches Expo over the internet while the phone may not
+ * reach the Gate at all — so it writes neither `connected` nor a connection
+ * word. Said here because the alternative — a card freshly stamped
+ * "Connected" by a push the phone cannot check — is the lie this companion used
+ * to tell, however far the Gate could reach Expo.
+ *
+ * `WidgetPayload.parse` still requires `connected`, so on today's phone this
+ * write is refused and the card keeps the last snapshot the app itself wrote.
+ * That half is the phone's to fix (the headless push task must merge the pushed
+ * fields into the stored snapshot and supply `connected` itself, and `status`
+ * must then agree with it), and until it does the companion is the cost of
+ * telling the truth: one data-only push per opted-in device, no card write.
+ */
 function widgetCompanion(row, event, snapshot) {
   if (row.widgetUpdates !== true) return null;
   const snap = resolveSnapshot(snapshot);
-  const connected = snap?.connected !== false;
   const approvalsPending = Number.isInteger(snap?.approvalsPending) && snap.approvalsPending >= 0
     ? snap.approvalsPending
     : 0;
@@ -222,8 +262,7 @@ function widgetCompanion(row, event, snapshot) {
   // the newest result rides along only when the device opted into rich bodies.
   const widget = {
     v: 2,
-    status: connected ? 'Connected' : 'Disconnected',
-    connected,
+    status: GATE_STATUS_WORD,
     work: nonEmptyString(snap?.work) ?? 'No runs in flight',
     ...(nonEmptyString(event?.text) && row.richBody === true ? { result: truncateText(event.text) } : {}),
     approvalsPending,
@@ -237,15 +276,17 @@ function widgetCompanion(row, event, snapshot) {
 }
 
 /**
- * The Gate's live state for the widget companion: how many environments are
- * mid-run and how many approval cards await triage. Pure, so the wording is
- * unit-tested without booting a Gate.
+ * The Gate's live state for the widget companion: how many runs are in flight
+ * and how many approval cards await triage. Pure, so the wording is unit-tested
+ * without booting a Gate.
+ *
+ * No `connected` key: what the Gate knows is its own state, never the phone's
+ * link to it (see widgetCompanion).
  */
-export function widgetSnapshot({ connected = true, busyRuns = 0, approvalsPending = 0 } = {}) {
+export function widgetSnapshot({ busyRuns = 0, approvalsPending = 0 } = {}) {
   const runs = Number.isInteger(busyRuns) && busyRuns > 0 ? busyRuns : 0;
   const pending = Number.isInteger(approvalsPending) && approvalsPending >= 0 ? approvalsPending : 0;
   return {
-    connected,
     work: runs === 0 ? 'No runs in flight' : `${runs} run${runs === 1 ? '' : 's'} in flight`,
     approvalsPending: pending,
   };

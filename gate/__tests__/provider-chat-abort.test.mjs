@@ -22,7 +22,7 @@ const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind
  * the Gate gave up on it — a response that was never finished and whose socket
  * died is exactly a cancelled upstream request.
  */
-async function startUpstream({ answer, hold = false, silentForMs = 0 } = {}) {
+async function startUpstream({ answer, hold = false, holdForMs = 0, silentForMs = 0 } = {}) {
   const state = { requests: 0, abandoned: 0 };
   const server = createServer((req, res) => {
     state.requests += 1;
@@ -42,7 +42,10 @@ async function startUpstream({ answer, hold = false, silentForMs = 0 } = {}) {
     } else if (answer) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write(answer);
-      if (!hold) res.end();
+      // Head and first frame together, then a stream that stays open for
+      // `holdForMs`: the wait that follows is on the body, not on the headers.
+      if (holdForMs) setTimeout(() => { if (!res.writableEnded) res.end(); }, holdForMs).unref?.();
+      else if (!hold) res.end();
     }
     // With no `answer`, the response is simply never written: a vendor that
     // has taken the request and gone quiet.
@@ -162,13 +165,25 @@ test('a provider that never answers is a 504, not a request held open forever', 
 
 test('the bound is on the headers: a slow stream is not cut off', async () => {
   // The Gate must not mistake a long answer for a dead vendor: the watchdog is
-  // cleared the moment the response exists.
-  const upstream = await startUpstream({ answer: `data: ${JSON.stringify({ choices: [{ delta: { content: 'Hi' } }] })}\n\n` });
-  const { gate, root } = await gateWithStubProvider(upstream.baseUrl, { upstreamHeadersTimeoutMs: 60 });
+  // cleared the moment the response exists. The vendor's head and first frame go
+  // out together and the stream then stays open past the bound below, so what is
+  // under test is the head clearing the clock. The bound is seconds rather than
+  // milliseconds because it also has to cover this machine reaching the socket at
+  // all: at 60ms the test reported on how busy the box was, not on the Gate.
+  const upstream = await startUpstream({
+    answer: `data: ${JSON.stringify({ choices: [{ delta: { content: 'Hi' } }] })}\n\n`,
+    holdForMs: 4000,
+  });
+  const { gate, root } = await gateWithStubProvider(upstream.baseUrl, { upstreamHeadersTimeoutMs: 3000 });
   try {
     const response = await post(gate);
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /"content":"Hi"/);
+    const body = await response.text();
+    assert.match(body, /"content":"Hi"/);
+    // The turn ran past the header bound, so it must also have been carried to
+    // its terminal frame: a stream cut short at the bound would still hold the
+    // content it had already relayed.
+    assert.match(body, /data: \[DONE\]/);
     assert.equal(upstream.state.abandoned, 0);
   } finally {
     await gate.close();
