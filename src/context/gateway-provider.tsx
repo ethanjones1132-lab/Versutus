@@ -85,6 +85,7 @@ import {
 import { extractMentions, handoffFailedNote, rosterUnavailableNote } from '@/lib/gateway/mentions';
 import { formatRunFailure, modelLockFallback, modelLockFor, modelSubstitutionNote, recordModelTurnFailure, shouldShowModelSubstitution, upstreamModelRefusal, clearModelLock as clearModelLockFn } from '@/lib/gateway/run-failures';
 import { resolveDefaultBackend } from '@/lib/gateway/backend-defaults';
+import { gatewayScopeKey, scopeForAttach } from '@/lib/gateway/client-scope';
 import {
   decideEnvironmentProbe,
   environmentProbeFailureText,
@@ -1003,6 +1004,46 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     selectedBotIdRef.current = selectedBotId;
   }, [selectedBotId]);
+  /**
+   * Which Gate the remembered environment and Bot belong to.
+   *
+   * The scope survives a client rebuild — that is the point of it — so without
+   * this a re-attach for the same Gate would drop it, and once the drop is
+   * fixed, attaching a DIFFERENT Gate would inherit this one's `hermes-local`
+   * and Bot. Written wherever the scope is set, and read by every install.
+   */
+  const scopeGatewayKeyRef = useRef<string | undefined>(undefined);
+  /** Note the Gate a scope belongs to. An unknown gateway changes nothing. */
+  const rememberScopeGateway = useCallback((gateway?: GatewayProfile | null) => {
+    const key = gatewayScopeKey(gateway);
+    if (key) scopeGatewayKeyRef.current = key;
+  }, []);
+  /**
+   * Hand the thread's scope to a client that is about to go live.
+   *
+   * Runs before the client is installed and before it connects, so a turn can
+   * never be sent through a rebuilt client that has no idea which environment
+   * or Bot it is talking to. A scope belonging to another Gate is dropped from
+   * state as well as from the client, which is what lets the new Gate's own
+   * adoption effect resolve its default.
+   */
+  const applyClientScope = useCallback((client: PortalClient, gateway: GatewayProfile) => {
+    const scope = scopeForAttach({
+      attachingGatewayKey: gatewayScopeKey(gateway),
+      scopeGatewayKey: scopeGatewayKeyRef.current,
+      selectedBackendId: selectedBackendIdRef.current,
+      selectedBotId: selectedBotIdRef.current,
+    });
+    if (scope.reset) {
+      selectedBackendIdRef.current = undefined;
+      selectedBotIdRef.current = undefined;
+      setSelectedBackendId(undefined);
+      setSelectedBotId(undefined);
+    }
+    rememberScopeGateway(gateway);
+    client.setBackendId?.(scope.backendId);
+    client.setBotId?.(scope.botId);
+  }, [rememberScopeGateway]);
   // Client-derived honesty verdicts, decided when a client is installed and
   // cleared when it goes away: does this client speak bots / group rooms at
   // all? The pure decisions live in lib/gateway so the UI hides creation
@@ -2192,6 +2233,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      // The client above is new, so it holds no environment and no Bot — and
+      // every re-attach comes through here: a reconnect, a Retry, an app resume,
+      // a gateway switch, and the late-manifest upgrade. Hand it the thread's
+      // scope on the way in, before the install and before connect(), so no
+      // turn can leave through a client that does not know where it is.
+      applyClientScope(client, gateway);
       clientRef.current = client;
       historyLoadedForRef.current = null;
       // Capability verdicts ride the client install: manifest clients answer
@@ -2269,7 +2316,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // patchActivityRuns is a useCallback with [] deps, so its identity is stable
     // for the provider's lifetime; listing it satisfies exhaustive-deps without
     // changing when this callback is rebuilt.
-    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns, persistGateway, reconcileInterrupted, teardownRetiredActiveGateway, resetSessionSelector, updateTlsFingerprintChange, cancelConnectedReads, scheduleConnectedRead, noteConnectedFanOut],
+    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns, persistGateway, reconcileInterrupted, teardownRetiredActiveGateway, resetSessionSelector, updateTlsFingerprintChange, cancelConnectedReads, scheduleConnectedRead, noteConnectedFanOut, applyClientScope],
   );
 
   useEffect(() => {
@@ -2678,6 +2725,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       selectedBotIdRef.current = undefined;
       setSelectedBackendId(backendId);
       setSelectedBotId(undefined);
+      // The scope now belongs to this gateway's world, whoever asked for it.
+      rememberScopeGateway(activeGatewayRef.current ?? activeGateway);
       sessionIdRef.current = undefined;
       setCurrentSessionId(undefined);
       setMessages([]);
@@ -2700,7 +2749,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         void reloadHistoryFor(updated);
       }
     },
-    [activeGateway, clearInterruptedRecovery, persistGateway, reloadHistoryFor, resetSessionSelector],
+    [activeGateway, clearInterruptedRecovery, persistGateway, reloadHistoryFor, resetSessionSelector, rememberScopeGateway],
   );
 
   /**
@@ -2736,7 +2785,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         const client = clientRef.current as (PortalClient & { setBackendId?: (id?: string) => void }) | null;
         resetSessionSelector();
         client?.setBackendId?.(resolved);
+        // The mirror is written here too, not only on the next commit: an
+        // attach that installs a client mid-tick reads this ref to hand over the
+        // scope, and adoption is how a first connect acquires one.
+        selectedBackendIdRef.current = resolved;
         setSelectedBackendId(resolved);
+        rememberScopeGateway(activeGatewayRef.current);
 
         const gateway = activeGatewayRef.current;
         if (gateway && gateway.backendId !== resolved) {
@@ -2777,7 +2831,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       });
     }, 0);
     return () => clearTimeout(timer);
-  }, [backends, gatewayRequest, persistGateway, reloadHistoryFor, selectedBackendId, status, resetSessionSelector]);
+  }, [backends, gatewayRequest, persistGateway, reloadHistoryFor, selectedBackendId, status, resetSessionSelector, rememberScopeGateway]);
 
 
   const runAgentCommand = useCallback(
@@ -5314,7 +5368,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     selectedBotIdRef.current = undefined;
     clientRef.current?.setBotId?.(undefined);
     setSelectedBotId(undefined);
-  }, [resetSessionSelector]);
+    // Leaving a Bot Chat is not leaving the gateway, so the scope still belongs
+    // to this one — recorded here so a re-attach cannot read it as foreign.
+    rememberScopeGateway(activeGatewayRef.current);
+  }, [resetSessionSelector, rememberScopeGateway]);
 
   // A surface the chat screen must move to, asked for from outside it. The
   // screen owns which surface it shows — its header, its panes and its backends
@@ -5390,6 +5447,9 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     client.setBotId(botId);
     selectedBotIdRef.current = botId;
     setSelectedBotId(botId);
+    // A Bot is a Hermes profile of this gateway's Gate, so the scope it opens
+    // belongs to this gateway.
+    rememberScopeGateway(activeGatewayRef.current ?? activeGateway);
     try {
       const chat = await loadBotChat(
         () => client.getSessions(200),
@@ -5439,7 +5499,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLastError(error instanceof Error ? error.message : String(error));
       throw error;
     }
-  }, [activeGateway, clearInterruptedRecovery, persistGateway, reloadHistoryFor, resetSessionSelector]);
+  }, [activeGateway, clearInterruptedRecovery, persistGateway, reloadHistoryFor, resetSessionSelector, rememberScopeGateway]);
 
   useEffect(() => {
     repairStalePinRef.current = async (client, isCurrent, fallbackGateway) => {

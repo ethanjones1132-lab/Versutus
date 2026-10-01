@@ -48,6 +48,7 @@ import { ScriptedEngine, scriptedEngineEnabled } from './voice/engines/scripted-
 import { verifySignedAccessRequest, ReplayCache } from './signature.mjs';
 import { describeAuthFailure } from './auth-failure.mjs';
 import { unresolvedBackendResponse } from './backend-resolution.mjs';
+import { createBackendModelRouter } from './backend-model-route.mjs';
 import { backendUpstreamRefusal } from './upstream-refusal.mjs';
 import * as openaiFlavor from '../flavors/openai.mjs';
 import * as anthropicFlavor from '../flavors/anthropic.mjs';
@@ -776,6 +777,23 @@ export async function createGate(config = {}) {
     return methods === null || methods.has(method);
   }
 
+  /**
+   * Which attached environment serves a model, for a turn that named a provider
+   * this Gate does not own (see core/backend-model-route.mjs).
+   *
+   * Only ever asked for such a turn: an id the Gate holds a record for is that
+   * provider's turn to answer, and the app now sends this thread's environment
+   * with every turn. Catalogs are cached per environment for a minute, so the
+   * burst of turns a retry storm produces costs one read each.
+   */
+  const modelRouter = createBackendModelRouter({
+    listBackends: () => backendManager.list(),
+    listModels: async (entry) => {
+      const backend = await backendManager.get(entry.id);
+      return backend.listModels();
+    },
+  });
+
   // Shell sessions for the app's Shell tab. See terminal.mjs for why this is a
   // piped shell rather than a PTY — it is what this client actually consumes.
   const terminalSessions = injectedTerminalSessions ?? createTerminalSessions();
@@ -958,6 +976,20 @@ export async function createGate(config = {}) {
     () => reload().catch(() => undefined),
     { delayMs: outcomeReloadDelayMs },
   );
+
+  /**
+   * Whether the Gate itself owns this provider id — a v2 store record or a
+   * legacy registry entry, the same two sources `dispatchChat` resolves.
+   *
+   * Asked before a scope-less turn is routed to an environment: a provider the
+   * Gate holds is that vendor's turn, and an environment that happens to list
+   * the same string is a coincidence this route must not act on.
+   */
+  async function gateOwnsProvider(providerId) {
+    if (!providerId) return false;
+    const record = await providerStore.get(providerId).catch(() => null);
+    return Boolean(record) || state.providers.some((item) => item.id === providerId);
+  }
 
   /**
    * Send a chat request to whichever component actually owns the provider's
@@ -2626,8 +2658,19 @@ export async function createGate(config = {}) {
         // the provider proxy below and came back as an upstream error from a
         // vendor that was never meant to serve it.
         const botForTurn = readBotId(url, body);
-        if (body.backendId || botForTurn) {
-          const backend = await resolveConversationBackend(body.backendId, botForTurn);
+        // A turn that names no environment, no Bot, and a provider this Gate has
+        // never heard of, is a client that lost the thread's scope: the provider
+        // id it sent belongs to an environment's catalogue (`kilo` is a Hermes
+        // provider, not one of ours). Ask the attached environments whether one
+        // of them serves the model before this becomes a 404 — older APKs in the
+        // field still send exactly this turn. Never for a provider the Gate owns:
+        // that ambiguity is the client's scope to fix, not this route to guess.
+        const gateOwnsProviderId = body.providerId ? await gateOwnsProvider(body.providerId) : false;
+        const routedBackendId = body.backendId || botForTurn || gateOwnsProviderId
+          ? undefined
+          : await modelRouter.backendFor(body.model, body.providerId);
+        if (body.backendId || botForTurn || routedBackendId) {
+          const backend = await resolveConversationBackend(body.backendId || routedBackendId, botForTurn);
           if (!backend) return;
           try {
             const text = lastUserText(body.messages);
@@ -2744,6 +2787,21 @@ export async function createGate(config = {}) {
         }
         const matches = advertised.filter((entry) => entry.modelId === body.model);
         if (body.providerId) {
+          // Reached only for a provider the Gate owns, or one no environment
+          // serves: the routing above answered the rest. What is left to say is
+          // the whole picture — neither this Gate's providers nor any of its
+          // environments has the model, so the way out is a different model and
+          // not a re-send.
+          if (!gateOwnsProviderId) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              error: {
+                message: `Model "${body.model}" is not on this Gate's providers or any of its environments. Pick another model.`,
+                code: 'unknown_provider',
+              },
+            }));
+            return;
+          }
           await dispatchChat(body.providerId, body, res);
           return;
         }
