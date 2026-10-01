@@ -184,13 +184,27 @@ async function diagnoseCredentialBindings(record, id, vault) {
 }
 
 /**
+ * A listener that accepts the connection and then never answers headers (a
+ * half-dead process still holding the port) hangs the default `fetch` forever,
+ * so every caller that probes on a user-facing command needs a deadline.
+ */
+const PROBE_TIMEOUT_MS = 5000;
+
+/**
  * Is a Gate actually answering on this machine right now? The runbook's first
  * troubleshooting step is "confirm it answers locally" — this does it in one
  * command instead of asking the operator to reach for curl.
+ *
+ * Without a caller-supplied `fetchImpl` the real fetch is used, bounded by
+ * `timeoutMs`: `service stop` used to hang here forever, so its taskkill
+ * fallback and its final "service stopped" never happened. An injected
+ * fetchImpl is used exactly as given (tests, and callers that bound their own
+ * request).
  */
-export async function probeLocalGate(manifestUrl, fetchImpl = globalThis.fetch) {
+export async function probeLocalGate(manifestUrl, fetchImpl, { timeoutMs = PROBE_TIMEOUT_MS } = {}) {
+  const fetchBounded = fetchImpl ?? ((url) => globalThis.fetch(url, { signal: AbortSignal.timeout(timeoutMs) }));
   try {
-    const response = await fetchImpl(manifestUrl);
+    const response = await fetchBounded(manifestUrl);
     return response.ok
       ? { reachable: true, detail: `manifest answered ${response.status}` }
       : { reachable: false, detail: `listener responded ${response.status}` };

@@ -128,7 +128,26 @@ export class Supervisor {
     this._childStartedAt = this._now();
     this._status = 'running';
     this._emitState();
-    child?.once?.('exit', (code, signal) => this._onExit(code, signal));
+    // A Gate that cannot be spawned at all — the interpreter moved, the code
+    // root is stale — reports 'error' and never 'exit'. With no listener Node
+    // turns that into an uncaught exception and the supervisor dies: the one
+    // process whose whole job is to survive, gone, with the Gate down until the
+    // Scheduled Task restarts it a minute later. Fold it into the exit path so
+    // the same backoff applies, and count the death once — a child that reports
+    // both must not spend two restart attempts on one failure.
+    let died = false;
+    const onDeath = (code, signal) => {
+      if (died) return;
+      died = true;
+      this._onExit(code, signal);
+    };
+    child?.once?.('exit', onDeath);
+    child?.once?.('error', (error) => {
+      // node names the executable it could not start in the message
+      // ("spawn C:\...\node.exe ENOENT"), so this line says what to fix.
+      this._log(`spawn failed: ${error?.message ?? error}${this._codeRoot ? ` (code root ${this._codeRoot})` : ''}`);
+      onDeath(null, null);
+    });
     // A probe that fires during startup proves nothing: give the Gate its
     // grace period before the first check, then probe on a fixed interval.
     this._later(this._graceMs, () => this._probeLoop(0));

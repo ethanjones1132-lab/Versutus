@@ -564,7 +564,28 @@ async function serviceRun() {
   // firing twice, a manual launch) must refuse instead of double-spawning.
   const lock = await acquireInstanceLock(paths.dir, { name: 'supervisor.lock' });
   const rlog = new RotatingLog(join(paths.gateHome, 'logs'));
-  const say = (message) => rlog.write('supervisor', `${message}\n`);
+  // The supervisor outlives the Gate on purpose, so nothing in its own plumbing
+  // may take it down: with Node's defaults a rejected promise or a throw in the
+  // poll, the state write or the log sink exits the process, and the Scheduled
+  // Task brings it back a minute later with the Gate down for all of it. Every
+  // write to the log is therefore wrapped — a sink that fails (full disk,
+  // rotated-away file) must not throw inside the handler installed to catch
+  // throws.
+  const guard = (write) => (message) => {
+    try {
+      write(message);
+    } catch (error) {
+      console.error(`supervisor log write failed: ${error.message}`);
+    }
+  };
+  const say = guard((message) => rlog.write('supervisor', `${message}\n`));
+  const sayGate = (stream) => guard((chunk) => rlog.write('gate', chunk, stream));
+  // Installed before anything else can throw. `exit: () => {}` keeps the
+  // guard's logging and drops its deliberate exit: here an unexpected error is
+  // a failed attempt, which the supervisor's own backoff already handles.
+  // (`gate start` keeps the guards' exit-on-fatal semantics — that process is
+  // the Gate, not the thing that watches over it.)
+  installProcessGuards({ log: say, exit: () => {} });
 
   const spawnGate = () => {
     const child = spawn(
@@ -574,8 +595,8 @@ async function serviceRun() {
     );
     // Separate stream keys: a half line held from stdout must never be glued
     // onto stderr's text, or a `Token:` line escapes redaction.
-    child.stdout?.on('data', (chunk) => rlog.write('gate', chunk, 'stdout'));
-    child.stderr?.on('data', (chunk) => rlog.write('gate', chunk, 'stderr'));
+    child.stdout?.on('data', sayGate('stdout'));
+    child.stderr?.on('data', sayGate('stderr'));
     return child;
   };
   const probe = async () => (await probeLocalGate(
@@ -592,7 +613,16 @@ async function serviceRun() {
     spawnGate,
     probe,
     killTree,
-    writeState: (state) => writeFileSync(paths.state, JSON.stringify(state, null, 2)),
+    // A failed state write (the service dir vanished, a locked file) loses the
+    // `service status` view, not the supervisor — `service stop` then waits out
+    // its 20 s bound and tree-kills on the port check instead.
+    writeState: (state) => {
+      try {
+        writeFileSync(paths.state, JSON.stringify(state, null, 2));
+      } catch (error) {
+        say(`state write failed: ${error.message}`);
+      }
+    },
     log: say,
     codeRoot: SERVICE_CODE_ROOT,
     gitHead: serviceGitHead(SERVICE_CODE_ROOT),
@@ -609,18 +639,31 @@ async function serviceRun() {
     } catch {
       return;
     }
-    rmSync(paths.control, { force: true });
-    if (action === 'stop') {
-      clearInterval(poll);
-      sup.stop().then(() => resolveStopped());
-    } else if (action === 'restart') {
-      sup.requestRestart();
+    // Everything past the read is best-effort: a throw here (an undeletable
+    // control file, a failing stop) is logged and the interval keeps running,
+    // so a transient fault cannot end the process that keeps the Gate alive.
+    try {
+      rmSync(paths.control, { force: true });
+      if (action === 'stop') {
+        clearInterval(poll);
+        sup.stop().then(() => resolveStopped(), (error) => {
+          say(`stop failed: ${error?.message ?? error}`);
+          resolveStopped();
+        });
+      } else if (action === 'restart') {
+        sup.requestRestart();
+      }
+    } catch (error) {
+      say(`control action "${action}" failed: ${error?.message ?? error}`);
     }
   }, 2000);
 
   process.on('SIGINT', () => {
     clearInterval(poll);
-    sup.stop().then(() => resolveStopped());
+    sup.stop().then(() => resolveStopped(), (error) => {
+      say(`stop failed: ${error?.message ?? error}`);
+      resolveStopped();
+    });
   });
   await stopped;
   rlog.close();
@@ -649,6 +692,10 @@ async function serviceStop() {
   }
   // Tree-kill leftovers only when the port proves someone is still holding it
   // — a stale supervisor.json pid may have been recycled by Windows.
+  // The default probe is now bounded (diagnostics.PROBE_TIMEOUT_MS): a listener
+  // that accepts the connection and never answers headers used to hang both
+  // probes below forever, so the taskkill fallback and this command's own
+  // completion never happened.
   const stillUp = await probeLocalGate(GATE_MANIFEST);
   if (stillUp.reachable) {
     try {
