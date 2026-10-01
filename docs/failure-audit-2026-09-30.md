@@ -3,9 +3,10 @@
 Theme of the day: **remove failures.** The app must work as intended every time — no failed
 fetches or data retrievals, faster retrievals, a connection that persists, and the rest.
 
-This document is a **list, not a fix plan.** Nothing in the code was changed. Every entry says
-*where* it is, *what* fails, and *why* it fails. Entries are appended as the scan continues;
-IDs are stable so later fix commits can cite them.
+This document started as a **list** (nothing was changed while scanning) and now also records
+the fix for each entry. Every entry says *where* it is, *what* fails, and *why* it fails; the
+*Fix status* line under it, and the companion fix log, say what was done. Entries are appended as
+the scan continues (see the second-pass sections at the end); IDs are stable so fix commits can cite them.
 
 - Branch/commit scanned: `claude/app-failure-audit-fc957c` @ `67306a9` (== `master`).
 - Scan method: read the connection path end to end (client, transport, monitor, provider),
@@ -13,6 +14,10 @@ IDs are stable so later fix commits can cite them.
   samples of the UI; ran `tsc`, ESLint, jest and the Gate test suite for an objective baseline.
 - Prior audits (`docs/audit-bugs-architecture.md`, `docs/gap-and-bug-audit-2026-08-19.md`) were
   read first. Their findings are recorded as fixed; nothing below repeats a finding they closed.
+
+## Update - fixes landed
+
+Of the 60 findings: **52 fixed**, **1 partly fixed** (a part rides on another package or a follow-up is named), **7 not fixed** (each is a decision or needs your action - see the entries). The full diagnosis and fix for every finding is in [failure-audit-2026-09-30-fixes.md](failure-audit-2026-09-30-fixes.md); each finding below carries a *Fix status* line linking to it. The fixes are commits on branch `claude/app-failure-audit-fc957c` (not pushed, not deployed). Verification on the integration branch: `tsc`, ESLint (0 errors), full jest with coverage and the coverage ratchet, the Gate suite and the Kotlin unit tests (in a scratch Android tree) all pass; the `[device?]` items still need a phone to confirm the real-world effect.
 
 **Confidence labels**
 
@@ -117,6 +122,8 @@ lifecycle).
 
 ### BG-1 · S1 · A chat turn lives exactly as long as the phone's socket `[read]` `[device?]`
 
+> **Fix status:** Fixed - package(s) G4, P1, P2b, commit(s) `203821b`, `19de6a2`, `4a9e3cc` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#bg-1)
+
 **Where:** `gate/core/server.mjs:85-90` (`res.on('close') → controller.abort()`),
 `gate/core/server.mjs:2235-2246` (push only when the turn completed while connected),
 `gate/core/voice/turn-runner.mjs` (abort races the backend turn), `src/context/gateway-provider.tsx:3677-3703`
@@ -144,6 +151,8 @@ This is the structural reason "persist the connection in the background" cannot 
 
 ### LIFE-3 · S2 · No network-change signal `[read]`
 
+> **Fix status:** Fixed - package(s) P1, W1, commit(s) `19de6a2`, `5d2d9c0` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#life-3)
+
 **Where:** `package.json` (no `@react-native-community/netinfo` / `expo-network`),
 `src/lib/gateway/connection-monitor.ts:1,26,110-144`, `src/lib/gateway/client.ts:55`.
 
@@ -161,6 +170,8 @@ changed".
 ## 3. Connection lifecycle
 
 ### LIFE-1 · S1 · Foreground recovery can blank the chat and the capability hello `[read]` `[device?]`
+
+> **Fix status:** Fixed - package(s) P2a, commit(s) `a59aeb2` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#life-1)
 
 **Where:** `gateway-provider.tsx:3701-3703` → `:3648-3664` → `:1744-1757` (`connectGateway`) →
 `:1375-1385` (`attachClient` early return).
@@ -186,6 +197,8 @@ radio wake on a Tailscale/DERP path is lossy (`client.ts:44-54`).
 
 ### LIFE-2 · S1 · A rejected token is retried forever and its message is erased `[read]`
 
+> **Fix status:** Fixed - package(s) P1, P2a, commit(s) `19de6a2`, `a59aeb2` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#life-2)
+
 **Where:** `gateway-provider.tsx:1512` vs `:1669`; `src/lib/gateway/client.ts:183-188`;
 `src/lib/gateway/manifest-client.ts:212-216`; `gateway-provider.tsx:3595-3602`, `:1830-1832`.
 
@@ -204,6 +217,8 @@ does not.
 
 ### LIFE-5 · S3 · `disconnect()` does not cancel an in-flight `connect()` `[read]`
 
+> **Fix status:** Fixed - package(s) P1, commit(s) `19de6a2` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#life-5)
+
 **Where:** `client.ts:157-204,206-216`; `manifest-client.ts:183-227,229-235`.
 
 **What fails:** Disconnect (switch gateway, delete, unmount) while `attemptConnect` is awaiting
@@ -217,6 +232,8 @@ session.
 
 ### LIFE-6 · S3 · Gateway switch leaves the UI "connected" to the old client `[read]`
 
+> **Fix status:** Fixed - package(s) P2a, commit(s) `a59aeb2` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#life-6)
+
 **Where:** `gateway-provider.tsx:1404` (old client disconnected), `:1428-1435` (manifest fetch, ≤~21 s),
 `:1655` (`clientRef.current = client`).
 
@@ -227,6 +244,8 @@ under the new gateway's name.
 
 ### LIFE-7 · S3 · The TLS fingerprint guard is inert `[read]`
 
+> **Fix status:** Not fixed (decision needed) - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#life-7)
+
 **Where:** `gateway-provider.tsx:1635` — `checkTlsFingerprintTofu(gateway, gateway.tlsFingerprint)`;
 `src/lib/gateway/security.ts:66-90`.
 
@@ -236,6 +255,8 @@ certificate fingerprint (React Native fetch cannot). Not a failure by itself, bu
 does not exist. (The 08-05 audit listed "tlsFingerprint displayed pinned but never verified"; it is still true.)
 
 ### LIFE-8 · S3 · Deleting the active gateway waits on a best-effort call `[read]`
+
+> **Fix status:** Fixed - package(s) P2a, commit(s) `a59aeb2` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#life-8)
 
 **Where:** `gateway-provider.tsx:2389` — `await deregisterWithGate(leaving)`.
 
@@ -248,6 +269,8 @@ as active. `disconnectGateway` does the same call as `void … .catch(…)` (`:2
 ## 4. Transport, fetch and data retrieval
 
 ### NET-1 · S2 · Request timeout is cleared when headers arrive `[read]` `[device?]`
+
+> **Fix status:** Fixed - package(s) A1, commit(s) `e21db1c` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#net-1)
 
 **Where:** `src/lib/gateway/http-transport.ts:98` (`clearTimeout(timer)` right after `await fetch`),
 `:111` (`await response.text()`); `node_modules/expo/src/winter/runtime.native.ts:44-53`.
@@ -264,6 +287,8 @@ successful `/health`.) `manifest.ts:fetchGatewayManifestRaw` and `access.ts` do 
 
 ### NET-2 · S2 · No keepalive, no idle detection `[read]` `[device?]`
 
+> **Fix status:** Fixed - package(s) A1, G4, commit(s) `e21db1c`, `203821b` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#net-2)
+
 **Where:** every SSE route in `gate/core/server.mjs` (`streamBackendTurn` `:73-139`, run events `:1334-1372`,
 env run events `:2041-2057`, terminal `:1445-1479`) — none writes a heartbeat (`grep` for `: ping`/keepalive: none);
 client side `client.ts:546-573`, `manifest-client.ts:390-450`, `http-transport.ts:135-219`.
@@ -278,6 +303,8 @@ incident) and that decision is sound for a slow model — but with no *transport
 "model is thinking" from "socket is dead". The two are separable (SSE comment lines vs. content frames).
 
 ### NET-3 · S2 · The phone's session-list timeout is shorter than the read it depends on `[read]`
+
+> **Fix status:** Fixed - package(s) P1, commit(s) `19de6a2` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#net-3)
 
 **Where:** `src/lib/gateway/get-sessions-retry.ts:22` (8 s per attempt, 3 attempts),
 `gateway-provider.tsx:4316` (`openBot` → `getSessions(200)`), `chat-screen.tsx:1690` + `session-analytics.ts:298`
@@ -295,12 +322,16 @@ exactly the dependency (`state.db`) that is already slow.
 
 ### NET-4 · S3 · Reachability verdicts use a timeout the codebase calls too short `[read]`
 
+> **Fix status:** Fixed - package(s) A1, commit(s) `e21db1c` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#net-4)
+
 **Where:** `src/hooks/use-gateway-reachability.ts:15` (`PROBE_TIMEOUT_MS = 1800`) vs `probe.ts:8-12` and
 `client.ts:44-54` (DERP path measured 0.9–1.7 s RTT with loss; 3–3.5 s already produced false negatives).
 
 Saved tailnet gateways can show "unreachable" while reachable.
 
 ### NET-5 · S3 · Terminal input `[read]`
+
+> **Fix status:** Fixed - package(s) A1, commit(s) `e21db1c` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#net-5)
 
 **Where:** `src/lib/terminal/client.ts:151-162`, `terminal-screen.tsx:166-178`.
 
@@ -310,10 +341,14 @@ marks the terminal disconnected although the SSE stream may be fine.
 
 ### NET-6 · S3 · `authorizedFetch` has no timeout `[read]`
 
+> **Fix status:** Fixed - package(s) A1, commit(s) `e21db1c` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#net-6)
+
 **Where:** `manifest-client.ts:937-942` → `streamingFetch` (no timer). Used for CLI-environment run submission; a
 stalled POST never settles.
 
 ### NET-7 · S3 · A broken MagicDNS name pays a failed lookup on every request `[read]`
+
+> **Fix status:** Fixed - package(s) A1, A2, commit(s) `e21db1c`, `790a799` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#net-7)
 
 **Where:** `src/lib/gateway/host-lookup.ts:78-96`. The IPv4 rewrite is tried only *after* the hostname attempt
 fails, per request, with no memory of which candidate last worked.
@@ -325,6 +360,8 @@ fails, per request, with no memory of which candidate last worked.
 None of these timings were measured on a device; they are structural.
 
 ### SPD-1 · S2 · Cold connect is a serial chain with duplicate fetches `[read]`
+
+> **Fix status:** Fixed - package(s) S1a, commit(s) `511b310` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#spd-1)
 
 **Where:** `gateway-provider.tsx:1428-1435` (manifest) → `manifest-client.ts:189-210` (health, then models) →
 `:1556-1560` → `reloadHistoryFor` (`:1146-1268`: session list, then messages).
@@ -343,6 +380,8 @@ Duplicated work on the same connect:
 
 ### SPD-2 · S2 · The fastest probe waits for the slowest `[read]`
 
+> **Fix status:** Fixed - package(s) A1, A2, commit(s) `e21db1c`, `790a799` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#spd-2)
+
 **Where:** `probe.ts:104-135` — `Promise.allSettled` over the wave, *then* a manifest fetch fan-out.
 
 If any of the ≤4 candidates black-holes (a tailnet name while off-tailnet, a stale LAN IP), it holds the wave for its full
@@ -350,6 +389,8 @@ If any of the ≤4 candidates black-holes (a tailnet name while off-tailnet, a s
 `hasGatewayManifest` (≤10 s).
 
 ### SPD-3 · S2 · A 200-session read at both ends of every turn `[read]`
+
+> **Fix status:** Fixed - package(s) S1b, commit(s) `6dca43c` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#spd-3)
 
 **Where:** `chat-screen.tsx:1424-1433,1687-1715`, `session-analytics.ts:226-234,298`.
 
@@ -359,6 +400,8 @@ request on a host documented as single-threaded and `state.db`-bound. Each read 
 timeout) with no abort (the effect only sets a `cancelled` flag).
 
 ### SPD-4 · S2 · Connect-time fan-out on every `connected` transition `[read]`
+
+> **Fix status:** Fixed - package(s) S1a, commit(s) `511b310` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#spd-4)
 
 **Where:** `gateway-provider.tsx`: models `:1678`, manifest refresh `:1702`, approvals `:2750-2765`, workflows `:3042-3049`,
 routine re-arm `:4031-4035`, `cron.list` `:4071-4088`, `listBots` `:4099-4111`, push registration `:1519`, plus
@@ -370,6 +413,8 @@ gateway the code documents as single-threaded. Two of them read the same thing t
 
 ### SPD-5 · S2 · Only the manifest is cached `[read]`
 
+> **Fix status:** Fixed - package(s) S1b, commit(s) `6dca43c` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#spd-5)
+
 **Where:** `grep` for cache use: `src/lib/portal/attach-manifest.ts` is the only data cache. Chat history, sessions, Bot
 roster, models, routines and spend are fetched fresh for every visit, and are empty/loading (or absent) offline or while
 the Gate is slow.
@@ -379,10 +424,14 @@ slow or failed read is always visible.
 
 ### SPD-6 · S3 · Roster re-read on every visit `[read]`
 
+> **Fix status:** Fixed - package(s) S1b, commit(s) `6dca43c` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#spd-6)
+
 **Where:** `chat-screen.tsx:1397-1416` — depends on `[surface.kind, status, listBots]`, so each return to the roster and
 each reconnect issues `/v1/bots` (which enumerates Hermes profiles on the Gate) with no cache. Failure handling is UI-1.
 
 ### SPD-7 · S2 · Resolving a backend starts every backend `[read]`
+
+> **Fix status:** Fixed - package(s) G2, commit(s) `8063ac7` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#spd-7)
 
 **Where:** `gate/core/server.mjs:1097-1119` (`resolveBackendFor`), `:1160-1163`, `:1046-1050`, `:2152-2162`;
 `gate/core/cli-environments/backend-manager.mjs:96-142`; `native-server.mjs:6,74-112`.
@@ -398,6 +447,8 @@ waits up to `DEFAULT_START_TIMEOUT_MS = 30 s`, then the walk continues.
 
 ### SPD-8 · S3 · The cached manifest is the last resort, not the first `[read]`
 
+> **Fix status:** Fixed - package(s) S1a, commit(s) `511b310` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#spd-8)
+
 **Where:** `attach-manifest.ts:49-53` — live fetch (10 s) → sleep 0.9 s → live fetch (10 s) → *then* the cache. With a
 known Gate that is down or slow, `client.connect()` cannot start for ~21 s although a usable manifest is on disk.
 
@@ -406,6 +457,8 @@ known Gate that is down or slow, `client.connect()` cannot start for ~21 s altho
 ## 6. Chat and runs
 
 ### SEND-2 · S2 · A streamed turn with no session id creates a session per message `[read]`
+
+> **Fix status:** Fixed - package(s) G4, P1, P2b, commit(s) `203821b`, `19de6a2`, `4a9e3cc` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#send-2)
 
 **Where:** `gate/core/server.mjs:2230-2234` (`body.sessionId ?? createSession(...)`), `:2233-2247` (stream returns no id),
 `gateway-provider.tsx:2529-2538`.
@@ -418,11 +471,15 @@ opens a **new** Hermes session, the streamed response never tells the phone its 
 
 ### SEND-3 · S3 · Stop discards the partial reply `[read]`
 
+> **Fix status:** Fixed - package(s) P2b, commit(s) `4a9e3cc` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#send-3)
+
 **Where:** `gateway-provider.tsx:3438-3450` — `setMessages(prev => prev.filter(m => !m.streaming))`. The text already streamed
 is removed from view, and the `catch` in `sendMessage` then runs `convertStreamError` (`:2648-2651`) on a message that no
 longer exists.
 
 ### SEND-4 · S3 · `/agent` commands can't be cancelled `[read]`
+
+> **Fix status:** Fixed - package(s) P2b, commit(s) `4a9e3cc` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#send-4)
 
 **Where:** `gateway-provider.tsx:2217-2248`. `runAgentCommand` passes no `signal`, sets `activeRunIdRef.current = runId`
 (`:2231`) and never clears it. `cancelCommand` (`:3729-3749`) aborts `abortControllerRef`/`runAbortControllerRef`, neither of
@@ -431,11 +488,15 @@ which this call uses, so Cancel only edits the transcript. A stale `activeRunIdR
 
 ### SEND-5 · S3 · `/model <name>` throws its validation away `[read]`
 
+> **Fix status:** Fixed - package(s) U1, commit(s) `3de607a` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#send-5)
+
 **Where:** `src/lib/gateway/slash-commands.ts:1049` — `const validation = await validateModelId(...)` is never read
 (ESLint: `'validation' is assigned a value but never used`). The bare form sets the override with none of the "not in the
 live catalog" warning that `/model set` (`:1063`) gives, and still pays the catalog read.
 
 ### SEND-6 · S3 · Fire-and-forget profile writes `[read]`
+
+> **Fix status:** Fixed - package(s) P2b, commit(s) `4a9e3cc` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#send-6)
 
 **Where:** `gateway-provider.tsx` — 14 × `void upsertGateway(x).then(setGateways)` with no `.catch`
 (`:1471,1645,1684,2133,2179,2595,2645,2689,3904,3939,4338,4416,4444,4635`); stale bases at `:2589`, `:2642`, `:2686`
@@ -445,6 +506,8 @@ A failed write (storage, Keystore — STORE-2) is silently lost; a long turn wri
 began, undoing a model/session pin the user changed meanwhile.
 
 ### SEND-7 · S2 · The run driver gives up on the first transient failure `[read]`
+
+> **Fix status:** Fixed - package(s) M1, commit(s) `143d3f7` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#send-7)
 
 **Where:** `src/lib/gateway/runs.ts:281-352` — three `getRunStatus` sites each return `{ status: 'unknown', unresolved: true }`
 on one failure; `:328` swallows a stream error and immediately polls once.
@@ -459,6 +522,8 @@ leaves the run "unresolved" until the next reconnect.
 
 ### STORE-1 · S2 · Transcripts: unserialized read-modify-write, written per streamed delta `[read]`
 
+> **Fix status:** Fixed - package(s) ST1, commit(s) `79b7305` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#store-1)
+
 **Where:** `src/lib/gateway/transcript.ts:31-55`; `gateway-provider.tsx:2324-2352` (`updateLocalMessage`),
 `:3218-3224` (`onAgentDelta`).
 
@@ -468,6 +533,8 @@ Every streamed delta of an `/agent` command calls `updateLocalMessage` → `upda
 updates can land out of order and leave a stale summary, and the I/O rate follows the token rate.
 
 ### STORE-2 · S3 · All gateways live in one SecureStore item `[read]`
+
+> **Fix status:** Partly fixed - package(s) ST1, ST2, commit(s) `79b7305`, `49b7026` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#store-2)
 
 **Where:** `src/lib/gateway/storage.ts:36-38`, `src/lib/storage/secure-key-value.ts:52-63,65-91`.
 
@@ -479,6 +546,8 @@ updates can land out of order and leave a stale summary, and the I/O rate follow
   `bootstrap` reports "Could not load saved gateway settings" (`gateway-provider.tsx:2021-2027`).
 
 ### STORE-3 · S3 · Loads are unguarded `[read]`
+
+> **Fix status:** Fixed - package(s) ST1, commit(s) `79b7305` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#store-3)
 
 **Where:** `transcript.ts:13-22` (only `JSON.parse` is in the `try`), `session-persistence.ts:124-134,211-221`,
 `gateway-provider.tsx:1975-1982` (`Promise.all` of four loads).
@@ -494,6 +563,8 @@ limit needs a heavy user — `[device?]`, unverified.
 
 ### UI-1 · S2 · One failed roster read empties the Bot list `[read]`
 
+> **Fix status:** Fixed - package(s) S1b, commit(s) `6dca43c` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#ui-1)
+
 **Where:** `chat-screen.tsx:1407-1412` — the `catch` does `setRosterRows([{ kind: 'configurable' }])`.
 
 This effect re-runs on every `status` change (each reconnect) and each return to the roster. A transient failure after a
@@ -501,6 +572,8 @@ blip replaces a good roster with the configurable-only row plus an error. The pu
 comment ("a failed RE-read never wipes rows") show the intended behaviour; the mount path does not follow it.
 
 ### UI-2 · S2 · Pause/resume folds an empty routine list as a success `[read]`
+
+> **Fix status:** Fixed - package(s) U1, commit(s) `3de607a` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#ui-2)
 
 **Where:** `chat-screen.tsx:1517-1542` (`handleRoutineTogglePause`), wired at `:2218` and `routines-pane.tsx:119`.
 
@@ -511,11 +584,15 @@ right above it is correct.)
 
 ### UI-3 · S3 · A 1 Hz timer for the whole app lifetime `[read]`
 
+> **Fix status:** Fixed - package(s) U1, commit(s) `3de607a` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#ui-3)
+
 **Where:** `src/components/voice/handsfree-call-banner.tsx:38-45`, mounted unconditionally at `src/app/_layout.tsx:720`.
 `useSyncExternalStore` subscribes with `setInterval(onStoreChange, 1000)` and a snapshot that changes every second, and the
 `if (!active) return null` comes after the hooks, so an idle app re-renders this component 60×/minute.
 
 ### UI-4 · S3 · No safety net and no field telemetry `[read]`
+
+> **Fix status:** Fixed - package(s) U2, commit(s) `6017230` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#ui-4)
 
 There is no exported `ErrorBoundary` in `src/app` (the providers above the Stack are uncovered), no
 `ErrorUtils.setGlobalHandler`, and no crash/failure reporting dependency (`grep` for sentry/crashlytics/bugsnag: none). The
@@ -523,6 +600,8 @@ only boundaries are four `componentDidCatch` classes around canvases. The one fi
 "Runtime environment" screen. A failure in the field is invisible until the user reports it.
 
 ### UI-5 · S3 · Terminal `[read]`
+
+> **Fix status:** Fixed - package(s) U1, commit(s) `3de607a` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#ui-5)
 
 **Where:** `terminal-screen.tsx:94-100,140`. The effect that owns the live shell has `[gatewayId, status]` in its dependency list
 and closes the session in cleanup, so any `status` flip (a health blip → `reconnecting` → `connected`) closes the stream (the Gate
@@ -535,6 +614,8 @@ before the request succeeds (`:164-178`).
 
 ### NOTIF-1 · S3 · Permission handling `[read]`
 
+> **Fix status:** Fixed - package(s) M1, commit(s) `143d3f7` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#notif-1)
+
 **Where:** `src/lib/notifications/local.ts:35-44,70`. `permissionGranted` caches only `true`, so a denied state re-calls
 `requestPermissionsAsync()` for every notice; and `present()` returns early while foregrounded, so the request is issued when the
 app is backgrounded — where Android 13+ cannot show the dialog. `syncPushRegistration` requires an already-granted permission
@@ -542,6 +623,8 @@ app is backgrounded — where Android 13+ cannot show the dialog. `syncPushRegis
 (`use-notification-preferences.ts:146`). By design (A5) but worth knowing when "push never arrived".
 
 ### PUSH-1 · S3 · Receipts are requested before they exist `[read]` (medium confidence)
+
+> **Fix status:** Fixed - package(s) G3, commit(s) `97f25f0` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#push-1)
 
 **Where:** `gate/core/push-send.mjs:91` — `collectReceipts` runs immediately after `send`. Expo generates receipts asynchronously
 (its docs advise waiting ≥15 minutes), so the poll normally returns nothing: `DeviceNotRegistered` is only learned from the
@@ -552,6 +635,8 @@ synchronous ticket, dead tokens found by receipt are never pruned, and every not
 ## 10. Gate (server, supervision, stores)
 
 ### GATE-1 · S1 · One unhandled child-process error takes the Gate down `[read]`
+
+> **Fix status:** Fixed - package(s) G1, G2, commit(s) `3399f6e`, `8063ac7` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#gate-1)
 
 **Where (no `error` listener on a spawned child):** `gate/core/cli-environments/native-server.mjs:114`,
 `stdio-server.mjs:50`, `gate/core/voice/engines/local-engine.mjs:18` (only `exit` is handled, `:106`).
@@ -570,6 +655,8 @@ survive. `voice-worker` restart logic assumes the Gate outlives the worker.
 
 ### GATE-2 · S2 · The Codex backend never recovers `[read]`
 
+> **Fix status:** Fixed - package(s) G2, commit(s) `8063ac7` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#gate-2)
+
 **Where:** `stdio-server.mjs:33` (`if (handle) return handle;`), no `exit` hook anywhere in the file;
 `backend-manager.mjs:96-128` caches the server forever.
 
@@ -578,6 +665,8 @@ request ("app-server is not running") until the Gate restarts. The HTTP variant 
 the stdio variant has no equivalent.
 
 ### GATE-6 · S2 · Auth stores: non-atomic writes and swallowed read errors `[read]`
+
+> **Fix status:** Fixed - package(s) G3, commit(s) `97f25f0` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#gate-6)
 
 **Where:** `gate/core/device-tokens.mjs:20-33` (read swallows to `[]`; `writeFile` truncates), `tokens.mjs:36-42`,
 `pairing.mjs:17-28,41-51`, `push-tokens.mjs:29-45`. Contrast `providers/store.mjs`, `credentials/vault.mjs`, `cli-environments/store.mjs`,
@@ -594,6 +683,8 @@ the stdio variant has no equivalent.
 
 ### GATE-7 · S2 · The unauthenticated pairing endpoint is unbounded `[read]`
 
+> **Fix status:** Fixed - package(s) G3, commit(s) `97f25f0` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#gate-7)
+
 **Where:** `gate/core/server.mjs:784-795` (`readJsonBody` collects the whole stream, no size limit — for every route),
 `:819-875` (`/.well-known/gateway/access`, unauthenticated), `:767` (`replayCache = new Set()`, never pruned),
 `pairing.mjs:41-51` (pending list grows per distinct device id, whole-file read/rewrite each time).
@@ -604,16 +695,22 @@ and a request lose updates (read-modify-write across processes).
 
 ### GATE-8 · S3 · Provider-path chat outlives the client `[read]`
 
+> **Fix status:** Fixed - package(s) G4, commit(s) `203821b` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#gate-8)
+
 **Where:** `server.mjs:163-282` (`proxyChat`, `relayNormalizedSse`), `:198` (`fetch` with no signal/timeout). `streamBackendTurn`
 aborts on `res.close` (`:90`) but this path does not, so Stop or a dropped phone lets the vendor stream keep running (and being paid for),
 and a vendor that never answers holds the request for undici's default (~5 min).
 
 ### GATE-9 · S3 · Environment run-event SSE ignores disconnect `[read]`
 
+> **Fix status:** Fixed - package(s) G4, commit(s) `203821b` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#gate-9)
+
 **Where:** `server.mjs:2041-2057` — `for await (const event of environmentService.events(...))` with no `close` hook. A viewer that leaves
 keeps a subscription until the run ends; for a run parked on approval, that is indefinitely.
 
 ### GATE-10 · S3 · Two DELETE routes have no error mapping `[read]`
+
+> **Fix status:** Fixed - package(s) G4, commit(s) `203821b` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#gate-10)
 
 **Where:** `server.mjs:1882` (`removeJob`), `:1986` (`deleteSession`). Unlike their siblings they are not wrapped, so a backend refusal
 (unknown id, host error) becomes a generic `500 Internal Server Error` with a stack logged, and the app cannot tell "already gone" from
@@ -621,11 +718,15 @@ keeps a subscription until the run ends; for a run parked on approval, that is i
 
 ### GATE-11 · S3 · `/health` cannot see a dead backend `[read]`
 
+> **Fix status:** Not fixed (decision needed) - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#gate-11)
+
 **Where:** `server.mjs:801-809` returns `{status:'ok'}` without touching a backend. The app's connection monitor uses only this
 (`client.ts:246`, `manifest-client.ts:252`), so a Gate whose Hermes is wedged (the documented `state.db` failure) reads as `connected`
 while chat, sessions and Bots fail.
 
 ### GATE-12 · S3 · `ws` is imported but not declared by `gate/` `[read]`
+
+> **Fix status:** Fixed - package(s) G1, commit(s) `3399f6e` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#gate-12)
 
 **Where:** `gate/core/voice/media-socket.mjs:18`; `gate/package.json` has no `dependencies` (root `package.json` carries `ws`). A
 Gate deployed from `gate/` alone, or a root install skipped after a pull, fails at import when the media socket loads.
@@ -635,6 +736,8 @@ Gate deployed from `gate/` alone, or a root install skipped after a pull, fails 
 ## 11. Voice (JS + Kotlin)
 
 ### VOICE-1 · S1 (latent) · Uncaught `InterruptedException` on hang-up `[read]` `[device?]`
+
+> **Fix status:** Fixed - package(s) K1, commit(s) `4466fd9` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#voice-1)
 
 **Where:** `modules/handsfree-voice/android/src/main/java/com/versutus/handsfreevoice/HandsfreeGateMedia.kt:93`
 (`playbackThread?.interrupt()` in `stop()`), `:245` (`Thread.sleep(5)` in the playback loop, no `try/catch`).
@@ -646,6 +749,8 @@ on device only because Gate calls don't currently open (VOICE-6).
 
 ### VOICE-2 · S2 · `JitterBuffer` is not thread-safe `[read]` `[device?]`
 
+> **Fix status:** Fixed - package(s) K1, commit(s) `4466fd9` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#voice-2)
+
 **Where:** `JitterBuffer.kt:21-60` (`ArrayDeque`, `totalBytes`, `primed`, `activeGen` — no lock), used from the OkHttp reader thread
 (`push`, `cancel` via `handleTextFrame`), the playback thread (`drain`) and the caller thread (`flush` in `start`/`stop`).
 
@@ -654,6 +759,8 @@ on device only because Gate calls don't currently open (VOICE-6).
 OkHttp thread (surfacing as a socket failure). The JVM tests are single-threaded.
 
 ### VOICE-3 · S2 · The native error frame is hand-built JSON `[read]`
+
+> **Fix status:** Fixed - package(s) K1, commit(s) `4466fd9` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#voice-3)
 
 **Where:** `HandsfreeGateMedia.kt:143` interpolates `error.message` into a JSON string (`:137` is a fixed string and is fine); the consumer is
 `src/context/handsfree-voice-provider.tsx:186-194` (`isRetryableSocketFailure` → `parseGateFrame`, `catch → false`).
@@ -664,16 +771,22 @@ as retryable, and the Gate's 20 s resume window (`media-socket.mjs:26`) is never
 
 ### VOICE-4 · S3 · No ping on the media socket `[read]`
 
+> **Fix status:** Fixed - package(s) K1, commit(s) `4466fd9` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#voice-4)
+
 **Where:** `HandsfreeGateMedia.kt:42-44` (`readTimeout(0)`, no `pingInterval`). A half-open link is never detected by the phone;
 reconnect only triggers from `onFailure`. The Gate's 30 s no-audio timeout closes only its side.
 
 ### VOICE-5 · S3 · Read loops spin `[read]`
+
+> **Fix status:** Fixed - package(s) K1, commit(s) `4466fd9` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#voice-5)
 
 **Where:** `HandsfreeGateMedia.kt:201` capture loop (`if (read <= 0) continue`), `HandsfreeCallService.kt:773` (same). A failing
 `AudioRecord.read` (mic taken by another app, audio focus loss) returns an error code immediately and the loop busy-waits at full CPU
 until `running`/`vadRunning` flips.
 
 ### VOICE-6 · Hands-free calls never open `[known]`
+
+> **Fix status:** Known / open (unchanged) - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#voice-6)
 
 `PENDING.md:23-24` (2026-09-18, handed to another agent). Listed so VOICE-1/2 are read with the right expectation: the Gate media path is
 under-exercised on device.
@@ -683,6 +796,8 @@ under-exercised on device.
 ## 12. Environment, tests, tooling
 
 ### ENV-1 · S2 · The main checkout can't run the gate `[run]`
+
+> **Fix status:** Not fixed (needs your action, nothing touched) - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#env-1)
 
 `C:\Projects\Versutus\node_modules` (709 packages) is missing `@babel/code-frame`, `@eslint-community/eslint-utils` and
 `@expo-google-fonts/instrument-serif`; `Versutus-ui-audit` is the same. `Versutus-build` and `Versutus-nocturne` (716) are complete.
@@ -694,10 +809,14 @@ Consequences: `tsc` fails (`font-provider.tsx:10`, TS2307), `jest` and `eslint` 
 
 ### TEST-1 · S3 · Load-sensitive suites `[run]`
 
+> **Fix status:** Fixed - package(s) M1, commit(s) `143d3f7` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#test-1)
+
 `__tests__/fleet-roster-state-test.ts` and `fleet-route-test.ts` exceeded jest's 5 s timeout in a parallel full run (each suite took
 ~20 s to load) and pass alone in 4 s. `npm test` uses `--runInBand`, which may hide it; a slower machine or CI may not.
 
 ### LINT-1 · S3 · The lint gate skips `scripts/` and `modules/` `[run]`
+
+> **Fix status:** Fixed - package(s) M1, manual, commit(s) `143d3f7`, `a699ddd` - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#lint-1)
 
 `npm run lint` = `expo lint && eslint gate`. Linting `scripts/` shows 7 `no-undef` errors for `Buffer`
 (`register-desktop-agent.mjs:10,13,17,23`, `smoke-provider-runtime.mjs:29,30`, `voice-spikes/s1-codex-realtime.mjs:44`) — the same
@@ -707,15 +826,21 @@ class §1.4 of the 08-19 audit fixed for `gate/` — plus dead variables (`hasFl
 
 ### COV-1 · S3 · Coverage is narrow `[read]`
 
+> **Fix status:** Not fixed (decision needed) - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#cov-1)
+
 `package.json` `jest.collectCoverageFrom = ["src/lib/gateway/**/*.ts"]` with thresholds only there. `gateway-provider.tsx` (4.9k lines), the
 UI, the Gate (node:test, no coverage) and the Kotlin/Swift modules are unmeasured. Nearly every S1/S2 above lives in an unmeasured place.
 
 ### CFG-1 · S3 · Fallback hosts are compiled in `[read]`
 
+> **Fix status:** Not fixed (low value, your call) - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#cfg-1)
+
 `app.json` → `extra.gatewayHosts` hard-codes `ethanspc.tail3a1a8a.ts.net`, `100.95.137.83`, `192.168.4.30`, `192.168.4.28`. The saved
 profile and `lastSuccessfulUrl` mask this normally; a changed PC address or a second user needs a rebuild for the fallback list.
 
 ### DEAD-1 · S3 · Discovery is off but still in the connect path `[read]`
+
+> **Fix status:** Not fixed (refactor, out of scope) - [diagnosis and fix](failure-audit-2026-09-30-fixes.md#dead-1)
 
 `src/lib/discovery/scanner.ts` — `isNativeDiscoveryAvailable()` is `false`, so `discoverForProbe` returns `[]` at once and the beacon
 branches (`gateway-provider.tsx:1855-1873`, `mergeDiscoveredProbeUrls`) never run. Not a failure; it means OpenClaw gateways cannot be
