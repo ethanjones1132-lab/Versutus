@@ -19,6 +19,12 @@
 
 const ALLOWED_METHODS = 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS';
 
+// Response headers a browser client may read. CORS exposes nothing by default,
+// so a streamed turn's contract — which session it belongs to, and how long to
+// wait for a heartbeat — would be invisible to the web build even though the
+// Gate sent it.
+const EXPOSED_HEADERS = 'X-Versutus-Session-Id, X-Versutus-Keepalive-Ms';
+
 /** "http://A:8081, https://b" -> ["http://a:8081","https://b"] (trimmed, lowercased, deduped). */
 export function parseAllowedOrigins(raw) {
   if (typeof raw !== 'string') return [];
@@ -46,6 +52,7 @@ export function webCors(req, res, rawList = process.env.VERSUTUS_GATE_ALLOW_ORIG
   const origin = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
   if (origin && allowed.includes(origin.toLowerCase())) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Expose-Headers', EXPOSED_HEADERS);
     res.setHeader('Vary', 'Origin');
   }
 
@@ -55,6 +62,9 @@ export function webCors(req, res, rawList = process.env.VERSUTUS_GATE_ALLOW_ORIG
   // browser refuses to send the real call — deny stays silent, like today.
   res.statusCode = 204;
   res.setHeader('Access-Control-Allow-Methods', ALLOWED_METHODS);
+  // Echoing what was asked for is what admits `X-Versutus-Turn-Id` (and any
+  // other header this build sends) without pinning a list that would go stale
+  // the moment the phone grows one.
   const requestHeaders = req.headers['access-control-request-headers'];
   if (typeof requestHeaders === 'string' && requestHeaders.trim()) {
     res.setHeader('Access-Control-Allow-Headers', requestHeaders.trim());

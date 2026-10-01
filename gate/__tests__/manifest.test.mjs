@@ -76,6 +76,8 @@ test('advertises design-spec transport, endpoints, and capabilities', () => {
     health: '/health',
     models: '/v1/models',
     chat: '/v1/chat/completions',
+    // A streamed turn can outlive its socket, so Stop is a route of its own.
+    chatCancel: '/v1/chat/cancel',
     providers: '/v1/providers',
     environments: '/v1/environments',
     capabilitiesRpc: '/v1/capabilities/rpc',

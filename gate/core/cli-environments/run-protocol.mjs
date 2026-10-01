@@ -8,6 +8,8 @@
  * - `onEmit` mirrors each freshly emitted event to a subscriber (the disk
  *   archive) without changing what the stream yields. A throwing subscriber
  *   must never break the run, so its errors are swallowed here.
+ * - `stream(signal)` is the one way in, and the signal is how a subscriber that
+ *   has left lets go: see the release note there.
  */
 export function createEventLog(runId, { events: seeded, onEmit } = {}) {
   const events = seeded ? [...seeded] : [];
@@ -38,19 +40,55 @@ export function createEventLog(runId, { events: seeded, onEmit } = {}) {
     return event;
   }
 
-  async function* stream() {
+  async function* stream(signal) {
     let index = 0;
-    while (true) {
-      while (index < events.length) {
-        const event = events[index];
-        index += 1;
-        yield event;
-        if (/^run\.(completed|failed|cancelled)$/.test(event.type)) return;
+    let released = false;
+    // A parked waiter is the only thing holding a subscription to a quiet run,
+    // and a queued `return()` cannot take it: the loop re-parks at a fresh
+    // await every time round, so a return waiting behind an in-flight `next()`
+    // is never honoured and the waiter outlives the subscriber. The signal is
+    // therefore the unsubscribe — it drops the waiter and wakes the generator so
+    // this loop can end for real.
+    let wake = null;
+    const release = () => {
+      if (released) return;
+      released = true;
+      if (!wake) return;
+      const parked = waiters.indexOf(wake);
+      if (parked !== -1) waiters.splice(parked, 1);
+      wake();
+    };
+    if (signal?.aborted) return;
+    signal?.addEventListener('abort', release, { once: true });
+    try {
+      for (;;) {
+        while (index < events.length) {
+          if (released) return;
+          const event = events[index];
+          index += 1;
+          yield event;
+          if (/^run\.(completed|failed|cancelled)$/.test(event.type)) return;
+        }
+        if (terminal || released) return;
+        await new Promise((resolve) => {
+          wake = () => { wake = null; resolve(); };
+          waiters.push(wake);
+        });
       }
-      if (terminal) return;
-      await new Promise((resolve) => waiters.push(resolve));
+    } finally {
+      signal?.removeEventListener('abort', release);
+      release();
     }
   }
 
-  return { emit, stream, events: () => events.slice() };
+  /**
+   * How many subscribers are parked waiting for the next event. A released one
+   * has to drop out of this: it is the only honest witness that a viewer who
+   * left is no longer holding the run open.
+   */
+  function pendingWaiters() {
+    return waiters.length;
+  }
+
+  return { emit, stream, events: () => events.slice(), pendingWaiters };
 }

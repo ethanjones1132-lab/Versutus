@@ -95,6 +95,32 @@ test('the preflight is answered centrally, before routing', async () => {
   }
 });
 
+test('a listed origin may read the streaming contract, and may send the turn id', async () => {
+  process.env.VERSUTUS_GATE_ALLOW_ORIGIN = 'http://192.168.1.20:8081';
+  const gate = await makeGate();
+  try {
+    const res = await fetch(`${gateBase(gate)}/v1/models`, { headers: { Origin: 'http://192.168.1.20:8081' } });
+    // CORS exposes nothing by default, so a browser build could not read which
+    // session a streamed turn belongs to, nor how long to wait for a heartbeat.
+    assert.match(res.headers.get('access-control-expose-headers') ?? '', /X-Versutus-Session-Id/);
+    assert.match(res.headers.get('access-control-expose-headers') ?? '', /X-Versutus-Keepalive-Ms/);
+
+    // The preflight must admit the turn-id header the streamed turn relies on.
+    const preflight = await fetch(`${gateBase(gate)}/v1/chat/completions`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://192.168.1.20:8081',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'authorization, content-type, x-versutus-turn-id',
+      },
+    });
+    assert.equal(preflight.status, 204);
+    assert.match(preflight.headers.get('access-control-allow-headers') ?? '', /x-versutus-turn-id/i);
+  } finally {
+    await gate.close();
+  }
+});
+
 test('an unlisted origin stays blind even when a list exists', async () => {
   process.env.VERSUTUS_GATE_ALLOW_ORIGIN = 'http://192.168.1.20:8081';
   const gate = await makeGate();

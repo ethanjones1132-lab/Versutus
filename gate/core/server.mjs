@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 
 import { webCors } from './cors.mjs';
+import { sseHeaders, startSseKeepalive, createSseFrameTracker } from './sse.mjs';
 import { loadCapabilities, describeKinds, resolveManifestInstances } from './capabilities/registry.mjs';
 import { buildInstanceHandlers } from './capabilities/dispatch.mjs';
 import { createRegistryMethods } from './capabilities/registry-methods.mjs';
@@ -59,6 +60,28 @@ const FLAVOR_MODULES = { openai: openaiFlavor, anthropic: anthropicFlavor };
 const ACCESS_MAX_BODY_BYTES = 16 * 1024;
 const AUTH_MAX_BODY_BYTES = 64 * 1024 * 1024;
 
+// A phone that names its turn can detach from it: a backgrounded app has its
+// socket suspended or killed by Android, which says nothing about the turn
+// still running on the Gate. Such a turn is kept alive (see streamBackendTurn)
+// and reaped by three bounds, because a turn nobody can see must not be able to
+// run forever: an explicit cancel, this age, and this many at a time.
+const TURN_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
+const DEFAULT_DETACHED_TURN_MAX_MS = 10 * 60 * 1000;
+const DETACHED_TURN_LIMIT = 8;
+// A vendor that accepts the request and never answers would otherwise hold it
+// for undici's default forever. This bounds the wait for RESPONSE HEADERS
+// only: a slow stream keeps streaming for as long as it is making progress.
+const DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS = 120 * 1000;
+
+/** The caller's turn id, or null when it sent none (or an unusable one). */
+function readTurnId(value) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === 'string' && TURN_ID_PATTERN.test(raw) ? raw : null;
+}
+
+/** What a stream race yields once the client is gone, so `next.done` stays a real result. */
+const CLOSED_STREAM = Object.freeze({ closed: true, done: true, value: undefined });
+
 /** The turn to send onward. A native session already holds the history. */
 function lastUserText(messages = []) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -76,13 +99,47 @@ function lastUserText(messages = []) {
  * runner typed and spoken turns share. The runner reports deltas, tool calls
  * and the model that ran; this writer only shapes them onto the wire and adds
  * the empty-turn guarantee.
+ *
+ * A turn that named itself is detachable. A phone that locks mid-reply has its
+ * socket suspended or killed, which is indistinguishable from the user pressing
+ * Stop, and reading it as the latter threw the answer away with the reply: no
+ * stream, and no notification either, because a dropped turn has no text to
+ * report. So a close on a named turn detaches instead of aborting — the turn
+ * finishes on the Gate and its reply arrives as a push — while an unnamed turn
+ * (every client before this header existed) keeps the old meaning of a close.
  */
-async function streamBackendTurn(backend, sessionId, { text, model }, res) {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
+async function streamBackendTurn(backend, sessionId, { text, model }, res, {
+  callerId = 'anonymous',
+  turnId = null,
+  inFlightTurns,
+  keepaliveIntervalMs,
+  detachedTurnMaxMs = DEFAULT_DETACHED_TURN_MAX_MS,
+} = {}) {
+  // One turn per turn id, per caller. The id is how Stop finds this turn, so a
+  // second turn claiming an id that is still in use would take the entry with
+  // it: the first turn's `finally` would then delete the SECOND turn's entry,
+  // leaving it unstoppable, invisible to close() and uncounted against the
+  // detached bound. Refused here, before any stream header is written, so the
+  // client gets a JSON answer rather than a 200 it would read as a turn.
+  const key = turnId && inFlightTurns ? `${callerId}:${turnId}` : null;
+  if (key && inFlightTurns.has(key)) {
+    res.writeHead(409, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: {
+        message: `Turn "${turnId}" is already running. Send it under a new turn id, or stop that one first.`,
+        code: 'turn_id_in_use',
+      },
+    }));
+    return null;
+  }
+
+  res.writeHead(200, sseHeaders({
+    // The streamed turn is the only chat answer that carries no body to read
+    // the session out of, so a phone with no session of its own would open a
+    // new one every turn and lose the thread.
+    ...(safeHeaderValue(sessionId) ? { 'X-Versutus-Session-Id': sessionId } : {}),
+  }));
+  const stopKeepalive = startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
 
   // A response that closes before we finish is the client walking away (the
   // app's "stop" affordance aborting its fetch, or the network dropping) —
@@ -92,9 +149,41 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
   res.on('close', () => { clientDisconnected = true; });
 
   const controller = new AbortController();
-  // A client that walks away must also stop the upstream turn, or the request
-  // keeps streaming into a socket nobody is reading.
-  res.on('close', () => controller.abort());
+  const turn = key
+    ? { controller, startedAt: Date.now(), detached: false, finished: false, timer: null }
+    : null;
+  if (turn) inFlightTurns.set(key, turn);
+  res.on('close', () => {
+    if (!turn) {
+      // A client that walks away must also stop the upstream turn, or the
+      // request keeps streaming into a socket nobody is reading.
+      controller.abort();
+      return;
+    }
+    // Node emits `close` after `finish` on a normal completion, so a turn that
+    // already ran to its end reaches this handler too. A finished turn cannot
+    // be detached: its `finally` has cleared the timer and left the map, so
+    // arming one here would hold it for the whole age bound with nothing to
+    // reap and nothing able to clear it.
+    if (turn.finished) return;
+    // An explicit cancel already stopped it; the turn is on its way out.
+    if (controller.signal.aborted) return;
+    // The bound on how many turns may run unseen. Past it a close is read as
+    // the stop it used to be: an unbounded set of invisible turns is how a
+    // Gate ends up paying for replies nobody will ever read.
+    if ([...inFlightTurns.values()].filter((entry) => entry.detached).length >= DETACHED_TURN_LIMIT) {
+      controller.abort();
+      return;
+    }
+    turn.detached = true;
+    // Writes past here are already suppressed by clientDisconnected, so the
+    // turn simply runs to its own conclusion under the age bound.
+    turn.timer = setTimeout(
+      () => controller.abort(),
+      Math.max(0, detachedTurnMaxMs - (Date.now() - turn.startedAt)),
+    );
+    turn.timer.unref?.();
+  });
 
   // The reply text so far (capped): returned to the caller for the push
   // notifier when the turn completes. A stopped or dropped turn returns null
@@ -107,7 +196,7 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
   };
 
   try {
-    const { hasContent, report } = await runBackendTurn(backend, sessionId, { text, model }, {
+    const { hasContent, report, aborted } = await runBackendTurn(backend, sessionId, { text, model }, {
       signal: controller.signal,
       onDelta: collectDelta,
       // Raw OpenAI-shaped payloads, relayed verbatim so a frame the runner
@@ -117,12 +206,23 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
       },
     });
 
+    // An aborted turn came back empty BECAUSE it was stopped, and `empty_turn`
+    // is the phone's verdict that nothing answered. The runner reports an abort
+    // as contentless (turn-runner's ABORTED_OUTCOME), so without this a turn the
+    // caller itself ended — Stop, which now cancels over /v1/chat/cancel while
+    // the socket is deliberately still open — arrives as "The backend completed
+    // the turn with no assistant content.", which the app raises as a
+    // streamError before it checks its own abort and shows as "The model did
+    // not answer", with advice to pick another model. The caller stopped it, so
+    // the only thing left to say is that the stream is over.
+    const stopped = aborted === true || controller.signal.aborted;
+
     // Same truth the non-streaming path reports: which model actually ran.
     if (!clientDisconnected && report.model) {
       res.write(`data: ${JSON.stringify({ ...report, choices: [] })}\n\n`);
     }
 
-    if (!clientDisconnected && !hasContent) {
+    if (!clientDisconnected && !stopped && !hasContent) {
       // The backend reported the turn as done, but nothing came back that
       // the user could see — a clean [DONE] here would render as a silent
       // empty bubble with no indication anything went wrong.
@@ -131,18 +231,43 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res) {
       })}\n\n`);
     }
   } catch (error) {
-    if (!clientDisconnected) {
+    // Same truth as above, from the other direction: an abort that surfaced as
+    // a throw is still the caller's stop, not a backend failure to report.
+    if (!clientDisconnected && !controller.signal.aborted) {
       const code = typeof error?.code === 'string' && /^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(error.code)
         ? error.code : 'backend_error';
       res.write(`data: ${JSON.stringify({ error: { message: error.message, code } })}\n\n`);
     }
   } finally {
+    stopKeepalive();
     if (!clientDisconnected) {
       res.write('data: [DONE]\n\n');
       res.end();
     }
+    if (turn) {
+      turn.finished = true;
+      clearTimeout(turn.timer);
+      // Only the turn that owns the key may release it: a turn that was
+      // replaced under its id (or one that outlived a close() that cleared the
+      // map) must not evict the entry its Stop is found through.
+      if (inFlightTurns.get(key) === turn) inFlightTurns.delete(key);
+    }
   }
-  return clientDisconnected || !collected ? null : collected;
+  // An aborted turn never earned a notice, however much text it had already
+  // streamed: the phone asked it to stop. A detached turn that ran to its end
+  // has an answer, and this is the only way that answer can reach the phone.
+  return controller.signal.aborted || !collected ? null : collected;
+}
+
+/**
+ * Whether a value can be written into a response header at all.
+ *
+ * A session id can arrive from the client, and Node throws ERR_INVALID_CHAR
+ * from inside writeHead for a value carrying a newline — an unhandled throw in
+ * the middle of opening a stream.
+ */
+function safeHeaderValue(value) {
+  return typeof value === 'string' && /^[\t -~\x80-\xff]{1,512}$/.test(value);
 }
 
 /** Backend models are `providerId/modelId`, since a CLI reaches many vendors. */
@@ -167,7 +292,33 @@ function parseQualifiedModel(model) {
   return { providerId: String(model).slice(0, separator), modelId: String(model).slice(separator + 1) };
 }
 
-async function proxyChat(root, provider, requestBody, res) {
+/**
+ * One upstream provider call, owned by the caller's socket and on a clock.
+ *
+ * Without this the vendor keeps generating (and billing) a turn whose client
+ * pressed Stop or lost the network, and a vendor that accepts the connection
+ * and never answers holds the request for undici's default instead of being
+ * told it timed out. The bound is on the RESPONSE HEADERS only —
+ * `clearWatchdog()` runs the moment the response exists, so a long stream is
+ * never cut off for being slow, while the client's own abort stays attached for
+ * the whole call: a phone that leaves mid-stream is still the reason to stop
+ * reading, and undici only tears the connection down if the signal says so.
+ */
+function providerUpstreamCall(res, { headersTimeoutMs = DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS } = {}) {
+  const client = new AbortController();
+  res.once('close', () => client.abort());
+  const watchdog = new AbortController();
+  const timer = setTimeout(() => watchdog.abort(), headersTimeoutMs);
+  timer.unref?.();
+  return {
+    signal: AbortSignal.any([client.signal, watchdog.signal]),
+    get clientGone() { return client.signal.aborted; },
+    get timedOut() { return watchdog.signal.aborted; },
+    clearWatchdog() { clearTimeout(timer); },
+  };
+}
+
+async function proxyChat(root, provider, requestBody, res, { headersTimeoutMs, keepaliveIntervalMs } = {}) {
   const flavorModule = FLAVOR_MODULES[provider.config.flavor];
   if (!flavorModule) {
     res.writeHead(501, { 'Content-Type': 'application/json' });
@@ -200,13 +351,29 @@ async function proxyChat(root, provider, requestBody, res) {
     return;
   }
 
+  const upstream = providerUpstreamCall(res, { headersTimeoutMs });
   let upstreamResponse;
   try {
-    upstreamResponse = await fetch(upstreamRequest.url, upstreamRequest.init);
+    upstreamResponse = await fetch(upstreamRequest.url, { ...upstreamRequest.init, signal: upstream.signal });
   } catch (error) {
+    if (upstream.clientGone) return;
+    if (upstream.timedOut) {
+      res.writeHead(504, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: {
+          message: 'The provider did not answer within the header timeout.',
+          code: 'upstream_timeout',
+        },
+      }));
+      return;
+    }
     res.writeHead(502, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: { message: `Upstream request failed: ${error.message}`, code: 'upstream_unreachable' } }));
     return;
+  } finally {
+    // Headers are in: the stream itself is allowed to take as long as it makes
+    // progress, so the clock has done its job.
+    upstream.clearWatchdog();
   }
 
   if (!upstreamResponse.ok) {
@@ -217,7 +384,16 @@ async function proxyChat(root, provider, requestBody, res) {
   }
 
   if (!wantsStream) {
-    const json = await upstreamResponse.json();
+    let json;
+    try {
+      json = await upstreamResponse.json();
+    } catch {
+      // The client left, or the body tore: there is nobody left to answer.
+      if (upstream.clientGone) return;
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Upstream returned an unreadable body', code: 'upstream_error' } }));
+      return;
+    }
     const text = flavorModule.parseResponseText(json);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
@@ -228,7 +404,7 @@ async function proxyChat(root, provider, requestBody, res) {
     return;
   }
 
-  await relayNormalizedSse(upstreamResponse, flavorModule, res);
+  await relayNormalizedSse(upstreamResponse, flavorModule, res, { upstream, keepaliveIntervalMs });
 }
 
 function endProviderStreamWithError(res, error) {
@@ -244,25 +420,36 @@ function endProviderStreamWithError(res, error) {
 /**
  * Read an upstream SSE body and re-emit it in the OpenAI delta shape the app's
  * clients parse, whatever dialect the vendor speaks.
+ *
+ * `upstream` is the caller's abort: when the phone stops or drops, the vendor's
+ * stream is cancelled instead of being relayed into a socket nobody reads (and
+ * billed to the end).
+ *
+ * A reasoning model can be silent for a long time before its first token, which
+ * is exactly the quiet stream a client would otherwise read as dead, so the
+ * heartbeat the headers advertise is really sent here.
  */
-async function relayNormalizedSse(upstreamResponse, flavorModule, res) {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
+async function relayNormalizedSse(upstreamResponse, flavorModule, res, { upstream, keepaliveIntervalMs } = {}) {
+  res.writeHead(200, sseHeaders());
+  const stopKeepalive = startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
 
   const reader = upstreamResponse.body.getReader();
+  const release = () => reader.cancel().catch(() => {});
+  res.once('close', release);
+  // Read, not merely listened for: a phone can give up while the vendor is
+  // still answering, so the close has already fired by the time we get here and
+  // the listener above will never fire.
+  const clientGone = () => res.destroyed || res.writableEnded || upstream?.clientGone === true;
   const decoder = new TextDecoder();
   let buffer = '';
   const MAX_BUFFER_BYTES = 1024 * 1024; // 1MB — a single SSE line has no legitimate reason to exceed this
   try {
-    while (true) {
+    while (!clientGone()) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       if (buffer.length > MAX_BUFFER_BYTES) {
-        reader.cancel().catch(() => {});
+        await release();
         res.end(`data: ${JSON.stringify({ error: { message: 'Upstream sent an oversized line without a delimiter', code: 'upstream_error' } })}\n\n`);
         return;
       }
@@ -279,11 +466,17 @@ async function relayNormalizedSse(upstreamResponse, flavorModule, res) {
       }
     }
   } catch (error) {
+    // A client that walked away is not a stream failure: there is nothing left
+    // to report it to, and the upstream is already being cancelled.
+    if (clientGone()) return;
     endProviderStreamWithError(res, error);
     return;
   } finally {
-    reader.cancel().catch(() => {});
+    stopKeepalive();
+    res.off('close', release);
+    await release();
   }
+  if (clientGone()) return;
   res.write('data: [DONE]\n\n');
   res.end();
 }
@@ -401,9 +594,26 @@ export async function createGate(config = {}) {
     backendServerFactory,
     terminalSessions: injectedTerminalSessions,
     pushFetch,
+    // Bounds the three things that cannot be inferred from a socket: how long a
+    // detached turn may run unseen, how often a silent stream proves it is
+    // alive, and how long a vendor may take to send response headers. Injected
+    // so the tests can watch each one fire in milliseconds.
+    detachedTurnMaxMs = Number(process.env.VERSUTUS_GATE_DETACHED_TURN_MAX_MS) || DEFAULT_DETACHED_TURN_MAX_MS,
+    keepaliveIntervalMs,
+    upstreamHeadersTimeoutMs = DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS,
   } = config;
 
   await migrateLegacyProviders({ sourceRoot: root, gateHome });
+  /**
+   * Turns running on this Gate, keyed `${callerId}:${turnId}`.
+   *
+   * Caller-scoped so one phone's Stop can never abort another's turn, and owned
+   * by this Gate instance so two of them in one process cannot abort each
+   * other's turns or share the detached-turn bound. A turn registers here before
+   * the first byte of upstream work and leaves in streamBackendTurn's `finally`;
+   * close() aborts whatever is left.
+   */
+  const inFlightTurns = new Map();
   const providerStore = new ProviderStore(gateHome);
   const vault = injectedVault ?? new CredentialVault({ gateHome });
   const oauth = new OAuthManager({ vault, profiles: releaseOAuthProfiles });
@@ -716,7 +926,7 @@ export async function createGate(config = {}) {
       await chatViaProviderService(providerId, record, body, res);
       return;
     }
-    await proxyChat(root, legacy, body, res);
+    await proxyChat(root, legacy, body, res, { headersTimeoutMs: upstreamHeadersTimeoutMs, keepaliveIntervalMs });
   }
 
   /** Chat through the v2 ProviderService, which resolves the vault credential. */
@@ -725,6 +935,9 @@ export async function createGate(config = {}) {
     const flavorModule =
       record.config?.registration?.protocol === 'anthropic_messages' ? anthropicFlavor : openaiFlavor;
 
+    // The adapter threads this into its own fetch, so a Stop or a dropped
+    // connection ends the vendor's turn instead of leaving it to finish.
+    const upstream = providerUpstreamCall(res, { headersTimeoutMs: upstreamHeadersTimeoutMs });
     let result;
     try {
       result = await providerService.chat({
@@ -732,8 +945,16 @@ export async function createGate(config = {}) {
         model: body.model,
         messages: body.messages ?? [],
         stream: wantsStream,
-      });
+      }, upstream.signal);
     } catch (error) {
+      if (upstream.clientGone) return;
+      if (upstream.timedOut) {
+        res.writeHead(504, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          error: { message: 'The provider did not answer within the header timeout.', code: 'upstream_timeout' },
+        }));
+        return;
+      }
       // Readiness is only as good as its last real turn: a catalog probe passes
       // on a provider whose account cannot pay for a completion.
       await providerService.noteChatOutcome(providerId, error).catch(() => undefined);
@@ -743,6 +964,9 @@ export async function createGate(config = {}) {
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: { message: error.message, code: error.code || 'upstream_error' } }));
       return;
+    } finally {
+      // Headers (or the whole answer) are in: a slow stream is not a timeout.
+      upstream.clearWatchdog();
     }
 
     await providerService.noteChatOutcome(providerId, null).catch(() => undefined);
@@ -764,23 +988,32 @@ export async function createGate(config = {}) {
     // Profile adapters hand back the raw upstream Response; the local-interface
     // adapter hands back an async iterator of already-parsed SSE events.
     if (typeof result?.body?.getReader === 'function') {
-      await relayNormalizedSse(result, flavorModule, res);
+      await relayNormalizedSse(result, flavorModule, res, { upstream, keepaliveIntervalMs });
       return;
     }
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    });
+    res.writeHead(200, sseHeaders());
+    // The same silence a reasoning model produces before its first token, on the
+    // path where the local interface hands over an iterator instead of a
+    // response: the heartbeat the headers advertise has to be sent here too.
+    const stopKeepalive = startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
+    // The local interface hands back an iterator, so there is no reader to
+    // cancel — leaving is read off the socket between events instead.
+    const clientGone = () => res.destroyed || res.writableEnded || upstream.clientGone;
     try {
       for await (const event of result) {
+        if (clientGone()) return;
         const text = typeof event === 'string' ? event : event?.choices?.[0]?.delta?.content;
         if (text) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
       }
     } catch (error) {
+      // A cancelled turn is the caller's own doing, not a stream failure.
+      if (clientGone()) return;
       endProviderStreamWithError(res, error);
       return;
+    } finally {
+      stopKeepalive();
     }
+    if (clientGone()) return;
     res.write('data: [DONE]\n\n');
     res.end();
   }
@@ -926,6 +1159,7 @@ export async function createGate(config = {}) {
         /^\/v1\/providers\/[^/]+$/.test(pathname) ||
         /^\/p\/[^/]+\/v1\/models$/.test(pathname) ||
         (pathname === '/v1/chat/completions' && method === 'POST') ||
+        (pathname === '/v1/chat/cancel' && method === 'POST') ||
         /^\/p\/[^/]+\/v1\/chat\/completions$/.test(pathname) ||
         (pathname === '/v1/backends' && method === 'GET') ||
         (pathname === '/v1/toolsets' && method === 'GET') ||
@@ -1117,6 +1351,28 @@ export async function createGate(config = {}) {
         res.writeHead(status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           error: { message: botId ? `Bot ${botId}: ${message}` : message, code, ...(botId ? { botId } : {}) },
+        }));
+      }
+
+      /**
+       * A backend that refuses a delete is answering about the request, not
+       * crashing the Gate. Unwrapped, every refusal became a generic 500 with
+       * a logged stack, and the app could not tell "that job is already gone"
+       * from "the Gate is broken" — so it retried, or showed nothing.
+       */
+      function deleteRefusal(error, fallbackCode) {
+        const message = typeof error?.message === 'string' && error.message
+          ? error.message : 'The backend refused the delete';
+        const missing = error?.code === 'unknown_session' || /not found/i.test(message);
+        const upstreamStatus = Number(error?.status);
+        const status = Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus < 600
+          ? upstreamStatus : missing ? 404 : 502;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          error: {
+            message,
+            code: typeof error?.code === 'string' && error.code ? error.code : fallbackCode,
+          },
         }));
       }
 
@@ -1334,11 +1590,9 @@ export async function createGate(config = {}) {
         // (and heals) instead.
         const archived = runStreams.isActive(runId) ? null : await runStreams.read(runId);
         if (archived !== null && runStreams.isComplete(runId)) {
-          res.writeHead(200, {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            Connection: 'keep-alive',
-          });
+          // Whole history, in one write: there is nothing to wait for, so this
+          // response advertises no heartbeat (see sseHeaders).
+          res.writeHead(200, sseHeaders({}, { keepalive: false }));
           res.write(archived);
           res.end();
           return;
@@ -1356,12 +1610,7 @@ export async function createGate(config = {}) {
             // buffer is gone, or Hermes is down). Serve what was captured —
             // but FLAGGED, so a truncated history can never read as a
             // complete verdict.
-            res.writeHead(200, {
-              'Content-Type': 'text/event-stream',
-              'Cache-Control': 'no-cache',
-              Connection: 'keep-alive',
-              'X-Run-Archive-Incomplete': 'true',
-            });
+            res.writeHead(200, sseHeaders({ 'X-Run-Archive-Incomplete': 'true' }, { keepalive: false }));
             res.write(archived);
             res.end();
             return;
@@ -1381,11 +1630,7 @@ export async function createGate(config = {}) {
           }));
           return;
         }
-        res.writeHead(200, {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        });
+        res.writeHead(200, sseHeaders());
         // Relay bytes unchanged: the app already parses Hermes run events.
         // The single tee-holder also archives them (backend-run-streams.mjs)
         // so a completed run replays from disk after the live buffer is gone.
@@ -1396,12 +1641,24 @@ export async function createGate(config = {}) {
           if (tee) runStreams.end(runId);
           return;
         }
+        // A run with nothing to say can be quiet for minutes, and a quiet
+        // stream behind a NAT is a dead stream the phone cannot tell apart.
+        // The heartbeat has to wait for a frame boundary: the bytes below are
+        // relayed exactly as they arrive, and a comment written into the middle
+        // of a half-written line would terminate it and hand the client a
+        // truncated frame.
+        const frames = createSseFrameTracker();
+        const stopKeepalive = startSseKeepalive(res, {
+          intervalMs: keepaliveIntervalMs,
+          canWrite: () => frames.atBoundary,
+        });
         try {
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
             const chunk = Buffer.from(value);
             res.write(chunk);
+            frames.push(chunk);
             if (tee) runStreams.append(runId, chunk);
           }
           // Clean end of the upstream stream: the archive now holds the whole
@@ -1416,6 +1673,7 @@ export async function createGate(config = {}) {
           // frame, and a later replay re-streams live instead of trusting it).
           try { res.end(); } catch { /* socket already gone */ }
         } finally {
+          stopKeepalive();
           if (tee) runStreams.end(runId);
         }
         return;
@@ -1493,11 +1751,10 @@ export async function createGate(config = {}) {
       // dimensions nothing can apply is the dead-config shape this codebase
       // keeps finding. Restore it alongside a real PTY, not before.
       if (pathname === '/v1/terminal/stream' && method === 'GET') {
-        res.writeHead(200, {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        });
+        res.writeHead(200, sseHeaders());
+        // A shell at an idle prompt says nothing for as long as the user reads
+        // it, and the socket is exactly the thing a locked phone loses.
+        startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
         const send = (event, data) => {
           if (event) res.write(`event: ${event}\n`);
           res.write(`data: ${data}\n\n`);
@@ -1929,7 +2186,12 @@ export async function createGate(config = {}) {
           : await resolveBackendFor('removeJob');
         if (!backend) return;
         if (!requireBackendMethod(backend, 'removeJob')) return;
-        await backend.removeJob(jobId);
+        try {
+          await backend.removeJob(jobId);
+        } catch (error) {
+          deleteRefusal(error, 'job_delete_failed');
+          return;
+        }
         res.writeHead(200);
         res.end(JSON.stringify({ ok: true }));
         return;
@@ -2033,7 +2295,12 @@ export async function createGate(config = {}) {
       if (sessionMatch && method === 'DELETE') {
         const backend = await resolveConversationBackend(url.searchParams.get('backendId'), readBotId(url));
         if (!backend) return;
-        await backend.deleteSession(decodeURIComponent(sessionMatch[1]));
+        try {
+          await backend.deleteSession(decodeURIComponent(sessionMatch[1]));
+        } catch (error) {
+          deleteRefusal(error, 'session_delete_failed');
+          return;
+        }
         res.writeHead(200);
         res.end(JSON.stringify({ deleted: true }));
         return;
@@ -2090,19 +2357,39 @@ export async function createGate(config = {}) {
 
       const runEvents = pathname.match(/^\/v1\/environments\/([^/]+)\/runs\/([^/]+)\/events$/);
       if (runEvents && method === 'GET') {
-        res.writeHead(200, {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        });
+        res.writeHead(200, sseHeaders());
+        const stopKeepalive = startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
+        // A run parked on an approval emits nothing at all, so the stream has
+        // to prove it is alive (above) and a viewer who has left has to be let
+        // go. Iterating to the end of a run kept the subscription alive for
+        // every second of it — indefinitely for a run that is only waiting for
+        // a decision, however many phones had already navigated away.
+        //
+        // Releasing it is this signal, not a `return()` on the stream: the event
+        // log's generator re-parks at a fresh await on every loop, so a return
+        // queued behind an in-flight `next()` is never honoured and the waiter
+        // would sit in the log until the run happened to emit again.
+        const subscription = new AbortController();
+        res.once('close', () => subscription.abort());
+        const closed = new Promise((resolve) => res.once('close', resolve));
         try {
-          for await (const event of environmentService.events(decodeURIComponent(runEvents[2]))) {
-            res.write(`data: ${JSON.stringify(event)}\n\n`);
+          const subscriber = environmentService
+            .events(decodeURIComponent(runEvents[2]), { signal: subscription.signal })[Symbol.asyncIterator]();
+          for (;;) {
+            const next = await Promise.race([subscriber.next(), closed.then(() => CLOSED_STREAM)]);
+            if (next === CLOSED_STREAM || next.done) break;
+            if (res.destroyed || res.writableEnded) break;
+            res.write(`data: ${JSON.stringify(next.value)}\n\n`);
           }
         } catch (error) {
-          res.write(`data: ${JSON.stringify({ type: 'run.failed', payload: { message: error.message } })}\n\n`);
+          if (!res.destroyed && !res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ type: 'run.failed', payload: { message: error.message } })}\n\n`);
+          }
+        } finally {
+          subscription.abort();
+          stopKeepalive();
+          res.end();
         }
-        res.end();
         return;
       }
 
@@ -2284,10 +2571,17 @@ export async function createGate(config = {}) {
               ?? (await backend.createSession({ title: newThreadTitle(), model })).id;
 
             if (body.stream === true) {
-              const streamed = await streamBackendTurn(backend, sessionId, { text, model }, res);
+              const streamed = await streamBackendTurn(backend, sessionId, { text, model }, res, {
+                callerId,
+                turnId: readTurnId(req.headers['x-versutus-turn-id']),
+                inFlightTurns,
+                keepaliveIntervalMs,
+                detachedTurnMaxMs,
+              });
               // A completed turn reports as a Bot reply (a cron routine
-              // session classifies to `routine` inside the notifier); a
-              // stopped or dropped turn stays silent.
+              // session classifies to `routine` inside the notifier). A turn
+              // the phone stopped stays silent; a turn it walked away from
+              // still reports, because that reply is the only notice it will get.
               if (streamed) {
                 notifyPush({
                   trigger: 'final-response',
@@ -2394,6 +2688,24 @@ export async function createGate(config = {}) {
           return;
         }
         await dispatchChat(providerId, body, res);
+        return;
+      }
+
+      // /v1/chat/cancel - the user's Stop, as a fact the Gate can act on.
+      //
+      // A detached turn outlives the socket it was streamed on, so "the client
+      // left" can no longer mean "stop the turn": that would throw away the
+      // reply the phone is about to be notified about. The phone therefore
+      // says Stop here FIRST and closes afterwards, and this is the one request
+      // that ends a turn on purpose.
+      if (pathname === '/v1/chat/cancel' && method === 'POST') {
+        const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
+        const turnId = readTurnId(body?.turnId);
+        // Scoped to the caller: one phone's Stop must never end another's turn.
+        const turn = turnId ? inFlightTurns.get(`${callerId}:${turnId}`) : null;
+        if (turn) turn.controller.abort();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ cancelled: Boolean(turn) }));
         return;
       }
 
@@ -2529,6 +2841,13 @@ export async function createGate(config = {}) {
       for (const stream of [...terminalStreams]) {
         terminalStreams.delete(stream);
         try { stream.end(); } catch { /* already gone */ }
+      }
+      // Detached turns are still holding their request handlers, so the same
+      // rule applies to them: a restart is a named end, not a wait.
+      for (const turn of [...inFlightTurns.values()]) {
+        clearTimeout(turn.timer);
+        turn.controller.abort();
+        inFlightTurns.clear();
       }
       return new Promise((resolve, reject) => {
         // A restart is a clean, named end for every live call, not a drop.

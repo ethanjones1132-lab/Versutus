@@ -93,6 +93,10 @@ export function buildManifest({
       health: '/health',
       models: '/v1/models',
       chat: '/v1/chat/completions',
+      // A streamed turn can outlive the socket it was streamed on (a phone
+      // that locks mid-reply), so the phone's Stop is a request of its own
+      // rather than a dropped connection.
+      chatCancel: '/v1/chat/cancel',
       providers: '/v1/providers',
       environments: '/v1/environments',
       capabilitiesRpc: '/v1/capabilities/rpc',

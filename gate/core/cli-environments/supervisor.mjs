@@ -538,10 +538,18 @@ export class CliEnvironmentService {
     return { credentials, unresolved };
   }
 
-  events(runId) {
+  /**
+   * The event stream for one run.
+   *
+   * `signal` is the unsubscribe: abort it when the viewer goes away. `return()`
+   * on the returned stream cannot do it — the log's generator re-parks at a
+   * fresh await on every pass, so a queued return is never honoured and the
+   * subscriber would stay parked for the life of the run.
+   */
+  events(runId, { signal } = {}) {
     const run = this.runs.get(runId);
     if (!run) throw new Error(`unknown run ${runId}`);
-    return run.log.stream();
+    return run.log.stream(signal);
   }
 
   /**

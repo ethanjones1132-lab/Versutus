@@ -1,11 +1,13 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, copyFile, writeFile } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createGate, runVoiceTurn } from '../core/server.mjs';
+import { DeviceTokenStore } from '../core/device-tokens.mjs';
 
 const kindModulePath = fileURLToPath(new URL('../core/capabilities/provider/kind.mjs', import.meta.url));
 const roots = [];
@@ -149,7 +151,7 @@ function stubTurnRegistry({ calls = [], sendMessage, streamEvents } = {}) {
   };
 }
 
-async function makeGate({ calls = [], provider, registry, terminalSessions, environments, pushFetch, backendServerFactory } = {}) {
+async function makeGate({ calls = [], provider, registry, terminalSessions, environments, pushFetch, backendServerFactory, gateOptions, pairedDevices = [] } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'gate-backend-'));
   roots.push(root);
   const gateHome = join(root, '.gate-home');
@@ -189,6 +191,14 @@ async function makeGate({ calls = [], provider, registry, terminalSessions, envi
   }), 'utf8');
   }
 
+  // A second caller identity, issued before the Gate starts: the device grant
+  // is the only thing that separates one phone's turn from another's.
+  const deviceTokens = new DeviceTokenStore(join(root, '.device-tokens.json'));
+  const paired = {};
+  for (const deviceId of pairedDevices) {
+    paired[deviceId] = await deviceTokens.issue(deviceId, { role: 'operator', scopes: ['operator.read'] });
+  }
+
   const gate = await createGate({
     root,
     port: 0,
@@ -202,8 +212,9 @@ async function makeGate({ calls = [], provider, registry, terminalSessions, envi
       isOwned: () => false,
     })),
     ...(pushFetch ? { pushFetch } : {}),
+    ...(gateOptions ? { ...gateOptions } : {}),
   });
-  return { gate, calls };
+  return { gate, calls, paired };
 }
 
 function auth(gate) {
@@ -891,7 +902,9 @@ test('every GET endpoint the manifest advertises is allowlisted', async () => {
   const { gate } = await makeGate();
   try {
     const manifest = await (await fetch(`http://127.0.0.1:${gate.port}/.well-known/gateway.json`)).json();
-    const postOnly = new Set(['chat', 'capabilitiesRpc', 'runs']);
+    // chatCancel is POST-only, like chat and capabilitiesRpc: this walk probes
+    // with GET, and a POST-only path is answered 404 by design.
+    const postOnly = new Set(['chat', 'chatCancel', 'capabilitiesRpc', 'runs']);
     const checked = [];
     for (const [name, path] of Object.entries(manifest.endpoints)) {
       if (postOnly.has(name) || path.includes('{')) continue;
@@ -2877,3 +2890,571 @@ test('a backend whose capability cannot be read is started and asked, as before'
     await gate.close();
   }
 });
+
+// ─── Detachable turns: a phone that locks mid-reply keeps the reply ─────
+// Android suspends (and often kills) an app's socket when the screen locks,
+// which is indistinguishable from the user pressing Stop. Reading it as the
+// latter killed the turn: the reply was thrown away, and with it the only
+// notification the phone would ever get for it.
+
+const TURN_ID = 'turn-abc-123';
+
+/** A turn whose send is held open by the test, recording the abort signal. */
+function parkedTurnRegistry(turns, { delta } = {}) {
+  // The runner subscribes and then sends with no await in between, so the feed
+  // signal and the send of one turn are adjacent: a queue pairs them up even
+  // with several turns in flight.
+  const signals = [];
+  return stubTurnRegistry({
+    sendMessage: (_id, input) => new Promise((resolve) => {
+      turns.push({ resolve, signal: signals.shift(), text: input?.text });
+    }),
+    streamEvents: (_id, onEvent, signal) => {
+      signals.push(signal);
+      // Text the turn has already said, so a test can prove it is not retracted.
+      if (delta) onEvent({ type: 'message.delta', payload: { text: delta } });
+      return new Promise((resolve) => {
+        if (signal?.aborted) return resolve();
+        signal?.addEventListener('abort', resolve, { once: true });
+      });
+    },
+  });
+}
+
+const streamingTurn = (gate, { turnId, controller, text = 'say it once', sessionId = 'ses_1' } = {}) => fetch(
+  `http://127.0.0.1:${gate.port}/v1/chat/completions`,
+  {
+    method: 'POST',
+    headers: { ...auth(gate), ...(turnId ? { 'X-Versutus-Turn-Id': turnId } : {}) },
+    signal: controller?.signal,
+    body: JSON.stringify({
+      backendId: 'stub-local', ...(sessionId ? { sessionId } : {}),
+      messages: [{ role: 'user', content: text }], stream: true,
+    }),
+  },
+);
+
+const answer = (text) => ({ text, message: { role: 'assistant', content: [{ type: 'text', text }] } });
+
+/** Bounded poll: the seams under test (push delivery, abort) are async. */
+const until = async (predicate, ms = 3000) => {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  return false;
+};
+
+test('a turn named by the phone survives a dropped socket and pushes its reply once', async () => {
+  const turns = [];
+  const pushSends = [];
+  const pushFetch = async (url, init) => {
+    if (url.endsWith('/push/send')) {
+      const messages = JSON.parse(init.body);
+      pushSends.push(...messages);
+      return {
+        ok: true, status: 200,
+        async json() { return { data: messages.map((_, index) => ({ status: 'ok', id: `t-${index}` })) }; },
+      };
+    }
+    return {
+      ok: true, status: 200,
+      async json() { return { data: Object.fromEntries(JSON.parse(init.body).ids.map((id) => [id, { status: 'ok' }])) }; },
+    };
+  };
+  const { gate } = await makeGate({ registry: parkedTurnRegistry(turns), pushFetch });
+  const base = `http://127.0.0.1:${gate.port}`;
+  const controller = new AbortController();
+  try {
+    for (const [method, params] of [
+      ['notifications.register', { expoPushToken: 'ExponentPushToken[phone]', platform: 'ios', timezone: 'UTC', deviceId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' }],
+      ['notifications.preferences.set', { enabled: true, deviceId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' }],
+    ]) {
+      const rpc = await fetch(`${base}/v1/capabilities/rpc`, {
+        method: 'POST', headers: auth(gate), body: JSON.stringify({ method, params }),
+      });
+      assert.equal(rpc.status, 200);
+    }
+
+    const pending = streamingTurn(gate, { turnId: TURN_ID, controller });
+    assert.ok(await until(() => turns.length === 1), 'the turn never reached the backend');
+    // The phone is backgrounded: the socket dies mid-turn, with no Stop.
+    controller.abort();
+    await pending.catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(turns[0].signal?.aborted, false, 'a dropped socket must not cancel a named turn');
+
+    // The Gate finishes the turn on its own, and the answer reaches the phone
+    // as the push it can no longer be streamed.
+    turns[0].resolve(answer('the whole answer'));
+    assert.ok(await until(() => pushSends.length === 1), 'a detached turn that finished must still push');
+    // The reply notice names the session, not the text: the phone reads the
+    // transcript. What is being proven here is that the turn finished and was
+    // reported AT ALL, which is what locking the phone used to prevent.
+    assert.equal(pushSends[0].data.kind, 'reply');
+    assert.equal(pushSends[0].data.sessionId, 'ses_1');
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(pushSends.length, 1, 'exactly one notice per turn');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a turn with no id keeps the old meaning of a dropped socket: the turn stops', async () => {
+  const turns = [];
+  const { gate } = await makeGate({ registry: parkedTurnRegistry(turns) });
+  const controller = new AbortController();
+  try {
+    const pending = streamingTurn(gate, { controller });
+    assert.ok(await until(() => turns.length === 1));
+    controller.abort();
+    await pending.catch(() => undefined);
+    assert.ok(
+      await until(() => turns[0].signal?.aborted === true),
+      'an unnamed turn must still be cancelled by a close',
+    );
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a turn id the protocol cannot accept is ignored, as if none was sent', async () => {
+  const turns = [];
+  const { gate } = await makeGate({ registry: parkedTurnRegistry(turns) });
+  const controller = new AbortController();
+  try {
+    const pending = streamingTurn(gate, { turnId: 'short', controller });
+    assert.ok(await until(() => turns.length === 1));
+    controller.abort();
+    await pending.catch(() => undefined);
+    assert.ok(
+      await until(() => turns[0].signal?.aborted === true),
+      'a malformed id must not buy a detached turn',
+    );
+  } finally {
+    await gate.close();
+  }
+});
+
+test('Stop is a request the Gate acts on, and only for the caller that owns the turn', async () => {
+  const turns = [];
+  const { gate, paired } = await makeGate({ registry: parkedTurnRegistry(turns), pairedDevices: ['phone-two'] });
+  const base = `http://127.0.0.1:${gate.port}`;
+  const controller = new AbortController();
+  const cancel = (turnId, token = gate.token) => fetch(`${base}/v1/chat/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ turnId }),
+  });
+  try {
+    const pending = streamingTurn(gate, { turnId: TURN_ID, controller });
+    assert.ok(await until(() => turns.length === 1));
+
+    // Another phone's Stop must not reach into this turn.
+    const otherCaller = await cancel(TURN_ID, paired['phone-two']);
+    assert.equal(otherCaller.status, 200);
+    assert.deepEqual(await otherCaller.json(), { cancelled: false });
+    assert.equal(turns[0].signal?.aborted, false, "one phone must never stop another phone's turn");
+
+    const stranger = await cancel('turn-nobody-owns');
+    assert.deepEqual(await stranger.json(), { cancelled: false });
+
+    const stopped = await cancel(TURN_ID);
+    assert.deepEqual(await stopped.json(), { cancelled: true });
+    assert.ok(await until(() => turns[0].signal?.aborted === true), 'Stop must abort the turn it names');
+
+    // The phone closes its own socket afterwards, as it always did.
+    controller.abort();
+    await pending.catch(() => undefined);
+    // A stopped turn is gone: asking again finds nothing to cancel.
+    assert.equal((await (await cancel(TURN_ID)).json()).cancelled, false);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a stopped turn ends quietly, and is not reported as one that came back empty', async () => {
+  // Stop is a request the Gate acts on while the stream is deliberately still
+  // open, so this is the flow the cancel route exists for: the phone keeps
+  // reading to [DONE] after asking. An abort comes back from the runner as a
+  // turn with no content, which is exactly what `empty_turn` reports — and the
+  // app raises that frame as a streamError before it checks its own abort
+  // (assertChatStreamComplete), so the user who pressed Stop was told "The model
+  // did not answer", with advice to pick another model, after any text it had
+  // already been given.
+  const turns = [];
+  const { gate } = await makeGate({ registry: parkedTurnRegistry(turns, { delta: 'Partial reply' }) });
+  const base = `http://127.0.0.1:${gate.port}`;
+  try {
+    // No abort signal: this client keeps its socket open, as the phone does
+    // while it waits for the stream to end after Stop.
+    const pending = streamingTurn(gate, { turnId: TURN_ID });
+    assert.ok(await until(() => turns.length === 1), 'the turn never reached the backend');
+
+    const stopped = await fetch(`${base}/v1/chat/cancel`, {
+      method: 'POST',
+      headers: auth(gate),
+      body: JSON.stringify({ turnId: TURN_ID }),
+    });
+    assert.deepEqual(await stopped.json(), { cancelled: true });
+    assert.ok(await until(() => turns[0].signal?.aborted === true), 'Stop must abort the turn it names');
+
+    // What the turn had already said stays, and nothing is added to it.
+    assert.equal(await (await pending).text(), delta('Partial reply') + 'data: [DONE]\n\n');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a turn id already in use is refused, and the turn that owns it stays stoppable', async () => {
+  // The turn id is how Stop finds a turn, so the map entry is ownership of it.
+  // A second turn claiming the same id used to take that entry: the first
+  // turn's `finally` then deleted the second turn's entry, and the second turn
+  // could not be stopped by anyone — not by its own phone, not by close().
+  const turns = [];
+  // A delta per turn so every accepted stream flushes its headers at once: a
+  // turn that says nothing never flushes them, and a client waiting on them
+  // would be waiting for the turn to end.
+  const { gate } = await makeGate({ registry: parkedTurnRegistry(turns, { delta: 'thinking' }) });
+  const base = `http://127.0.0.1:${gate.port}`;
+  const cancel = (turnId) => fetch(`${base}/v1/chat/cancel`, {
+    method: 'POST',
+    headers: auth(gate),
+    body: JSON.stringify({ turnId }),
+  });
+  try {
+    const first = streamingTurn(gate, { turnId: TURN_ID });
+    first.catch(() => undefined);
+    assert.ok(await until(() => turns.length === 1), 'the turn never reached the backend');
+
+    // Refused as a request, before any stream header: a 200 with an
+    // `text/event-stream` body would read to the client as a second live turn.
+    const second = await streamingTurn(gate, { turnId: TURN_ID });
+    assert.equal(second.status, 409);
+    assert.match(second.headers.get('content-type'), /application\/json/);
+    assert.equal(second.headers.get('x-versutus-session-id'), null, 'no turn was opened to stream');
+    assert.equal((await second.json()).error.code, 'turn_id_in_use');
+    assert.equal(turns.length, 1, 'the refused turn must never reach the backend');
+
+    // The turn that owns the id is still the one Stop reaches.
+    assert.deepEqual(await (await cancel(TURN_ID)).json(), { cancelled: true });
+    assert.ok(await until(() => turns[0].signal?.aborted === true), 'Stop must abort the turn it names');
+    await first.catch(() => undefined);
+
+    // And the id is free again once that turn has ended, so a client that
+    // retries with it is served rather than refused forever.
+    let reused = null;
+    for (let attempt = 0; attempt < 100 && !reused; attempt += 1) {
+      const attempt_ = await streamingTurn(gate, { turnId: TURN_ID });
+      if (attempt_.status !== 409) reused = attempt_;
+      else await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(reused, 'a turn id must be usable again once the turn it named has ended');
+    assert.deepEqual(await (await cancel(TURN_ID)).json(), { cancelled: true });
+  } finally {
+    await gate.close();
+  }
+});
+
+test('Stop needs the Gate\'s own credential', async () => {
+  const { gate } = await makeGate();
+  try {
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ turnId: TURN_ID }),
+    });
+    assert.equal(response.status, 401);
+  } finally {
+    await gate.close();
+  }
+});
+
+test('no more than eight turns may run unseen; the ninth is cancelled as before', async () => {
+  const turns = [];
+  const { gate } = await makeGate({ registry: parkedTurnRegistry(turns) });
+  const controllers = Array.from({ length: 9 }, () => new AbortController());
+  try {
+    const pendings = controllers.map((controller, index) => streamingTurn(gate, {
+      turnId: `turn-detached-${index}`, controller, text: `turn number ${index}`,
+    }));
+    pendings.forEach((pending) => pending.catch(() => undefined));
+    assert.ok(await until(() => turns.length === 9), `only ${turns.length} of 9 turns started`);
+
+    // One at a time, so which close crossed the cap is unambiguous. Which turn
+    // each close belongs to is read back from the backend, not assumed: the
+    // requests reach the Gate in whatever order the pool hands them out.
+    for (let index = 0; index < controllers.length; index += 1) {
+      controllers[index].abort();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const cancelled = turns.filter((turn) => turn.signal?.aborted).map((turn) => turn.text);
+      assert.deepEqual(
+        cancelled,
+        index === 8 ? ['turn number 8'] : [],
+        `after ${index + 1} detached turns, the cancelled set should be ${index === 8 ? "['turn number 8']" : 'empty'}`,
+      );
+    }
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a detached turn is reaped once it is older than the age bound', async () => {
+  const turns = [];
+  const { gate } = await makeGate({
+    registry: parkedTurnRegistry(turns),
+    gateOptions: { detachedTurnMaxMs: 40 },
+  });
+  const controller = new AbortController();
+  try {
+    const pending = streamingTurn(gate, { turnId: TURN_ID, controller });
+    pending.catch(() => undefined);
+    assert.ok(await until(() => turns.length === 1));
+    controller.abort();
+    assert.ok(
+      await until(() => turns[0].signal?.aborted === true, 2000),
+      'a turn nobody is watching must not be able to run forever',
+    );
+  } finally {
+    await gate.close();
+  }
+});
+
+test('closing the Gate ends the turns it is still holding', async () => {
+  const turns = [];
+  const { gate } = await makeGate({ registry: parkedTurnRegistry(turns) });
+  const controller = new AbortController();
+  const pending = streamingTurn(gate, { turnId: TURN_ID, controller });
+  pending.catch(() => undefined);
+  assert.ok(await until(() => turns.length === 1));
+  controller.abort();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(turns[0].signal?.aborted, false);
+  // Without this, close() waits on the detached turn's request handler.
+  await gate.close();
+  assert.equal(turns[0].signal?.aborted, true, 'a restart is a named end for every live turn');
+});
+
+test('a streamed turn tells the phone which session it belongs to', async () => {
+  const created = [];
+  const plain = stubRegistry([]).get('stubcli');
+  const adapter = {
+    ...plain,
+    createBackend() {
+      return {
+        ...plain.createBackend(),
+        async createSession(input) {
+          const id = `ses_created_${created.length + 1}`;
+          created.push({ id, title: input?.title });
+          return { ...SESSION, id };
+        },
+        async sendMessage() { return answer('ok'); },
+      };
+    },
+  };
+  const { gate } = await makeGate({ registry: { get: () => adapter, list: () => [adapter] } });
+  try {
+    // The Gate opened this session, so only the response header can say which:
+    // the body is a stream of deltas, and there is no session_id in it.
+    const opened = await streamingTurn(gate, { sessionId: null });
+    await opened.text();
+    assert.equal(created.length, 1, 'the turn named no session, so the Gate opened one');
+    assert.equal(opened.headers.get('x-versutus-session-id'), 'ses_created_1');
+
+    // A session the caller already holds is echoed back, not replaced.
+    const supplied = await streamingTurn(gate, { sessionId: 'ses_existing' });
+    await supplied.text();
+    assert.equal(supplied.headers.get('x-versutus-session-id'), 'ses_existing');
+    assert.equal(created.length, 1, 'a supplied session must not be reopened');
+  } finally {
+    await gate.close();
+  }
+});
+
+// ─── A turn that is over must leave nothing armed ────────────────────────
+// Node emits `close` after `finish`, so a turn that ran to its end on a live
+// socket reaches the detach handler too. A turn that is over must not look like
+// one that was detached: it would mark itself detached and arm an age timer
+// nothing can ever clear, holding an AbortController for ten minutes a turn.
+
+/** Watch the long timers the Gate arms, and prove the watch can see one. */
+function trackLongTimers(thresholdMs) {
+  const real = { set: globalThis.setTimeout, clear: globalThis.clearTimeout };
+  const live = new Map();
+  let armed = 0;
+  globalThis.setTimeout = (handler, delay, ...rest) => {
+    const timer = real.set(handler, delay, ...rest);
+    if (delay >= thresholdMs) {
+      armed += 1;
+      live.set(timer, delay);
+    }
+    return timer;
+  };
+  globalThis.clearTimeout = (timer) => {
+    live.delete(timer);
+    return real.clear(timer);
+  };
+  return {
+    get armed() { return armed; },
+    get pending() { return live.size; },
+    restore() { globalThis.setTimeout = real.set; globalThis.clearTimeout = real.clear; },
+  };
+}
+
+const DETACHED_AGE_MS = 30000;
+
+/**
+ * A turn over a connection that really closes.
+ *
+ * fetch keeps the socket in its pool, so the server's response never emits
+ * `close` and the case under test never happens; a phone whose app is being
+ * torn down does close. `agent: false` is that phone.
+ */
+function turnOverClosingConnection(gate, { turnId }) {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({
+      host: '127.0.0.1',
+      port: gate.port,
+      path: '/v1/chat/completions',
+      method: 'POST',
+      agent: false,
+      headers: { ...auth(gate), 'X-Versutus-Turn-Id': turnId, 'Content-Type': 'application/json' },
+    }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => resolve({ status: response.statusCode, body }));
+    });
+    request.on('error', reject);
+    request.end(JSON.stringify({
+      backendId: 'stub-local', sessionId: 'ses_1',
+      messages: [{ role: 'user', content: 'say it once' }], stream: true,
+    }));
+  });
+}
+
+test('a turn that finished on a live socket arms no timer to reap it', async () => {
+  const plain = stubRegistry([]).get('stubcli');
+  const adapter = {
+    ...plain,
+    createBackend() {
+      return { ...plain.createBackend(), async sendMessage() { return answer('a full answer'); } };
+    },
+  };
+  const { gate } = await makeGate({
+    registry: { get: () => adapter, list: () => [adapter] },
+    gateOptions: { detachedTurnMaxMs: DETACHED_AGE_MS },
+  });
+  const timers = trackLongTimers(DETACHED_AGE_MS / 2);
+  try {
+    const finished = await turnOverClosingConnection(gate, { turnId: TURN_ID });
+    assert.equal(finished.status, 200);
+    assert.match(finished.body, /a full answer/);
+    // The socket is gone, so `close` has followed `finish` — which is when the
+    // detach handler used to arm its timer on a turn that was already over.
+    // (The next test is the other half: a close on an unfinished turn does arm
+    // one, so a zero here is the fix and not a blind spot.)
+    assert.equal(timers.pending, 0, `a finished turn armed ${timers.pending} reaper timer(s)`);
+    assert.equal(timers.armed, 0, 'a turn nobody walked away from has nothing to reap');
+  } finally {
+    timers.restore();
+    await gate.close();
+  }
+});
+
+test('a detached turn does arm one, and the turn ending clears it', async () => {
+  const turns = [];
+  const { gate } = await makeGate({
+    registry: parkedTurnRegistry(turns),
+    gateOptions: { detachedTurnMaxMs: DETACHED_AGE_MS },
+  });
+  const timers = trackLongTimers(DETACHED_AGE_MS / 2);
+  const controller = new AbortController();
+  try {
+    const pending = streamingTurn(gate, { turnId: TURN_ID, controller });
+    pending.catch(() => undefined);
+    assert.ok(await until(() => turns.length === 1));
+    controller.abort();
+    await pending.catch(() => undefined);
+    // The watch is proved by this turn: it is the case that must arm one.
+    assert.ok(await until(() => timers.armed > 0), 'a detached turn must be bounded by its age');
+    assert.equal(timers.pending, 1);
+
+    turns[0].resolve(answer('the whole answer'));
+    assert.ok(
+      await until(() => timers.pending === 0),
+      'the timer must not outlive the turn it was reaping',
+    );
+  } finally {
+    timers.restore();
+    await gate.close();
+  }
+});
+
+// ─── A delete the backend refuses ───────────────────────────────────────
+// Both DELETE routes were unwrapped, so any refusal became a generic 500 with
+// a logged stack: the phone could not tell "that is already gone" from "the
+// Gate is broken", and had no code to branch on.
+
+for (const [label, route, operation, fallbackCode, method] of [
+  ['DELETE /v1/jobs/:id', '/v1/jobs/job-1', 'removeJob', 'job_delete_failed', 'DELETE'],
+  ['DELETE /v1/sessions/:id', '/v1/sessions/ses_1', 'deleteSession', 'session_delete_failed', 'DELETE'],
+]) {
+  test(`${label} answers a backend refusal with a status and a code`, async () => {
+    let failure = null;
+    const calls = [];
+    const registry = stubFrontedRegistry(calls);
+    const adapter = registry.get('stubcli');
+    const createBackend = adapter.createBackend.bind(adapter);
+    adapter.createBackend = (...args) => ({
+      ...createBackend(...args),
+      async [operation](...input) {
+        if (failure) throw failure;
+        calls.push(`${operation}:${input[0]}`);
+      },
+    });
+    const { gate } = await makeGate({ calls, registry });
+    try {
+      const send = () => fetch(`http://127.0.0.1:${gate.port}${route}?backendId=stub-local`, {
+        method, headers: auth(gate),
+      });
+
+      // An upstream status in the 4xx/5xx band is the backend's own answer and
+      // is passed through, as every sibling fronted route does.
+      failure = Object.assign(new Error('Routine store refused'), { status: 503, code: 'job_busy' });
+      const refused = await send();
+      assert.equal(refused.status, 503);
+      assert.match(refused.headers.get('content-type'), /application\/json/);
+      assert.deepEqual(await refused.json(), { error: { message: 'Routine store refused', code: 'job_busy' } });
+
+      // A refusal with no usable status is the Gate talking about its backend.
+      failure = new Error('Hermes connection reset');
+      const broken = await send();
+      assert.equal(broken.status, 502);
+      assert.deepEqual(await broken.json(), { error: { message: 'Hermes connection reset', code: fallbackCode } });
+
+      // "It is already gone" is 404, named by what is missing, not a 502: the
+      // phone deletes it locally either way and must not retry forever.
+      failure = Object.assign(new Error('session not found'), { code: 'unknown_session' });
+      const missing = await send();
+      assert.equal(missing.status, 404);
+      assert.deepEqual(await missing.json(), { error: { message: 'session not found', code: 'unknown_session' } });
+
+      // An out-of-band status is not passed through: a 200 refusal would read
+      // as a successful delete.
+      failure = Object.assign(new Error('Routine store unavailable'), { status: 200 });
+      const invalid = await send();
+      assert.equal(invalid.status, 502);
+      assert.deepEqual(await invalid.json(), { error: { message: 'Routine store unavailable', code: fallbackCode } });
+
+      failure = null;
+      const success = await send();
+      assert.equal(success.status, 200);
+    } finally {
+      await gate.close();
+    }
+  });
+}
+
