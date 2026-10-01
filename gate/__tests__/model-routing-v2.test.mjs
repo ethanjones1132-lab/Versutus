@@ -60,7 +60,10 @@ test('qualified providerId selects the intended duplicate model owner', async ()
       providerId: 'beta',
       messages: [{ role: 'user', content: 'hi' }],
     });
-    assert.notEqual(response.status, 409);
+    // Naming the owner is what selects it; the turn then fails for that owner's
+    // own reason, which for a migrated provider with no credential is a 409 —
+    // so the routing is shown by the refusal not being the ambiguous one.
+    assert.notEqual((await response.json()).error?.code, 'ambiguous_model');
   } finally {
     await gate.close();
   }

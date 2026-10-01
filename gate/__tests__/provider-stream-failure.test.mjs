@@ -8,10 +8,15 @@ import { createGate } from '../core/server.mjs';
 import { ProviderStore } from '../core/providers/store.mjs';
 import { ProviderService } from '../core/providers/service.mjs';
 
+// A Gate that is still flushing its provider store can recreate a file while the
+// tree is being removed, which is a lost temp dir, not a failed assertion. The
+// same helper provider-chat-abort.test.mjs uses.
+const removeRoot = (root) => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+
 async function setup(t, chat) {
   const root = await mkdtemp(join(tmpdir(), 'gate-stream-failure-'));
   const gateHome = join(root, '.gate-home');
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => removeRoot(root));
   await new ProviderStore(gateHome).put({
     schemaVersion: 2, kind: 'provider', id: 'stub', label: 'Stub',
     providerType: 'openai-compatible', enabled: true,

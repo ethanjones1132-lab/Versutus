@@ -11,6 +11,7 @@ import { createTerminalSessions } from './cli-environments/terminal.mjs';
 import { getSecret } from './capabilities/secrets.mjs';
 import { buildManifest } from './manifest.mjs';
 import { tailnetIpv4FromInterfaces } from './reachability.mjs';
+import { createSerialReload, createDebouncedReload } from './serial-reload.mjs';
 import { ProviderStore } from './providers/store.mjs';
 import { migrateLegacyProviders } from './providers/migrate-v1.mjs';
 import { ProviderService } from './providers/service.mjs';
@@ -72,6 +73,16 @@ const DETACHED_TURN_LIMIT = 8;
 // for undici's default forever. This bounds the wait for RESPONSE HEADERS
 // only: a slow stream keeps streaming for as long as it is making progress.
 const DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS = 120 * 1000;
+// Provider states the operator has to fix, not faults a turn ran into: a
+// disabled provider, a provider with no key and a stored key this machine
+// cannot decrypt are all answered 409, and none of them says anything about
+// whether the provider can complete a turn — so none of them is recorded as a
+// chat outcome either. Reported as 502 they read as a vendor that was tried and
+// failed, and the readiness they wrote was a verdict on a provider nobody asked.
+const CONFIGURATION_ERROR_CODES = new Set(['disabled', 'missing_credentials', 'credential_unreadable']);
+// How long a burst of chat outcomes is allowed to wait before the manifest is
+// rebuilt to match. Injected so the tests do not have to wait a real second.
+const DEFAULT_OUTCOME_RELOAD_DELAY_MS = 1000;
 
 /** The caller's turn id, or null when it sent none (or an unusable one). */
 function readTurnId(value) {
@@ -428,6 +439,12 @@ function endProviderStreamWithError(res, error) {
  * A reasoning model can be silent for a long time before its first token, which
  * is exactly the quiet stream a client would otherwise read as dead, so the
  * heartbeat the headers advertise is really sent here.
+ *
+ * Resolves with how the turn ENDED, not with the fact that headers were sent:
+ * `{ ok: true }` for a stream that reached its end, `{ ok: false, error }` for
+ * one that died, `{ abandoned: true }` for a client that walked away. A caller
+ * that records the turn has nothing to learn from a stream whose outcome is
+ * still open, and the legacy twin ignores the answer entirely.
  */
 async function relayNormalizedSse(upstreamResponse, flavorModule, res, { upstream, keepaliveIntervalMs } = {}) {
   res.writeHead(200, sseHeaders());
@@ -450,8 +467,12 @@ async function relayNormalizedSse(upstreamResponse, flavorModule, res, { upstrea
       buffer += decoder.decode(value, { stream: true });
       if (buffer.length > MAX_BUFFER_BYTES) {
         await release();
-        res.end(`data: ${JSON.stringify({ error: { message: 'Upstream sent an oversized line without a delimiter', code: 'upstream_error' } })}\n\n`);
-        return;
+        const error = Object.assign(
+          new Error('Upstream sent an oversized line without a delimiter'),
+          { code: 'upstream_error' },
+        );
+        endProviderStreamWithError(res, error);
+        return { ok: false, error };
       }
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
@@ -468,17 +489,51 @@ async function relayNormalizedSse(upstreamResponse, flavorModule, res, { upstrea
   } catch (error) {
     // A client that walked away is not a stream failure: there is nothing left
     // to report it to, and the upstream is already being cancelled.
-    if (clientGone()) return;
+    if (clientGone()) return { abandoned: true };
     endProviderStreamWithError(res, error);
-    return;
+    return { ok: false, error };
   } finally {
     stopKeepalive();
     res.off('close', release);
     await release();
   }
-  if (clientGone()) return;
+  if (clientGone()) return { abandoned: true };
   res.write('data: [DONE]\n\n');
   res.end();
+  return { ok: true };
+}
+
+/**
+ * The same relay for the other provider shape: an async iterator of
+ * already-parsed SSE events instead of a raw response, so there is no reader to
+ * cancel and leaving is read off the socket between events. Returns the same
+ * three outcomes as `relayNormalizedSse`.
+ */
+async function relayIteratorSse(events, res, { upstream, keepaliveIntervalMs } = {}) {
+  res.writeHead(200, sseHeaders());
+  // The same silence a reasoning model produces before its first token, on the
+  // path where the local interface hands over an iterator instead of a
+  // response: the heartbeat the headers advertise has to be sent here too.
+  const stopKeepalive = startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
+  const clientGone = () => res.destroyed || res.writableEnded || upstream?.clientGone === true;
+  try {
+    for await (const event of events) {
+      if (clientGone()) return { abandoned: true };
+      const text = typeof event === 'string' ? event : event?.choices?.[0]?.delta?.content;
+      if (text) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
+    }
+  } catch (error) {
+    // A cancelled turn is the caller's own doing, not a stream failure.
+    if (clientGone()) return { abandoned: true };
+    endProviderStreamWithError(res, error);
+    return { ok: false, error };
+  } finally {
+    stopKeepalive();
+  }
+  if (clientGone()) return { abandoned: true };
+  res.write('data: [DONE]\n\n');
+  res.end();
+  return { ok: true };
 }
 
 // ─── Voice turn start: resolve a backend truthfully, then run it ─────────
@@ -601,6 +656,7 @@ export async function createGate(config = {}) {
     detachedTurnMaxMs = Number(process.env.VERSUTUS_GATE_DETACHED_TURN_MAX_MS) || DEFAULT_DETACHED_TURN_MAX_MS,
     keepaliveIntervalMs,
     upstreamHeadersTimeoutMs = DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS,
+    outcomeReloadDelayMs = DEFAULT_OUTCOME_RELOAD_DELAY_MS,
   } = config;
 
   await migrateLegacyProviders({ sourceRoot: root, gateHome });
@@ -743,7 +799,7 @@ export async function createGate(config = {}) {
    * Both close over `state`/`reload` lazily, so the order is safe.
    */
   const registryMethods = {
-    ...createRegistryMethods({ root, getState: () => state, reload, gateHome }),
+    ...createRegistryMethods({ root, getState: () => state, reload: () => reload(), gateHome }),
     ...providerRpc,
     ...environmentRpc,
   };
@@ -884,11 +940,24 @@ export async function createGate(config = {}) {
     return { kinds, instances, providers, manifest, dispatch };
   }
 
+  // Assigning a whole snapshot is only safe while the snapshots arrive in the
+  // order their reads did: two RPC surfaces reload this same state, and an older
+  // read that finished last used to hide a provider or an instance that had
+  // already been created. See `createSerialReload`.
   let state = await computeState();
-  async function reload() {
-    state = await computeState();
-    return state;
-  }
+  const reload = createSerialReload(async () => {
+    const next = await computeState();
+    state = next;
+    return next;
+  });
+  // The manifest advertises readiness, and readiness is only as good as the last
+  // real turn — so a turn that moved the verdict has to be able to move it.
+  // Debounced because turns arrive in bursts and a phone retrying would
+  // otherwise rebuild the whole state once per attempt.
+  const scheduleOutcomeReload = createDebouncedReload(
+    () => reload().catch(() => undefined),
+    { delayMs: outcomeReloadDelayMs },
+  );
 
   /**
    * Send a chat request to whichever component actually owns the provider's
@@ -929,6 +998,19 @@ export async function createGate(config = {}) {
     await proxyChat(root, legacy, body, res, { headersTimeoutMs: upstreamHeadersTimeoutMs, keepaliveIntervalMs });
   }
 
+  /**
+   * Record how a turn really went, and let the manifest follow when it moved the
+   * verdict. A streamed turn is only ever recorded from the relay's answer, once
+   * the final frame is written, so the store write is the only thing left between
+   * the client and the handler settling and `end()` never waits for it. A failure
+   * here is swallowed: the turn has already been answered, and a store that
+   * cannot record it is not the phone's problem.
+   */
+  async function noteTurnOutcome(providerId, error) {
+    const outcome = await providerService.noteChatOutcome(providerId, error).catch(() => undefined);
+    if (outcome?.changed) scheduleOutcomeReload();
+  }
+
   /** Chat through the v2 ProviderService, which resolves the vault credential. */
   async function chatViaProviderService(providerId, record, body, res) {
     const wantsStream = body.stream === true;
@@ -955,12 +1037,17 @@ export async function createGate(config = {}) {
         }));
         return;
       }
+      // A configuration state is not a verdict on the provider: nothing was
+      // asked of it, so nothing it answered says whether it can complete a turn.
+      const configured = CONFIGURATION_ERROR_CODES.has(error.code);
       // Readiness is only as good as its last real turn: a catalog probe passes
       // on a provider whose account cannot pay for a completion.
-      await providerService.noteChatOutcome(providerId, error).catch(() => undefined);
-      const status = Number.isInteger(error.status) && error.status >= 400 && error.status <= 599
-        ? error.status
-        : 502;
+      if (!configured) await noteTurnOutcome(providerId, error);
+      const status = configured
+        ? 409
+        : Number.isInteger(error.status) && error.status >= 400 && error.status <= 599
+          ? error.status
+          : 502;
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: { message: error.message, code: error.code || 'upstream_error' } }));
       return;
@@ -969,8 +1056,11 @@ export async function createGate(config = {}) {
       upstream.clearWatchdog();
     }
 
-    await providerService.noteChatOutcome(providerId, null).catch(() => undefined);
-
+    // A streamed turn is not decided at its headers. Headers only say the
+    // vendor accepted the request: the relay reports how it ENDED, and until it
+    // does there is nothing honest to record. So the answer, the frames and the
+    // record all come from the same run — which is the only way a vendor whose
+    // stream dies mid-reply stops being advertised as ready.
     if (!wantsStream) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
@@ -982,40 +1072,19 @@ export async function createGate(config = {}) {
           finish_reason: 'stop',
         }],
       }));
+      await noteTurnOutcome(providerId, null);
       return;
     }
 
     // Profile adapters hand back the raw upstream Response; the local-interface
     // adapter hands back an async iterator of already-parsed SSE events.
-    if (typeof result?.body?.getReader === 'function') {
-      await relayNormalizedSse(result, flavorModule, res, { upstream, keepaliveIntervalMs });
-      return;
-    }
-    res.writeHead(200, sseHeaders());
-    // The same silence a reasoning model produces before its first token, on the
-    // path where the local interface hands over an iterator instead of a
-    // response: the heartbeat the headers advertise has to be sent here too.
-    const stopKeepalive = startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
-    // The local interface hands back an iterator, so there is no reader to
-    // cancel — leaving is read off the socket between events instead.
-    const clientGone = () => res.destroyed || res.writableEnded || upstream.clientGone;
-    try {
-      for await (const event of result) {
-        if (clientGone()) return;
-        const text = typeof event === 'string' ? event : event?.choices?.[0]?.delta?.content;
-        if (text) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
-      }
-    } catch (error) {
-      // A cancelled turn is the caller's own doing, not a stream failure.
-      if (clientGone()) return;
-      endProviderStreamWithError(res, error);
-      return;
-    } finally {
-      stopKeepalive();
-    }
-    if (clientGone()) return;
-    res.write('data: [DONE]\n\n');
-    res.end();
+    const outcome = typeof result?.body?.getReader === 'function'
+      ? await relayNormalizedSse(result, flavorModule, res, { upstream, keepaliveIntervalMs })
+      : await relayIteratorSse(result, res, { upstream, keepaliveIntervalMs });
+    // A turn the client stopped is not a failure and not a success: it says
+    // nothing about the provider, so nothing is written for it.
+    if (outcome?.ok) await noteTurnOutcome(providerId, null);
+    else if (outcome?.error) await noteTurnOutcome(providerId, outcome.error);
   }
 
   // Initialize token store
@@ -2455,6 +2524,9 @@ export async function createGate(config = {}) {
         const snapshots = await providerService.list();
         const allModels = [];
         for (const snapshot of snapshots) {
+          // A disabled provider is asked nothing and answers nothing, so
+          // offering its models only sends the picker somewhere that refuses.
+          if (snapshot.readiness?.state === 'disabled') continue;
           const models = snapshot.catalog?.models?.length
             ? snapshot.catalog.models.map((model) => model.id)
             : state.providers.find((provider) => provider.id === snapshot.id)?.config.models ?? [];

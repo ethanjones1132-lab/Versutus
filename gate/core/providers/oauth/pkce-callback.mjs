@@ -30,6 +30,31 @@ export async function createPkceAttempt(store, { providerId, ttlMs = 10 * 60_000
     };
   });
 
+  /**
+   * End the attempt for good: the timer stops, the loopback listener closes and
+   * the attempt leaves the store, so an attempt nobody finished in time costs
+   * nothing after it expires. Three things can reach it — the expiry timer, the
+   * one callback it exists to receive, and an explicit `close()` — and all three
+   * may arrive, so it is idempotent and never throws.
+   */
+  let released = null;
+  const release = () => {
+    if (released) return released;
+    clearTimeout(timeout);
+    released = new Promise((resolve) => {
+      try {
+        server.close(() => resolve());
+        // `close` only stops new connections; the browser that just ran the
+        // callback is still holding the one this attempt answered on.
+        server.closeAllConnections?.();
+      } catch {
+        resolve();
+      }
+    });
+    store.delete(attempt.id);
+    return released;
+  };
+
   const server = createServer((req, res) => {
     let url;
     try {
@@ -50,7 +75,13 @@ export async function createPkceAttempt(store, { providerId, ttlMs = 10 * 60_000
       error: url.searchParams.get('error'),
     };
     res.writeHead(200, { 'content-type': 'text/plain' });
-    res.end(received.error ? 'Authorization failed' : 'Authorization complete');
+    res.end(received.error ? 'Authorization failed' : 'Authorization complete', () => {
+      // The callback has been served, so the loopback listener this attempt
+      // opened has nothing left to answer — closed once the response it wrote
+      // is on the wire, so the browser is not reading from a socket being torn
+      // down under it.
+      void release();
+    });
     resolveCallback(received);
   });
 
@@ -63,14 +94,12 @@ export async function createPkceAttempt(store, { providerId, ttlMs = 10 * 60_000
   attempt.server = server;
   const timeout = setTimeout(() => {
     rejectCallback(new Error('attempt expired'));
+    void release();
   }, ttlMs);
   timeout.unref?.();
   attempt.callback.catch(() => {});
 
-  attempt.close = () => new Promise((resolve) => {
-    clearTimeout(timeout);
-    server.close(() => resolve());
-  });
+  attempt.close = () => release();
 
   store.put(attempt);
   return attempt;

@@ -22,12 +22,17 @@ test('PKCE attempts are one-use, state-bound, and expiry-bound', async () => {
   } finally {
     await attempt.close();
   }
-  const expired = await createPkceAttempt(store, { providerId: 'fake-oauth', ttlMs: 1 });
+  // Expiry is still enforced here, but no longer by waiting a real ttl out: an
+  // attempt that expires also releases itself now — listener closed, store entry
+  // gone (see pkce-attempt-cleanup.test.mjs) — so `consume` reports it as unknown
+  // rather than as expired. The rule that is left is the attempt's own
+  // `expiresAt`, moved back by hand so the assertion is about the rule.
+  const expiring = await createPkceAttempt(store, { providerId: 'fake-oauth', ttlMs: 2000 });
   try {
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    assert.throws(() => consumePkceAttempt(store, expired.id, expired.state), /expir/i);
+    expiring.expiresAt = Date.now() - 1;
+    assert.throws(() => consumePkceAttempt(store, expiring.id, expiring.state), /expir/i);
   } finally {
-    await expired.close();
+    await expiring.close();
   }
 });
 
