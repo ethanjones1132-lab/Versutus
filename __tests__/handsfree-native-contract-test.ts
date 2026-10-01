@@ -89,6 +89,14 @@ const gateMedia = readSource(
   'HandsfreeGateMedia.kt',
 );
 
+function between(src: string, startMarker: string, endMarker: string): string {
+  const start = src.indexOf(startMarker);
+  if (start === -1) return '';
+  const rest = src.slice(start + startMarker.length);
+  const end = rest.indexOf(endMarker);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
 describe('hands-free native contract', () => {
   it('declares every event in the TypeScript contract', () => {
     for (const event of EVENTS) {
@@ -346,5 +354,221 @@ describe('hands-free native contract', () => {
   it('forwards each Gate frame through the one gate event and stubs iOS as PENDING-MACOS', () => {
     expect(kotlin).toContain('sendEvent("gate"');
     expect(swift).toContain('PENDING-MACOS');
+  });
+});
+
+// The iOS half of the seam is Swift, which this suite cannot execute. These
+// cases pin the invariants by reading the source, the same way the rest of this
+// file pins the wiring: each one fails on the defect it names, so a regression
+// in the Swift is a red test here rather than a device-only surprise.
+describe('the iOS module is a clean slate per call', () => {
+  it('clears the mute flag on every end, including the inactive early return', () => {
+    // `isMuted` has exactly one writer, `setMuted`. Android is immune because
+    // `HandsfreeCallState.start()` resets `muted`; iOS resets it here, before
+    // the `sessionActive` guard, so a call that ended while muted cannot leave
+    // the next call unable to listen.
+    const end = between(swift, 'private func endLocked(reason: String) {', '// MARK: - Events');
+    const clear = end.indexOf('self.isMuted = false');
+    const guard = end.indexOf('guard self.sessionActive else { return }');
+    expect(clear).toBeGreaterThan(-1);
+    expect(guard).toBeGreaterThan(-1);
+    expect(clear).toBeLessThan(guard);
+    // The Android twin is immune by construction, and stays that way.
+    const state = readSource(
+      'modules',
+      'handsfree-voice',
+      'android',
+      'src',
+      'main',
+      'java',
+      'com',
+      'versutus',
+      'handsfreevoice',
+      'HandsfreeCallState.kt',
+    );
+    expect(state).toMatch(/fun start\([\s\S]*?muted = false/);
+  });
+
+  it('resets the per-call flags on a successful start, not only on end', () => {
+    const started = between(swift, 'self.sessionActive = true', 'DispatchQueue.main.async { promise.resolve("started") }');
+    expect(started).toContain('self.isMuted = false');
+    expect(started).toContain('self.isListening = false');
+    expect(started).toContain('self.isFinishingTurn = false');
+    // The queue is flushed, not adopted: the new call has its own replies.
+    expect(started).toContain('self.stopSpeakingLocked()');
+    // A start whose engine refuses is still a fresh call.
+    const refused = between(swift, 'if !self.startEngineIfNeeded() {', 'DispatchQueue.main.async { promise.resolve("started") }');
+    expect(refused).toContain('self.sessionActive = false');
+  });
+
+  it('keeps the start attempt id superseded on end, unchanged by the reset', () => {
+    const end = between(swift, 'private func endLocked(reason: String) {', '// MARK: - Events');
+    expect(end).toContain('self.startAttemptId = nil');
+    expect(end.indexOf('self.startAttemptId = nil')).toBeLessThan(end.indexOf('self.isMuted = false'));
+  });
+});
+
+describe('iOS progressive speech queues instead of truncating', () => {
+  const speak = between(swift, 'private func speakLocked(', 'private func speakNextChunk()');
+
+  it('appends to a running queue rather than replacing it and cancelling', () => {
+    // Android's `speakInternal` does exactly this. iOS overwrote `pendingChunks`
+    // and stopped the synthesizer on every streamed sentence, so each reply was
+    // cut off mid-word.
+    expect(service).toContain('queuedSpeech.addAll(chunks)');
+    expect(speak).toContain('pendingChunks.append(contentsOf: chunks)');
+    expect(speak).not.toContain('stopSpeaking(at:');
+    // The append returns before the new-generation setup.
+    const append = speak.indexOf('pendingChunks.append(contentsOf: chunks)');
+    const generation = speak.indexOf('speechGeneration += 1');
+    expect(append).toBeGreaterThan(-1);
+    expect(generation).toBeGreaterThan(append);
+    // The queued sentence keeps the voice it was asked for: the running
+    // utterance already has its own copy, so the fields can be set before the
+    // append. Android does the same, assigning `pendingVoiceIdentifier` and
+    // friends ahead of its own `if (speaking)` check.
+    expect(speak.indexOf('self.voiceIdentifier = voiceIdentifier')).toBeLessThan(append);
+    expect(speak).toContain('self.speechRate = rate');
+    expect(speak).toContain('self.speechPitch = pitch');
+    expect(service.indexOf('pendingVoiceIdentifier = voiceIdentifier')).toBeLessThan(
+      service.indexOf('queuedSpeech.addAll(chunks)'),
+    );
+  });
+
+  it('still starts a fresh utterance when nothing is speaking', () => {
+    expect(speak).toMatch(/guard sessionActive, !destroyed else \{ return \}[\s\S]*?if isSpeaking \{[\s\S]*?return\n\s*\}/);
+    expect(speak).toContain('speechGeneration += 1');
+    expect(speak).toContain('pendingChunks = chunks');
+    expect(speak).toContain('isSpeaking = true');
+    expect(speak).toContain('speakNextChunk()');
+    // Recognition is off before speech, on the path that actually speaks.
+    expect(speak.indexOf('if isListening { stopListeningLocked() }')).toBeGreaterThan(
+      speak.indexOf('pendingChunks.append(contentsOf: chunks)'),
+    );
+  });
+
+  it('stops listening on every speak, so a queued sentence never re-opens the mic', () => {
+    // The first speech already closes recognition; a progressive append cannot
+    // re-open it, since the append branch returns before any state is touched.
+    expect(speak).toContain('if isListening { stopListeningLocked() }');
+    expect(speak.indexOf('pendingChunks.append(contentsOf: chunks)')).toBeLessThan(
+      speak.indexOf('if isListening { stopListeningLocked() }'),
+    );
+  });
+
+  it('flushes the queue on stopSpeaking, which is how JS starts a fresh reply', () => {
+    const stop = between(swift, 'private func stopSpeakingLocked() {', 'private func handleBargeIn()');
+    expect(stop).toContain('pendingChunks.removeAll()');
+    expect(stop).toContain('speakingUtterance = nil');
+    expect(stop).toMatch(/if synthesizer\.isSpeaking \{\s*synthesizer\.stopSpeaking\(at: \.immediate\)/);
+    // Barge-in flushes through the same path.
+    const barge = between(swift, 'private func handleBargeIn() {', '// MARK: - Earcon');
+    expect(barge).toContain('stopSpeakingLocked()');
+  });
+
+  it('does not let a cancelled utterance advance the queue', () => {
+    // `stopSpeaking(at: .immediate)` cancels the in-flight utterance. If that
+    // utterance's completion still arrives, advancing would shift the next
+    // reply's first sentence off the queue before it was spoken.
+    expect(swift).toContain('speakingUtterance: AVSpeechUtterance?');
+    expect(swift).toContain('private func utteranceFinished(_ utterance: AVSpeechUtterance)');
+    const advance = between(swift, 'private func utteranceFinished(', 'private func stopSpeakingLocked()');
+    expect(advance).toContain('utterance === self.speakingUtterance');
+    expect(advance).toContain('self.speakNextChunk()');
+    // The delegate hands over the utterance it finished, not just a bare event.
+    expect(swift).toMatch(/HandsfreeSpeechDelegate \{ \[weak self\] utterance in[\s\S]*?utteranceFinished\(utterance\)/);
+    expect(swift).toContain('private let onFinish: (AVSpeechUtterance) -> Void');
+  });
+});
+
+describe('a failing iOS recogniser backs off instead of spinning', () => {
+  const handle = between(swift, 'private func handleRecognition(', 'private func finishTurn(');
+
+  it('counts the streak and ends the call at the bound', () => {
+    expect(swift).toContain('private var consecutiveRecognitionErrors = 0');
+    expect(handle).toContain('consecutiveRecognitionErrors += 1');
+    // The bound is reached by escalation, not by any framework timeout.
+    expect(handle).toMatch(/if consecutiveRecognitionErrors >= HandsfreeVoiceModule\.maxRecognitionRestarts \{[\s\S]*?emit\("fatalError"/);
+    expect(swift).toContain('private static let maxRecognitionRestarts = 5');
+    // The terminal shape is the one the not-listening branch already emits.
+    const terminal = between(swift, 'if consecutiveRecognitionErrors >=', '} else {\n        emit("fatalError"');
+    expect(terminal).toContain('"reason": "recognition-failed"');
+    expect(terminal).toContain('error.localizedDescription');
+    expect(terminal).toContain('end(reason: "recognition-failed")');
+  });
+
+  it('resets the streak on any recognised speech and on a normal final', () => {
+    expect(handle).toMatch(/if result\.isFinal \{[\s\S]*?consecutiveRecognitionErrors = 0[\s\S]*?finishTurn\(text: text\)/);
+    expect(handle).toMatch(/if !text\.isEmpty \{[\s\S]*?consecutiveRecognitionErrors = 0/);
+    // A new call starts with no history either.
+    expect(swift).toMatch(/self\.sessionActive = true[\s\S]*?self\.consecutiveRecognitionErrors = 0/);
+  });
+
+  it('delays the restart with a capped exponential backoff, guarded against staleness', () => {
+    expect(swift).toContain('private static let recognitionRestartBase: TimeInterval = 0.25');
+    expect(swift).toContain('private static let recognitionRestartMax: TimeInterval = 4');
+    expect(swift).toContain('private func recognitionRestartDelay() -> TimeInterval');
+    const delay = between(swift, 'private func recognitionRestartDelay()', 'private func scheduleRecognitionRestart(');
+    // Doubling per streak, capped. Four restarts reach 2s; the 5th error ends
+    // the call, so the 4s ceiling is a bound rather than a scheduled value.
+    expect(delay).toContain('Double(1 << min(step, 4))');
+    expect(delay).toMatch(/min\([\s\S]*?recognitionRestartMax/);
+    const schedule = between(swift, 'private func scheduleRecognitionRestart(', 'private func stopListeningLocked()');
+    expect(schedule).toContain('audioQueue.asyncAfter(deadline: .now() + delay)');
+    expect(schedule).toMatch(/guard token == self\.turnToken,[\s\S]*?self\.sessionActive,[\s\S]*?!self\.isSpeaking,[\s\S]*?!self\.destroyed[\s\S]*?else \{ return \}/);
+    expect(schedule).toContain('self.beginRecognition()');
+  });
+
+  it('emits one noSpeech per streak, not one per failed retry', () => {
+    expect(handle).toContain('emitSilence: consecutiveRecognitionErrors == 1');
+    const finish = between(swift, 'private func finishTurn(', 'private func recognitionRestartDelay()');
+    expect(finish).toContain('emitSilence: Bool = true');
+    expect(finish).toMatch(/if text\.isEmpty \{\s*if emitSilence \{\s*emit\("noSpeech", \["reason": "silence"\]\)/);
+  });
+
+  it('retires the turn token when the turn closes, so a cancelled task cannot end the call', () => {
+    // With the restart delayed there is now a window in which `isListening` is
+    // false and the cancelled task's own terminal error is still in flight. That
+    // callback takes the branch which ends the call as broken, so the token has
+    // to move here, not only in `beginRecognition`.
+    const finish = between(swift, 'private func finishTurn(', 'private func stopListeningLocked() {');
+    expect(finish).toMatch(/recognitionTask = nil[\s\S]*?turnToken \+= 1[\s\S]*?endpointing\.reset\(\)/);
+    // `stopListeningLocked` still moves it, so mute and End invalidate a pending
+    // restart exactly as they invalidate a live turn.
+    const stop = between(swift, 'private func stopListeningLocked() {', '// MARK: - Speech');
+    expect(stop).toContain('turnToken += 1');
+  });
+
+  it('restarts immediately for ordinary silence, and only the error path waits', () => {
+    const finish = between(swift, 'private func finishTurn(', 'private func recognitionRestartDelay()');
+    expect(finish).toMatch(/guard let delay = restartAfter else \{\s*beginRecognition\(\)/);
+    // The final branch of a recognised turn never passes a delay.
+    expect(swift).not.toMatch(/finishTurn\(text: text,[^)]*restartAfter/);
+    expect(handle).toContain('restartAfter: recognitionRestartDelay()');
+  });
+});
+
+describe('iOS state is read on the queue that writes it', () => {
+  it('declares no lock it does not use', () => {
+    expect(swift).not.toContain('stateLock');
+    expect(swift).not.toContain('NSLock');
+  });
+
+  it('reads the guards through audioQueue.sync, not on the calling thread', () => {
+    const listen = between(swift, 'AsyncFunction("startListening")', 'AsyncFunction("stopListening")');
+    expect(listen).toMatch(/let allowed = self\.audioQueue\.sync \{ self\.sessionActive && !self\.isMuted \}/);
+    const speak = between(swift, 'AsyncFunction("speak")', 'AsyncFunction("stopSpeaking")');
+    expect(speak).toMatch(/let active = self\.audioQueue\.sync \{ self\.sessionActive \}/);
+    // The decision stays on the queue: the work is still dispatched, not run
+    // inline, so the queue's ordering is the whole contract.
+    expect(listen).toContain('self.audioQueue.async { self.beginRecognition() }');
+    expect(speak).toContain('self.audioQueue.async {');
+  });
+
+  it('keeps the streaming reads on the queue, as beginRecognition already did', () => {
+    // `end`, the notification observers and the input tap all mutate or read
+    // state from a dispatched block, never inline.
+    expect(swift).toMatch(/private func end\(reason: String\) \{\s*audioQueue\.async \{ self\.endLocked\(reason: reason\) \}/);
+    expect(swift).toMatch(/AsyncFunction\("setMuted"\)[\s\S]*?self\.audioQueue\.async \{[\s\S]*?self\.isMuted = muted/);
   });
 });

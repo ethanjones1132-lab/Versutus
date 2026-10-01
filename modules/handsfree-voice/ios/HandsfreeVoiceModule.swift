@@ -13,8 +13,18 @@ import Speech
 public class HandsfreeVoiceModule: Module {
   public static weak var current: HandsfreeVoiceModule?
 
+  /**
+   * The one owner of every field below. State is read and written only from a
+   * block dispatched to `audioQueue`, and an entry point that needs a decision
+   * out of that state reads it with `audioQueue.sync` rather than on the
+   * calling thread. The queue is the lock; a second one would be a lie.
+   */
   private let audioQueue = DispatchQueue(label: "com.versutus.handsfreevoice.audio")
-  private let stateLock = NSLock()
+
+  /// Consecutive failed recognition turns before the call is ended as broken.
+  private static let maxRecognitionRestarts = 5
+  private static let recognitionRestartBase: TimeInterval = 0.25
+  private static let recognitionRestartMax: TimeInterval = 4
 
   private var audioEngine: AVAudioEngine?
   private var speechRecognizer: SFSpeechRecognizer?
@@ -34,12 +44,24 @@ public class HandsfreeVoiceModule: Module {
   private var turnToken = 0
   private var speechGeneration = 0
   private var pendingChunks: [String] = []
+  /**
+   * The utterance the synthesizer is speaking now. A cancelled utterance can
+   * still report completion on some iOS versions, and treating that as a finish
+   * would shift a sentence off the queue before it was ever spoken.
+   */
+  private var speakingUtterance: AVSpeechUtterance?
   private var voiceIdentifier: String?
   private var speechRate: Float?
   private var speechPitch: Float?
   private var lastPartial = ""
   private var onsetStart: TimeInterval = 0
   private var lastLevelEmit: TimeInterval = 0
+  /**
+   * How many recognition tasks have died mid-turn in a row. A recogniser that
+   * fails the instant it is created would otherwise spin; the streak bounds the
+   * retries and then ends the call. Zeroed by any turn that produced speech.
+   */
+  private var consecutiveRecognitionErrors = 0
   /**
    * The id of the newest start the module has claimed. A `stopSession` for an
    * older id (or a newer start) moves it on, so an answer the OS permission
@@ -69,8 +91,8 @@ public class HandsfreeVoiceModule: Module {
 
     OnCreate {
       HandsfreeVoiceModule.current = self
-      self.synthDelegate = HandsfreeSpeechDelegate { [weak self] in
-        self?.audioQueue.async { self?.speakNextChunk() }
+      self.synthDelegate = HandsfreeSpeechDelegate { [weak self] utterance in
+        self?.utteranceFinished(utterance)
       }
       self.synthesizer.delegate = self.synthDelegate
       self.observeAudioSession()
@@ -126,6 +148,17 @@ public class HandsfreeVoiceModule: Module {
             }
             self.sessionActive = true
             self.destroyed = false
+            // A new call starts from a clean slate. `isMuted` in particular is
+            // written only by `setMuted`, so without this a call that ended
+            // while muted would leave every later call unable to listen and
+            // killing it ~1.2s in with "recognition-failed".
+            self.isMuted = false
+            self.isListening = false
+            self.isFinishingTurn = false
+            self.consecutiveRecognitionErrors = 0
+            // Any speech queue a previous call left behind is flushed here, not
+            // adopted: the new call has its own replies to speak.
+            self.stopSpeakingLocked()
             if !self.startEngineIfNeeded() {
               self.sessionActive = false
               DispatchQueue.main.async { promise.resolve("unavailable") }
@@ -138,7 +171,11 @@ public class HandsfreeVoiceModule: Module {
     }
 
     AsyncFunction("startListening") { () -> Bool in
-      guard self.sessionActive, !self.isMuted else { return false }
+      // Read on the queue that writes the state. An AsyncFunction body runs on
+      // Expo's own queue, never on `audioQueue`, so a `sync` read here cannot
+      // deadlock: nothing dispatched to `audioQueue` waits on this thread.
+      let allowed = self.audioQueue.sync { self.sessionActive && !self.isMuted }
+      guard allowed else { return false }
       self.audioQueue.async { self.beginRecognition() }
       return true
     }
@@ -153,7 +190,10 @@ public class HandsfreeVoiceModule: Module {
       let rate = (options["rate"] as? NSNumber)?.floatValue
       let pitch = (options["pitch"] as? NSNumber)?.floatValue
       let usable = chunks.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-      guard self.sessionActive, !usable.isEmpty else { return false }
+      guard !usable.isEmpty else { return false }
+      // `sessionActive` is read on `audioQueue`, the queue that writes it.
+      let active = self.audioQueue.sync { self.sessionActive }
+      guard active else { return false }
       self.audioQueue.async {
         self.speakLocked(chunks: usable, voiceIdentifier: voice, rate: rate, pitch: pitch)
       }
@@ -378,8 +418,15 @@ public class HandsfreeVoiceModule: Module {
       let text = result.bestTranscription.formattedString
         .trimmingCharacters(in: .whitespacesAndNewlines)
       if result.isFinal {
+        // A normal completion, silent or not, is a live recogniser.
+        consecutiveRecognitionErrors = 0
         finishTurn(text: text)
         return
+      }
+      if !text.isEmpty {
+        // Any recognised speech proves the recogniser is alive, so the restart
+        // streak is over.
+        consecutiveRecognitionErrors = 0
       }
       if !text.isEmpty && text != lastPartial {
         lastPartial = text
@@ -389,9 +436,31 @@ public class HandsfreeVoiceModule: Module {
     }
     if let error = error {
       if isListening {
-        // A recognition that dies mid-turn is not fatal to the call; the turn
-        // closes as no speech and the next one starts fresh.
-        finishTurn(text: "")
+        // A recognition that dies mid-turn is not fatal to the first failure:
+        // the turn closes as no speech and the next one starts fresh. But a
+        // recogniser that fails the instant it is created - revoked mic access,
+        // no network for server-side recognition, a wedged SFSpeechRecognizer -
+        // used to spin here: a request and task created and torn down as fast
+        // as the framework answered, one noSpeech per pass into JS, and
+        // `endpointing.begin` resetting the no-speech clock each time so it
+        // never tripped. The streak bounds it, and the restart waits.
+        consecutiveRecognitionErrors += 1
+        if consecutiveRecognitionErrors >= HandsfreeVoiceModule.maxRecognitionRestarts {
+          stopListeningLocked()
+          emit("fatalError", [
+            "reason": "recognition-failed",
+            "message": error.localizedDescription
+          ])
+          end(reason: "recognition-failed")
+          return
+        }
+        // One noSpeech per streak is enough for the JS grace window; the rest of
+        // the streak is silent so the banner does not flicker per retry.
+        finishTurn(
+          text: "",
+          emitSilence: consecutiveRecognitionErrors == 1,
+          restartAfter: recognitionRestartDelay()
+        )
       } else {
         emit("fatalError", [
           "reason": "recognition-failed",
@@ -402,23 +471,69 @@ public class HandsfreeVoiceModule: Module {
     }
   }
 
-  private func finishTurn(text: String) {
+  private func finishTurn(
+    text: String,
+    emitSilence: Bool = true,
+    restartAfter: TimeInterval? = nil
+  ) {
     isListening = false
     isFinishingTurn = false
     recognitionTask?.cancel()
     recognitionRequest = nil
     recognitionTask = nil
+    // Retire this turn's token here, not only in `beginRecognition`: a cancelled
+    // task still reports its own terminal error, and when the restart is delayed
+    // that callback arrives with `isListening` false - the branch that ends the
+    // call as broken. Moving the token here discards it whichever way the restart
+    // is scheduled; `beginRecognition` bumps it again on the immediate path.
+    turnToken += 1
     endpointing.reset()
     if text.isEmpty {
-      emit("noSpeech", ["reason": "silence"])
+      if emitSilence {
+        emit("noSpeech", ["reason": "silence"])
+      }
     } else {
       emit("final", ["text": text])
     }
     // Restart immediately: the JS grace window can only cancel a pending send
     // in favour of a resumed utterance if the recognizer is already listening
-    // again, and restart latency otherwise clips the first syllables.
-    if !isSpeaking {
+    // again, and restart latency otherwise clips the first syllables. Only a
+    // failed recognition waits, and then only for its backoff.
+    if isSpeaking { return }
+    guard let delay = restartAfter else {
       beginRecognition()
+      return
+    }
+    scheduleRecognitionRestart(after: delay)
+  }
+
+  /**
+   * 250ms, then doubling, capped at 4s: long enough that a wedged recogniser
+   * stops burning the CPU, short enough that a transient failure is invisible.
+   */
+  private func recognitionRestartDelay() -> TimeInterval {
+    let step = max(consecutiveRecognitionErrors - 1, 0)
+    return min(
+      HandsfreeVoiceModule.recognitionRestartBase * Double(1 << min(step, 4)),
+      HandsfreeVoiceModule.recognitionRestartMax
+    )
+  }
+
+  /**
+   * Reopen recognition after a failed turn, once the backoff has elapsed. The
+   * guard is the turn token plus the live-call flags, so a restart that outlives
+   * its call - or the mute, barge-in or End that ended the turn - does nothing.
+   */
+  private func scheduleRecognitionRestart(after delay: TimeInterval) {
+    let token = turnToken
+    audioQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+      guard let self = self else { return }
+      guard token == self.turnToken,
+        self.sessionActive,
+        !self.isSpeaking,
+        !self.destroyed
+      else { return }
+      self.beginRecognition()
     }
   }
 
@@ -441,6 +556,22 @@ public class HandsfreeVoiceModule: Module {
     pitch: Float?
   ) {
     guard sessionActive, !destroyed else { return }
+    if isSpeaking {
+      // Progressive speech: JS calls `speak` once per newly completed sentence
+      // while a reply streams, so a call that lands mid-utterance joins the
+      // queue the way Android's `speakInternal` does. Replacing the queue here
+      // and stopping the synthesizer truncated the reply mid-word and, if the
+      // cancelled utterance still reported completion, skipped a sentence.
+      // The running utterance keeps its own voice/rate/pitch; these values apply
+      // to the chunks that follow it, as Android's `speakInternal` does. A fresh
+      // reply is introduced by JS calling `stopSpeaking` first, which still
+      // flushes everything.
+      self.voiceIdentifier = voiceIdentifier
+      self.speechRate = rate
+      self.speechPitch = pitch
+      pendingChunks.append(contentsOf: chunks)
+      return
+    }
     // Recognition is off before speech so the reply is not heard back.
     if isListening { stopListeningLocked() }
     self.voiceIdentifier = voiceIdentifier
@@ -449,9 +580,6 @@ public class HandsfreeVoiceModule: Module {
     speechGeneration += 1
     pendingChunks = chunks
     isSpeaking = true
-    if synthesizer.isSpeaking {
-      synthesizer.stopSpeaking(at: .immediate)
-    }
     speakNextChunk()
   }
 
@@ -459,12 +587,14 @@ public class HandsfreeVoiceModule: Module {
     guard isSpeaking, speechGeneration > 0 else { return }
     if pendingChunks.isEmpty {
       isSpeaking = false
+      speakingUtterance = nil
       onsetStart = 0
       emit("speechFinished", ["reason": "done"])
       return
     }
     let chunk = pendingChunks.removeFirst()
     let utterance = AVSpeechUtterance(string: chunk)
+    speakingUtterance = utterance
     if let identifier = voiceIdentifier, let voice = AVSpeechSynthesisVoice(identifier: identifier) {
       utterance.voice = voice
     }
@@ -477,11 +607,30 @@ public class HandsfreeVoiceModule: Module {
     synthesizer.speak(utterance)
   }
 
+  /**
+   * The utterance that just finished may advance the queue, but only if it is
+   * the one currently speaking. The small correctness guard: `stopSpeaking` and
+   * barge-in both cancel, and a cancelled utterance's completion callback must
+   * not shift a fresh reply's first sentence off the queue.
+   */
+  private func utteranceFinished(_ utterance: AVSpeechUtterance) {
+    audioQueue.async { [weak self] in
+      guard let self = self else { return }
+      guard self.isSpeaking,
+        self.speechGeneration > 0,
+        utterance === self.speakingUtterance
+      else { return }
+      self.speakingUtterance = nil
+      self.speakNextChunk()
+    }
+  }
+
   private func stopSpeakingLocked() {
     speechGeneration += 1
     isSpeaking = false
     onsetStart = 0
     pendingChunks.removeAll()
+    speakingUtterance = nil
     if synthesizer.isSpeaking {
       synthesizer.stopSpeaking(at: .immediate)
     }
@@ -584,6 +733,12 @@ public class HandsfreeVoiceModule: Module {
     // live session down. Clearing even when inactive is what makes a late
     // grant resolve "unavailable" instead of activating audio.
     self.startAttemptId = nil
+    // Cleared before the inactive early return: this flag is per-call state
+    // with no writer other than `setMuted`, so letting it survive any end -
+    // even the one that runs when no call was live - is exactly how a muted
+    // call poisons the next one.
+    self.isMuted = false
+    self.consecutiveRecognitionErrors = 0
     guard self.sessionActive else { return }
     self.sessionActive = false
     self.destroyed = true
@@ -619,13 +774,13 @@ public class HandsfreeVoiceModule: Module {
 /// because `AVSpeechSynthesizerDelegate` requires an `NSObject`, which the
 /// Expo module base class is not.
 private final class HandsfreeSpeechDelegate: NSObject, AVSpeechSynthesizerDelegate {
-  private let onFinish: () -> Void
+  private let onFinish: (AVSpeechUtterance) -> Void
 
-  init(onFinish: @escaping () -> Void) {
+  init(onFinish: @escaping (AVSpeechUtterance) -> Void) {
     self.onFinish = onFinish
   }
 
   func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-    onFinish()
+    onFinish(utterance)
   }
 }
