@@ -71,6 +71,71 @@ function sessionToken(value) {
 }
 
 /**
+ * Turn a finished OpenCode message into what the caller asked for.
+ *
+ * OpenCode's own /message route answers 200 even when the *upstream* model call
+ * failed (e.g. the provider 404s) — the failure is folded into `info.error` with
+ * `parts` left empty, never a non-ok HTTP response. Trusting that as success
+ * would be the same mistake Claude Code's `result.subtype === 'success'` almost
+ * caused for auth failures.
+ */
+function turnResult(message) {
+  const upstream = message?.info?.error;
+  if (upstream) {
+    throw new Error(`opencode: ${upstream.data?.message ?? upstream.name ?? 'the turn failed upstream'}`);
+  }
+  if (!message) return { message: null, text: '' };
+  const mapped = toGatewayMessage(message);
+  return { message: mapped, text: mapped.content.map((part) => part.text).join('') };
+}
+
+/**
+ * The turn's own assistant message, and only that one.
+ *
+ * The session's *last* assistant message is the previous turn's answer whenever
+ * this turn produced none — an upstream failure that created no message, a turn
+ * that ended empty — and serving it again would answer the operator with the
+ * answer they already have. A message is this turn's when this turn's send
+ * created it; the slop absorbs the clock difference between the Gate and the
+ * server, which is the only other thing that could make a fresh message look
+ * older than the send that produced it.
+ */
+function thisTurnAssistantMessage(messages, sentAt) {
+  const list = Array.isArray(messages) ? messages : [];
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    if (list[index]?.info?.role !== 'assistant') continue;
+    const created = list[index]?.info?.time?.created;
+    if (typeof created === 'number' && created >= sentAt - TURN_START_SLOP_MS) return list[index];
+  }
+  return null;
+}
+
+/** How a model is named in a failure the operator reads on their phone. */
+function modelLabel(model) {
+  if (model?.providerId && model?.modelId) return `${model.providerId}/${model.modelId}`;
+  return model?.modelId ?? null;
+}
+
+/**
+ * The reason a silent turn is reported with: the model, the wait it was given,
+ * and what OpenCode said about the provider while it kept saying nothing.
+ */
+function silentTurnReason(model, boundMs, retryNote) {
+  // Never report a zero-second wait: an injected sub-second bound rounds up.
+  const seconds = Math.max(1, Math.round(boundMs / 1000));
+  const name = modelLabel(model);
+  const lead = name ? `${name} did not answer` : 'the model did not answer';
+  const why = retryNote ? ` (the provider kept failing: ${retryNote})` : '';
+  return `${lead} within ${seconds} s. OpenCode stopped the turn - try another model.${why}`;
+}
+
+/** Whatever a `session.status` retry frame says about why the provider is failing. */
+function retryReason(properties) {
+  const message = properties?.message ?? properties?.reason ?? errorText(properties?.error);
+  return typeof message === 'string' ? message.trim() : '';
+}
+
+/**
  * The bus is global, so a subscription must know an event is its own *before*
  * the event can touch a part cache, a pending-delta queue, the tool call map
  * or the client — not merely before it is emitted.
@@ -121,6 +186,31 @@ const TOOL_PROGRESS_MIN_INTERVAL_MS = 120;
 const METADATA_LOOKUP_TIMEOUT_MS = 1000;
 /** Abort must settle even if an underlying read/cancel ignores its signal. */
 const STREAM_CLEANUP_TIMEOUT_MS = 250;
+/** Stopping a turn must not be able to hang the failure that reports it. */
+const TURN_STOP_TIMEOUT_MS = 2000;
+/**
+ * Bounds on a turn the server has already accepted. A model that accepts a turn
+ * and then never answers leaves the bus completely silent, so without these the
+ * turn waits out the transport's own 300 s headers timeout and the operator
+ * reads "could not reach ... (Headers Timeout Error)" instead of a reason — while
+ * OpenCode keeps burning the turn with nobody watching. Before the first
+ * assistant output a silent turn is already a dead one; after it, a slow model is
+ * still working and gets the longer bound. A running tool part suspends both.
+ */
+export const OPENCODE_FIRST_OUTPUT_IDLE_MS = 60_000;
+export const OPENCODE_IDLE_MS = 180_000;
+/**
+ * How long a turn's bus subscription gets to prove it is live before the prompt
+ * is posted. The send waits for the ready point, never for the feed itself: a
+ * subscription that opens slowly must not delay the turn, and one that never
+ * opens cannot lose the answer either, because the silence bound re-reads the
+ * session's messages before it calls a turn dead.
+ */
+const BUS_READY_TIMEOUT_MS = 3000;
+/** Reading the session's messages back must not hold a turn that is over. */
+const TURN_MESSAGES_TIMEOUT_MS = 5000;
+/** How far before the send a message may be created and still be this turn's. */
+const TURN_START_SLOP_MS = 2000;
 const ABORTED = Symbol('aborted');
 
 /** Part types whose body streams through `message.part.delta`. */
@@ -148,6 +238,24 @@ function errorText(error) {
     }
   }
   return String(error);
+}
+
+/**
+ * A value inside a bound, or `undefined` when the wait runs out or the promise
+ * fails. Used only where the answer is a witness rather than the record — a
+ * subscription that has not opened yet, a route read that will not answer — so
+ * that neither can hold a turn that is otherwise over.
+ */
+function boundedValue(promise, ms) {
+  let timer;
+  const expiry = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ms);
+    timer.unref?.();
+  });
+  return Promise.race([
+    Promise.resolve(promise).then((value) => value, () => undefined),
+    expiry,
+  ]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -299,7 +407,15 @@ function frame(type, payload) {
 }
 
 /** Build a backend bound to a running OpenCode server. */
-export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } = {}) {
+export function createOpenCodeBackend({
+  baseUrl,
+  fetchImpl = fetch,
+  password,
+  // The silence bounds are injectable so a test proves the failure without
+  // waiting one out; production takes the exported defaults.
+  firstOutputIdleMs = OPENCODE_FIRST_OUTPUT_IDLE_MS,
+  idleMs = OPENCODE_IDLE_MS,
+} = {}) {
   const root = String(baseUrl).replace(/\/+$/, '');
 
   async function call(path, init = {}) {
@@ -319,12 +435,180 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
       } catch {
         // keep the raw text
       }
-      throw new Error(`opencode: ${message}`);
+      // The status rides along: a 404 is the only answer that means "this server
+      // has no such route", which is how the async prompt falls back.
+      throw Object.assign(new Error(`opencode: ${message}`), { status: response.status });
     }
     return response.json();
   }
 
-  return {
+  /** Best-effort stop of a turn the server is still running, and bounded. */
+  async function stopTurn(sessionId) {
+    const controller = new AbortController();
+    let timer;
+    try {
+      await Promise.race([
+        call(`/session/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', signal: controller.signal })
+          .catch(() => undefined),
+        new Promise((resolve) => { timer = setTimeout(resolve, TURN_STOP_TIMEOUT_MS); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+  }
+
+  /** The session's messages, read back once and bounded. */
+  async function readTurnMessages(sessionId) {
+    const controller = new AbortController();
+    try {
+      return await boundedValue(
+        call(`/session/${encodeURIComponent(sessionId)}/message`, { signal: controller.signal }),
+        TURN_MESSAGES_TIMEOUT_MS,
+      );
+    } finally {
+      controller.abort();
+    }
+  }
+
+  /**
+   * A turn's bus subscription and the wait it settles, both live from before the
+   * prompt is posted.
+   *
+   * The turn can be over before the send that started it has been answered — a
+   * provider that refuses at once, a cached reply — so a subscription opened
+   * after the POST has already missed the `session.idle`/`session.error` that
+   * ended it. The wait then sees silence for a turn that is over, stops a turn
+   * that is done and reports "<model> did not answer" for an answer that was
+   * already in the session. Hence the subscribe-then-send order.
+   */
+  function openTurnBus(sessionId, model, signal) {
+    const controller = new AbortController();
+    const runningTools = new Set();
+    let startedOutput = false;
+    let retryNote = '';
+    let feedDead = false;
+    let timer = null;
+    let settled = false;
+    let resolveOutcome;
+    const outcome = new Promise((resolve) => { resolveOutcome = resolve; });
+    const bound = () => (startedOutput ? idleMs : firstOutputIdleMs);
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      timer = null;
+      resolveOutcome(value);
+    };
+    // Silence is measured from the last sign of life, never from the send.
+    const arm = () => {
+      if (settled) return;
+      clearTimeout(timer);
+      timer = null;
+      // A long tool is the turn working, not a dead turn: no bound while one runs.
+      // A dead feed is the opposite — no progress can arrive to clear the bound,
+      // so it stays armed even if a tool was running when the feed died.
+      if (!feedDead && runningTools.size > 0) return;
+      timer = setTimeout(() => finish({ kind: 'silent', boundMs: bound() }), bound());
+      timer.unref?.();
+    };
+    const onEvent = (event) => {
+      if (settled) return;
+      const type = event?.type;
+      if (type === 'run.completed') { finish({ kind: 'idle' }); return; }
+      if (type === 'run.failed') { finish({ kind: 'failed', error: event.payload?.error }); return; }
+      if (type === 'message.delta') startedOutput = true;
+      const callId = event?.payload?.callId ?? '#tool';
+      if (type === 'tool.started' || type === 'tool.progress') runningTools.add(callId);
+      else if (type === 'tool.output') runningTools.delete(callId);
+      const status = type === 'diagnostic' && event.payload?.source === 'session.status'
+        ? event.payload.properties
+        : null;
+      // A retry is the provider failing, not the turn progressing: the clock
+      // keeps running and the reason goes into the failure.
+      if (status?.type === 'retry') {
+        retryNote = retryReason(status) || retryNote;
+        return;
+      }
+      arm();
+    };
+    // The caller's signal ends the turn and the wait, and stops the server's
+    // turn with them — an abort that leaves OpenCode working is not an abort.
+    const onCallerAbort = () => {
+      controller.abort();
+      finish({ kind: 'aborted' });
+    };
+    const close = () => {
+      controller.abort();
+      signal?.removeEventListener('abort', onCallerAbort);
+    };
+    if (signal?.aborted) onCallerAbort();
+    else signal?.addEventListener('abort', onCallerAbort, { once: true });
+
+    /**
+     * Wait out a turn the server has already accepted, and complete it from the
+     * bus.
+     *
+     * The blocking route answers only when the whole turn is done, so the wait
+     * for a model that never answers is the transport's headers timeout and the
+     * turn keeps running after the Gate has given up. `prompt_async` returns at
+     * once instead: the answer is read back off the session when it goes idle,
+     * and what counts as a sign of life is decided here — any event for this
+     * session, with two exceptions that are not progress at all: a `session.status`
+     * of type `retry` (OpenCode failing over to the provider) and a tool part that
+     * is legitimately still running.
+     */
+    async function awaitTurnOnBus(sentAt) {
+      try {
+        const settledOutcome = await outcome;
+        if (settledOutcome.kind === 'idle') {
+          const messages = await call(`/session/${encodeURIComponent(sessionId)}/message`);
+          return turnResult(thisTurnAssistantMessage(messages, sentAt));
+        }
+        if (settledOutcome.kind === 'failed') {
+          throw new Error(`opencode: ${errorText(settledOutcome.error) || 'the turn failed upstream'}`);
+        }
+        if (settledOutcome.kind === 'silent') {
+          // The bus is a witness, not the record: a turn that ended while the
+          // subscription was still opening (or after it died) emitted the frame
+          // that ended it to nobody. Ask the session whether this turn finished
+          // before stopping it and calling it silent.
+          const finished = thisTurnAssistantMessage(await readTurnMessages(sessionId), sentAt);
+          if (finished?.info?.time?.completed) return turnResult(finished);
+        }
+        // Give up on a turn nobody is answering for, and stop the server's turn
+        // before saying so: the next attempt would otherwise fight this one.
+        await stopTurn(sessionId);
+        if (settledOutcome.kind === 'aborted') throw new Error('opencode: the turn was aborted');
+        throw new Error(silentTurnReason(model, settledOutcome.boundMs, retryNote));
+      } finally {
+        // The subscription is closed, never awaited: a feed that ignores its
+        // signal must not hold a turn that has already settled.
+        close();
+      }
+    }
+
+    let subscription = null;
+    if (!settled) {
+      arm();
+      subscription = backend.streamEvents(sessionId, onEvent, controller.signal);
+      // A feed that fails is silence from then on: the bound still ends the
+      // turn, and the wait re-reads the session before it calls it dead.
+      Promise.resolve(subscription).catch(() => {
+        feedDead = true;
+        arm();
+      });
+    }
+    return {
+      // The subscription's own proof that it is live, bounded: the send waits
+      // for the ready point and never for the feed itself.
+      ready: boundedValue(subscription?.ready, BUS_READY_TIMEOUT_MS),
+      wait: awaitTurnOnBus,
+      close,
+    };
+  }
+
+  const backend = {
     kind: 'opencode',
 
     async listSessions() {
@@ -349,28 +633,39 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
       return typeof limit === 'number' ? mapped.slice(-limit) : mapped;
     },
 
-    /** Blocks until the turn completes; live deltas come from streamEvents. */
-    async sendMessage(sessionId, { text, model } = {}) {
+    /**
+     * Submit the turn and complete it from the bus; live deltas come from
+     * streamEvents.
+     *
+     * The bus subscription is opened — and its ready point awaited — before the
+     * prompt is posted, so a turn that ends early cannot finish behind the
+     * Gate's back. `prompt_async` returns as soon as the server has accepted the
+     * turn, so the wait for the answer is bounded here and ends with a reason
+     * rather than with a transport timeout. A 404 is the server saying it
+     * predates that route, and the blocking POST still serves it.
+     */
+    async sendMessage(sessionId, { text, model, signal } = {}) {
       const body = { parts: [{ type: 'text', text }] };
       if (model?.providerId) body.model = { providerID: model.providerId, modelID: model.modelId };
-      const message = await call(`/session/${encodeURIComponent(sessionId)}/message`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      // OpenCode's own /message route answers 200 even when the *upstream*
-      // model call failed (e.g. the provider 404s) — the failure is folded
-      // into `info.error` with `parts` left empty, never a non-ok HTTP
-      // response. Trusting that as success would be the same mistake Claude
-      // Code's `result.subtype === 'success'` almost caused for auth failures.
-      if (message?.info?.error) {
-        const upstream = message.info.error;
-        throw new Error(`opencode: ${upstream.data?.message ?? upstream.name ?? 'the turn failed upstream'}`);
+      const payload = JSON.stringify(body);
+      const session = encodeURIComponent(sessionId);
+      // Subscribe first, post second, and record when the send went out: the
+      // session's messages are read back against this mark, so the previous
+      // turn's answer can never be passed off as this one's.
+      const turn = openTurnBus(sessionId, model, signal);
+      await turn.ready;
+      const sentAt = Date.now();
+      try {
+        await call(`/session/${session}/prompt_async`, { method: 'POST', body: payload });
+      } catch (error) {
+        // The bus is not this path's answer: the blocking route is.
+        turn.close();
+        // Only a missing route falls back: every other refusal may already have
+        // been accepted, and re-sending would run the turn twice.
+        if (error?.status !== 404) throw error;
+        return turnResult(await call(`/session/${session}/message`, { method: 'POST', body: payload }));
       }
-      const mapped = toGatewayMessage(message);
-      return {
-        message: mapped,
-        text: mapped.content.map((part) => part.text).join(''),
-      };
+      return turn.wait(sentAt);
     },
 
     async abort(sessionId) {
@@ -439,6 +734,17 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
           const toolCalls = new Map();
           const parts = createOpenCodePartTracker();
           const pendingDeltas = new Map();
+          // The role of every message of this turn, from `message.updated`
+          // (`info.id` -> `info.role`) or from the bounded message lookup. Only
+          // the assistant's text is the answer: the operator's own prompt is a
+          // `text` part of a `role:'user'` message on this same session, so
+          // without this the reply is published with their words glued in front
+          // of it.
+          const messageRoles = new Map();
+          // Streamed parts held because the role of their message had not
+          // arrived yet. Held and released the way an untyped delta is, and
+          // dropped outright once the role is known to be another.
+          const roleHeld = new Map();
           // Every delivery funnels through here so a callback that aborts the
           // caller silences the frame behind it, whatever path produced it.
           const emit = (event) => {
@@ -489,6 +795,8 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
             pendingDeltas.clear();
             recoveredSnapshots.clear();
             requestedLookups.clear();
+            roleHeld.clear();
+            messageRoles.clear();
             parts.clear();
           };
           // Once the terminal frame is in hand, a lookup still settling must
@@ -504,6 +812,93 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
               if (signal?.aborted) return;
               const flushed = normalizeOpenCodeEvent(pending, parts);
               if (flushed) emit(flushed);
+            }
+          };
+          /**
+           * Hold a `field:'text'` delta whose part type has not arrived yet: it
+           * could be a thought, and `field` alone cannot say. True when the
+           * delta was queued instead of published.
+           */
+          const holdUntypedDelta = (parsed, recover = true) => {
+            if (parsed?.type !== 'message.part.delta') return false;
+            const props = parsed.properties ?? {};
+            if (props.field !== 'text' || typeof props.delta !== 'string') return false;
+            const partId = props.partID;
+            if (!partId || parts.partType(partId)) return false;
+            const queue = pendingDeltas.get(partId) ?? [];
+            queue.push(parsed);
+            pendingDeltas.set(partId, queue);
+            if (recover) recoverMessageParts(props.messageID);
+            return true;
+          };
+          /**
+           * Whether an event would publish answer text at all: a streamed
+           * part's snapshot, or one of its deltas.
+           */
+          const publishesText = (parsed) => {
+            if (parsed.type === 'message.part.updated') {
+              const part = parsed.properties?.part;
+              return Boolean(part && STREAMED_PART_TYPES.has(part.type));
+            }
+            if (parsed.type !== 'message.part.delta') return false;
+            const props = parsed.properties ?? {};
+            if (typeof props.delta !== 'string' || !props.delta) return false;
+            return props.field === 'text' || props.field === 'reasoning'
+              || props.field === 'reasoning_content' || props.field === 'thinking';
+          };
+          /**
+           * Hold a part's text until the role of its message is known. The role
+           * arrives on `message.updated`, which the bus does not order before
+           * the parts of that message, or from the same bounded message lookup
+           * that recovers a part type. True means the caller must not normalize
+           * the event: it belongs to a message that is not the assistant's and
+           * is dropped, or it is held until the role lands.
+           */
+          const holdForRole = (parsed) => {
+            const props = parsed.properties ?? {};
+            const source = parsed.type === 'message.part.updated' ? (props.part ?? {}) : props;
+            const messageId = source.messageID ?? props.messageID;
+            // Nothing names the message, so nothing can say who wrote it: the
+            // legacy shapes the app already maps keep flowing as they did.
+            if (!messageId) return false;
+            const role = messageRoles.get(messageId);
+            if (role === 'assistant') return false;
+            if (role !== undefined) return true;
+            const key = props.partID ?? source.id ?? messageId;
+            const held = roleHeld.get(key) ?? { messageId, events: [] };
+            held.events.push(parsed);
+            roleHeld.set(key, held);
+            recoverMessageParts(messageId);
+            return true;
+          };
+          /**
+           * Release the text held for a message whose role has arrived:
+           * published when the message is the assistant's, forgotten otherwise
+           * so no tail of it can surface later. Releasing every held part (no
+           * `messageId`) is what the terminal does once the bound has passed
+           * and no role was in sight — the routing the text would have had all
+           * along, never a guess.
+           */
+          const releaseRoleHeld = (messageId, publish) => {
+            for (const [key, held] of [...roleHeld]) {
+              if (messageId !== undefined && held.messageId !== messageId) continue;
+              if (signal?.aborted) return;
+              roleHeld.delete(key);
+              if (!publish) {
+                // The operator's own prompt. A type learned for it is not enough
+                // to publish it, so nothing is normalized on its behalf.
+                pendingDeltas.delete(key);
+                recoveredSnapshots.delete(key);
+                continue;
+              }
+              for (const event of held.events) {
+                if (holdUntypedDelta(event, !finished)) continue;
+                const flushed = normalizeOpenCodeEvent(event, parts);
+                if (flushed) emit(flushed);
+              }
+              // Only a typed part may leave this way; an untyped one keeps
+              // waiting for its metadata exactly as it would have.
+              if (parts.partType(key)) flushPartDeltas(key);
             }
           };
           // A first untyped delta names its message; the message route returns
@@ -540,6 +935,16 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
                   if (info.id && info.id !== messageId) return;
                   if (info.sessionID && info.sessionID !== sessionId) return;
                 }
+                // The message route carries the role beside the parts, so this
+                // lookup answers the role question as well as the type one.
+                const role = typeof info?.role === 'string' && info.role ? info.role : undefined;
+                if (role) messageRoles.set(messageId, role);
+                // A message this answer says nothing about is not a refusal: the
+                // held text goes back to the routing it would have had anyway.
+                releaseRoleHeld(messageId, role === undefined || role === 'assistant');
+                // A message that is not the assistant's has no parts to recover:
+                // its text is the operator's prompt and must not be published.
+                if (role !== undefined && role !== 'assistant') return;
                 for (const part of Array.isArray(message?.parts) ? message.parts : []) {
                   if (!part?.id || !STREAMED_PART_TYPES.has(part.type)) continue;
                   if (parts.partType(part.id)) continue;
@@ -680,28 +1085,34 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
               const scoped = scopeToSession(parsed, sessionId);
               if (!scoped) continue;
               parsed = scoped;
+              // The role of a message lives only on `message.updated`, and the
+              // bus does not promise it lands before the parts of that message.
+              if (parsed.type === 'message.updated') {
+                const info = parsed.properties?.info;
+                if (info?.id && typeof info.role === 'string' && info.role) {
+                  messageRoles.set(info.id, info.role);
+                  releaseRoleHeld(info.id, info.role === 'assistant');
+                }
+              }
+              // A streamed part's type is metadata about the part, not about its
+              // text, so it is remembered even while that text waits for the
+              // role below: the type is what decides whether it may be published.
+              if (parsed.type === 'message.part.updated') {
+                const part = parsed.properties?.part;
+                if (part && STREAMED_PART_TYPES.has(part.type)) parts.remember(part);
+              }
+              // Only the assistant's own text is the answer; the operator's
+              // prompt is a `text` part of a `role:'user'` message on this same
+              // session.
+              if (publishesText(parsed) && holdForRole(parsed)) continue;
               // A streamed part's deltas name it only by id; its type arrives
               // on a separate `message.part.updated`. Hold undecided text
               // deltas until that metadata lands so a thought is never emitted
               // as the answer.
-              if (parsed.type === 'message.part.delta'
-                && parsed.properties?.field === 'text'
-                && typeof parsed.properties.delta === 'string') {
-                const partId = parsed.properties.partID;
-                if (partId && !parts.partType(partId)) {
-                  const queue = pendingDeltas.get(partId) ?? [];
-                  queue.push(parsed);
-                  pendingDeltas.set(partId, queue);
-                  recoverMessageParts(parsed.properties.messageID);
-                  continue;
-                }
-              }
+              if (holdUntypedDelta(parsed)) continue;
+              // The part's type is known, so whatever waited on it can go.
               if (parsed.type === 'message.part.updated') {
-                const part = parsed.properties?.part;
-                if (part && STREAMED_PART_TYPES.has(part.type)) {
-                  parts.remember(part);
-                  flushPartDeltas(part.id);
-                }
+                flushPartDeltas(parsed.properties?.part?.id);
               }
               let normalized = normalizeOpenCodeEvent(parsed, parts);
               const callId = normalized?.payload?.callId;
@@ -799,6 +1210,11 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
                 if (signal?.aborted) return;
                 // No later lookup may append after the terminal frame.
                 finished = true;
+                // Text still waiting for its role is reconciled the way text
+                // waiting for its type is: the turn is over and the bound has
+                // passed, so it goes out by the type it announced, or is
+                // reported by id below — never as the answer on a guess.
+                releaseRoleHeld(undefined, true);
                 const unclassified = flushPendingDeltas();
                 if (unclassified) {
                   emit(frame('diagnostic', {
@@ -849,4 +1265,6 @@ export function createOpenCodeBackend({ baseUrl, fetchImpl = fetch, password } =
       return done;
     },
   };
+
+  return backend;
 }

@@ -425,9 +425,23 @@ export function shouldReleaseSessionForModel(input: {
   return !sameModelId(previous, next);
 }
 
-/** System line for a transcript emptied because the session had to be released. */
-export function modelSwitchAnnouncement(input: { previous: string; next: string }): string {
-  return `New session opened. Was ${input.previous}, now ${input.next}.`;
+/**
+ * System line for a transcript emptied because the session had to be released.
+ *
+ * A thread that never had an override has no known previous model, and the
+ * release happens anyway — `shouldReleaseSessionForModel` treats "nothing
+ * proves the open session serves `next`" as a change. There is no swap to
+ * report in that case, and `Was X, now X` (the caller used to substitute
+ * `next` for the missing previous) reads as a defect on the phone. Only a
+ * real change — compared on qualification-insensitive identity, like every
+ * other comparison here — names both models.
+ */
+export function modelSwitchAnnouncement(input: { previous?: string | null; next: string }): string {
+  const previous = input.previous?.trim();
+  if (!previous || sameModelId(previous, input.next)) {
+    return `New session opened on ${input.next}.`;
+  }
+  return `New session opened. Was ${previous}, now ${input.next}.`;
 }
 
 /**

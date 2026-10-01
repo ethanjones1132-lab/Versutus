@@ -24,6 +24,32 @@ describe('modelSwitchAnnouncement', () => {
       shouldReleaseSessionForModel({ previous: 'kimi-k3', next: 'kimi-k3', hasSession: true }),
     ).toBe(false);
   });
+
+  // A thread with no stored override has no known previous model, yet the
+  // release still happens (see shouldReleaseSessionForModel). Substituting
+  // `next` for the missing previous printed "Was kimi-k3, now kimi-k3." on the
+  // phone: a swap that never happened.
+  test('no known previous model names only the new one, never "Was X, now X"', () => {
+    expect(modelSwitchAnnouncement({ previous: undefined, next: 'opencode-go/mimo-v2.6-pro' }))
+      .toBe('New session opened on opencode-go/mimo-v2.6-pro.');
+    expect(modelSwitchAnnouncement({ previous: null, next: 'kimi-k3' }))
+      .toBe('New session opened on kimi-k3.');
+    expect(modelSwitchAnnouncement({ previous: '   ', next: 'kimi-k3' }))
+      .toBe('New session opened on kimi-k3.');
+  });
+
+  test('a previous that is the same model by identity is not reported as a change', () => {
+    expect(modelSwitchAnnouncement({ previous: 'kimi-k3', next: 'kimi-k3' }))
+      .toBe('New session opened on kimi-k3.');
+    // Qualification-insensitive, like every other model comparison here.
+    expect(modelSwitchAnnouncement({ previous: 'moonshot/kimi-k3', next: 'kimi-k3' }))
+      .toBe('New session opened on kimi-k3.');
+  });
+
+  test('a real change still names both models', () => {
+    expect(modelSwitchAnnouncement({ previous: 'longcat-2.0', next: 'kimi-k3' }))
+      .toBe('New session opened. Was longcat-2.0, now kimi-k3.');
+  });
 });
 
 describe('selectModel writes the announcement onto the fresh transcript', () => {
@@ -38,6 +64,18 @@ describe('selectModel writes the announcement onto the fresh transcript', () => 
     expect(select).toMatch(/appendSystemNote/);
     expect(select).toMatch(/modelSwitchAnnouncement/);
     expect(select).not.toMatch(/setMessages\(\[\]\)/);
+  });
+
+  // The caller used to pass `previousModel ?? modelId`, which turned a thread
+  // with no known previous model into the "Was X, now X" line.
+  test('the announcement is handed the previous model as it is, with no substitution', () => {
+    const src = nodeFs
+      .readFileSync([__dirname, '..', 'src', 'context', 'gateway-provider.tsx'].join(SEP), 'utf8')
+      .replace(/\r\n/g, '\n');
+    const select = src.match(/const selectModel = useCallback\([\s\S]*?\n  \);/)?.[0];
+    expect(select).toBeDefined();
+    expect(select).toMatch(/modelSwitchAnnouncement\(\{\s*previous:\s*previousModel\s*,\s*next:\s*modelId\s*\}\)/);
+    expect(select).not.toMatch(/previousModel\s*\?\?/);
   });
 
   test('appendSystemNote still produces a system-role line the transcript can show', () => {

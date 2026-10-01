@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  OPENCODE_FIRST_OUTPUT_IDLE_MS,
+  OPENCODE_IDLE_MS,
   createOpenCodeBackend,
   createOpenCodePartTracker,
   normalizeOpenCodeEvent,
@@ -244,14 +246,21 @@ function waitForEvent(seen, type, timeoutMs = 2000) {
 }
 
 /** A backend whose /event stream stays open until the test sends or closes it. */
-function liveBackend(routes = {}) {
+function liveBackend(routes = {}, options = {}) {
   const encoder = new TextEncoder();
   let streamController;
   let closed = false;
+  const calls = [];
+  const send = (event) => streamController.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+  // The server's side of the bus: a frame published with nobody subscribed is
+  // gone, exactly as it is on a real OpenCode server.
+  const broadcast = (event) => { if (streamController) send(event); };
   const backend = createOpenCodeBackend({
     baseUrl: 'http://127.0.0.1:4096',
+    ...options,
     fetchImpl: async (url, init = {}) => {
       const path = String(url).replace(/^https?:\/\/[^/]+/, '');
+      calls.push({ path, method: init.method ?? 'GET', body: init.body ? JSON.parse(init.body) : undefined });
       if (path === '/event') {
         return {
           ok: true,
@@ -261,13 +270,24 @@ function liveBackend(routes = {}) {
       }
       const handler = routes[`${init.method ?? 'GET'} ${path}`] ?? routes[path];
       if (!handler) return { ok: false, status: 404, async text() { return 'not found'; } };
-      const value = typeof handler === 'function' ? await handler(init) : handler;
+      // A route may act as the server while it answers — broadcast a bus frame,
+      // read a clock — which is how a turn that ends before the send is answered
+      // is reproduced.
+      const value = typeof handler === 'function'
+        ? await handler(init, { send, broadcast })
+        : handler;
       return { ok: true, status: 200, async json() { return value; }, async text() { return JSON.stringify(value); } };
     },
   });
   return {
     backend,
-    send: (event) => streamController.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)),
+    calls,
+    /** True once a subscriber is attached to the bus this fixture feeds. */
+    opened: () => Boolean(streamController),
+    send,
+    // The server's side of the bus: a frame published with nobody subscribed is
+    // gone, exactly as it is on a real OpenCode server.
+    broadcast,
     // One chunk carrying several frames, so a callback that aborts mid-batch
     // really does land with lines still queued behind it.
     sendAll: (...events) => streamController.enqueue(
@@ -479,6 +499,9 @@ test('part metadata that arrives while the recovery lookup is in flight wins', a
   const seen = [];
   const stream = backend.streamEvents('ses_abc', (event) => seen.push(event));
   await stream.ready;
+  // The role lives only on `message.updated`, so the fixture has to say who
+  // wrote message 'm' before its parts are published at all.
+  send({ type: 'message.updated', properties: { info: { id: 'm', role: 'assistant', sessionID: 'ses_abc' } } });
   send(unknownTextDelta('u', 'deep'));
   // Metadata beats the lookup: the part is a thought, not the answer.
   send({ type: 'message.part.updated', properties: { sessionID: 'ses_abc', part: { id: 'u', type: 'reasoning', text: 'deep', messageID: 'm' } } });
@@ -693,6 +716,116 @@ test('an abort settles while the reader, its cancel and the recovery lookup all 
     releaseLookup?.();
     process.off('unhandledRejection', onRejection);
   }
+});
+
+// ─── whose text is the answer ───────────────────────────────────────
+// The operator's own prompt is a `text` part of a `role:'user'` message on the
+// same session, and nothing in the streamed-part path used to look at the role.
+// Forwarding it glues the operator's words in front of the reply — reported from
+// a phone on 2026-10-01 as `Hey budHey! What are we working on?`. The role is
+// only on `message.updated`, and the bus does not promise it lands first.
+
+/** A real message update: `info.id` and `info.role` are the only role carrier. */
+const messageUpdated = (id, role) => ({
+  type: 'message.updated',
+  properties: { info: { id, role, sessionID: 'ses_abc' } },
+});
+
+test("the operator's own prompt is never published as the answer", async () => {
+  const seen = await collectEvents([
+    messageUpdated('msg_u', 'user'),
+    // The prompt's parts: a snapshot of its text and the thought stream beside
+    // it. Both belong to a message that is not the assistant's.
+    partUpdated({ id: 'prt_u', type: 'text', text: 'Hey bud', messageID: 'msg_u' }),
+    partUpdated({ id: 'prt_r_u', type: 'reasoning', text: 'be warm', messageID: 'msg_u' }),
+    messageUpdated('msg_a', 'assistant'),
+    partUpdated({ id: 'prt_a', type: 'text', text: '', messageID: 'msg_a' }),
+    { type: 'message.part.delta', properties: { sessionID: 'ses_abc', messageID: 'msg_a', partID: 'prt_a', field: 'text', delta: 'Hey! What are we working on?' } },
+    { type: 'session.idle', properties: { sessionID: 'ses_abc' } },
+  ]);
+  const answer = seen.filter((event) => event.type === 'message.delta').map((event) => event.payload.text).join('');
+  assert.equal(answer, 'Hey! What are we working on?');
+  assert.equal(seen.filter((event) => event.type === 'message.reasoning.delta').length, 0);
+  assert.ok(!JSON.stringify(seen).includes('Hey bud'), "the operator's prompt must not reach the client");
+  assert.ok(!JSON.stringify(seen).includes('be warm'), "the operator's own reasoning must not reach the client");
+});
+
+test("a prompt streamed before its message's role is still not published", async () => {
+  // No lookup can answer here, so the late `message.updated` is the only thing
+  // that can drop the prompt: bus order alone must never publish it.
+  const { backend, send } = liveBackend({
+    'GET /session/ses_abc/message/msg_u': () => new Promise(() => {}),
+  });
+  const seen = [];
+  const stream = backend.streamEvents('ses_abc', (event) => seen.push(event));
+  await stream.ready;
+  send({
+    type: 'message.part.delta',
+    properties: { sessionID: 'ses_abc', messageID: 'msg_u', partID: 'prt_u', field: 'text', delta: 'Hey bud' },
+  });
+  send(partUpdated({ id: 'prt_u', type: 'text', text: 'Hey bud', messageID: 'msg_u' }));
+  // Only now does the turn say who wrote that message.
+  send(messageUpdated('msg_u', 'user'));
+  send(messageUpdated('msg_a', 'assistant'));
+  send({ type: 'session.idle', properties: { sessionID: 'ses_abc' } });
+  await stream;
+  assert.equal(seen.filter((event) => event.type === 'message.delta').length, 0);
+  assert.deepEqual(seen.map((event) => event.type).slice(-1), ['run.completed']);
+  assert.ok(!JSON.stringify(seen).includes('Hey bud'), "the operator's prompt must not reach the client");
+});
+
+test('the bounded message lookup settles a prompt whose message.updated never arrives', async () => {
+  let lookups = 0;
+  // The message route answers for the prompt itself: same part, same text, and
+  // the role that says it is not this turn's answer.
+  const { backend, send } = liveBackend({
+    'GET /session/ses_abc/message/msg_u': () => {
+      lookups += 1;
+      return {
+        info: { id: 'msg_u', role: 'user', sessionID: 'ses_abc' },
+        parts: [{ id: 'prt_p', type: 'text', text: 'a private prompt', messageID: 'msg_u', sessionID: 'ses_abc' }],
+      };
+    },
+  });
+  const seen = [];
+  const stream = backend.streamEvents('ses_abc', (event) => seen.push(event));
+  await stream.ready;
+  send({
+    type: 'message.part.delta',
+    properties: { sessionID: 'ses_abc', messageID: 'msg_u', partID: 'prt_p', field: 'text', delta: 'a private prompt' },
+  });
+  send({ type: 'session.idle', properties: { sessionID: 'ses_abc' } });
+  await stream;
+  assert.equal(lookups, 1, 'the held part must ask for its role exactly once');
+  assert.equal(seen.filter((event) => event.type === 'message.delta').length, 0);
+  assert.ok(!JSON.stringify(seen).includes('a private prompt'));
+});
+
+test('an assistant part held for its role is published once, as soon as the role lands', async () => {
+  const { backend, send } = liveBackend({});
+  const seen = [];
+  const stream = backend.streamEvents('ses_abc', (event) => seen.push(event));
+  await stream.ready;
+  send({
+    type: 'message.part.delta',
+    properties: { sessionID: 'ses_abc', messageID: 'msg_a', partID: 'prt_a', field: 'text', delta: 'Hello ' },
+  });
+  send({
+    type: 'message.part.delta',
+    properties: { sessionID: 'ses_abc', messageID: 'msg_a', partID: 'prt_a', field: 'text', delta: 'there' },
+  });
+  send(partUpdated({ id: 'prt_a', type: 'text', text: 'Hello there', messageID: 'msg_a' }));
+  // Nothing may go out before the role is known: this text could be a prompt.
+  await delay(30);
+  assert.deepEqual(seen, [], 'answer text must not leave before its role is known');
+  send(messageUpdated('msg_a', 'assistant'));
+  await waitForEvent(seen, 'message.delta');
+  // Two frames for two deltas, in order, and the closing snapshot adds nothing.
+  assert.deepEqual(seen.filter((event) => event.type === 'message.delta').map((event) => event.payload.text), ['Hello ', 'there']);
+  // The closing snapshot must not be replayed over what already went out.
+  send({ type: 'session.idle', properties: { sessionID: 'ses_abc' } });
+  await stream;
+  assert.equal(seen.filter((event) => event.type === 'message.delta').map((event) => event.payload.text).join(''), 'Hello there');
 });
 
 // ─── session isolation ─────────────────────────────────────────────
@@ -1098,7 +1231,9 @@ test('sending a message posts parts and returns the assistant text', async () =>
     model: { providerId: 'opencode-go', modelId: 'gpt-5.6-luna' },
   });
   assert.equal(result.text, 'contract ok');
-  assert.deepEqual(calls[0].body, {
+  // The bus subscription is opened before the prompt, so the submitted body is
+  // the POST, not the first call the server sees.
+  assert.deepEqual(calls.find((call) => call.path === '/session/ses_abc/message').body, {
     model: { providerID: 'opencode-go', modelID: 'gpt-5.6-luna' },
     parts: [{ type: 'text', text: 'say hi' }],
   });
@@ -1119,7 +1254,9 @@ test('a refused fetch rejects naming the baseUrl, not a bare fetch failed', asyn
   });
   await assert.rejects(
     () => backend.sendMessage('s', { text: 'x' }),
-    /opencode: could not reach http:\/\/127\.0\.0\.1:4096\/session\/s\/message \(fetch failed\)/,
+    // The send now submits to `prompt_async`, so the route named in the reason
+    // is that one (and the blocking POST only after a 404 on it).
+    /opencode: could not reach http:\/\/127\.0\.0\.1:4096\/session\/s\/(prompt_async|message) \(fetch failed\)/,
   );
 });
 
@@ -1159,6 +1296,336 @@ test('an upstream failure embedded in a 200 response fails the turn, not a silen
     () => backend.sendMessage('ses_abc', { text: 'say exactly: ping ok' }),
     /Resource not found/,
   );
+});
+
+// ─── a turn that never answers ─────────────────────────────────────
+// `POST /session/{id}/message` holds the POST open until the whole turn is done,
+// so a free model that accepts a turn and then says nothing was reported after
+// five minutes as `could not reach ... (Headers Timeout Error)`, with OpenCode
+// still burning the turn. `prompt_async` returns at once and the turn is then
+// completed from the bus, with silence bounded by what is actually meaningful:
+// progress, a running tool, and a provider that is failing over.
+
+const SILENT_MODEL = { providerId: 'opencode', modelId: 'longcat-2.5-preview-free' };
+/** Bounds short enough to fail in real time; production takes the exported ones. */
+const FAST_BOUNDS = { firstOutputIdleMs: 150, idleMs: 150 };
+
+/**
+ * Start a turn. Its rejection is claimed here so a turn that fails while the
+ * fixture is still getting ready can never surface as an unhandled rejection;
+ * a test that expects one reads it through `failureWithin`.
+ */
+function startTurn(backend, options = {}) {
+  const turn = backend.sendMessage('ses_abc', { text: 'say hi', model: SILENT_MODEL, ...options });
+  turn.catch(() => undefined);
+  return turn;
+}
+
+function waitUntil(check, what = 'the bus subscription', timeoutMs = 2000) {
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const tick = () => {
+      if (check()) return resolve();
+      if (Date.now() - started > timeoutMs) return reject(new Error(`timed out waiting for ${what}`));
+      setTimeout(tick, 5);
+    };
+    tick();
+  });
+}
+
+/**
+ * How a turn ended, or `null` when it was still running `ms` later. It never
+ * rejects, so waiting on it can never leave an unhandled rejection behind when
+ * the turn fails before the test gets there.
+ */
+function failureWithin(turn, ms = 2000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    turn.then(
+      (value) => { clearTimeout(timer); resolve({ value }); },
+      (error) => { clearTimeout(timer); resolve({ error }); },
+    );
+  });
+}
+
+const idleFrame = { type: 'session.idle', properties: { sessionID: 'ses_abc' } };
+/**
+ * A finished assistant message, stamped when the route is answered so it is this
+ * turn's own: a message the session held before the send is the previous turn's
+ * answer and must never be served as this one's.
+ */
+const assistantMessage = (text) => {
+  const at = Date.now();
+  return {
+    info: { id: 'msg_a', role: 'assistant', sessionID: 'ses_abc', time: { created: at, completed: at } },
+    parts: [{ type: 'text', text }],
+  };
+};
+/** The same, from before this turn: the answer the operator already has. */
+const olderAssistantMessage = (text) => {
+  const at = Date.now() - 60_000;
+  return {
+    info: { id: 'msg_old', role: 'assistant', sessionID: 'ses_abc', time: { created: at, completed: at } },
+    parts: [{ type: 'text', text }],
+  };
+};
+const assistantPart = (text) => partUpdated({ id: 'prt_a', type: 'text', text, messageID: 'msg_a' });
+const answerDelta = (text) => ({
+  type: 'message.part.delta',
+  properties: { sessionID: 'ses_abc', messageID: 'msg_a', partID: 'prt_a', field: 'text', delta: text },
+});
+
+test('the production silence bounds are a minute before output and three after', () => {
+  assert.equal(OPENCODE_FIRST_OUTPUT_IDLE_MS, 60_000);
+  assert.equal(OPENCODE_IDLE_MS, 180_000);
+});
+
+test('a turn is submitted to prompt_async and completed from the bus', async () => {
+  const { backend, calls, opened, send } = liveBackend({
+    'POST /session/ses_abc/prompt_async': { ok: true },
+    // Stamped per request: the read-back is checked against when the send went
+    // out, so a message has to be this turn's own.
+    'GET /session/ses_abc/message': () => [assistantMessage('the answer')],
+  });
+  const turn = startTurn(backend);
+  await waitUntil(opened);
+  send(assistantPart(''));
+  send(answerDelta('the answer'));
+  send(idleFrame);
+  const result = await turn;
+  assert.equal(result.text, 'the answer');
+  assert.equal(result.message.id, 'msg_a');
+  // The bus subscription is opened before the prompt, so the submit is not the
+  // first call the server sees.
+  assert.deepEqual(calls.find((call) => call.path === '/session/ses_abc/prompt_async'), {
+    path: '/session/ses_abc/prompt_async',
+    method: 'POST',
+    body: { model: { providerID: 'opencode', modelID: 'longcat-2.5-preview-free' }, parts: [{ type: 'text', text: 'say hi' }] },
+  });
+});
+
+test('a turn the server reports as failed fails with the upstream message', async () => {
+  const { backend, opened, send } = liveBackend({ 'POST /session/ses_abc/prompt_async': { ok: true } });
+  const turn = startTurn(backend);
+  await waitUntil(opened);
+  send({
+    type: 'session.error',
+    properties: { sessionID: 'ses_abc', error: { name: 'ProviderAuthError', message: 'no credit on this account' } },
+  });
+  await assert.rejects(() => turn, /no credit on this account/);
+});
+
+// An idle turn whose final message carries `info.error` is the same upstream
+// failure the blocking route folded into its 200 response: it must fail the same
+// way, not return an empty reply.
+test('an upstream failure in the completed turn fails it rather than returning nothing', async () => {
+  const { backend, opened, send } = liveBackend({
+    'POST /session/ses_abc/prompt_async': { ok: true },
+    'GET /session/ses_abc/message': () => [{
+      info: {
+        id: 'msg_a',
+        role: 'assistant',
+        sessionID: 'ses_abc',
+        time: { created: Date.now(), completed: Date.now() },
+        error: { name: 'APIError', data: { message: 'Resource not found' } },
+      },
+      parts: [],
+    }],
+  });
+  const turn = startTurn(backend);
+  await waitUntil(opened);
+  send(idleFrame);
+  await assert.rejects(() => turn, /Resource not found/);
+});
+
+test('a bus that stays silent fails with the model named, and stops the server turn', async () => {
+  const { backend, calls, opened } = liveBackend({
+    'POST /session/ses_abc/prompt_async': { ok: true },
+    'POST /session/ses_abc/abort': { ok: true },
+  }, FAST_BOUNDS);
+  const turn = startTurn(backend);
+  await waitUntil(opened);
+  const outcome = await failureWithin(turn);
+  assert.ok(outcome?.error, `the silence bound must end the turn: ${JSON.stringify(outcome)}`);
+  assert.match(
+    outcome.error.message,
+    /opencode\/longcat-2\.5-preview-free did not answer within \d+ s\. OpenCode stopped the turn - try another model\./,
+  );
+  // The turn the server is still running must not outlive the Gate giving up.
+  assert.ok(
+    calls.some((call) => call.path === '/session/ses_abc/abort'),
+    `the silent turn must be stopped: ${JSON.stringify(calls)}`,
+  );
+});
+
+test('a turn that keeps streaming is never cut off, however long it runs', async () => {
+  const { backend, opened, send } = liveBackend({
+    'POST /session/ses_abc/prompt_async': { ok: true },
+    'GET /session/ses_abc/message': () => [assistantMessage('a long answer')],
+  }, FAST_BOUNDS);
+  const turn = startTurn(backend);
+  await waitUntil(opened);
+  send(messageUpdated('msg_a', 'assistant'));
+  send(assistantPart(''));
+  // Steadier than the bound, for longer than it: every delta is a sign of life.
+  for (let index = 0; index < 12; index += 1) {
+    send(answerDelta('word '));
+    await delay(25);
+  }
+  send(idleFrame);
+  const result = await turn;
+  assert.equal(result.text, 'a long answer');
+});
+
+test('a tool that runs longer than the bound is the turn working, not a dead turn', async () => {
+  const { backend, opened, send } = liveBackend({
+    'POST /session/ses_abc/prompt_async': { ok: true },
+    'GET /session/ses_abc/message': () => [assistantMessage('done')],
+  }, FAST_BOUNDS);
+  const turn = backend.sendMessage('ses_abc', { text: 'run the suite', model: SILENT_MODEL });
+  await waitUntil(opened);
+  send(partUpdated({ type: 'tool', tool: 'bash', callID: 'c1', state: { status: 'running', input: { command: 'npm test' } } }));
+  // Three times the bound with nothing but the running tool on the bus.
+  await delay(FAST_BOUNDS.firstOutputIdleMs * 3);
+  send(partUpdated({ type: 'tool', tool: 'bash', callID: 'c1', state: { status: 'completed', output: 'ok' } }));
+  send(assistantPart('done'));
+  send(idleFrame);
+  const result = await turn;
+  assert.equal(result.text, 'done');
+});
+
+// OpenCode retrying the provider emits a status frame and no answer: it is not
+// progress, so it must not re-arm the bound, and why the provider is failing
+// belongs in the failure the operator reads.
+test('a provider that keeps retrying is not progress, and its reason is reported', async () => {
+  const { backend, calls, opened, send } = liveBackend({
+    'POST /session/ses_abc/prompt_async': { ok: true },
+    'POST /session/ses_abc/abort': { ok: true },
+  }, FAST_BOUNDS);
+  const turn = startTurn(backend);
+  await waitUntil(opened);
+  // Claim the outcome before the retries start, so the turn's rejection always
+  // has a handler even if the bound expires mid-loop.
+  const failure = failureWithin(turn);
+  for (let index = 0; index < 6; index += 1) {
+    send({ type: 'session.status', properties: { sessionID: 'ses_abc', type: 'retry', message: '503 from provider' } });
+    await delay(10);
+  }
+  const outcome = await failure;
+  assert.ok(outcome?.error, `a retrying provider is not progress: the bound must expire. ${JSON.stringify(outcome)}`);
+  assert.match(outcome.error.message, /did not answer within \d+ s\..*\(the provider kept failing: 503 from provider\)/);
+  assert.ok(calls.some((call) => call.path === '/session/ses_abc/abort'), 'the stuck turn must be stopped');
+});
+
+test('the caller aborting a turn stops it on the server too', async () => {
+  const { backend, calls, opened } = liveBackend({
+    'POST /session/ses_abc/prompt_async': { ok: true },
+    'POST /session/ses_abc/abort': { ok: true },
+  }, FAST_BOUNDS);
+  const controller = new AbortController();
+  const turn = startTurn(backend, { signal: controller.signal });
+  await waitUntil(opened);
+  controller.abort();
+  const outcome = await failureWithin(turn);
+  assert.ok(outcome?.error, `an abort must settle the turn: ${JSON.stringify(outcome)}`);
+  assert.match(outcome.error.message, /aborted/);
+  assert.ok(calls.some((call) => call.path === '/session/ses_abc/abort'), 'an abort must stop the server turn');
+});
+
+// ─── a turn that is over before the send is answered ───────────────
+// `prompt_async` returns as soon as the server accepts the turn, and the turn can
+// be finished by then: a provider that refuses at once, a cached reply. A
+// subscription opened *after* the POST has already missed the `session.idle` /
+// `session.error` that ended it, so the wait saw silence for a turn that was over
+// — reported as "<model> did not answer", with the answer sitting in the session.
+// These fixtures broadcast when the prompt is posted, which is what a real bus
+// does: a frame with no subscriber is gone.
+
+test('a turn the bus finishes before the send is answered is that answer, not a failure', async () => {
+  const { backend, calls } = liveBackend({
+    'POST /session/ses_abc/prompt_async': (_init, server) => { server.broadcast(idleFrame); return { ok: true }; },
+    'GET /session/ses_abc/message': () => [assistantMessage('answered already')],
+    'POST /session/ses_abc/abort': { ok: true },
+  }, FAST_BOUNDS);
+  const started = Date.now();
+  const result = await startTurn(backend);
+  assert.equal(result.text, 'answered already');
+  assert.equal(result.message.id, 'msg_a');
+  // The bound was a fraction of a second away: this can only be the answer.
+  assert.ok(Date.now() - started < FAST_BOUNDS.firstOutputIdleMs, 'the turn must not have waited out the bound');
+  assert.ok(
+    !calls.some((call) => call.path === '/session/ses_abc/abort'),
+    `a turn that answered must not be stopped: ${JSON.stringify(calls)}`,
+  );
+});
+
+test('an upstream failure reported before the send is answered fails with its message', async () => {
+  const { backend, calls } = liveBackend({
+    'POST /session/ses_abc/prompt_async': (_init, server) => {
+      server.broadcast({
+        type: 'session.error',
+        properties: { sessionID: 'ses_abc', error: { name: 'ProviderAuthError', message: 'no credit on this account' } },
+      });
+      return { ok: true };
+    },
+    'POST /session/ses_abc/abort': { ok: true },
+  }, FAST_BOUNDS);
+  const outcome = await failureWithin(startTurn(backend));
+  assert.ok(outcome?.error, `the turn must fail: ${JSON.stringify(outcome)}`);
+  assert.match(outcome.error.message, /no credit on this account/);
+  assert.doesNotMatch(outcome.error.message, /did not answer/, 'a reported failure is not silence');
+  assert.ok(!calls.some((call) => call.path === '/session/ses_abc/abort'), 'a failed turn is already over');
+});
+
+// The bus is a witness, not the record: a turn can finish while the subscription
+// is still opening, or after it died, and the session's messages are what prove
+// it. The silence bound must ask them before it stops a turn that answered.
+test('a silent bus that already holds this turn\'s finished message answers it', async () => {
+  const { backend, calls } = liveBackend({
+    'POST /session/ses_abc/prompt_async': { ok: true },
+    'GET /session/ses_abc/message': () => [assistantMessage('finished while the bus was quiet')],
+    'POST /session/ses_abc/abort': { ok: true },
+  }, FAST_BOUNDS);
+  const result = await startTurn(backend);
+  assert.equal(result.text, 'finished while the bus was quiet');
+  assert.ok(
+    !calls.some((call) => call.path === '/session/ses_abc/abort'),
+    `a turn that answered must not be stopped: ${JSON.stringify(calls)}`,
+  );
+});
+
+// The session's last assistant message is the *previous* turn's answer whenever
+// this turn produced none — an upstream failure that created no message of its
+// own. Serving it again would answer the operator with what they already have,
+// so an empty turn must read as empty.
+test('an idle turn with no message of its own does not answer with the last one', async () => {
+  const { backend, opened, send } = liveBackend({
+    'POST /session/ses_abc/prompt_async': { ok: true },
+    'GET /session/ses_abc/message': [olderAssistantMessage('the answer to the last question')],
+  }, FAST_BOUNDS);
+  const turn = startTurn(backend);
+  await waitUntil(opened);
+  send(idleFrame);
+  const result = await turn;
+  assert.equal(result.text, '', "the previous turn's answer must not be served as this one's");
+  assert.equal(result.message, null);
+});
+
+test('a server without the async prompt falls back to the blocking send', async () => {
+  const { calls, fetchImpl } = stubFetch({
+    'POST /session/ses_abc/message': assistantMessage('contract ok'),
+  });
+  const backend = createOpenCodeBackend({ baseUrl: 'http://127.0.0.1:4096', fetchImpl });
+  const result = await backend.sendMessage('ses_abc', { text: 'say hi', model: SILENT_MODEL });
+  assert.equal(result.text, 'contract ok');
+  // 404 on the async route, then the send this Gate has always made. The bus
+  // subscription is opened first, and this server has no bus at all.
+  const sent = calls.filter((call) => call.path !== '/event');
+  assert.deepEqual(sent.map((call) => call.path), ['/session/ses_abc/prompt_async', '/session/ses_abc/message']);
+  assert.deepEqual(sent[1].body, {
+    model: { providerID: 'opencode', modelID: 'longcat-2.5-preview-free' },
+    parts: [{ type: 'text', text: 'say hi' }],
+  });
 });
 
 test('abort cancels the active turn', async () => {

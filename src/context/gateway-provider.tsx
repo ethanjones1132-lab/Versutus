@@ -4825,7 +4825,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         sessionIdRef.current = undefined;
         setCurrentSessionId(undefined);
         setMessages(
-          appendSystemNote([], modelSwitchAnnouncement({ previous: previousModel ?? modelId, next: modelId })),
+          appendSystemNote([], modelSwitchAnnouncement({ previous: previousModel, next: modelId })),
         );
         const client = clientRef.current ?? { setSessionId: () => undefined };
         const pinned = pinLiveSession({
