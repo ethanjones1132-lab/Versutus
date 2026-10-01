@@ -67,8 +67,14 @@ describe('providers section disconnected retry', () => {
     const provider = readSource(['src', 'context', 'gateway-provider.tsx']);
     const start = provider.indexOf('const retryAutoConnect = useCallback(async () => {');
     expect(start).toBeGreaterThanOrEqual(0);
-    const body = provider.slice(start, start + 500);
+    const body = provider.slice(start, provider.indexOf('}, [', start));
     expect(body).toContain('autoRetryFailureStreakRef.current = 0;');
-    expect(body).toContain('await runAutoConnectCycle();');
+    // ONB-1: the exported retry is what a Retry BUTTON calls, and every
+    // button drops the promise — so the cycle's own rejection is reported
+    // here exactly as the automatic entry points report it, instead of
+    // escaping the process. This assertion used to pin the bare
+    // `await runAutoConnectCycle();`, which is the defect.
+    expect(body).toContain('await runAutoConnectCycle().catch(reportAutoConnectFailure);');
+    expect(body).not.toContain('await runAutoConnectCycle();');
   });
 });

@@ -7,7 +7,20 @@ export function validatePcAddress(value: string): { valid: boolean; message: str
   }
 
   // Optional :port so Gate (:8760) can be named explicitly; Hermes defaults to :8642.
-  const withoutPort = trimmed.replace(/:(\d{2,5})$/, '');
+  // The RANGE is checked here, not just the shape: `new URL` refuses any port
+  // above 65535, so `host:99999` used to read "ready", be saved as
+  // `tailscaleHost`, and then be dropped from every candidate wave by the
+  // parser's throw — an address this device could never reach and never learn
+  // it could not. Rejecting it up front is the only point that still has the
+  // operator's attention.
+  const portMatch = /:(\d+)$/.exec(trimmed);
+  if (portMatch) {
+    const port = Number(portMatch[1]);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return { valid: false, message: 'Ports go from 1 to 65535.' };
+    }
+  }
+  const withoutPort = portMatch ? trimmed.slice(0, -(portMatch[1].length + 1)) : trimmed;
   const hostnamePattern = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
   const tailnetIpPattern = /^100\.(?:\d{1,3}\.){2}\d{1,3}$/;
   const lanIpPattern = /^(?:\d{1,3}\.){3}\d{1,3}$/;

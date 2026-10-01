@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import Animated, {
   Easing,
@@ -31,6 +31,24 @@ export function OnboardingScreen() {
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  // The cycle in flight, in a ref rather than in the state above: two taps
+  // inside one frame come off the same rendered closure, where `setRetrying`
+  // has not landed yet, and the second tap would start a second ladder.
+  const retryingRef = useRef(false);
+  // The retry is judged in an effect, not off the closure the tap was holding:
+  // `connectionPhase` is only committed by a later render, so reading it where
+  // `await retryAutoConnect()` returns reads the phase from BEFORE the tap.
+  const [awaitingRetryPhase, setAwaitingRetryPhase] = useState(false);
+  // `setRetrying` after the screen is gone is a setState on a dead tree, so the
+  // cycle's own cleanup says whether this screen is still the one waiting.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const validation = useMemo(() => validatePcAddress(pcAddress), [pcAddress]);
   // The manual Connect CTA must stay reachable while the background
@@ -73,6 +91,53 @@ export function OnboardingScreen() {
       setWorking(false);
     }
   }
+
+  /**
+   * The failed auto-connect's Retry. It has to hold the button honest while the
+   * ladder runs and name the outcome when the ladder ends in `failed` again —
+   * the probe message alone cannot, because it still carries the words from
+   * BEFORE the tap.
+   */
+  async function handleRetry() {
+    if (retryingRef.current) return;
+    retryingRef.current = true;
+    setRetrying(true);
+    setAwaitingRetryPhase(false);
+    // The last retry's verdict is about the last retry; leaving its card up
+    // over a fresh one would be the same lie the busy state is fixing.
+    setError(null);
+    try {
+      await retryAutoConnect();
+    } catch (err) {
+      // `retryAutoConnect` reports through the provider rather than rejecting,
+      // so this is the belt to that braces: whatever does throw must be named
+      // here, not left for the `void` on the press to drop.
+      if (mountedRef.current) {
+        setError((current) => current ?? (err instanceof Error ? err.message : String(err)));
+      }
+    } finally {
+      retryingRef.current = false;
+      if (mountedRef.current) {
+        setRetrying(false);
+        // The verdict is judged where the phase is committed: the render this
+        // tap triggers still carries the phase from BEFORE the ladder ran, so
+        // reading it where the await returns would read the wrong one.
+        setAwaitingRetryPhase(true);
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!awaitingRetryPhase) return;
+    if (connectionPhase !== 'failed') return;
+    setAwaitingRetryPhase(false);
+    setError(
+      (current) =>
+        current ??
+        probeMessage ??
+        'The gateway could not be reached. Check its address and network, then try again.',
+    );
+  }, [awaitingRetryPhase, connectionPhase, probeMessage]);
 
   return (
     <Screen>
@@ -195,13 +260,23 @@ export function OnboardingScreen() {
               </Animated.View>
             ) : null}
 
-            {probeMessage && !busy && connectionPhase === 'failed' ? (
+            {probeMessage && (retrying || (!busy && connectionPhase === 'failed')) ? (
               // The failed auto-connect message says "Tap retry", and the
               // Connect CTA above stays disabled until an address validates —
               // on a discovery-only failure the field is empty and there was
               // no tap anywhere. Retry re-runs the auto-connect cycle, the
-              // same affordance Home's Try-again button fires.
-              <Button label="Retry" onPress={() => void retryAutoConnect()} />
+              // same affordance Home's Try-again button fires, and says so
+              // while it is running instead of sitting there looking dead.
+              // `retrying` deliberately outranks `busy`: the ladder parks the
+              // phase in 'searching' before its first await, so `busy` is true
+              // for the whole cycle and a busy-gated button would unmount the
+              // instant it was tapped — taking its "Retrying…" label with it.
+              // Every other situation still hides on `busy` as before.
+              <Button
+                label={retrying ? 'Retrying…' : 'Retry'}
+                onPress={() => void handleRetry()}
+                disabled={retrying}
+              />
             ) : null}
 
             {error ? (

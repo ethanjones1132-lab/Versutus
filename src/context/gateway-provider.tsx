@@ -4374,8 +4374,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     autoRetryFailureStreakRef.current = 0;
     authFailureRef.current = false;
     authRejectedTokenRef.current = undefined;
-    await runAutoConnectCycle();
-  }, [runAutoConnectCycle]);
+    // `runAutoConnect` ends in `finally` with no `catch`, so a connect that
+    // ends in a refusal (or any throw) leaves the cycle rejecting. Every
+    // automatic entry point already ends in `reportAutoConnectFailure`; this
+    // exported one is what a Retry BUTTON calls, and the buttons drop the
+    // promise — without this the rejection left the process as an unhandled
+    // one and the screen kept the message from before the tap.
+    await runAutoConnectCycle().catch(reportAutoConnectFailure);
+  }, [runAutoConnectCycle, reportAutoConnectFailure]);
 
   const scheduleAutoRetry = useCallback((floorMs = AUTO_RETRY_BASE_DELAY_MS) => {
     if (!settingsRef.current.autoConnect) return;

@@ -23,6 +23,12 @@ jest.mock('expo-notifications', () => ({
   registerTaskAsync: jest.fn(),
 }));
 
+// The widget companion task this module registers reads the app's last widget
+// payload out of AsyncStorage, so the storage behind it is mocked here too.
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);
+
 jest.mock('expo-constants', () => ({
   __esModule: true,
   default: { easConfig: { projectId: '52545800-300a-4bbc-a2b9-7e412d9c217e' } },

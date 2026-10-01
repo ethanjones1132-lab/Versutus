@@ -29,10 +29,34 @@ describe('onboarding failed auto-connect retry', () => {
     );
   });
 
-  test('a Retry button wired to retryAutoConnect renders only in the failed phase', () => {
+  test('a Retry button wired to the busy-aware handler renders in the failed phase and through the retry', () => {
     const src = readScreen();
-    expect(src).toContain("probeMessage && !busy && connectionPhase === 'failed'");
-    expect(src).toContain('<Button label="Retry" onPress={() => void retryAutoConnect()} />');
+    // The ladder parks the phase in 'searching' before its first await, and
+    // that makes `busy` true — so the tap's own flag has to carry the button
+    // through the whole run, while every other case still hides on `busy`.
+    expect(src).toContain("probeMessage && (retrying || (!busy && connectionPhase === 'failed'))");
+    expect(src).not.toContain("probeMessage && !busy && connectionPhase === 'failed'");
+    // ONB-1: the button used to fire `void retryAutoConnect()` — a cycle with
+    // no `catch` inside it, with no busy state and no result on screen. The
+    // handler now says while it runs and what came of it.
+    expect(src).toContain("label={retrying ? 'Retrying…' : 'Retry'}");
+    expect(src).toContain('onPress={() => void handleRetry()}');
+    expect(src).toContain('disabled={retrying}');
+    expect(src).toContain('await retryAutoConnect();');
+  });
+
+  test('a second tap inside one frame cannot start a second cycle', () => {
+    const src = readScreen();
+    expect(src).toContain('if (retryingRef.current) return;');
+    expect(src).toContain('retryingRef.current = true;');
+  });
+
+  test('a cycle that ends in failed names itself in the error card', () => {
+    const src = readScreen();
+    // `probeMessage` still carries the words from BEFORE the tap, so the
+    // verdict is judged where the phase is committed — in an effect.
+    expect(src).toContain("if (connectionPhase !== 'failed') return;");
+    expect(src).toContain('setError(\n');
   });
 
   test('the probe-message status card still renders the message as plain text', () => {

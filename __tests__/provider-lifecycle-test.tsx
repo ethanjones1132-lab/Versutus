@@ -482,6 +482,36 @@ describe('LIFE-2: a key the gateway refuses', () => {
     await settle(4, 5 * 60_000);
     expect(mockClients).toHaveLength(2);
   });
+
+  // ONB-1: `runAutoConnect` is `try { ... } finally { ... }` with no `catch`,
+  // so a connect that ends in a refusal (or any throw) left the cycle
+  // rejecting. Every internal entry point ends in
+  // `reportAutoConnectFailure`; the exported `retryAutoConnect` is what a
+  // Retry BUTTON calls, and the buttons drop the promise — so the rejection
+  // used to leave the process as an unhandled one and the screen kept the
+  // message from before the tap.
+  test('the exported retry resolves when the cycle throws, and records the failure', async () => {
+    await mountRefused();
+    await settle(4, 15_000);
+
+    // A refusal-shaped throw that is NOT an auth rejection, so the message
+    // under test is the reported one rather than the auth copy.
+    connectScript = async () => {
+      throw new Error('the probe ladder came apart');
+    };
+
+    let outcome: 'resolved' | 'rejected' = 'rejected';
+    await act(async () => {
+      outcome = await gatewayApi().retryAutoConnect().then(
+        () => 'resolved',
+        () => 'rejected',
+      );
+    });
+    await settle();
+
+    expect(outcome).toBe('resolved');
+    expect(gatewayApi().lastError).toBe('the probe ladder came apart');
+  });
 });
 
 describe('LIFE-6: a switch while the new gateway is still being identified', () => {

@@ -38,4 +38,34 @@ describe('validatePcAddress', () => {
     // No dot: not a hostname by this pattern, not an IP either.
     expect(validatePcAddress('ethanspc').valid).toBe(false);
   });
+
+  // ONB-2: the old check stripped up to five port digits and validated only
+  // the HOST, so `100.95.137.83:99999` read "ready" and was saved as
+  // `tailscaleHost` — where `new URL` throws, `push` swallows it, and every
+  // later wave dropped the same address. The port's RANGE is the gate.
+  test.each([
+    ['100.95.137.83:1', 'the lowest port a socket can be asked for'],
+    ['100.95.137.83:65535', 'the highest port URL parsing accepts'],
+    ['studio.tailnet.ts.net:1', 'a one-digit port on a MagicDNS name'],
+  ])('accepts %s (%s)', (value) => {
+    expect(validatePcAddress(value).valid).toBe(true);
+  });
+
+  test.each([
+    ['100.95.137.83:0', 'port zero'],
+    ['100.95.137.83:65536', 'one past the URL parser ceiling'],
+    ['100.95.137.83:99999', 'five digits, unprobeable'],
+    ['studio.tailnet.ts.net:70000', 'a MagicDNS name with an unprobeable port'],
+  ])('rejects %s (%s) and says so', (value) => {
+    const verdict = validatePcAddress(value);
+    expect(verdict.valid).toBe(false);
+    expect(verdict.message).toBe('Ports go from 1 to 65535.');
+  });
+
+  test('a host with no port is judged exactly as before', () => {
+    expect(validatePcAddress('100.95.137.83').message).toBe('Looks good — ready to connect.');
+    expect(validatePcAddress('studio.tailnet.ts.net:8760').message).toBe(
+      'Looks good — ready to connect.',
+    );
+  });
 });

@@ -58,6 +58,28 @@ describe('gateway candidate URLs', () => {
     expect(urls).toEqual(['http://100.95.137.83:8760']);
   });
 
+  // ONB-2: `validatePcAddress` now accepts a one-digit port, so a candidate
+  // has to be able to form one — otherwise the field reads "ready" and the
+  // address still never gets probed, which is the same defect one digit down.
+  test('a one-digit explicit port forms exactly one candidate', () => {
+    const urls = buildGatewayCandidates({
+      configuredHosts: ['100.95.137.83:1'],
+      includeLocalFallbacks: false,
+    });
+    expect(urls).toEqual(['http://100.95.137.83:1']);
+  });
+
+  test('an unprobeable port drops that host and leaves the rest of the wave', () => {
+    // The fallbacks still answer: a saved setting written before the range was
+    // checked must not empty the whole wave.
+    const urls = buildGatewayCandidates({
+      tailscaleHost: '100.95.137.83:99999',
+      configuredHosts: ['192.168.4.30'],
+    });
+    expect(urls).not.toContain('http://100.95.137.83:99999');
+    expect(urls).toContain('http://192.168.4.30:8760');
+  });
+
   test('user-typed host is ordered before a sticky lastSuccessful Hermes URL', () => {
     const urls = buildGatewayCandidates({
       tailscaleHost: '100.95.137.83:8760',

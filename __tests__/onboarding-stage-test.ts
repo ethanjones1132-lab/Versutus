@@ -49,7 +49,7 @@ describe('onboarding first-connection chrome', () => {
     expect(onboarding).toContain('const result = await setupFromPcAddress(pcAddress, token);');
     expect(onboarding).toContain("if (result.kind === 'connected')");
     expect(onboarding).toContain('disabled={cta.locked || !validation.valid}');
-    expect(onboarding).toContain('<Button label="Retry" onPress={() => void retryAutoConnect()} />');
+    expect(onboarding).toContain("label={retrying ? 'Retrying…' : 'Retry'}");
     expect(onboarding).toContain("router.push('/gateway/add')");
   });
 

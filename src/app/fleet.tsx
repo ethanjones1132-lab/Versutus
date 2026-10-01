@@ -8,6 +8,8 @@ import { Screen, Text } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import { useGatewayReachability } from '@/hooks/use-gateway-reachability';
+import { connectionErrorShown } from '@/lib/connection/stale-error';
+import type { PublicBot } from '@/lib/gateway/bots';
 import { botTap } from '@/lib/fleet/bot-tap';
 import { botSheetView, type BotSheetView } from '@/lib/fleet/bot-sheet';
 import { fleetConstellationInput } from '@/lib/fleet/constellation-input';
@@ -15,6 +17,29 @@ import { constellationModel, type ConstellationNode } from '@/lib/fleet/constell
 import { gatewayHandshake } from '@/lib/fleet/gateway-handshake';
 import { fleetRoutineRead } from '@/lib/fleet/routine-read';
 import { failFleetRosterRead, fleetRosterRead, UNREPORTED_ROSTER } from '@/lib/fleet/roster-read';
+
+/**
+ * One `/v1/bots` per gateway at a time, shared by every Fleet mount.
+ *
+ * `rosterRequest` changes identity on each `status` / `activeGateway` change,
+ * so a connection blip (connected → reconnecting → connected) or a quick
+ * A → B switch started a SECOND enumeration for a gateway whose first was
+ * still in flight, and the Gate serves both — the expensive read that
+ * enumerates Hermes profiles. A read already running for a gateway is joined
+ * rather than repeated; the entry is released the moment it settles, so the
+ * next wave is a fresh read and never a replayed answer.
+ */
+const rosterReadsInFlight = new Map<string, Promise<PublicBot[]>>();
+
+function readFleetRoster(gatewayId: string, listBots: () => Promise<PublicBot[]>): Promise<PublicBot[]> {
+  const joined = rosterReadsInFlight.get(gatewayId);
+  if (joined) return joined;
+  const started = listBots().finally(() => {
+    if (rosterReadsInFlight.get(gatewayId) === started) rosterReadsInFlight.delete(gatewayId);
+  });
+  rosterReadsInFlight.set(gatewayId, started);
+  return started;
+}
 
 /**
  * D2's destination, rebuilt: the fleet as a living star map. It reads only
@@ -53,12 +78,14 @@ export default function FleetScreen() {
   );
 
   // One existing read per connection, never a poll. The request identity
-  // masks a prior connection before its effect runs; late results are ignored.
+  // masks a prior connection before its effect runs; late results are ignored,
+  // and a read for a gateway that is already being read is joined rather than
+  // issued twice.
   useEffect(() => {
     const { gatewayId, status: readStatus, listBots } = rosterRequest;
     if (readStatus !== 'connected' || !gatewayId) return undefined;
     let cancelled = false;
-    void listBots()
+    void readFleetRoster(gatewayId, listBots)
       .then((bots) => {
         if (!cancelled) setRosterRead({ gatewayId, bots, status: 'ready', request: rosterRequest });
       })
@@ -94,6 +121,33 @@ export default function FleetScreen() {
     router.navigate('/chat');
   }, [requestSurface, router]);
 
+  // The one line this screen speaks for itself. `connectGateway` rejects on an
+  // auth refusal ON PURPOSE (the provider's `onStatus` has already recorded the
+  // reason in `lastError`), so a tap has to answer for it — and a gateway star
+  // whose profile has been deleted has to admit it rather than swallow the
+  // tap, on a screen whose own comments promise "never a silent no-op".
+  const [connectFailure, setConnectFailure] = useState<unknown>(null);
+  const [removedNotice, setRemovedNotice] = useState<string | null>(null);
+  // A gateway that is answering has refused nothing, so the refusal is dropped
+  // on the way up as well as judged at render (stale-error.ts).
+  const [failureStatus, setFailureStatus] = useState(status);
+  if (status !== failureStatus) {
+    setFailureStatus(status);
+    if (status === 'connected') setConnectFailure(null);
+  }
+  const shownConnectFailure =
+    connectFailure === null
+      ? null
+      : connectionErrorShown(
+          status,
+          // The provider names the refusal better than the rejected promise
+          // does, so its own words lead; a connect that threw before anything
+          // could be recorded falls back to the message the rejection carried.
+          (lastError ?? '').trim() ||
+            (connectFailure instanceof Error ? connectFailure.message : String(connectFailure)),
+        );
+  const noticeMessage = shownConnectFailure ?? removedNotice;
+
   // One handshake line per saved gateway, computed by the same pure helper
   // that gates the tap — so what the map says and what the tap allows can
   // never disagree. A failure reason is only truthful for the gateway the
@@ -120,33 +174,45 @@ export default function FleetScreen() {
     return lines;
   }, [gateways, status, activeGateway?.id, activeGateway?.name, statusDetail, lastError]);
 
+  // The graph is memoized, so a profile removed while this screen is mounted
+  // can leave one render's star behind. Bumping the revision re-derives the map
+  // from the current profile list instead of leaving a star the screen can no
+  // longer act on — the same honesty the Bot branch already shows a roster row
+  // that vanished.
+  const [modelRevision, setModelRevision] = useState(0);
+
   const model = useMemo(
-    () =>
-      constellationModel(
-        fleetConstellationInput({
-          gateways,
-          connectedGatewayId: status === 'connected' ? activeGateway?.id : undefined,
-          reachability,
-          capabilitySnapshot,
-          rosterReadStatus: connectedRosterRead.status,
-          roster: connectedRoster.map((bot) => ({ id: bot.id, displayName: bot.displayName })),
-          routineReadStatus: connectedRoutineRead.status,
-          cronJobs: connectedRoutineJobs.map((job) => ({
-            id: job.id,
-            name: job.name ?? undefined,
-            title: job.title,
-            paused: job.paused ?? undefined,
-            running: job.running ?? undefined,
-            lastStatus: job.lastStatus ?? undefined,
-            lastError: job.lastError ?? undefined,
-            lastDeliveryError: job.lastDeliveryError ?? undefined,
-            cooldownReason: job.cooldownReason ?? undefined,
-            failureStreak: job.failureStreak ?? undefined,
-          })),
-          activityRuns: activityRunsForActiveGateway,
-          pendingRunApproval,
-        }),
-      ),
+    () => {
+      // Read for the effect on this memo's identity alone: a tap that lands on
+      // a star with no profile behind it bumps the revision, which re-derives
+      // the graph from the current profile list instead of leaving that star up.
+      void modelRevision;
+      return constellationModel(
+          fleetConstellationInput({
+            gateways,
+            connectedGatewayId: status === 'connected' ? activeGateway?.id : undefined,
+            reachability,
+            capabilitySnapshot,
+            rosterReadStatus: connectedRosterRead.status,
+            roster: connectedRoster.map((bot) => ({ id: bot.id, displayName: bot.displayName })),
+            routineReadStatus: connectedRoutineRead.status,
+            cronJobs: connectedRoutineJobs.map((job) => ({
+              id: job.id,
+              name: job.name ?? undefined,
+              title: job.title,
+              paused: job.paused ?? undefined,
+              running: job.running ?? undefined,
+              lastStatus: job.lastStatus ?? undefined,
+              lastError: job.lastError ?? undefined,
+              lastDeliveryError: job.lastDeliveryError ?? undefined,
+              cooldownReason: job.cooldownReason ?? undefined,
+              failureStreak: job.failureStreak ?? undefined,
+            })),
+            activityRuns: activityRunsForActiveGateway,
+            pendingRunApproval,
+          }),
+      );
+    },
     [
       gateways,
       status,
@@ -159,6 +225,7 @@ export default function FleetScreen() {
       connectedRoutineRead.status,
       activityRunsForActiveGateway,
       pendingRunApproval,
+      modelRevision,
     ],
   );
 
@@ -198,6 +265,17 @@ export default function FleetScreen() {
     // already in flight (this one's or a rival's) and an unresolved pairing
     // each refuse a second handshake; a settled gateway starts one.
     const gateway = gateways.find((candidate) => candidate.id === node.gatewayId);
+    if (!gateway) {
+      // The star names a profile this device no longer holds — deleted from
+      // Settings while this screen was mounted, or one render of a graph the
+      // profile list has already moved past. The Bot branch answers a missing
+      // roster row by opening the surface that names it; there is nothing to
+      // open here, so the tap says what happened and re-derives the map.
+      setConnectFailure(null);
+      setRemovedNotice('That gateway was removed');
+      setModelRevision((revision) => revision + 1);
+      return;
+    }
     const handshake = gatewayHandshake({
       gatewayName: node.label,
       gatewayId: node.gatewayId,
@@ -206,8 +284,10 @@ export default function FleetScreen() {
       activeGatewayName: activeGateway?.name,
       status,
     });
-    if (!gateway || !handshake.canConnect) return;
-    void connectGateway(gateway);
+    if (!handshake.canConnect) return;
+    setRemovedNotice(null);
+    setConnectFailure(null);
+    void connectGateway(gateway).catch((error: unknown) => setConnectFailure(error));
   };
 
   const handlePressApproval = () => {
@@ -272,6 +352,11 @@ export default function FleetScreen() {
             gateway is dimmed and dated; only the connected one is live.
           </Text>
         </View>
+        {noticeMessage ? (
+          <Text variant="caption" color="statusDisconnected">
+            {noticeMessage}
+          </Text>
+        ) : null}
         <ConstellationView
           model={model}
           onPressNode={handlePressNode}

@@ -142,9 +142,17 @@ export function beaconKindForUrl(
   return kind ? kind : undefined;
 }
 
-/** Split host:port when the user types an explicit port (IPv4 / hostname only). */
+/**
+ * Split host:port when the user types an explicit port (IPv4 / hostname only).
+ *
+ * The width matches what `validatePcAddress` accepts, so an address the
+ * onboarding field called ready can always form a candidate. A port outside
+ * 1-65535 is refused there; one that reaches here from an already-saved
+ * setting cannot be normalized (`new URL` throws) and is dropped by `push`'s
+ * catch, leaving the rest of the wave to answer as it always has.
+ */
 function splitHostPort(input: string): { host: string; port?: string } {
-  const match = /^([^:[\]]+):(\d{2,5})$/.exec(input);
+  const match = /^([^:[\]]+):(\d{1,5})$/.exec(input);
   if (!match) return { host: input };
   return { host: match[1], port: match[2] };
 }

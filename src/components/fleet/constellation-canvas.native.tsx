@@ -24,6 +24,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import {
   CONSTELLATION_NODE_RADIUS,
   constellationLayout,
+  type ConstellationModel,
 } from '@/lib/fleet/constellation-model';
 
 import {
@@ -61,6 +62,23 @@ export function ConstellationCanvas(props: ConstellationCanvasProps) {
 }
 
 const PULSE = Easing.inOut(Easing.sin);
+/**
+ * Where the breath rests while nothing is running — the middle of its own
+ * range, so a quiet map looks the same as it did at the top of a breath and
+ * costs no frame to hold.
+ */
+const QUIET_PULSE = 0.5;
+
+/**
+ * Whether the map is breathing. The pulse is the fleet's tell that work is in
+ * flight, so a quiet fleet must not drive a UI-thread animation and a Skia
+ * redraw every frame for a picture that never changes. The count is the
+ * MODEL's own summary — the fact the HUD line under the map reads — not this
+ * file's re-reading of which badges happen to be accent-toned.
+ */
+export function shouldPulse(model: Pick<ConstellationModel, 'summary'>): boolean {
+  return model.summary.running > 0;
+}
 
 /**
  * One routine arc as a Skia path: a gentle quadratic lift between the same
@@ -83,13 +101,23 @@ function SkiaConstellation({ model, size: width, height }: ConstellationCanvasPr
   const tokens = useTokens();
   const layout = constellationLayout(model, width, height);
   const pulse = useSharedValue(0);
+  const running = shouldPulse(model);
 
   // One slow breath for every running star: the fleet visibly at work, at
-  // glance speed — never a strobe, never a battery-burner.
+  // glance speed — never a strobe, never a battery-burner. With nothing
+  // running the animation is cancelled and the opacity held still, because
+  // `edgeOpacity` wraps EVERY host edge: an idle map was paying a 60 Hz
+  // UI-thread animation and a redraw per frame for a picture that never
+  // changes.
   useEffect(() => {
+    if (!running) {
+      cancelAnimation(pulse);
+      pulse.value = QUIET_PULSE;
+      return undefined;
+    }
     pulse.value = withRepeat(withTiming(1, { duration: 2600, easing: PULSE }), -1, true);
     return () => cancelAnimation(pulse);
-  }, [pulse]);
+  }, [running, pulse]);
 
   // Edges and stars shift with each breath; both reads stay on the UI thread.
   const edgeOpacity = useDerivedValue(() => 0.5 + 0.5 * pulse.value);
