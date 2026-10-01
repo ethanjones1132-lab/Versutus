@@ -588,6 +588,27 @@ const DEREGISTER_TIMEOUT_MS = 3000;
 const INTERRUPTED_RECOVERY_DELAYS_MS = [2_000, 8_000, 20_000];
 
 /**
+ * When each connected-time read runs, counted from the `connected` the client
+ * announced. The chat history is read immediately and everything else waits
+ * its turn behind it: against a single-threaded Gate or Hermes the whole set at
+ * once was contending with the transcript the operator is waiting for, in an
+ * order that put the cheapest, most-wanted reads last.
+ */
+const CONNECTED_APPROVALS_DELAY_MS = 600;
+const CONNECTED_ROUTINE_LIST_DELAY_MS = 900;
+const CONNECTED_WIDGET_BOTS_DELAY_MS = 1_200;
+const CONNECTED_ROUTINE_REARM_DELAY_MS = 1_500;
+const CONNECTED_WORKFLOWS_DELAY_MS = 1_800;
+/** The default-model pin read is not what the operator is waiting for either. */
+const CONNECT_DEFAULT_MODEL_DELAY_MS = 1_000;
+
+/**
+ * How recently this gateway's fan-out ran before a `connected` the monitor
+ * earned back on its own counts as one already done.
+ */
+const CONNECTED_FAN_OUT_REPEAT_MS = 60_000;
+
+/**
  * Transcript and send state, split out of the shared gateway value so a
  * streamed frame re-renders only the chat surface that reads them instead
  * of the whole mounted tab tree.
@@ -1610,6 +1631,78 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [applyStatus, resetSessionSelector],
   );
 
+  /**
+   * The connected-time reads, staggered.
+   *
+   * Every transition to `connected` used to fire this whole set together —
+   * approvals, routines, Bots, workflows — against a single-threaded Gate while
+   * the chat history the operator is waiting for was still in flight. History
+   * stays immediate; every other read takes a turn. Each timer is cancelled the
+   * moment its read stops being wanted — a disconnect, a gateway switch, a
+   * superseding attach — so none of them lands against a connection that has
+   * gone.
+   */
+  const connectedReadTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
+  const cancelConnectedReads = useCallback(() => {
+    for (const timer of connectedReadTimersRef.current) clearTimeout(timer);
+    connectedReadTimersRef.current.clear();
+  }, []);
+
+  /** Run `read` `delayMs` after the connection came up; the returned disposer cancels it. */
+  const scheduleConnectedRead = useCallback((delayMs: number, read: () => void): (() => void) => {
+    const timer = setTimeout(() => {
+      connectedReadTimersRef.current.delete(timer);
+      read();
+    }, delayMs);
+    connectedReadTimersRef.current.add(timer);
+    return () => {
+      clearTimeout(timer);
+      connectedReadTimersRef.current.delete(timer);
+    };
+  }, []);
+
+  useEffect(() => cancelConnectedReads, [cancelConnectedReads]);
+
+  /**
+   * When the last fan-out RAN, for which gateway and on which client.
+   *
+   * The connection monitor recovers in place, so its `connected` arrives on the
+   * SAME client — same generation — seconds after a real connection's, while a
+   * real attach installs a new client and bumps the generation.
+   */
+  const connectedFanOutRef = useRef<{ gatewayId: string; generation: number; at: number } | null>(null);
+  /**
+   * Whether the `connected` the staggered reads are reacting to is a real one
+   * or the monitor earning back one that just fanned out. Stamped on the
+   * client's own announcement, read on the render that announcement produced.
+   *
+   * Holds the fan-out that announcement is owed and the client it is owed on,
+   * because only a fan-out that actually ran may silence the next transition:
+   * a connection that dropped again inside the stagger window ran none of it.
+   */
+  const connectedFanOutDueRef = useRef<{ gatewayId: string; generation: number } | null>(null);
+  const noteConnectedFanOut = useCallback((gatewayId: string, generation: number) => {
+    const last = connectedFanOutRef.current;
+    const silentRecovery =
+      last !== null &&
+      last.gatewayId === gatewayId &&
+      last.generation === generation &&
+      Date.now() - last.at < CONNECTED_FAN_OUT_REPEAT_MS;
+    connectedFanOutDueRef.current = silentRecovery ? null : { gatewayId, generation };
+  }, []);
+  /**
+   * Called by the last read of the set, as it runs. Stamping the announcement
+   * instead let a connection that dropped inside the 1.8s window suppress the
+   * reads its own recovery needed, because the timers that would have run them
+   * were cancelled with it.
+   */
+  const markConnectedFanOutRan = useCallback(() => {
+    const due = connectedFanOutDueRef.current;
+    if (!due) return;
+    connectedFanOutRef.current = { ...due, at: Date.now() };
+  }, []);
+
   const attachClient = useCallback(
     async (gatewayInput: GatewayProfile, options: { upgrade?: boolean } = {}) => {
       let gateway = gatewayInput;
@@ -1642,6 +1735,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setActiveManifest(null);
       const generation = clientGenerationRef.current;
       const isCurrent = () => clientGenerationRef.current === generation;
+      // This attach supersedes whatever was queued for the previous one: a
+      // delayed read still waiting its turn must not fire against a client that
+      // is about to be discarded.
+      cancelConnectedReads();
       // Solution A4: a Gate this device leaves must forget this phone's push
       // token before its client is discarded, so a replaced Gate cannot keep
       // notifying. Best-effort and not awaited: an unreachable Gate would
@@ -1672,6 +1769,61 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         applyConnectionPhase('failed');
       };
 
+      /**
+       * The background refresh behind a cached attach can land before this
+       * attach has finished publishing the manifest it was built from, so the
+       * fresher answer is held here rather than being overwritten by the staler
+       * one it was waiting for.
+       */
+      let refreshedManifest: GatewayManifest | null = null;
+
+      /**
+       * What a manifest says about the roster: retire the legacy
+       * `parentId::providerId` child profiles it replaces. This rides along with
+       * whichever publish carries the document, because the publish is the only
+       * thing that knows what this Gate serves — a `live` attach is never
+       * fetched a second time, so nothing else would retire them.
+       */
+      const syncManifestRoster = (manifest: GatewayManifest) => {
+        if (gateway.parentId) return;
+        void syncChildProfiles(gateway, manifestProviders(manifest))
+          .then(async (retirement) => {
+            if (!retirement) return;
+            // Cleared before the roster drops the profile: a retired child
+            // profile is a real, connectable gateway, so its transcript and
+            // session labels leave the device with it.
+            await clearRetiredGatewayStores(retirement.removedIds);
+            // A superseded chain must not touch a newer connection, so the
+            // session teardown and the roster move share one generation check.
+            if (!isCurrent()) return;
+            teardownRetiredActiveGateway(retirement.removedIds, retirement.gateways);
+            setGateways(retirement.gateways);
+          })
+          .catch(() => undefined);
+      };
+
+      /**
+       * What a manifest that lands after this attach was built does: publish
+       * it, keep it on disk, rebuild a client that connected without one, and
+       * re-sync the child-profile roster. Both the background refresh
+       * `manifestForAttach` runs for a cached attach and the fetch a
+       * manifest-less attach still owes end up here, so a connect never reads
+       * the same document twice.
+       */
+      const adoptLiveManifest = (manifest: GatewayManifest, source: AttachManifestSource) => {
+        refreshedManifest = manifest;
+        setActiveManifest(manifest);
+        void saveCachedGateManifest(gateway.parentId ?? gateway.id, manifest).catch(() => undefined);
+        if (lateManifestUpgradesClient(source, manifest)) {
+          // Connected without the manifest means connected through the
+          // Hermes adapter, where every Gate-only call fails. The Gate has
+          // answered now: rebuild the client as the Gate's own.
+          void upgradeClientRef.current(gateway);
+          return;
+        }
+        syncManifestRoster(manifest);
+      };
+
       let identityForClient: GatewayIdentity | undefined;
       let parentUrl: string | undefined;
       // OpenClaw is WS-only. Everything else (including profiles saved without a
@@ -1694,13 +1846,30 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         const manifestUrl = manifestUrlForGateway(gateway, parentUrl);
         // A child profile serves its parent's manifest, so it shares the cache.
         const manifestCacheId = gateway.parentId ?? gateway.id;
+        // The refresh behind a cached attach retries over the IPv4s that very
+        // manifest advertised, exactly as the post-connect fetch it replaces
+        // did. `loadCached` runs before that refresh, so the value is in hand
+        // by the time it is asked for.
+        let cachedManifest: GatewayManifest | null = null;
+        const manifestRetryIps = () =>
+          cachedManifest ? manifestAlternateIpv4(gateway, cachedManifest) : manifestAlternateIpv4(gateway, null);
         const attached = await manifestForAttach({
           // A Gate that misses one fetch is still a Gate: retry once, then
           // build from the last manifest it served, never the Hermes adapter.
           knownGate: gateway.kind === 'custom',
-          fetchLive: () => fetchGatewayManifestWithLookupRetry(manifestUrl, manifestAlternateIpv4(gateway, null)),
-          loadCached: () => loadCachedGateManifest(manifestCacheId),
+          fetchLive: () => fetchGatewayManifestWithLookupRetry(manifestUrl, manifestRetryIps()),
+          loadCached: async () => {
+            cachedManifest = await loadCachedGateManifest(manifestCacheId);
+            return cachedManifest;
+          },
           saveCached: (served) => saveCachedGateManifest(manifestCacheId, served),
+          // The cached path refreshes in the background; the answer belongs to
+          // this attach's own bookkeeping, so it is handed over rather than
+          // fetched again after connect.
+          onLive: (served) => {
+            if (!isCurrent()) return;
+            adoptLiveManifest(served, 'cached');
+          },
         });
         const manifest = attached.manifest;
         attachSource = attached.source;
@@ -1708,7 +1877,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (!isCurrent()) return;
         if (manifest) {
           fetchedManifest = manifest;
-          setActiveManifest(manifest);
+          setActiveManifest(refreshedManifest ?? manifest);
           clientKind = 'custom';
           const providers = manifestProviders(manifest);
           identityForClient = {
@@ -1739,6 +1908,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             setActiveGateway(corrected);
             persistGateway(corrected);
           }
+          // The roster follows the document. A manifest served live for this
+          // attach is not fetched again after connect, so this publish is the
+          // only chance it has to retire the legacy child profiles it replaces
+          // — a `cached` attach's roster arrives with the background refresh
+          // through `adoptLiveManifest`.
+          if (attachSource === 'live') syncManifestRoster(manifest);
         }
       }
 
@@ -1787,6 +1962,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             if (decision.scheduleAutoRetry && activeGatewayRef.current && !authFailureRef.current) {
               scheduleAutoRetryRef.current(AUTO_RETRY_BASE_DELAY_MS);
             }
+            // A `connected` the monitor earned back on its own repeats no
+            // fan-out: history is reloaded by onHealthCheck and the approvals
+            // inbox still has to know, but every other read was served seconds
+            // ago by this same client.
+            if (nextStatus === 'connected') noteConnectedFanOut(gateway.id, generation);
             // Solution A4: this device's Expo push token belongs to the Gate
             // once per connection — initial and every reconnect — and the
             // registration never blocks or breaks the connection itself.
@@ -1905,18 +2085,27 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // would 404 "No provider declares model undefined"). Prefer a model
       // whose provider is signed in — the first row can be a locked one.
       if (!gateway.model && isCurrent()) {
-        try {
-          const models = await client.getModels();
-          const scoped = scopeModelsToBackend(models, selectedBackendIdRef.current ?? gateway.backendId);
-          const first = scoped.find((m) => m.available !== false)?.id ?? scoped[0]?.id ?? models[0]?.id;
-          if (first && isCurrent()) {
-            const withModel = { ...gateway, model: first };
-            setActiveGateway(withModel);
-            persistGateway(withModel);
-          }
-        } catch {
-          // optional
-        }
+        // Off the connect path: the catalog is a whole read the operator is not
+        // waiting for, and awaiting it here stretched every caller of
+        // connectGateway — including the history read they are watching — by a
+        // full round trip for a default this connection can work without.
+        scheduleConnectedRead(CONNECT_DEFAULT_MODEL_DELAY_MS, () => {
+          void (async () => {
+            try {
+              const models = await client.getModels();
+              if (!isCurrent()) return;
+              const scoped = scopeModelsToBackend(models, selectedBackendIdRef.current ?? gateway.backendId);
+              const first = scoped.find((m) => m.available !== false)?.id ?? scoped[0]?.id ?? models[0]?.id;
+              if (first && isCurrent()) {
+                const withModel = { ...gateway, model: first };
+                setActiveGateway(withModel);
+                persistGateway(withModel);
+              }
+            } catch {
+              // optional
+            }
+          })();
+        });
       }
 
       // A pin written while its provider was signed in outlives the login:
@@ -1926,46 +2115,32 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // catalog read must not hold up or fail the connect.
       void repairStalePinRef.current?.(client, isCurrent, gateway);
 
-      // Fetch is cheap and idempotent; only a manifest-serving gate returns
-      // providers[] at all, so this is a no-op against Hermes/OpenClaw.
-      // Always use the parent origin — a child /p/{id} URL does not host the
+      // Only a connect that had no manifest at all still owes one. A `live`
+      // attach was served this document milliseconds ago — its roster is already
+      // synced above — and a `cached` one is already being refreshed in the
+      // background, which hands its answer to `adoptLiveManifest` above — so
+      // this is not a duplicate read, it is the upgrade path for the Hermes
+      // adapter a manifest-less connect built.
+      // Cheap and idempotent either way; only a manifest-serving gate returns
+      // providers[] at all, so it is a no-op against Hermes/OpenClaw. Always
+      // use the parent origin — a child /p/{id} URL does not host the
       // well-known document, and syncing children from a child is wrong.
+      if (attachSource !== 'none') return;
       void fetchGatewayManifestWithLookupRetry(
           manifestUrlForGateway(gateway, parentUrl),
           manifestAlternateIpv4(gateway, fetchedManifest),
         )
         .then((manifest) => {
           if (!manifest || !isCurrent()) return undefined;
-          setActiveManifest(manifest);
-          void saveCachedGateManifest(gateway.parentId ?? gateway.id, manifest).catch(() => undefined);
-          if (lateManifestUpgradesClient(attachSource, manifest)) {
-            // Connected without the manifest means connected through the
-            // Hermes adapter, where every Gate-only call fails. The Gate has
-            // answered now: rebuild the client as the Gate's own.
-            void upgradeClientRef.current(gateway);
-            return undefined;
-          }
-          if (gateway.parentId) return undefined;
-          return syncChildProfiles(gateway, manifestProviders(manifest));
-        })
-        .then(async (retirement) => {
-          if (!retirement) return;
-          // Cleared before the roster drops the profile: a retired child
-          // profile is a real, connectable gateway, so its transcript and
-          // session labels leave the device with it.
-          await clearRetiredGatewayStores(retirement.removedIds);
-          // A superseded chain must not touch a newer connection, so the
-          // session teardown and the roster move share one generation check.
-          if (!isCurrent()) return;
-          teardownRetiredActiveGateway(retirement.removedIds, retirement.gateways);
-          setGateways(retirement.gateways);
+          adoptLiveManifest(manifest, attachSource);
+          return undefined;
         })
         .catch(() => undefined);
     },
     // patchActivityRuns is a useCallback with [] deps, so its identity is stable
     // for the provider's lifetime; listing it satisfies exhaustive-deps without
     // changing when this callback is rebuilt.
-    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns, persistGateway, reconcileInterrupted, teardownRetiredActiveGateway, resetSessionSelector, updateTlsFingerprintChange],
+    [reloadHistoryFor, applyStatus, applyConnectionPhase, patchActivityRuns, persistGateway, reconcileInterrupted, teardownRetiredActiveGateway, resetSessionSelector, updateTlsFingerprintChange, cancelConnectedReads, scheduleConnectedRead, noteConnectedFanOut],
   );
 
   useEffect(() => {
@@ -3116,18 +3291,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // Deferred: the effect only schedules the read, so the setState inside it
     // never runs synchronously in the effect body (set-state-in-effect). A
     // disconnect empties the list; a live connection re-reads it.
-    queueMicrotask(() => {
-      if (status !== 'connected') {
+    if (status !== 'connected') {
+      queueMicrotask(() => {
         // Settled empty: there is no Gate to be waiting on, so the card
         // answers ready+empty rather than spinning or claiming a failure.
         setPendingApprovals([]);
         setPendingApprovalsError(null);
         setPendingApprovalsState('ready');
-        return;
-      }
+      });
+      return undefined;
+    }
+    // Still off the transcript's back: this read answers on a turn the Gate
+    // serves one request at a time. It is not part of the self-heal guard — an
+    // approval the operator has not answered does not wait 60s to appear.
+    const cancelRead = scheduleConnectedRead(CONNECTED_APPROVALS_DELAY_MS, () => {
       void refreshPendingApprovals();
     });
-  }, [status, refreshPendingApprovals]);
+    return cancelRead;
+  }, [status, refreshPendingApprovals, scheduleConnectedRead]);
 
   const runTask = useCallback(
     async (
@@ -3409,13 +3590,23 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     workflows: [],
   });
   useEffect(() => {
-    if (!activeGateway || status !== 'connected') return undefined;
-    const gatewayId = activeGateway.id;
-    void loadWorkflows(gatewayId).then((workflows) => {
-      setWorkflowStore({ gatewayId, workflows });
+    const gatewayId = activeGateway?.id;
+    if (!gatewayId || status !== 'connected') return undefined;
+    // The last read of the set, and the one the palette is least urgent about:
+    // a row that exists by the time it lands is a row the operator never saw
+    // missing, so it takes the back of the queue rather than a place in it.
+    // Keyed by id, not by the profile object: every write that lands while
+    // connected (a default model pin, a new TLS fingerprint) is a new object,
+    // and re-scheduling the read behind each of them could push it anywhere.
+    return scheduleConnectedRead(CONNECTED_WORKFLOWS_DELAY_MS, () => {
+      if (!connectedFanOutDueRef.current) return;
+      // The set is complete here, so this is the one read that proves it ran.
+      markConnectedFanOutRan();
+      void loadWorkflows(gatewayId).then((workflows) => {
+        setWorkflowStore({ gatewayId, workflows });
+      });
     });
-    return undefined;
-  }, [activeGateway, status]);
+  }, [activeGateway?.id, status, scheduleConnectedRead, markConnectedFanOutRan]);
   const relatedWorkflows = useMemo(
     () => (workflowStore.gatewayId === (activeGateway?.id ?? '') ? workflowStore.workflows : []),
     [workflowStore, activeGateway],
@@ -4464,6 +4655,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     },
   }), []);
 
+  /**
+   * Mirrors `routineRead` so the re-arm — which runs on the connect path, above
+   * the state itself — can reuse the list the cron read already produced.
+   */
+  const routineReadRef = useRef<FleetRoutineRead>({ jobs: [], status: 'unreported' });
+
   // Re-arm routine notices on app open while connected. A routine whose cron
   // is not one of the two repeating shapes is scheduled as a one-shot DATE at
   // the next fire the GATEWAY reported (§1a); that trigger leaves nothing
@@ -4474,7 +4671,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // the two can never disagree about which jobs exist or when they fire next.
   const rearmRoutineNotices = useCallback(async () => {
     try {
-      const jobs = routineJobsFromList(await botJobs.list());
+      // The cron read has already listed this gateway's routines by the time
+      // this runs, through a different route to the same facts — so a second
+      // `listJobs` on the same connect is the duplicate this seam removes. Only
+      // a gateway whose cron read never landed (no cron capability, or it
+      // failed) still owes the read.
+      const read = routineReadRef.current;
+      const landed = read.status === 'ready' && read.gatewayId === activeGatewayRef.current?.id;
+      const jobs = routineJobsFromList(landed ? read.jobs : await botJobs.list());
       await rearmRoutineNotifications(jobs);
     } catch {
       // best-effort: a failed routine read re-arms nothing and breaks no
@@ -4483,10 +4687,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, [botJobs]);
 
   useEffect(() => {
-    if (status !== 'connected') return;
-    // Fire-and-forget: the connection must never wait on a notification read.
-    void rearmRoutineNotices();
-  }, [rearmRoutineNotices, status]);
+    if (status !== 'connected') return undefined;
+    // Fire-and-forget: the connection must never wait on a notification read —
+    // and a notice nothing has asked for yet is the last thing this set owes.
+    return scheduleConnectedRead(CONNECTED_ROUTINE_REARM_DELAY_MS, () => {
+      if (!connectedFanOutDueRef.current) return;
+      void rearmRoutineNotices();
+    });
+  }, [rearmRoutineNotices, status, scheduleConnectedRead]);
 
   const cron = useMemo(() => ({
     get available() {
@@ -4524,22 +4732,34 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let live = true;
+    let cancelRead: (() => void) | undefined;
     const gatewayId = activeGateway?.id;
     void Promise.resolve().then(async () => {
       if (!live) return;
+      routineReadRef.current = beginFleetRoutineRead(routineReadRef.current);
       setRoutineRead(beginFleetRoutineRead);
       if (status !== 'connected' || !cron.available || !gatewayId) return;
-      try {
-        const jobs = await cron.list();
-        if (live) setRoutineRead({ gatewayId, jobs, status: 'ready' });
-      } catch {
-        // The read began stale (or unreported); failure keeps those facts.
-      }
+      if (!connectedFanOutDueRef.current) return;
+      // Behind the approvals inbox, and cancelled outright if the connection
+      // leaves before its turn comes.
+      cancelRead = scheduleConnectedRead(CONNECTED_ROUTINE_LIST_DELAY_MS, () => {
+        void (async () => {
+          try {
+            const jobs = await cron.list();
+            if (!live) return;
+            routineReadRef.current = { gatewayId, jobs, status: 'ready' };
+            setRoutineRead({ gatewayId, jobs, status: 'ready' });
+          } catch {
+            // The read began stale (or unreported); failure keeps those facts.
+          }
+        })();
+      });
     });
     return () => {
       live = false;
+      cancelRead?.();
     };
-  }, [activeGateway?.id, cron, status]);
+  }, [activeGateway?.id, cron, status, scheduleConnectedRead]);
 
   /**
    * The widget's Bot half. The roster is read once per connected transition,
@@ -4551,18 +4771,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [widgetBots, setWidgetBots] = useState<import('@/lib/gateway/bots').PublicBot[]>([]);
 
   useEffect(() => {
-    if (status !== 'connected') return;
+    if (status !== 'connected') return undefined;
     let live = true;
     const gatewayId = activeGateway?.id;
-    void listBots()
-      .then((bots) => {
-        if (live && gatewayId === activeGateway?.id) setWidgetBots(bots);
-      })
-      .catch(() => undefined);
+    const cancelRead = scheduleConnectedRead(CONNECTED_WIDGET_BOTS_DELAY_MS, () => {
+      if (!connectedFanOutDueRef.current) return;
+      void listBots()
+        .then((bots) => {
+          if (live && gatewayId === activeGateway?.id) setWidgetBots(bots);
+        })
+        .catch(() => undefined);
+    });
     return () => {
       live = false;
+      cancelRead();
     };
-  }, [activeGateway?.id, listBots, status]);
+  }, [activeGateway?.id, listBots, status, scheduleConnectedRead]);
 
   /**
    * The widget's privacy preference. Read on mount and again whenever the

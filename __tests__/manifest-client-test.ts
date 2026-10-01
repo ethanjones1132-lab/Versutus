@@ -141,6 +141,96 @@ describe('ManifestClient', () => {
     client.disconnect();
   });
 
+  // SPD-1c: the connect-time proof that a token is accepted used to be the whole
+  // model catalogue. On a Gate `/v1/models` aggregates every provider and every
+  // backend and can start backends to do it — a full read on the critical path
+  // of every connect to ask a yes/no.
+  test('the auth proof takes the cheapest advertised route, not the catalogue', async () => {
+    const calls: string[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      calls.push(url);
+      return Promise.resolve(jsonResponse({ data: [] }));
+    });
+
+    const client = clientWithEndpoints({
+      health: '/health',
+      environments: '/v1/environments',
+      providers: '/v1/providers',
+      models: '/v1/models',
+    });
+    await client.connect();
+
+    expect(client.connectionStatus).toBe('connected');
+    expect(calls.some((url) => url.endsWith('/v1/environments'))).toBe(true);
+    expect(calls.some((url) => url.endsWith('/v1/providers'))).toBe(false);
+    expect(calls.some((url) => url.endsWith('/v1/models'))).toBe(false);
+    client.disconnect();
+  });
+
+  test('a manifest without environments falls back to providers, then to models', async () => {
+    const providersOnly: string[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      providersOnly.push(String(input));
+      return Promise.resolve(jsonResponse({ data: [] }));
+    });
+    const providersClient = clientWithEndpoints({
+      health: '/health',
+      providers: '/v1/providers',
+      models: '/v1/models',
+    });
+    await providersClient.connect();
+    expect(providersOnly.some((url) => url.endsWith('/v1/providers'))).toBe(true);
+    expect(providersOnly.some((url) => url.endsWith('/v1/models'))).toBe(false);
+    providersClient.disconnect();
+
+    const modelsOnly: string[] = [];
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      modelsOnly.push(String(input));
+      return Promise.resolve(jsonResponse({ data: [] }));
+    });
+    const modelsClient = clientWithEndpoints({ health: '/health', models: '/v1/models' });
+    await modelsClient.connect();
+    expect(modelsOnly.filter((url) => url.endsWith('/v1/models'))).toHaveLength(1);
+    modelsClient.disconnect();
+  });
+
+  test('a refusal from the cheapest route still surfaces as an auth failure', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/health')) return Promise.resolve(jsonResponse({ status: 'ok' }));
+      return Promise.resolve(jsonResponse({ error: { message: 'Invalid token' } }, 401));
+    });
+
+    const client = clientWithEndpoints({
+      health: '/health',
+      environments: '/v1/environments',
+      models: '/v1/models',
+    });
+    await expect(client.connect()).rejects.toThrow(/token/i);
+    expect(client.authRejected).toBe(true);
+    client.disconnect();
+  });
+
+  test('a probe that fails for any other reason does not block connect', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {
+      const url = String(input);
+      if (url.endsWith('/health')) return Promise.resolve(jsonResponse({ status: 'ok' }));
+      if (url.endsWith('/v1/environments')) return Promise.resolve(jsonResponse({}, 503));
+      return Promise.resolve(jsonResponse({ data: [] }));
+    });
+
+    const client = clientWithEndpoints({
+      health: '/health',
+      environments: '/v1/environments',
+      models: '/v1/models',
+    });
+    await client.connect();
+    expect(client.connectionStatus).toBe('connected');
+    expect(client.authRejected).toBe(false);
+    client.disconnect();
+  });
+
   test('a busy gate keeps answering root-origin traffic without being declared down', async () => {
     let healthUp = true;
     (globalThis as { fetch: unknown }).fetch = jest.fn((input: unknown) => {

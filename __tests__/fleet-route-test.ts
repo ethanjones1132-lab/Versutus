@@ -151,5 +151,5 @@ test('the Fleet scopes Routine facts to their gateway and forwards freshness wit
   const provider = readSource('src', 'context', 'gateway-provider.tsx');
   expect(provider).toContain('setRoutineRead(beginFleetRoutineRead)');
   expect(provider).toContain("setRoutineRead({ gatewayId, jobs, status: 'ready' })");
-  expect(provider).toContain('[activeGateway?.id, cron, status]');
+  expect(provider).toContain('[activeGateway?.id, cron, status, scheduleConnectedRead]');
 });

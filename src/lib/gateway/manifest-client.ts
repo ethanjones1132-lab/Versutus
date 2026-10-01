@@ -41,6 +41,9 @@ function interpolatePath(path: string, vars: Record<string, string>): string {
 /** How long authorizedFetch waits for response headers before aborting. */
 const AUTHORIZED_FETCH_HEADER_TIMEOUT_MS = 60_000;
 
+/** How long the connect-time auth proof waits before it stops asking. */
+const AUTH_PROBE_TIMEOUT_MS = 10_000;
+
 /**
  * A PortalClient for any gateway that serves the Open Gateway Manifest and
  * has no built-in adapter (spec: docs/superpowers/specs/2026-08-10-versutus-gate-design.md §7).
@@ -242,10 +245,8 @@ export class ManifestClient implements PortalClient {
       // Prove the token by hitting an authenticated endpoint, mirroring
       // HermesGatewayClient's connect(): a manifest fetch alone is
       // unauthenticated, so it would never catch a rejected token.
-      if (this.endpoints.models) {
-        await this.getModels();
-        if (this.connectEpoch !== epoch) return;
-      }
+      await this.probeAuth();
+      if (this.connectEpoch !== epoch) return;
     } catch (error) {
       if (this.connectEpoch !== epoch) return;
       if (isAuthRejection(error)) {
@@ -332,6 +333,23 @@ export class ManifestClient implements PortalClient {
       return (result as { data: ModelInfo[] }).data;
     }
     return [];
+  }
+
+  /**
+   * "Is this token accepted?", and nothing else.
+   *
+   * `getModels()` used to answer that, but on a Gate `/v1/models` aggregates
+   * every provider and every backend and can start backends to do it — a whole
+   * catalogue read on the critical path of every connect to ask a yes/no the
+   * cheapest advertised route answers identically. So the proof goes to
+   * `environments`, then `providers`, and only falls back to the catalogue for a
+   * manifest that advertises neither. The answer is discarded: this is a
+   * verdict on the key, not data.
+   */
+  private async probeAuth(): Promise<void> {
+    const path = this.endpoints.environments ?? this.endpoints.providers ?? this.endpoints.models;
+    if (!path) return;
+    await this.rootTransport.request<unknown>('GET', path, undefined, AUTH_PROBE_TIMEOUT_MS);
   }
 
   /**

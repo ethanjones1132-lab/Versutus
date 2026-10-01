@@ -148,6 +148,139 @@ describe('the manifest a connect builds from', () => {
   });
 });
 
+// SPD-8: a known Gate with a manifest already on disk used to sit through the
+// whole live-then-retry ladder (~21s of request time plus the retry sleep)
+// before it could even begin connecting — the document that makes it a Gate was
+// in storage the whole time.
+describe('a known Gate that already has a manifest', () => {
+  const REFRESHED = { ...GATE_MANIFEST, name: 'Versutus Gate (moved)' } as unknown as GatewayManifest;
+
+  afterEach(() => jest.useRealTimers());
+
+  /** A live fetch that stays outstanding until the test lets it land. */
+  function heldFetch() {
+    let land!: (manifest: GatewayManifest | null) => void;
+    const fetchLive = jest.fn(
+      () => new Promise<GatewayManifest | null>((resolve) => {
+        land = resolve;
+      }),
+    );
+    return { fetchLive, land: (manifest: GatewayManifest | null) => land(manifest) };
+  }
+
+  test('connects on the cached manifest instead of waiting for the live one', async () => {
+    jest.useFakeTimers();
+    const { fetchLive, land } = heldFetch();
+    const sleep = jest.fn(async () => undefined);
+    let settled = false;
+    const pending = manifestForAttach({
+      knownGate: true,
+      fetchLive,
+      loadCached: async () => GATE_MANIFEST,
+      saveCached: async () => undefined,
+      onLive: jest.fn(),
+      sleep,
+    }).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    // Neither the request timeout nor the 0.9s retry sleep is on this path: the
+    // connect is unblocked while the refresh is still outstanding.
+    await jest.advanceTimersByTimeAsync(10_000);
+    expect(settled).toBe(true);
+    await expect(pending).resolves.toEqual({ manifest: GATE_MANIFEST, source: 'cached' });
+    expect(sleep).not.toHaveBeenCalled();
+    expect(fetchLive).toHaveBeenCalledTimes(1);
+
+    land(null);
+  });
+
+  test('the refresh that lands is saved and handed to the caller, never fetched again', async () => {
+    jest.useFakeTimers();
+    const { fetchLive, land } = heldFetch();
+    const saveCached = jest.fn(async () => undefined);
+    const onLive = jest.fn();
+    await manifestForAttach({
+      knownGate: true,
+      fetchLive,
+      loadCached: async () => GATE_MANIFEST,
+      saveCached,
+      onLive,
+    });
+
+    expect(saveCached).not.toHaveBeenCalled();
+    land(REFRESHED);
+    await jest.advanceTimersByTimeAsync(0);
+
+    expect(saveCached).toHaveBeenCalledWith(REFRESHED);
+    expect(onLive).toHaveBeenCalledWith(REFRESHED);
+  });
+
+  test('a refresh that fails or finds nothing changes nothing the connect depends on', async () => {
+    jest.useFakeTimers();
+    const saveCached = jest.fn(async () => undefined);
+    const onLive = jest.fn();
+    const failing = await manifestForAttach({
+      knownGate: true,
+      fetchLive: jest.fn(async () => {
+        throw new Error('Network request failed');
+      }),
+      loadCached: async () => GATE_MANIFEST,
+      saveCached,
+      onLive,
+    });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(failing).toEqual({ manifest: GATE_MANIFEST, source: 'cached' });
+    expect(saveCached).not.toHaveBeenCalled();
+    expect(onLive).not.toHaveBeenCalled();
+
+    const empty = await manifestForAttach({
+      knownGate: true,
+      fetchLive: jest.fn(async () => null),
+      loadCached: async () => GATE_MANIFEST,
+      saveCached,
+      onLive,
+    });
+    await jest.advanceTimersByTimeAsync(0);
+    expect(empty).toEqual({ manifest: GATE_MANIFEST, source: 'cached' });
+    expect(onLive).not.toHaveBeenCalled();
+  });
+
+  test('a Gate with nothing cached still pays the retry before giving up', async () => {
+    const noSleep = jest.fn(async () => undefined);
+    const fetchLive = jest.fn(async () => null);
+    const onLive = jest.fn();
+    const result = await manifestForAttach({
+      knownGate: true,
+      fetchLive,
+      loadCached: async () => null,
+      saveCached: async () => undefined,
+      onLive,
+      sleep: noSleep,
+    });
+    expect(result).toEqual({ manifest: null, source: 'none' });
+    expect(fetchLive).toHaveBeenCalledTimes(2);
+    expect(noSleep).toHaveBeenCalledWith(GATE_MANIFEST_RETRY_MS);
+    expect(onLive).not.toHaveBeenCalled();
+  });
+
+  test('a profile not known as a Gate never reads the cache or starts a refresh', async () => {
+    const onLive = jest.fn();
+    const loadCached = jest.fn(async () => GATE_MANIFEST);
+    const result = await manifestForAttach({
+      knownGate: false,
+      fetchLive: jest.fn(async () => REFRESHED),
+      loadCached,
+      saveCached: async () => undefined,
+      onLive,
+    });
+    expect(result).toEqual({ manifest: REFRESHED, source: 'live' });
+    expect(loadCached).not.toHaveBeenCalled();
+    expect(onLive).not.toHaveBeenCalled();
+  });
+});
+
 describe('the provider connects through that seam', () => {
   const nodeFs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
   const SEP = __dirname.includes('\\') ? '\\' : '/';
@@ -159,16 +292,31 @@ describe('the provider connects through that seam', () => {
   test('attach reads its manifest through manifestForAttach, a saved Gate counting as known', () => {
     expect(attach).toContain('await manifestForAttach({');
     expect(attach).toContain("knownGate: gateway.kind === 'custom',");
-    expect(attach).toContain('loadCached: () => loadCachedGateManifest(manifestCacheId),');
+    expect(attach).toContain('cachedManifest = await loadCachedGateManifest(manifestCacheId);');
     // The swallowed one-shot fetch that stranded the phone is gone.
     expect(attach).not.toMatch(/const manifest = await fetchGatewayManifestWithLookupRetry\(/);
   });
 
   test('a late manifest after a manifest-less connect rebuilds the client', () => {
-    expect(attach).toContain('if (lateManifestUpgradesClient(attachSource, manifest)) {');
+    // The upgrade decision moved into the shared adopt path (SPD-1a): both the
+    // background refresh a cached attach runs and the fetch a manifest-less
+    // attach still owes land there, with the source each one came from.
+    expect(attach).toContain('if (lateManifestUpgradesClient(source, manifest)) {');
     expect(attach).toContain('void upgradeClientRef.current(gateway);');
     expect(attach).toContain('!options.upgrade &&');
+    expect(attach).toContain('adoptLiveManifest(manifest, attachSource);');
+    expect(attach).toContain("onLive: (served) => {");
     expect(src).toContain('upgradeClientRef.current = (gateway: GatewayProfile) => attachClient(gateway, { upgrade: true });');
+  });
+
+  test('a manifest this attach was just served is not fetched a second time', () => {
+    // `live` was fetched milliseconds ago and `cached` is already refreshing in
+    // the background behind `onLive`; only a manifest-less connect still owes
+    // the read, and that is the upgrade path.
+    expect(attach).toContain("if (attachSource !== 'none') return;");
+    expect(attach.indexOf("if (attachSource !== 'none') return;")).toBeLessThan(
+      attach.indexOf('manifestAlternateIpv4(gateway, fetchedManifest)'),
+    );
   });
 });
 

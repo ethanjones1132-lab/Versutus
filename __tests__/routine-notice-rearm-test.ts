@@ -157,13 +157,16 @@ describe('re-arming routine notices as the connection comes up', () => {
 describe('the provider re-arms as the connection comes up', () => {
   const provider = () => readSource('src', 'context', 'gateway-provider.tsx');
 
-  test('the re-arm reads the routine list the panes read and handles every unpaused job', () => {
+  test('the re-arm reuses the cron read and handles every unpaused job', () => {
     const src = provider();
     const rearm = src.match(/const rearmRoutineNotices = useCallback\([\s\S]*?\n  \}, \[botJobs\]\);/)?.[0];
     expect(rearm).toBeDefined();
-    // Same read and same parse the Routines pane uses, so the re-arm and the
-    // pane can never disagree about which jobs exist or when they fire next.
-    expect(rearm).toContain('routineJobsFromList(await botJobs.list())');
+    // Same parse the Routines pane uses, so the re-arm and the pane can never
+    // disagree about which jobs exist or when they fire next — and when the cron
+    // read has already landed for this gateway, it is that list, not a second
+    // `listJobs` for the same facts on the same connect (SPD-4).
+    expect(rearm).toContain('routineJobsFromList(landed ? read.jobs : await botJobs.list())');
+    expect(rearm).toContain("read.status === 'ready' && read.gatewayId === activeGatewayRef.current?.id");
     expect(rearm).toContain('await rearmRoutineNotifications(jobs)');
     // Best-effort: a failed re-arm never breaks the connection flow.
     expect(rearm).toContain('} catch {');
@@ -172,10 +175,14 @@ describe('the provider re-arms as the connection comes up', () => {
   test('the effect is gated on the connected status, so a disconnected open arms nothing', () => {
     const src = provider();
     const effect = src.match(
-      /useEffect\(\(\) => \{\n    if \(status !== 'connected'\) return;[\s\S]*?\n  \}, \[rearmRoutineNotices, status\]\);/,
+      /useEffect\(\(\) => \{\n    if \(status !== 'connected'\) return undefined;[\s\S]*?\n  \}, \[rearmRoutineNotices, status, scheduleConnectedRead\]\);/,
     )?.[0];
     expect(effect).toBeDefined();
-    // Fire-and-forget: the connection must never wait on a notification read.
+    // Fire-and-forget: the connection must never wait on a notification read —
+    // and a notice nothing has asked for yet is the last read of the set, so it
+    // takes the back of the connected-time queue rather than a place in it.
+    expect(effect).toContain('scheduleConnectedRead(CONNECTED_ROUTINE_REARM_DELAY_MS, () => {');
+    expect(effect).toContain('if (!connectedFanOutDueRef.current) return;');
     expect(effect).toContain('void rearmRoutineNotices();');
   });
 });

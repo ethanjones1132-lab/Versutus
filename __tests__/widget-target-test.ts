@@ -330,7 +330,7 @@ describe('the provider writes the snapshot as run state changes', () => {
   test('the routine half is read through the same cron seam the Activity tab uses', () => {
     const src = provider();
     const start = src.indexOf('const [routineRead, setRoutineRead]');
-    const end = src.indexOf('}, [activeGateway?.id, cron, status]);', start);
+    const end = src.indexOf('}, [activeGateway?.id, cron, status, scheduleConnectedRead]);', start);
     const read = src.slice(start, end);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
@@ -338,19 +338,25 @@ describe('the provider writes the snapshot as run state changes', () => {
     expect(read).toContain('setRoutineRead(beginFleetRoutineRead)');
     expect(read).toContain("if (status !== 'connected' || !cron.available || !gatewayId) return;");
     // A failed read retains the list; only a landed list may replace it.
-    expect(read).toContain("if (live) setRoutineRead({ gatewayId, jobs, status: 'ready' });");
+    expect(read).toContain("routineReadRef.current = { gatewayId, jobs, status: 'ready' };");
+    expect(read).toContain("setRoutineRead({ gatewayId, jobs, status: 'ready' });");
     expect(read).toContain('live = false;');
+    // SPD-4: the read takes its turn behind the transcript instead of competing
+    // with it, and its timer is dropped if the connection leaves first.
+    expect(read).toContain('scheduleConnectedRead(CONNECTED_ROUTINE_LIST_DELAY_MS, () => {');
+    expect(read).toContain('cancelRead?.();');
   });
 
   test('the Bot rows come from the roster read once per connect, like the routines', () => {
     const read = provider().match(
-      /useEffect\(\(\) => \{\n    if \(status !== 'connected'\) return;[\s\S]*?\n  \}, \[activeGateway\?\.id, listBots, status\]\);/,
+      /useEffect\(\(\) => \{\n    if \(status !== 'connected'\) return undefined;[\s\S]*?\n  \}, \[activeGateway\?\.id, listBots, status, scheduleConnectedRead\]\);/,
     )?.[0];
     expect(read).toBeDefined();
     expect(read).toContain('const gatewayId = activeGateway?.id;');
     expect(read).toContain('.then((bots) =>');
     expect(read).toContain('if (live && gatewayId === activeGateway?.id) setWidgetBots(bots);');
     expect(read).toContain('.catch(() => undefined);');
+    expect(read).toContain('scheduleConnectedRead(CONNECTED_WIDGET_BOTS_DELAY_MS, () => {');
   });
 
   test('the run lifecycle it rides on still persists, and the Runs destination reads active gateway runs', () => {

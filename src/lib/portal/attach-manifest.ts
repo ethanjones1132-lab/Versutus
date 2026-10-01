@@ -10,10 +10,11 @@
  * moment before misses the first manifest fetch often enough that this was
  * the Gate setup screen's usual state.
  *
- * So a profile already known to be a Gate gets one more try, and then the
- * last manifest it served — a Gate's routes do not change between launches —
- * rather than the wrong client. Pure over injected reads, so it is tested
- * without a network.
+ * So a profile already known to be a Gate is built from the last manifest it
+ * served — a Gate's routes do not change between launches — rather than the
+ * wrong client, and the live document is asked for alongside the connect
+ * instead of in front of it. Pure over injected reads, so it is tested without
+ * a network.
  */
 
 import { keyValueStorage } from '@/lib/storage/key-value';
@@ -37,6 +38,7 @@ export async function manifestForAttach({
   saveCached,
   retryDelayMs = GATE_MANIFEST_RETRY_MS,
   sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+  onLive,
 }: {
   /** The profile was saved as a Gate (kind 'custom'): a missing manifest is a miss, not an answer. */
   knownGate: boolean;
@@ -45,7 +47,33 @@ export async function manifestForAttach({
   saveCached: (manifest: GatewayManifest) => Promise<void>;
   retryDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * The live manifest the background refresh served, when one was cached. The
+   * caller owns everything a later manifest changes (the active manifest, the
+   * child-profile roster), so handing it over is what keeps the attach from
+   * fetching the same document a second time.
+   */
+  onLive?: (manifest: GatewayManifest) => void;
 }): Promise<AttachManifest> {
+  if (knownGate) {
+    // A usable manifest is already on disk, so the connect starts now and the
+    // live refresh runs beside it. Asking first meant a known Gate that was down
+    // or slow could not begin connecting for ~21s (live, 0.9s, live again)
+    // although the document that makes it a Gate was sitting in storage.
+    const cached = await loadCached().catch(() => null);
+    if (cached) {
+      void fetchLive()
+        .then((live) => {
+          if (!live) return undefined;
+          // A refused write still leaves the caller its fresh manifest.
+          return saveCached(live)
+            .catch(() => undefined)
+            .then(() => onLive?.(live));
+        })
+        .catch(() => undefined);
+      return { manifest: cached, source: 'cached' };
+    }
+  }
   let live = await fetchLive().catch(() => null);
   if (!live && knownGate) {
     await sleep(retryDelayMs);
@@ -54,10 +82,6 @@ export async function manifestForAttach({
   if (live) {
     await saveCached(live).catch(() => undefined);
     return { manifest: live, source: 'live' };
-  }
-  if (knownGate) {
-    const cached = await loadCached().catch(() => null);
-    if (cached) return { manifest: cached, source: 'cached' };
   }
   return { manifest: null, source: 'none' };
 }
