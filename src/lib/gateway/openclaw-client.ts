@@ -4,23 +4,51 @@ import { buildDeviceAuthPayloadV3 } from '@/lib/gateway/auth-payload';
 import { clearDeviceAuthToken, loadDeviceAuthToken, saveDeviceAuthToken } from '@/lib/gateway/device-auth-token';
 import { loadOrCreateDeviceIdentity, signDevicePayload } from '@/lib/gateway/device-identity';
 import { DEVICE_IDENTITY_FAILURE, isDeviceIdentityError } from '@/lib/gateway/errors';
-import { ConnectionMonitor } from '@/lib/gateway/connection-monitor';
+import { isIpv4 } from '@/lib/gateway/host-lookup';
+import {
+  ConnectionMonitor,
+  hasRecentContact,
+} from '@/lib/gateway/connection-monitor';
 import type { ChatEventPayload, GatewayFrame } from '@/lib/gateway/openclaw-types';
-import type { ConnectionStatus, GatewayHelloOk, GatewayProfile, PairingDetails } from '@/lib/gateway/types';
+import type {
+  ConnectionStatus,
+  GatewayHelloOk,
+  GatewayProfile,
+  HealthResponse,
+  PairingDetails,
+} from '@/lib/gateway/types';
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  /**
+   * A liveness probe settles on ANY answer, so a gateway that refuses the
+   * method (`ok:false`, "unknown method") still counts as proof the socket is
+   * alive. Ordinary requests keep rejecting on `ok:false`.
+   */
+  settleOnAnyResponse?: boolean;
 };
 
 export type GatewayClientCallbacks = {
-  onStatus?: (status: ConnectionStatus, detail?: string) => void;
+  onStatus?: (status: ConnectionStatus, detail?: string, info?: { authRejected?: boolean }) => void;
   onHello?: (hello: GatewayHelloOk) => void;
   onPairingRequired?: (details: PairingDetails) => void;
   onChatEvent?: (payload: ChatEventPayload) => void;
   onError?: (message: string) => void;
+  onHealthCheck?: (healthy: boolean, info?: HealthResponse) => void;
 };
+
+/**
+ * Liveness budget for one probe. The wire has no health endpoint: the probe is
+ * a `capabilities` round trip on the socket already in hand, so it only has to
+ * outlast a tailnet RTT — and stay well under the 30s monitor interval so a
+ * lost path is declared in seconds rather than half a minute.
+ */
+export const OPENCLAW_PROBE_TIMEOUT_MS = 5000;
+
+/** The method the adapter already calls on connect — no new endpoint assumed. */
+const PROBE_METHOD = 'capabilities';
 
 const CLIENT_ID = 'openclaw-android';
 const CLIENT_MODE = 'ui';
@@ -73,6 +101,15 @@ export class OpenClawGatewayClient {
   private identityPromise: ReturnType<typeof loadOrCreateDeviceIdentity> | null = null;
   private status: ConnectionStatus = 'disconnected';
   private detail = '';
+  private authRejectedState = false;
+  /** When the gateway last answered anything on this socket. Drives liveness. */
+  private lastResponseAt = 0;
+  /** The URL a socket last completed its handshake on; tried first next time. */
+  private lastConnectedUrl: string | null = null;
+  /** The URL the live socket was dialled on, remembered for handshake bookkeeping. */
+  private activeSocketUrl = '';
+  /** How many dials have gone by without one opening; rotates the dial address. */
+  private dialCursor = 0;
   private readonly monitor: ConnectionMonitor;
 
   constructor(
@@ -81,11 +118,15 @@ export class OpenClawGatewayClient {
   ) {
     // Reconnect policy is the shared monitor's (jittered backoff, escalation
     // to the provider's auto-retry after sustained failure), not a private
-    // copy — roadmap 1.5. Scheduler-only: the OpenClaw wire has no health
-    // endpoint we have verified, so liveness comes from the socket lifecycle
-    // itself and no probe interval is armed.
+    // copy — roadmap 1.5. The wire has no /health, so the probe is a
+    // `capabilities` round trip over the socket already open: any answer, even
+    // a refusal, proves the path works. Without it a half-open socket (Wi-Fi
+    // drop, silent tailnet path change) reads as 'connected' forever.
     this.monitor = new ConnectionMonitor({
+      probe: () => this.probeLiveness(),
+      recentlyServedUs: () => hasRecentContact(this.lastResponseAt, Date.now()),
       onStatus: (status, detail) => this.setStatus(status, detail),
+      onDeclaredDown: () => this.callbacks.onHealthCheck?.(false),
       reconnect: async () => {
         if (!this.closed) this.openSocket();
       },
@@ -100,12 +141,25 @@ export class OpenClawGatewayClient {
     return this.detail;
   }
 
+  /**
+   * True while the last disconnect was the gateway refusing our credentials.
+   * The provider sees that status before connect()'s rejection reaches it, so
+   * without this signal a refused token is retried forever and its message is
+   * erased by the next attempt.
+   */
+  get authRejected(): boolean {
+    return this.authRejectedState;
+  }
+
   updateProfile(profile: GatewayProfile) {
     this.profile = profile;
   }
 
   connect() {
     this.closed = false;
+    // A fresh attempt is the operator (or the provider's auto-retry) saying
+    // "try again", so the previous refusal no longer speaks for this one.
+    this.authRejectedState = false;
     this.monitor.stop(); // an explicit attempt starts a fresh retry ladder
     this.setStatus('connecting');
     this.openSocket();
@@ -142,6 +196,58 @@ export class OpenClawGatewayClient {
     }
   }
 
+  /**
+   * Ask the monitor for a liveness verdict now, on the caller's own evidence
+   * of trouble (a request that went unanswered, a stalled stream). Two quick
+   * probes reach `reconnecting` in seconds instead of waiting out the 30s
+   * interval — the WS twin of HttpTransport's onNetworkTrouble hook.
+   */
+  nudge(reason: string) {
+    this.monitor.nudge(reason);
+  }
+
+  /**
+   * Re-verify in place. For a caller that doubts a client which still claims
+   * 'connected': rebuilding the client throws away a live connection to
+   * re-earn the answer, and this re-runs the handshake on the existing one.
+   */
+  forceReconnect() {
+    this.setStatus('reconnecting', 'Checking the connection');
+    this.closed = false;
+    this.openSocket();
+  }
+
+  /**
+   * One liveness probe: `capabilities` on the socket already open, bounded by
+   * OPENCLAW_PROBE_TIMEOUT_MS. ANY response frame settles it true — including
+   * an `ok:false` refusal, which is a gateway talking, not a dead path. A
+   * timeout, or no socket at all, settles it false.
+   */
+  async probeLiveness(timeoutMs = OPENCLAW_PROBE_TIMEOUT_MS): Promise<boolean> {
+    if (!this.socket) return false;
+    const id = randomId('probe');
+    const frame = { type: 'req', id, method: PROBE_METHOD, params: {} };
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        resolve(false);
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: () => resolve(true),
+        reject: () => resolve(false),
+        timer,
+        settleOnAnyResponse: true,
+      });
+      try {
+        this.socket?.send(JSON.stringify(frame));
+      } catch {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        resolve(false);
+      }
+    });
+  }
+
   async request<T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs = 30000): Promise<T> {
     await this.waitUntilConnected(timeoutMs);
     const id = randomId('req');
@@ -149,6 +255,9 @@ export class OpenClawGatewayClient {
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        // A request unanswered for its whole budget is evidence of a dead path
+        // the 30s interval cannot act on for another half-minute.
+        this.nudge(`Request timed out: ${method}`);
         reject(new Error(`Request timed out: ${method}`));
       }, timeoutMs);
       this.pending.set(id, {
@@ -183,11 +292,15 @@ export class OpenClawGatewayClient {
     this.connectUsedStoredDeviceToken = false;
     this.retireSocket();
 
+    const url = this.nextDialUrl();
+    let opened = false;
+    this.activeSocketUrl = url;
     try {
-      const socket = new WebSocket(this.profile.url);
+      const socket = new WebSocket(url);
       this.socket = socket;
 
       socket.onopen = () => {
+        opened = true;
         this.challengeTimer = setTimeout(() => {
           if (!this.connectSent) {
             this.handleTerminalFailure('Gateway handshake timed out');
@@ -207,8 +320,11 @@ export class OpenClawGatewayClient {
           this.setStatus('disconnected');
           return;
         }
+        // A dial that died before it ever opened is the shape a name that does
+        // not resolve takes: the next rung tries the advertised tailnet IPv4.
+        if (!opened && event.code === 1006) this.noteDialFailure();
         const failureDetail = !this.connectSent
-          ? describeSocketFailure(this.profile.url, event.code, event.reason)
+          ? describeSocketFailure(url, event.code, event.reason)
           : event.reason || `Closed (${event.code})`;
         if (!this.connectSent) {
           this.callbacks.onError?.(failureDetail);
@@ -216,8 +332,52 @@ export class OpenClawGatewayClient {
         this.scheduleReconnect(failureDetail);
       };
     } catch (error) {
-      this.handleTerminalFailure(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      this.noteDialFailure();
+      if (this.hasAlternateAddress()) {
+        // The URL could not even be dialled, and there is a tailnet address
+        // left to try: this attempt is a rung, not the end of the ladder.
+        this.callbacks.onError?.(message);
+        this.scheduleReconnect(message);
+        return;
+      }
+      this.handleTerminalFailure(message);
     }
+  }
+
+  private hasAlternateAddress(): boolean {
+    return ipv4SocketUrls(this.profile.url, this.profile.alternateIpv4 ?? []).length > 0;
+  }
+
+  /**
+   * Every address this profile may be dialled on: the saved URL first, then its
+   * advertised tailnet IPv4 rewrites (same port, path and scheme).
+   */
+  private dialUrls(): string[] {
+    const urls = [this.profile.url, ...ipv4SocketUrls(this.profile.url, this.profile.alternateIpv4 ?? [])];
+    // The address that last completed a handshake leads: a tailnet IPv4 that
+    // proved itself over a MagicDNS name that was then failing must not be
+    // re-proved by name on every reconnect.
+    const remembered = this.lastConnectedUrl ? urls.indexOf(this.lastConnectedUrl) : -1;
+    if (remembered <= 0) return urls;
+    return [urls[remembered], ...urls.slice(0, remembered), ...urls.slice(remembered + 1)];
+  }
+
+  private nextDialUrl(): string {
+    const urls = this.dialUrls();
+    return urls[this.dialCursor % urls.length];
+  }
+
+  /**
+   * Remember that a dial never opened, so the next attempt rotates onto the
+   * next advertised address instead of repeating one that just missed.
+   */
+  private noteDialFailure() {
+    this.dialCursor += 1;
+  }
+
+  private noteHandshakeComplete() {
+    this.dialCursor = 0;
   }
 
   /**
@@ -377,10 +537,25 @@ export class OpenClawGatewayClient {
       if (frame.ok) {
         this.monitor.noteConnected();
         this.staleTokenRetryUsed = false;
+        this.lastConnectedUrl = this.activeSocketUrl || null;
+        this.noteHandshakeComplete();
         this.setStatus('connected');
         const hello = frame.payload as GatewayHelloOk;
-        void this.storeHelloDeviceToken(hello);
+        // A failed write loses the pairing silently: the next connect presents
+        // no device token and the operator has to approve pairing again. Say
+        // so instead — without any storage or key text.
+        void this.storeHelloDeviceToken(hello).catch(() => {
+          this.callbacks.onError?.(
+            'Could not save the gateway pairing token. Versutus will have to pair again.',
+          );
+        });
         this.callbacks.onHello?.(hello);
+        // The provider's only reconnect-time trigger for re-reading the thread
+        // and settling an interrupted turn. Fired here at the same point the
+        // Hermes dialects fire it — after the handshake, before the probe
+        // interval starts — so both dialects feed the same machinery.
+        this.callbacks.onHealthCheck?.(true, this.healthReport(hello.server?.version));
+        this.monitor.start();
       } else {
         const code = frame.error?.details?.code ?? frame.error?.code ?? 'CONNECT_FAILED';
         const message = frame.error?.message ?? 'Connect failed';
@@ -403,9 +578,22 @@ export class OpenClawGatewayClient {
           this.staleTokenRetryUsed = true;
           void this.getIdentity()
             .then((identity) => clearDeviceAuthToken(identity.deviceId, 'operator'))
+            .catch(() => {
+              // A failed clear is worth saying out loud, but the retry matters
+              // more: a stale token the store could not drop still fails the
+              // next connect, and that attempt has to happen.
+              this.callbacks.onError?.(
+                'Could not clear the stored pairing token. Versutus will retry the connection.',
+              );
+            })
             .finally(() => this.scheduleReconnect('Stored pairing token expired — retrying with fresh auth'));
         } else if (isGatewayAuthMissing(code)) {
-          this.handleTerminalFailure('Gateway requires setup token or pairing approval');
+          this.handleTerminalFailure('Gateway requires setup token or pairing approval', true);
+        } else if (code === 'AUTH_DEVICE_TOKEN_MISMATCH') {
+          // The single stale-token retry was already spent and the gateway
+          // refused again: the credential is wrong, not stale, and no retry of
+          // ours can fix it.
+          this.handleTerminalFailure('Gateway rejected the pairing token. Pair the gateway again.', true);
         } else {
           this.handleTerminalFailure(message || 'Gateway connection failed. Check logs or retry.');
         }
@@ -417,7 +605,11 @@ export class OpenClawGatewayClient {
     if (!pending) return;
     clearTimeout(pending.timer);
     this.pending.delete(frame.id);
+    // Any answer is reachability evidence: an `ok:false` refusal still means
+    // the frame reached a live gateway and one came back.
+    this.lastResponseAt = Date.now();
     if (frame.ok) pending.resolve(frame.payload);
+    else if (pending.settleOnAnyResponse) pending.resolve(frame.payload ?? null);
     else {
       pending.reject(new Error(frame.error?.message ?? 'Gateway request failed'));
     }
@@ -434,20 +626,35 @@ export class OpenClawGatewayClient {
     this.monitor.scheduleReconnect(reason);
   }
 
-  private handleTerminalFailure(message: string) {
+  private handleTerminalFailure(message: string, authRejected = false) {
     this.closed = true;
     this.monitor.stop();
     this.clearChallengeTimer();
     this.flushPending(new Error(message));
     this.callbacks.onError?.(message);
-    this.setStatus('disconnected', message);
+    if (authRejected) this.authRejectedState = true;
+    this.setStatus('disconnected', message, authRejected ? { authRejected: true } : undefined);
     const socket = this.socket;
     this.socket = null;
     socket?.close();
   }
 
+  /**
+   * The device identity, read once per client.
+   *
+   * A REJECTED read is not remembered: the memo held the same dead promise for
+   * the life of the client, so every later handshake rung re-awaited one storage
+   * fault and the app could not pair again until the provider happened to build
+   * a fresh client. Clearing it on rejection lets the next rung retry the read.
+   */
   private async getIdentity() {
-    if (!this.identityPromise) this.identityPromise = loadOrCreateDeviceIdentity();
+    if (!this.identityPromise) {
+      const attempt = loadOrCreateDeviceIdentity();
+      this.identityPromise = attempt;
+      void attempt.catch(() => {
+        if (this.identityPromise === attempt) this.identityPromise = null;
+      });
+    }
     return this.identityPromise;
   }
 
@@ -476,11 +683,43 @@ export class OpenClawGatewayClient {
     this.challengeTimer = null;
   }
 
-  private setStatus(status: ConnectionStatus, detail = '') {
+  /** The health sample this dialect reports, shaped like the HTTP dialects'. */
+  private healthReport(version?: string): HealthResponse {
+    return { status: 'ok', platform: 'openclaw', version: version ?? 'unknown' };
+  }
+
+  private setStatus(status: ConnectionStatus, detail = '', info?: { authRejected?: boolean }) {
     this.status = status;
     this.detail = detail;
-    this.callbacks.onStatus?.(status, detail);
+    this.callbacks.onStatus?.(status, detail, info);
   }
+}
+
+/**
+ * The saved ws URL rewritten onto each advertised tailnet IPv4, keeping the
+ * port, path and scheme.
+ *
+ * MagicDNS can miss for a moment on a phone while the tunnel address still
+ * works, and a WebSocket dial has no retry seam of its own: without these the
+ * only address ever tried is the name. ws:// is plain here — the TLS hostname
+ * check does not apply to the tailnet wire this URL already used.
+ */
+function ipv4SocketUrls(url: string, alternateIpv4: string[]): string[] {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return [];
+  }
+  if (parsed.protocol !== 'ws:') return [];
+  const port = parsed.port;
+  const path = `${parsed.pathname}${parsed.search}`;
+  const urls: string[] = [];
+  for (const ip of alternateIpv4) {
+    if (!isIpv4(ip) || ip === parsed.hostname) continue;
+    urls.push(`ws://${ip}${port ? `:${port}` : ''}${path}`);
+  }
+  return urls;
 }
 
 function readString(value: unknown): string | undefined {

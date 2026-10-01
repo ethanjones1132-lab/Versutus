@@ -62,6 +62,12 @@ export type ConnectionMonitorCallbacks = {
   probe?: () => Promise<boolean>;
   /** True when some other request came back recently. */
   recentlyServedUs?: () => boolean;
+  /**
+   * Fired the moment the failure streak declares the path down, before the
+   * reconnect ladder takes over. A dialect that publishes its own health
+   * samples uses it to report the loss on the same channel as its successes.
+   */
+  onDeclaredDown?: (reason: string) => void;
   onStatus: (
     status: 'connected' | 'reconnecting' | 'disconnected',
     detail?: string,
@@ -221,6 +227,7 @@ export class ConnectionMonitor {
     this.failures += 1;
     if (this.failures < HEALTH_FAILURE_THRESHOLD) return false;
     this.down = true;
+    this.callbacks.onDeclaredDown?.('Gateway became unreachable');
     this.callbacks.onStatus('reconnecting', 'Gateway became unreachable');
     this.scheduleReconnect('Gateway became unreachable');
     return true;

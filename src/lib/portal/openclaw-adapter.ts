@@ -72,6 +72,14 @@ export class OpenClawAdapterClient implements PortalClient {
     return this.inner.statusDetail;
   }
 
+  /**
+   * Delegated: the provider reads this to tell "the gateway refused our
+   * credential" (stop retrying, name the cause) from "the gateway is down".
+   */
+  get authRejected(): boolean {
+    return this.inner.authRejected;
+  }
+
   get sessionId(): string | undefined {
     return this.currentSessionId;
   }
@@ -100,9 +108,26 @@ export class OpenClawAdapterClient implements PortalClient {
     this.inner.resumeReconnect();
   }
 
-  async healthCheck(): Promise<HealthResponse | null> {
+  nudge(reason: string) {
+    this.inner.nudge(reason);
+  }
+
+  forceReconnect() {
+    this.inner.forceReconnect();
+  }
+
+  /**
+   * A real probe, not the local status flag. Returning `{status:'ok'}` from a
+   * flag the client itself sets made the provider's foreground heal treat a
+   * half-open socket as verified — every request then failed on its own 30s
+   * timer while nothing declared the gateway unreachable.
+   */
+  async healthCheck(timeoutMs?: number): Promise<HealthResponse | null> {
     if (this.inner.connectionStatus !== 'connected') return null;
-    return { status: 'ok', platform: 'openclaw', version: this.helloVersion ?? 'unknown' };
+    const alive = await this.inner.probeLiveness(timeoutMs);
+    return alive
+      ? { status: 'ok', platform: 'openclaw', version: this.helloVersion ?? 'unknown' }
+      : null;
   }
 
   async rpcRequest<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {

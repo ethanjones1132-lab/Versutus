@@ -438,7 +438,10 @@ describe('OpenClawGatewayClient handshake', () => {
     c.connect();
     const ws = FakeWebSocket.instances[0];
     ws.serverOpen();
-    mockIdentity.mockRejectedValueOnce(new Error('could not read private-key bytes'));
+    // Every read fails, not just the first: the client no longer memoises a
+    // rejected identity promise, so the pairing read retries and would
+    // otherwise succeed on a second call.
+    mockIdentity.mockRejectedValue(new Error('could not read private-key bytes'));
     ws.serverFrame(challenge('n1')); // sendConnect trips over the failed identity read
     await flush();
     expect(ws.sentFrames()).toHaveLength(0); // nothing was sent
@@ -468,7 +471,9 @@ describe('OpenClawGatewayClient handshake', () => {
     c.connect();
     const ws = FakeWebSocket.instances[0];
     ws.serverOpen();
-    mockIdentity.mockRejectedValueOnce(new DeviceIdentityError());
+    // A rejected identity read is no longer memoised, so the pairing read
+    // retries: both must fail for the product copy to be the answer.
+    mockIdentity.mockRejectedValue(new DeviceIdentityError());
     ws.serverFrame(challenge('n1'));
     await flush();
 
