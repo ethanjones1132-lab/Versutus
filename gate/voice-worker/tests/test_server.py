@@ -27,7 +27,7 @@ class FakeVad:
         return []
 
 
-def _pipeline(events):
+def _pipeline(events, emit=None):
     vad = FakeVad()
     transcriber = PartialTranscriber(lambda pcm, beam_size: "hello there")
     tts = SpeechSynthesizer(lambda text: [text.encode("ascii")])
@@ -36,7 +36,7 @@ def _pipeline(events):
         transcriber=transcriber,
         turn_judge=None,
         synthesizer=tts,
-        emit=lambda method, params: events.append((method, params)),
+        emit=emit or (lambda method, params: events.append((method, params))),
         # Synthesis runs on a thread in production; the fake keeps it inline.
         spawn=lambda fn: fn(),
     )
@@ -96,6 +96,57 @@ def test_an_unknown_method_is_an_error():
     server = RpcServer(_pipeline(events))
     server.handle_message(json.dumps({"jsonrpc": "2.0", "id": 6, "method": "voice.nope", "params": {}}))
     assert json.loads(server.written[-1])["error"]["code"] == -32601
+
+
+def test_a_production_server_keeps_no_copy_of_the_audio_it_writes():
+    # `written` is a test assertion hook. In production it retained every
+    # synthesised sentence of the call as a base64 PCM blob, for a reply that is
+    # over in seconds, and the same frames were copied again on every respawn.
+    class Sink:
+        def __init__(self):
+            self.lines = []
+
+        def write(self, text):
+            self.lines.append(text)
+
+        def flush(self):
+            pass
+
+    sink = Sink()
+    # Wired the way `main` wires it: the pipeline's notifications are the
+    # server's frames, so they must come out of `out`.
+    server = None
+    pipeline = _pipeline([], emit=lambda method, params: server.emit(method, params))
+    server = RpcServer(pipeline, out=sink, record=False)
+
+    server.handle_message(json.dumps({"jsonrpc": "2.0", "id": 7, "method": "voice.speak", "params": {"gen": 1, "text": "One. Two."}}))
+    assert server.written == []
+    frames = [json.loads(line) for line in sink.lines]
+    assert [frame.get("method") for frame in frames] == [
+        "voice.speechAudio",
+        "voice.speechAudio",
+        "voice.speechDone",
+        None,  # the response to the request, which carries no method
+    ]
+    assert frames[-1]["id"] == 7
+
+    # The reply that ended the call still leaves nothing behind.
+    server.handle_message(json.dumps({"jsonrpc": "2.0", "id": 8, "method": "voice.close", "params": {}}))
+    assert server.written == []
+
+
+def test_the_default_server_still_records_what_it_writes():
+    class Sink:
+        def write(self, _text):
+            pass
+
+        def flush(self):
+            pass
+
+    server = RpcServer(_pipeline([]), out=Sink())
+    server.handle_message(json.dumps({"jsonrpc": "2.0", "id": 9, "method": "voice.describe", "params": {}}))
+    assert len(server.written) == 1
+    assert json.loads(server.written[0])["result"]["sampleRate"] == {"input": 16000, "output": 24000}
 
 
 def test_the_local_whisper_dir_is_used_only_when_every_file_is_present(tmp_path):

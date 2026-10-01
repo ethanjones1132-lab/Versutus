@@ -267,13 +267,18 @@ class VoicePipeline:
 class RpcServer:
     """A newline-delimited JSON-RPC 2.0 loop over the pipeline."""
 
-    def __init__(self, pipeline, sample_rate=None, out=None):
+    def __init__(self, pipeline, sample_rate=None, out=None, record=True):
         self.pipeline = pipeline
         self.sample_rate = sample_rate or {
             "input": INPUT_SAMPLE_RATE,
             "output": OUTPUT_SAMPLE_RATE,
         }
+        # `written` exists so tests can assert on the frames that went out. In
+        # production it would hold a copy of every synthesised sentence of the
+        # whole call (one base64 PCM blob each), so the real server records
+        # nothing and writes only to `out`.
         self.written = []
+        self._record = record
         self._out = out
         # Synthesis runs on its own thread (see VoicePipeline.speak); frames
         # from that thread and the stdin loop must not interleave mid-line.
@@ -281,7 +286,8 @@ class RpcServer:
 
     def _write(self, payload):
         line = json.dumps(payload)
-        self.written.append(line)
+        if self._record:
+            self.written.append(line)
         if self._out is not None:
             with self._write_lock:
                 self._out.write(line + "\n")
@@ -607,7 +613,7 @@ def main(argv=None):
         models_dir=args.models_dir,
         cpu=args.cpu,
     )
-    server = RpcServer(pipeline, out=sys.stdout)
+    server = RpcServer(pipeline, out=sys.stdout, record=False)
     server.serve(stdin=sys.stdin)
     return 0
 

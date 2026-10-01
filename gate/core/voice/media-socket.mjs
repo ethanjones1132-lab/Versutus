@@ -195,6 +195,13 @@ export function attachVoiceMediaSocket({
       }
     };
     const startAudioTimer = () => {
+      // One call owns one audio timer. `audioTimer` is a single handle, so
+      // arming over an existing one orphans that interval: the stale socket's
+      // close handler ignores itself because `ws` is no longer it, and `end()`
+      // clears only the newest. A second upgrade while the first socket is
+      // still open — a half-open socket on Tailscale, which is exactly what the
+      // resume window exists for — would then leak a 1 Hz timer per re-attach.
+      clearAudioTimer();
       audioTimer = setInterval(() => {
         if (ws && now() - lastAudioAt > noAudioTimeoutMs) ws.close(1001, 'idle');
       }, Math.min(noAudioTimeoutMs, 1000));
@@ -458,6 +465,10 @@ export function attachVoiceMediaSocket({
       ws = newWs;
       clearResumeTimer();
       lastAudioAt = now();
+      // Explicit, though `startAudioTimer` clears too: this is the path that
+      // replaced a socket without the old one closing, so it is the one that
+      // must not leave the previous call's timer running.
+      clearAudioTimer();
       startAudioTimer();
       // The grant is real: a socket carrying this session actually arrived.
       registry.markAttached(session.voiceSessionId);

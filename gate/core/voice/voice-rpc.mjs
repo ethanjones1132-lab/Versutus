@@ -34,15 +34,51 @@ export const GRANT_ATTACH_GRACE_MS = 60_000;
  */
 export const ATTACHED_LIVENESS_MS = 90_000;
 
+/**
+ * How long an ended session's record stays answerable. It cannot go at once: a
+ * phone whose media socket upgrade is still in flight has to be told the session
+ * is over, not that it never existed, or a socket arriving after its grant was
+ * released would find nothing to refuse and could open a call beside the
+ * replacement (media-socket.mjs rejects on `session.ended`, which needs the
+ * record). Ten minutes covers that upgrade; past it the record says nothing an
+ * unknown id does not, and the media socket answers both with 404.
+ */
+export const ENDED_RETENTION_MS = 10 * 60_000;
+
+/**
+ * How many ended records are held at once, oldest ended first. Ended records
+ * exist to refuse a late upgrade, not to be listed, so a day of calls must not
+ * leave a day of records behind. Live records are never evicted: one of them
+ * still holds its device.
+ */
+export const MAX_ENDED_SESSIONS = 200;
+
 /** The live-call registry the media socket also reads. */
 export class VoiceSessionRegistry {
-  constructor({ now = () => Date.now() } = {}) {
+  constructor({
+    now = () => Date.now(),
+    endedRetentionMs = ENDED_RETENTION_MS,
+    maxEndedSessions = MAX_ENDED_SESSIONS,
+  } = {}) {
     this.sessions = new Map();
     this._endListeners = new Set();
     this._now = now;
+    this._endedRetentionMs = endedRetentionMs;
+    this._maxEndedSessions = maxEndedSessions;
+    // Live ids per device, in the order they were created. `voice.session.start`
+    // asks for the device's live call on every attempt, so walking the whole
+    // map — every ended record included — made the start path cost O(sessions
+    // ever) instead of O(this device's calls). This index holds only not-ended
+    // records, and only `create`/`end` write it.
+    this._liveByDevice = new Map();
+    // Ended ids in the order they ended, with the clock reading at the end.
+    // This is what makes "oldest ended first" and "older than its retention
+    // window" answerable without walking the map.
+    this._ended = new Map();
   }
 
   create(record) {
+    this._prune();
     const grantedAt = this._now();
     const session = {
       ...record,
@@ -52,7 +88,49 @@ export class VoiceSessionRegistry {
       lastSeenAt: grantedAt,
     };
     this.sessions.set(record.voiceSessionId, session);
+    this._addLive(session.deviceId, record.voiceSessionId);
     return session;
+  }
+
+  /** Index a live session against its device, first come first served. */
+  _addLive(deviceId, voiceSessionId) {
+    let ids = this._liveByDevice.get(deviceId);
+    if (!ids) {
+      ids = new Set();
+      this._liveByDevice.set(deviceId, ids);
+    }
+    ids.add(voiceSessionId);
+  }
+
+  /** Take a session off its device's index; an emptied device is forgotten. */
+  _removeLive(deviceId, voiceSessionId) {
+    const ids = this._liveByDevice.get(deviceId);
+    if (!ids) return;
+    ids.delete(voiceSessionId);
+    if (ids.size === 0) this._liveByDevice.delete(deviceId);
+  }
+
+  /**
+   * Sweep ended records: past their retention window, then past the cap. Called
+   * from `create`, `end` and `liveForDevice` — the only writers and the only
+   * paths that touch the registry often enough to pay for it — so nothing here
+   * needs a timer of its own and the map stays bounded whether or not calls are
+   * still being made.
+   */
+  _prune() {
+    const cutoff = this._now() - this._endedRetentionMs;
+    // `_ended` is in end order, so the first record still inside its window
+    // ends the sweep: everything after it ended later and is inside it too.
+    for (const [voiceSessionId, endedAtMs] of this._ended) {
+      if (endedAtMs > cutoff) break;
+      this._ended.delete(voiceSessionId);
+      this.sessions.delete(voiceSessionId);
+    }
+    for (const voiceSessionId of this._ended.keys()) {
+      if (this._ended.size <= this._maxEndedSessions) break;
+      this._ended.delete(voiceSessionId);
+      this.sessions.delete(voiceSessionId);
+    }
   }
 
   get(voiceSessionId) {
@@ -100,15 +178,21 @@ export class VoiceSessionRegistry {
      * media calls for one device. Ending it makes the late upgrade a 409.
      */
     liveForDevice(deviceId) {
+      this._prune();
+      const ids = this._liveByDevice.get(deviceId);
+      if (!ids) return null;
       const now = this._now();
-      for (const session of this.sessions.values()) {
-        if (session.deviceId !== deviceId || session.ended) continue;
+      for (const voiceSessionId of ids) {
+        const session = this.sessions.get(voiceSessionId);
+        // The index holds only not-ended records; a miss means the record was
+        // released from under it, so it cannot be this device's live call.
+        if (!session || session.ended) continue;
         if (!session.attached && now - session.grantedAt > GRANT_ATTACH_GRACE_MS) {
-          this.end(session.voiceSessionId, 'expired');
+          this.end(voiceSessionId, 'expired');
           continue;
         }
         if (session.attached && now - session.lastSeenAt > ATTACHED_LIVENESS_MS) {
-          this.end(session.voiceSessionId, 'abandoned');
+          this.end(voiceSessionId, 'abandoned');
           continue;
         }
         return session;
@@ -134,6 +218,10 @@ export class VoiceSessionRegistry {
     if (!session || session.ended) return false;
     session.ended = true;
     session.endedReason = reason;
+    session.endedAtMs = this._now();
+    // The fan-out runs with `thread` still in place: the media socket writes its
+    // audit line from the terminal event it dispatches inside its own `end()`,
+    // and that line names the Bot.
     for (const listener of [...this._endListeners]) {
       try {
         listener(session, reason);
@@ -141,6 +229,16 @@ export class VoiceSessionRegistry {
         // one bad listener must not keep a session from being released
       }
     }
+    // The thread is the phone's own object, stored by reference and unbounded.
+    // Nothing reads it once the call is over — the fan-out above is the last
+    // reader — so the record stops holding every conversation's thread for the
+    // life of the Gate.
+    session.thread = undefined;
+    this._removeLive(session.deviceId, voiceSessionId);
+    this._ended.set(voiceSessionId, session.endedAtMs);
+    // Swept here too, so the bound holds the moment a call ends and not only
+    // after the next start: an idle Gate must not sit on a day's records.
+    this._prune();
     return true;
   }
 }
