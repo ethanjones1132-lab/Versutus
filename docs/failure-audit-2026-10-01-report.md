@@ -29,7 +29,11 @@ a redaction helper that leaked every secret containing a regex character; a widg
 
 ## Verification
 
-On the tip: `verify-config`, `tsc`, ESLint (0 errors), the full jest suite with coverage and the ratchet, and the Gate suite (1,469 tests) - see the last section of the fix log for the final run. Integration found three problems no single package could see (two tests mocking modules whose exports changed under them, one race-prone supervisor test); all three were test-only. The Kotlin changes were compiled and unit-tested by their reviewers; the Swift changes (iOS) could not be compiled on this machine and are the least verified part of this round.
+On the tip: `verify-config`, `tsc`, ESLint (0 errors), the full jest suite with coverage and the ratchet, and the Gate suite (1,469 tests) - see the last section of the fix log for the final run. Integration found three problems no single package could see (two tests mocking modules whose exports changed under them, one race-prone supervisor test); all three were test-only. The Kotlin changes compile in the release build below (and the hands-free notification package's reviewer ran its unit tests); the Swift changes (iOS) could not be compiled on this machine and are the least verified part of this round.
+
+## Build
+
+`C:\Projects\Versutus-apk-outersutus-round2-90e9b1c-20261001-1355.apk` (154 MB, debug-signed release build, built from `90e9b1c` = the pushed tip, which contains round 1 and round 2). SHA-256 `CAECB21181ADEC66AFF8D5DABE34D13712EA4BE8242E4B5826662DB2ED`. Release build: successful. Not sent to the phone.
 
 ## What still needs a device
 
