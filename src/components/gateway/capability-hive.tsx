@@ -1,4 +1,3 @@
-import * as Haptics from 'expo-haptics';
 import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
@@ -15,6 +14,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { entering } from '@/lib/motion/presets';
 import type { GatewayCapabilityGroup, GatewayCapabilitySnapshot } from '@/lib/gateway/types';
+import { haptics } from '@/lib/haptics';
 
 /**
  * Compact "capability hive" micro-visualization for the dashboard. Each cell is
@@ -54,7 +54,7 @@ export function CapabilityHive({
             selected={selected === group.id}
             busy={showBusy}
             onPress={() => {
-              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              void haptics.light();
               setSelected((current) => (current === group.id ? null : group.id));
             }}
           />

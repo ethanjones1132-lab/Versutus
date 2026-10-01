@@ -1,5 +1,4 @@
 import * as Clipboard from 'expo-clipboard';
-import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
@@ -43,6 +42,7 @@ import { openTerminalSession, sendTerminalInput, type TerminalSession } from '@/
 import { describeShellUnavailable, resolveShellSupport } from '@/lib/terminal/shell-support';
 import { terminalKeyboardBehavior } from '@/lib/terminal/keyboard-behavior';
 import { terminalRpcContentPaddingBottom } from '@/lib/terminal/rpc-insets';
+import { haptics } from '@/lib/haptics';
 
 const HISTORY_LIMIT = 40;
 
@@ -123,11 +123,11 @@ export function TerminalScreen() {
       );
       sessionRef.current = session;
       setTerminalConnected(true);
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await haptics.success();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setTerminalError(message);
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      await haptics.error();
     }
   }, [activeGateway, appendOutput, shellReady, status]);
 
@@ -155,7 +155,7 @@ export function TerminalScreen() {
   // Same copy contract as the RPC/Agent CommandLogSheet: the visible lines go
   // to the clipboard as plain text (ANSI stripped), with a copied flash.
   const copyTerminalOutput = useCallback(async () => {
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await haptics.success();
     await Clipboard.setStringAsync(terminalLines.map((line) => ansiPlainText(line.text)).join('\n'));
     setOutputCopied(true);
     if (outputCopiedResetRef.current) clearTimeout(outputCopiedResetRef.current);
@@ -171,7 +171,7 @@ export function TerminalScreen() {
     setInput('');
     setHistoryIndex(-1);
     setInputHistory((previous) => [value, ...previous.filter((item) => item !== value)].slice(0, HISTORY_LIMIT));
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await haptics.light();
     try {
       await sendTerminalInput(gateway.url, session.sid, payload, gateway.token);
     } catch (error) {
@@ -221,14 +221,14 @@ export function TerminalScreen() {
           setCommandOutput(summary);
           setCommandLog(JSON.stringify(result, null, 2));
         }
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        await haptics.success();
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setTerminalError(message);
         setLastFailedCommand(command);
         setCommandOutput(`Command failed: ${message}`);
         setCommandLog(message);
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        await haptics.error();
       } finally {
         setRunningCommandId(null);
       }

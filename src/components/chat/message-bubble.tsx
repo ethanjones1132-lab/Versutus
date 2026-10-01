@@ -1,4 +1,3 @@
-import * as Haptics from 'expo-haptics';
 import { Image } from 'expo-image';
 import { memo, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
@@ -15,6 +14,7 @@ import { entering } from '@/lib/motion/presets';
 import { useTokens } from '@/hooks/use-tokens';
 import { interruptedSendAgainLabel } from '@/lib/gateway/interrupted-copy';
 import type { ChatMessage, CommandTranscriptEntry } from '@/lib/gateway/types';
+import { haptics } from '@/lib/haptics';
 
 type MessageBubbleProps = {
   message: ChatMessage;
@@ -67,7 +67,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
 
   const handleLongPress = async () => {
     if (!onLongPress) return;
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await haptics.medium();
     onLongPress(message);
   };
 
@@ -125,7 +125,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
             <View style={styles.activitySection}>
               <PressableScale
                 onPress={async () => {
-                  await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  await haptics.light();
                   setActivityUserOverride((prev) => (prev !== null ? !prev : !activitySettled));
                 }}
                 accessibilityRole="button"
@@ -208,7 +208,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
           {isInterrupted && onResume ? (
             <PressableScale
               onPress={async () => {
-                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                await haptics.light();
                 onResume(message);
               }}
               hitSlop={CHIP_HIT_SLOP}
@@ -222,7 +222,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
           {!isCommand && !isInterrupted && !message.streaming && !isUser && onResume && message.text.startsWith('Error:') ? (
             <PressableScale
               onPress={async () => {
-                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                await haptics.light();
                 onResume(message);
               }}
               hitSlop={CHIP_HIT_SLOP}
@@ -268,7 +268,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
               {commandStatus === 'error' && onRetry && message.command?.input ? (
                 <PressableScale
                   onPress={async () => {
-                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    await haptics.light();
                     onRetry({
                       input: message.command!.input!,
                       title: message.command?.title,
@@ -284,7 +284,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onRetry, onC
               {commandStatus === 'running' && onCancel ? (
                 <PressableScale
                   onPress={async () => {
-                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    await haptics.light();
                     onCancel(message.id);
                   }}
                   hitSlop={CHIP_HIT_SLOP}

@@ -1,4 +1,3 @@
-import * as Haptics from 'expo-haptics';
 import { ReactNode, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
   Keyboard,
@@ -25,6 +24,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Motion, Palette, Radius } from '@/constants/tokens';
 import { sentenceCase } from '@/lib/copy/sentence-case';
+import { haptics } from '@/lib/haptics';
 import {
   sheetAnchoredEdgeMargin,
   sheetContentPaddingBottom,
@@ -190,7 +190,7 @@ export function BaseSheet({
             settleBack();
             return;
           }
-          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          void haptics.light();
           flyOut();
           onClose?.();
         },
@@ -207,7 +207,7 @@ export function BaseSheet({
 
   const handleBackdrop = () => {
     if (onClose) {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      void haptics.light();
       onClose();
     }
   };
@@ -224,7 +224,7 @@ export function BaseSheet({
       {onClose ? (
         <PressableScale
           onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            await haptics.light();
             onClose();
           }}
           hitSlop={12}

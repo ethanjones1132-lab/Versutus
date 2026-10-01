@@ -1,4 +1,3 @@
-import * as Haptics from 'expo-haptics';
 import { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 
@@ -6,6 +5,7 @@ import { BaseSheet } from './BaseSheet';
 import { Button } from './Button';
 import { Text } from './Text';
 import { Spacing } from '@/constants/tokens';
+import { haptics } from '@/lib/haptics';
 
 export type ConfirmSheetProps = {
   visible: boolean;
@@ -36,7 +36,7 @@ export function ConfirmSheet({
 }: ConfirmSheetProps) {
   useEffect(() => {
     if (visible) {
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      void haptics.warning();
     }
   }, [visible]);
 
@@ -53,7 +53,7 @@ export function ConfirmSheet({
             variant={danger ? 'primary' : 'secondary'}
             busy={busy}
             onPress={() => {
-              void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              void haptics.success();
               onConfirm();
             }}
           />

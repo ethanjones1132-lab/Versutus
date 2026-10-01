@@ -1,4 +1,3 @@
-import * as Haptics from 'expo-haptics';
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import { Keyboard, SectionList, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -10,6 +9,7 @@ import type { SlashCommandSuggestion } from '@/lib/gateway/slash-commands';
 import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { filterPaletteSuggestions, groupSuggestionsByFamily } from '@/lib/gateway/slash-palette';
 import { paletteListMaxHeight } from '@/lib/motion/slash-palette-height';
+import { haptics } from '@/lib/haptics';
 
 export type SlashCommandPaletteProps = {
   visible: boolean;
@@ -150,7 +150,7 @@ export function SlashCommandPalette({
                 accessibilityLabel={`Command ${item.label}`}
                 accessibilityState={{ disabled: item.unavailable }}
                 onPress={async () => {
-                  await Haptics.selectionAsync();
+                  await haptics.selection();
                   onSelect(item.value);
                   onClose();
                 }}

@@ -38,7 +38,7 @@ describe('terminal shell live-output copy', () => {
 
   test('copy feedback confirms with a success haptic and a copied state', () => {
     const file = readScreen();
-    expect(file).toMatch(/Haptics\.NotificationFeedbackType\.Success/);
+    expect(file).toMatch(/haptics\.success\(\)/);
     expect(file).toMatch(/setOutputCopied\(true\)/);
     expect(file).toMatch(/outputCopied \? 'Copied' : 'Copy'/);
   });
@@ -60,6 +60,6 @@ describe('terminal shell live-output copy', () => {
   test('CommandLogSheet copyAll is byte-identical', () => {
     const file = readLogSheet();
     expect(file).toMatch(/await Clipboard\.setStringAsync\(log\);/);
-    expect(file).toMatch(/Haptics\.NotificationFeedbackType\.Success/);
+    expect(file).toMatch(/haptics\.success\(\)/);
   });
 });

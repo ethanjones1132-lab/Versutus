@@ -71,5 +71,5 @@ test('the chip row, the boxed utility button and their styles are gone', () => {
   expect(src).toContain('styles.pill');
   // Selection haptics survive: every `+` menu row still taps through the
   // safe vocabulary on selection.
-  expect(src).toContain('Haptics.selectionAsync()');
+  expect(src).toContain('haptics.selection()');
 });

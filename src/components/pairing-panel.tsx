@@ -1,5 +1,4 @@
 import * as Clipboard from 'expo-clipboard';
-import * as Haptics from 'expo-haptics';
 import { useCallback, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
@@ -8,6 +7,7 @@ import { Card, PressableScale, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { PairingDetails } from '@/lib/gateway/types';
+import { haptics } from '@/lib/haptics';
 
 type CopyKind = 'id' | 'cmd';
 
@@ -26,7 +26,7 @@ function CopyRow({ label, value, copied, kind, onCopy }: CopyRowProps) {
         {label}
       </Text>
       <PressableScale style={styles.copyRow} onPress={async () => {
-        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        await haptics.light();
         void onCopy(value, kind);
       }}>
         <Text variant="mono" style={styles.copyValue} numberOfLines={2}>
@@ -55,7 +55,7 @@ export function PairingPanel({
 
   const copyText = useCallback(async (text: string, kind: CopyKind) => {
     await Clipboard.setStringAsync(text);
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await haptics.light();
     setCopied(kind);
     setTimeout(() => setCopied(null), 2000);
   }, []);

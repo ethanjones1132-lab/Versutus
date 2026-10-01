@@ -160,7 +160,7 @@ describe('every gateway and settings flow the tone pass left alone', () => {
   it('hive selection haptics and the ready count still drive the grid', () => {
     const source = hive();
     for (const needle of [
-      'void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);',
+      'void haptics.light();',
       'setSelected((current) => (current === group.id ? null : group.id));',
       'const ready = counted.filter((group) => group.status === \'ready\' || group.status === \'available\').length;',
       '{ready}/{counted.length} ready',

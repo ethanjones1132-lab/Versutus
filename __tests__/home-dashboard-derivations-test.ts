@@ -74,6 +74,10 @@ describe('home hero action organization', () => {
     const retryBlock = src.match(/\{!connected && !shownConnectionError \? \([\s\S]*?\) : null\}/)?.[0];
     expect(retryBlock).toBeDefined();
     expect(retryBlock).toContain('label="Retry connection"');
+    // The retry haptic goes through the wrapper (HAPTIC-1 / ONB-1): a rejected
+    // `expo-haptics` call must not be able to stop the retry below it.
+    expect(retryBlock).toContain('await haptics.light();');
+    expect(retryBlock).toContain('void retryAutoConnect();');
   });
 
   test('fleet and council share one grouped action row with their targets, haptics, and disabled gating', () => {
@@ -82,7 +86,7 @@ describe('home hero action organization', () => {
     expect(row).toBeDefined();
     expect(row).toContain("router.push('/fleet')");
     expect(row).toContain("router.push('/council')");
-    expect(row).toContain('Haptics.impactAsync');
+    expect(row).toContain('haptics.light()');
     expect(row).toContain('disabled={!connected}');
     // Neither target is a stacked ghost outside the row any more.
     const withoutRow = src.replace(/<View style=\{styles\.primaryActions\}>[\s\S]*?<\/View>/, '');

@@ -1,4 +1,3 @@
-import * as Haptics from 'expo-haptics';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
@@ -7,6 +6,7 @@ import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import type { ChatToolCall } from '@/lib/gateway/types';
+import { haptics } from '@/lib/haptics';
 
 const STATUS_TONE = {
   running: 'warning',
@@ -57,7 +57,7 @@ export function ToolCallCard({ toolCall }: { toolCall: ChatToolCall }) {
         <View style={styles.detailSection}>
           <PressableScale
             onPress={async () => {
-              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              await haptics.light();
               setDetailUserOverride((prev) => (prev !== null ? !prev : status !== 'error'));
             }}
             accessibilityRole="button"

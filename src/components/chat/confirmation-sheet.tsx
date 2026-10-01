@@ -1,10 +1,10 @@
-import * as Haptics from 'expo-haptics';
 import { StyleSheet, View } from 'react-native';
 
 import { Badge, BaseSheet, Button, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 import type { GatewayActionPreview } from '@/lib/gateway/types';
+import { haptics } from '@/lib/haptics';
 
 function confirmLabelForPreview(preview: GatewayActionPreview): string {
   const cmd = preview.applyCommand.toLowerCase();
@@ -101,7 +101,7 @@ export function ConfirmationSheet({
           label="Cancel"
           variant="secondary"
           onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            await haptics.light();
             onCancel();
           }}
           style={styles.footerButton}
@@ -109,11 +109,7 @@ export function ConfirmationSheet({
         <Button
           label={confirmLabelForPreview(preview)}
           onPress={async () => {
-            await Haptics.notificationAsync(
-              preview.risk === 'high'
-                ? Haptics.NotificationFeedbackType.Warning
-                : Haptics.NotificationFeedbackType.Success,
-            );
+            await (preview.risk === 'high' ? haptics.warning() : haptics.success());
             onConfirm();
           }}
           style={styles.footerPrimary}

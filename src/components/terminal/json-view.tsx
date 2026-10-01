@@ -1,11 +1,11 @@
 import * as Clipboard from 'expo-clipboard';
-import * as Haptics from 'expo-haptics';
 import { useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/ui';
 import { FontFamily, Spacing, type SemanticPalette } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
+import { haptics } from '@/lib/haptics';
 import {
   flattenJsonTreeRows,
   jsonTreeNode,
@@ -36,7 +36,7 @@ export function JsonView({ value, maxDepth = 2 }: Props) {
   const rows = useMemo(() => flattenJsonTreeRows(root, expanded), [root, expanded]);
 
   const toggle = (path: string) => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void haptics.light();
     setExpanded((current) => {
       const next = new Set(current);
       if (next.has(path)) next.delete(path);
@@ -46,7 +46,7 @@ export function JsonView({ value, maxDepth = 2 }: Props) {
   };
 
   const copy = async (text: string) => {
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await haptics.success();
     await Clipboard.setStringAsync(text);
   };
 

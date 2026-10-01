@@ -1,4 +1,3 @@
-import * as Haptics from 'expo-haptics';
 import { memo, useEffect, useRef, useState, useSyncExternalStore, type Ref } from 'react';
 import {
   Keyboard,
@@ -190,11 +189,11 @@ export const ChatComposer = memo(function ChatComposer({
   const handleAction = async () => {
     setMenuOpen(false);
     if (isStreaming) {
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      await haptics.warning();
       onStop();
       return;
     }
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await haptics.light();
     // The message leaves as light: a ring from the orb, a glint across the
     // glass — and the stage's swell rises from here (src/lib/stage/signals).
     setLaunches((n) => n + 1);
@@ -315,7 +314,7 @@ export const ChatComposer = memo(function ChatComposer({
                   accessibilityRole="button"
                   accessibilityLabel="Attach an image"
                   onPress={async () => {
-                    await Haptics.selectionAsync();
+                    await haptics.selection();
                     setMenuOpen(false);
                     onAttach();
                   }}>
@@ -333,7 +332,7 @@ export const ChatComposer = memo(function ChatComposer({
                   accessibilityRole="button"
                   accessibilityLabel={HANDSFREE_START_LABEL}
                   onPress={async () => {
-                    await Haptics.selectionAsync();
+                    await haptics.selection();
                     setMenuOpen(false);
                     onStartCall();
                   }}>
@@ -350,7 +349,7 @@ export const ChatComposer = memo(function ChatComposer({
                     <PressableScale
                       key={action.label}
                       onPress={async () => {
-                        await Haptics.selectionAsync();
+                        await haptics.selection();
                         setMenuOpen(false);
                         onSelectSlashSuggestion?.(action.draft);
                       }}
@@ -369,7 +368,7 @@ export const ChatComposer = memo(function ChatComposer({
               {dockUtilities.includes('browse-commands') && onBrowseCommands ? (
                 <PressableScale
                   onPress={async () => {
-                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    await haptics.light();
                     setMenuOpen(false);
                     onBrowseCommands();
                   }}
@@ -416,7 +415,7 @@ export const ChatComposer = memo(function ChatComposer({
                     accessibilityRole="button"
                     accessibilityLabel={`Mention ${label}`}
                     onPress={async () => {
-                      await Haptics.selectionAsync();
+                      await haptics.selection();
                       onSelectMention(botId);
                     }}>
                     <View style={styles.paletteRow}>
@@ -468,7 +467,7 @@ export const ChatComposer = memo(function ChatComposer({
                     accessibilityState={{ disabled: unavailable }}
                     onPress={async () => {
                       if (!unavailable) {
-                        await Haptics.selectionAsync();
+                        await haptics.selection();
                         onSelectSlashSuggestion?.(item.value);
                       }
                     }}>
@@ -504,7 +503,7 @@ export const ChatComposer = memo(function ChatComposer({
                   accessibilityRole="button"
                   accessibilityLabel="Browse all commands"
                   onPress={async () => {
-                    await Haptics.selectionAsync();
+                    await haptics.selection();
                     onBrowseCommands();
                   }}>
                   <View style={styles.paletteRow}>
@@ -562,7 +561,7 @@ export const ChatComposer = memo(function ChatComposer({
             // the one-tap commands, browse).
             <PressableScale
               onPress={async () => {
-                await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                await haptics.light();
                 setMenuOpen((open) => !open);
               }}
               hitSlop={6}

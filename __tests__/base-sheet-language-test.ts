@@ -101,7 +101,8 @@ describe('BaseSheet open/close and confirm flows are untouched', () => {
     const src = readBaseSheet();
     expect(src).toContain('if (!mounted) return null;');
     expect(src).toContain('accessibilityLabel="Dismiss sheet"');
-    expect(src).toContain('Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)');
+    // The close haptic, still Light, now via the wrapper that cannot reject.
+    expect(src).toContain('haptics.light()');
     expect(src).toContain('onRequestClose={onClose}');
   });
 

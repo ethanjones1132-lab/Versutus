@@ -79,7 +79,7 @@ describe('MessageBubble activity/raw toggles screen-reader state', () => {
     // The activity toggle fires a Light haptic before flipping the override;
     // the raw toggle is a plain state flip with no haptic.
     expect(src).toMatch(
-      /<PressableScale[\s\S]*?Haptics\.impactAsync\(Haptics\.ImpactFeedbackStyle\.Light\)[\s\S]*?style=\{styles\.activityToggle\}/,
+      /<PressableScale[\s\S]*?haptics\.light\(\)[\s\S]*?style=\{styles\.activityToggle\}/,
     );
     expect(src).toContain('onPress={() => setRawOpen((open) => !open)}');
   });

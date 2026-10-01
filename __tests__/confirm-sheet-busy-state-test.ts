@@ -51,7 +51,8 @@ describe('confirm sheet busy state', () => {
   test('the confirm Button keeps its variant and haptics wiring', () => {
     const src = readConfirmSheet();
     expect(src).toContain("variant={danger ? 'primary' : 'secondary'}");
-    expect(src).toContain('Haptics.NotificationFeedbackType.Success');
+    // The success haptic, now via the wrapper that cannot reject.
+    expect(src).toContain('haptics.success()');
     expect(src).toContain('onConfirm();');
   });
 

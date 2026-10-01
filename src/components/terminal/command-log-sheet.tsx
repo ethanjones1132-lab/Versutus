@@ -1,5 +1,4 @@
 import * as Clipboard from 'expo-clipboard';
-import * as Haptics from 'expo-haptics';
 import { useMemo } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -8,6 +7,7 @@ import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
 
 import { describeCommandResult } from '@/lib/terminal/json-tree';
+import { haptics } from '@/lib/haptics';
 
 import { CommandResultView } from './command-result-view';
 
@@ -26,12 +26,12 @@ export function CommandLogSheet({
   const tokens = useTokens();
 
   const handleClose = async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await haptics.light();
     onClose();
   };
 
   const copyAll = async () => {
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    await haptics.success();
     await Clipboard.setStringAsync(log);
   };
 

@@ -38,8 +38,11 @@ describe('FUTURE-ITEMS open cites describe the live tree', () => {
   test('P1 keeps the live composer-draw and supportsImageInput cites', () => {
     expect(p1Section).toContain('`src/components/chat/chat-composer.tsx:312-330`');
     expect(p1Section).toContain('`src/lib/gateway/chat-parts.ts:92`');
-    expect(chatComposer[311]).toContain('onAttach && !callActive && !isStreaming');
-    expect(chatComposer.slice(311, 330).join('\n')).toContain('accessibilityLabel="Attach an image"');
+    // The attach row is one line higher than the doc cite: dropping the
+    // `expo-haptics` import from the composer (HAPTIC-1) shortened the file
+    // by one. The row itself is the one the cite names.
+    expect(chatComposer[310]).toContain('onAttach && !callActive && !isStreaming');
+    expect(chatComposer.slice(310, 329).join('\n')).toContain('accessibilityLabel="Attach an image"');
     expect(chatParts[91]).toContain('export function supportsImageInput');
   });
 

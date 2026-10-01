@@ -1,9 +1,9 @@
-import * as Haptics from 'expo-haptics';
 import { Pressable, StyleSheet } from 'react-native';
 
 import { Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
+import { haptics } from '@/lib/haptics';
 
 export function CommandChip({ label, onPress }: { label: string; onPress: () => void }) {
   const tokens = useTokens();
@@ -12,7 +12,7 @@ export function CommandChip({ label, onPress }: { label: string; onPress: () => 
     <Pressable
       style={[styles.chip, { borderColor: tokens.border, backgroundColor: tokens.backgroundElevated }]}
       onPress={async () => {
-        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        await haptics.light();
         onPress();
       }}>
       <Text variant="caption">{label}</Text>

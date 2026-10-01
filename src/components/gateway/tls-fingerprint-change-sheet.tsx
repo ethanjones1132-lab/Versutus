@@ -1,10 +1,10 @@
-import * as Haptics from 'expo-haptics';
 import { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { BaseSheet, Button, Divider, Text } from '@/components/ui';
 import { Radius, Spacing } from '@/constants/tokens';
 import { useTokens } from '@/hooks/use-tokens';
+import { haptics } from '@/lib/haptics';
 
 export type TlsFingerprintChangeSheetProps = {
   visible: boolean;
@@ -39,7 +39,7 @@ export function TlsFingerprintChangeSheet({
 
   useEffect(() => {
     if (visible) {
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      void haptics.warning();
     }
   }, [visible]);
 
@@ -103,7 +103,7 @@ export function TlsFingerprintChangeSheet({
             label="Trust new fingerprint"
             variant="secondary"
             onPress={() => {
-              void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              void haptics.success();
               onApprove();
             }}
           />

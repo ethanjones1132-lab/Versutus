@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import * as Haptics from 'expo-haptics';
 
 import { EnvironmentActionsSheet } from '@/components/gateway/environment-actions-sheet';
 import { Badge, Button, Card, Icon, PressableScale, Text } from '@/components/ui';
@@ -9,6 +8,7 @@ import { Spacing } from '@/constants/tokens';
 import { environmentPrimaryAction, environmentRunBudgetLine } from '@/lib/gateway/entity-actions';
 import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import type { EnvironmentSnapshot } from '@/lib/gateway/environment-types';
+import { haptics } from '@/lib/haptics';
 
 export type EnvironmentCardProps = {
   environment: EnvironmentSnapshot;
@@ -72,7 +72,7 @@ export function EnvironmentCard({ environment, onCheck, onStart, onStop, onRun, 
         <Button
           label={primary.label}
           onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            await haptics.light();
             handlers[primary.id]?.();
           }}
           style={styles.primary}

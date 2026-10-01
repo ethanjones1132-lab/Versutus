@@ -1,5 +1,4 @@
 import * as Clipboard from 'expo-clipboard';
-import * as Haptics from 'expo-haptics';
 import { Link, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
@@ -33,6 +32,7 @@ import {
   saveAppLock,
   type AppLockUnavailableReason,
 } from '@/lib/settings/app-lock';
+import { haptics } from '@/lib/haptics';
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
 import { deviceAppLockState } from '@/lib/settings/app-lock-device';
 import {
@@ -436,7 +436,7 @@ export default function GatewaySettingsScreen() {
 
   const copyText = useCallback(async (text: string) => {
     await Clipboard.setStringAsync(text);
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await haptics.light();
     setCopied('id');
     setTimeout(() => setCopied(null), 2000);
   }, []);

@@ -1,10 +1,10 @@
-import * as Haptics from 'expo-haptics';
 import { Pressable, StyleSheet } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
 import { GlassSurface, Text } from '@/components/ui';
 import { Palette, Spacing } from '@/constants/tokens';
 import { springSnappy } from '@/lib/motion/presets';
+import { haptics } from '@/lib/haptics';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -35,7 +35,7 @@ export function PreviewScenarioChip({
         scale.value = withSpring(1, springSnappy);
       }}
       onPress={() => {
-        void Haptics.selectionAsync();
+        void haptics.selection();
         onPress();
       }}
       style={animatedStyle}>

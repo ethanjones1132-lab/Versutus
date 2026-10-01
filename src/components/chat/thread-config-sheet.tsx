@@ -1,4 +1,3 @@
-import * as Haptics from 'expo-haptics';
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { FlatList, Keyboard, SectionList, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -39,6 +38,7 @@ import {
 } from '@/lib/gateway/thread-config';
 import { useTokens } from '@/hooks/use-tokens';
 import { threadConfigListMaxHeight } from '@/lib/motion/thread-config-list-height';
+import { haptics } from '@/lib/haptics';
 
 function subscribeKeyboardHeight(onChange: () => void) {
   const show = Keyboard.addListener('keyboardDidShow', onChange);
@@ -259,7 +259,7 @@ function SessionsSection({
   }, []);
 
   const submitNewSession = useCallback(async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await haptics.light();
     onNewSession?.(sessionCreateTitle(nameDraft));
     setNameDraft('');
   }, [nameDraft, onNewSession]);
@@ -288,7 +288,7 @@ function SessionsSection({
 
   const togglePin = useCallback(
     async (item: SessionItem) => {
-      await Haptics.selectionAsync();
+      await haptics.selection();
       writeLabel(item.id, { pinned: labelFor(item.id)?.pinned !== true });
     },
     [labelFor, writeLabel],
@@ -296,7 +296,7 @@ function SessionsSection({
 
   const startRename = useCallback(
     async (item: SessionItem) => {
-      await Haptics.selectionAsync();
+      await haptics.selection();
       // A second tap on the same row's Rename closes the field unwritten.
       if (renamingId === item.id) {
         setRenamingId(null);
@@ -330,7 +330,7 @@ function SessionsSection({
     }
     setOpening(true);
     setOpenError(null);
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await haptics.light();
     try {
       const result = await reader(id);
       if (result.ok) {
@@ -371,7 +371,7 @@ function SessionsSection({
             accessibilityLabel={`Switch to session ${sessionLabelTitle(item.title, label)}`}
             accessibilityState={{ selected: isCurrent }}
             onPress={async () => {
-              await Haptics.selectionAsync();
+              await haptics.selection();
               onSelect?.(item.id);
             }}>
             {isCurrent ? <CurrentBar /> : null}
@@ -605,7 +605,7 @@ function SessionsSection({
           disabled={loadingOlderSessions}
           busy={loadingOlderSessions}
           onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            await haptics.light();
             onShowOlder();
           }}
           style={styles.refresh}
@@ -622,7 +622,7 @@ function SessionsSection({
           variant="ghost"
           size="sm"
           onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            await haptics.light();
             onRefresh();
           }}
           style={styles.refresh}
@@ -710,7 +710,7 @@ function ModelsSection({
 
   const toggleSection = useCallback(
     async (key: string) => {
-      await Haptics.selectionAsync();
+      await haptics.selection();
       setExpanded((prev) => ({ ...prev, [key]: !(prev[key] ?? key === fallbackExpandedKey) }));
     },
     [fallbackExpandedKey],
@@ -748,7 +748,7 @@ function ModelsSection({
             accessibilityLabel={`Apply model ${name}`}
             accessibilityState={{ selected: isCurrent, disabled: item.available === false || locked }}
             onPress={async () => {
-              await Haptics.selectionAsync();
+              await haptics.selection();
               onSelect?.(item.id, item.providerId ?? item.provider);
             }}>
             {isCurrent ? <CurrentBar /> : null}
@@ -911,7 +911,7 @@ function ModelsSection({
           variant="ghost"
           size="sm"
           onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            await haptics.light();
             onRefresh();
           }}
           style={styles.refresh}

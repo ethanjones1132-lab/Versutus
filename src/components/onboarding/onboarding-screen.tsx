@@ -1,4 +1,3 @@
-import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
@@ -22,6 +21,7 @@ import { entering } from '@/lib/motion/presets';
 import { onboardingKeyboardBehavior } from '@/lib/onboarding/keyboard-behavior';
 import { deriveWizardCta } from '@/lib/onboarding/wizard-cta';
 import { validatePcAddress } from '@/lib/onboarding/validate-pc-address';
+import { haptics } from '@/lib/haptics';
 
 export function OnboardingScreen() {
   const router = useRouter();
@@ -47,13 +47,13 @@ export function OnboardingScreen() {
   async function handleContinue() {
     if (!validation.valid) return;
 
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await haptics.medium();
     setError(null);
     setWorking(true);
     try {
       const result = await setupFromPcAddress(pcAddress, token);
       if (result.kind === 'connected') {
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        await haptics.success();
         router.replace('/(tabs)/chat');
       } else if (result.kind === 'tls-fingerprint-change') {
         setError(
@@ -67,7 +67,7 @@ export function OnboardingScreen() {
         );
       }
     } catch (err) {
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      await haptics.error();
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setWorking(false);

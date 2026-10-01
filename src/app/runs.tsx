@@ -1,4 +1,3 @@
-import * as Haptics from 'expo-haptics';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, KeyboardAvoidingView, Platform, RefreshControl, StyleSheet, View } from 'react-native';
@@ -19,6 +18,7 @@ import { useGateway } from '@/context/gateway-provider';
 import { useNow } from '@/hooks/use-now';
 import { useTokens } from '@/hooks/use-tokens';
 import { filterRunsByBot, type ScorecardFilter } from '@/lib/fleet/scorecard';
+import { haptics } from '@/lib/haptics';
 import { useAmbientParallaxScroll } from '@/lib/motion/ambient-parallax';
 import { screenEdgesFor } from '@/lib/motion/screen-edges';
 import { tabContentPaddingBottom } from '@/lib/motion/tab-insets';
@@ -143,8 +143,11 @@ export default function RunsScreen() {
     const prompt = runPrompt.trim();
     if (!prompt || !runsSupported || starting) return;
     setStarting(true);
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
+      // Inside the try so nothing between here and the send can skip the
+      // `finally` and wedge the card on "Starting…". The wrapper cannot
+      // reject; the ordering is the guarantee.
+      await haptics.medium();
       // Route through slash so Activity + chat command bubble stay consistent.
       // Clear the draft only when the command completed: a refusal still
       // lands its "Command failed" bubble in chat, and the prompt stays so

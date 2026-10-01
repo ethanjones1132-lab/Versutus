@@ -2,7 +2,6 @@ import { Link, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import * as Haptics from 'expo-haptics';
 
 import { PulsingDot, statusColor } from '@/components/connection-badge';
 import { connectionErrorShown } from '@/lib/connection/stale-error';
@@ -27,6 +26,7 @@ import { useTokens } from '@/hooks/use-tokens';
 import { describeAutoRetry } from '@/lib/connection/retry-ladder';
 import { humanizeGatewayError } from '@/lib/gateway/error-humanizer';
 import type { GatewayProfile } from '@/lib/gateway/types';
+import { haptics } from '@/lib/haptics';
 import { describeHomeEmptyState } from '@/lib/home/home-empty-state';
 
 export function GatewayHomeDashboard() {
@@ -356,7 +356,7 @@ export function GatewayHomeDashboard() {
           <Button
             label="Retry connection"
             onPress={async () => {
-              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              await haptics.light();
               void retryAutoConnect();
             }}
             variant="ghost"
@@ -368,7 +368,7 @@ export function GatewayHomeDashboard() {
           <Button
             label="Open fleet map"
             onPress={async () => {
-              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              await haptics.light();
               router.push('/fleet');
             }}
             disabled={!connected}
@@ -379,7 +379,7 @@ export function GatewayHomeDashboard() {
           <Button
             label="Compare Bots"
             onPress={async () => {
-              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              await haptics.light();
               router.push('/council');
             }}
             disabled={!connected}
@@ -395,7 +395,7 @@ export function GatewayHomeDashboard() {
       <ChannelStatusRow
         group={channelGroup}
         onPress={async () => {
-          await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          await haptics.light();
           router.push('/chat');
         }}
       />
@@ -430,7 +430,7 @@ export function GatewayHomeDashboard() {
             variant="secondary"
             size="sm"
             onPress={async () => {
-              await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              await haptics.light();
               router.push('/activity');
             }}
           />
@@ -505,7 +505,7 @@ export function GatewayHomeDashboard() {
           label="Refresh capabilities"
           variant="ghost"
           onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            await haptics.light();
             void refreshCapabilities();
           }}
           style={{ alignSelf: 'flex-end', marginTop: -Spacing.one }}

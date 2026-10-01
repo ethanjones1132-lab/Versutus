@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import * as Haptics from 'expo-haptics';
 
 import { ProviderActionsSheet } from '@/components/gateway/provider-actions-sheet';
 import { Badge, Button, Card, Icon, PressableScale, Text } from '@/components/ui';
@@ -10,6 +9,7 @@ import { CHIP_HIT_SLOP } from '@/lib/motion/chip-hit-slop';
 import { providerPrimaryAction } from '@/lib/gateway/entity-actions';
 import type { ProviderSnapshot } from '@/lib/gateway/provider-types';
 import { providerUiState } from '@/lib/gateway/provider-state';
+import { haptics } from '@/lib/haptics';
 
 export type ProviderCardProps = {
   snapshot: ProviderSnapshot;
@@ -76,7 +76,7 @@ export function ProviderCard(props: ProviderCardProps) {
         <Button
           label={primary.label}
           onPress={async () => {
-            await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            await haptics.light();
             handlers[primary.id]?.();
           }}
           style={styles.primary}
