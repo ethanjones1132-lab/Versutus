@@ -19,7 +19,11 @@ import {
   isDownNoticeFor,
 } from './gateway-down-notice';
 import { APPROVAL_CATEGORY_ID, APPROVAL_NOTICE_DATA_KIND } from './categories';
-import type { RunProgressNotice } from './run-progress';
+import {
+  RUN_PROGRESS_NOTICE_PREFIX,
+  runProgressNoticeIdentifier,
+  type RunProgressNotice,
+} from './run-progress';
 import { RUN_NOTICE_DATA_KIND } from './tap-route';
 
 let permissionGranted = false;
@@ -58,6 +62,16 @@ function rememberDenial(): void {
 }
 
 /**
+ * The one permission answer this process is waiting on, so concurrent callers
+ * share a single evaluation: N notices folded in the same tick (a re-arm fanning
+ * out over every routine) would otherwise each read the phone and each ask it
+ * for the dialog, all before the first answer had set the cache. Cleared as
+ * soon as the evaluation settles, so the next caller starts from the cached
+ * grant, the remembered refusal, or a fresh read.
+ */
+let permissionCheckInFlight: Promise<boolean> | null = null;
+
+/**
  * Whether a notice may be drawn, asking the phone only when asking can work.
  *
  * This used to cache `granted === true` and call `requestPermissionsAsync()` on
@@ -68,10 +82,25 @@ function rememberDenial(): void {
  * re-ask, and the dialog is requested only from an undetermined state while the
  * app is in the foreground, which is the one place it can be shown. Best-effort
  * throughout — a notice is never worth an exception.
+ *
+ * Shared with the scheduled routine notices (routine-sync.ts), which kept a
+ * private copy of the older asking gate and asked once per routine per
+ * re-arm. One gate, one answer, for every poster on the phone.
  */
-async function ensurePermission(): Promise<boolean> {
+export async function ensureNotificationPermission(): Promise<boolean> {
   if (permissionGranted) return true;
   if (denialRemembered()) return false;
+  if (permissionCheckInFlight) return permissionCheckInFlight;
+  const check = readPermission();
+  permissionCheckInFlight = check;
+  try {
+    return await check;
+  } finally {
+    if (permissionCheckInFlight === check) permissionCheckInFlight = null;
+  }
+}
+
+async function readPermission(): Promise<boolean> {
   try {
     const current = await Notifications.getPermissionsAsync();
     if (current.granted) {
@@ -121,7 +150,7 @@ async function present(
   androidNotice?: { identifier: string; channelId: string },
 ): Promise<string | null> {
   if (isForegrounded() && !allowForeground) return null;
-  if (!(await ensurePermission())) return null;
+  if (!(await ensureNotificationPermission())) return null;
   try {
     return await Notifications.scheduleNotificationAsync({
       ...(androidNotice ? { identifier: androidNotice.identifier } : {}),
@@ -216,10 +245,15 @@ export async function notifyApprovalDecided(decision: ApprovalDecision): Promise
  * offline outbox says it is saved and waiting on a connection, and a reply
  * whose Bot Chat could not be opened says nothing was sent. Neither claims the
  * Bot received anything — the reply's own words are the only text involved.
+ *
+ * Drawn while the app is up, on purpose: the Reply action that leads here
+ * foregrounds the app to open the Bot Chat, so the ordinary foreground refusal
+ * would swallow the one notice that tells the operator their words went
+ * nowhere — the failure is only ever heard by the person holding the phone.
  */
 export async function notifyBotReplyNotSent(reason: BotReplyNoticeReason): Promise<void> {
   const copy = botReplyNoticeCopy(reason);
-  await present(copy.title, copy.body);
+  await present(copy.title, copy.body, true);
 }
 
 /**
@@ -229,9 +263,13 @@ export async function notifyBotReplyNotSent(reason: BotReplyNoticeReason): Promi
  * (session-open-by-id.ts) refuses to switch on a missing id. So the miss is
  * named rather than swallowed, and the message arrives already whole
  * (openSessionByIdFailureText names the id it was about).
+ *
+ * Drawn while the app is up for the same reason as the reply above: the tap
+ * that reached this is the tap that foregrounded the app, so refusing to draw
+ * here is refusing to draw the only copy the operator will ever get.
  */
 export async function notifySessionOpenFailed(message: string): Promise<void> {
-  await present('Session not opened', message);
+  await present('Session not opened', message, true);
 }
 
 /**
@@ -390,6 +428,29 @@ export function installForegroundNotificationHandler(): void {
 }
 
 /**
+ * The shortest gap between two tray posts for the SAME run, and why it exists.
+ *
+ * Every run event re-folds §7's notice (the driver is the run rows), so a long
+ * run streaming tool output asked the phone to draw, rebuild and notify once per
+ * event — for a tray entry whose text changes only every few seconds. Five
+ * seconds bounds that to what a locked screen can usefully show, and the copy
+ * the window posts is the LATEST one (trailing), so a throttled post never
+ * leaves the tray behind the run.
+ */
+const RUN_PROGRESS_THROTTLE_MS = 5_000;
+
+type RunProgressThrottle = {
+  /** When the last post for this identifier went out. */
+  lastPostedAt: number;
+  /** The newest state the throttle window is holding, posted when it opens. */
+  pending?: Extract<RunProgressNotice, { verb: 'update' }>;
+  /** The one-shot that posts `pending`, if the window is still open. */
+  timer?: ReturnType<typeof setTimeout>;
+};
+
+const runProgressThrottles = new Map<string, RunProgressThrottle>();
+
+/**
  * Post one run's progress notice (§7's ongoing notice, item 7a's copy).
  *
  * The identifier is the run's own, so every update for that run REPLACES the
@@ -403,6 +464,12 @@ export function installForegroundNotificationHandler(): void {
  * gate's call — `present` refuses while the app is foregrounded, where the
  * operator already has the run card in front of them.
  *
+ * At most one post per run per {@link RUN_PROGRESS_THROTTLE_MS}, trailing: the
+ * first post of a run is never delayed, a post inside the window is held as the
+ * window's newest state, and the ending is never this notice's to say (a
+ * `retire` is `dismissRunProgress`'s). The throttle lives here, on the poster,
+ * so it covers every caller rather than one call site.
+ *
  * A `retire` never reaches here: that arm is `dismissRunProgress`'s, because a
  * run's ending is `notifyRunComplete`'s to say, not this notice's.
  */
@@ -413,6 +480,12 @@ export async function notifyRunProgress(
   // Before the notice: the trigger below names this channel, and a post that
   // overtook its channel would land on the app's default one.
   await ensureRunProgressChannel();
+  await throttleRunProgress(notice);
+}
+
+async function drawRunProgress(
+  notice: Extract<RunProgressNotice, { verb: 'update' }>,
+): Promise<void> {
   await present(notice.title, notice.body, undefined, notice.data, undefined, {
     identifier: notice.identifier,
     channelId: RUN_PROGRESS_CHANNEL_ID,
@@ -420,14 +493,123 @@ export async function notifyRunProgress(
 }
 
 /**
+ * Ask for one update, coalescing to at most one post per throttle window.
+ *
+ * Outside the window the state is drawn now and becomes the window's baseline.
+ * Inside it, the state becomes the window's newest — which the open window's
+ * timer posts, so the tray ends the window holding the LATEST state rather than
+ * the first one it happened to swallow.
+ */
+function throttleRunProgress(
+  notice: Extract<RunProgressNotice, { verb: 'update' }>,
+): Promise<void> {
+  const now = Date.now();
+  const open = runProgressThrottles.get(notice.identifier);
+  const sinceLast = open ? now - open.lastPostedAt : RUN_PROGRESS_THROTTLE_MS;
+  if (sinceLast >= RUN_PROGRESS_THROTTLE_MS) {
+    clearRunProgressWindow(notice.identifier);
+    runProgressThrottles.set(notice.identifier, { lastPostedAt: now });
+    return drawRunProgress(notice);
+  }
+  const throttle: RunProgressThrottle = open ?? { lastPostedAt: now };
+  throttle.pending = notice;
+  runProgressThrottles.set(notice.identifier, throttle);
+  if (!throttle.timer) {
+    throttle.timer = setTimeout(() => {
+      const held = runProgressThrottles.get(notice.identifier);
+      if (!held) return;
+      clearRunProgressWindow(notice.identifier);
+      runProgressThrottles.set(notice.identifier, { lastPostedAt: Date.now() });
+      if (held.pending) void drawRunProgress(held.pending);
+    }, RUN_PROGRESS_THROTTLE_MS - sinceLast);
+  }
+  return Promise.resolve();
+}
+
+function clearRunProgressWindow(identifier: string): void {
+  const throttle = runProgressThrottles.get(identifier);
+  if (throttle?.timer) clearTimeout(throttle.timer);
+  runProgressThrottles.delete(identifier);
+}
+
+/**
+ * Drop every coalescing window this process opened, timers and all.
+ *
+ * Called when the provider unmounts, so a window left open by the last render
+ * before teardown cannot post a held update afterwards for a run nothing is
+ * following any more — the same reason `dismissRunProgress` takes its own window
+ * with it when a run ends.
+ */
+export function clearRunProgressThrottles(): void {
+  for (const throttle of runProgressThrottles.values()) {
+    if (throttle.timer) clearTimeout(throttle.timer);
+  }
+  runProgressThrottles.clear();
+}
+
+/**
+ * The same reset, named for the suites that need it: the windows are time-based
+ * module state, so a suite that posts the same run in several cases would
+ * otherwise inherit the window the case before it left open — the same reason
+ * `resetRunActivitiesForTests` exists for the Lock Screen's held map.
+ */
+export function resetRunProgressThrottleForTests(): void {
+  clearRunProgressThrottles();
+}
+
+/**
  * Retire one run's progress notice, under the identifier its updates were
  * posted with. Best-effort, like every other dismissal here: what settles a run
  * is the run settling, never the tray.
+ *
+ * The throttle window for that identifier goes with it, so a run that settles
+ * mid-window is not handed one last update for a tray entry that has just been
+ * retired.
  */
 export async function dismissRunProgress(identifier: string): Promise<void> {
   if (Platform.OS !== 'android') return;
+  clearRunProgressWindow(identifier);
   try {
     await Notifications.dismissNotificationAsync(identifier);
+  } catch {
+    // best-effort: a stale tray entry is cosmetic, never fatal
+  }
+}
+
+/**
+ * Retire the run-progress notices this process did NOT post.
+ *
+ * Every other retirement path reads `runProgressNoticeIdsRef` in the provider —
+ * an in-process set that starts empty, so a notice posted by a process Android
+ * then killed (`run-progress:<runId>`, a deterministic identifier) was never
+ * retired: the restored row reconciled to complete, `present` refused while the
+ * operator was looking at the app, and the tray went on claiming "Run in
+ * progress" for a finished run until it was swiped away. This asks the tray
+ * itself, so a notice from any process is found.
+ *
+ * Only run-progress notices are touched, and only ones for runs that are no
+ * longer in flight: a live run's notice is the poster's business, and every
+ * other notice on the phone is left exactly where it is. Best-effort — a tray
+ * that cannot be read is a tray that cannot be swept.
+ */
+export async function dismissStaleRunProgress(liveRunIds: string[]): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  const live = new Set(liveRunIds.map((runId) => runProgressNoticeIdentifier(runId)));
+  try {
+    const presented = await Notifications.getPresentedNotificationsAsync();
+    await Promise.all(
+      presented
+        // An expo Notification wraps the request (identifier + content) in a
+        // `request` field; the sweep reads the identifier from there, the way
+        // `dismissGatewayDown` above reads its own.
+        .map((notification) => notification.request)
+        .filter(
+          (request) =>
+            request.identifier.startsWith(RUN_PROGRESS_NOTICE_PREFIX) &&
+            !live.has(request.identifier),
+        )
+        .map((request) => Notifications.dismissNotificationAsync(request.identifier)),
+    );
   } catch {
     // best-effort: a stale tray entry is cosmetic, never fatal
   }

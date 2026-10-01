@@ -8,7 +8,11 @@ import {
   BOT_MESSAGE_CATEGORY_ID,
   BOT_MESSAGE_REPLY_ACTION_ID,
 } from '@/lib/notifications/categories';
-import { notifyBotReplyNotSent } from '@/lib/notifications/local';
+import {
+  notifyBotReplyNotSent,
+  notifyRunComplete,
+  notifySessionOpenFailed,
+} from '@/lib/notifications/local';
 
 jest.mock('expo-notifications', () => ({
   scheduleNotificationAsync: jest.fn(),
@@ -189,13 +193,71 @@ describe('notifyBotReplyNotSent', () => {
     expect(request.trigger).toBeNull();
   });
 
-  test('a follow-up posted while the app is foregrounded is suppressed, like every local notice', async () => {
+  // CHANGED ASSERTION: this used to expect the follow-up to be SUPPRESSED while
+  // the app was foregrounded, which is the shipped rule for an ordinary notice
+  // and the opposite of what this notice is for. The Reply action that reaches
+  // here foregrounds the app to open the Bot Chat, so the refusal swallowed the
+  // one copy the operator would ever get — they never learn their words went
+  // nowhere (V-2).
+  test('both follow-ups are drawn for the tap that foregrounded the app', async () => {
     setAppState('active');
 
     await notifyBotReplyNotSent('queued');
     await notifyBotReplyNotSent('bot-chat-unavailable');
 
+    expect(mockSchedule).toHaveBeenCalledTimes(2);
+    expect(mockSchedule.mock.calls[1][0].content.title).toBe('Reply not sent');
+  });
+
+  test('an ordinary notice is still suppressed while the app is foregrounded', async () => {
+    // The rule itself is unchanged and still load-bearing: a run-complete
+    // notice beside the run card the operator is already reading is the same
+    // news twice. Only these two follow-ups ask to be drawn anyway.
+    setAppState('active');
+
+    await notifyRunComplete('Run complete', 'wrote 3 files', 'run-7');
+
     expect(mockSchedule).not.toHaveBeenCalled();
+  });
+});
+
+describe('notifySessionOpenFailed', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setAppState('background');
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue(grantedPermissions);
+    (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue(grantedPermissions);
+    mockSchedule.mockResolvedValue('notif-1');
+  });
+
+  afterAll(() => {
+    if (originalStateDescriptor) {
+      Object.defineProperty(AppState, 'currentState', originalStateDescriptor);
+    }
+  });
+
+  test('a miss on a backgrounded phone is an immediate notice', async () => {
+    await notifySessionOpenFailed('Session sess-9 is no longer available.');
+
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+    const request = mockSchedule.mock.calls[0][0];
+    expect(request.content.title).toBe('Session not opened');
+    expect(request.content.body).toBe('Session sess-9 is no longer available.');
+    expect(request.trigger).toBeNull();
+  });
+
+  test('the tap that foregrounded the app still gets to read the miss', async () => {
+    // The other half of V-2, and the same argument: this notice exists because a
+    // push-delivered session id could not be opened, and the app is foregrounded
+    // precisely because the operator tapped it. Refusing to draw here is
+    // refusing to draw the only copy of the failure they will ever get — and
+    // unlike a run-complete notice there is no on-screen run card to read it off.
+    setAppState('active');
+
+    await notifySessionOpenFailed('Session sess-9 is no longer available.');
+
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+    expect(mockSchedule.mock.calls[0][0].content.title).toBe('Session not opened');
   });
 });
 

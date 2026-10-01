@@ -133,6 +133,33 @@ describe('local notice permission handling', () => {
     expect(schedule).toHaveBeenCalledTimes(1);
   });
 
+  test('three callers folded in the same tick share ONE evaluation of the gate', async () => {
+    // NOTIF-03's shape reaches this gate too: a re-arm fanning out over every
+    // routine calls it once per routine, all before the first answer has set the
+    // cache. Each of them reading the phone and asking it for the dialog is N
+    // native round trips and N chances to spend the one dialog.
+    const { local, read, request, schedule, setState } = freshLocal();
+    setState('background');
+    read.mockImplementation(async () => {
+      // The operator brought the app forward while the phone was being read, so
+      // this is the one moment a dialog could actually be shown (the case above
+      // does the same thing). Deferred so all three callers have already reached
+      // the gate — the point of this case is what happens AFTER that.
+      await Promise.resolve();
+      setState('active');
+      return UNDETERMINED;
+    });
+    request.mockResolvedValue(GRANTED);
+
+    await Promise.all([postNotice(local), postNotice(local), postNotice(local)]);
+
+    // One read, one dialog, between three callers — and the grant they share is
+    // real work: all three notices are drawn.
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(schedule).toHaveBeenCalledTimes(3);
+  });
+
   test('a grant is honoured, and is asked for nothing', async () => {
     const { local, read, request, schedule, setState } = freshLocal();
     setState('background');

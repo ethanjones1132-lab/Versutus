@@ -20,6 +20,11 @@ jest.mock('expo-notifications', () => ({
   SchedulableTriggerInputTypes: { DAILY: 'daily', WEEKLY: 'weekly', DATE: 'date' },
   scheduleNotificationAsync: jest.fn(),
   cancelScheduledNotificationAsync: jest.fn(),
+  // The shared gate (local.ts `ensureNotificationPermission`) reads the phone
+  // before it ever asks, and the reconcile at the end of a re-arm enumerates
+  // the OS queue, so both of its reads are in the mock.
+  getPermissionsAsync: jest.fn(),
+  getAllScheduledNotificationsAsync: jest.fn(),
   requestPermissionsAsync: jest.fn(),
 }));
 
@@ -41,6 +46,7 @@ import { keyValueStorage } from '@/lib/storage/key-value';
 
 const mockSchedule = Notifications.scheduleNotificationAsync as jest.Mock;
 const mockCancel = Notifications.cancelScheduledNotificationAsync as jest.Mock;
+const mockScheduled = Notifications.getAllScheduledNotificationsAsync as jest.Mock;
 
 // Both ends of the range, so the premise holds on any machine clock: one fire
 // the gateway reported that has already passed, and one that has not.
@@ -71,7 +77,11 @@ describe('re-arming routine notices as the connection comes up', () => {
     jest.clearAllMocks();
     mockSchedule.mockResolvedValue('notif-1');
     mockCancel.mockResolvedValue(undefined);
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
     (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
+    // Nothing is queued on the phone unless a case says so, so the reconcile
+    // every re-arm closes with reads an empty queue by default.
+    mockScheduled.mockResolvedValue([]);
   });
 
   test('a one-shot whose gateway fire has passed holds nothing until the gateway names a fresh one', async () => {
@@ -205,11 +215,16 @@ describe('the Bot Chat re-arms from the routine read only it can make', () => {
 });
 
 describe('the sync decides before it retires', () => {
-  /** The unpaused half of syncRoutineNotification, up to the next export. */
+  /**
+   * The body that decides, up to the next export. It reads `armRoutineNotice`
+   * rather than the exported wrapper because the sync now runs behind this
+   * job's own chain — the serialisation lives in the export, the work it
+   * serialises lives here.
+   */
   const syncBody = () => {
     const src = readSource('src', 'lib', 'notifications', 'routine-sync.ts');
-    const start = src.indexOf('export async function syncRoutineNotification');
-    const end = src.indexOf('export async function cancelRoutineNotification');
+    const start = src.indexOf('async function armRoutineNotice');
+    const end = src.indexOf('export async function syncRoutineNotification');
     return start === -1 || end === -1 ? '' : src.slice(start, end);
   };
 
@@ -219,11 +234,19 @@ describe('the sync decides before it retires', () => {
     expect(decision).toBeGreaterThan(-1);
     // The retirement on the replacement path sits AFTER the decision: a read
     // that names no fire can no longer retire a notice nothing replaces.
-    expect(body.lastIndexOf('await cancelKnownNotice(job.id)')).toBeGreaterThan(decision);
+    expect(body.lastIndexOf('await cancelNotice(replacedId)')).toBeGreaterThan(decision);
     // A pause IS a decision: it retires the held notice before the trigger is
     // even computed, so an unpriceable paused row still goes.
     const pauseGuard = body.indexOf('if (job.paused)');
     expect(pauseGuard).toBeGreaterThan(-1);
     expect(pauseGuard).toBeLessThan(decision);
+  });
+
+  test('the replacement is recorded before the notice it replaces is retired', () => {
+    const body = syncBody();
+    const record = body.indexOf('await keyValueStorage.setItem(noticeKey(job.id), identifier)');
+    const retire = body.indexOf('await cancelNotice(replacedId)');
+    expect(record).toBeGreaterThan(-1);
+    expect(retire).toBeGreaterThan(record);
   });
 });

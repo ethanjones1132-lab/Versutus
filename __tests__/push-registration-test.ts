@@ -124,14 +124,30 @@ describe('push registration', () => {
     );
   });
 
-  test('an unchanged token is registered without a redundant write', async () => {
-    mockGet.mockResolvedValue('ExponentPushToken[new]');
+  test('an unchanged token is neither rewritten nor re-registered', async () => {
+    // CHANGED ASSERTION: this used to expect the RPC on the unchanged token,
+    // which is exactly what NOTIF-08 calls a defect — a token the Gate already
+    // holds was fetched and POSTed again on every `connected` transition,
+    // silent recoveries included. The write was already skipped; now the whole
+    // sequence is, while the registration this process completed stands. The
+    // window, the rotation and the refused register are covered in
+    // push-registration-once-test.ts.
+    mockGet.mockResolvedValue(null);
     const rpc = rpcStub();
+
+    // The registration that lands, then the connect after it. The store is what
+    // tells the two apart: nothing is held before the first, and afterwards the
+    // phone's token is the one the Gate was given.
+    await syncPushRegistration(rpc);
+    expect(rpc.rpcRequest).toHaveBeenCalled();
+    mockGet.mockResolvedValue('ExponentPushToken[new]');
+    mockSet.mockClear();
+    rpc.rpcRequest.mockClear();
 
     await syncPushRegistration(rpc);
 
     expect(mockSet).not.toHaveBeenCalled();
-    expect(rpc.rpcRequest).toHaveBeenCalled();
+    expect(rpc.rpcRequest).not.toHaveBeenCalled();
   });
 
   test('web returns null and never touches Expo or the gate', async () => {

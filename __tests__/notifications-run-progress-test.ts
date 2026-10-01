@@ -11,9 +11,12 @@ import { AppState, Platform } from 'react-native';
 import { runEventPreview, type ActivityRun } from '@/lib/gateway/runs';
 import {
   RUN_PROGRESS_CHANNEL_ID,
+  clearRunProgressThrottles,
   dismissRunProgress,
+  dismissStaleRunProgress,
   notifyRunComplete,
   notifyRunProgress,
+  resetRunProgressThrottleForTests,
 } from '@/lib/notifications/local';
 import {
   runProgressNotice,
@@ -24,6 +27,9 @@ import {
 jest.mock('expo-notifications', () => ({
   scheduleNotificationAsync: jest.fn(),
   dismissNotificationAsync: jest.fn(),
+  // The tray sweep (dismissStaleRunProgress) reads what the phone is showing,
+  // the way dismissGatewayDown already did.
+  getPresentedNotificationsAsync: jest.fn(),
   setNotificationChannelAsync: jest.fn(),
   getPermissionsAsync: jest.fn(),
   requestPermissionsAsync: jest.fn(),
@@ -113,9 +119,18 @@ function onAndroid(): void {
   jest.replaceProperty(Platform, 'OS', 'android');
 }
 
+/**
+ * How long one run's tray posts are coalesced for (local.ts, NOTIF-11). A case
+ * that posts the same run twice steps over this window; a case that does not
+ * needs the poster's own module state cleared, so it does not inherit the window
+ * the case before it opened.
+ */
+const RUN_PROGRESS_THROTTLE_MS = 5_000;
+
 describe('notifyRunProgress (the Android progress notice)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    resetRunProgressThrottleForTests();
     setAppState('background');
     mockDismiss.mockResolvedValue(undefined);
     (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true, status: 'granted' });
@@ -124,6 +139,7 @@ describe('notifyRunProgress (the Android progress notice)', () => {
   });
 
   afterEach(() => {
+    jest.useRealTimers();
     jest.restoreAllMocks();
   });
 
@@ -154,9 +170,14 @@ describe('notifyRunProgress (the Android progress notice)', () => {
 
   test('an update re-posts the run’s own identifier, so the tray keeps one notice per run', async () => {
     onAndroid();
+    // NOTIF-11: a second post inside the coalescing window is held rather than
+    // drawn, so this case owns the clock and steps over that window to see the
+    // post that REPLACES the first.
+    jest.useFakeTimers();
 
     const first = update('run-7');
     await notifyRunProgress(first);
+    jest.advanceTimersByTime(RUN_PROGRESS_THROTTLE_MS);
     await notifyRunProgress(update('run-7', { events: [step('reading the config')] }));
 
     // §7's own mechanism: the identifier is the notification's tag on Android,
@@ -240,6 +261,7 @@ describe('notifyRunProgress (the Android progress notice)', () => {
 describe('dismissRunProgress', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    resetRunProgressThrottleForTests();
     setAppState('background');
     mockDismiss.mockResolvedValue(undefined);
     (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true, status: 'granted' });
@@ -248,6 +270,7 @@ describe('dismissRunProgress', () => {
   });
 
   afterEach(() => {
+    jest.useRealTimers();
     jest.restoreAllMocks();
   });
 
@@ -277,6 +300,205 @@ describe('dismissRunProgress', () => {
     mockDismiss.mockRejectedValue(new Error('tray unavailable'));
 
     await expect(dismissRunProgress(runProgressNoticeIdentifier('run-7'))).resolves.toBeUndefined();
+  });
+});
+
+// The tray sweep and the throttle below both read the phone's clock, so each
+// suite below owns it (fake timers) and the poster's own windows (the reset the
+// suites above use too).
+describe('the run-progress throttle (NOTIF-11)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    resetRunProgressThrottleForTests();
+    setAppState('background');
+    mockDismiss.mockResolvedValue(undefined);
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true, status: 'granted' });
+    (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
+    mockSchedule.mockResolvedValue('notif-1');
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    if (originalStateDescriptor) {
+      Object.defineProperty(AppState, 'currentState', originalStateDescriptor);
+    }
+  });
+
+  test('twenty events inside two seconds reach the phone twice, not twenty times', async () => {
+    onAndroid();
+
+    // A long run streaming tool output: the driver is the run rows, so one event
+    // is one pass of §7's write point. Before the throttle every one of these
+    // asked the phone to draw, rebuild and notify for a tray entry whose text
+    // changes only every few seconds.
+    for (let index = 0; index < 20; index += 1) {
+      await notifyRunProgress(update('run-7', { events: [step(`reading file ${index}`)] }));
+      jest.advanceTimersByTime(100);
+    }
+
+    // The first post of a run is never delayed, so one notice has gone out; the
+    // nineteen inside its window are held, not drawn.
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+  });
+
+  test('the window posts the NEWEST state, so the tray never lags the run', async () => {
+    onAndroid();
+
+    await notifyRunProgress(update('run-7', { events: [step('reading file 0')] }));
+    for (let index = 1; index < 20; index += 1) {
+      await notifyRunProgress(update('run-7', { events: [step(`reading file ${index}`)] }));
+      jest.advanceTimersByTime(100);
+    }
+    await jest.advanceTimersByTimeAsync(RUN_PROGRESS_THROTTLE_MS);
+
+    // Two posts for twenty events, and the second carries the last thing the run
+    // reported — a trailing window, so a coalesced post never leaves the tray
+    // showing an event the run has already moved past.
+    expect(mockSchedule).toHaveBeenCalledTimes(2);
+    expect(mockSchedule.mock.calls[1][0].content.body).toContain('reading file 19');
+    expect(mockSchedule.mock.calls[1][0].content.body).not.toContain('reading file 0\n');
+  });
+
+  test('two runs are throttled apart from each other', async () => {
+    onAndroid();
+
+    await notifyRunProgress(update('run-7'));
+    await notifyRunProgress(update('run-8'));
+
+    // The window belongs to a run, not to the poster: a second run in flight
+    // posts its own notice immediately.
+    expect(mockSchedule).toHaveBeenCalledTimes(2);
+  });
+
+  test('a settled run is retired at once, and its held post never goes out', async () => {
+    onAndroid();
+
+    await notifyRunProgress(update('run-7'));
+    // Held by the window, not drawn.
+    await notifyRunProgress(update('run-7', { events: [step('about to be stopped')] }));
+    await dismissRunProgress(runProgressNoticeIdentifier('run-7'));
+    await jest.advanceTimersByTimeAsync(2 * RUN_PROGRESS_THROTTLE_MS);
+
+    // The ending is never this notice's to delay, and the timer goes with the
+    // identifier it would have posted under: nothing re-draws a tray entry that
+    // has just been retired.
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+    expect(mockDismiss).toHaveBeenCalledWith(runProgressNoticeIdentifier('run-7'));
+  });
+
+  test('the window is opened by the poster, not by the caller’s effect', async () => {
+    const src = readSource('src', 'lib', 'notifications', 'local.ts');
+
+    // §7's own rule is that the write point asks for no timer: the driver is the
+    // run rows. So the coalescing lives on the poster, where every caller meets
+    // it, rather than in the provider's effect.
+    expect(src).toContain('RUN_PROGRESS_THROTTLE_MS');
+    expect(readSource('src', 'context', 'gateway-provider.tsx')).not.toContain('RUN_PROGRESS_THROTTLE_MS');
+  });
+
+  test('a window left open at unmount never fires its held post', async () => {
+    onAndroid();
+    const src = readSource('src', 'context', 'gateway-provider.tsx');
+
+    // The windows are module state on the poster, so nothing tears them down when
+    // the provider goes away — a held update would be posted minutes later for a
+    // run nobody is following. The provider drops them on unmount, and this is
+    // that call: a cleanup that hangs off mount/unmount alone, because a
+    // per-render one would take the window down on every run change.
+    expect(src).toContain('useEffect(() => clearRunProgressThrottles, []);');
+
+    // And the same teardown is what a settle does per run, so a retired notice is
+    // never re-drawn by the window that was holding it.
+    await notifyRunProgress(update('run-7'));
+    await notifyRunProgress(update('run-7', { events: [step('about to be stopped')] }));
+    clearRunProgressThrottles();
+    await jest.advanceTimersByTimeAsync(2 * RUN_PROGRESS_THROTTLE_MS);
+
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('dismissStaleRunProgress (the tray sweep a killed process leaves behind)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    resetRunProgressThrottleForTests();
+    setAppState('background');
+    mockDismiss.mockResolvedValue(undefined);
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true, status: 'granted' });
+    mockSchedule.mockResolvedValue('notif-1');
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    if (originalStateDescriptor) {
+      Object.defineProperty(AppState, 'currentState', originalStateDescriptor);
+    }
+  });
+
+  /** The tray as expo hands it back: the request wrapped in a Notification. */
+  function presented(identifier: string) {
+    return { request: { identifier, content: { title: '', body: '' }, trigger: null } };
+  }
+
+  test('a notice for a run that is no longer running is retired', async () => {
+    onAndroid();
+    (Notifications.getPresentedNotificationsAsync as jest.Mock).mockResolvedValue([
+      presented('run-progress:run-7'),
+    ]);
+
+    await dismissStaleRunProgress([]);
+
+    // Nothing this process posted is named by runProgressNoticeIdsRef after a
+    // restart, so this is the only path that can ask the phone to take it down.
+    expect(mockDismiss).toHaveBeenCalledWith('run-progress:run-7');
+  });
+
+  test("a live run's notice is kept, and every other notice is left alone", async () => {
+    onAndroid();
+    (Notifications.getPresentedNotificationsAsync as jest.Mock).mockResolvedValue([
+      presented('run-progress:run-7'),
+      presented('run-progress:run-8'),
+      presented('gateway-down:gw-a'),
+      presented('approval-request'),
+    ]);
+
+    await dismissStaleRunProgress(['run-7']);
+
+    // The sweep is scoped to this feature's own identifiers and to runs that are
+    // no longer in flight — the Runs destination's live pair, which the fold and
+    // the poster share, so it cannot disagree with them about run-7.
+    expect(mockDismiss).toHaveBeenCalledTimes(1);
+    expect(mockDismiss).toHaveBeenCalledWith('run-progress:run-8');
+  });
+
+  test('a tray that cannot be read retires nothing and throws nothing', async () => {
+    onAndroid();
+    (Notifications.getPresentedNotificationsAsync as jest.Mock).mockRejectedValue(
+      new Error('tray unavailable'),
+    );
+
+    await expect(dismissStaleRunProgress([])).resolves.toBeUndefined();
+    expect(mockDismiss).not.toHaveBeenCalled();
+  });
+
+  test('iOS and the web sweep nothing at all', async () => {
+    jest.replaceProperty(Platform, 'OS', 'web');
+    (Notifications.getPresentedNotificationsAsync as jest.Mock).mockResolvedValue([
+      presented('run-progress:run-7'),
+    ]);
+
+    await dismissStaleRunProgress([]);
+
+    // The notice is Android's (item 7b), so nothing else pays for the read.
+    expect(Notifications.getPresentedNotificationsAsync).not.toHaveBeenCalled();
   });
 });
 
@@ -344,7 +566,14 @@ describe('the provider writes the notice as run state changes', () => {
     const src = provider();
     expect(src).toContain('notifyRunProgress,');
     expect(src).toContain('dismissRunProgress,');
-    expect(src).toContain("import { runProgressNotice } from '@/lib/notifications/run-progress';");
+    // CHANGED ASSERTION: the import carries the tray sweep's helper beside the
+    // fold's own (NOTIF-05 needs the same in-flight pair the fold reads), so the
+    // pinned name list is the new one. What this case exists for — the fold and
+    // the poster stay behind the shipped local module, and the provider never
+    // reaches for expo-notifications itself — is unchanged.
+    expect(src).toContain(
+      "import { inFlightRunIds, runProgressNotice } from '@/lib/notifications/run-progress';",
+    );
     expect(src).not.toMatch(/from 'expo-notifications'/);
   });
 
@@ -378,5 +607,33 @@ describe('the provider writes the notice as run state changes', () => {
     // Seeded from the platform rather than defaulted, so the first render of an
     // app already up is not read as a pocketed one and asked for a notice.
     expect(src).toContain('useState(() => AppState.currentState === \'active\')');
+  });
+
+  test('the tray is swept where runs are restored or reconciled, not only for this process’s own notices', () => {
+    const src = provider();
+    // NOTIF-05: `runProgressNoticeIdsRef` starts empty in a new process, so the
+    // notice a killed process posted can only be retired by asking the tray.
+    // Three sites, and the live set each passes is the fold's own in-flight pair.
+    expect(src.match(/void dismissStaleRunProgress\(inFlightRunIds\(/g)).toHaveLength(3);
+
+    // At mount, on the rows this process has just restored.
+    const restoredAt = src.indexOf('setActivityRuns(restoredRuns);');
+    const bootstrap = src.slice(restoredAt, src.indexOf('void readDeviceIdentity()', restoredAt));
+    expect(restoredAt).toBeGreaterThan(-1);
+    expect(bootstrap).toContain('void dismissStaleRunProgress(inFlightRunIds(restoredRuns));');
+
+    // On the connect-time settle of restored unresolved runs.
+    const connected = src.slice(
+      src.indexOf("if (nextStatus === 'connected' && gateway.kind === 'custom')"),
+      src.indexOf('onHello:'),
+    );
+    expect(connected).toContain('void dismissStaleRunProgress(inFlightRunIds(settled));');
+
+    // And on the shared reconcile the reconnect and foreground paths both use.
+    const reconcile = src.slice(
+      src.indexOf('const reconcileInterrupted = useCallback'),
+      src.indexOf('const clearInterruptedRecovery'),
+    );
+    expect(reconcile).toContain('void dismissStaleRunProgress(inFlightRunIds(settled));');
   });
 });

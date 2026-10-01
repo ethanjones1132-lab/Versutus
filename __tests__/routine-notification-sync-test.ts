@@ -13,6 +13,10 @@ jest.mock('expo-notifications', () => ({
   SchedulableTriggerInputTypes: { DAILY: 'daily', WEEKLY: 'weekly', DATE: 'date' },
   scheduleNotificationAsync: jest.fn(),
   cancelScheduledNotificationAsync: jest.fn(),
+  // The shared gate (local.ts `ensureNotificationPermission`) READS the phone
+  // before it ever asks it, so the read has to be in the mock as well.
+  getPermissionsAsync: jest.fn(),
+  getAllScheduledNotificationsAsync: jest.fn(),
   requestPermissionsAsync: jest.fn(),
 }));
 
@@ -79,33 +83,44 @@ const unnamespacedJob = {
   schedule: '0 9 * * *',
 };
 
-// A decline can only be exercised before any case in this file grants the
-// permission: `ensurePermission` caches ONE granted answer for the life of the
-// process, so this suite sits ABOVE the granted-permission suite below and
-// never asks for a grant. Nothing is scheduled here — the point is what the
-// sync does NOT do when the phone refuses.
-describe('a phone that declines the schedule', () => {
+// The permission gate is local.ts's, shared with the immediate notices: it
+// READS the phone first and only ever asks it for the dialog from an
+// undetermined state while the app is foregrounded. So the phone that cannot
+// say yes is exercised here as the platform really reports it — never asked,
+// app pocketed — and the request mock answers GRANTED, so a sync that reached
+// for the dialog anyway would show up as a scheduled notice rather than
+// passing quietly. Nothing is scheduled here: the point is what the sync does
+// NOT do, and a suite that never reaches the granted path leaves the shared
+// gate's cached grant unset for every case below.
+describe('a phone that has not been asked, with the app pocketed', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     setAppState('background');
     mockCancel.mockResolvedValue(undefined);
-    (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: false });
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({
+      granted: false,
+      status: 'undetermined',
+      canAskAgain: true,
+    });
+    (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
+    (Notifications.getAllScheduledNotificationsAsync as jest.Mock).mockResolvedValue([]);
   });
 
-  test('a first sync the phone declines stores no identifier', async () => {
+  test('a first sync the phone has not granted stores no identifier', async () => {
     await syncRoutineNotification(dailyJob);
 
+    expect(Notifications.requestPermissionsAsync).not.toHaveBeenCalled();
     expect(mockSchedule).not.toHaveBeenCalled();
     await expect(storedIdFor('job-1')).resolves.toBeNull();
   });
 
-  test('a held notice survives a re-sync the phone declines', async () => {
+  test('a held notice survives a re-sync the phone has not granted', async () => {
     // The phone already holds this job's notice — the persisted mapping is the
     // identifier it was scheduled under.
     await keyValueStorage.setItem('versutus:routine-notification:job-7', 'notif-held');
     mockCancel.mockClear();
 
-    // Permission stays refused, so the replacement never lands and the held
+    // Permission is not granted, so the replacement never lands and the held
     // notice must not be retired for it: no identifier was ever stored for a
     // replacement that does not exist.
     await syncRoutineNotification({ ...dailyJob, id: 'job-7' });
@@ -122,7 +137,9 @@ describe('routine notification sync/cancel bookkeeping', () => {
     setAppState('background');
     mockSchedule.mockResolvedValue('notif-1');
     mockCancel.mockResolvedValue(undefined);
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
     (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
+    (Notifications.getAllScheduledNotificationsAsync as jest.Mock).mockResolvedValue([]);
   });
 
   afterAll(() => {

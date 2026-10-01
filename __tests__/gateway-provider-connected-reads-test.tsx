@@ -13,6 +13,7 @@ import { gateManifestCacheKey, saveCachedGateManifest } from '@/lib/portal/attac
 import { saveWorkflows } from '@/lib/gateway/workflows';
 import { keyValueStorage } from '@/lib/storage/key-value';
 import { removeGatewayIds } from '@/lib/gateway/storage';
+import { syncPushRegistration } from '@/lib/notifications/push-registration';
 import type { ConnectionStatus, GatewayProfile, HermesSession } from '@/lib/gateway/types';
 import type { PortalClient, PortalClientCallbacks } from '@/lib/portal/adapters';
 import type { GatewayManifest } from '@/lib/portal/manifest';
@@ -123,6 +124,7 @@ jest.mock('@/lib/notifications/push-registration', () => ({
 jest.mock('@/lib/notifications/local', () => ({
   dismissGatewayDown: jest.fn(async () => undefined),
   dismissRunProgress: jest.fn(async () => undefined),
+  dismissStaleRunProgress: jest.fn(async () => undefined),
   notifyApprovalRequired: jest.fn(async () => undefined),
   notifyGatewayDown: jest.fn(async () => undefined),
   notifyRunComplete: jest.fn(async () => undefined),
@@ -626,6 +628,48 @@ describe('the connected-time reads take their turn', () => {
     // one the recovery is owed — the stamp is written when the set completes.
     expect(client.listCronJobsCalls).toBe(1);
     expect(client.listBotsCalls).toBe(1);
+  });
+
+  test("the monitor's own recovery registers nothing again", async () => {
+    jest.mocked(syncPushRegistration).mockClear();
+    const client = await connectAlpha();
+    expect(jest.mocked(syncPushRegistration)).toHaveBeenCalledTimes(1);
+
+    // The same self-heal as the case above, 30 s later — inside the window a
+    // fan-out is remembered for, and a flapping link repeats it every 30–70 s.
+    await advance(30_000);
+    await act(async () => {
+      mockClients[0].forceReconnect?.();
+    });
+    await act(async () => {
+      await mockClients[0].connect();
+    });
+    await settle(4, 2_000);
+
+    // Push registration takes the same silent-recovery decision the staggered
+    // reads take: the token the Gate already holds is not worth a native token
+    // read and an authenticated RPC per flap. (The window inside the module
+    // itself is push-registration-once-test.ts.)
+    expect(client.listCronJobsCalls).toBe(1);
+    expect(jest.mocked(syncPushRegistration)).toHaveBeenCalledTimes(1);
+  });
+
+  test('a real reconnect of a new client registers again', async () => {
+    jest.mocked(syncPushRegistration).mockClear();
+    await connectAlpha();
+    expect(jest.mocked(syncPushRegistration)).toHaveBeenCalledTimes(1);
+
+    // A new client, a new generation: this `connected` is a real one, so the
+    // registration still happens on the first connect after it.
+    await act(async () => {
+      await gatewayApi().disconnectGateway();
+    });
+    await act(async () => {
+      await gatewayApi().connectGateway(profile({ id: 'alpha', url: 'http://alpha.test:8642', kind: 'custom' }));
+    });
+    await settle(4, 2_000);
+
+    expect(jest.mocked(syncPushRegistration)).toHaveBeenCalledTimes(2);
   });
 
   test('a profile written while connected does not push the workflow read out', async () => {

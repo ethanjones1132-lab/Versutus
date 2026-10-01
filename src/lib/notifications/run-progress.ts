@@ -50,12 +50,29 @@ export function runProgressNoticeData(runId: string): RunProgressData {
 }
 
 /**
+ * The prefix every run's progress notice identifier carries, so a tray sweep
+ * can recognise the notices this feature owns without holding the identifiers:
+ * one string per run id follows it, and nothing else the app posts starts with
+ * it.
+ */
+export const RUN_PROGRESS_NOTICE_PREFIX = 'run-progress:';
+
+/**
  * The identifier every update of one run's notice is posted under. One string
  * per run id and nothing else — the clock is not part of it, which is the whole
  * reason the next post replaces the notice rather than adding one.
  */
 export function runProgressNoticeIdentifier(runId: string): string {
-  return `run-progress:${runId}`;
+  return `${RUN_PROGRESS_NOTICE_PREFIX}${runId}`;
+}
+
+/**
+ * The ids of the runs still in flight — what a tray sweep must keep its notices
+ * for. The same in-flight pair the fold above and the Runs destination read, so
+ * a sweep cannot disagree with the poster about which runs are still running.
+ */
+export function inFlightRunIds(runs: readonly ActivityRun[]): string[] {
+  return runs.filter((run) => IN_FLIGHT_RUN_STATUSES.has(run.status)).map((run) => run.id);
 }
 
 /**

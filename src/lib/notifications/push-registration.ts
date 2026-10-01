@@ -6,9 +6,13 @@
 // operator flips the per-device toggle (A5).
 //
 // The token is persisted only so a rotated one is noticed and written down; the
-// Gate holds the authority on what is registered. Every failure — web, a
-// missing permission, a throw from the native module — resolves to null and
-// never reaches the connect path, so push setup can never stall a connection.
+// Gate holds the authority on what is registered. Nothing here writes down a
+// registration that did not LAND either: a connect that finds this device
+// already registered skips the fetch and the RPC entirely, so a flapping link
+// stops spending a native token read and a Gate request every few seconds. Every
+// failure — web, a missing permission, a throw from the native module — resolves
+// to null and never reaches the connect path, so push setup can never stall a
+// connection.
 
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
@@ -84,11 +88,32 @@ async function obtainGrantedExpoPushToken(): Promise<string | null> {
     });
     const token = typeof result.data === 'string' && result.data.length > 0 ? result.data : null;
     if (!token) return null;
-    const stored = await loadStoredExpoPushToken();
-    if (stored !== token) await secureKeyValueStorage.setItem(STORE_KEY, token);
+    await persistExpoPushToken(token);
     return token;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Write down the token so a rotated one is noticed next time.
+ *
+ * Best-effort, and deliberately NOT the caller's gate on the token: the token
+ * was obtained, and the Gate is the authority on what is registered, so a
+ * Keystore hiccup on this cache write (secure-key-value.ts retries once, then
+ * throws) must not turn a working registration into "no token" — which is what
+ * it did, silently, for the rest of the session. Failing to write costs the
+ * rotation notice and nothing else; the next successful write puts it right.
+ */
+async function persistExpoPushToken(token: string): Promise<void> {
+  try {
+    const stored = await loadStoredExpoPushToken();
+    if (stored === token) return;
+    await secureKeyValueStorage.setItem(STORE_KEY, token);
+  } catch (error) {
+    // Named, not swallowed: the rotation notice is the only thing this write
+    // buys, so the loss is small — but it is a real loss, not a no-op.
+    console.warn('[push-registration] could not persist the Expo push token', error);
   }
 }
 
@@ -126,6 +151,12 @@ export async function registerWithGate(rpc: Rpc, token: string): Promise<void> {
 
 /** Tell the Gate to drop this device's token. */
 export async function deregisterWithGate(rpc: Rpc): Promise<void> {
+  // Forgetting the token is also what invalidates what this process remembers
+  // about registering it: a Gate being left is exactly the "switch to another
+  // gateway" case, and the Gate that answers next has never been told about
+  // this device's token. Cleared BEFORE the RPC, so a refused deregistration
+  // still leaves the next connect registering rather than skipping.
+  lastRegistration = null;
   await rpc.rpcRequest('notifications.deregister', await pushDeviceParams());
 }
 
@@ -143,12 +174,32 @@ function isConfirmedDenial(permissions: PermissionStatus): boolean {
 
 /** Sync the Gate token with permission; confirmed denial drops the device row. */
 export async function syncPushRegistration(rpc: Rpc): Promise<void> {
-  // Prepare the background widget task independently of token registration.
-  // Without a push row, the widget still has its timer refresh.
+  // One pass at a time. The connect path fires this per `connected` transition
+  // and a silent self-heal can land on top of a real one, so without this two
+  // transitions in the same tick would both fetch a token and both POST it.
+  if (registrationInFlight) return registrationInFlight;
+  const pass = runPushRegistration(rpc);
+  registrationInFlight = pass;
   try {
-    await registerWidgetPushTask();
-  } catch {
-    // Ignore: the six-hourly worker still rolls the stamp over.
+    return await pass;
+  } finally {
+    if (registrationInFlight === pass) registrationInFlight = null;
+  }
+}
+
+async function runPushRegistration(rpc: Rpc): Promise<void> {
+  // Prepare the background widget task independently of token registration.
+  // Without a push row, the widget still has its timer refresh — and once per
+  // process is enough: Android keeps the task this registers, so re-asking on
+  // every reconnect buys a native round trip and nothing else. A refusal is not
+  // remembered as done, so the next connect retries.
+  if (!widgetPushTaskReady) {
+    try {
+      await registerWidgetPushTask();
+      widgetPushTaskReady = true;
+    } catch {
+      // Ignore: the six-hourly worker still rolls the stamp over.
+    }
   }
   if (Platform.OS === 'web') return;
   // Only a confirmed permission denial removes the row. An undecided
@@ -161,10 +212,51 @@ export async function syncPushRegistration(rpc: Rpc): Promise<void> {
       return;
     }
     if (!permissions.granted) return;
+    // A token the Gate already holds, registered by this process and still
+    // fresh: re-POSTing it costs a token fetch and a request to a
+    // single-threaded Gate, roughly every reconnect on a flapping link.
+    if (await registrationIsFresh()) return;
     const token = await obtainGrantedExpoPushToken();
     if (!token) return;
     await registerWithGate(rpc, token);
+    // Only a registration that LANDED is remembered, so a refused one is
+    // retried at the next connect rather than skipped for six hours.
+    lastRegistration = { token, registeredAt: Date.now() };
   } catch {
     // Neither RPC may reject the connect path — the next connect retries.
   }
+}
+
+/**
+ * How long a registration this process completed stands in for a re-registration.
+ *
+ * Long enough to outlast a flapping connection (a `connected` the health
+ * monitor earns back every 30–70 s) and short enough that a Gate that lost the
+ * row, or a device that was off for a while, is written down again on the next
+ * connect. Six hours is the same window the widget's own worker rolls over on.
+ */
+const REGISTRATION_FRESH_MS = 6 * 60 * 60 * 1000;
+
+/** The registration this process last completed, or null if it holds none. */
+let lastRegistration: { token: string; registeredAt: number } | null = null;
+
+/** The pass in flight, so overlapping connects share one registration. */
+let registrationInFlight: Promise<void> | null = null;
+
+/** Whether this process has already asked Android to run the widget push task. */
+let widgetPushTaskReady = false;
+
+/**
+ * Whether the Gate already holds this device's token, unchanged, recently
+ * enough that re-registering it would buy nothing.
+ *
+ * The token IS the registration: a stored one that is not the registered one
+ * means a rotated token has already been noticed on the way in (this module is
+ * the only writer), and the Gate is holding a token this device no longer has
+ * — so that is a rotation, and it registers.
+ */
+async function registrationIsFresh(): Promise<boolean> {
+  if (!lastRegistration) return false;
+  if (Date.now() - lastRegistration.registeredAt >= REGISTRATION_FRESH_MS) return false;
+  return (await loadStoredExpoPushToken()) === lastRegistration.token;
 }

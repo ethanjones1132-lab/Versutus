@@ -147,8 +147,10 @@ import {
 import { retirementTookActiveGateway, syncChildProfiles } from '@/lib/gateway/child-sync';
 import { checkTlsFingerprintTofu } from '@/lib/gateway/security';
 import {
+  clearRunProgressThrottles,
   dismissGatewayDown,
   dismissRunProgress,
+  dismissStaleRunProgress,
   notifyApprovalRequired,
   notifyGatewayDown,
   notifyRunComplete,
@@ -157,7 +159,7 @@ import {
 import { deregisterWithGate, syncPushRegistration } from '@/lib/notifications/push-registration';
 import { syncRunActivities } from '@/lib/notifications/run-activity-device';
 import { pendingRunFocus, type RunFocus } from '@/lib/notifications/run-focus';
-import { runProgressNotice } from '@/lib/notifications/run-progress';
+import { inFlightRunIds, runProgressNotice } from '@/lib/notifications/run-progress';
 import { rearmRoutineNotifications } from '@/lib/notifications/routine-sync';
 import type {
   ChatMessage,
@@ -1174,6 +1176,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     }
     runProgressNoticeIdsRef.current = next;
   }, [activityRuns, appInForeground]);
+  // Unmounting takes the coalescing windows with it: a window the last render
+  // opened would otherwise fire its held post after teardown, for a run nothing
+  // is following any more. A per-render cleanup could not do this — the windows
+  // are meant to survive re-renders — so it hangs off mount/unmount alone.
+  useEffect(() => clearRunProgressThrottles, []);
   const runApprovalResolverRef = useRef<((approved: boolean, feedback?: string) => void) | null>(null);
   const runAbortControllerRef = useRef<AbortController | null>(null);
   const activeRunTaskIdRef = useRef<string | null>(null);
@@ -1573,6 +1580,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
                 run.id,
               );
             }
+            // A notice this process never posted — posted by one Android later
+            // killed — is retired by asking the tray, because the in-process set
+            // the effect above works from starts empty in a new process.
+            void dismissStaleRunProgress(inFlightRunIds(settled));
           }
         }
       }
@@ -2064,8 +2075,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             // Solution A4: this device's Expo push token belongs to the Gate
             // once per connection — initial and every reconnect — and the
             // registration never blocks or breaks the connection itself.
+            //
+            // It rides the same real-connect decision the staggered reads take
+            // just above: a `connected` the monitor earned back on its own
+            // repeats no fan-out, and a token the Gate already holds (its own
+            // six-hour window, and this device's) is not worth a native read and
+            // an authenticated RPC every 30–70 s of a flapping link.
             if (nextStatus === 'connected' && gateway.kind === 'custom') {
-              void syncPushRegistration(client);
+              if (connectedFanOutDueRef.current) void syncPushRegistration(client);
               // Restored unresolved runs must be reconciled on the first successful
               // Gateway connection, not only after a later disconnect. The
               // onHealthCheck path handles reconnects, but the initial connect
@@ -2088,6 +2105,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
                         run.id,
                       );
                     }
+                    // The tray is asked directly, not through this process's own
+                    // set of posted identifiers: the notice that outlived the
+                    // killed process is the one this set cannot name.
+                    void dismissStaleRunProgress(inFlightRunIds(settled));
                   }
                 })();
               }
@@ -2510,6 +2531,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setGateways(loadedGateways);
       offlineQueueRef.current = restoredQueue;
       setActivityRuns(restoredRuns);
+      // One sweep at mount: a run-progress notice posted by a process that was
+      // killed while it ran is in the tray, and nothing this process has posted
+      // can name it — the restored rows say which runs are still in flight, and
+      // every other notice for a run that is not is retired here.
+      void dismissStaleRunProgress(inFlightRunIds(restoredRuns));
 
       // Device identity powers pairing/access requests — surface it once. A
       // refusal settles failed with its cause so the card can name it and retry.
