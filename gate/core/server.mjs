@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 
 import { webCors } from './cors.mjs';
+import { enableJsonCompression } from './http-compress.mjs';
 import { sseHeaders, startSseKeepalive, createSseFrameTracker } from './sse.mjs';
 import { loadCapabilities, describeKinds, resolveManifestInstances } from './capabilities/registry.mjs';
 import { buildInstanceHandlers } from './capabilities/dispatch.mjs';
@@ -1131,6 +1132,10 @@ export async function createGate(config = {}) {
     // Web CORS: opt-in via --allow-origin / VERSUTUS_GATE_ALLOW_ORIGIN. Until
     // the operator names origins this handles nothing at all (core/cors.mjs).
     if (webCors(req, res)) return;
+
+    // One-shot JSON answers go out gzipped for the clients that ask; streams and
+    // small answers are handed straight back to node:http (core/http-compress.mjs).
+    enableJsonCompression(req, res);
 
     // Set common headers
     res.setHeader('Content-Type', 'application/json');
