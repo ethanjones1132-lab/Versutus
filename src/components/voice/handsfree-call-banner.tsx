@@ -34,7 +34,7 @@ export function HandsfreeCallBanner() {
 }
 
 function ActiveHandsfreeCallBanner() {
-  const { phase, partial, label, level, engine, engineReason, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs } =
+  const { phase, partial, label, level, engine, engineReason, muted, mute, unmute, skipReply, end, startedAtMs, sendingSinceMs } =
     useHandsfreeVoice();
   const tokens = useTokens();
   const insets = useSafeAreaInsets();
@@ -63,7 +63,6 @@ function ActiveHandsfreeCallBanner() {
     sendingSinceMs !== null ? handsfreeSlowTurnCopy(sendingSinceMs, nowMs) : null;
 
   const phaseLabel = handsfreePhaseLabel(phase);
-  const muted = phase === 'muted';
   const speaking = phase === 'speaking';
   // The confirming grace window keeps its Listening label but is not silent:
   // a re-arming hold is finishing a turn it has already heard, not dead.

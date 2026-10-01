@@ -17,6 +17,22 @@ import type { GateVoiceGrant } from '@/lib/voice/handsfree-start-reason';
  */
 export const GATE_RECONNECT_WINDOW_MS = 20_000;
 
+/**
+ * How much of the window the last attempt leaves open for its own round trip.
+ * The schedule used to sum to exactly the window, so the final delay put the
+ * last attempt on the deadline itself — past the point where the Gate is still
+ * holding the call — and the loop spent that tail asleep. This is the room the
+ * last shot now keeps.
+ */
+export const GATE_RECONNECT_SAFETY_MARGIN_MS = 2_500;
+
+/**
+ * How long one attempt is assumed to take. An attempt with less than this left
+ * cannot finish inside the window, so issuing it buys one more refusal and no
+ * re-attach; one that starts with this much room is allowed to run.
+ */
+const ATTEMPT_ROUND_TRIP_MS = 1_000;
+
 const BACKOFF_MS = [500, 1_000, 2_000, 4_000, 8_000];
 
 /** The delay before each reconnect attempt, fitted inside the window. */
@@ -28,8 +44,10 @@ export function gateReconnectDelays(windowMs = GATE_RECONNECT_WINDOW_MS): number
     delays.push(step);
     spent += step;
   }
-  // Always leave one shot for the last moment of the window.
-  if (spent < windowMs) delays.push(windowMs - spent);
+  // One shot for the last moment of the window — landing before it closes, so
+  // the attempt is issued rather than slept through.
+  const last = windowMs - GATE_RECONNECT_SAFETY_MARGIN_MS - spent;
+  if (last > 0) delays.push(last);
   return delays;
 }
 
@@ -67,7 +85,11 @@ export async function reconnectGateMedia(input: ReconnectGateMediaInput): Promis
 
   for (const delay of delays) {
     await sleep(delay);
-    if (input.isAborted() || now() >= deadline) return false;
+    // Teardown at any point wins. So does a window with no room left for a
+    // round trip: an attempt that cannot finish before the Gate stops holding
+    // the call is one more refusal, not a re-attach. An attempt that already
+    // started inside the window is always run to its answer.
+    if (input.isAborted() || now() + ATTEMPT_ROUND_TRIP_MS >= deadline) return false;
     try {
       const started = await input.startGateMedia({
         url: toMediaUrl(input.gatewayUrl, input.grant.streamPath),

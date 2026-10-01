@@ -77,7 +77,7 @@ export type HandsfreeEvent =
   | { type: 'bargeIn' }
   | { type: 'skipReply' }
   | { type: 'interruption' }
-  | { type: 'endRequested' }
+  | { type: 'endRequested'; reason?: 'app-killed' }
   | { type: 'fatalError'; reason: 'recognition-failed' | 'speech-failed' }
   | { type: 'mute' }
   | { type: 'unmute' }
@@ -105,6 +105,13 @@ export type HandsfreeSessionState = {
   startedAtMs?: number;
   /** Where unmute returns: the phase mute was entered from. */
   resumePhase?: 'listening' | 'speaking';
+  /**
+   * A mute tapped while a turn was already in flight. The turn is not cancelled
+   * by it — the words were said and the reply is still owed — so the intent is
+   * recorded here and honoured when the turn would have reopened the
+   * microphone.
+   */
+  muteIntent?: boolean;
   /** Whether the correlated reply is still being spoken (mute does not stop it). */
   replyPlaying: boolean;
 };
@@ -145,9 +152,36 @@ function endCall(
       partial: '',
       held: '',
       resumePhase: undefined,
+      muteIntent: undefined,
       replyPlaying: false,
     },
     effects,
+  };
+}
+
+/**
+ * Where a turn goes once its reply is done or failed. A mute tapped while the
+ * turn was in flight lands here: the microphone is muted and the call waits in
+ * `muted` instead of opening it, which is the only thing the tap asked for. The
+ * intent is consumed, so unmute resumes recognition as it does from any mute.
+ */
+function afterReply(
+  state: HandsfreeSessionState,
+  effects: HandsfreeEffect[],
+): HandsfreeTransition {
+  if (!state.muteIntent) {
+    return { state: { ...state, phase: 'listening', replyPlaying: false }, effects };
+  }
+  return {
+    state: {
+      ...state,
+      phase: 'muted',
+      resumePhase: 'listening',
+      replyPlaying: false,
+      muteIntent: undefined,
+    },
+    // The microphone was told to stay shut, so recognising does not reopen it.
+    effects: effects.filter((effect) => effect.kind !== 'start-listening'),
   };
 }
 
@@ -200,8 +234,13 @@ export function reduceHandsfreeSession(
   }
 
   // Terminal events, valid from any live phase, all take the same path.
-  if (event.type === 'end' || event.type === 'endRequested') {
-    return endCall(state, 'user');
+  if (event.type === 'end') return endCall(state, 'user');
+  if (event.type === 'endRequested') {
+    // The notification's End is the operator's own. The platform also ends a
+    // call nobody asked to end when its foreground service dies under a live JS
+    // runtime, and that is a fact with its own sentence to say — not a call the
+    // operator silently walked away from.
+    return endCall(state, event.reason ?? 'user');
   }
   if (event.type === 'disconnect') return endCall(state, 'disconnect');
   if (event.type === 'thread-changed') return endCall(state, 'thread-changed');
@@ -305,6 +344,22 @@ export function reduceHandsfreeSession(
       if (event.type === 'reply-appeared') {
         return { state: { ...state, phase: 'waiting' }, effects: [] };
       }
+      // Mute does not cancel a turn the operator already said out loud. It
+      // records the intent, mutes the microphone now, and is honoured when the
+      // turn would have reopened it — the same effect every other phase emits.
+      if (event.type === 'mute') {
+        return {
+          state: { ...state, muteIntent: true },
+          effects: [{ kind: 'set-muted', muted: true }],
+        };
+      }
+      if (event.type === 'unmute') {
+        if (!state.muteIntent) return stay(state);
+        return {
+          state: { ...state, muteIntent: undefined },
+          effects: [{ kind: 'set-muted', muted: false }],
+        };
+      }
       return stay(state);
     }
 
@@ -316,38 +371,56 @@ export function reduceHandsfreeSession(
         };
       }
       if (event.type === 'reply-appeared') return stay(state);
+      // A mute tapped while the turn was in flight is honoured on the way back:
+      // the call waits muted rather than opening the microphone it was told to
+      // keep shut.
+      if (event.type === 'mute') {
+        return {
+          state: { ...state, muteIntent: true },
+          effects: [{ kind: 'set-muted', muted: true }],
+        };
+      }
+      if (event.type === 'unmute') {
+        if (!state.muteIntent) return stay(state);
+        return {
+          state: { ...state, muteIntent: undefined },
+          effects: [{ kind: 'set-muted', muted: false }],
+        };
+      }
       // A reply that errored while it streamed is the same fact as one
       // retracted mid-speech: recognition reopens for the next turn instead
       // of killing the whole call. No speech started, so stop-speaking is a
       // no-op the module tolerates.
       if (event.type === 'reply-failed') {
-        return {
-          state: { ...state, phase: 'listening', replyPlaying: false },
-          effects: [{ kind: 'stop-speaking' }, { kind: 'start-listening' }],
-        };
+        return afterReply(state, [{ kind: 'stop-speaking' }, { kind: 'start-listening' }]);
       }
       return stay(state);
     }
 
     case 'speaking': {
       if (event.type === 'speechFinished' || event.type === 'bargeIn' || event.type === 'skipReply') {
-        return {
-          state: { ...state, phase: 'listening', replyPlaying: false },
-          effects: [{ kind: 'stop-speaking' }, { kind: 'start-listening' }],
-        };
+        return afterReply(state, [{ kind: 'stop-speaking' }, { kind: 'start-listening' }]);
       }
       if (event.type === 'reply-failed') {
         // A reply the model retracted mid-speech is silenced at once rather
         // than finished; recognition reopens for the next turn.
-        return {
-          state: { ...state, phase: 'listening', replyPlaying: false },
-          effects: [{ kind: 'stop-speaking' }, { kind: 'start-listening' }],
-        };
+        return afterReply(state, [{ kind: 'stop-speaking' }, { kind: 'start-listening' }]);
       }
       if (event.type === 'mute') {
         return {
           state: { ...state, phase: 'muted', resumePhase: 'speaking' },
           effects: [{ kind: 'set-muted', muted: true }],
+        };
+      }
+      // This is where a mute taken while the turn was in flight arrives, with
+      // the reply still being read aloud. The banner offers Unmute for it, so it
+      // has to do something: the microphone goes back, the reply finishes being
+      // spoken, and `afterReply` finds no intent and reopens listening.
+      if (event.type === 'unmute') {
+        if (!state.muteIntent) return stay(state);
+        return {
+          state: { ...state, muteIntent: undefined },
+          effects: [{ kind: 'set-muted', muted: false }],
         };
       }
       return stay(state);
@@ -363,6 +436,10 @@ export function reduceHandsfreeSession(
           ...state,
           phase: backToSpeaking ? 'speaking' : 'listening',
           resumePhase: undefined,
+          // An intent that has been honoured by reaching `muted` is spent: the
+          // operator has the microphone back, so the next turn must not be
+          // ended by a mute they lifted.
+          muteIntent: undefined,
         };
         const effects: HandsfreeEffect[] = [{ kind: 'set-muted', muted: false }];
         if (!backToSpeaking) effects.push({ kind: 'start-listening' });

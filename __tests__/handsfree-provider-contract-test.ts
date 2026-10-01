@@ -116,7 +116,14 @@ describe('the phase-to-native wiring table', () => {
   });
 
   test('End and the notification End take the same path', () => {
-    expect(provider).toContain("dispatch({ type: 'endRequested' })");
+    // The notification's End carries a reason: the platform also ends a call
+    // nobody asked to end when its foreground service dies, and that is a
+    // different fact from the operator walking away from their own call. It
+    // still reaches the reducer's one terminal end.
+    expect(provider).toContain("type: 'endRequested'");
+    expect(provider).toContain(
+      "reason: event.reason === 'app-killed' ? 'app-killed' : undefined",
+    );
     expect(provider).toContain("dispatch({ type: 'end' })");
   });
 });
@@ -406,7 +413,17 @@ describe('a start that never answers is abandoned on both transports', () => {
   test('nothing after the call is declared starting is left unbounded', () => {
     // The device identity is read after `dispatch({ type: 'start' })`, so a
     // secure-store call that never answers strands the start the same way.
-    expect(gateStart).toMatch(/identity\.guard\(/);
+    expect(gateStart).toMatch(/budget\.guard\('the device identity'/);
+    // ONE budget for the whole Gate start. It used to mint one for the identity
+    // and hand the chain a second, so a Gate that black-holed both held the
+    // sheet on "Starting" for twice the timeout the constant advertises.
+    expect(gateStart).toContain('const budget = startDeadline()');
+    expect(gateStart).toContain('deadline: budget');
+    expect(gateStart.match(/startDeadline\(/g)?.length).toBe(1);
+    // Disposed from a `finally`, not after the await: a chain that rethrows
+    // would otherwise leave the timer pending, and a timer nobody disposed
+    // rejects a promise nothing is racing any more.
+    expect(gateStart).toContain('.finally(() => budget.dispose())');
   });
 
   test('an abandoned native start is cancelled on both transports, without reaching a newer retry', () => {
@@ -468,5 +485,148 @@ describe('a start that never answers is abandoned on both transports', () => {
     expect(abandon).not.toContain('dispatch(');
     // The normal refusal path is preserved.
     expect(provider).toContain("dispatch({ type: 'start-refused' })");
+  });
+});
+
+// A chunk the platform refused was recorded as spoken before the refusal could
+// be seen, so it was never offered again and the phase sat on "Speaking" with
+// no watchdog to release it. Text is now committed only what the platform
+// actually took, a refusal is a bounded retry, and the retries running out is
+// the reducer's own `reply-failed` (no speech started) rather than a park.
+describe('a refused chunk is retried, never recorded as spoken', () => {
+  const stream = between(
+    provider,
+    'const streamReplyText = useCallback(',
+    'const performSend = useCallback(',
+  );
+
+  test('spoken text is committed only after speak answers true', () => {
+    const ask = stream.indexOf('module.speak(');
+    const refused = stream.indexOf('if (!accepted) {');
+    const commit = stream.indexOf('spokenRef.current = plan.spoken');
+    expect(ask).toBeGreaterThan(-1);
+    expect(refused).toBeGreaterThan(ask);
+    expect(commit).toBeGreaterThan(refused);
+    // The commit is on the accepted branch alone: a `false` answer and a
+    // rejection both go back to `offer` with the chunk still unrecorded, and it
+    // is the newest text that is planned next, never a re-offer of what failed.
+    expect(stream).toMatch(/\(accepted\) => \{\s*if \(!accepted\)/);
+    expect(stream).toMatch(
+      /\(error: unknown\) => \{\s*offer\(text, retriesLeft, error instanceof Error \? error\.message : String\(error\)\);/,
+    );
+  });
+
+  test('a refusal is a bounded retry, and the retries running out reopens the microphone', () => {
+    expect(provider).toContain('const HANDSFREE_SPEAK_RETRY_MS = 250;');
+    expect(provider).toContain('const HANDSFREE_SPEAK_RETRY_LIMIT = 5;');
+    // The retry is the same chunk offered again, not a new plan of newer text:
+    // the text stays what the platform refused.
+    expect(stream).toMatch(
+      /speakRetryTimerRef\.current = setTimeout\(\(\) => \{[\s\S]*?offer\(text, retriesLeft - 1, null\);[\s\S]*?\}, HANDSFREE_SPEAK_RETRY_MS\);/,
+    );
+    // Exhausted retries end the speaking phase honestly: no speech started, so
+    // the call reopens the microphone for the next turn instead of parking.
+    expect(stream).toMatch(
+      /if \(retriesLeft <= 0\) \{[\s\S]*?recordFailure\([\s\S]*?dispatch\(\{ type: 'reply-failed' \}\);/,
+    );
+  });
+
+  test('only one speak or retry is in flight per reply, and a new reply never inherits it', () => {
+    // Every streamed delta runs this, and each parks its text while a speak is
+    // already in flight rather than starting an overlapping one.
+    expect(stream).toContain('speakTextRef.current = { fullText, streaming };');
+    expect(stream).toContain('if (speakBusyRef.current) return;');
+    // ...and the flag is actually claimed, or the guard above is decoration.
+    expect(stream).toContain('speakBusyRef.current = true;');
+    // A delta that arrived during the speak is another pass; one that did not is
+    // not. The parked text is a fresh object every run, so the comparison is the
+    // text itself — comparing identity re-planned on every accepted chunk.
+    expect(stream).toMatch(
+      /const newest = speakTextRef\.current;\s*if \(newest && \(newest\.fullText !== text\.fullText \|\| newest\.streaming !== text\.streaming\)\) \{\s*offer\(newest, HANDSFREE_SPEAK_RETRY_LIMIT, null\);/,
+    );
+    // The retry belongs to one reply: a new turn, a stop and an unmount all
+    // clear it, so a chunk refused for the previous reply is never offered here.
+    const reset = between(provider, 'const resetSpeech = useCallback(', 'const unsubscribe = useCallback(');
+    expect(reset).toMatch(/clearTimeout\(speakRetryTimerRef\.current\)/);
+    expect(reset).toContain('speakTextRef.current = null');
+    const unmount = between(provider, 'void teardownRef.current();', '}, [clearGateMute]);');
+    expect(unmount).toMatch(/clearTimeout\(speakRetryTimerRef\.current\)/);
+
+    // The text is committed only while this is still the reply being spoken: a
+    // barge-in, a Skip or an End resets the plan, and a speak already in the air
+    // must not write its text into the next turn's plan as if it were spoken.
+    expect(provider).toContain('const speakEpochRef = useRef(0);');
+    expect(reset).toContain('speakEpochRef.current += 1;');
+    expect(stream).toContain('const epoch = speakEpochRef.current;');
+    // A late answer neither commits into the next turn's plan nor releases the
+    // next turn's claim on the single speak slot: `resetSpeech` did that.
+    expect(stream).toContain('if (speakEpochRef.current !== epoch) return;');
+    expect(stream).toMatch(
+      /refusedAs: string \| null,\s*\): void => \{[\s\S]*?if \(speakEpochRef\.current !== epoch\) return;/,
+    );
+  });
+});
+
+// In Gate mode the banner folds the moment Mute is tapped, which is the right
+// moment for the operator and the wrong moment to call it true. The Gate's own
+// `phase` frame is the authority: a refused frame, a rejection, or five seconds
+// of silence puts the previous phase back, and a frame that does arrive always
+// wins.
+describe('an optimistic Gate mute is confirmed or rolled back', () => {
+  const mute = between(provider, 'const mute = useCallback(', 'const unmute = useCallback(');
+  const unmute = between(provider, 'const unmute = useCallback(', 'const skipReply = useCallback(');
+
+  test('both controls fold immediately and roll back on a refused or failed frame', () => {
+    expect(provider).toContain('const GATE_MUTE_CONFIRM_MS = 5_000;');
+    expect(mute).toContain('foldGateMute(true)');
+    expect(unmute).toContain('foldGateMute(false)');
+    for (const control of [mute, unmute]) {
+      // A `false` from the native send and a rejected send are the same fact: the
+      // Gate never heard it, so the banner goes back.
+      expect(control).toContain('rollbackGateMute(');
+      expect(control).not.toContain('void moduleRef.current?.sendGateControl');
+    }
+  });
+
+  test('a phase frame confirms the fold, and the wait is cleared on end and unmount', () => {
+    expect(provider).toContain("function isGatePhaseFrame(frame: string)");
+    const fold = between(provider, 'const fold = (frame: string) => {', "module.addListener('gate'");
+    expect(fold).toMatch(/if \(isGatePhaseFrame\(frame\)\) clearGateMute\(\);/);
+    // The fold and its five-second wait live together, and the wait is armed even
+    // before the frame is sent: a socket that never answers is rolled back too.
+    const gateMute = between(provider, 'const foldGateMute = useCallback(', 'const resetSpeech = useCallback(');
+    expect(gateMute).toMatch(
+      /setTimeout\(\(\) => rollbackGateMute\('[^']+'\), GATE_MUTE_CONFIRM_MS\)/,
+    );
+    expect(gateMute).toContain('clearGateMute()');
+    expect(between(provider, 'const teardown = useCallback(', 'useEffect(() => {\n    teardownRef.current')).toContain('clearGateMute()');
+    const unmount = between(provider, 'void teardownRef.current();', '}, [clearGateMute]);');
+    expect(unmount).toContain('clearGateMute()');
+  });
+
+  test('a rollback is logged, and it puts back the phase the Gate last reported', () => {
+    const rollback = between(provider, 'const rollbackGateMute = useCallback(', 'const foldGateMute = useCallback(');
+    expect(rollback).toContain('phase: pending.previous.phase');
+    expect(rollback).toContain('muted: pending.previous.muted');
+    expect(rollback).toContain('console.warn');
+    expect(rollback).toContain('setGateBanner(next)');
+  });
+});
+
+// The banner's Mute control follows the real state, which now includes a mute
+// taken while a turn was still in flight: the microphone is already off, and the
+// label must say so before the phase itself reaches `muted`.
+describe('the Mute label follows the state, not the phase alone', () => {
+  test('the context reports muted from the state as well as from the phase', () => {
+    expect(provider).toMatch(
+      /const muted = phase === 'muted' \|\| \(!gateLive && session\.muteIntent === true\);/,
+    );
+    expect(provider).toMatch(/^\s*muted: boolean;$/m);
+  });
+
+  test('the banner draws the control from the reported state', () => {
+    expect(banner).toContain('muted');
+    expect(banner).not.toContain("const muted = phase === 'muted'");
+    expect(banner).toContain("onPress={muted ? unmute : mute}");
   });
 });

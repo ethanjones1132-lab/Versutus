@@ -72,6 +72,14 @@ export type OpenGateVoiceSessionInput = {
   mediaUrl?: (base: string, path: string) => string;
   log?: (event: HandsfreeStartLog) => void;
   now?: () => string;
+  /**
+   * The budget for the WHOLE Gate start, including the device identity read that
+   * runs before this chain. `startGateCall` mints one and hands it here, so the
+   * two links cannot each spend a full timeout. Without it this chain mints its
+   * own, exactly as before. A borrowed budget is not disposed here: its owner
+   * disposes it when the start has settled.
+   */
+  deadline?: StartDeadline;
   /** How long the whole chain may take before the start is abandoned. */
   startTimeoutMs?: number;
 };
@@ -162,7 +170,9 @@ function finish(
  * A grant that cannot be joined is stopped so the next start is not
  * `call_in_progress`, and every link — the grant, the prompt, the media socket
  * and the release itself — is raced against one budget so a link that never
- * answers is abandoned rather than leaving the call in `starting` forever. A
+ * answers is abandoned rather than leaving the call in `starting` forever. The
+ * caller may hand in the budget it already started (see `deadline`), which is
+ * what keeps the device identity read and this chain inside one timeout. A
  * timeout names the link that went quiet, because "the start failed" was never
  * enough to tell a wedged Gate from a wedged microphone prompt.
  */
@@ -171,7 +181,12 @@ export async function openGateVoiceSession(
 ): Promise<HandsfreeStartAttempt & { grant?: GateVoiceGrant }> {
   const log = input.log ?? logHandsfreeStart;
   const toMediaUrl = input.mediaUrl ?? mediaSocketUrl;
-  const deadline = startDeadline(input.startTimeoutMs ?? HANDSFREE_START_TIMEOUT_MS);
+  // A budget the caller already started spends with the call, not with this
+  // function: only one minted here is this function's to dispose.
+  const ownDeadline = input.deadline
+    ? undefined
+    : startDeadline(input.startTimeoutMs ?? HANDSFREE_START_TIMEOUT_MS);
+  const deadline = input.deadline ?? ownDeadline!;
   // This attempt's native key. Cancellation names it, so cleanup for an
   // abandoned attempt can never reach the service a newer retry owns.
   const startId = input.startId ?? newHandsfreeStartId();
@@ -305,6 +320,6 @@ export async function openGateVoiceSession(
     }
     throw error;
   } finally {
-    deadline.dispose();
+    ownDeadline?.dispose();
   }
 }

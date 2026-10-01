@@ -31,6 +31,7 @@ import {
   type HandsfreeCallTransport,
 } from '@/lib/voice/gate-call';
 import { isDeviceIdentityError } from '@/lib/gateway/errors';
+import { recordFailure } from '@/lib/diagnostics/failure-log';
 import { pushDeviceParams } from '@/lib/notifications/push-registration';
 import { reconnectGateMedia } from '@/lib/voice/gate-reconnect';
 import { loadHandsfreeModule, type HandsfreeNativeModule } from '@/lib/voice/handsfree-device';
@@ -52,6 +53,7 @@ import {
   handsfreeReplyForTurn,
   isFailedReply,
   planHandsfreeSpeech,
+  type HandsfreeSpeechCursor,
 } from '@/lib/voice/handsfree-reply';
 import {
   clearHandsfreeRecovery,
@@ -89,6 +91,23 @@ const HANDSFREE_LISTEN_RETRY_MS = 150;
 const HANDSFREE_PROBE_RETRIES = 3;
 const HANDSFREE_PROBE_RETRY_MS = 500;
 
+/**
+ * A chunk the platform refused is offered again this often, this many times.
+ * Android answers a plain `false` when its service is momentarily gone, and a
+ * chunk recorded as spoken is never offered again — so a refusal has to be a
+ * retry, not a silent loss.
+ */
+const HANDSFREE_SPEAK_RETRY_MS = 250;
+const HANDSFREE_SPEAK_RETRY_LIMIT = 5;
+
+/**
+ * How long an optimistic Gate mute waits for the Gate's own `phase` frame
+ * before the banner is put back. Long enough for a socket that is only slow,
+ * short enough that a mute nobody can confirm is not read as a mute that
+ * happened.
+ */
+const GATE_MUTE_CONFIRM_MS = 5_000;
+
 /** What one call is for. Built by the caller, never derived from context. */
 export type HandsfreeCallTarget = {
   gatewayId: string;
@@ -113,6 +132,12 @@ export type HandsfreeVoiceContextValue = {
   phase: HandsfreePhase;
   /** A call is live (not idle and not ended). */
   active: boolean;
+  /**
+   * Whether the call's microphone is muted right now. True from `muted`, and
+   * also while a turn is still in flight after Mute was tapped: the words are
+   * still owed, but the microphone is already off and the control has to say so.
+   */
+  muted: boolean;
   /**
    * The epoch (`Date.now()`) the live call started at, once the native side
    * confirmed `started`; undefined for an idle call or one whose start this
@@ -193,6 +218,15 @@ function isRetryableSocketFailure(frame: unknown): frame is string {
   }
 }
 
+/** Whether a frame is the Gate's own account of what phase the call is in. */
+function isGatePhaseFrame(frame: string): boolean {
+  try {
+    return parseGateFrame(frame).t === 'phase';
+  } catch {
+    return false;
+  }
+}
+
 export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode }) {
   const {
     activeGateway,
@@ -226,6 +260,17 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const graceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const spokenRef = useRef('');
+  // Where the last speech plan's sentence scan stopped, so the next streamed
+  // delta plans from there instead of re-reading the whole reply.
+  const speechCursorRef = useRef<HandsfreeSpeechCursor | undefined>(undefined);
+  // One speak at a time per reply: the newest text is parked here while a speak
+  // is in flight, and the retry timer for a refused one.
+  const speakTextRef = useRef<{ fullText: string; streaming: boolean } | null>(null);
+  const speakBusyRef = useRef(false);
+  const speakRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped by every `resetSpeech`, so a speak that answers after a barge-in, a
+  // Skip or an End cannot write its text into the plan the next turn starts from.
+  const speakEpochRef = useRef(0);
   const fallbackRef = useRef(false);
   const turnIdRef = useRef<string | undefined>(undefined);
   const replyIdRef = useRef<string | undefined>(undefined);
@@ -240,6 +285,14 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // media socket with these exact ids inside the Gate's resume window.
   const gateGrantRef = useRef<GateVoiceGrant | null>(null);
   const gateReconnectingRef = useRef(false);
+  // An optimistic Gate mute, and the banner it replaced. The Gate's own `phase`
+  // frame is the authority; until one arrives (or refuses to) the fold is
+  // unconfirmed, and a control frame that never lands must not leave the banner
+  // claiming a microphone the Gate still has open.
+  const gateMuteRef = useRef<{
+    previous: { phase: GateCallBanner['phase']; muted: boolean };
+    timer: ReturnType<typeof setTimeout> | null;
+  } | null>(null);
 
   // Everything a stable callback has to read at call time. Updated after every
   // render, so `start` and the reply watchers always see the current values
@@ -308,9 +361,79 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     }
   }, []);
 
+  /** An optimistic Gate mute stops waiting to be confirmed. */
+  const clearGateMute = useCallback(() => {
+    const pending = gateMuteRef.current;
+    if (!pending) return;
+    if (pending.timer !== null) clearTimeout(pending.timer);
+    gateMuteRef.current = null;
+  }, []);
+
+  /**
+   * Put the banner back the way the Gate last described the call. Used when the
+   * control frame is refused or never confirmed: a banner that says "Muted"
+   * while the Gate is still capturing is a lie the operator pays for.
+   */
+  const rollbackGateMute = useCallback(
+    (why: string) => {
+      const pending = gateMuteRef.current;
+      if (!pending) return;
+      clearGateMute();
+      const next: GateCallBanner = {
+        ...gateBannerRef.current,
+        phase: pending.previous.phase,
+        muted: pending.previous.muted,
+      };
+      gateBannerRef.current = next;
+      setGateBanner(next);
+      console.warn(
+        `[gate-mute] ${why} session=${gateSessionIdRef.current ?? 'unknown'} phase=${next.phase}`,
+      );
+    },
+    [clearGateMute],
+  );
+
+  /**
+   * Fold the banner the way the operator was promised it — the moment is
+   * immediate — and remember what the Gate last said, so the fold can be undone
+   * when the Gate disagrees. A `phase` frame confirms it; a refusal or five
+   * seconds of silence does not.
+   */
+  const foldGateMute = useCallback(
+    (muted: boolean) => {
+      const previous = gateBannerRef.current;
+      const next: GateCallBanner = {
+        ...previous,
+        phase: muted ? 'muted' : 'listening',
+        muted,
+      };
+      gateBannerRef.current = next;
+      setGateBanner(next);
+      clearGateMute();
+      gateMuteRef.current = {
+        previous: { phase: previous.phase, muted: previous.muted },
+        timer: setTimeout(() => rollbackGateMute('the Gate never confirmed the mute'), GATE_MUTE_CONFIRM_MS),
+      };
+      return moduleRef.current?.sendGateControl(
+        serializeGateControl(gateControlFor(muted ? 'mute' : 'unmute')),
+      );
+    },
+    [clearGateMute, rollbackGateMute],
+  );
+
   const resetSpeech = useCallback(() => {
     spokenRef.current = '';
+    speechCursorRef.current = undefined;
     fallbackRef.current = false;
+    speakEpochRef.current += 1;
+    // A retry belongs to one reply: a new turn, a stop or a teardown must not
+    // inherit it, or a chunk refused for the previous reply is offered here.
+    if (speakRetryTimerRef.current) {
+      clearTimeout(speakRetryTimerRef.current);
+      speakRetryTimerRef.current = null;
+    }
+    speakTextRef.current = null;
+    speakBusyRef.current = false;
   }, []);
 
   const unsubscribe = useCallback(() => {
@@ -345,8 +468,15 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         module.addListener('interruption', () => {
           dispatch({ type: 'interruption' });
         }),
-        module.addListener('endRequested', () => {
-          dispatch({ type: 'endRequested' });
+        module.addListener('endRequested', (event) => {
+          // The notification's End carries the operator's own reason; the
+          // platform also ends a call nobody asked to end when its foreground
+          // service dies under a live runtime, and that is a different fact the
+          // screen can name rather than a call the operator walked away from.
+          dispatch({
+            type: 'endRequested',
+            reason: event.reason === 'app-killed' ? 'app-killed' : undefined,
+          });
         }),
         module.addListener('fatalError', (event) => {
           dispatch({ type: 'fatalError', reason: event.reason });
@@ -384,6 +514,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     (module: HandsfreeNativeModule) => {
       unsubscribe();
       const fold = (frame: string) => {
+        // The Gate's own account of the phase is the authority on an optimistic
+        // mute: it always wins, and it stops the wait that would otherwise undo
+        // a fold the Gate has agreed with.
+        if (isGatePhaseFrame(frame)) clearGateMute();
         const next = reduceGateCall(gateBannerRef.current, frame);
         gateBannerRef.current = next.state;
         setGateBanner(next.state);
@@ -429,7 +563,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         }),
       ];
     },
-    [level, runGateEffect, unsubscribe],
+    [clearGateMute, level, runGateEffect, unsubscribe],
   );
 
   const teardown = useCallback(async () => {
@@ -438,6 +572,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     endingRef.current = true;
     clearGrace();
     clearWatchdog();
+    clearGateMute();
     unsubscribe();
     const wasGate = gateModeRef.current;
     const gateSessionId = gateSessionIdRef.current;
@@ -497,7 +632,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       }
     }
     dispatch({ type: 'stopped' });
-  }, [clearGrace, clearWatchdog, dispatch, resetSpeech, unsubscribe]);
+  }, [clearGateMute, clearGrace, clearWatchdog, dispatch, resetSpeech, unsubscribe]);
 
   useEffect(() => {
     teardownRef.current = teardown;
@@ -525,28 +660,109 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   }, [clearWatchdog, dispatch]);
 
   const streamReplyText = useCallback((fullText: string, streaming: boolean) => {
-    const module = moduleRef.current;
-    const bound = availabilityRef.current?.maxSpeechInputLength ?? 0;
-    if (!module || !(bound > 0)) return;
-    const plan = planHandsfreeSpeech({
-      fullText,
-      streaming,
-      spoken: spokenRef.current,
-      maxLength: bound,
-      waitForCompletion: fallbackRef.current,
-    });
-    if (plan.mutated) {
-      // A reply that mutated where it was already spoken is no longer trusted
-      // to be append-only; this turn waits for completion, the next resumes.
-      fallbackRef.current = true;
-      spokenRef.current = '';
-      return;
-    }
-    spokenRef.current = plan.spoken;
-    if (!plan.chunks.length) return;
-    const voice = targetRef.current?.voice ?? {};
-    void module.speak({ chunks: plan.chunks, ...voice });
-  }, []);
+    // The newest text always wins: a reply streams faster than the speech queue
+    // is drained, so what is spoken next is planned from what has arrived last.
+    speakTextRef.current = { fullText, streaming };
+    if (speakBusyRef.current) return;
+    // The plan this run works against, retired by the next `resetSpeech`.
+    const epoch = speakEpochRef.current;
+
+    /**
+     * One speak at a time, planned from the newest text and from what the
+     * platform has actually accepted. A refused chunk is offered again a bounded
+     * number of times and is never recorded as spoken; when the retries run out
+     * the call reopens the microphone for the next turn instead of parking on
+     * "Speaking" with a reply nobody ever heard.
+     */
+    const offer = (
+      text: { fullText: string; streaming: boolean },
+      retriesLeft: number,
+      refusedAs: string | null,
+    ): void => {
+      // A retry belongs to one reply: a barge-in, a Skip or an End that reset
+      // the plan retired this offer, and a new turn's plan must not inherit it.
+      // `resetSpeech` already released the claim, and releasing it again here
+      // would hand a second speak to a reply that is already being spoken.
+      if (speakEpochRef.current !== epoch) return;
+      // Claimed until this offer parks or finishes: a delta arriving mid-speak
+      // leaves its text in `speakTextRef` rather than starting a second one.
+      speakBusyRef.current = true;
+      if (refusedAs !== null) {
+        if (retriesLeft <= 0) {
+          speakBusyRef.current = false;
+          void recordFailure({
+            kind: 'other',
+            message: `A hands-free reply was never spoken: the platform refused it (${refusedAs}).`,
+          });
+          dispatch({ type: 'reply-failed' });
+          return;
+        }
+        speakRetryTimerRef.current = setTimeout(() => {
+          speakRetryTimerRef.current = null;
+          offer(text, retriesLeft - 1, null);
+        }, HANDSFREE_SPEAK_RETRY_MS);
+        return;
+      }
+
+      const module = moduleRef.current;
+      const bound = availabilityRef.current?.maxSpeechInputLength ?? 0;
+      if (!module || !(bound > 0)) {
+        speakBusyRef.current = false;
+        return;
+      }
+      const plan = planHandsfreeSpeech({
+        fullText: text.fullText,
+        streaming: text.streaming,
+        spoken: spokenRef.current,
+        maxLength: bound,
+        waitForCompletion: fallbackRef.current,
+        cursor: speechCursorRef.current,
+      });
+      speechCursorRef.current = plan.cursor;
+      if (plan.mutated) {
+        // A reply that mutated where it was already spoken is no longer trusted
+        // to be append-only; this turn waits for completion, the next resumes.
+        fallbackRef.current = true;
+        spokenRef.current = '';
+        speakBusyRef.current = false;
+        return;
+      }
+      if (!plan.chunks.length) {
+        speakBusyRef.current = false;
+        return;
+      }
+      const voice = targetRef.current?.voice ?? {};
+      void Promise.resolve(module.speak({ chunks: plan.chunks, ...voice })).then(
+        (accepted) => {
+          if (!accepted) {
+            offer(text, retriesLeft, 'it answered false');
+            return;
+          }
+          // Only text the platform took is spoken text — and only while this is
+          // still the reply being spoken: a barge-in, a Skip or an End that
+          // reset the plan must not be undone by a speak already in the air,
+          // and this late answer must not release the next reply's own claim
+          // on the single speak slot either.
+          if (speakEpochRef.current !== epoch) return;
+          spokenRef.current = plan.spoken;
+          // The parked text is a fresh object every run, so identity would report
+          // a delta that never arrived; what is worth another pass is a delta
+          // that changed the text or stopped the stream.
+          const newest = speakTextRef.current;
+          if (newest && (newest.fullText !== text.fullText || newest.streaming !== text.streaming)) {
+            offer(newest, HANDSFREE_SPEAK_RETRY_LIMIT, null);
+            return;
+          }
+          speakBusyRef.current = false;
+        },
+        (error: unknown) => {
+          offer(text, retriesLeft, error instanceof Error ? error.message : String(error));
+        },
+      );
+    };
+
+    offer({ fullText, streaming }, HANDSFREE_SPEAK_RETRY_LIMIT, null);
+  }, [dispatch]);
 
   const performSend = useCallback(
     async (text: string) => {
@@ -741,8 +957,16 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   useEffect(() => {
     return () => {
       void teardownRef.current();
+      // A refused chunk's retry must not outlive the provider that owned it: a
+      // teardown that found the call already idle returns early, and the timer
+      // would still fire into a phone that has no call.
+      if (speakRetryTimerRef.current) {
+        clearTimeout(speakRetryTimerRef.current);
+        speakRetryTimerRef.current = null;
+      }
+      clearGateMute();
     };
-  }, []);
+  }, [clearGateMute]);
 
   // Detach every listener and ref a Gate start captured, without telling the
   // reducer the start was refused. An abandoned start that ran out of budget is
@@ -750,6 +974,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   // reducer out of `starting` and make the timeout event inert.
   const abandonGateStart = useCallback(() => {
     unsubscribe();
+    clearGateMute();
     gateModeRef.current = false;
     setGateMode(false);
     setEngineInfo(null);
@@ -759,7 +984,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     moduleRef.current = null;
     targetRef.current = null;
     threadRef.current = undefined;
-  }, [unsubscribe]);
+  }, [clearGateMute, unsubscribe]);
 
   const refuseGateStart = useCallback(() => {
     abandonGateStart();
@@ -801,18 +1026,21 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
       subscribeGate(module);
       sessionRef.current = dispatch({ type: 'start' });
 
-      // The device identity is read after the phase has already moved to
-      // `starting`, so a secure-store call that never answers would strand the
-      // start exactly the way a silent Gate would. It runs under the same
-      // one-shot budget, and an expiry is reported as its own reason: a refusal
-      // means a precondition the sheet should have blocked, which is a
-      // different fact from a link that went quiet.
-      const identity = startDeadline();
+      // The whole Gate start runs under ONE budget. The device identity is read
+      // after the phase has already moved to `starting`, so a secure-store call
+      // that never answers would strand the start exactly the way a silent Gate
+      // would; the grant, the microphone prompt, the media link and the release
+      // are all links of the same chain. A second budget here would let the
+      // sheet sit on "Starting" for twice the time every constant advertises. An
+      // expiry is reported as its own reason: a refusal means a precondition the
+      // sheet should have blocked, which is a different fact from a link that
+      // went quiet.
+      const budget = startDeadline();
       let device: { deviceId: string };
       try {
-        device = await identity.guard('the device identity', pushDeviceParams());
+        device = await budget.guard('the device identity', pushDeviceParams());
       } catch (err) {
-        identity.dispose();
+        budget.dispose();
         if (isStartTimeout(err)) {
           // Reset the captured refs and listeners without a refusal: this start
           // ran out of budget, which the reducer answers with its own event.
@@ -831,8 +1059,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         logHandsfreeStart({ result, transport: 'gate', engine: target.voiceEngine });
         return { result };
       }
-      identity.dispose();
 
+      // The budget is disposed from a `finally`, not after the await: a chain that
+      // rethrows would leave its timer pending, and a timer nobody disposed
+      // rejects a promise no one is racing any more.
       const attempt = await openGateVoiceSession({
         gatewayUrl: gateway.url,
         gatewayToken: gateway.token ?? '',
@@ -844,6 +1074,9 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
           botId: target.botId,
         },
         device,
+        // The same one-shot budget, so the identity read and the whole chain
+        // behind it are bounded together.
+        deadline: budget,
         gatewayRequest: (method, params) => latest.current.gatewayRequest(method, params),
         startSession: (title, startId) => module.startSession({ title, startId }),
         // Keyed by the attempt's own id: this cleanup can never stop a newer
@@ -851,14 +1084,15 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
         // cannot strand the start or leak an unhandled rejection.
         cancelStartSession: (startId) => cancelNativeSession(module, startId),
         startGateMedia: (options) => module.startGateMedia(options),
-      });
+      }).finally(() => budget.dispose());
 
       if (attempt.result === 'start-timed-out') {
-        // The chain inside `openGateVoiceSession` carries its own budget; this
-        // is the one expiry the provider can still see, and it must reach the
-        // reducer as the event that returns the call to idle. The inner chain
-        // already logged the timeout with the link that went quiet — logging it
-        // again here would be a second, less accurate line for one fact.
+        // The chain inside `openGateVoiceSession` reports the expiry of the one
+        // budget this start shares with it; this is the one expiry the provider
+        // can still see, and it must reach the reducer as the event that returns
+        // the call to idle. The inner chain already logged the timeout with the
+        // link that went quiet — logging it again here would be a second, less
+        // accurate line for one fact.
         abandonGateStart();
         dispatch({ type: 'start-timeout' });
         return { result: 'start-timed-out', detail: attempt.detail };
@@ -1024,24 +1258,30 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
 
   const mute = useCallback(() => {
     if (gateModeRef.current) {
-      void moduleRef.current?.sendGateControl(serializeGateControl(gateControlFor('mute')));
-      const next = { ...gateBannerRef.current, phase: 'muted' as const, muted: true };
-      gateBannerRef.current = next;
-      setGateBanner(next);
+      // The banner folds now, but it is a promise until the Gate says so: a
+      // refused or unconfirmed control frame puts the previous phase back.
+      void Promise.resolve(foldGateMute(true)).then(
+        (sent) => {
+          if (sent === false) rollbackGateMute('the Gate refused the mute');
+        },
+        () => rollbackGateMute('the mute could not be sent'),
+      );
       return;
     }
     dispatch({ type: 'mute' });
-  }, [dispatch]);
+  }, [dispatch, foldGateMute, rollbackGateMute]);
   const unmute = useCallback(() => {
     if (gateModeRef.current) {
-      void moduleRef.current?.sendGateControl(serializeGateControl(gateControlFor('unmute')));
-      const next = { ...gateBannerRef.current, phase: 'listening' as const, muted: false };
-      gateBannerRef.current = next;
-      setGateBanner(next);
+      void Promise.resolve(foldGateMute(false)).then(
+        (sent) => {
+          if (sent === false) rollbackGateMute('the Gate refused the unmute');
+        },
+        () => rollbackGateMute('the unmute could not be sent'),
+      );
       return;
     }
     dispatch({ type: 'unmute' });
-  }, [dispatch]);
+  }, [dispatch, foldGateMute, rollbackGateMute]);
   const skipReply = useCallback(() => {
     if (gateModeRef.current) {
       void moduleRef.current?.sendGateControl(serializeGateControl(gateControlFor('skip')));
@@ -1066,6 +1306,10 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
     session.phase !== 'ended';
   const active = session.phase !== 'idle' && session.phase !== 'ended';
   const phase = gateLive ? appPhaseForGate(gateBanner.phase) : session.phase;
+  // The control's label follows the real state. A mute tapped while a turn was
+  // still in flight has already muted the microphone, so the banner says so
+  // before the phase itself reaches `muted`.
+  const muted = phase === 'muted' || (!gateLive && session.muteIntent === true);
   const partial = gateLive ? gateBanner.partial : session.partial;
   // Offered whenever a call could run on this device; what blocks it *right now*
   // is reported separately so the control never flickers with chat activity.
@@ -1078,6 +1322,7 @@ export function HandsfreeVoiceProvider({ children }: { children: React.ReactNode
   const value: HandsfreeVoiceContextValue = {
     phase,
     active,
+    muted,
     startedAtMs: session.startedAtMs,
     sendingSinceMs,
     partial,
