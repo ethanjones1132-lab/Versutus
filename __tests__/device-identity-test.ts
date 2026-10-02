@@ -102,6 +102,39 @@ describe('device identity without WebCrypto (Hermes)', () => {
     expect(signature.length).toBeGreaterThan(0);
     expect(signature).not.toMatch(/[+/=]/);
   });
+
+  test('two concurrent first-launch callers share one identity and one write', async () => {
+    // A first launch runs the provider's identity read and push registration in
+    // the same second. Both used to see null, mint a keypair each and race their
+    // writes, so the phone presented two deviceIds to one Gate.
+    const cryptoMock = jest.requireMock('expo-crypto') as { getRandomBytes: jest.Mock };
+    let seed = 0;
+    cryptoMock.getRandomBytes.mockImplementation(() => {
+      const bytes = new Uint8Array(32).fill(7);
+      bytes[0] = (seed += 1);
+      return bytes;
+    });
+    // A delayed read that snapshots the store up front so both callers observe
+    // the empty store before either write lands — the first-launch race.
+    mockGet.mockImplementation(async (key: string) => {
+      const held = backing.get(key) ?? null;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return held;
+    });
+
+    try {
+      const [first, second] = await Promise.all([
+        loadOrCreateDeviceIdentity(),
+        loadOrCreateDeviceIdentity(),
+      ]);
+
+      expect(first.deviceId).toBe(second.deviceId);
+      expect(first.privateKeyB64Url).toBe(second.privateKeyB64Url);
+      expect(mockSet).toHaveBeenCalledTimes(1);
+    } finally {
+      cryptoMock.getRandomBytes.mockImplementation(() => new Uint8Array(32).fill(7));
+    }
+  });
 });
 
 describe('a phone that cannot make an identity says so', () => {

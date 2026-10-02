@@ -163,12 +163,44 @@ function serialized<T>(task: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/**
+ * Records waiting to be written. Queuing one full read-modify-write of the
+ * whole log per failure meant a rejection storm put hundreds of file cycles
+ * ahead of the Diagnostics screen's read. Buffer them instead and drain the
+ * buffer in one cycle per scheduled flush.
+ */
+let pendingRecords: FailureRecord[] = [];
+let flushInFlight: Promise<void> | null = null;
+
+/** Drain every buffered record — plus anything that arrives mid-write — in
+ *  as few read-modify-write cycles as possible. */
+async function flushPending(): Promise<void> {
+  while (pendingRecords.length > 0) {
+    const batch = pendingRecords;
+    pendingRecords = [];
+    const stored = await readStored();
+    await writeStored(batch.reduce(withRecord, stored));
+  }
+}
+
+function startFlush(): Promise<void> {
+  const run = serialized(flushPending);
+  flushInFlight = run;
+  const settled = (): void => {
+    if (flushInFlight !== run) return;
+    flushInFlight = null;
+    // A record that landed between the drain and this callback still needs a
+    // writer; scheduling another flush must not strand it.
+    if (pendingRecords.length > 0) startFlush();
+  };
+  void run.then(settled, settled);
+  return run;
+}
+
 /** Record one failure. Never rejects: this is called from a crash path. */
 export function recordFailure(record: FailureRecord): Promise<void> {
-  return serialized(async () => {
-    const stored = await readStored();
-    await writeStored(withRecord(stored, record));
-  });
+  pendingRecords.push(record);
+  return flushInFlight ?? startFlush();
 }
 
 /** The recorded failures, newest first. A failed read is an empty list. */

@@ -100,9 +100,32 @@ export function reduceEnvironmentRunEvent(view: EnvironmentRunView, event: Envir
   return { ...view, notes: [...view.notes, noteFor(event)] };
 }
 
-/** Assemble the full event log into one view. */
+// The launcher retains the event log and re-renders on every streamed frame,
+// handing the whole growing list here each time. Folding it from scratch per
+// frame is O(n²) over a chatty run, so the last fold is kept and a call whose
+// list extends the cached one by reference folds only the new tail.
+let cachedEvents: readonly EnvironmentRunEvent[] | null = null;
+let cachedView: EnvironmentRunView = EMPTY_VIEW;
+
+/** Whether `events` begins with exactly the cached events, by reference. */
+function extendsCache(events: readonly EnvironmentRunEvent[]): boolean {
+  if (cachedEvents === null || events.length < cachedEvents.length) return false;
+  for (let index = 0; index < cachedEvents.length; index += 1) {
+    if (events[index] !== cachedEvents[index]) return false;
+  }
+  return true;
+}
+
+/** Assemble the full event log into one view, folding only what is new. */
 export function environmentRunView(events: readonly EnvironmentRunEvent[]): EnvironmentRunView {
-  return events.reduce(reduceEnvironmentRunEvent, EMPTY_VIEW);
+  const start = extendsCache(events) ? cachedEvents!.length : 0;
+  let view = start === 0 ? EMPTY_VIEW : cachedView;
+  for (let index = start; index < events.length; index += 1) {
+    view = reduceEnvironmentRunEvent(view, events[index]);
+  }
+  cachedEvents = events;
+  cachedView = view;
+  return view;
 }
 
 export type EnvironmentRunBadge = { label: string; tone: 'accent' | 'success' | 'danger' | 'neutral' };

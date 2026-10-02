@@ -56,7 +56,28 @@ async function createIdentity(): Promise<StoredDeviceIdentity> {
   };
 }
 
-export async function loadOrCreateDeviceIdentity(): Promise<StoredDeviceIdentity> {
+// Two callers can reach an empty store at once (first launch runs the
+// provider's identity read and push registration within the same second). Each
+// used to read null, mint a keypair and write, so the phone presented two
+// deviceIds to one Gate and only the last write survived a restart — the other
+// id then answered 403 pairing_required. Everyone who arrives while a
+// read-create-write is running shares its result, and the slot is cleared once
+// it settles so a later launch re-reads storage and a failed read retries
+// instead of being cached forever.
+let identityInFlight: Promise<StoredDeviceIdentity> | null = null;
+
+export function loadOrCreateDeviceIdentity(): Promise<StoredDeviceIdentity> {
+  if (identityInFlight) return identityInFlight;
+  const attempt = loadOrCreateDeviceIdentityOnce();
+  identityInFlight = attempt;
+  const settled = (): void => {
+    if (identityInFlight === attempt) identityInFlight = null;
+  };
+  void attempt.then(settled, settled);
+  return attempt;
+}
+
+async function loadOrCreateDeviceIdentityOnce(): Promise<StoredDeviceIdentity> {
   const raw = await secureKeyValueStorage.getItem(DEVICE_IDENTITY_KEY);
   if (raw) {
     try {

@@ -162,6 +162,27 @@ describe('recordFailure / loadFailures', () => {
     expect(stored.map((entry) => entry.message).sort()).toEqual(['first', 'second', 'third']);
   });
 
+  test('a burst of records coalesces instead of queueing one full rewrite each', async () => {
+    const mockGet = keyValueStorage.getItem as jest.Mock;
+    mockGet.mockClear();
+
+    // 100 rejections in one tick: every call used to queue its own full
+    // read+write of the log, so a storm serialised 100 file cycles the
+    // Diagnostics screen had to wait behind.
+    const burst = Array.from({ length: 100 }, (_, index) =>
+      recordFailure({ kind: 'unhandled-rejection', message: `storm ${index}` }),
+    );
+    await Promise.all(burst);
+
+    const reads = mockGet.mock.calls.length;
+    expect(reads).toBeLessThanOrEqual(2);
+
+    // Coalescing must not lose records: all 100 land, newest-first capped at 50.
+    const stored = await loadFailures();
+    expect(stored).toHaveLength(50);
+    expect(stored[0].message).toBe('storm 99');
+  });
+
   test('a corrupt stored log reads as no failures, not as a throw', async () => {
     mockBacking.set(FAILURE_LOG_KEY, '{not json');
     await expect(loadFailures()).resolves.toEqual([]);

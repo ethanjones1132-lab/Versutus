@@ -79,9 +79,11 @@ describe('terminal output model', () => {
     expect(ansiPlainText(lines[0].text)).toBe('green');
   });
 
-  test('appendTerminalChunk strips carriage returns only', () => {
+  test('appendTerminalChunk applies carriage-return overwrite, not concatenation', () => {
+    // `\r` returns to column 0: `b` overwrites `a`, so the redraw state wins.
+    // The old assertion pinned `ab`, which piled every progress redraw up.
     const lines = appendTerminalChunk([], 'a\rb');
-    expect(lines.map((line) => line.text)).toEqual(['ab']);
+    expect(lines.map((line) => line.text)).toEqual(['b']);
   });
 
   test('appends chunks across line boundaries', () => {

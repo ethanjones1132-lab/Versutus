@@ -129,6 +129,40 @@ describe('environment run view', () => {
     expect(view.status).toBe('completed');
   });
 
+  describe('incremental folding', () => {
+    it('folds only newly appended events instead of refolding the whole log', () => {
+      let reads = 0;
+      const makeOutput = (index: number): EnvironmentRunEvent => {
+        const payload = new Proxy(
+          { stream: 'stdout', text: `line ${index}\n` },
+          {
+            get: (target, property, receiver) => {
+              if (property === 'text') reads += 1;
+              return Reflect.get(target, property, receiver);
+            },
+          },
+        );
+        return {
+          runId: 'run-1',
+          sequence: index + 1,
+          timestamp: '2026-08-21T00:00:00.000Z',
+          type: 'run.output',
+          payload,
+        };
+      };
+
+      let events: EnvironmentRunEvent[] = [];
+      for (let index = 0; index < 60; index += 1) {
+        events = [...events, makeOutput(index)];
+        environmentRunView(events);
+      }
+
+      // Refolding the retained log every frame rereads O(n²) payloads; an
+      // incremental fold reads each event once.
+      expect(reads).toBeLessThanOrEqual(120);
+    });
+  });
+
   describe('badge', () => {
     it('is null while idle', () => {
       expect(environmentRunBadge(environmentRunView([]))).toBeNull();

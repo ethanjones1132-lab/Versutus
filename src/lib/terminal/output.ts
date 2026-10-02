@@ -14,32 +14,75 @@ export function stripAnsi(text: string): string {
   return text.replace(ANSI_PATTERN, '');
 }
 
+// A single rendered line is bounded so a minified bundle or a giant JSON blob
+// cannot pin megabytes in one React child. Unlike a silent truncation, the
+// overflow becomes continuation line(s), so the rest of the line stays visible
+// and copyable.
+const MAX_LINE_LENGTH = 8192;
+
+/** Apply a span's bare carriage returns: each `\r` rewrites the line from
+ *  column 0, so a progress bar's redraws collapse to their last state. */
+function applyCarriageReturns(current: string, span: string): string {
+  const parts = span.split('\r');
+  let text = current + parts[0];
+  for (let index = 1; index < parts.length; index += 1) {
+    const part = parts[index];
+    text = part + text.slice(part.length);
+  }
+  return text;
+}
+
+/** Split one logical line into rendered lines no longer than MAX_LINE_LENGTH. */
+function splitLine(text: string): string[] {
+  if (text.length <= MAX_LINE_LENGTH) return [text];
+  const segments: string[] = [];
+  for (let at = 0; at < text.length; at += MAX_LINE_LENGTH) {
+    segments.push(text.slice(at, at + MAX_LINE_LENGTH));
+  }
+  return segments;
+}
+
 /**
  * Append a stream chunk to line records, retaining only the newest maxLines.
  *
  * ANSI sequences are preserved in the stored text on purpose — the pane paints
- * colours from them. Only bare carriage returns are removed (progress bars use
- * `\r` to redraw one line, which a list of discrete lines cannot reproduce).
+ * colours from them. Bare carriage returns rewrite the current line from its
+ * start (progress bars), so redraws collapse to their last state instead of
+ * accumulating. A logical line longer than MAX_LINE_LENGTH is split across
+ * continuation lines rather than cut: a silently truncated line reads as
+ * complete when the operator copies it.
  */
 export function appendTerminalChunk(
   lines: TerminalLine[],
   chunk: string,
   maxLines = 2000,
 ): TerminalLine[] {
-  const clean = chunk.replace(/\r/g, '');
-  if (!clean) return lines;
+  if (!chunk) return lines;
 
   const next = lines.length > 0 ? [...lines] : [{ id: 0, text: '' }];
-  const parts = clean.split('\n');
-  const last = next[next.length - 1];
-  let text = last.text + (parts.shift() ?? '');
-  if (text.length > 8192) text = text.slice(0, 8192);
-  last.text = text;
+  const parts = chunk.split('\n');
 
-  for (const part of parts) {
-    let p = part;
-    if (p.length > 8192) p = p.slice(0, 8192);
-    next.push({ id: (next[next.length - 1]?.id ?? 0) + 1, text: p });
+  // The first span continues the current line; every later span starts one.
+  const logical = [applyCarriageReturns(next[next.length - 1].text, parts[0])];
+  for (let index = 1; index < parts.length; index += 1) {
+    logical.push(applyCarriageReturns('', parts[index]));
+  }
+
+  const [head, ...tail] = logical;
+  const firstId = next[next.length - 1].id;
+  const headSegments = splitLine(head);
+  // Replace, never mutate: a caller may still hold the previous line record.
+  next[next.length - 1] = { id: firstId, text: headSegments[0] };
+  let id = firstId;
+  for (const segment of headSegments.slice(1)) {
+    id += 1;
+    next.push({ id, text: segment });
+  }
+  for (const line of tail) {
+    for (const segment of splitLine(line)) {
+      id += 1;
+      next.push({ id, text: segment });
+    }
   }
 
   return next.length > maxLines ? next.slice(-maxLines) : next;
