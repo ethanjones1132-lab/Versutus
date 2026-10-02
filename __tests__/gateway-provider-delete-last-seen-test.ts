@@ -53,11 +53,11 @@ describe('gateway deletion clears last-seen stamps', () => {
   });
 
   test('clearLastSeen is best-effort like the other cleanups', () => {
-    // The Promise.all swallows individual rejections — a storage failure on
-    // one key does not block the others or the deletion itself.
+    // All four cleanups go out as one batch and settle together — a storage
+    // failure on one key does not block the others or the deletion itself.
     const clearBlock = deleteFn.slice(
-      deleteFn.indexOf('await Promise.all(['),
-      deleteFn.indexOf('});', deleteFn.indexOf('clearLastSeen'))
+      deleteFn.indexOf('await Promise.allSettled(['),
+      deleteFn.indexOf(']);', deleteFn.indexOf('clearLastSeen')) + 3,
     );
     expect(clearBlock).toContain('clearTranscriptsForGateway');
     expect(clearBlock).toContain('clearSessionLabelsForGateway');

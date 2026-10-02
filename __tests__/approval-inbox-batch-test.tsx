@@ -256,6 +256,45 @@ describe('a batch decision keeps the list on screen and moves through it', () =>
   });
 });
 
+// A refused read says nothing about what the Gate is still holding: the Gate is
+// busy, the relayed link blipped, the read raced a disconnect. The provider now
+// keeps the rows it had under that failure, so the card must paint them — a
+// refusal the operator cannot see the list through is a card that asks them to
+// decide again what they were already halfway through.
+describe('a failed read leaves the rows the operator still has to act on', () => {
+  it('the rows and their buttons stay listed beside the error card', async () => {
+    mockState.pendingApprovals = [row('half'), row('other')];
+    mockState.pendingApprovalsState = 'failed';
+    mockState.pendingApprovalsError = 'Gate is busy';
+    await mount();
+
+    const cards = renderer?.root.findAllByType(ERROR_CARD).map((node) => String(node.props.cause));
+    expect(cards).toContain('Gate is busy');
+    // Both rows are still here, and still decidable.
+    const buttons = renderer?.root.findAllByType(BUTTON).map((node) => String(node.props.label)) ?? [];
+    expect(buttons.filter((label) => label === 'Approve')).toHaveLength(2);
+    expect(buttons.filter((label) => label === 'Deny')).toHaveLength(2);
+
+    await press('Approve');
+    await settleOne();
+    expect(mockDecided).toEqual(['half']);
+  });
+
+  it('a read in flight still stands in for the list, and an empty settled one says so', async () => {
+    mockState.pendingApprovalsState = 'loading';
+    await mount();
+    expect(renderer?.root.findAllByType(BUTTON)).toHaveLength(0);
+    expect(stringsIn(renderer?.toJSON())).not.toContain('No approvals are waiting.');
+
+    mockState.pendingApprovals = [];
+    mockState.pendingApprovalsState = 'ready';
+    await act(async () => {
+      renderer?.update(createElement(ApprovalInbox));
+    });
+    expect(stringsIn(renderer?.toJSON())).toContain('No approvals are waiting.');
+  });
+});
+
 describe('a single row decision is still one decision, not a batch', () => {
   it('decides the row it was pressed on without taking the batch path', async () => {
     mockState.pendingApprovals = [row('solo')];

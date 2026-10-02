@@ -45,6 +45,18 @@ export type OfflineQueueItem = {
    */
   sessionId?: string;
   /**
+   * The CLI environment the line was typed under, decided once at queue time.
+   *
+   * A queued line has no model of its own: `runTask` and
+   * `executeGatewaySlashCommand` resolve the environment from the live
+   * selection when the flush dispatches them, so `/run` typed under
+   * `claude-local` started under whatever was selected by the time the tailnet
+   * link came back — and a Hermes session's model pin is immutable, so the work
+   * ran where the operator did not type it. Absent on a row written before this
+   * field existed, which flushes exactly as it always did.
+   */
+  backendId?: string;
+  /**
    * The Gate turn this line is sent as, minted once when the row was written.
    *
    * Without it every resend of the same words is a NEW turn: a process killed
@@ -82,7 +94,7 @@ export function isRunQueuedRow(item: OfflineQueueItem): boolean {
 }
 
 /** Where a queued line was typed for, when it was a reply to a notice. */
-export type OfflineQueueDestination = Pick<OfflineQueueItem, 'botId' | 'sessionId'>;
+export type OfflineQueueDestination = Pick<OfflineQueueItem, 'botId' | 'sessionId' | 'backendId'>;
 
 function isOfflineQueueItem(value: unknown): value is OfflineQueueItem {
   if (!value || typeof value !== 'object') return false;
@@ -118,6 +130,8 @@ function normalizeOfflineQueueItem(item: OfflineQueueItem): OfflineQueueItem {
   if (botId) next.botId = botId;
   const sessionId = destinationId(item.sessionId);
   if (sessionId) next.sessionId = sessionId;
+  const backendId = destinationId(item.backendId);
+  if (backendId) next.backendId = backendId;
   const turnId = destinationId(item.turnId);
   if (turnId) next.turnId = turnId;
   const run = isQueuedRunShape(item.run) ? item.run : undefined;
@@ -271,7 +285,19 @@ export async function loadActivityRuns(): Promise<ActivityRun[]> {
 // always the last one written. Reads stay off the queue: a load racing a write
 // may observe the pre-write state, which is acceptable, while keeping
 // loadActivityRuns off the queue avoids adding latency to the Activity restore.
+//
+// The queue also COALESCES, because a save is not one event but one per event:
+// a long agentic run calls `patchActivityRuns` for every tool event it streams,
+// and ordering alone turned 500 events into 500 whole-list serializes queued
+// against the store — competing with the Activity screen's own reads for it, and
+// growing without bound while the run streams. `transcript.ts` solves the twin of
+// this (a write per `/agent` delta) with a trailing debounce; here the store's
+// own round trip IS the window, so the newest list is simply held until the
+// write in flight drains it. Nothing is lost: the holder is drained whatever the
+// write did, and the last list always lands.
 let activityRunsWriteTail: Promise<void> = Promise.resolve();
+let activityRunsHeld: ActivityRun[] | null = null;
+let activityRunsDrain: Promise<void> | null = null;
 
 function enqueueActivityRunsWrite<T>(task: () => Promise<T>): Promise<T> {
   const result = activityRunsWriteTail.then(task);
@@ -284,12 +310,47 @@ function enqueueActivityRunsWrite<T>(task: () => Promise<T>): Promise<T> {
   return result;
 }
 
-export function saveActivityRuns(runs: ActivityRun[]): Promise<void> {
-  return enqueueActivityRunsWrite(() => {
-    const capped = runs.slice(0, ACTIVITY_RUNS_PERSIST_CAP);
-    if (capped.length === 0) {
-      return keyValueStorage.removeItem(ACTIVITY_RUNS_KEY);
+function writeActivityRuns(runs: ActivityRun[]): Promise<void> {
+  const capped = runs.slice(0, ACTIVITY_RUNS_PERSIST_CAP);
+  if (capped.length === 0) {
+    return keyValueStorage.removeItem(ACTIVITY_RUNS_KEY);
+  }
+  return keyValueStorage.setItem(ACTIVITY_RUNS_KEY, JSON.stringify(capped));
+}
+
+/**
+ * Write the newest list this device has, collapsing everything that arrived
+ * while a write was in flight. One refused write is reported once its own
+ * caller has had the answer; the tail still settles resolved so a later save
+ * runs.
+ */
+function drainActivityRuns(): Promise<void> {
+  const drain = (async () => {
+    let failure: unknown;
+    try {
+      for (;;) {
+        const next = activityRunsHeld;
+        if (!next) break;
+        activityRunsHeld = null;
+        try {
+          await enqueueActivityRunsWrite(() => writeActivityRuns(next));
+        } catch (error) {
+          failure ??= error;
+        }
+      }
+    } finally {
+      activityRunsDrain = null;
     }
-    return keyValueStorage.setItem(ACTIVITY_RUNS_KEY, JSON.stringify(capped));
-  });
+    if (failure !== undefined) throw failure;
+  })();
+  activityRunsDrain = drain;
+  return drain;
+}
+
+export function saveActivityRuns(runs: ActivityRun[]): Promise<void> {
+  // The newest list wins: a superseded one is never written, and the promise a
+  // caller holds settles when the drain that carries its list is done — so
+  // `await saveActivityRuns(...)` still means "the store holds this".
+  activityRunsHeld = runs;
+  return activityRunsDrain ?? drainActivityRuns();
 }

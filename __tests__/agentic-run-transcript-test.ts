@@ -33,7 +33,7 @@ describe('agentic-run transcript surface', () => {
     // call so a network refusal lands as a single catch.
     const src = readSource('src', 'components', 'activity', 'agentic-run-sheet.tsx');
     expect(src).toMatch(
-      /loadEvents:\s*\(runId: string, signal: AbortSignal\) => Promise<RunEvent\[\]>/,
+      /loadEvents:\s*\(runId: string, signal: AbortSignal\) => Promise<RunEvent\[\] \| RunTranscriptPage>/,
     );
     expect(src).toMatch(/await loadEvents\(id, controller\.signal\)/);
   });
@@ -105,7 +105,7 @@ describe('agentic-run transcript wiring', () => {
     // signal abort does not silently regress.
     const src = readSource('src', 'context', 'gateway-provider.tsx');
     expect(src).toMatch(
-      /loadRunEvents: \(runId: string, signal: AbortSignal\) => Promise<RunEvent\[\]>/,
+      /loadRunEvents: \(runId: string, signal: AbortSignal\) => Promise<RunEvent\[\] \| RunTranscriptPage>/,
     );
     const impl = src.match(
       /const loadRunEvents = useCallback\([\s\S]*?\},\s*\[\]\);/,
@@ -113,12 +113,12 @@ describe('agentic-run transcript wiring', () => {
     expect(impl).toBeDefined();
     expect(impl).toMatch(/client\.streamRunEvents\(/);
     expect(impl).toMatch(/if \(signal\.aborted\) return;/);
-    expect(impl).toMatch(/return collected;/);
+    expect(impl).toMatch(/return finishRunTranscript\(page\)/);
     // The abort signal must be forwarded into the SSE reader so closing the
     // sheet actually cuts the response — not a decorative forwarding. The
     // source passes runId, an onEvent closure, then signal — pinned as the
     // third argument so a future refactor that drops the abort still fails.
-    expect(impl).toMatch(/client\.streamRunEvents\(\s*runId,[\s\S]*?collected\.push\(event\);[\s\S]*?signal,/);
+    expect(impl).toMatch(/client\.streamRunEvents\(\s*runId,[\s\S]*?pushRunTranscriptEvent\(page, event\);[\s\S]*?signal,/);
     // And the no-capability guard must name run events explicitly.
     expect(src).toMatch(/This gateway does not expose run events\./);
   });

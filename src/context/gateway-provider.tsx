@@ -143,14 +143,17 @@ import { loadRecentCommands, pushRecentCommand } from '@/lib/gateway/recents';
 import {
   ACTIVITY_EVENT_CAP,
   executeRun,
+  finishRunTranscript,
   isTerminalRunStatus,
   outcomeToActivityStatus,
+  pushRunTranscriptEvent,
   runEventPreview,
   runStatusToActivityStatus,
   runsForGateway,
   settleUnresolvedRuns,
   type ActivityRun,
   type RunCapableClient,
+  type RunTranscriptPage,
 } from '@/lib/gateway/runs';
 import { routineJobsFromList } from '@/lib/gateway/routines';
 import { beginFleetRoutineRead, fleetRoutineRead, type FleetRoutineRead } from '@/lib/fleet/routine-read';
@@ -615,11 +618,13 @@ type GatewayContextValue = {
   /** Stop a running run: aborts the local driver and asks the gateway to stop it. */
   stopActivityRun: (runId: string) => void;
   /**
-   * Drain a run's full event stream from the gateway and resolve with the
-   * collected list. Used by the agentic-run transcript sheet; aborting the
-   * signal stops the collection and lets the SSE reader release the response.
+   * Drain a run's event stream from the gateway and resolve with the newest
+   * window plus how many older frames were dropped. Used by the agentic-run
+   * transcript sheet; aborting the signal stops the collection and lets the
+   * SSE reader release the response. Arrays are accepted so a showcase client
+   * can still answer with `[]`.
    */
-  loadRunEvents: (runId: string, signal: AbortSignal) => Promise<RunEvent[]>;
+  loadRunEvents: (runId: string, signal: AbortSignal) => Promise<RunEvent[] | RunTranscriptPage>;
   modelPicker: {
     visible: boolean;
     mode: 'default' | 'fallbacks' | 'agent';
@@ -1211,6 +1216,31 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [modelCatalog, setModelCatalog] = useState<any[]>([]);
   const [modelCatalogError, setModelCatalogError] = useState<string | undefined>(undefined);
   const [modelCatalogLoaded, setModelCatalogLoaded] = useState(false);
+  /**
+   * The scope the catalogue on screen was read for. Nothing else clears it — the
+   * read's failure arm keeps the last good list beside the error, and
+   * `resetSessionSelector` bumps the read sequence without touching model state
+   * — so without this the picker listed one environment's models under another's
+   * name for the whole read, and forever after a failed one. A same-scope
+   * re-attach (the common reconnect) leaves the key alone and paints from cache
+   * as it always did.
+   */
+  const modelCatalogScopeRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    // Read inside the effect, not during render: these are the live mirrors the
+    // reads themselves use, and the state values below are what says the scope
+    // moved. Their effects are declared above this one, so they are current.
+    const scope = scopeCacheId(
+      activeGatewayRef.current,
+      selectedBotIdRef.current,
+      selectedBackendIdRef.current,
+    );
+    if (modelCatalogScopeRef.current === scope) return;
+    modelCatalogScopeRef.current = scope;
+    // The same array back when there is nothing to take off screen, so a scope
+    // that never held a catalogue costs no render.
+    setModelCatalog((current) => (current.length === 0 ? current : []));
+  }, [activeGateway?.id, selectedBackendId, selectedBotId]);
   const [sessionListState, setSessionListState] = useState<SessionListState<HermesSession>>(
     emptySessionList<HermesSession>(),
   );
@@ -1348,7 +1378,26 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   // are meant to survive re-renders — so it hangs off mount/unmount alone.
   useEffect(() => clearRunProgressThrottles, []);
   const runApprovalResolverRef = useRef<((approved: boolean, feedback?: string) => void) | null>(null);
+  /**
+   * The run whose approval is on screen, by id. The state is the five screens'
+   * copy; this is the driver's, and it is what tells a driver that has unwound
+   * that the card on screen belongs to IT: nothing can answer an approval once
+   * the run that asked has gone, so the resolver is nil by then and Approve on
+   * the card would only make it vanish.
+   */
+  const pendingRunApprovalIdRef = useRef<string | null>(null);
+  const setRunApproval = useCallback((next: { runId: string; prompt: string } | null) => {
+    pendingRunApprovalIdRef.current = next?.runId ?? null;
+    setPendingRunApproval(next);
+  }, []);
   const runAbortControllerRef = useRef<AbortController | null>(null);
+  /**
+   * The run the one driver slot is driving, by the id its Activity row carries
+   * — the provisional `local-…` id until the gateway names the run, the real
+   * one after. It is what makes "stop the run this row names" nameable: the
+   * controller slot holds one run, so a Stop on any OTHER live row would
+   * otherwise abort that run's driver while asking the Gate to stop the row's.
+   */
   const activeRunTaskIdRef = useRef<string | null>(null);
   const gatewayDownNotifiedRef = useRef(false);
   const authFailureRef = useRef(false);
@@ -2576,24 +2625,33 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   /**
-   * Stop the turn that is streaming because the client reading it is going away.
+   * Stop the work that is in flight because the client reading it is going away.
    *
-   * The signal belongs to this provider, not to the client, so nothing on the
-   * client-teardown path can stop it: a gateway switch, or a reconnect ladder
-   * that discards and rebuilds a client, used to leave the old turn reading —
-   * frames for a thread this phone has left, and a socket held open on the Gate
-   * for the rest of the turn. The run id and the turn id go with it, so a later
+   * The signals belong to this provider, not to the client, so nothing on the
+   * client-teardown path can stop them: a gateway switch, a Disconnect, or a
+   * reconnect ladder that discards and rebuilds a client, used to leave the old
+   * turn reading — frames for a thread this phone has left, and a socket held
+   * open on the Gate for the rest of the turn. An agentic run was worse: its
+   * driver kept polling `getRunStatus` and `streamRunEvents` on the discarded
+   * client, and its row stayed `running` in Activity after the operator had
+   * explicitly left. The run id and the turn id go with the turn, so a later
    * reconcile does not try to freeze a bubble whose turn is gone, and Stop never
    * names a turn the new client knows nothing about.
+   *
+   * The approval card goes with the run: the abort resolves its promise as
+   * denied and nils the resolver, so a card left up names a run nothing can ever
+   * answer, and it used to survive the gateway switch itself.
    */
   const abandonLiveTurn = useCallback(() => {
     abortAndClear(abortControllerRef);
+    abortAndClear(runAbortControllerRef);
+    setRunApproval(null);
     setIsSending(false);
     isSendingRef.current = false;
     activeRunIdRef.current = null;
     sendingRunIdRef.current = null;
     turnIdRef.current = null;
-  }, []);
+  }, [setRunApproval]);
 
   const attachClient = useCallback(
     async (gatewayInput: GatewayProfile, options: { upgrade?: boolean } = {}) => {
@@ -3806,7 +3864,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     (text: string, destination?: OfflineQueueDestination) => {
       const gatewayId = activeGatewayRef.current?.id ?? '';
       const id = appendLocalMessage('user', text, undefined, true);
-      const item: OfflineQueueItem = { id, text, gatewayId, createdAt: Date.now(), ...destination };
+      const item: OfflineQueueItem = {
+        id,
+        text,
+        gatewayId,
+        createdAt: Date.now(),
+        // The environment these words were typed under, recorded here rather
+        // than read from the live selection at flush time: nothing about a
+        // parked row carries a scope, so a `/run` (or `/model`, `/workflow`,
+        // `/session`) went to whichever backend is selected by the time the
+        // link returns. A destination that names its own backend wins over the
+        // live selection — that is the scope those words belong to.
+        backendId: destination?.backendId ?? selectedBackendIdRef.current,
+        ...destination,
+      };
       // D8: the run shape rides the row ONLY when the parked words were a
       // run line — the Bot scope the composer held, so the flush re-runs it
       // exactly as it would have started live. A plain line (including a
@@ -3872,10 +3943,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     for (const gateway of before) {
       if (!next.some((remaining) => remaining.id === gateway.id)) removedIds.add(gateway.id);
     }
-    await Promise.all([...removedIds].map((removedId) => clearTranscriptsForGateway(removedId)));
-    await Promise.all([...removedIds].map((removedId) => clearSessionLabelsForGateway(removedId)));
-    await Promise.all([...removedIds].map((removedId) => clearCachedForGateway(removedId)));
-    await Promise.all([...removedIds].map((removedId) => clearLastSeen(removedId)));
+    // Every store clear here is best-effort tidying, and one refusing store must
+    // not skip the other three — or, worse, every teardown statement below,
+    // which left the profile the operator had just deleted still wired up as
+    // the active gateway (client pinned, session live) while the dashboard
+    // reported the delete as failed. One batch, not four sequential round trips
+    // through the same store, and a refusal settles rather than throws.
+    await Promise.allSettled([
+      Promise.all([...removedIds].map((removedId) => clearTranscriptsForGateway(removedId))),
+      Promise.all([...removedIds].map((removedId) => clearSessionLabelsForGateway(removedId))),
+      Promise.all([...removedIds].map((removedId) => clearCachedForGateway(removedId))),
+      Promise.all([...removedIds].map((removedId) => clearLastSeen(removedId))),
+    ]);
 
     // Cascade removes child profiles too — tear down if the active gateway
     // was the deleted parent or one of its children.
@@ -3895,6 +3974,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // unreachable Gate held the whole teardown for the request timeout while
       // the gateway the operator had just deleted still read as active.
       const leaving = clientRef.current;
+      // Work in flight is reading through the client this profile's going away
+      // from: see abandonLiveTurn. It is the same teardown `disconnectGateway`
+      // makes, and without it a run kept polling a client nothing would ever
+      // answer and its approval card outlived the profile it belonged to.
+      abandonLiveTurn();
       if (leaving && activeGateway?.kind === 'custom') {
         void Promise.race([
           deregisterWithGate(leaving),
@@ -3923,7 +4007,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         applyConnectionPhase('idle');
       }
     }
-  }, [activeGateway, gateways, settings, runAutoConnect, applyStatus, applyConnectionPhase, resetSessionSelector, reportAutoConnectFailure]);
+  }, [activeGateway, abandonLiveTurn, gateways, settings, runAutoConnect, applyStatus, applyConnectionPhase, resetSessionSelector, reportAutoConnectFailure]);
 
   const disconnectGateway = useCallback(() => {
     // Supersede first: the client emits 'disconnected' synchronously, and the
@@ -4335,8 +4419,8 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const resolveRunApproval = useCallback((approved: boolean, feedback?: string) => {
     runApprovalResolverRef.current?.(approved, feedback);
     runApprovalResolverRef.current = null;
-    setPendingRunApproval(null);
-  }, []);
+    setRunApproval(null);
+  }, [setRunApproval]);
 
   /**
    * D1: the Gate's inbox. The read settles three phases so the card can
@@ -4356,7 +4440,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setPendingApprovals(approvalRowsFromUnknown(payload));
       setPendingApprovalsState('ready');
     } catch (caught) {
-      setPendingApprovals([]);
+      // A refused read says nothing about what the Gate is still holding: the
+      // single-threaded Gate busy with a run, a blip on the relayed link and a
+      // read that raced a disconnect all land here. Emptying the inbox threw
+      // away the approval the operator was halfway through deciding, and only
+      // the next `connected` transition brought it back — which a link that
+      // stays nominally connected never fires. Same rule as the roster read and
+      // `applySessionListRead`: keep the rows and name the failure beside them.
       setPendingApprovalsError(caught instanceof Error ? caught.message : String(caught));
       setPendingApprovalsState('failed');
     }
@@ -4492,6 +4582,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         ...prev,
       ]);
       const trackedId = { current: localId };
+      // The driver owns this row from the moment it exists, provisional id and
+      // all: `onStarted` re-keys it, and until then the row the operator can
+      // stop is the only name this driver has.
+      activeRunTaskIdRef.current = localId;
 
       try {
         const outcome = await executeRun(runCapable, prompt, {
@@ -4499,8 +4593,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           ...resolveSendModel(gateway, selectedBackendIdRef.current, selectedBotIdRef.current),
           signal: abortController.signal,
           onStarted: (runId) => {
+            // The id this row carries RIGHT NOW, captured before the fold runs.
+            // `patchActivityRuns` defers its fold to React's render pass, by
+            // which time the line below has already pointed the ref at the new
+            // run — so a fold that read `trackedId.current` matched nothing and
+            // the row kept its provisional id for good. That id is the one the
+            // Gate refuses to stop (`isLocalProvisionalRunId`), so "Stop run"
+            // asked for nothing at all, and a finished run restored as
+            // cancelled because the load only trusts `local-` to have ended.
+            const from = trackedId.current;
             patchActivityRuns((prev) =>
-              prev.map((run) => (run.id === trackedId.current ? { ...run, id: runId } : run)),
+              prev.map((run) => (run.id === from ? { ...run, id: runId } : run)),
             );
             trackedId.current = runId;
             activeRunTaskIdRef.current = runId;
@@ -4543,7 +4646,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               return { approved: true };
             }
             patchRun(trackedId.current, { status: 'waiting-approval' });
-            setPendingRunApproval({ runId, prompt });
+            setRunApproval({ runId, prompt });
             void notifyApprovalRequired(prompt, runId, activeGatewayRef.current?.id ?? '');
             onApprovalWaiting?.();
             return new Promise<{ approved: boolean; feedback?: string }>((resolve) => {
@@ -4605,11 +4708,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         if (aborted) throw asCommandAbort(error);
         throw error;
       } finally {
-        // Only clear what this call installed. An overlapping run installs its
-        // own controller and run id synchronously before any await, so an
-        // unconditional clear here would wipe the later run's handle — Stop
-        // would abort nothing, skip the server-side stop, and paint the row
-        // cancelled anyway.
+        // An approval belongs to the run that asked for it, and a driver that has
+        // unwound can never be answered — the abort already resolved the promise
+        // as denied and nil'd the resolver. The card outlived every exit from
+        // here (Stop, Stop run, Cancel, a refused start, a disconnect) and named
+        // a run whose row beside it read `cancelled`, with Approve on it doing
+        // nothing at all. Cleared by run, so an overlapping run's own approval is
+        // left up.
+        if (pendingRunApprovalIdRef.current === trackedId.current) setRunApproval(null);
+        // Only this driver's own slots. A run that displaced another one leaves
+        // the displaced driver unwinding, and an unconditional clear here took
+        // the newer driver's controller with it — so a Stop on the run actually
+        // on screen then aborted nothing at all.
         if (runAbortControllerRef.current === abortController) {
           runAbortControllerRef.current = null;
         }
@@ -4618,7 +4728,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         }
       }
     },
-    [patchActivityRuns, status],
+    [patchActivityRuns, setRunApproval, status],
   );
 
   const stopActivityRun = useCallback(
@@ -4642,8 +4752,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      // Abort the local driver (denies any pending approval, stops the stream).
-      abortAndClear(runAbortControllerRef);
+      // Abort the local driver (denies any pending approval, stops the stream) —
+      // but only when it is the driver OF THIS RUN. The controller slot holds one
+      // run, so stopping a row this phone is not driving aborted that other run's
+      // driver while the Gate was asked to stop this row's: both stopped, and the
+      // one the operator was watching read as cancelled because they tapped the
+      // other card. A row with no driver of ours is stopped at the Gate alone.
+      if (activeRunTaskIdRef.current === runId) abortAndClear(runAbortControllerRef);
       // Ask the gateway to stop the run server-side (best effort).
       void serverSideCancelForCommand(clientRef.current, runId);
       patchActivityRuns((prev) =>
@@ -4658,18 +4773,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   );
 
   /**
-   * Drain a run's full event stream from the connected gateway. Subscribes via
-   * `client.streamRunEvents`, collects every event the stream emits, and
-   * resolves with the list when the stream closes end-to-end (the Gate sends
-   * the SSE end-marker after the replay finishes). The `signal` lets the
-   * caller cut a replay mid-stream when the sheet closes — the SSE response is
-   * released and no more events are appended.
+   * Drain a run's event stream from the connected gateway. Subscribes via
+   * `client.streamRunEvents` and keeps the newest RUN_TRANSCRIPT_EVENT_CAP
+   * frames so an 8 MiB Gate replay cannot sit in JS memory. Resolves with
+   * those frames plus how many older ones were dropped. The `signal` lets
+   * the caller cut a replay mid-stream when the sheet closes.
    *
    * Refuses to replay if the run's owning gateway is not the active one, since
    * we only hold a client for the current gateway.
    */
   const loadRunEvents = useCallback(
-    async (runId: string, signal: AbortSignal): Promise<RunEvent[]> => {
+    async (runId: string, signal: AbortSignal): Promise<RunTranscriptPage> => {
       const run = activityRunsRef.current.find((r) => r.id === runId);
       const activeGatewayId = activeGatewayRef.current?.id;
 
@@ -4683,16 +4797,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       if (!client || !client.streamRunEvents) {
         throw new Error('This gateway does not expose run events.');
       }
-      const collected: RunEvent[] = [];
+      const page: RunTranscriptPage = { events: [], omitted: 0 };
       await client.streamRunEvents(
         runId,
         (event) => {
           if (signal.aborted) return;
-          collected.push(event);
+          pushRunTranscriptEvent(page, event);
         },
         signal,
       );
-      return collected;
+      return finishRunTranscript(page);
     },
     [],
   );
@@ -4799,9 +4913,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // either took it (a replay of the same id counts) or it never left.
         // `sendChatInput` used to resolve 'sent' whatever happened, which is how
         // the outbox dropped a line whose send had not reached the Gate at all.
-        return sendMessage(trimmed, options?.messageId, undefined, options?.attachments, {
+        const outcome = await sendMessage(trimmed, options?.messageId, undefined, options?.attachments, {
           turnId: options?.turnId,
         });
+        // A live turn holds the composer lock, so these words never left this
+        // phone — and the caller (a notification quick reply, a resume, a
+        // retry) reads nothing else off the answer. Parked instead: the durable
+        // outbox exists for exactly this case, and a `busy` that stayed a
+        // `busy` was a line the operator had typed, watched vanish, and never
+        // saw again. A row the flush is sending keeps its own bookkeeping — it
+        // ends the batch and goes back on the queue itself.
+        if (outcome === 'busy' && !fromQueue) {
+          queueOfflineInput(trimmed, { botId: options?.botId, sessionId: options?.sessionId });
+          return 'queued';
+        }
+        return outcome;
       }
 
       const busySlash = decideBusySlash(trimmed, isCommandRunning, runningCommandLabel);
@@ -5173,24 +5299,44 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
      */
     let readSettled = false;
     const cacheId = scopeCacheId(activeGatewayRef.current, selectedBotIdRef.current, selectedBackendIdRef.current);
-    if (cacheId) {
+    // One read of the remembered page, shared by the cached paint and the
+    // no-client settle below: two reads of the same page would each be gated on
+    // `readSettled` and the loser would be the one the operator sees.
+    const cachedPage = cacheId
+      ? readCached<HermesSession[]>('sessions', cacheId, 'page1').catch(() => null)
+      : null;
+    if (cachedPage) {
       // Last-known-good first: the newest page this scope really listed, so a
       // Gateway that is slow or refused still shows the threads the operator
       // had. A read that has landed owns the list — and a failed one keeps
       // `loaded: false` on purpose (`applySessionListRead`), so `failed` has to
       // be refused the same way `loaded` is.
-      void readCached<HermesSession[]>('sessions', cacheId, 'page1')
-        .then((cached) => {
-          if (!cached || readSettled || !isCurrent()) return;
-          setSessionListState((previous) =>
-            previous.loaded || previous.failed
-              ? previous
-              : { sessions: cached.value, loaded: true, failed: false },
-          );
-        })
-        .catch(() => undefined);
+      void cachedPage.then((cached) => {
+        if (!cached || readSettled || !isCurrent()) return;
+        setSessionListState((previous) =>
+          previous.loaded || previous.failed
+            ? previous
+            : { sessions: cached.value, loaded: true, failed: false },
+        );
+      });
     }
-    if (!client) return;
+    // Nothing to ask. No read was issued, so nothing can contradict what this
+    // device remembers: the remembered page wins and the sheet has something to
+    // show. With nothing remembered there is nothing to wait for either, so the
+    // read settles as a refusal — leaving `loaded: false, failed: false` made
+    // the sheet claim "Reading sessions… / The gateway is answering." until the
+    // operator closed it and reopened it after a reconnect.
+    if (!client) {
+      const cached = await cachedPage;
+      if (!isCurrent()) return;
+      readSettled = true;
+      setSessionListState((previous) =>
+        cached
+          ? { sessions: cached.value, loaded: true, failed: false }
+          : applySessionListRead(previous, { ok: false }),
+      );
+      return;
+    }
     // The gateway's own verdict about this page, held beside the rows:
     // `readSessionList` reports rows and success, and a page the Gate marked
     // `partial` is short on purpose — judging completeness by the row count alone
@@ -5858,6 +6004,15 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // wanted here.
     clearInterruptedRecovery();
     const client = clientRef.current;
+    // The validation read below is a network hop, and the transport's own bound
+    // on one is 30s. This thread belongs to the client that was current when it
+    // started, so that is what the read is stamped against: a gateway switch, a
+    // Disconnect or another profile's attach lands inside the await, bumps the
+    // generation and replaces `clientRef.current` — and this function would then
+    // pin the old gateway's session id onto the new conversation and ask the new
+    // client to reload history for it (SCOPE-1's shape). The tap is stale by then,
+    // so it is refused instead; the sheet it came from went with the switch.
+    const generation = clientGenerationRef.current;
     // The slash path reads `session.restore` and switches only after it
     // resolves; the tap used to pin first and fail at the history read
     // after. Validate through the same read ahead of the pin: a DEFINITE
@@ -5874,6 +6029,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       sessionId,
       { backendId: selectedBackendIdRef.current, botId: selectedBotIdRef.current },
     );
+    if (clientGenerationRef.current !== generation) return;
     if (!validation.ok) {
       setLastError(threadSwitchFailureText(sessionId, validation.error));
       if (validation.refreshList) {
@@ -6718,6 +6874,16 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     void (async () => {
       try {
         for (const item of forActive) {
+          // The environment this line was typed in, restored before anything is
+          // sent or started. A plain reconnect puts the same backend back on its
+          // own, so this is a no-op there; the operator switching backends while
+          // the row waited is not — and a Hermes session's model pin is
+          // immutable, so the words would have run in an environment nobody
+          // typed them in. Before the Bot open below, because selecting a
+          // backend clears the Bot scope.
+          if (item.backendId !== undefined && item.backendId !== selectedBackendIdRef.current) {
+            selectBackend(item.backendId);
+          }
           // A reply row names its Bot Chat; a run row carries the Bot the
           // composer held when the run was typed. Both open that Bot first, so
           // nothing is sent or started under whichever Bot is selected now.
@@ -6813,7 +6979,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         flushingOwedRef.current = null;
       }
     })();
-  }, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, sendChatInput, sendRunQueued, status]);
+  }, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, selectBackend, sendChatInput, sendRunQueued, status]);
 
   const createNewSession = useCallback(async (title?: string) => {
     const client = clientRef.current;

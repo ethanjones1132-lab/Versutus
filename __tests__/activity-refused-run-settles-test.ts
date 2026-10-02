@@ -49,7 +49,12 @@ describe('activity refused run settles the provisional card', () => {
 
   test('the onStarted local-to-real re-key stays byte-identical', () => {
     const src = readProvider();
-    expect(src).toContain('prev.map((run) => (run.id === trackedId.current ? { ...run, id: runId } : run))');
+    // The fold runs when React renders, so it names the id captured BEFORE the
+    // ref was re-pointed. Reading `trackedId.current` inside the fold matched
+    // nothing — the ref already held the new run — and the row kept its
+    // provisional id for good, which is the one the Gate refuses to stop.
+    expect(src).toContain('const from = trackedId.current;');
+    expect(src).toContain('prev.map((run) => (run.id === from ? { ...run, id: runId } : run))');
     expect(src).toContain('trackedId.current = runId;');
   });
 

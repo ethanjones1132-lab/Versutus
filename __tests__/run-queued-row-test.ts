@@ -225,7 +225,7 @@ describe('the flush re-sends a run-shaped row through the run dispatch, not the 
     const providerSrc = provider();
 
     expect(providerSrc).toContain(
-      '}, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, sendChatInput, sendRunQueued, status]);',
+      '}, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, selectBackend, sendChatInput, sendRunQueued, status]);',
     );
     // The flush names the fold it needs.
     expect(providerSrc).toContain('if (isRunQueuedRow(item)) {');

@@ -110,8 +110,10 @@ describe('the approval notice payload', () => {
 
     // One call site. The payload's run id is the guard the action path keeps,
     // so the provider must pass the run id the pending approval holds — and
-    // the gateway key names the connection that issued the run.
-    expect(src).toContain('setPendingRunApproval({ runId, prompt })');
+    // the gateway key names the connection that issued the run. The state is
+    // written through `setRunApproval`, which also stamps the id the driver
+    // compares against when it unwinds.
+    expect(src).toContain('setRunApproval({ runId, prompt });');
     expect(src).toContain("notifyApprovalRequired(prompt, runId, activeGatewayRef.current?.id");
   });
 });

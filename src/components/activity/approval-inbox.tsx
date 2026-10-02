@@ -148,90 +148,92 @@ export function ApprovalInbox() {
         />
       ) : null}
 
-      {pendingApprovalsState === 'ready' ? (
-        pendingApprovals.length === 0 ? (
-          <View style={styles.quiet}>
-            <Icon name={{ ios: 'checkmark.circle', android: 'check_circle', web: 'check_circle' }} size={18} color="statusConnected" />
-            <Text variant="caption" color="secondary">
-              No approvals are waiting.
-            </Text>
-          </View>
-        ) : (
-          <>
-            {batchProgress ? (
-              <View style={styles.quiet}>
-                <Text variant="caption" color="secondary">
-                  {`Deciding ${batchProgress.done} of ${batchProgress.total}…`}
-                </Text>
-              </View>
-            ) : null}
-            {pendingApprovals.map((row, index) => (
-              <View
-                key={row.approvalId}
-                style={[
-                  styles.row,
-                  index > 0 ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: tokens.borderSubtle } : null,
-                ]}>
-                <RequesterGlow botId={row.botId} />
-                <View style={styles.rowHead}>
-                  {row.botId ? (
-                    <BotAvatar botId={row.botId} size={40} />
-                  ) : (
-                    <View style={[styles.shield, { backgroundColor: tokens.backgroundRaised }]}>
-                      <Icon name={{ ios: 'checkmark.shield', android: 'verified_user', web: 'verified_user' }} size={16} color="statusConnecting" />
-                    </View>
-                  )}
-                  <View style={styles.rowText}>
-                    <Text variant="body" style={styles.summary}>
-                      {approvalInboxCopy(row)}
-                    </Text>
-                    <Text variant="caption" color="tertiary">
-                      {approvalClassLabel(row.cls)}
-                      {row.operation ? ` · ${row.operation}` : ''}
-                    </Text>
+      {/* The rows stay on screen under a failed read: the refusal says nothing
+          about what the Gate is still holding, and a half-decided approval that
+          vanished took its context with it. Only `ready` may claim the list is
+          settled, so a `loading` skeleton still stands in for it. */}
+      {pendingApprovalsState === 'ready' && pendingApprovals.length === 0 ? (
+        <View style={styles.quiet}>
+          <Icon name={{ ios: 'checkmark.circle', android: 'check_circle', web: 'check_circle' }} size={18} color="statusConnected" />
+          <Text variant="caption" color="secondary">
+            No approvals are waiting.
+          </Text>
+        </View>
+      ) : pendingApprovalsState !== 'loading' && pendingApprovals.length > 0 ? (
+        <>
+          {batchProgress ? (
+            <View style={styles.quiet}>
+              <Text variant="caption" color="secondary">
+                {`Deciding ${batchProgress.done} of ${batchProgress.total}…`}
+              </Text>
+            </View>
+          ) : null}
+          {pendingApprovals.map((row, index) => (
+            <View
+              key={row.approvalId}
+              style={[
+                styles.row,
+                index > 0 ? { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: tokens.borderSubtle } : null,
+              ]}>
+              <RequesterGlow botId={row.botId} />
+              <View style={styles.rowHead}>
+                {row.botId ? (
+                  <BotAvatar botId={row.botId} size={40} />
+                ) : (
+                  <View style={[styles.shield, { backgroundColor: tokens.backgroundRaised }]}>
+                    <Icon name={{ ios: 'checkmark.shield', android: 'verified_user', web: 'verified_user' }} size={16} color="statusConnecting" />
                   </View>
-                </View>
-                <View style={styles.actions}>
-                  <Button
-                    label="Deny"
-                    size="sm"
-                    variant="secondary"
-                    onPress={() => void decide(row.approvalId, 'deny')}
-                    disabled={approvalBusy === row.approvalId}
-                    style={styles.action}
-                  />
-                  <Button
-                    label="Approve"
-                    size="sm"
-                    onPress={() => void decide(row.approvalId, 'approve')}
-                    disabled={approvalBusy === row.approvalId}
-                    style={styles.action}
-                  />
+                )}
+                <View style={styles.rowText}>
+                  <Text variant="body" style={styles.summary}>
+                    {approvalInboxCopy(row)}
+                  </Text>
+                  <Text variant="caption" color="tertiary">
+                    {approvalClassLabel(row.cls)}
+                    {row.operation ? ` · ${row.operation}` : ''}
+                  </Text>
                 </View>
               </View>
-            ))}
-            {pendingApprovals.length > 1 ? (
-              <View style={[styles.batch, { borderTopColor: tokens.borderSubtle }]}>
-                {approvable.length > 0 ? (
-                  <Button
-                    label={`Approve ${approvable.length} read-only`}
-                    size="sm"
-                    variant="ghost"
-                    disabled={batchBusy}
-                    onPress={() => void decideAll(approvable.map((row) => row.approvalId), 'approve')}
-                  />
-                ) : null}
+              <View style={styles.actions}>
                 <Button
-                  label="Deny all"
+                  label="Deny"
+                  size="sm"
+                  variant="secondary"
+                  onPress={() => void decide(row.approvalId, 'deny')}
+                  disabled={approvalBusy === row.approvalId}
+                  style={styles.action}
+                />
+                <Button
+                  label="Approve"
+                  size="sm"
+                  onPress={() => void decide(row.approvalId, 'approve')}
+                  disabled={approvalBusy === row.approvalId}
+                  style={styles.action}
+                />
+              </View>
+            </View>
+          ))}
+          {pendingApprovals.length > 1 ? (
+            <View style={[styles.batch, { borderTopColor: tokens.borderSubtle }]}>
+              {approvable.length > 0 ? (
+                <Button
+                  label={`Approve ${approvable.length} read-only`}
                   size="sm"
                   variant="ghost"
                   disabled={batchBusy}
-                  onPress={() => void decideAll(pendingApprovals.map((row) => row.approvalId), 'deny')}
+                  onPress={() => void decideAll(approvable.map((row) => row.approvalId), 'approve')}
                 />
-              </View>
-            ) : null}
-          </>
-        )
+              ) : null}
+              <Button
+                label="Deny all"
+                size="sm"
+                variant="ghost"
+                disabled={batchBusy}
+                onPress={() => void decideAll(pendingApprovals.map((row) => row.approvalId), 'deny')}
+              />
+            </View>
+          ) : null}
+        </>
       ) : null}
     </View>
   );

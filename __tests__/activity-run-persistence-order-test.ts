@@ -118,7 +118,11 @@ describe('activity run persistence order', () => {
       ]),
     ]);
 
-    expect(mockSet).toHaveBeenCalledTimes(3);
+    // The first save had already started writing when the other two landed, so
+    // the burst costs two writes rather than three: the ones it superseded are
+    // never serialized at all. What the queue guarantees is unchanged — the
+    // newest list is what the store ends up holding.
+    expect(mockSet).toHaveBeenCalledTimes(2);
     expect(stored()).toEqual([
       run({ id: 'run-1', status: 'complete', startedAt: 1, finishedAt: 9, events: [], summary: 'done' }),
     ]);

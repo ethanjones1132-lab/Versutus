@@ -93,6 +93,46 @@ export type ActivityRun = {
 export const ACTIVITY_EVENT_CAP = 50;
 
 /**
+ * Newest frames kept when replaying a finished run. The Gate archive is an
+ * 8 MiB SSE file (backend-run-streams.mjs DEFAULT_MAX_BYTES_PER_RUN); holding
+ * every frame in JS memory is what OOMs a mid-range phone. A few thousand of
+ * the newest lines is still a long transcript and fits in a windowed list.
+ */
+export const RUN_TRANSCRIPT_EVENT_CAP = 4_000;
+
+/** One replay page: the newest window, plus how many older frames were dropped. */
+export type RunTranscriptPage = {
+  events: RunEvent[];
+  omitted: number;
+};
+
+/**
+ * Fold one replay frame into a newest-window. Compacts in batches of `cap` so
+ * a long stream is O(n) and peak memory is 2× the kept window, not the Gate's
+ * 8 MiB archive.
+ */
+export function pushRunTranscriptEvent(
+  page: RunTranscriptPage,
+  event: RunEvent,
+  cap: number = RUN_TRANSCRIPT_EVENT_CAP,
+): void {
+  page.events.push(event);
+  if (page.events.length < cap * 2) return;
+  page.omitted += page.events.length - cap;
+  page.events = page.events.slice(-cap);
+}
+
+/** Drop leftover overflow after the stream closes. */
+export function finishRunTranscript(
+  page: RunTranscriptPage,
+  cap: number = RUN_TRANSCRIPT_EVENT_CAP,
+): RunTranscriptPage {
+  if (page.events.length <= cap) return page;
+  const extra = page.events.length - cap;
+  return { events: page.events.slice(-cap), omitted: page.omitted + extra };
+}
+
+/**
  * The runs Home, Activity and the widget show for one gateway. A run saved
  * before `gatewayId` existed names no gateway; it stays visible under the
  * active one (the pre-scoping behaviour) instead of silently vanishing from

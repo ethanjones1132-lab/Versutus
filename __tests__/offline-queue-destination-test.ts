@@ -263,7 +263,7 @@ describe('the flush opens the Bot Chat a queued reply was for, before it sends',
 
   test('the effect re-runs when the Bot path or the run fold changes, so the opens are live', () => {
     expect(provider()).toContain(
-      '}, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, sendChatInput, sendRunQueued, status]);',
+      '}, [isCommandRunning, isSending, openBot, persistOfflineQueue, requestSurface, selectBackend, sendChatInput, sendRunQueued, status]);',
     );
   });
 });
@@ -368,8 +368,11 @@ describe('the send path hands a destination to the queue', () => {
     const src = between(provider(), 'const queueOfflineInput = useCallback', 'const updateLocalMessage');
 
     expect(src).toContain('(text: string, destination?: OfflineQueueDestination)');
+    // The destination it was handed rides the row, and with it the environment
+    // the line was typed under: a parked line is dispatched against the scope it
+    // was typed in, not against whatever is selected when the link returns.
     expect(src).toContain(
-      'const item: OfflineQueueItem = { id, text, gatewayId, createdAt: Date.now(), ...destination };',
+      'backendId: destination?.backendId ?? selectedBackendIdRef.current,',
     );
     // The D8 shape rides the row only when the parked words were a run line —
     // decided once here, never re-derived from the text at flush time.

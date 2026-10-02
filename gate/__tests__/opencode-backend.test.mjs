@@ -251,7 +251,19 @@ function liveBackend(routes = {}, options = {}) {
   let streamController;
   let closed = false;
   const calls = [];
-  const send = (event) => streamController.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+  const send = (event) => {
+    try {
+      streamController.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+    } catch {
+      // The subscriber has let the stream go — the turn's own bound fired and
+      // closed it — so this frame is published to nobody. Same rule as the
+      // `broadcast` helper below and as a real bus: a frame nobody is reading is
+      // gone, not a `ERR_INVALID_STATE` out of the fixture. Without this the
+      // test that drives a bound to expiry fails for the fixture's reason rather
+      // than its own, and only when the suite's load stretches its `delay`s
+      // enough for the bound to land mid-loop.
+    }
+  };
   // The server's side of the bus: a frame published with nobody subscribed is
   // gone, exactly as it is on a real OpenCode server.
   const broadcast = (event) => { if (streamController) send(event); };
