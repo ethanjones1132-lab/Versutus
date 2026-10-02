@@ -43,7 +43,8 @@ import { createPushNotifier, widgetSnapshot } from './push-notifier.mjs';
 import { createVoiceRpc } from './voice/voice-rpc.mjs';
 import { attachVoiceMediaSocket } from './voice/media-socket.mjs';
 import { createVoiceAudit } from './voice/audit.mjs';
-import { LocalEngine } from './voice/engines/local-engine.mjs';
+import { LocalEngine, spawnVoiceWorker } from './voice/engines/local-engine.mjs';
+import { createVoiceWorkerPool } from './voice/engines/worker-pool.mjs';
 import { voicePaths, voiceStatus, installVoice, uvRunner } from './voice/runtime.mjs';
 import { runBackendTurn, modelReport } from './voice/turn-runner.mjs';
 import { resolveVoiceBackend, startVoiceBackendLease } from './voice/voice-backend.mjs';
@@ -761,6 +762,11 @@ export async function createGate(config = {}) {
     // host. Injected with the two windows above for the same reason.
     catalogueResponseTimeoutMs = CATALOGUE_RESPONSE_TIMEOUT_MS,
     modelHealthFile = join(gateHome, 'model-health.json'),
+    // The PC voice worker: one process shared by every call, warmed before the
+    // first one arrives. Both are injectable so a test can watch the warm start
+    // and the shutdown without a python, a GPU or twenty seconds of model load.
+    voicePool = null,
+    voiceWarmStart = true,
   } = config;
 
   await migrateLegacyProviders({ sourceRoot: root, gateHome });
@@ -1011,14 +1017,43 @@ export async function createGate(config = {}) {
     return `turn-${seq}`;
   }
   environmentService.onRunEvent = notifyPush;
+  // One worker for the whole Gate, spawned only when something asks for it to
+  // be warm. Sharing it is what makes a call start instantly: the models are
+  // loaded once and then kept across calls until they go idle.
+  const voiceWorkerPool = voicePool ?? createVoiceWorkerPool({
+    spawn: () => spawnVoiceWorker({ paths: voicePaths() }),
+    log: (line) => console.log(line),
+  });
+  // A call must not pay for the model load, and neither must the operator who
+  // only opened the call sheet: `voice.capabilities` warms the worker too. The
+  // warm never blocks the caller (it is idempotent and a failure is named once),
+  // and a warm that failed is simply retried by the next call's lease.
+  let warmFailureNamed = false;
+  const warmVoiceWorker = (state) => {
+    if (!voiceWarmStart || state !== 'ready') return;
+    Promise.resolve()
+      .then(() => voiceWorkerPool.warm())
+      .catch((error) => {
+        if (warmFailureNamed) return;
+        warmFailureNamed = true;
+        console.log(`voice.worker warm failed ${error?.message ?? error}`);
+      });
+  };
+  const voiceState = () => {
+    const state = voiceStatus({ paths: voicePaths() });
+    warmVoiceWorker(state.engines?.local?.state);
+    return state;
+  };
+
   // Voice sessions live on the Gate; the media socket (M2 task 2.2) reads the
   // same registry the RPC writes, so a grant and its socket cannot disagree.
   // Capabilities are read from the installed runtime (M5 task 5.2): `local` is
   // `ready` only once the venv and models are on disk, so `auto` cannot pick an
-  // engine that is not there.
+  // engine that is not there — and an engine that is there is warmed, so the
+  // call that follows it does not pay for the load either.
   const voiceRpc = createVoiceRpc({
     log: (line) => console.log(line),
-    capabilities: () => voiceStatus({ paths: voicePaths() }),
+    capabilities: voiceState,
     install: {
       // The phone starts the same install the CLI runs, over the same runtime.
       start: () =>
@@ -3433,7 +3468,7 @@ export async function createGate(config = {}) {
     audit: (summary) => voiceAudit.record(summary),
     createEngine: (session) => (
       session.engine === 'local' && !scriptedEngineEnabled()
-        ? new LocalEngine({ paths: voicePaths() })
+        ? new LocalEngine({ paths: voicePaths(), pool: voiceWorkerPool, log: (line) => console.log(line) })
         : new ScriptedEngine()
     ),
     runTurn: (session, text, handlers) => runVoiceTurn(backendManager, session, text, handlers),
@@ -3493,6 +3528,10 @@ export async function createGate(config = {}) {
         // A restart is a clean, named end for every live call, not a drop.
         voiceMedia.endAll?.('gate-restart');
         voiceMedia.close();
+        // Each call's `close` releases its lease, but a call whose engine never
+        // opened holds none and the warm worker is nobody's: shut the pool down
+        // with the Gate or it outlives it, holding the GPU.
+        Promise.resolve(voiceWorkerPool.shutdown?.()).catch(() => {});
         server.close((err) => {
           if (err) reject(err);
           else resolve();
@@ -3508,6 +3547,12 @@ export async function createGate(config = {}) {
 
   // Start listening
   await gateObj.listen();
+
+  // The Gate is up and serving; the worker is warmed behind that, so a call
+  // that arrives now finds models already loaded. Never awaited: a Gate whose
+  // worker takes twenty seconds to load must answer its first request in
+  // milliseconds.
+  warmVoiceWorker(voiceStatus({ paths: voicePaths() }).engines?.local?.state);
 
   return gateObj;
 }

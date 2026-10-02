@@ -176,7 +176,9 @@ test('the measured call is one utterance, and the call log accounts for every fi
   assert.equal(finalFrames[0].text, UTTERANCE);
   assert.deepEqual(
     ofType(call.frames, 'phase').map((frame) => frame.phase),
-    ['listening', 'thinking', 'speaking'],
+    // `opening` first: the phone is not told it can be heard until the engine
+    // can hear it (VOE-2), so the reducer has one more phase to get through.
+    ['opening', 'listening', 'thinking', 'speaking'],
     'one turn, so one thinking phase',
   );
   // The phone watched the utterance grow rather than seeing one frame per sentence.
@@ -339,7 +341,7 @@ test('a second segment ends a speculative turn, and the hold starts the only liv
   assert.deepEqual(ofType(call.frames, 'final').map((frame) => frame.text), ['draft that was only half']);
   assert.deepEqual(
     ofType(call.frames, 'phase').map((frame) => frame.phase),
-    ['listening', 'thinking'],
+    ['opening', 'listening', 'thinking'],
     'exactly one turn for one utterance',
   );
 

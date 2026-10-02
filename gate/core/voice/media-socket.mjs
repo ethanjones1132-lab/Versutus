@@ -16,6 +16,13 @@
 // re-connects with the same `voiceSessionId`. One that does not ends it with
 // reason `network` (M7 task 7.1), parking any turn still running rather than
 // throwing it away.
+//
+// "Listening" is claimed only when the engine can hear: the phone is told
+// `opening` the moment its socket attaches and `ready`/`listening` only once
+// `engine.open()` resolves — a cold local worker takes tens of seconds to load
+// Whisper, Silero, Kokoro and Smart Turn, and every PCM frame written to that
+// pipe before it was read by nobody (measured on a live call, 2026-10-02: the
+// first transcript 17.9 s after the stream opened).
 
 import { WebSocketServer } from 'ws';
 
@@ -72,6 +79,11 @@ export const CONTINUATION_MS = 5_000;
 // hands the turn back the moment it ends — by finishing, or by the caller
 // aborting, which is what this timer does.
 export const TURN_TIMEOUT_MS = 180_000;
+// The outer bound on `engine.open`. The local engine carries its own deadline
+// (it has to: nothing else can time out a worker's model load), but a scripted
+// or third-party engine has none, and a call must not sit in `opening` for ever
+// because an engine never answered.
+export const ENGINE_OPEN_TIMEOUT_MS = 90_000;
 
 /**
  * The ends that mean the phone is not there, as opposed to a person or a process
@@ -116,6 +128,7 @@ export function attachVoiceMediaSocket({
   maxBufferedFrames = MAX_BUFFERED_FRAMES,
   parkedTurnMaxMs = PARKED_TURN_MAX_MS,
   turnTimeoutMs = TURN_TIMEOUT_MS,
+  engineOpenTimeoutMs = ENGINE_OPEN_TIMEOUT_MS,
   speculationWindowMs = SPECULATION_WINDOW_MS,
   utteranceHoldMs = UTTERANCE_HOLD_MS,
   continuationMs = CONTINUATION_MS,
@@ -196,6 +209,10 @@ export function attachVoiceMediaSocket({
       startedAt: now(),
       audioFrames: 0,
       audioBytes: 0,
+      // Audio the phone sent before the engine could hear it: dropped, and
+      // counted so the end line says what was thrown away rather than letting
+      // a deaf call look like a quiet one.
+      audioFramesEarly: 0,
       partials: 0,
       finals: 0,
       utterances: 0,
@@ -214,6 +231,9 @@ export function attachVoiceMediaSocket({
     let turnAbort = null;
     let turnTimer = null;
     let holdTimer = null;
+    // Whether `engine.open` has resolved. Nothing is pushed into an engine that
+    // is not open, and `ready`/`listening` is claimed only once it is.
+    let engineReady = false;
     let turnCommittedAt = 0;
     let turnFirstReplyAt = 0;
     let turnFirstAudioAt = 0;
@@ -511,7 +531,8 @@ export function attachVoiceMediaSocket({
           + ` audioFrames=${trace.audioFrames} audioBytes=${trace.audioBytes} partials=${trace.partials}`
           + ` finals=${trace.finals} speechChunks=${trace.speechChunks} utterances=${trace.utterances}`
           + ` queued=${trace.queued} continued=${trace.continued} turns=${turns}`
-          + ` parkedTurns=${trace.parkedTurns} phase=${call.phase}`,
+          + ` parkedTurns=${trace.parkedTurns} phase=${call.phase}`
+          + ` audioFramesEarly=${trace.audioFramesEarly}`,
         );
       }
       // The reducer keeps its own clocks out, so the socket stamps the time it
@@ -662,6 +683,14 @@ export function attachVoiceMediaSocket({
         registry.markActivity(session.voiceSessionId);
         trace.audioFrames += 1;
         trace.audioBytes += frame.length;
+        // The frame counts as traffic whether or not it can be used: it keeps
+        // the call's liveness lease alive while a cold worker is still loading,
+        // and the no-audio watchdog from closing a socket that is speaking into
+        // a pipe which is about to be read.
+        if (!engineReady) {
+          trace.audioFramesEarly += 1;
+          return;
+        }
         engine.pushAudio(frame);
         return;
       }
@@ -702,15 +731,15 @@ export function attachVoiceMediaSocket({
         if (ws === newWs) detach();
       });
 
-      sendFrame({ t: 'ready', engine: session.engine, resumeWindowMs: resumeTimeoutMs });
+      // A first attach is the phone arriving at an engine that may still be
+      // loading its models, so it gets the reducer's own `opening` phase and
+      // nothing else: `ready` and `listening` are the engine's word, sent below
+      // once `engine.open` resolves. A re-attach is a phone rejoining a call
+      // that is already running and keeps today's behaviour.
       if (first) {
-        dispatch({
-          type: 'ready',
-          turnId: session.voiceSessionId,
-          utteranceHoldMs,
-          continuationMs,
-        });
+        sendFrame({ t: 'phase', phase: 'opening' });
       } else {
+        sendFrame({ t: 'ready', engine: session.engine, resumeWindowMs: resumeTimeoutMs });
         sendFrame({ t: 'phase', phase: call.phase === 'opening' ? 'listening' : call.phase });
         flush();
       }
@@ -818,14 +847,47 @@ export function attachVoiceMediaSocket({
       }),
     );
 
-    // The engine must be opened before any audio can reach it: for the local
-    // engine `open` spawns the worker and sends `voice.open`. A call created
-    // without it pushed PCM into an engine that never loaded a model, so no
-    // transcription ever came back and every call idled out (M6 regression).
+    // The engine must be open before the phone is told it can be heard and
+    // before any audio reaches it: for the local engine `open` takes a lease on
+    // the shared worker and waits for its models (a cold worker took 17.9 s on a
+    // live call, 2026-10-02) plus the `voice.open` acknowledgement. A call
+    // created without it pushed PCM into an engine that never loaded a model, so
+    // no transcription ever came back and every call idled out (M6 regression).
     // A failed open used to be swallowed, so the phone saw a live call that
     // never transcribed.
-    void Promise.resolve()
-      .then(() => engine.open?.(session))
+    const openEngine = () => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`The PC voice engine did not start within ${engineOpenTimeoutMs}ms.`));
+      }, engineOpenTimeoutMs);
+      timer.unref?.();
+      Promise.resolve()
+        .then(() => engine.open?.(session))
+        .then(
+          (value) => {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          (error) => {
+            clearTimeout(timer);
+            reject(error);
+          },
+        );
+    });
+
+    void openEngine()
+      .then(() => {
+        if (ended) return;
+        engineReady = true;
+        // The reducer owns the phase frames; `ready` says which engine answered.
+        dispatch({
+          type: 'ready',
+          turnId: session.voiceSessionId,
+          utteranceHoldMs,
+          continuationMs,
+        });
+        sendFrame({ t: 'ready', engine: session.engine, resumeWindowMs: resumeTimeoutMs });
+        log(`voice.engine open session=${session.voiceSessionId} afterMs=${now() - trace.startedAt}`);
+      })
       .catch((error) => {
         const message = error?.message ?? 'The PC voice engine would not start.';
         log(`voice.stream engine-open fail session=${session.voiceSessionId} ${message}`);

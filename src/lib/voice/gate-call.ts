@@ -15,12 +15,13 @@ import {
   type GateVoiceFrame,
   type PhoneVoiceFrame,
   type VoicePhase,
+  type VoiceSpeechState,
 } from './voice-stream-protocol';
 
 /** Which side drives a call. `gate` means the Gate owns the loop. */
 export type HandsfreeCallTransport = 'phone' | 'gate';
 
-export type GateCallPhase = VoicePhase | 'opening' | 'ended';
+export type GateCallPhase = VoicePhase | 'ended';
 
 export type GateCallBanner = {
   phase: GateCallPhase;
@@ -37,7 +38,7 @@ export type GateCallBanner = {
    */
   turnError: string | null;
   speechGen: number;
-  speechState: 'start' | 'end' | 'cancelled' | null;
+  speechState: VoiceSpeechState | null;
   muted: boolean;
   approval: { turnId: string; summary: string } | null;
   endedReason: string | null;

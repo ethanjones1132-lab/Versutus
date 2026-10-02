@@ -19,9 +19,9 @@ export const GATE_FRAME_TYPES = [
   'error',
   'ended',
 ] as const;
-export const PHASES = ['listening', 'thinking', 'speaking', 'muted'] as const;
+export const PHASES = ['opening', 'listening', 'thinking', 'speaking', 'muted'] as const;
 export const TURN_STATES = ['sent', 'replying', 'done', 'failed'] as const;
-export const SPEECH_STATES = ['start', 'end', 'cancelled'] as const;
+export const SPEECH_STATES = ['start', 'end', 'cancelled', 'gap'] as const;
 
 export type VoicePhase = (typeof PHASES)[number];
 export type VoiceTurnState = (typeof TURN_STATES)[number];

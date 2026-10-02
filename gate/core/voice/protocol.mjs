@@ -20,7 +20,9 @@ export const GATE_FRAME_TYPES = Object.freeze([
   'error',
   'ended',
 ]);
-export const PHASES = Object.freeze(['listening', 'thinking', 'speaking', 'muted']);
+// `opening` is the call before its engine can hear: a first attach is told so at
+// once and `listening` only when the engine is open.
+export const PHASES = Object.freeze(['opening', 'listening', 'thinking', 'speaking', 'muted']);
 export const TURN_STATES = Object.freeze(['sent', 'replying', 'done', 'failed']);
 // `gap` says the audio that was in front of this is gone: the head of a reply
 // was dropped because the call's replay log overflowed while no phone was

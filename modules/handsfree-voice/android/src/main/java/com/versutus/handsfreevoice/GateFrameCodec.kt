@@ -88,9 +88,9 @@ object GateFrameCodec {
     "ready", "phase", "partial", "final", "turn", "reply", "speech", "level", "approval", "error", "ended",
   )
   private val PHONE_TYPES = setOf("mute", "skip", "bargein", "end")
-  private val PHASES = setOf("listening", "thinking", "speaking", "muted")
+  private val PHASES = setOf("opening", "listening", "thinking", "speaking", "muted")
   private val TURN_STATES = setOf("sent", "replying", "done", "failed")
-  private val SPEECH_STATES = setOf("start", "end", "cancelled")
+  private val SPEECH_STATES = setOf("start", "end", "cancelled", "gap")
 
   fun parse(json: String): GateFrame = fromGateRecord(record(json, GATE_TYPES))
 
