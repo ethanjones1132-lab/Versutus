@@ -283,7 +283,14 @@ export default function ActivityScreen() {
           activeGatewayId={activeGateway?.id}
           status={status}
           onSelect={(gateway) => {
-            void connectGateway(gateway);
+            // `connectGateway` rethrows an auth refusal by design and this action
+            // is fire-and-forget, so without a handler a refused key was an
+            // unhandled rejection with nothing on screen. The refresh notice is
+            // the screen's one error line, and the provider has already written
+            // the same reason into `lastError`.
+            void connectGateway(gateway).catch((caught: unknown) => {
+              setRefreshError(caught instanceof Error ? caught.message : String(caught));
+            });
           }}
         />
       </View>

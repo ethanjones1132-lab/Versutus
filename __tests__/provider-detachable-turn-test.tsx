@@ -10,6 +10,7 @@ import {
   type GatewayContextValue,
 } from '@/context/gateway-provider';
 import { isStoppedTurn } from '@/lib/gateway/message-reducer';
+import { clearTranscriptsForGateway } from '@/lib/gateway/transcript';
 import type { ConnectionStatus, GatewayProfile, HermesSession, SessionMessage } from '@/lib/gateway/types';
 import type { PortalClient, PortalClientCallbacks } from '@/lib/portal/adapters';
 import type { GatewayManifest } from '@/lib/portal/manifest';
@@ -173,6 +174,10 @@ type FakeClient = PortalClient & {
   /** Every turn id Stop was asked to cancel, with whether the abort had landed. */
   cancels: { turnId: string; streamAborted: boolean }[];
   historyReads: number;
+  /** Session ids `getSessionMessages` was asked for, in order. */
+  sessionReads: string[];
+  /** How many times this client was asked to mint a session. */
+  sessionCreates: number;
 };
 
 function abortError(): Error {
@@ -219,6 +224,8 @@ function mockMakeClient(callbacks: PortalClientCallbacks, gateway: GatewayProfil
     streams: [] as StreamOptions[],
     cancels: [] as { turnId: string; streamAborted: boolean }[],
     historyReads: 0,
+    sessionReads: [] as string[],
+    sessionCreates: 0,
     // A Gate that cannot manage sessions is the honest model for "the phone
     // holds no thread": the turn's session is whatever the Gate decides.
     canManageSessions: mockState.canManageSessions !== false,
@@ -269,9 +276,13 @@ function mockMakeClient(callbacks: PortalClientCallbacks, gateway: GatewayProfil
     getModels: async () => [{ id: 'm1', object: 'model' }],
     getCapabilities: async () => ({ chat: true, models: true }),
     getSessions: async () => (mockState.canManageSessions === false ? [] : [SESSION]),
-    createSession: async () => SESSION,
-    getSessionMessages: async () => {
+    createSession: async () => {
+      client.sessionCreates += 1;
+      return SESSION;
+    },
+    getSessionMessages: async (sessionId: string) => {
       client.historyReads += 1;
+      client.sessionReads.push(sessionId);
       if (mockState.historyFails) throw new Error('history refused');
       return mockState.history;
     },
@@ -700,6 +711,45 @@ describe('BG-1: Stop cancels the turn the Gate is still running', () => {
     await settleStream();
 
     expect(mockClients[0].cancels).toEqual([{ turnId: 'turn-second', streamAborted: false }]);
+  });
+
+  test('Stop hands the busy flag on so a replacement send can finish', async () => {
+    // stopStreaming dropped isSending without releasing sendingRunRef. The next
+    // send could not claim the owner, and its finally left isSending true —
+    // sendMessage then answered busy and Stop stayed live. The abandoned
+    // stream is held open on purpose: recovery used to depend on its unwind.
+    let releaseFirst = (): void => undefined;
+    const abandoned = new Promise<string>((_resolve, reject) => {
+      releaseFirst = () => reject(new Error('Chat stream closed'));
+    });
+    streamScript = () => abandoned;
+    await mount();
+    await startSend('explain');
+    expect(chatApi().isSending).toBe(true);
+
+    await act(async () => {
+      await gatewayApi().stopStreaming();
+    });
+    await settleStream();
+    expect(chatApi().isSending).toBe(false);
+
+    streamScript = async (_options, onDelta) => {
+      onDelta('done');
+      return 'done';
+    };
+    await act(async () => {
+      await gatewayApi().sendChatInput('and again');
+    });
+    await settleStream();
+
+    expect(chatApi().isSending).toBe(false);
+    expect(chatApi().messages.some((message) => message.streaming)).toBe(false);
+
+    await act(async () => {
+      releaseFirst();
+    });
+    await settleStream();
+    expect(chatApi().isSending).toBe(false);
   });
 });
 
@@ -1241,5 +1291,127 @@ describe('SEND-4: a cancelled command reads as a cancel, not a failure', () => {
     expect(gatewayApi().commandTranscripts.find((entry) => entry.id === bubble!.id)?.status).toBe(
       'cancelled',
     );
+  });
+});
+
+// Leaving a gateway is the moment this thread's facts stop being true: the
+// session it was showing, the transcripts recorded under it, and the busy flag
+// its turn was holding all belong to the gateway being left. A turn still
+// waiting on the discarded client used to hand the flag back on its way out,
+// and the session and transcripts outlived the profile with nothing to correct
+// them.
+describe('the gateway the operator left stops speaking for this thread', () => {
+  beforeEach(async () => {
+    stageActive({ id: 'alpha', url: 'http://alpha.test:8642' });
+    // The transcript module keeps its own held copy per key, so an earlier
+    // case's `/agent` entry would still be there for this one to find.
+    await clearTranscriptsForGateway('alpha');
+  });
+
+  test('a send abandoned by a gateway switch does not stand the replacement turn down', async () => {
+    // `disconnect()` on a real client aborts nothing: the send keeps waiting on
+    // the stream it was handed, well after the operator has moved on and typed
+    // again. That late unwind is the whole point of this case.
+    let releaseFirst = (): void => undefined;
+    const abandoned = new Promise<string>((_resolve, reject) => {
+      releaseFirst = () => reject(new Error('Chat stream closed'));
+    });
+    streamScript = () => abandoned;
+    await mount();
+
+    await startSend('first question');
+    expect(chatApi().isSending).toBe(true);
+
+    await act(async () => {
+      await gatewayApi().connectGateway(profile({ id: 'beta', url: 'http://beta.test:8642' }));
+    });
+    await settleStream();
+    // The switch hands the busy flag on: the operator has to be able to send on
+    // the gateway they just moved to.
+    expect(chatApi().isSending).toBe(false);
+
+    streamScript = (options, onDelta) => {
+      onDelta('half an ans');
+      return hangUntilAborted(options);
+    };
+    await startSend('second question');
+    expect(chatApi().isSending).toBe(true);
+
+    await act(async () => {
+      releaseFirst();
+    });
+    await settleStream();
+
+    // The turn on the gateway the operator is ON is still streaming, and the
+    // turn on the one they left has no say over that.
+    expect(chatApi().isSending).toBe(true);
+    expect(chatApi().messages.some((message) => message.streaming)).toBe(true);
+  });
+
+  test('a refused history read on the new gateway does not leave the old gateway\'s command transcripts', async () => {
+    streamScript = (options) => hangUntilAborted(options);
+    await mount();
+
+    await act(async () => {
+      void gatewayApi().sendChatInput('/agent status').catch(() => undefined);
+    });
+    await settleStream();
+    expect(gatewayApi().commandTranscripts).toHaveLength(1);
+
+    // The one run where the reload publishes no transcript list of its own: the
+    // history read bails before the paint, so nothing overwrites the list the
+    // previous gateway filled.
+    mockState.historyFails = true;
+    await act(async () => {
+      await gatewayApi().connectGateway(profile({ id: 'beta', url: 'http://beta.test:8642' }));
+    });
+    await settleStream();
+
+    expect(gatewayApi().commandTranscripts).toEqual([]);
+  });
+
+  test('leaving a gateway releases the session its thread was showing', async () => {
+    // The Gate names the session its turn ran in, and that id is what the
+    // composer draft, the thread spend and the selector's current marker are
+    // keyed by — under whichever gateway comes next.
+    mockState.canManageSessions = false;
+    streamScript = async (options, onDelta) => {
+      options.onSession?.('sess-from-gate');
+      onDelta('pong');
+      return 'pong';
+    };
+    await mount();
+    await act(async () => {
+      await gatewayApi().sendChatInput('hello');
+    });
+    await settleStream();
+    expect(gatewayApi().currentSessionId).toBe('sess-from-gate');
+
+    await act(async () => {
+      gatewayApi().disconnectGateway();
+    });
+    await settleStream();
+
+    // The session belonged to the gateway that just went away, and the list it
+    // was chosen from went with it.
+    expect(gatewayApi().currentSessionId).toBeUndefined();
+  });
+
+  test('a reconnect resumes the session the profile pinned', async () => {
+    // connectGateway copies stored onto the live slot, then attachClient
+    // resets the selector. If that reset is the last writer, liveSessionId
+    // sees an empty slot, ignores stored, and the first history load either
+    // picks the newest api_server session or mints a new one.
+    stageActive({
+      id: 'alpha',
+      url: 'http://alpha.test:8642',
+      sessionId: 'pinned-session',
+    });
+    await mount();
+
+    expect(mockClients[0].sessionReads).toContain('pinned-session');
+    expect(mockClients[0].sessionReads).not.toContain('live-session');
+    expect(mockClients[0].sessionCreates).toBe(0);
+    expect(gatewayApi().currentSessionId).toBe('pinned-session');
   });
 });

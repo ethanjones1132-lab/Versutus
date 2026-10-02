@@ -84,3 +84,32 @@ describe('restored unresolved runs settle on first connect', () => {
     expect(helper).toContain('activityRunsRef.current');
   });
 });
+
+// A reconnect that finds a turn still in flight freezes its bubble as
+// "Connection lost" before reloading the Gate's history page — and the freeze
+// has to be read off the list the reload KEEPS. `messagesRef` is only synced in
+// an effect, so it names the commit from before the freeze, and the reload
+// replaces the list with a direct write that discards the freeze queued before
+// it. Both used to leave `preserveInterruptedAfterReload` restoring marks from a
+// list that carried none.
+describe('the interrupted freeze is taken from the list the reload keeps', () => {
+  const helper = readProvider().slice(
+    readProvider().indexOf('const reconcileInterrupted = useCallback'),
+    readProvider().indexOf('const clearInterruptedRecovery'),
+  );
+
+  test('the list handed to the restore is the one the freeze produced', () => {
+    const freeze = helper.indexOf('markInterrupted(current, activeRunId, \'Connection lost\')');
+    const read = helper.indexOf('let previousMessages: ChatMessage[] = [];');
+    const reload = helper.indexOf('await reloadHistoryFor(gateway);');
+    const restore = helper.indexOf('preserveInterruptedAfterReload(history, previousMessages)');
+    expect(freeze).toBeGreaterThan(-1);
+    expect(read).toBeGreaterThan(-1);
+    expect(read).toBeLessThan(freeze);
+    expect(reload).toBeGreaterThan(freeze);
+    expect(restore).toBeGreaterThan(reload);
+    // Read through the state queue, not through the ref the commit syncs: the
+    // freeze this restore is handed has to be the freeze the list carries.
+    expect(helper).not.toContain('const previousMessages = messagesRef.current;');
+  });
+});

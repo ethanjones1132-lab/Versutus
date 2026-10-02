@@ -725,6 +725,31 @@ describe('the connected-time reads take their turn', () => {
     expect(mockClients[1].listBotsCalls).toBe(1);
     expect(client.listCronJobsCalls).toBe(1);
   });
+
+  test('leaving inside the stagger window reads nothing more', async () => {
+    const alpha = profile({ id: 'alpha', url: 'http://alpha.test:8642', kind: 'custom' });
+    mockState.gateways = [alpha];
+    mockState.activeId = alpha.id;
+    mockState.manifests.set(alpha.url, GATE_MANIFEST);
+    await mount();
+    const client = mockClients[0];
+    // Connected, with the whole fan-out still queued.
+    const modelsAtLeave = client.getModelsCalls;
+
+    await act(async () => {
+      gatewayApi().disconnectGateway();
+    });
+    await settle(4, 2_000);
+
+    // Every timer the connection armed is cancelled with it. The default-model
+    // pin is the one that has to be: its disposer is thrown away, so nothing
+    // but the canceller can stop it, and a client already discarded would be
+    // the one it read from.
+    expect(client.getModelsCalls).toBe(modelsAtLeave);
+    expect(client.listCronJobsCalls).toBe(0);
+    expect(client.listBotsCalls).toBe(0);
+    expect(gatewayApi().status).toBe('disconnected');
+  });
 });
 
 // Deciding a row re-reads the Gate's inbox. That read used to flip

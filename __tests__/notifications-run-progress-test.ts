@@ -617,10 +617,10 @@ describe('the provider writes the notice as run state changes', () => {
     expect(src.match(/void dismissStaleRunProgress\(inFlightRunIds\(/g)).toHaveLength(3);
 
     // At mount, on the rows this process has just restored.
-    const restoredAt = src.indexOf('setActivityRuns(restoredRuns);');
+    const restoredAt = src.indexOf('setActivityRuns(restoredRunsLoad.runs);');
     const bootstrap = src.slice(restoredAt, src.indexOf('void readDeviceIdentity()', restoredAt));
     expect(restoredAt).toBeGreaterThan(-1);
-    expect(bootstrap).toContain('void dismissStaleRunProgress(inFlightRunIds(restoredRuns));');
+    expect(bootstrap).toContain('void dismissStaleRunProgress(inFlightRunIds(restoredRunsLoad.runs));');
 
     // On the connect-time settle of restored unresolved runs.
     const connected = src.slice(

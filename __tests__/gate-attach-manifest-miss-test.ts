@@ -302,7 +302,10 @@ describe('the provider connects through that seam', () => {
     // background refresh a cached attach runs and the fetch a manifest-less
     // attach still owes land there, with the source each one came from.
     expect(attach).toContain('if (lateManifestUpgradesClient(source, manifest)) {');
-    expect(attach).toContain('void upgradeClientRef.current(gateway);');
+    // The upgrade is the one automatic entry point that fires an attach which
+    // rethrows, so it ends in the reporter like every other one: a refused key
+    // here was an unhandled rejection with the screen still on the adapter.
+    expect(attach).toContain('void upgradeClientRef.current(gateway).catch(reportAutoConnectFailure);');
     expect(attach).toContain('!options.upgrade &&');
     expect(attach).toContain('adoptLiveManifest(manifest, attachSource);');
     expect(attach).toContain("onLive: (served) => {");

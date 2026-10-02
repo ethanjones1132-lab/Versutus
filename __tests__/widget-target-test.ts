@@ -443,7 +443,12 @@ describe('the provider writes the snapshot as run state changes', () => {
     const patch = provider().match(
       /const patchActivityRuns = useCallback\([\s\S]*?\n  \}, \[\]\);/,
     )?.[0];
-    expect(patch).toContain('void saveActivityRuns(next);');
+    // The roster's durable write rides the committed state rather than the
+    // updater: React may invoke an updater more than once or discard it, so a
+    // write issued from one is a write for a state that never committed.
+    expect(patch).not.toContain('saveActivityRuns(');
+    expect(provider()).toContain('void saveActivityRuns(activityRuns).catch(');
+    expect(provider()).toContain('}, [activityRuns, isBootstrapped]);');
     // The Runs destination now reads activityRunsForActiveGateway (scoped to active gateway).
     expect(readSource('src', 'app', 'runs.tsx')).toContain('runs={activityRunsForActiveGateway}');
   });

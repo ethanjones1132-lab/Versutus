@@ -17,7 +17,7 @@ jest.mock('@/lib/storage/key-value', () => ({
   },
 }));
 
-import { loadActivityRuns, loadOfflineQueue } from '@/lib/gateway/session-persistence';
+import { loadActivityRuns, loadActivityRunsFromStore, loadOfflineQueue } from '@/lib/gateway/session-persistence';
 
 const refusing = async (): Promise<never> => {
   throw new Error('SQLite disk image is malformed');
@@ -43,8 +43,15 @@ describe('a store that will not hand the key over', () => {
 
   test('the activity runs load empty rather than failing the bootstrap', async () => {
     await expect(loadActivityRuns()).resolves.toEqual([]);
-    expect(warnSpy).toHaveBeenCalledTimes(1);
+    await expect(loadActivityRunsFromStore()).resolves.toEqual({ read: false, runs: [] });
+    expect(warnSpy).toHaveBeenCalledTimes(2);
     expect(String(warnSpy.mock.calls[0]?.[0] ?? '')).toContain('SQLite disk image is malformed');
+  });
+
+  test('a missing activity-runs key is a genuine empty roster, not a refused read', async () => {
+    mockGet.mockReset().mockImplementation(async () => null);
+    await expect(loadActivityRunsFromStore()).resolves.toEqual({ read: true, runs: [] });
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   test('a value that will not parse is still an empty list, and still quiet about the cause', async () => {
@@ -52,6 +59,7 @@ describe('a store that will not hand the key over', () => {
 
     await expect(loadOfflineQueue()).resolves.toEqual([]);
     await expect(loadActivityRuns()).resolves.toEqual([]);
+    await expect(loadActivityRunsFromStore()).resolves.toEqual({ read: true, runs: [] });
     expect(warnSpy).not.toHaveBeenCalled();
   });
 });

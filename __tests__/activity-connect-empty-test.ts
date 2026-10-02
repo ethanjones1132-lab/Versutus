@@ -79,7 +79,12 @@ describe('runs connect-to-start-runs empty state', () => {
   test('AgentTargets still connects the tapped gateway profile independently', () => {
     const src = readActivity();
     expect(src).toContain('<AgentTargets');
-    expect(src).toMatch(/onSelect=\{\(gateway\) => \{\s*void connectGateway\(gateway\);/);
+    // The tap still names the profile it was handed, and the refusal is handled:
+    // `connectGateway` rethrows an auth refusal by design, so this fire-and-forget
+    // used to leave an unhandled rejection with nothing on the screen.
+    expect(src).toMatch(
+      /onSelect=\{\(gateway\) => \{\n(?:\s*\/\/[^\n]*\n)*\s*void connectGateway\(gateway\)\.catch\(/,
+    );
   });
 });
 

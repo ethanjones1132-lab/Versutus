@@ -583,6 +583,50 @@ describe('the child-profile sync path', () => {
     expect(secondTeardown).toBeGreaterThan(secondClear);
     expect(secondSet).toBeGreaterThan(secondTeardown);
   });
+
+  test('one refused store cannot take the retire with it', () => {
+    const src = readSource('src', 'context', 'gateway-provider.tsx');
+    const start = src.indexOf('async function clearRetiredGatewayStores(');
+    const end = src.indexOf('export function GatewayProvider(');
+    expect(start).toBeGreaterThan(-1);
+    const helper = src.slice(start, end);
+
+    // `syncChildProfiles` has already deleted the profile from SecureStore by the
+    // time the store clear runs, so a refused AsyncStorage read leaves an orphan
+    // store — while a throw out of here would abort the chain that is waiting on
+    // it, and the swallow-all `.catch` would hide that: the session would stay
+    // up on a profile the roster no longer holds. Every store is therefore
+    // cleared best-effort, so the retire behind them always runs.
+    expect(helper.match(/Promise\.allSettled\(ids\.map\(/g)).toHaveLength(3);
+    expect(helper).not.toContain('Promise.all(ids.map(');
+  });
+});
+
+describe('the teardown of a retired active gateway', () => {
+  function teardown(): string {
+    const src = readSource('src', 'context', 'gateway-provider.tsx');
+    const start = src.indexOf('const teardownRetiredActiveGateway = useCallback(');
+    const end = src.indexOf('const attachClient = useCallback(');
+    expect(start).toBeGreaterThan(-1);
+    return src.slice(start, end);
+  }
+
+  test('a retirement cancels the connected-time reads it stopped wanting', () => {
+    // A retirement is the one thing that stops a staggered read being wanted
+    // whose own effect cleanup does not run: the default-model pin is armed by
+    // the attach and its disposer thrown away, so `cancelConnectedReads` is the
+    // only cancel it has. Without it the timer survives the teardown and fires
+    // 1s later against the client this callback just discarded.
+    expect(teardown()).toContain('cancelConnectedReads();');
+  });
+
+  test('the pin it clears is a write that can be refused, so it is named', () => {
+    // SecureStore refuses — `runSecureStore` retries once and then throws, and
+    // `allowInsecureFallback` throws outright when the store is absent in a
+    // release build. Left unhandled, the next cold start reads the retired id
+    // back and bootstraps onto a gateway that is gone.
+    expect(teardown()).toMatch(/void saveActiveGatewayId\(null\)\.catch\(/);
+  });
 });
 
 describe('a label never leaves the device', () => {

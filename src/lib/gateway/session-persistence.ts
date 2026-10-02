@@ -257,23 +257,40 @@ export function normalizeRestoredRuns(runs: ActivityRun[]): ActivityRun[] {
   });
 }
 
+/**
+ * A roster load. `read` is whether the store answered — a genuine empty
+ * roster is `{ read: true, runs: [] }`. A refused getItem is `{ read: false }`
+ * and must not be persisted: writing that empty list deletes the on-disk key.
+ */
+export type ActivityRunsLoad =
+  | { read: true; runs: ActivityRun[] }
+  | { read: false; runs: [] };
+
 export async function loadActivityRuns(): Promise<ActivityRun[]> {
+  return (await loadActivityRunsFromStore()).runs;
+}
+
+export async function loadActivityRunsFromStore(): Promise<ActivityRunsLoad> {
   let raw: string | null;
   try {
     raw = await keyValueStorage.getItem(ACTIVITY_RUNS_KEY);
   } catch (error) {
     // The other half of the same `Promise.all`: an unreadable run history is an
-    // empty Activity tab, not a bootstrap that never settles.
+    // empty Activity tab, not a bootstrap that never settles. The caller must
+    // not persist this empty stand-in — that would erase the on-disk roster.
     console.warn(`[session-persistence] Could not read activity runs: ${errorText(error)}`);
-    return [];
+    return { read: false, runs: [] };
   }
-  if (!raw) return [];
+  if (!raw) return { read: true, runs: [] };
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return normalizeRestoredRuns(parsed.filter(isActivityRun).slice(0, ACTIVITY_RUNS_PERSIST_CAP));
+    if (!Array.isArray(parsed)) return { read: true, runs: [] };
+    return {
+      read: true,
+      runs: normalizeRestoredRuns(parsed.filter(isActivityRun).slice(0, ACTIVITY_RUNS_PERSIST_CAP)),
+    };
   } catch {
-    return [];
+    return { read: true, runs: [] };
   }
 }
 

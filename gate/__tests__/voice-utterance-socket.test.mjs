@@ -65,10 +65,20 @@ function makeControllableEngine() {
   return engine;
 }
 
+<<<<<<< HEAD
 async function startCall(
   { engine, runTurn, utteranceHoldMs = 150, continuationMs = 4_000, speculationWindowMs } = {},
   t,
 ) {
+=======
+async function startCall(t, {
+  engine,
+  runTurn,
+  utteranceHoldMs = 150,
+  continuationMs = 4_000,
+  speculationWindowMs,
+} = {}) {
+>>>>>>> 09fd1d6 (fix(p1): 11 verified defects from the round-4 scan (gateway provider state and connection))
   const registry = new VoiceSessionRegistry();
   registry.create(SESSION);
   const deviceTokens = {
@@ -104,7 +114,32 @@ async function startCall(
   ws.on('message', (data, isBinary) => {
     if (!isBinary) frames.push(JSON.parse(data.toString()));
   });
-  await once(ws, 'open');
+  let released = false;
+  const close = () =>
+    new Promise((done) => {
+      // A failed assertion used to skip the caller's close and leave this
+      // server listening, so the isolated child never exited and the suite
+      // waited on it until the harness timed out.
+      if (released) {
+        done();
+        return;
+      }
+      released = true;
+      for (const client of wss.clients) client.terminate();
+      wss.close(() => server.close(done));
+    });
+  t.after(() => close());
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('websocket did not open')), 4000);
+    ws.once('open', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.once('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
   await waitUntil(() => frames.some((frame) => frame.t === 'ready'));
   const close = () =>
     new Promise((done) => {
@@ -151,6 +186,7 @@ const logged = (lines, pattern) => lines.filter((line) => pattern.test(line));
 test('the measured call is one utterance, and the call log accounts for every final', async (t) => {
   const engine = makeControllableEngine();
   const turns = [];
+<<<<<<< HEAD
   const call = await startCall(
     {
       engine,
@@ -159,6 +195,14 @@ test('the measured call is one utterance, and the call log accounts for every fi
         handlers.onDelta('It will rain in Glasgow.');
         return { hasContent: true };
       },
+=======
+  const call = await startCall(t, {
+    engine,
+    runTurn: async (_session, text, handlers) => {
+      turns.push(text);
+      handlers.onDelta('It will rain in Glasgow.');
+      return { hasContent: true };
+>>>>>>> 09fd1d6 (fix(p1): 11 verified defects from the round-4 scan (gateway provider state and connection))
     },
     t,
   );
@@ -221,6 +265,7 @@ test('the measured call is one utterance, and the call log accounts for every fi
 test('finals heard while the reply is spoken wait for one follow-up turn, not one each', async (t) => {
   const engine = makeControllableEngine();
   const turns = [];
+<<<<<<< HEAD
   const call = await startCall(
     {
       engine,
@@ -230,6 +275,15 @@ test('finals heard while the reply is spoken wait for one follow-up turn, not on
         handlers.onDelta('Tell me more.');
         return { hasContent: true };
       },
+=======
+  const call = await startCall(t, {
+    engine,
+    utteranceHoldMs: 60,
+    runTurn: async (_session, text, handlers) => {
+      turns.push(text);
+      handlers.onDelta('Tell me more.');
+      return { hasContent: true };
+>>>>>>> 09fd1d6 (fix(p1): 11 verified defects from the round-4 scan (gateway provider state and connection))
     },
     t,
   );
@@ -275,6 +329,7 @@ test('a final heard while the turn is still thinking is folded into that turn', 
   const engine = makeControllableEngine();
   const attempts = [];
   let firstAborted = false;
+<<<<<<< HEAD
   const call = await startCall(
     {
       engine,
@@ -286,6 +341,17 @@ test('a final heard while the turn is still thinking is folded into that turn', 
             firstAborted = true;
             reject(new Error('aborted'));
           });
+=======
+  const call = await startCall(t, {
+    engine,
+    utteranceHoldMs: 60,
+    runTurn: (_session, text, handlers) => {
+      attempts.push(text);
+      return new Promise((_resolve, reject) => {
+        handlers.signal.addEventListener('abort', () => {
+          firstAborted = true;
+          reject(new Error('aborted'));
+>>>>>>> 09fd1d6 (fix(p1): 11 verified defects from the round-4 scan (gateway provider state and connection))
         });
       },
     },
@@ -325,6 +391,7 @@ test('a second segment ends a speculative turn, and the hold starts the only liv
   const engine = makeControllableEngine();
   const attempts = [];
   let draftAborted = false;
+<<<<<<< HEAD
   const call = await startCall(
     {
       engine,
@@ -338,6 +405,19 @@ test('a second segment ends a speculative turn, and the hold starts the only liv
             if (text === 'draft') draftAborted = true;
             reject(new Error('aborted'));
           });
+=======
+  const call = await startCall(t, {
+    engine,
+    utteranceHoldMs: 60,
+    // Long enough that the lost-frame net cannot interfere with this scenario.
+    speculationWindowMs: 30_000,
+    runTurn: (_session, text, handlers) => {
+      attempts.push(text);
+      return new Promise((_resolve, reject) => {
+        handlers.signal.addEventListener('abort', () => {
+          if (text === 'draft') draftAborted = true;
+          reject(new Error('aborted'));
+>>>>>>> 09fd1d6 (fix(p1): 11 verified defects from the round-4 scan (gateway provider state and connection))
         });
       },
     },
@@ -357,6 +437,10 @@ test('a second segment ends a speculative turn, and the hold starts the only liv
   // As above: the replacement turn starts before its frame reaches the phone.
   await waitUntil(() => ofType(call.frames, 'final').length === 1);
   call.advance(400);
+  // The merged final is written to the socket after the turn is armed; under
+  // load the assertion used to read the frame list before that write landed,
+  // throw, skip close, and pin the suite on the still-listening server.
+  await waitUntil(() => ofType(call.frames, 'final').some((frame) => frame.text === 'draft that was only half'));
 
   assert.ok(draftAborted, 'the speculative upstream was ended as soon as the segment merged');
   assert.deepEqual(attempts, ['draft', 'draft that was only half']);
@@ -379,6 +463,7 @@ test('a second segment ends a speculative turn, and the hold starts the only liv
 
 test('the audit reports how long a turn took to answer and to be heard', async (t) => {
   const engine = makeControllableEngine();
+<<<<<<< HEAD
   const call = await startCall(
     {
       engine,
@@ -388,6 +473,15 @@ test('the audit reports how long a turn took to answer and to be heard', async (
         handlers.onDelta('Here is the answer.');
         return { hasContent: true };
       },
+=======
+  const call = await startCall(t, {
+    engine,
+    utteranceHoldMs: 60,
+    runTurn: async (_session, _text, handlers) => {
+      call.advance(700);
+      handlers.onDelta('Here is the answer.');
+      return { hasContent: true };
+>>>>>>> 09fd1d6 (fix(p1): 11 verified defects from the round-4 scan (gateway provider state and connection))
     },
     t,
   );
@@ -405,10 +499,14 @@ test('the audit reports how long a turn took to answer and to be heard', async (
 });
 
 test('a call with no turn records no latency at all', async (t) => {
+<<<<<<< HEAD
   const call = await startCall(
     { engine: makeControllableEngine(), runTurn: async () => ({ hasContent: true }) },
     t,
   );
+=======
+  const call = await startCall(t, { engine: makeControllableEngine(), runTurn: async () => ({ hasContent: true }) });
+>>>>>>> 09fd1d6 (fix(p1): 11 verified defects from the round-4 scan (gateway provider state and connection))
   await call.end();
   assert.equal(call.audit[0].p50FirstAudioMs, null);
   assert.equal(call.audit[0].p50FirstReplyMs, null);

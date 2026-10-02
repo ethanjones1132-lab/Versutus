@@ -160,7 +160,7 @@ import { beginFleetRoutineRead, fleetRoutineRead, type FleetRoutineRead } from '
 import {
   durableQueueRows,
   isRunQueuedRow,
-  loadActivityRuns,
+  loadActivityRunsFromStore,
   loadOfflineQueue,
   resurfaceOfflineQueue,
   saveActivityRuns,
@@ -982,9 +982,15 @@ function isGatewayAuthFailure(error: unknown): boolean {
  */
 async function clearRetiredGatewayStores(ids: readonly string[]): Promise<void> {
   if (ids.length === 0) return;
-  await Promise.all(ids.map((id) => clearTranscriptsForGateway(id)));
-  await Promise.all(ids.map((id) => clearSessionLabelsForGateway(id)));
-  await Promise.all(ids.map((id) => clearCachedForGateway(id)));
+  // Best-effort, store by store: `syncChildProfiles` has already deleted these
+  // profiles from SecureStore by the time this runs, so a refused AsyncStorage
+  // read leaves orphan stores — while a throw out of here would abort the retire
+  // that is waiting on it and leave the app connected to a profile the roster no
+  // longer holds, which is the state this teardown exists to prevent. The stores
+  // are named again by the next sync that retires the same id.
+  await Promise.allSettled(ids.map((id) => clearTranscriptsForGateway(id)));
+  await Promise.allSettled(ids.map((id) => clearSessionLabelsForGateway(id)));
+  await Promise.allSettled(ids.map((id) => clearCachedForGateway(id)));
 }
 
 export function GatewayProvider({ children }: { children: React.ReactNode }) {
@@ -1044,6 +1050,20 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [isSending, setIsSending] = useState(false);
   /** Mirrors `isSending` for callbacks that must read it without a re-render. */
   const isSendingRef = useRef(false);
+  /**
+   * The turn holding the busy flag, or null when no turn holds it.
+   *
+   * One flag for every kind of busy turn, and overlapping turns are allowed
+   * here: the first of them to unwind hands the flag on, so the operator can
+   * type again while another turn is still streaming. What must not happen is
+   * the reverse — a send whose flag was taken AWAY giving it back. A gateway
+   * switch, a disconnect and Stop drop it deliberately (the operator has to be
+   * able to send on the gateway they moved to, or after they stopped), and the
+   * send still waiting on the discarded client used to take it back on its way
+   * out, standing the replacement turn down as it streamed. Same contract
+   * `liveControllersRef` records for the controller slot: liveness is tracked
+   * by the owner, not inferred from the slot.
+   */
   const [isCommandRunning, setIsCommandRunning] = useState(false);
   // Tracks the running command's label so a second slash command can be told
   // which command it must wait for. Kept as state (not a ref) because the
@@ -1254,6 +1274,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const [sessionListHasOlder, setSessionListHasOlder] = useState(false);
   const [loadingOlderSessions, setLoadingOlderSessions] = useState(false);
   const loadingOlderSessionsRef = useRef(false);
+  const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
+  /**
+   * The live thread's session, mirrored for callbacks that must read it without a
+   * re-render — a send addresses this id, and `resetSessionSelector` releases it
+   * with the list it belongs to.
+   */
+  const sessionIdRef = useRef<string | undefined>(undefined);
+  /**
+   * The thread scope goes: the sessions this client may list, the one the thread
+   * on screen belongs to, and the transcripts recorded under it.
+   *
+   * The current session is released with the list because it belongs to it —
+   * leaving it named leaves the composer draft, the thread spend keys and the
+   * selector's current marker keyed by a session of the gateway that was just
+   * retired or switched away from, under the gateway that replaced it. Both
+   * writers go through this, so every path that leaves a thread leaves its
+   * session behind with it.
+   */
   const resetSessionSelector = useCallback(() => {
     ++sessionReadSeqRef.current;
     ++modelReadSeqRef.current;
@@ -1262,8 +1300,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setSessionListState(emptySessionList<HermesSession>());
     setSessionListHasOlder(false);
     setLoadingOlderSessions(false);
+    sessionIdRef.current = undefined;
+    setCurrentSessionId(undefined);
+    setTranscripts([]);
   }, []);
-  const [currentSessionId, setCurrentSessionId] = useState<string | undefined>(undefined);
   const [historyLoading, setHistoryLoading] = useState(false);
   /**
    * Mirrors `historyLoading` for callbacks that must read it without a
@@ -1309,6 +1349,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     [],
   );
   const [activityRuns, setActivityRuns] = useState<ActivityRun[]>([]);
+  /**
+   * The store actually answered a roster read. A swallowed getItem refusal
+   * restores `[]` in memory so bootstrap can settle; persisting that empty
+   * list would delete the on-disk roster the refusal hid. The durable writer
+   * stays quiet until a real read (including a genuine empty roster) lands.
+   */
+  const activityRunsReadRef = useRef(false);
   const activityRunsRef = useRef<ActivityRun[]>([]);
   useEffect(() => {
     activityRunsRef.current = activityRuns;
@@ -1452,7 +1499,6 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    */
   const sendingRunIdRef = useRef<string | null>(null);
   const lastSubstitutionRef = useRef<import('@/lib/gateway/run-failures').ModelReport | null>(null);
-  const sessionIdRef = useRef<string | undefined>(undefined);
   const bootstrapStartedRef = useRef(false);
   const autoConnectInFlightRef = useRef(false);
   const autoRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1590,16 +1636,42 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    */
   const flushingOwedRef = useRef<Set<OfflineQueueItem> | null>(null);
 
+  /**
+   * The outbox's durable copy, named when it cannot be written.
+   *
+   * These rows are the operator's own unsent words — the one write in this range
+   * whose lost value cannot be retyped — and a refused AsyncStorage write (an
+   * Android SQLite fault, a full disk) is fire-and-forget, so without a handler
+   * the refusal left the process as an unhandled rejection and the queue silently
+   * unsaved until the next write happened to land.
+   */
   const persistOfflineQueue = useCallback(() => {
-    void saveOfflineQueue(durableQueueRows(offlineQueueRef.current, flushingOwedRef.current ?? []));
+    void saveOfflineQueue(durableQueueRows(offlineQueueRef.current, flushingOwedRef.current ?? [])).catch(
+      (error) => {
+        setLastError(`Queued messages could not be saved: ${error instanceof Error ? error.message : String(error)}`);
+      },
+    );
   }, []);
 
-  const patchActivityRuns = useCallback((updater: (prev: ActivityRun[]) => ActivityRun[]) => {
-    setActivityRuns((prev) => {
-      const next = updater(prev);
-      void saveActivityRuns(next);
-      return next;
+  /**
+   * The roster's one durable writer, deliberately outside every updater: React
+   * may invoke an updater more than once or discard its result, so a write issued
+   * from one is not tied to a state that ever committed. Keyed on
+   * `activityRuns`, this sees only what committed, gated on the bootstrap
+   * having restored the roster so the first empty render cannot erase it, and
+   * on a successful read so a swallowed store refusal cannot turn `[]` into
+   * `removeItem`. A refused write is named rather than lost to an unhandled
+   * rejection.
+   */
+  useEffect(() => {
+    if (!isBootstrapped || !activityRunsReadRef.current) return;
+    void saveActivityRuns(activityRuns).catch((error) => {
+      setLastError(`Activity could not be saved: ${error instanceof Error ? error.message : String(error)}`);
     });
+  }, [activityRuns, isBootstrapped]);
+
+  const patchActivityRuns = useCallback((updater: (prev: ActivityRun[]) => ActivityRun[]) => {
+    setActivityRuns(updater);
   }, []);
 
   /**
@@ -1870,11 +1942,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // A bubble still marked streaming belongs to a stream whose connection is
       // gone; freeze it before the reload so it is not thrown away with the
       // list it was in.
+      //
+      // Both halves come out of ONE read through the state queue: `messagesRef`
+      // is only synced on commit, so it names the list from before the freeze,
+      // and the freeze queued here as its own update is discarded by the reload's
+      // direct write — which left `preserveInterruptedAfterReload` restoring from
+      // a list carrying no marks, so the freeze never reached the thread. Queued
+      // with the reload in this order, the marked list is what the reload keeps
+      // and what the restore is handed (the same contract `settleTurn` uses).
       const activeRunId = activeRunIdRef.current;
-      if (activeRunId) {
-        setMessages((prev) => markInterrupted(prev, activeRunId, 'Connection lost'));
-      }
-      const previousMessages = messagesRef.current;
+      let previousMessages: ChatMessage[] = [];
+      setMessages((current) => {
+        previousMessages = activeRunId
+          ? markInterrupted(current, activeRunId, 'Connection lost')
+          : current;
+        return previousMessages;
+      });
       await reloadHistoryFor(gateway);
       setMessages((history) => preserveInterruptedAfterReload(history, previousMessages));
 
@@ -1999,6 +2082,24 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   /**
+   * The connected-time reads, staggered.
+   *
+   * Every transition to `connected` used to fire this whole set together —
+   * approvals, routines, Bots, workflows — against a single-threaded Gate while
+   * the chat history the operator is waiting for was still in flight. History
+   * stays immediate; every other read takes a turn. Each timer is cancelled the
+   * moment its read stops being wanted — a disconnect, a gateway switch, a
+   * superseding attach, a retirement — so none of them lands against a connection
+   * that has gone. Declared above the teardown that has to reach the canceller.
+   */
+  const connectedReadTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+
+  const cancelConnectedReads = useCallback(() => {
+    for (const timer of connectedReadTimersRef.current) clearTimeout(timer);
+    connectedReadTimersRef.current.clear();
+  }, []);
+
+  /**
    * A manifest sync retires provider child profiles on every read, and one of
    * them can be the profile the app is connected to. The delete path already
    * reconciles its active connection against what it dropped; a sync that
@@ -2035,29 +2136,22 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setLiveCapabilities(null);
       applyStatus('disconnected');
       setMessages([]);
-      void saveActiveGatewayId(null);
+      // A retirement is the fourth thing that stops a connected-time read being
+      // wanted, and the only one whose own effect cleanups do not cover: the
+      // default-model pin's disposer is thrown away (`attachClient` arms the
+      // same read the same way), so `cancelConnectedReads` is its only cancel.
+      cancelConnectedReads();
+      // SecureStore refuses — the same way it refuses every other read here —
+      // and this write is what stops the next cold start reading a retired
+      // profile's id back and bootstrapping onto a gateway that is gone. Named
+      // rather than left to reject into the process with a stale pin on disk.
+      void saveActiveGatewayId(null).catch((error) => {
+        setLastError(`Could not clear the active gateway: ${error instanceof Error ? error.message : String(error)}`);
+      });
       resumeAfterRetiredTeardownRef.current(remaining);
     },
-    [applyStatus, resetSessionSelector],
+    [applyStatus, cancelConnectedReads, resetSessionSelector],
   );
-
-  /**
-   * The connected-time reads, staggered.
-   *
-   * Every transition to `connected` used to fire this whole set together —
-   * approvals, routines, Bots, workflows — against a single-threaded Gate while
-   * the chat history the operator is waiting for was still in flight. History
-   * stays immediate; every other read takes a turn. Each timer is cancelled the
-   * moment its read stops being wanted — a disconnect, a gateway switch, a
-   * superseding attach — so none of them lands against a connection that has
-   * gone.
-   */
-  const connectedReadTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
-
-  const cancelConnectedReads = useCallback(() => {
-    for (const timer of connectedReadTimersRef.current) clearTimeout(timer);
-    connectedReadTimersRef.current.clear();
-  }, []);
 
   /** Run `read` `delayMs` after the connection came up; the returned disposer cancels it. */
   const scheduleConnectedRead = useCallback((delayMs: number, read: () => void): (() => void) => {
@@ -2684,8 +2778,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // Supersede the outgoing client so its teardown cannot drive provider state.
       const leaving = clientRef.current;
       const leavingKind = activeGatewayRef.current?.kind;
+      // The reconnect pin lives in this slot: connect copies stored onto it
+      // before calling us, and an upgrade already holds the session the first
+      // attach resolved. resetSessionSelector releases the previous thread;
+      // put this pin back so the first history load still resumes.
+      const reconnectPin = sessionIdRef.current;
       clientGenerationRef.current += 1;
       resetSessionSelector();
+      sessionIdRef.current = reconnectPin;
       setActiveManifest(null);
       const generation = clientGenerationRef.current;
       const isCurrent = () => clientGenerationRef.current === generation;
@@ -2774,7 +2874,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           // Connected without the manifest means connected through the
           // Hermes adapter, where every Gate-only call fails. The Gate has
           // answered now: rebuild the client as the Gate's own.
-          void upgradeClientRef.current(gateway);
+          //
+          // The one automatic entry point that fires an attach which rethrows:
+          // the caller is a fetch nobody awaits, so without the reporter the
+          // refusal left the process as an unhandled rejection with the screen
+          // still on the adapter's status.
+          void upgradeClientRef.current(gateway).catch(reportAutoConnectFailure);
           return;
         }
         syncManifestRoster(manifest);
@@ -3162,7 +3267,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // patchActivityRuns is a useCallback with [] deps, so its identity is stable
     // for the provider's lifetime; listing it satisfies exhaustive-deps without
     // changing when this callback is rebuilt.
-    [reloadHistoryFor, abandonLiveTurn, applyStatus, applyConnectionPhase, patchActivityRuns, persistGateway, reconcileInterrupted, teardownRetiredActiveGateway, resetSessionSelector, updateTlsFingerprintChange, cancelConnectedReads, scheduleConnectedRead, noteConnectedFanOut, applyClientScope],
+    [reloadHistoryFor, abandonLiveTurn, applyStatus, applyConnectionPhase, patchActivityRuns, persistGateway, reconcileInterrupted, teardownRetiredActiveGateway, resetSessionSelector, updateTlsFingerprintChange, cancelConnectedReads, scheduleConnectedRead, noteConnectedFanOut, applyClientScope, reportAutoConnectFailure],
   );
 
   useEffect(() => {
@@ -3193,8 +3298,17 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setActiveHello(null);
       setMessages([]);
       setLastError(null);
+      // The busy flag is handed ON here, not merely dropped: the operator has to
+      // be able to send on the gateway they just moved to, so the send still
+      // waiting on the discarded client must not take it back when it unwinds.
+      // The mirror goes with it, so no guard is left reading a send that is over.
       setIsSending(false);
+      isSendingRef.current = false;
+      sendingRunIdRef.current = null;
       activeRunIdRef.current = null;
+      // Stored is the reconnect pin. Copied onto live before attachClient,
+      // which resets the selector then puts this pin back so the first
+      // history load still resumes.
       sessionIdRef.current = gateway.sessionId;
       await saveActiveGatewayId(gateway.id);
       await attachClient(gateway);
@@ -3462,13 +3576,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const bootstrap = useCallback(async () => {
     try {
-      const [loadedSettings, repairedGateways, restoredQueue, restoredRuns] = await Promise.all([
+      const [loadedSettings, repairedGateways, restoredQueue, restoredRunsLoad] = await Promise.all([
         loadAppSettings(),
         // Saved duplicates of one gateway collapse to the profile that can
         // authenticate before anything connects (profile-dedupe.ts).
         repairDuplicateGateways(),
         loadOfflineQueue(),
-        loadActivityRuns(),
+        loadActivityRunsFromStore(),
       ]);
       const loadedGateways = repairedGateways.gateways;
       const activeId = repairedGateways.activeId;
@@ -3498,12 +3612,13 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setSettings(loadedSettings);
       setGateways(roster);
       offlineQueueRef.current = restoredQueue;
-      setActivityRuns(restoredRuns);
+      activityRunsReadRef.current = restoredRunsLoad.read;
+      setActivityRuns(restoredRunsLoad.runs);
       // One sweep at mount: a run-progress notice posted by a process that was
       // killed while it ran is in the tray, and nothing this process has posted
       // can name it — the restored rows say which runs are still in flight, and
       // every other notice for a run that is not is retired here.
-      void dismissStaleRunProgress(inFlightRunIds(restoredRuns));
+      void dismissStaleRunProgress(inFlightRunIds(restoredRunsLoad.runs));
 
       // Device identity powers pairing/access requests — surface it once. A
       // refusal settles failed with its cause so the card can name it and retry.
@@ -3634,8 +3749,6 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       setSelectedBotId(undefined);
       // The scope now belongs to this gateway's world, whoever asked for it.
       rememberScopeGateway(activeGatewayRef.current ?? activeGateway);
-      sessionIdRef.current = undefined;
-      setCurrentSessionId(undefined);
       setMessages([]);
       if (activeGateway) {
         // Restore the model last used in this backend, so a send after the
@@ -3710,10 +3823,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
         // backend existed — an unscoped /v1/sessions resolves to whichever
         // environment the Gate picks by capability (claude-local here), so the
         // thread would show one backend's sessions while sends went to another.
-        // Drop any session that earlier load pinned — it was resolved without
-        // this scope and carries the wrong environment's immutable model pin —
-        // then reload so the thread re-resolves under the adopted backend.
-        sessionIdRef.current = undefined;
+        // The session that load pinned was released by `resetSessionSelector`
+        // above: it was resolved without this scope and carries the wrong
+        // environment's immutable model pin. Reload so the thread re-resolves
+        // under the adopted backend.
         if (gateway) void reloadHistoryFor(gateway);
       }, 0);
       return () => clearTimeout(timer);
@@ -4042,10 +4155,23 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     setHasGroupRooms(false);
     setCanReadBotSessions(false);
     setMessages([]);
+    // The same hand-over `connectGateway` makes: the flag is given up here, and
+    // the send still waiting on the client just discarded must not take it back.
     setIsSending(false);
+    isSendingRef.current = false;
+    sendingRunIdRef.current = null;
     applyConnectionPhase('idle');
-    void saveActiveGatewayId(null);
-  }, [abandonLiveTurn, applyStatus, applyConnectionPhase, resetSessionSelector]);
+    // The same cancellation the retire teardown makes: the default-model pin's
+    // disposer is thrown away, so this is its only cancel, and the client it
+    // would read is the one just discarded.
+    cancelConnectedReads();
+    // The same write the retire teardown makes, and refused the same way: this
+    // is the operator's own disconnect, so the next cold start must not read a
+    // pin back for a gateway they just left.
+    void saveActiveGatewayId(null).catch((error) => {
+      setLastError(`Could not clear the active gateway: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }, [abandonLiveTurn, applyStatus, applyConnectionPhase, cancelConnectedReads, resetSessionSelector]);
 
   const sendMessage = useCallback(
     async (
@@ -4362,11 +4488,12 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
           return accepted ? 'sent' : 'failed';
         }
       } finally {
-        // Only this send's own composer lock, and only while it still owns it: a
-        // gateway switch or a rebuilt client can leave a turn unwinding while the
-        // next one is already in flight, and clearing `isSending` over the top of
-        // that turn unlocked the composer under a live reply. The run id is
-        // dropped on the same terms.
+        // On this send's own terms, like the two slots cleared below it. A send
+        // whose flag was taken AWAY — a gateway switch and a disconnect hand it
+        // on deliberately, so the operator can send on the gateway they moved to
+        // — must not give it back: that stood the replacement turn down while it
+        // streamed, the `isSending` guard then admitted a second send beside it,
+        // and no reconcile could name the live turn.
         if (sendingRunIdRef.current === runId) {
           sendingRunIdRef.current = null;
           setIsSending(false);
@@ -5407,6 +5534,10 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const stopStreaming = useCallback(async () => {
     setIsSending(false);
     isSendingRef.current = false;
+    // Same hand-over a switch and a disconnect make: the next send has to
+    // claim the owner. Leaving it held by the stopped turn left isSending
+    // true after that send finished, and sendMessage answered busy.
+    sendingRunIdRef.current = null;
     // Nothing of ours is in flight on the Gate any more, so a later reconcile
     // must not freeze a bubble Stop is about to settle.
     activeRunIdRef.current = null;
