@@ -6,7 +6,7 @@ import { registerCrestFleet } from '@/lib/bot-avatar';
 import { GatewayDiscoveryScanner, isNativeDiscoveryAvailable } from '@/lib/discovery/scanner';
 import { beaconKindForUrl, buildExplicitHostCandidates, buildGatewayCandidates, friendlyPcName, matchSavedGateway, mergeTokenlessTwinGateways, normalizePcAddress, reachableAlternateIpv4 } from '@/lib/gateway/candidates';
 import { createClientForKind, type PortalClient } from '@/lib/portal/adapters';
-import { decideConnectionPhase } from '@/lib/connection/phase';
+import { applyGatewayDownDecision, decideConnectionPhase } from '@/lib/connection/phase';
 import {
   AUTO_RETRY_BASE_DELAY_MS,
   autoRetryDelayMs,
@@ -1460,7 +1460,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
    * otherwise abort that run's driver while asking the Gate to stop the row's.
    */
   const activeRunTaskIdRef = useRef<string | null>(null);
-  const gatewayDownNotifiedRef = useRef(false);
+  const gatewayDownNotifiedRef = useRef<ReadonlySet<string>>(new Set());
   const authFailureRef = useRef(false);
   /**
    * The token the gateway refused, so a later attach can tell "the operator
@@ -3085,8 +3085,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
               // Connected again: the failure streak that led here is forgiven.
               autoRetryFailureStreakRef.current = 0;
             }
+            if (decision.clearGatewayDownNotified || decision.notifyGatewayDown) {
+              // Keyed by gateway id: B connecting retires only B's notice and
+              // only forgets B's outage, so a still-down A keeps both its state
+              // and its one tray entry instead of a duplicate on the next drop.
+              const gatewayDown = applyGatewayDownDecision(
+                gatewayDownNotifiedRef.current,
+                decision,
+                gateway.id,
+              );
+              gatewayDownNotifiedRef.current = gatewayDown.notifiedGatewayIds;
+              if (gatewayDown.notify) {
+                void notifyGatewayDown(gateway.id, gatewayHostForDisplay(gateway.url));
+              }
+            }
             if (decision.clearGatewayDownNotified) {
-              gatewayDownNotifiedRef.current = false;
               // Connected again: this gateway's posted down notice retires
               // itself instead of haunting the tray long after the gateway
               // answered — scoped to the gateway that actually answered, so a
@@ -3095,10 +3108,6 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
             }
             if (decision.clearProbeMessage) setProbeMessage('');
             if (decision.clearLastError) setLastError(null);
-            if (decision.notifyGatewayDown && !gatewayDownNotifiedRef.current) {
-              gatewayDownNotifiedRef.current = true;
-              void notifyGatewayDown(gateway.id, gatewayHostForDisplay(gateway.url));
-            }
             if (decision.scheduleAutoRetry && activeGatewayRef.current && !authFailureRef.current) {
               scheduleAutoRetryRef.current(AUTO_RETRY_BASE_DELAY_MS);
             }

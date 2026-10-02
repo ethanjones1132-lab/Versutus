@@ -81,3 +81,27 @@ export function decideConnectionPhase(
   // phase transition here — pairing has its own onPairingRequired callback.
   return { phase: currentPhase, ...NO_OP };
 }
+
+/**
+ * Fold one status event's gateway-down request into the set of gateways that
+ * already owe a notice, keyed by gateway id.
+ *
+ * A single process-wide flag could not tell one gateway from another: a
+ * `connected` on gateway B cleared it for gateway A too, so every later outage
+ * of A posted a second notice while A's first still sat in the tray. Keyed by
+ * id, only the gateway that answered has its notice state cleared, and a
+ * gateway still down never posts twice for one outage.
+ *
+ * Pure, so the state machine is testable without rendering the provider.
+ */
+export function applyGatewayDownDecision(
+  notifiedGatewayIds: ReadonlySet<string>,
+  decision: ConnectionPhaseDecision,
+  gatewayId: string,
+): { notifiedGatewayIds: Set<string>; notify: boolean } {
+  const next = new Set(notifiedGatewayIds);
+  if (decision.clearGatewayDownNotified) next.delete(gatewayId);
+  const notify = decision.notifyGatewayDown && !next.has(gatewayId);
+  if (notify) next.add(gatewayId);
+  return { notifiedGatewayIds: next, notify };
+}

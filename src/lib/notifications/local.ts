@@ -130,6 +130,14 @@ function isForegrounded(): boolean {
 }
 
 /**
+ * The `data` key that marks a notice `present` was told to draw even while the
+ * app is up. On Android the handler installed below is the layer that actually
+ * decides presentation, so `allowForeground` has to travel in the payload to
+ * reach it — a boolean parameter never gets that far.
+ */
+export const FOREGROUND_NOTICE_DATA_KEY = 'versutusForegroundNotice';
+
+/**
  * The one gate every notice goes through: an app in the foreground draws
  * nothing unless it was asked to, and nothing is drawn without permission.
  *
@@ -151,6 +159,11 @@ async function present(
 ): Promise<string | null> {
   if (isForegrounded() && !allowForeground) return null;
   if (!(await ensureNotificationPermission())) return null;
+  // The foreground opt-in has to ride the payload: the notification handler is
+  // the layer that decides Android presentation, and it only sees content.
+  const noticeData = allowForeground
+    ? { ...(data ?? {}), [FOREGROUND_NOTICE_DATA_KEY]: true }
+    : data;
   try {
     return await Notifications.scheduleNotificationAsync({
       ...(androidNotice ? { identifier: androidNotice.identifier } : {}),
@@ -158,7 +171,7 @@ async function present(
         title,
         body,
         sound: 'default',
-        ...(data ? { data } : {}),
+        ...(noticeData ? { data: noticeData } : {}),
         ...(categoryIdentifier ? { categoryIdentifier } : {}),
       },
       trigger: androidNotice ? { channelId: androidNotice.channelId } : null,
@@ -406,13 +419,21 @@ let foregroundHandlerInstalled = false;
  * looking at the stream a relayed notice would announce. Background and killed
  * still present. This is display policy, not a second router — a tap still goes
  * through the existing response listener.
+ *
+ * A notice `present` posted with `allowForeground` carries
+ * {@link FOREGROUND_NOTICE_DATA_KEY}, and is the one exception: without it the
+ * handler below would veto the "your words went nowhere" notices one layer
+ * under the app's own gate, and the operator would never see them. This is the
+ * only way to reach the handler, which sees the payload and nothing else.
  */
 export function installForegroundNotificationHandler(): void {
   if (foregroundHandlerInstalled) return;
   try {
     Notifications.setNotificationHandler({
-      handleNotification: async () => {
-        const active = AppState.currentState === 'active';
+      handleNotification: async (notification) => {
+        const optedIn =
+          notification?.request?.content?.data?.[FOREGROUND_NOTICE_DATA_KEY] === true;
+        const active = AppState.currentState === 'active' && !optedIn;
         return {
           shouldShowBanner: !active,
           shouldShowList: !active,

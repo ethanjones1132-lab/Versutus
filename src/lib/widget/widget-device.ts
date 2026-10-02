@@ -114,6 +114,18 @@ export function clearWidgetSnapshot(
   });
 }
 
+/**
+ * Run one widget write on the same serialising queue the app's snapshots use.
+ * A headless companion push builds and writes its payload inside the queued job,
+ * so its native hop and its read-modify-write of the merge base are ordered with
+ * the app's own writes rather than left to race them.
+ */
+export function enqueueWidgetWrite(run: () => Promise<boolean>): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    enqueueWidgetJob({ kind: 'write', run, resolve });
+  });
+}
+
 /** The payload JSON the app last wrote here, or null when it has written none. */
 export async function readLastWidgetPayload(): Promise<string | null> {
   try {

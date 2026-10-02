@@ -1,9 +1,11 @@
 import * as TaskManager from 'expo-task-manager';
+import { Platform } from 'react-native';
 
 import { WIDGET_RESULT_HIDDEN_STORAGE_KEY } from '@/lib/settings/widget-privacy';
 import { keyValueStorage } from '@/lib/storage/key-value';
 import * as widgetDevice from '@/lib/widget/widget-device';
-import { WIDGET_LAST_PAYLOAD_KEY } from '@/lib/widget/widget-device';
+import { WIDGET_LAST_PAYLOAD_KEY, writeWidgetSnapshot } from '@/lib/widget/widget-device';
+import type { GlanceableSnapshot } from '@/lib/widget/snapshot';
 import {
   handleWidgetPush,
   mergeWidgetPushPayload,
@@ -176,7 +178,8 @@ describe('a companion message merges onto the payload the app last wrote', () =>
     expect(merged.runs).toEqual(APP_WRITE.runs);
     expect(merged.routinesFailing).toBe(1);
     expect(merged.routinesLate).toBe(2);
-    // The work line, the approval count and the stamp are the push's own.
+    // The work line and the approval count are the push's own; the stamp is the
+    // newer of the two writes (the push here lands 30 s after the app write).
     expect(merged.work).toBe(COMPANION.work);
     expect(merged.writtenAt).toBe(COMPANION.writtenAt);
     expect(merged.approvalsPending).toBe(COMPANION.approvalsPending);
@@ -279,6 +282,84 @@ describe('a companion message merges onto the payload the app last wrote', () =>
 
     expect(JSON.parse((await keyValueStorage.getItem(WIDGET_LAST_PAYLOAD_KEY)) ?? 'null')).toEqual(
       writtenPayload(setPayload),
+    );
+  });
+
+  test('a future stamp is not trusted: a fresh connected write does not stay connected forever', () => {
+    // The Gate stamps with the PC's clock. If that clock is ahead of the
+    // phone's, `now - last.writtenAt` is negative and every freshness test reads
+    // "young" forever, carrying `connected: true` forward from a write of
+    // unknown age — the one overclaim this module forbids.
+    const future = { ...APP_WRITE, writtenAt: NOW + 10 * 60 * 1000 };
+    const merged = mergeWidgetPushPayload(COMPANION, future, false, NOW);
+    expect(merged).toMatchObject({ connected: false, status: 'Disconnected' });
+    // The gate's own floor still stands for a stamp that is not in the future.
+    expect(mergeWidgetPushPayload(COMPANION, APP_WRITE, false, NOW)).toMatchObject({ connected: true });
+  });
+
+  test('a push older than the app write never overwrites the newer work line', () => {
+    // Doze delays a data-only push, so a companion generated before the app's
+    // last write can arrive after it. The newer app write is the truth.
+    const newerApp = { ...APP_WRITE, work: '1 run in flight', writtenAt: NOW };
+    const olderPush = { ...COMPANION, work: 'No runs in flight', writtenAt: NOW - 60_000 };
+    const merged = mergeWidgetPushPayload(olderPush, newerApp, false, NOW);
+    expect(merged).toMatchObject({ work: '1 run in flight', writtenAt: NOW });
+  });
+
+  test('concurrent app and push writes reach the card in one serial order', async () => {
+    jest.replaceProperty(Platform, 'OS', 'android');
+    await seedLast(APP_WRITE);
+    const order: string[] = [];
+    let inFlight = 0;
+    let peak = 0;
+    const setPayload = jest.fn(async (json: string) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      order.push(json);
+      // Hold the native hop open across a timer tick: both writers reach here
+      // on microtasks alone, so a window that closed sooner would be over before
+      // the second call could ever overlap it and the serialisation would go
+      // unasserted.
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      inFlight -= 1;
+      return true;
+    });
+    const load = async () => ({ setPayload, clearPayload: jest.fn() }) as never;
+    // Rows this write alone carries: the seeded base and the companion both say
+    // "Sweep the floor", so whichever payload the card is left holding is
+    // unambiguous — the newer app write, or the one merged from the older base.
+    const snapshot: GlanceableSnapshot = {
+      status: 'connected',
+      runsInFlight: 0,
+      runs: [{ title: 'Bake bread', state: 'Running' }],
+      approvalsPending: 0,
+      writtenAt: NOW + 1000,
+    };
+
+    // The app's own snapshot write and the headless push's write start in the
+    // same tick. Only the queue can impose an order between the two native hops.
+    const [, pushWrote] = await Promise.all([
+      writeWidgetSnapshot(snapshot, undefined, load as never),
+      handleWidgetPush({ widget: COMPANION }, load),
+    ]);
+
+    expect(pushWrote).toBe(true);
+    expect(order).toHaveLength(2);
+    // One native hop at a time: two unqueued writers both reach `setPayload`
+    // while the first is still in flight, which is the whole hazard.
+    expect(peak).toBe(1);
+    // The card is left holding the newer app write: the last payload it took
+    // carries that write's rows and stamp, not the seeded base's.
+    const held = JSON.parse(order.at(-1) ?? 'null') as {
+      runs?: { title: string; state: string }[];
+      writtenAt: number;
+    };
+    expect(held.runs).toEqual(snapshot.runs);
+    expect(held.writtenAt).toBe(NOW + 1000);
+    // …and what the card took is the next merge's base: the read-modify-write
+    // runs inside the same queued job rather than beside it.
+    expect(JSON.parse((await keyValueStorage.getItem(WIDGET_LAST_PAYLOAD_KEY)) ?? 'null')).toEqual(
+      held,
     );
   });
 });

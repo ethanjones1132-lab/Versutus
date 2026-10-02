@@ -9,6 +9,7 @@ import {
   BOT_MESSAGE_REPLY_ACTION_ID,
 } from '@/lib/notifications/categories';
 import {
+  FOREGROUND_NOTICE_DATA_KEY,
   notifyBotReplyNotSent,
   notifyRunComplete,
   notifySessionOpenFailed,
@@ -186,10 +187,12 @@ describe('notifyBotReplyNotSent', () => {
     expect(mockSchedule).toHaveBeenCalledTimes(1);
     const request = mockSchedule.mock.calls[0][0];
     expect(request.content.title).toBe('Reply not sent');
-    // No category: the follow-up offers no second text input. No data: a tap
-    // on it can never be read back as a notice of its own (routeForTap).
+    // No category: the follow-up offers no second text input. The only data is
+    // the foreground marker `present` adds so the display handler will draw it
+    // on Android — never a routing `kind`, so a tap on it can never be read
+    // back as a notice of its own (routeForTap).
     expect(request.content.categoryIdentifier).toBeUndefined();
-    expect(request.content.data).toBeUndefined();
+    expect(request.content.data).toEqual({ [FOREGROUND_NOTICE_DATA_KEY]: true });
     expect(request.trigger).toBeNull();
   });
 

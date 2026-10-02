@@ -61,6 +61,11 @@ type PendingWrite = {
   patch: Partial<NotificationPreferences>;
   seq: number;
   settle: (saved: boolean) => void;
+  /**
+   * The gateway generation this patch was computed against, so a queued write
+   * is dropped, not re-routed, when the operator switches gateways.
+   */
+  gatewayEpoch: number;
 };
 
 function normalize(raw: unknown): NotificationPreferences {
@@ -109,10 +114,20 @@ export function useNotificationPreferences() {
   // Reads of the phone are numbered, so an answer that turns up after a newer
   // one — or after this screen is gone — paints nothing.
   const readSeqRef = useRef(0);
+  // Reads of the Gate's row are numbered the same way. A `get` issued against
+  // gateway A can outlive the switch to B (disconnect cancels no in-flight
+  // request), and without this its late answer would paint A's switches over
+  // B's — with `synced` left true, so the next tap writes A's row onto B.
+  const loadSeqRef = useRef(0);
+  // Bumped whenever the active gateway changes. A write queued against one
+  // gateway is dropped rather than sent through another's client, and a reply
+  // still owed by the old gateway paints nothing on the new screen.
+  const gatewayEpochRef = useRef(0);
   const liveRef = useRef(true);
 
   const isCustom = activeGateway?.kind === 'custom';
   const connected = status === 'connected' && isCustom;
+  const activeGatewayId = activeGateway?.id ?? null;
 
   /**
    * Read what the phone allows right now. A READ, never the request: this
@@ -152,6 +167,9 @@ export function useNotificationPreferences() {
   }, [readPermission]);
 
   const load = useCallback(async () => {
+    // Bumped in every branch, so a switch away from a gateway (which re-runs
+    // this with `connected` false) retires the answer that gateway still owes.
+    const seq = ++loadSeqRef.current;
     if (!connected) {
       // Nothing will be fetched, so no read is in flight — never spin.
       setLoading(false);
@@ -164,16 +182,19 @@ export function useNotificationPreferences() {
       const params = await pushDeviceParams();
       sentDeviceId = true;
       const raw = await gatewayRequest<Record<string, unknown>>('notifications.preferences.get', params);
+      // A newer load (a gateway change re-ran this) owns the screen now.
+      if (seq !== loadSeqRef.current) return;
       const row = normalize(raw);
       confirmedRef.current = row;
       setPrefs(row);
       setSynced(true);
     } catch (err) {
+      if (seq !== loadSeqRef.current) return;
       // A refusal that arrived after the phone named itself is the Gate's own
       // verdict (unpaired), not the missing-identity copy.
       setError(describeGatewayError(err, { sentDeviceId }));
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   }, [connected, gatewayRequest]);
 
@@ -196,6 +217,20 @@ export function useNotificationPreferences() {
     saveCountRef.current = Math.max(0, saveCountRef.current - 1);
   }, []);
 
+  // A gateway switch re-keys every write. Anything still queued was computed
+  // against the old gateway's row and must not be sent through the new client,
+  // and any reply the old gateway still owes must paint nothing here.
+  useEffect(() => {
+    gatewayEpochRef.current += 1;
+    const stale = queueRef.current;
+    queueRef.current = [];
+    for (const write of stale) {
+      write.settle(false);
+      endSave();
+    }
+    if (stale.length > 0) setSaving(saveCountRef.current > 0);
+  }, [activeGatewayId, endSave]);
+
   /**
    * One write at a time, out of the queue. Everything waiting behind the write
    * in the air rides along in the next one: the Gate merges each patch onto its
@@ -209,6 +244,7 @@ export function useNotificationPreferences() {
         const batch = queueRef.current;
         queueRef.current = [];
         const seq = batch.reduce((highest, write) => Math.max(highest, write.seq), 0);
+        const epoch = batch.reduce((highest, write) => Math.max(highest, write.gatewayEpoch), 0);
         const patch = batch.reduce<Partial<NotificationPreferences>>(
           (merged, write) => ({ ...merged, ...write.patch }),
           {},
@@ -217,6 +253,10 @@ export function useNotificationPreferences() {
         // reply lands, not when the batch left: a tap made while this write was
         // in the air is what makes this reply stale.
         const newest = () => seq === seqRef.current;
+        // Whether the gateway this batch was computed against is still the one
+        // on screen. A reply from a gateway the operator has left must not
+        // repaint the new gateway's row or re-arm `synced` behind it.
+        const sameGateway = () => epoch === gatewayEpochRef.current;
         let saved = false;
         let sentDeviceId = false;
         try {
@@ -228,22 +268,26 @@ export function useNotificationPreferences() {
             ...params,
           });
           const row = normalize(raw);
-          confirmedRef.current = row;
-          // Only the newest write's reply owns the screen. An older row predates
-          // a tap the operator has already made, so painting it would move a
-          // switch back under their finger.
-          if (newest()) setPrefs(row);
-          setSynced(true);
-          void readPermission();
+          if (sameGateway()) {
+            confirmedRef.current = row;
+            // Only the newest write's reply owns the screen. An older row predates
+            // a tap the operator has already made, so painting it would move a
+            // switch back under their finger.
+            if (newest()) setPrefs(row);
+            setSynced(true);
+            void readPermission();
+          }
           saved = true;
         } catch (err) {
-          setError(describeGatewayError(err, { sentDeviceId }));
-          // The Gate did not take this row, so the card falls back to the last
-          // row it did confirm and stops offering switches it cannot vouch for:
-          // the error above them promises they stay locked until the Gate's own
-          // settings are read.
-          if (newest()) setPrefs(confirmedRef.current);
-          setSynced(false);
+          if (sameGateway()) {
+            setError(describeGatewayError(err, { sentDeviceId }));
+            // The Gate did not take this row, so the card falls back to the last
+            // row it did confirm and stops offering switches it cannot vouch for:
+            // the error above them promises they stay locked until the Gate's own
+            // settings are read.
+            if (newest()) setPrefs(confirmedRef.current);
+            setSynced(false);
+          }
         } finally {
           // One waiter's answer and one count back per write, so a coalesced
           // batch of three taps still hands `saving` back exactly once.
@@ -274,7 +318,7 @@ export function useNotificationPreferences() {
       setError(null);
       beginSave();
       return new Promise<boolean>((resolve) => {
-        queueRef.current.push({ patch, seq, settle: resolve });
+        queueRef.current.push({ patch, seq, settle: resolve, gatewayEpoch: gatewayEpochRef.current });
         void flush();
       });
     },

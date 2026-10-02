@@ -18,10 +18,17 @@ import { useNotificationPreferences } from '@/hooks/use-notification-preferences
 
 const mockRequest = jest.fn();
 const mockPermissionRead = jest.fn();
+// The gateway the hook sees. A switch to B is a new `activeGateway.id`, which
+// is what re-runs `load` and re-keys the write queue.
+const gatewayState: { id: string; kind: string; status: string } = {
+  id: 'gw-a',
+  kind: 'custom',
+  status: 'connected',
+};
 jest.mock('@/context/gateway-provider', () => ({
   useGateway: () => ({
-    activeGateway: { kind: 'custom' },
-    status: 'connected',
+    activeGateway: { id: gatewayState.id, kind: gatewayState.kind },
+    status: gatewayState.status,
     gatewayRequest: mockRequest,
   }),
 }));
@@ -65,6 +72,7 @@ const STORED: Record<string, unknown> = {
 
 let stored: Record<string, unknown>;
 let replies: Deferred<Record<string, unknown>>[];
+let getReplies: Deferred<Record<string, unknown>>[];
 let sent: { method: string; params: Record<string, unknown> }[];
 
 let preferences: ReturnType<typeof useNotificationPreferences>;
@@ -97,7 +105,10 @@ beforeEach(async () => {
   jest.useFakeTimers();
   stored = { ...STORED };
   replies = [];
+  getReplies = [];
   sent = [];
+  gatewayState.id = 'gw-a';
+  gatewayState.status = 'connected';
   mockPermissionRead.mockReset().mockResolvedValue(GRANTED);
   mockRequest.mockReset().mockImplementation((method: string, params: Record<string, unknown>) => {
     sent.push({ method, params });
@@ -111,13 +122,29 @@ beforeEach(async () => {
         return row;
       });
     }
-    return Promise.resolve(stored);
+    // A read can be held too, so a load against gateway A can outlive the
+    // switch to B.
+    const held = getReplies.shift();
+    return held ? held.promise : Promise.resolve(stored);
   });
   await act(async () => {
     renderer = create(createElement(Harness));
   });
   await flush();
 });
+
+/**
+ * Re-render with a new gateway, flipping the link through `connecting` the way
+ * a real switch does, and settle the reads the switch triggers.
+ */
+async function switchGateway(id: string, status: string): Promise<void> {
+  gatewayState.id = id;
+  gatewayState.status = status;
+  await act(async () => {
+    renderer.update(createElement(Harness));
+  });
+  await flush();
+}
 
 afterEach(async () => {
   await act(async () => {
@@ -241,4 +268,62 @@ test('a write that lands re-reads the phone, so a revoke cannot outlive the scre
   await flush();
 
   expect(mockPermissionRead).toHaveBeenCalledTimes(2);
+});
+
+test('a slow read of the old gateway cannot paint over the new gateway', async () => {
+  // Gateway A is connected over a lossy link; its preferences reload is held.
+  const heldFromA = deferred<Record<string, unknown>>();
+  getReplies.push(heldFromA);
+  const rowA = { ...STORED, richBody: true };
+  const rowB = { ...STORED, richBody: false };
+  act(() => {
+    void preferences.reload();
+  });
+  await flush();
+
+  // Switch to B: the link flips through connecting, the hook re-runs `load`,
+  // and B answers first with its own row.
+  await switchGateway('gw-b', 'connecting');
+  stored = rowB;
+  await switchGateway('gw-b', 'connected');
+  expect(preferences.prefs.richBody).toBe(false);
+  expect(preferences.synced).toBe(true);
+
+  // A's late reply now lands. It must paint nothing: the screen belongs to B.
+  await act(async () => {
+    heldFromA.resolve(rowA);
+  });
+  await flush();
+
+  expect(preferences.prefs.richBody).toBe(false);
+  expect(preferences.synced).toBe(true);
+});
+
+test('a write queued under one gateway is dropped, not flushed to the next', async () => {
+  // The patch is computed against A's row and queued while A's own write is in
+  // the air, so it has not been sent when the operator switches.
+  const firstReply = deferred<Record<string, unknown>>();
+  replies.push(firstReply);
+  act(() => {
+    void preferences.setPatch({ widgetUpdates: true });
+  });
+  act(() => {
+    void preferences.setPatch({ richBody: false });
+  });
+  await flush();
+  expect(writes()).toHaveLength(1);
+
+  // Switch before A's first write lands. The queued `richBody` patch was
+  // computed from A's row, so it must be dropped rather than sent through B.
+  await switchGateway('gw-b', 'connecting');
+  await switchGateway('gw-b', 'connected');
+
+  firstReply.resolve({ ...stored, widgetUpdates: true });
+  await flush();
+
+  expect(preferences.saving).toBe(false);
+  // Nothing carrying B's row was ever sent from the abandoned queue.
+  for (const write of writes()) {
+    expect(write.params).not.toHaveProperty('richBody', false);
+  }
 });

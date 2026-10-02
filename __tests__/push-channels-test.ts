@@ -10,10 +10,12 @@ import { AppState } from 'react-native';
 
 import {
   APPROVALS_CHANNEL_ID,
+  FOREGROUND_NOTICE_DATA_KEY,
   MODEL_REPLIES_CHANNEL_ID,
   ROUTINE_RESULTS_CHANNEL_ID,
   ensurePushChannels,
   installForegroundNotificationHandler,
+  notifyBotReplyNotSent,
 } from '@/lib/notifications/local';
 
 jest.mock('expo-notifications', () => ({
@@ -22,6 +24,9 @@ jest.mock('expo-notifications', () => ({
   AndroidImportance: { HIGH: 6, DEFAULT: 5 },
   setNotificationChannelAsync: jest.fn(),
   setNotificationHandler: jest.fn(),
+  scheduleNotificationAsync: jest.fn(),
+  getPermissionsAsync: jest.fn(),
+  requestPermissionsAsync: jest.fn(),
 }));
 
 import * as Notifications from 'expo-notifications';
@@ -46,6 +51,27 @@ const originalStateDescriptor = Object.getOwnPropertyDescriptor(AppState, 'curre
 
 function setAppState(value: string): void {
   Object.defineProperty(AppState, 'currentState', { value, configurable: true });
+}
+
+type ForegroundHandler = (notification?: {
+  request?: { content?: { data?: Record<string, unknown> } };
+}) => Promise<{
+  shouldShowBanner: boolean;
+  shouldShowList: boolean;
+  shouldPlaySound: boolean;
+  shouldSetBadge: boolean;
+}>;
+
+// The handler is installed once per process (the module guards it), so the
+// first test that reaches here captures the only handler the mock will ever be
+// handed and every later test exercises that same function.
+let foregroundHandler: ForegroundHandler;
+function captureForegroundHandler(): ForegroundHandler {
+  installForegroundNotificationHandler();
+  if (!foregroundHandler && mockHandler.mock.calls.length > 0) {
+    foregroundHandler = mockHandler.mock.calls[0][0].handleNotification as ForegroundHandler;
+  }
+  return foregroundHandler;
 }
 
 describe('ensurePushChannels', () => {
@@ -97,7 +123,7 @@ describe('ensurePushChannels', () => {
 
 describe('installForegroundNotificationHandler', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    captureForegroundHandler();
   });
 
   afterAll(() => {
@@ -107,26 +133,86 @@ describe('installForegroundNotificationHandler', () => {
   });
 
   test('draws nothing while active, and presents in the background', async () => {
-    installForegroundNotificationHandler();
-
-    expect(mockHandler).toHaveBeenCalledTimes(1);
-    const handler = mockHandler.mock.calls[0][0].handleNotification as () => Promise<{
-      shouldShowBanner: boolean;
-      shouldShowList: boolean;
-      shouldPlaySound: boolean;
-      shouldSetBadge: boolean;
-    }>;
+    expect(foregroundHandler).toBeDefined();
 
     setAppState('active');
-    const active = await handler();
+    const active = await foregroundHandler();
     expect(active.shouldShowBanner).toBe(false);
     expect(active.shouldShowList).toBe(false);
     expect(active.shouldPlaySound).toBe(false);
 
     setAppState('background');
-    const background = await handler();
+    const background = await foregroundHandler();
     expect(background.shouldShowBanner).toBe(true);
     expect(background.shouldShowList).toBe(true);
+  });
+
+  test('a notice that opted into the foreground is presented even while active', async () => {
+    // `present()`'s `allowForeground` schedules the notice, but on Android the
+    // handler is the layer that actually decides presentation. The opt-in must
+    // travel as payload data — which is all the handler sees — or
+    // `notifyBotReplyNotSent` / `notifySessionOpenFailed` are swallowed here and
+    // the operator never learns their words went nowhere.
+    setAppState('active');
+    const optedIn = await foregroundHandler({
+      request: { content: { data: { [FOREGROUND_NOTICE_DATA_KEY]: true } } },
+    });
+    expect(optedIn.shouldShowBanner).toBe(true);
+    expect(optedIn.shouldShowList).toBe(true);
+
+    // Every other notice in the foreground is still suppressed.
+    const plain = await foregroundHandler({ request: { content: { data: {} } } });
+    expect(plain.shouldShowBanner).toBe(false);
+  });
+
+  test('the policy is installed once per process, however often it is asked for', () => {
+    // The module's own `foregroundHandlerInstalled` guard is what keeps this
+    // file's captured handler the one the app runs; without it every call would
+    // swap the policy underneath the tests (and at runtime, under the app).
+    expect(mockHandler).toHaveBeenCalledTimes(1);
+    installForegroundNotificationHandler();
+    installForegroundNotificationHandler();
+    expect(mockHandler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a foreground opt-in posted by present() is actually presentable', () => {
+  const mockSchedule = Notifications.scheduleNotificationAsync as jest.Mock;
+
+  beforeEach(() => {
+    captureForegroundHandler();
+    jest.clearAllMocks();
+    (Notifications.getPermissionsAsync as jest.Mock).mockResolvedValue({
+      granted: true,
+      status: 'granted',
+      canAskAgain: true,
+    });
+    mockSchedule.mockResolvedValue('notif-1');
+  });
+
+  afterAll(() => {
+    if (originalStateDescriptor) {
+      Object.defineProperty(AppState, 'currentState', originalStateDescriptor);
+    }
+  });
+
+  test('the "your words went nowhere" notice carries the marker the handler reads', async () => {
+    // The end-to-end shape of NOTIF-1: the notice `notifyBotReplyNotSent` posts
+    // while the app is active must be handed to the handler as presentable,
+    // because the handler — not `present`'s own gate — is what decides drawing
+    // on Android.
+    setAppState('active');
+    await notifyBotReplyNotSent('queued');
+
+    expect(mockSchedule).toHaveBeenCalledTimes(1);
+    const request = mockSchedule.mock.calls[0][0] as {
+      content: { data?: Record<string, unknown> };
+    };
+    expect(request.content.data?.[FOREGROUND_NOTICE_DATA_KEY]).toBe(true);
+
+    const behavior = await foregroundHandler({ request });
+    expect(behavior.shouldShowBanner).toBe(true);
+    expect(behavior.shouldShowList).toBe(true);
   });
 });
 

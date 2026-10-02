@@ -149,8 +149,11 @@ export async function syncRunActivities(
         continue;
       }
       live.add(runId);
-      entry.props = step.props;
       await entry.instance.update(step.props);
+      // Advanced only after the write landed: a rejected update leaves the
+      // activity showing its previous reading, and a later settle must hand
+      // back what was actually displayed, never props it refused.
+      entry.props = step.props;
     } catch {
       // The activity keeps the reading it already holds.
     }

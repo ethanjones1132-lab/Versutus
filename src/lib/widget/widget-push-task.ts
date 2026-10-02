@@ -29,6 +29,7 @@ import {
   androidWidgetStatusWord,
 } from '@/lib/widget/android-widget-payload';
 import {
+  enqueueWidgetWrite,
   loadAndroidWidgetModule,
   readLastWidgetPayload,
   saveLastWidgetPayload,
@@ -78,16 +79,25 @@ function pushedCount(value: unknown): number | undefined {
     : undefined;
 }
 
-function pushedStamp(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+/** A stamp this phone can trust: positive, and never in the future. */
+function trustedStamp(value: unknown, now: number): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= now
+    ? value
+    : undefined;
 }
 
+/** The app write's own stamp, trusted the same way as the push's. */
+function lastStamp(last: VersutusWidgetPayload | null, now: number): number | undefined {
+  return last ? trustedStamp(last.writtenAt, now) : undefined;
+}
 /**
  * Fold a companion message onto the payload the app last wrote.
  *
  * Kept: the run rows, the Bot rows, the configuration Roster and the routine
  * tallies — all of it the app's own fold and none of it the Gate can see.
- * Replaced: the work line, the approval count and the stamp the message carries.
+ * Replaced: the work line, the approval count and the stamp the message carries
+ * — but only when the message is not older than the app's last write, and only
+ * when its stamp is one this phone can trust.
  * The result is the message's alone, and only while the device has not asked for
  * it to stay off the card.
  *
@@ -105,13 +115,25 @@ export function mergeWidgetPushPayload(
   const claim = widgetPushPayload({ widget: pushed });
   if (!claim) return null;
 
-  const work = pushedText(claim.work) ?? last?.work;
-  const approvalsPending = pushedCount(claim.approvalsPending) ?? last?.approvalsPending ?? 0;
-  const writtenAt = pushedStamp(claim.writtenAt) ?? last?.writtenAt ?? 0;
-  const result = pushedText(claim.result);
+  const pushedAt = trustedStamp(claim.writtenAt, now);
+  const previousAt = lastStamp(last, now);
+  // Is the push older than the app write? Doze can hand a data-only push over
+  // after a newer app write (the header says so), and the Gate's own clock can
+  // put its stamp ahead of the phone's. A push that is not trusted (a future
+  // stamp like that) cannot be shown to be newer than any app write, so it is
+  // treated as superseded rather than allowed to take the work line, the count
+  // and the stamp, and leave `last` claiming a write of unknown age forever.
+  const stale =
+    previousAt !== undefined && (pushedAt === undefined || pushedAt <= previousAt);
+  const work = (stale ? undefined : pushedText(claim.work)) ?? last?.work;
+  const approvalsPending =
+    (stale ? undefined : pushedCount(claim.approvalsPending)) ?? last?.approvalsPending ?? 0;
+  const result = stale ? last?.result : pushedText(claim.result);
+  const writtenAt = (stale ? undefined : pushedAt) ?? previousAt ?? 0;
   const redact = hidden || last?.redact === true;
-  // How long this phone's last app write still speaks for it.
-  const fresh = last !== null && now - last.writtenAt < WIDGET_WRITE_FLOOR_MS;
+  // How long this phone's last app write still speaks for it. `previousAt` is
+  // trusted (never in the future), so this cannot read as permanently fresh.
+  const fresh = previousAt !== undefined && now - previousAt < WIDGET_WRITE_FLOOR_MS;
 
   const payload: VersutusWidgetPayload = {
     // Version 3 whatever the companion said: this payload carries the Roster and
@@ -145,21 +167,26 @@ export async function handleWidgetPush(
 ): Promise<boolean> {
   const pushed = widgetPushPayload(data);
   if (!pushed) return false;
-  try {
-    const module = await load();
-    if (!module) return false;
-    const [hidden, lastJson] = await Promise.all([loadWidgetResultHidden(), readLastWidgetPayload()]);
-    const merged = mergeWidgetPushPayload(pushed, lastWidgetPayloadFrom(lastJson), hidden, Date.now());
-    if (!merged) return false;
-    const json = JSON.stringify(merged);
-    if ((await module.setPayload(json)) !== true) return false;
-    // Only what the card actually took becomes the next merge's base.
-    await saveLastWidgetPayload(json);
-    return true;
-  } catch {
-    // The card keeps the snapshot it already holds; the task stays registered.
-    return false;
-  }
+  // Through the same queue the app's snapshots use: the push's native hop must
+  // not overtake (or be overtaken by) a snapshot write, and the merge base is
+  // read and rewritten inside the queued job rather than beside it.
+  return enqueueWidgetWrite(async () => {
+    try {
+      const module = await load();
+      if (!module) return false;
+      const [hidden, lastJson] = await Promise.all([loadWidgetResultHidden(), readLastWidgetPayload()]);
+      const merged = mergeWidgetPushPayload(pushed, lastWidgetPayloadFrom(lastJson), hidden, Date.now());
+      if (!merged) return false;
+      const json = JSON.stringify(merged);
+      if ((await module.setPayload(json)) !== true) return false;
+      // Only what the card actually took becomes the next merge's base.
+      await saveLastWidgetPayload(json);
+      return true;
+    } catch {
+      // The card keeps the snapshot it already holds; the task stays registered.
+      return false;
+    }
+  });
 }
 
 TaskManager.defineTask(WIDGET_PUSH_TASK, async ({ data }) => {

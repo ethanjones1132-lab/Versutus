@@ -338,6 +338,25 @@ describe('syncRunActivities', () => {
     ).resolves.toBeUndefined();
     expect(start).toHaveBeenCalledTimes(1);
   });
+
+  test('a run that settles after a refused update is ended with the props it actually showed', async () => {
+    // The activity is showing the first reading. The second write is refused, so
+    // the held props must stay the first reading — a settle that hands the
+    // refused props back would end the activity narrating a state it never drew.
+    const { target, start, started } = fakeTarget();
+    await syncRunActivities([updateOf(run())], async () => target);
+    const shown = start.mock.calls[0][0];
+    started[0].update.mockRejectedValueOnce(new Error('ExpoWidgets is not available'));
+
+    await syncRunActivities(
+      [updateOf(run({ events: [previewedStep('reading the config')] }))],
+      async () => target,
+    );
+    await syncRunActivities([retireOf(run({ status: 'complete' }))], async () => target);
+
+    expect(started[0].end).toHaveBeenCalledTimes(1);
+    expect(started[0].end).toHaveBeenCalledWith(undefined, shown);
+  });
 });
 
 describe('the component and the seam', () => {
