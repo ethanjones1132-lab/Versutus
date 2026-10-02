@@ -29,6 +29,12 @@ export type ModelTurnLock = {
   recordedAt: number;
   /** The profile that pinned it, when the caller knew one. */
   profileId?: string;
+  /**
+   * Who locked it. Absent means this device (a recorded turn failure, which
+   * the operator can clear here); `gate` means the Gate's curated catalogue
+   * hid the row (`hiddenReason`), which only the Gate lifts.
+   */
+  source?: 'gate';
 };
 
 /**
@@ -93,13 +99,16 @@ export function recordModelTurnFailure(
  * Pure — the caller passes whatever rows it has and decides whether to apply.
  */
 export function modelLockFallback(
-  rows: readonly { id: string; available?: boolean; modelLocks?: Record<string, ModelTurnLock> }[],
+  rows: readonly { id: string; available?: boolean; hidden?: boolean; modelLocks?: Record<string, ModelTurnLock> }[],
   pinned: string | undefined,
 ): string | undefined {
   if (!pinned) return undefined;
+  // A row the Gate hid is one the picker will not offer, so it is no fallback
+  // either - same rule as `staleModelPin`.
   return rows.find(
     (row) =>
       row.available !== false &&
+      row.hidden !== true &&
       !isModelLocked(row.modelLocks ?? {}, row.id) &&
       !sameModelId(row.id, pinned),
   )?.id;
@@ -152,6 +161,8 @@ export function clearModelLock(
 
 /** The operator-facing line for a locked row: what it said and what to do. */
 export function modelLockNote(lock: ModelTurnLock): string {
+  // The Gate's own verdict says why in full and is not this device's to clear.
+  if (lock.source === 'gate') return `${lock.reason.trim() || 'Hidden by the Gate'}. Pick another model.`;
   const why = lock.reason?.trim() ? ` Reason: ${lock.reason.trim()}` : '';
   return `Locked on this device: ${lock.model}.${why} Pick another model or clear the lock.`;
 }

@@ -5,6 +5,7 @@ import {
   stalePinNote,
   visibleModelRows,
 } from '@/lib/gateway/model-selection';
+import { modelLockFallback, modelLockNote } from '@/lib/gateway/run-failures';
 
 // 2026-10-01: the Gate stopped offering a catalogue of everything an
 // environment claims to serve and started curating it — a provider the host is
@@ -169,8 +170,10 @@ describe('the chat screen wiring', () => {
       /modelLock: catalogueLock\(model, modelLockFor\(activeGateway\?\.modelLocks, String\(/,
     );
     expect(screen).toMatch(/const reason = typeof model\.hiddenReason === 'string'/);
+    // Marked as the Gate's, so the sheet shows the Gate's reason and offers no
+    // Clear this device cannot honour.
     expect(screen).toMatch(
-      /return \{\s*model: String\(model\.id[^}]*reason,\s*recordedAt: 0,?\s*\}/,
+      /return \{\s*model: String\(model\.id[^}]*reason,\s*recordedAt: 0,\s*source: 'gate',?\s*\}/,
     );
   });
 
@@ -179,5 +182,42 @@ describe('the chat screen wiring', () => {
     // and a row it cannot find condemns nothing but also fixes nothing.
     expect(screen).not.toMatch(/const modelCatalog = \w+\.filter\(/);
     expect(screen).toMatch(/visibleModelRows\(modelCatalog, threadModel\)/);
+  });
+});
+
+describe('a row the Gate hid, on the device-lock side', () => {
+  test('a device-locked pin never falls back onto a hidden row', () => {
+    // The other arm of the stale-pin repair: the thread's pin carries a lock
+    // this device recorded. Its fallback used to skip only `available: false`,
+    // so a hidden-but-runnable row (an image model) could become the thread's
+    // model although the picker will not offer it.
+    const locks = { 'kilo/kilo-auto/free': { model: 'kilo/kilo-auto/free', reason: '429', recordedAt: 1 } };
+    const rows = [
+      { id: 'kilo/kilo-auto/free', available: true, modelLocks: locks },
+      { id: 'kilo/google/gemini-3.1-flash-image', available: true, hidden: true, modelLocks: locks },
+      { id: 'kilo/kilo-auto/efficient', available: true, modelLocks: locks },
+    ];
+    expect(modelLockFallback(rows, 'kilo/kilo-auto/free')).toBe('kilo/kilo-auto/efficient');
+  });
+
+  test("the Gate's verdict reads as the Gate's, not as this device's lock", () => {
+    const note = modelLockNote({ model: 'kilo/x', reason: 'Not a chat model', recordedAt: 0, source: 'gate' });
+    expect(note).toBe('Not a chat model. Pick another model.');
+    expect(note).not.toMatch(/on this device|clear the lock/i);
+    // A device lock keeps exactly today's wording.
+    expect(modelLockNote({ model: 'kilo/x', reason: '429', recordedAt: 1 })).toBe(
+      'Locked on this device: kilo/x. Reason: 429 Pick another model or clear the lock.',
+    );
+  });
+
+  test('the sheet offers Clear only for a lock this device can clear', () => {
+    const nodeFs = jest.requireActual('fs') as { readFileSync(path: string, encoding: string): string };
+    const sheet = nodeFs.readFileSync(
+      [__dirname, '..', 'src', 'components', 'chat', 'thread-config-sheet.tsx'].join(
+        __dirname.includes('\\') ? '\\' : '/',
+      ),
+      'utf8',
+    );
+    expect(sheet).toMatch(/\{onClearLock && item\.modelLock\?\.source !== 'gate' \? \(/);
   });
 });

@@ -774,7 +774,9 @@ function ModelsSection({
                 <Text variant="micro" color="tertiary" numberOfLines={2} style={styles.modelMeta}>
                   {modelLockNote(item.modelLock!)}
                 </Text>
-                {onClearLock ? (
+                {/* Only this device's own lock is this device's to clear; a row
+                    the Gate hid comes back when the Gate lifts its verdict. */}
+                {onClearLock && item.modelLock?.source !== 'gate' ? (
                   <PressableScale
                     accessibilityRole="button"
                     accessibilityLabel={`Clear lock for ${name}`}

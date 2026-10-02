@@ -2875,6 +2875,7 @@ function catalogueLock(
     model: String(model.id || model.model || model.name || ''),
     reason,
     recordedAt: 0,
+    source: 'gate',
   };
 }
 
