@@ -24,6 +24,7 @@ export function BotApprovalPolicyRow({ botId }: { botId: string }) {
   const tokens = useTokens();
   const [enabled, setEnabled] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!activeGateway) return;
@@ -39,10 +40,19 @@ export function BotApprovalPolicyRow({ botId }: { botId: string }) {
   }, [activeGateway, botId]);
 
   const toggle = async (next: boolean) => {
-    if (!activeGateway) return;
+    if (!activeGateway || saving) return;
+    setSaving(true);
     setEnabled(next);
-    const policies = await loadApprovalPolicies();
-    await saveApprovalPolicies(setApprovalPolicy(policies, activeGateway.id, botId, next));
+    try {
+      const policies = await loadApprovalPolicies();
+      const ok = await saveApprovalPolicies(setApprovalPolicy(policies, activeGateway.id, botId, next));
+      if (!ok) {
+        const stored = await loadApprovalPolicies();
+        setEnabled(stored[approvalPolicyKey(activeGateway.id, botId)]?.autoApproveRead === true);
+      }
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (!activeGateway) return null;
@@ -60,7 +70,7 @@ export function BotApprovalPolicyRow({ botId }: { botId: string }) {
       <Switch
         value={enabled}
         onValueChange={(next) => void toggle(next)}
-        disabled={!loaded}
+        disabled={!loaded || saving}
         trackColor={{ true: tokens.accent, false: tokens.border }}
         thumbColor={tokens.textPrimary}
         accessibilityLabel="Auto-approve read-only commands for this Bot"

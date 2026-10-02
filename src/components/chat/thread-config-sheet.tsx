@@ -340,6 +340,8 @@ function SessionsSection({
       } else {
         setOpenError(openSessionByIdFailureText(id, result.error));
       }
+    } catch (cause: unknown) {
+      setOpenError(openSessionByIdFailureText(id, cause instanceof Error ? cause.message : String(cause)));
     } finally {
       setOpening(false);
     }
@@ -1023,32 +1025,35 @@ export function ThreadConfigSheet({
   selectedBackendId,
   onSelectBackend,
 }: ThreadConfigSheetProps) {
-  if (!mode) return null;
+  const [heldMode, setHeldMode] = useState(mode);
+  if (mode && mode !== heldMode) setHeldMode(mode);
+  if (!heldMode) return null;
 
+  const shown = mode ?? heldMode;
   const hopOptions = availableModes.filter((candidate, index) =>
     availableModes.indexOf(candidate) === index,
   );
 
   return (
     <BaseSheet
-      visible
+      visible={!!mode}
       eyebrow="THREAD"
-      title={threadConfigTitle(mode, modelMode, modelAgentId)}
+      title={threadConfigTitle(shown, modelMode, modelAgentId)}
       onClose={onClose}
       closeLabel="Done"
       position="bottom">
       {hopOptions.length > 1 ? (
         <SegmentedControl
           options={hopOptions.map((candidate) => ({ key: candidate, label: SECTION_LABELS[candidate] }))}
-          selectedKey={mode}
+          selectedKey={shown}
           onSelect={(next) => {
-            if (next !== mode) onModeChange(next);
+            if (next !== shown) onModeChange(next);
           }}
           style={styles.switcher}
         />
       ) : null}
 
-      {mode === 'sessions' ? (
+      <View style={shown === 'sessions' ? undefined : styles.hiddenSection}>
         <SessionsSection
           sessions={sessions}
           sessionsError={sessionsError}
@@ -1064,7 +1069,8 @@ export function ThreadConfigSheet({
           onDeleteSession={onDeleteSession}
           onOpenById={onOpenSessionById}
         />
-      ) : mode === 'models' ? (
+      </View>
+      <View style={shown === 'models' ? undefined : styles.hiddenSection}>
         <ModelsSection
           models={models}
           modelsError={modelsError}
@@ -1075,7 +1081,8 @@ export function ThreadConfigSheet({
           onClearLock={onClearModelLock}
           onRefresh={onRefreshModels}
         />
-      ) : (
+      </View>
+      <View style={shown === 'backends' ? undefined : styles.hiddenSection}>
         <BackendsSection
           backends={backends}
           selectedBackendId={selectedBackendId}
@@ -1086,7 +1093,7 @@ export function ThreadConfigSheet({
             onClose();
           }}
         />
-      )}
+      </View>
     </BaseSheet>
   );
 }
@@ -1094,6 +1101,10 @@ export function ThreadConfigSheet({
 const styles = StyleSheet.create({
   switcher: {
     marginBottom: Spacing.two,
+  },
+  // Keep inactive sections mounted so a hop does not throw away typed drafts.
+  hiddenSection: {
+    display: 'none',
   },
   blurb: { paddingHorizontal: Spacing.two, paddingBottom: Spacing.two },
   nameField: {

@@ -1,8 +1,12 @@
 import {
   botMemoryCopy,
   botMemoryFromUnknown,
+  botMemoryStaleCopy,
   isBotMemoryFile,
+  MEMORY_LINE_WINDOW,
   memoryFileSearch,
+  memoryLineWindowCopy,
+  memoryMatchesWindow,
   memorySaveConfirmationCopy,
 } from '@/lib/gateway/bot-memory';
 
@@ -82,6 +86,25 @@ describe('memory edits are guarded', () => {
   it('names the file it will change in the confirmation', () => {
     expect(memorySaveConfirmationCopy('MEMORY.md')).toContain('MEMORY.md');
     expect(memorySaveConfirmationCopy('MEMORY.md')).toMatch(/Save changes/);
+  });
+});
+
+describe('memory line window', () => {
+  it('caps an empty-query match list so the pane does not mount every line', () => {
+    const files = [
+      {
+        name: 'MEMORY.md' as const,
+        text: Array.from({ length: 200 }, (_, i) => `line-${i + 1}`).join('\n'),
+      },
+    ];
+    const matches = memoryFileSearch(files, '');
+    expect(matches).toHaveLength(200);
+    expect(memoryMatchesWindow(matches)).toHaveLength(MEMORY_LINE_WINDOW);
+    expect(memoryLineWindowCopy(matches.length)).toMatch(/Showing first 80 of 200/);
+  });
+
+  it('names a failed re-read without claiming the files are gone', () => {
+    expect(botMemoryStaleCopy()).toMatch(/Could not re-read memory/);
   });
 });
 

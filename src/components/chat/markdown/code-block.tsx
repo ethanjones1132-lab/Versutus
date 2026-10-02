@@ -1,5 +1,5 @@
 import * as Clipboard from 'expo-clipboard';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text as RNText, View } from 'react-native';
 
 import { Icon, PressableScale, Text } from '@/components/ui';
@@ -17,11 +17,24 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
   const tokens = useTokens();
   const [copied, setCopied] = useState(false);
 
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    },
+    [],
+  );
+
   const handleCopy = async () => {
-    await Clipboard.setStringAsync(code);
+    try {
+      await Clipboard.setStringAsync(code);
+    } catch {
+      return;
+    }
     await haptics.success();
     setCopied(true);
-    setTimeout(() => setCopied(false), 1600);
+    if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    copiedTimerRef.current = setTimeout(() => setCopied(false), 1600);
   };
 
   return (

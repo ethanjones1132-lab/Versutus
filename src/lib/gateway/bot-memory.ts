@@ -33,6 +33,23 @@ export function botMemoryFromUnknown(payload: unknown): BotMemory {
 
 export type MemoryMatch = { name: string; line: number; text: string };
 
+/** How many match lines the pane mounts at once. Search narrows the rest. */
+export const MEMORY_LINE_WINDOW = 80;
+
+export function memoryMatchesWindow(matches: MemoryMatch[]): MemoryMatch[] {
+  return matches.slice(0, MEMORY_LINE_WINDOW);
+}
+
+export function memoryLineWindowCopy(total: number): string | undefined {
+  if (total <= MEMORY_LINE_WINDOW) return undefined;
+  return `Showing first ${MEMORY_LINE_WINDOW} of ${total} lines — search to narrow.`;
+}
+
+/** After a write, a failed re-read must not look like the edit vanished. */
+export function botMemoryStaleCopy(): string {
+  return 'Could not re-read memory — showing the last files.';
+}
+
 /** Line matches for a query; an empty query returns every non-empty line. */
 export function memoryFileSearch(files: BotMemoryFile[], query: string): MemoryMatch[] {
   const needle = query.trim().toLowerCase();

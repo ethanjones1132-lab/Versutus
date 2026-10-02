@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { Badge, BaseSheet, Button, Text } from '@/components/ui';
@@ -10,6 +11,9 @@ function confirmLabelForPreview(preview: GatewayActionPreview): string {
   const cmd = preview.applyCommand.toLowerCase();
   if (cmd.includes('/model set') || cmd.includes('model set')) return 'Apply model';
   if (cmd.includes('devices approve')) return 'Approve device';
+  // abort/compact/fork/restore are not a switch; the command's own title is
+  // the honest verb. Other /session verbs keep the switch label.
+  if (/\b(abort|compact|fork|restore)\b/.test(cmd)) return preview.title;
   if (cmd.includes('/session')) return 'Switch session';
   return preview.title;
 }
@@ -26,30 +30,35 @@ export function ConfirmationSheet({
   onCancel: () => void;
 }) {
   const tokens = useTokens();
+  const [held, setHeld] = useState(preview);
+  if (preview && preview !== held) setHeld(preview);
 
-  if (!visible || !preview) return null;
+  const open = visible && !!preview;
+  if (!held && !open) return null;
+  const shown = preview ?? held;
+  if (!shown) return null;
 
   const riskTone =
-    preview.risk === 'high' ? 'danger' : preview.risk === 'medium' ? 'warning' : 'success';
+    shown.risk === 'high' ? 'danger' : shown.risk === 'medium' ? 'warning' : 'success';
 
   return (
     <BaseSheet
-      visible={visible}
+      visible={open}
       eyebrow="CONFIRM ACTION"
       onClose={onCancel}
       closeLabel="Dismiss"
       position="bottom">
-      <Text variant="title">{preview.title}</Text>
+      <Text variant="title">{shown.title}</Text>
 
       <Text color="secondary" style={styles.summary}>
-        {preview.summary}
+        {shown.summary}
       </Text>
 
       <View style={styles.riskRow}>
         <Text variant="caption" color="tertiary">
           Risk
         </Text>
-        <Badge label={preview.risk.toUpperCase()} tone={riskTone} dot={false} />
+        <Badge label={shown.risk.toUpperCase()} tone={riskTone} dot={false} />
       </View>
 
       <View style={styles.section}>
@@ -62,16 +71,16 @@ export function ConfirmationSheet({
             styles.command,
             { backgroundColor: tokens.backgroundInset, borderColor: tokens.border },
           ]}>
-          {preview.applyCommand}
+          {shown.applyCommand}
         </Text>
       </View>
 
-      {preview.diff && preview.diff.length > 0 ? (
+      {shown.diff && shown.diff.length > 0 ? (
         <View style={styles.section}>
           <Text variant="caption" color="tertiary">
             Preview
           </Text>
-          {preview.diff.map((d, i) => (
+          {shown.diff.map((d, i) => (
             <View
               key={i}
               style={[
@@ -107,9 +116,9 @@ export function ConfirmationSheet({
           style={styles.footerButton}
         />
         <Button
-          label={confirmLabelForPreview(preview)}
+          label={confirmLabelForPreview(shown)}
           onPress={async () => {
-            await (preview.risk === 'high' ? haptics.warning() : haptics.success());
+            await (shown.risk === 'high' ? haptics.warning() : haptics.success());
             onConfirm();
           }}
           style={styles.footerPrimary}

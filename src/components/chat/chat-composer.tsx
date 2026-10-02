@@ -36,6 +36,7 @@ import { micControlState } from '@/lib/voice/mic-state';
 import {
   speechRecognitionAvailable,
   speechRecognitionPermissionAskable,
+  cancelSpeechRecognition,
   startSpeechRecognition,
   stopSpeechRecognition,
 } from '@/lib/voice/speech-recognition';
@@ -176,7 +177,10 @@ export const ChatComposer = memo(function ChatComposer({
   // empty draft, and the round send (Stop while a reply streams) takes the
   // slot the moment there is text. Nothing else draws beside the field, so
   // the placeholder keeps the whole line to itself at phone width.
-  const showSend = draft.trim().length > 0 || isStreaming;
+  // Keep the mic mounted for the whole hold: writing the transcript into
+  // the draft must not swap this control for send, or press-out never
+  // arrives and the recognizer stays hot.
+  const showSend = !listening && (draft.trim().length > 0 || isStreaming);
   // What the `+` menu can offer right now. With nothing to offer there is no
   // control to draw rather than a `+` that opens an empty panel.
   const canOpenMenu = Boolean(
@@ -217,7 +221,11 @@ export const ChatComposer = memo(function ChatComposer({
     micHoldRef.current = entry;
     setListening(true);
 
-    void startSpeechRecognition({}, (transcript) => hold.onTranscript(transcript)).then((started) => {
+    void startSpeechRecognition({}, (transcript) => {
+      const live = micHoldRef.current;
+      if (!live || live.released || live.hold !== hold) return;
+      hold.onTranscript(transcript);
+    }).then((started) => {
       if (!started) {
         // Nothing is listening: a phone that refused, or a recognizer that
         // would not start, puts the text the hold began with back rather than
@@ -254,6 +262,20 @@ export const ChatComposer = memo(function ChatComposer({
     entry.released = true;
     void stopSpeechRecognition();
   };
+
+  // A hold that outlives this composer (Back, thread switch) must retire the
+  // recognizer: the captured writer would otherwise keep persisting speech
+  // into the thread the operator already left.
+  useEffect(() => {
+    return () => {
+      const entry = micHoldRef.current;
+      if (!entry) return;
+      entry.released = true;
+      micHoldRef.current = null;
+      setListening(false);
+      void cancelSpeechRecognition();
+    };
+  }, [onChangeText]);
 
   // A live call holds manual send and dictation for its thread: speech is the
   // call's to send, and a typed draft is preserved untouched rather than

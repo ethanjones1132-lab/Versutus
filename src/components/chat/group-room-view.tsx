@@ -390,6 +390,7 @@ export function GroupRoomView({
     setRenaming(true);
     onRename(name)
       .then(() => {
+        setError(undefined);
         setRenameVisible(false);
         setRenameDraft('');
       })
@@ -412,6 +413,7 @@ export function GroupRoomView({
       .then(() => {
         // The parent refreshes the roster copy behind the room, so the
         // member chips above show the joined roster; leave the picker.
+        setError(undefined);
         setAddVisible(false);
         setAddSelection([]);
       })
@@ -427,7 +429,10 @@ export function GroupRoomView({
     if (disbanding) return;
     setDisbanding(true);
     onDisband()
-      .then(() => setDisbandVisible(false))
+      .then(() => {
+        setError(undefined);
+        setDisbandVisible(false);
+      })
       .catch((cause: unknown) => {
         // Fail honest: the room is still here; say why (desktop-parity
         // verdict + fix for classifiable refusals) instead of pretending
@@ -491,6 +496,7 @@ export function GroupRoomView({
               <View style={styles.headActions}>
                 <PressableScale
                   onPress={() => {
+                    setError(undefined);
                     setRenameDraft(group.name);
                     setRenameVisible(true);
                   }}
@@ -708,9 +714,13 @@ export function GroupRoomView({
           const memberId = pendingRemoval;
           setPendingRemoval(null);
           if (!memberId) return;
-          onLeave(memberId).catch((cause: unknown) => {
-            setError(describeRoomError(cause));
-          });
+          onLeave(memberId)
+            .then(() => {
+              setError(undefined);
+            })
+            .catch((cause: unknown) => {
+              setError(describeRoomError(cause));
+            });
         }}
       />
 

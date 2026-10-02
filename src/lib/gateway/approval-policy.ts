@@ -99,11 +99,13 @@ export async function loadApprovalPolicies(): Promise<ApprovalPolicies> {
   }
 }
 
-export async function saveApprovalPolicies(policies: ApprovalPolicies): Promise<void> {
+export async function saveApprovalPolicies(policies: ApprovalPolicies): Promise<boolean> {
   try {
     await keyValueStorage.setItem(APPROVAL_POLICIES_STORAGE_KEY, JSON.stringify(policies));
+    return true;
   } catch {
-    // best-effort: a policy must never break the surface that set it
+    // best-effort: a policy must never throw; the caller rolls the switch back
+    return false;
   }
 }
 

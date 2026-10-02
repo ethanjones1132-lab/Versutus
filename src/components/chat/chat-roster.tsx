@@ -265,10 +265,12 @@ function ChatRosterImpl({
     ? () => {
         setRefreshing(true);
         const started = Date.now();
-        void Promise.resolve(onRefresh()).finally(() => {
-          const elapsed = Date.now() - started;
-          setTimeout(() => setRefreshing(false), elapsed < 400 ? 400 - elapsed : 0);
-        });
+        void Promise.resolve(onRefresh())
+          .catch(() => undefined)
+          .finally(() => {
+            const elapsed = Date.now() - started;
+            setTimeout(() => setRefreshing(false), elapsed < 400 ? 400 - elapsed : 0);
+          });
       }
     : undefined;
 

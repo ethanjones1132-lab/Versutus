@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Button, Skeleton, Text, TextField } from '@/components/ui';
+import { Button, DisclosureRow, Skeleton, Text, TextField } from '@/components/ui';
 import { Spacing } from '@/constants/tokens';
 import { useGateway } from '@/context/gateway-provider';
 import {
   botMemoryCopy,
   botMemoryFromUnknown,
+  botMemoryStaleCopy,
   memoryFileSearch,
+  memoryLineWindowCopy,
+  memoryMatchesWindow,
   memorySaveConfirmationCopy,
   type BotMemory,
 } from '@/lib/gateway/bot-memory';
 
-type MemoryState = { botId: string; memory: BotMemory; failed: boolean };
+type MemoryState = { botId: string; memory: BotMemory; failed: boolean; stale: boolean };
 type Editing = { name: string; text: string };
 
 /**
@@ -21,10 +24,12 @@ type Editing = { name: string; text: string };
  * the raw files and searches them. An edit is two taps and a confirmation —
  * nothing is written until the operator confirms, and the Gate still refuses
  * any name that is not memory. A failed read says so rather than reading as
- * empty.
+ * empty. The read waits until Memory is opened — a Bot detail sheet is about
+ * description and soul, not an eager memory round-trip.
  */
 export function BotMemoryPane({ botId }: { botId: string }) {
   const { status, gatewayRequest } = useGateway();
+  const [open, setOpen] = useState(false);
   const [state, setState] = useState<MemoryState | null>(null);
   const [query, setQuery] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
@@ -34,19 +39,27 @@ export function BotMemoryPane({ botId }: { botId: string }) {
   const [editError, setEditError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!open) return;
     if (status !== 'connected') return;
     let cancelled = false;
     void gatewayRequest('bots.memory', { id: botId })
       .then((payload) => {
-        if (!cancelled) setState({ botId, memory: botMemoryFromUnknown(payload), failed: false });
+        if (!cancelled) setState({ botId, memory: botMemoryFromUnknown(payload), failed: false, stale: false });
       })
       .catch(() => {
-        if (!cancelled) setState({ botId, memory: { files: [] }, failed: true });
+        if (!cancelled) {
+          setState((current) => {
+            if (current && current.botId === botId && current.memory.files.length > 0) {
+              return { ...current, failed: false, stale: true };
+            }
+            return { botId, memory: { files: [] }, failed: true, stale: false };
+          });
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [botId, status, gatewayRequest, reloadKey]);
+  }, [open, botId, status, gatewayRequest, reloadKey]);
 
   const save = useCallback(async () => {
     if (!editing) return;
@@ -54,6 +67,16 @@ export function BotMemoryPane({ botId }: { botId: string }) {
     setEditError(null);
     try {
       await gatewayRequest('bots.memory.write', { id: botId, name: editing.name, text: editing.text });
+      const written = editing;
+      setState((current) => {
+        if (!current || current.botId !== botId) {
+          return { botId, memory: { files: [{ name: written.name, text: written.text }] }, failed: false, stale: false };
+        }
+        const files = current.memory.files.some((file) => file.name === written.name)
+          ? current.memory.files.map((file) => (file.name === written.name ? { ...file, text: written.text } : file))
+          : [...current.memory.files, { name: written.name, text: written.text }];
+        return { botId, memory: { ...current.memory, files }, failed: false, stale: false };
+      });
       setEditing(null);
       setConfirming(false);
       setReloadKey((n) => n + 1);
@@ -66,14 +89,19 @@ export function BotMemoryPane({ botId }: { botId: string }) {
 
   const settled = state?.botId === botId ? state : null;
   const matches = settled ? memoryFileSearch(settled.memory.files, query) : [];
+  const visibleMatches = memoryMatchesWindow(matches);
+  const windowCopy = memoryLineWindowCopy(matches.length);
 
   return (
     <View style={styles.pane}>
-      <Text variant="micro" color="tertiary">
-        MEMORY
-      </Text>
+      <DisclosureRow
+        label="Memory"
+        icon={{ ios: 'doc.text', android: 'description', web: 'description' }}
+        expanded={open}
+        onPress={() => setOpen((value) => !value)}
+      />
 
-      {!settled ? (
+      {!open ? null : !settled ? (
         <Skeleton width="90%" height={40} />
       ) : settled.failed ? (
         <View style={styles.block}>
@@ -91,8 +119,16 @@ export function BotMemoryPane({ botId }: { botId: string }) {
           <Text variant="caption" color="tertiary">
             {botMemoryCopy(settled.memory)}
           </Text>
-          {settled.memory.files.length > 1 ? (
-            <TextField value={query} onChangeText={setQuery} placeholder="Search memory" />
+          {settled.stale ? (
+            <Text variant="caption" color="statusDisconnected">
+              {botMemoryStaleCopy()}
+            </Text>
+          ) : null}
+          <TextField value={query} onChangeText={setQuery} placeholder="Search memory" />
+          {windowCopy ? (
+            <Text variant="caption" color="secondary">
+              {windowCopy}
+            </Text>
           ) : null}
           {query.trim() && matches.length === 0 ? (
             <Text variant="caption" color="secondary">
@@ -168,7 +204,7 @@ export function BotMemoryPane({ botId }: { botId: string }) {
                   ) : null}
                 </View>
               ) : (
-                matches
+                visibleMatches
                   .filter((match) => match.name === file.name)
                   .map((match) => (
                     <View key={`${match.name}:${match.line}`} style={styles.match}>

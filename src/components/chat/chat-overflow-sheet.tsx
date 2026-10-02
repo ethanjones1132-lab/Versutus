@@ -86,7 +86,7 @@ export function ChatOverflowSheet({
   // Disconnect arms a danger confirmation first — same pattern as session
   // delete and group disband — so the tap cannot drop the connection alone.
   const [disconnectArmed, setDisconnectArmed] = useState(false);
-  if (!visible) return null;
+  if (!visible && disconnectArmed) setDisconnectArmed(false);
 
   const lastActive = session?.lastActive ?? spendSession?.last_active;
   const statusPulsing =
@@ -94,7 +94,7 @@ export function ChatOverflowSheet({
 
   return (
     <>
-      <BaseSheet visible={visible} eyebrow="CHAT" title="Session &amp; connection" onClose={onClose} closeLabel="Dismiss">
+      <BaseSheet visible={visible} eyebrow="CHAT" title="Session & connection" onClose={onClose} closeLabel="Dismiss">
       {status ? (
         <View style={styles.status}>
           <PulsingDot color={statusColor(tokens, status)} active={statusPulsing} />
@@ -236,7 +236,7 @@ export function ChatOverflowSheet({
       </View>
       </BaseSheet>
       <ConfirmSheet
-        visible={disconnectArmed}
+        visible={visible && disconnectArmed}
         title="Disconnect gateway?"
         message="The gateway connection drops and this Chat clears its messages until you connect again."
         confirmLabel="Disconnect gateway"

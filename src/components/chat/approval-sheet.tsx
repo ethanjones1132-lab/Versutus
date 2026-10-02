@@ -21,12 +21,19 @@ export function ApprovalSheet({
   onDeny: (feedback?: string) => void;
 }) {
   const [feedback, setFeedback] = useState('');
+  const [heldRunId, setHeldRunId] = useState(runId);
+  if (runId && runId !== heldRunId) {
+    setHeldRunId(runId);
+    setFeedback('');
+  }
 
-  if (!visible || !runId) return null;
+  const open = visible && !!runId;
+  const shownRunId = runId ?? heldRunId;
+  if (!shownRunId) return null;
 
   return (
     <BaseSheet
-      visible={visible}
+      visible={open}
       eyebrow="APPROVAL REQUIRED"
       onClose={() => onDeny(feedback.trim() || undefined)}
       closeLabel="Deny"
@@ -39,7 +46,7 @@ export function ApprovalSheet({
 
         {gatewayName ? (
           <Text variant="caption" color="tertiary" style={styles.meta}>
-            {gatewayName} · run {runId.slice(0, 12)}…
+            {gatewayName} · run {shownRunId.slice(0, 12)}…
           </Text>
         ) : null}
 

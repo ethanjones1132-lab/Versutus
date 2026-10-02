@@ -1,4 +1,5 @@
 import * as Clipboard from 'expo-clipboard';
+import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { BaseSheet, Divider, ListRow, Text } from '@/components/ui';
@@ -23,29 +24,39 @@ export function MessageActionsSheet({
   onRetry,
   onDelete,
 }: MessageActionsSheetProps) {
-  if (!visible || !message) return null;
+  const [held, setHeld] = useState(message);
+  if (message && message !== held) setHeld(message);
 
-  const command = message.command;
+  const open = visible && !!message;
+  if (!held && !open) return null;
+  const shown = message ?? held;
+  if (!shown) return null;
+
+  const command = shown.command;
   const canRetry = command?.status === 'error' && !!command.input && !!onRetry;
   // A live turn is still owned by the stream: deleting its bubble would only
   // drop it locally while later deltas land nowhere (the reducers no-op on a
   // missing id) and the next history reload restores the finished turn. Hide
   // Delete until the turn settles — a live turn ends via Cancel/Stop instead.
-  const isLive = message.streaming === true || message.command?.status === 'running';
+  const isLive = shown.streaming === true || shown.command?.status === 'running';
   const canDelete = !!onDelete && !isLive;
-  const timeLabel = message.timestamp ? formatClockTime(message.timestamp) : undefined;
+  const timeLabel = shown.timestamp ? formatClockTime(shown.timestamp) : undefined;
 
   const handleCopy = async () => {
-    await Clipboard.setStringAsync(message.text);
-    await haptics.success();
+    try {
+      await Clipboard.setStringAsync(shown.text);
+      await haptics.success();
+    } catch {
+      // Clipboard refused: still dismiss so the tap is not a hang.
+    }
     onClose();
   };
 
   return (
-    <BaseSheet visible={visible} eyebrow="MESSAGE" title="Message actions" onClose={onClose} closeLabel="Dismiss">
+    <BaseSheet visible={open} eyebrow="MESSAGE" title="Message actions" onClose={onClose} closeLabel="Dismiss">
       <View style={styles.meta}>
         <Text variant="caption" color="tertiary">
-          {message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Agent' : 'System'}
+          {shown.role === 'user' ? 'You' : shown.role === 'assistant' ? 'Agent' : 'System'}
           {timeLabel ? ` · ${timeLabel}` : ''}
           {command?.title ? ` · ${command.title}` : ''}
         </Text>
@@ -77,7 +88,7 @@ export function MessageActionsSheet({
             chevron={false}
             onPress={() => {
               void haptics.warning();
-              onDelete(message.id);
+              onDelete(shown.id);
               onClose();
             }}
             style={styles.destructive}

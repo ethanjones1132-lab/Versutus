@@ -1,4 +1,5 @@
 import * as Clipboard from 'expo-clipboard';
+import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { BotApprovalPolicyRow } from '@/components/chat/bot-approval-policy';
@@ -74,19 +75,26 @@ export function BotDetailSheet({
   onDismissExportNotice,
   onChangeLook,
 }: BotDetailSheetProps) {
-  if (!bot) return null;
-  const detail = describeBotDetail(bot);
+  const [held, setHeld] = useState(bot);
+  if (bot && bot !== held) setHeld(bot);
+  if (!held) return null;
+  const shown = bot ?? held;
+  const detail = describeBotDetail(shown);
   const soulState = soul ?? EMPTY_BOT_SOUL;
   const soulNote = botSoulCopy(soulState);
 
   const handleCopyId = async () => {
-    await Clipboard.setStringAsync(detail.id);
-    await haptics.success();
+    try {
+      await Clipboard.setStringAsync(detail.id);
+      await haptics.success();
+    } catch {
+      // Clipboard refused: the tap still happened; nothing to copy.
+    }
   };
 
   return (
     <BaseSheet
-      visible
+      visible={!!bot}
       eyebrow="AGENT"
       title={detail.name}
       onClose={onClose}
@@ -129,10 +137,10 @@ export function BotDetailSheet({
         </View>
 
         {/* D1: the per-Bot auto-approve opt-in (read-only classes only). */}
-        <BotApprovalPolicyRow botId={bot.id} />
+        <BotApprovalPolicyRow botId={shown.id} />
 
         {/* P2: the Bot's memory, read on demand from the Gate host. */}
-        <BotMemoryPane botId={bot.id} />
+        <BotMemoryPane botId={shown.id} />
 
         <View style={styles.fact}>
           <Text variant="micro" color="tertiary">

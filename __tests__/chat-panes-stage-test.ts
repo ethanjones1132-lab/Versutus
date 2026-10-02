@@ -66,7 +66,7 @@ describe('Chat auxiliary panes rest on the quiet stage', () => {
     expect(src).toContain("<Text variant=\"body\" color={detail.routingNext ? 'accent' : undefined}>");
     expect(src).toContain('<Text variant="caption" color="accent">');
     expect(src).toContain('<BaseSheet');
-    expect(src).toContain('<BotMemoryPane botId={bot.id} />');
+    expect(src).toContain('<BotMemoryPane botId={shown.id} />');
     expect(src).toContain('onMessage');
     expect(src).toContain('onEdit');
     expect(src).toContain('onExport');

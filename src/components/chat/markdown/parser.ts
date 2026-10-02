@@ -160,21 +160,24 @@ export function parseMarkdown(text: string): MdBlock[] {
   while (i < lines.length) {
     const line = lines[i];
 
-    // Fenced code block
+    // Fenced code block. An unterminated fence (truncated turn, model cut
+    // off mid-block) stays prose so the rest of the reply does not flip into
+    // one monospace block the moment streaming ends.
     const fence = line.match(FENCE);
     if (fence) {
-      flushParagraph();
       const fenceChar = fence[1][0];
-      const language = fence[2] || undefined;
-      const codeLines: string[] = [];
-      i += 1;
-      while (i < lines.length && !lines[i].trimStart().startsWith(fenceChar.repeat(3))) {
-        codeLines.push(lines[i]);
-        i += 1;
+      const closer = fenceChar.repeat(3);
+      let closeAt = i + 1;
+      while (closeAt < lines.length && !lines[closeAt].trimStart().startsWith(closer)) {
+        closeAt += 1;
       }
-      i += 1; // consume closing fence (or run off the end)
-      blocks.push({ type: 'code', language, code: codeLines.join('\n') });
-      continue;
+      if (closeAt < lines.length) {
+        flushParagraph();
+        const language = fence[2] || undefined;
+        blocks.push({ type: 'code', language, code: lines.slice(i + 1, closeAt).join('\n') });
+        i = closeAt + 1;
+        continue;
+      }
     }
 
     // Blank line ends the current paragraph

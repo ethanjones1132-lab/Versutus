@@ -86,7 +86,11 @@ export function CommandHistorySection() {
     commandTranscriptMarkdown(commandTranscripts, { includeRaw });
 
   const copyMarkdown = async () => {
-    await Clipboard.setStringAsync(transcriptMarkdown());
+    try {
+      await Clipboard.setStringAsync(transcriptMarkdown());
+    } catch {
+      return;
+    }
     await haptics.success();
   };
 

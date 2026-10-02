@@ -43,9 +43,24 @@ describe('streaming markdown does not re-parse the whole buffer', () => {
     const streaming = markdownBlocksForDisplay(openFence, true);
     expect(streaming).toEqual([{ type: 'paragraph', spans: [{ text: openFence }] }]);
 
-    // Once the stream completes the same text is parsed into real blocks.
+    // Once the stream completes, an unterminated fence must stay readable
+    // prose — a truncated turn must not flip the rest of the reply into a
+    // monospace code block the moment streaming ends.
     const done = markdownBlocksForDisplay(openFence, false);
-    expect(done.map((b) => b.type)).toEqual(['paragraph', 'code']);
+    expect(done.some((b) => b.type === 'code')).toBe(false);
+  });
+
+  test('an unterminated fence does not swallow trailing prose when the turn settles', () => {
+    const text = 'intro\n```js\nconst a = 1;\nstill prose';
+    const streaming = markdownBlocksForDisplay(text, true);
+    expect(streaming).toEqual([{ type: 'paragraph', spans: [{ text }] }]);
+
+    const settled = markdownBlocksForDisplay(text, false);
+    expect(settled.some((block) => block.type === 'code')).toBe(false);
+    const body = settled
+      .flatMap((block) => (block.type === 'paragraph' ? block.spans.map((span) => span.text) : []))
+      .join('\n');
+    expect(body).toContain('still prose');
   });
 
   test('the non-streaming branch always parses the full structure', () => {
