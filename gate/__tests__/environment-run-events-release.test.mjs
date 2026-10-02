@@ -169,9 +169,35 @@ test('a run that reaches its terminal event still ends the response cleanly', as
   }
 });
 
+test('close() settles with a run-event stream still open', async (t) => {
+  // The same shape one route over: a run parked on an approval says nothing
+  // for minutes, so its response is still in flight at shutdown, and
+  // `server.close()` waits for in-flight requests. Ending it is what lets the
+  // returned promise settle at all — without it the plain SIGINT handler, which
+  // awaits close() with no timer, never exits.
+  const seen = { requested: null, finished: 0 };
+  const { gate, root } = await stubEvents(t, seen, { events: [STARTED] });
+  try {
+    const response = await watchRun(gate);
+    assert.equal(response.status, 200);
+    assert.match(Buffer.from((await response.body.getReader().read()).value).toString(), /run\.started/);
+    assert.ok(await until(() => seen.log.pendingWaiters() === 1), 'the viewer is parked in the log');
+
+    const closed = await Promise.race([
+      gate.close().then(() => 'closed', (error) => `failed: ${error.message}`),
+      wait(5000).then(() => 'still open'),
+    ]);
+    assert.equal(closed, 'closed', 'a shutdown must not wait on a run parked on an approval');
+    assert.ok(
+      await until(() => seen.log.pendingWaiters() === 0),
+      'ending the response must release the subscription it was holding',
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
+  }
+});
+
 test('a run whose stream fails reports the failure on the wire', async (t) => {
-  // A log cannot fail mid-stream the way a broken archive can, so this one keeps
-  // a throwing iterator: the contract under test is the route's error frame.
   t.mock.method(CliEnvironmentService.prototype, 'events', function stubbed() {
     return {
       [Symbol.asyncIterator]() {

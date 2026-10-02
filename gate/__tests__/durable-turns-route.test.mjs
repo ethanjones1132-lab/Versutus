@@ -585,6 +585,65 @@ test('the detached-turn count is a runaway guard, not a reaper', async () => {
 
 // ─── A restart is an honest end, recorded ─────────────────────────────────
 
+test('a restart pushes the phone that walked away a notice, not silence', async () => {
+  // The detach contract is that the turn keeps working on the PC while the phone
+  // is gone, so a restart has to reach that phone somehow. It did not: the
+  // abort close() sent was indistinguishable from the user's own Stop, which
+  // reports an aborted turn as contentless and answers `null` — the "no notice"
+  // signal the route reads. The turn's real work was cancelled and nothing said
+  // so anywhere except the journal.
+  const turns = [];
+  const pushSends = [];
+  const pushFetch = async (url, init) => {
+    if (url.endsWith('/push/send')) {
+      const messages = JSON.parse(init.body);
+      pushSends.push(...messages);
+      return {
+        ok: true, status: 200,
+        async json() { return { data: messages.map((_, index) => ({ status: 'ok', id: `t-${index}` })) }; },
+      };
+    }
+    return {
+      ok: true, status: 200,
+      async json() { return { data: Object.fromEntries(JSON.parse(init.body).ids.map((id) => [id, { status: 'ok' }])) }; },
+    };
+  };
+  const gate = await makeGate({ registry: stubTurnRegistry(turns), pushFetch });
+  const controller = new AbortController();
+  try {
+    for (const [method, params] of [
+      ['notifications.register', { expoPushToken: 'ExponentPushToken[phone]', platform: 'ios', timezone: 'UTC', deviceId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' }],
+      ['notifications.preferences.set', { enabled: true, richBody: true, deviceId: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' }],
+    ]) {
+      const rpc = await fetch(`${gate.base}/v1/capabilities/rpc`, {
+        method: 'POST', headers: auth(gate.gate), body: JSON.stringify({ method, params }),
+      });
+      assert.equal(rpc.status, 200);
+    }
+
+    const pending = streamingTurn(gate.gate, { turnId: TURN_ID, controller });
+    pending.catch(() => undefined);
+    assert.ok(await until(() => turns.length === 1));
+    // The phone locks: the turn detaches and keeps working on the Gate.
+    controller.abort();
+    await pending.catch(() => undefined);
+    assert.equal(turns[0].signal?.aborted, false, 'leaving is not a cancel');
+
+    await gate.close();
+    assert.equal(turns[0].signal?.aborted, true, 'the restart ends the work it was doing');
+
+    assert.ok(
+      await until(() => pushSends.length === 1),
+      `a turn the phone walked away from must be told how it ended: ${JSON.stringify(pushSends)}`,
+    );
+    const notice = pushSends.find((message) => message.data?.kind === 'reply');
+    assert.equal(notice.data.sessionId, 'ses_1');
+    assert.match(notice.body, /stopped: gate_restart/);
+  } finally {
+    await gate.close();
+  }
+});
+
 test('closing the Gate ends an attached turn with an error frame, not a [DONE]', async () => {
   const turns = [];
   const gate = await makeGate({ registry: stubTurnRegistry(turns, { delta: 'half an ' }) });

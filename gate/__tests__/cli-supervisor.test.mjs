@@ -301,6 +301,155 @@ test('cancelling a run that is waiting for approval ends it cancelled', async ()
   }
 });
 
+test('a run whose terminate refuses is still finished, not stranded as running', async () => {
+  // A job object that cannot be killed is the realistic failure on this host
+  // (taskkill refuses). `cancel` used to finish the run only after that await,
+  // and the flag that stops the child's own `close` event from finishing it was
+  // already down — so the run stayed in `runs` as running for the life of the
+  // process: the environment read as busy, `listRuns` listed it as in flight,
+  // and nothing could stop it any more.
+  const gateHome = await mkdtemp(join(tmpdir(), 'gate-cli-sup-kill-'));
+  const store = new CliEnvironmentStore(gateHome);
+  const executable = await fakeRunner('0.142.1');
+  await store.put(validEnvironment({
+    id: 'codex-local',
+    adapterId: 'codex',
+    executable: { path: executable },
+    workspacePolicy: {
+      roots: [gateHome],
+      defaultRoot: gateHome,
+      defaultSandbox: 'read_only',
+      allowAdditionalRoots: false,
+    },
+  }));
+  const children = [];
+  const service = new CliEnvironmentService({
+    store,
+    registry: new CliAdapterRegistry(),
+    jobFactory: () => ({
+      children: [],
+      add(child) { this.children.push(child); },
+      async terminate() {
+        throw Object.assign(new Error('taskkill failed: access denied'), { code: 'EPERM' });
+      },
+    }),
+    spawnImpl: (command, args, options) => {
+      const child = spawn(command, args, options);
+      children.push(child);
+      return child;
+    },
+  });
+  const cleanup = () => {
+    for (const child of children) {
+      try { child.kill(); } catch { /* already gone */ }
+    }
+    return rm(gateHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  };
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'status',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: {},
+    });
+    for (let waited = 0; waited < 2000 && children.length === 0; waited += 10) await sleep(10);
+    assert.equal(children.length, 1);
+
+    // The refusal still reaches the caller: the tree could not be confirmed
+    // dead, which is a fact about the request and not a success to dress up.
+    await assert.rejects(() => service.cancel(handle.runId), /taskkill failed/);
+
+    // And the run is over, everywhere the Gate can be asked about it.
+    assert.equal(service.liveRunCount(), 0, 'a finished run must not keep the environment busy');
+    const [summary] = service.listRuns('codex-local');
+    assert.equal(summary.state, 'cancelled');
+    assert.equal(summary.endedAt !== null, true);
+    const events = await collectEvents(service, handle.runId);
+    assert.equal(events.at(-1).type, 'run.cancelled');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('an approval id the Gate no longer holds is refused, not ruled on', async () => {
+  const { service, cleanup } = await makeService();
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'prompt',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: { prompt: 'say hi after the gate' },
+    });
+    await sleep(50);
+    const card = (await service.approvals.list())[0];
+    assert.ok(card, 'the run is holding an approval card');
+    assert.equal(card.runId, handle.runId);
+
+    const ruling = await service.approve(handle.runId, card.approvalId, 'approve');
+    assert.equal(ruling.decision, 'approve');
+
+    // The second tap (a second device, or the same one after a reload). It used
+    // to resolve `{ decision: 'deny', reason: 'unknown approval' }`, which a
+    // route echoing the result turned into a 200 reading `deny` whatever the
+    // operator pressed — a ruling applied to nothing.
+    for (const decision of ['approve', 'deny']) {
+      await assert.rejects(
+        () => service.approve(handle.runId, card.approvalId, decision),
+        (error) => {
+          assert.equal(error.status, 404);
+          assert.equal(error.code, 'unknown_approval');
+          return true;
+        },
+        `a second ${decision} on a decided card must be refused, not applied`,
+      );
+    }
+    await assert.rejects(
+      () => service.approve(handle.runId, 'never-existed', 'approve'),
+      (error) => error.status === 404 && error.code === 'unknown_approval',
+      'a tap after a restart, where the table is empty, is refused the same way',
+    );
+
+    // The run the card belonged to is untouched by any of it.
+    const events = await collectEvents(service, handle.runId);
+    assert.equal(events.filter((event) => event.type === 'approval.required').length, 1);
+    assert.ok(['run.completed', 'run.failed'].includes(events.at(-1).type), `unexpected end: ${events.at(-1).type}`);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('an approval id belonging to another run cannot be decided through this one', async () => {
+  const { service, cleanup } = await makeService();
+  try {
+    const handle = await service.startRun({
+      environmentId: 'codex-local',
+      operation: 'prompt',
+      providerRef: { providerId: 'openai-main', modelId: 'gpt-test' },
+      workspaceId: 'default',
+      sandbox: 'read_only',
+      input: { prompt: 'say hi after the gate' },
+    });
+    await sleep(50);
+    const card = (await service.approvals.list())[0];
+    assert.ok(card);
+    await assert.rejects(
+      () => service.approve('some-other-run', card.approvalId, 'deny'),
+      (error) => error.status === 404 && error.code === 'unknown_approval',
+      'the run named in the path is part of what makes a ruling valid',
+    );
+    assert.equal((await service.approvals.list()).length, 1, 'the card is still pending');
+    await service.approve(handle.runId, card.approvalId, 'deny');
+    const events = await collectEvents(service, handle.runId);
+    assert.equal(events.at(-1).type, 'run.cancelled');
+  } finally {
+    await cleanup();
+  }
+});
+
 test('an unanswered approval times out and frees the slot', async () => {
   const { service, children, cleanup } = await makeService({}, { approvalTimeoutMs: 50 });
   // The supervisor's timeout timer is unref'd (so a real Gate can always

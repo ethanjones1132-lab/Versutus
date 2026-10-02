@@ -120,6 +120,38 @@ test('a streamed turn is bound to its session and asks for OpenAI-shaped chunks'
   assert.equal(response.body, 'stream');
 });
 
+test('a captioned attachment travels as an OpenAI content part', async () => {
+  // The Gate used to hand Hermes only the caption, so the model answered a
+  // picture it was never shown — a wrong answer with nothing anywhere saying
+  // so. This endpoint is the OpenAI-shaped one, so the parts are simply what it
+  // already serves: text first, then each image.
+  const { calls, hermes } = backend(() => ({ ok: true, status: 200, body: 'stream' }));
+  const url = 'data:image/png;base64,AA';
+  await hermes.sendMessageStreaming('ses_9', {
+    text: 'what is this',
+    images: [{ type: 'image_url', image_url: { url } }],
+  });
+  assert.deepEqual(calls[0].body.messages, [{
+    role: 'user',
+    content: [
+      { type: 'text', text: 'what is this' },
+      { type: 'image_url', image_url: { url } },
+    ],
+  }]);
+
+  // A picture with no caption still carries the picture: the text part is
+  // omitted rather than sent empty.
+  const bare = backend(() => ({ ok: true, status: 200, body: 'stream' }));
+  await bare.hermes.sendMessageStreaming('ses_9', {
+    text: '',
+    images: [{ type: 'image_url', image_url: { url } }],
+  });
+  assert.deepEqual(bare.calls[0].body.messages, [{
+    role: 'user',
+    content: [{ type: 'image_url', image_url: { url } }],
+  }]);
+});
+
 test('an abort signal is forwarded so a walk-away stops the upstream turn', async () => {
   const { calls, hermes } = backend(() => ({ ok: true, status: 200, body: null }));
   const controller = new AbortController();

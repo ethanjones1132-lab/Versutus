@@ -161,6 +161,29 @@ function lastUserText(messages = []) {
   return '';
 }
 
+/**
+ * The image parts of the last user message, in the OpenAI shape the provider
+ * path already forwards verbatim.
+ *
+ * `lastUserText` reduces a content array to its text, so an `image_url` part
+ * contributed `''` and the caption alone was what the backend was asked: the
+ * model answered a picture it was never shown, with nothing anywhere saying so.
+ * Read from the same message `lastUserText` reads, so a question asked later in
+ * a thread never inherits an earlier turn's attachment. Null when it carries
+ * none, so a text-only turn is unchanged.
+ */
+function lastUserImages(messages = []) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== 'user') continue;
+    const images = (Array.isArray(message.content) ? message.content : [])
+      .filter((part) => part?.type === 'image_url' && typeof part.image_url?.url === 'string')
+      .map((part) => ({ type: 'image_url', image_url: { url: part.image_url.url } }));
+    return images.length > 0 ? images : null;
+  }
+  return null;
+}
+
 /** The frame every attached turn is ended with when the Gate itself goes down. */
 const GATE_RESTART_FRAME = JSON.stringify({
   error: { code: 'gate_restart', message: 'The Gate restarted while this turn was running.' },
@@ -256,7 +279,7 @@ async function replayTurnStream(journal, callerId, turnId, res, {
  * meaning of a close, because a turn nobody can name is a turn nobody can find
  * again.
  */
-async function streamBackendTurn(backend, sessionId, { text, model }, res, {
+async function streamBackendTurn(backend, sessionId, { text, model, images }, res, {
   callerId = 'anonymous',
   turnId = null,
   backendId = null,
@@ -467,7 +490,7 @@ async function streamBackendTurn(backend, sessionId, { text, model }, res, {
 
   let stopped = false;
   try {
-    const { hasContent, report, aborted } = await runBackendTurn(backend, sessionId, { text, model }, {
+    const { hasContent, report, aborted } = await runBackendTurn(backend, sessionId, { text, model, images }, {
       signal: controller.signal,
       onDelta: collectDelta,
       // Tool frames are progress the Gate can see, so they re-arm the stall
@@ -1225,6 +1248,12 @@ export async function createGate(config = {}) {
   // waits for in-flight connections, and a terminal stream never finishes on
   // its own — without this a Gate with the Shell tab open cannot shut down.
   const terminalStreams = new Set();
+  // The same for the two run-event relays. A run parked on an approval emits
+  // nothing at all, so these streams last as long as the run does and
+  // `server.close()` waits on every one of them: without ending them a shutdown
+  // with a Runs sheet open never settles, and the SIGINT handler waits on it
+  // forever.
+  const runEventStreams = new Set();
 
   const tokenPath = join(root, '.tokens.json');
 
@@ -2434,9 +2463,19 @@ export async function createGate(config = {}) {
         backend ??= await resolveExistingRun(run);
         if (!backend) return;
         if (!requireBackendMethod(backend, 'runEvents')) return;
+        // A phone that navigates away, locks, or drops the relay is a subscriber
+        // going away, not a reason to hold this run's stream for the rest of it.
+        // The signal releases the upstream fetch (hermes.mjs forwards it), and
+        // the read below is raced against the close so the loop can end: with
+        // neither, the fetch, its reader, the tee slot and a synchronous append
+        // per frame all live for as long as the run does — and while `isActive`
+        // holds, every later replay of this run skips its own archive and
+        // re-streams live.
+        const subscription = new AbortController();
+        res.once('close', () => subscription.abort());
         let upstream;
         try {
-          upstream = await backend.runEvents(run.runId);
+          upstream = await backend.runEvents(run.runId, { signal: subscription.signal });
         } catch (error) {
           if (archived !== null) {
             // Best evidence fallback: a partial archive exists but the
@@ -2468,6 +2507,8 @@ export async function createGate(config = {}) {
         // Relay bytes unchanged: the app already parses Hermes run events.
         // The single tee-holder also archives them (backend-run-streams.mjs)
         // so a completed run replays from disk after the live buffer is gone.
+        runEventStreams.add(res);
+        res.once('close', () => runEventStreams.delete(res));
         const tee = runStreams.begin(runId);
         const reader = upstream.body?.getReader?.();
         if (!reader) {
@@ -2486,21 +2527,42 @@ export async function createGate(config = {}) {
           intervalMs: keepaliveIntervalMs,
           canWrite: () => frames.atBoundary,
         });
+        // The relay's other exit. A read parked on a run with nothing to say
+        // would otherwise never come back, and the stream would stay open to a
+        // client that is no longer there.
+        const closed = new Promise((resolve) => res.once('close', resolve));
         try {
           for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
+            const read = await Promise.race([reader.read(), closed.then(() => CLOSED_STREAM)]);
+            if (read === CLOSED_STREAM) {
+              // Cancel the reader as well as the fetch: a backend that ignores
+              // the abort signal would leave the socket behind this parked read
+              // open for the rest of the run. The archive stays unmarked, so a
+              // later replay re-streams live and heals it.
+              try { await reader.cancel(); } catch { /* already released */ }
+              break;
+            }
+            const { done, value } = read;
+            if (done) {
+              // Clean end of the upstream stream: the archive now holds the
+              // whole story and may be served as a verdict later. A torn relay
+              // (catch below) or a client that walked away (the branch above)
+              // leaves the file unmarked, so a truncated snapshot can never read
+              // as complete.
+              if (tee) runStreams.markComplete(runId);
+              res.end();
+              break;
+            }
+            // A response the Gate has already ended (a shutdown ending this
+            // relay) can take no more bytes: writing one anyway throws inside
+            // the relay, and the frames still upstream are the run's, not this
+            // response's.
+            if (res.writableEnded || res.destroyed) break;
             const chunk = Buffer.from(value);
             res.write(chunk);
             frames.push(chunk);
             if (tee) runStreams.append(runId, chunk);
           }
-          // Clean end of the upstream stream: the archive now holds the whole
-          // story and may be served as a verdict later. A torn relay (catch
-          // below) leaves the file unmarked, so a truncated snapshot can
-          // never read as complete.
-          if (tee) runStreams.markComplete(runId);
-          res.end();
         } catch {
           // A torn relay closes the response; the partial archive stays
           // readable but UNMARKED (the client drops one malformed trailing
@@ -3221,6 +3283,8 @@ export async function createGate(config = {}) {
       const runEvents = pathname.match(/^\/v1\/environments\/([^/]+)\/runs\/([^/]+)\/events$/);
       if (runEvents && method === 'GET') {
         res.writeHead(200, sseHeaders());
+        runEventStreams.add(res);
+        res.once('close', () => runEventStreams.delete(res));
         const stopKeepalive = startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
         // A run parked on an approval emits nothing at all, so the stream has
         // to prove it is alive (above) and a viewer who has left has to be let
@@ -3258,22 +3322,39 @@ export async function createGate(config = {}) {
 
       const runCancel = pathname.match(/^\/v1\/environments\/([^/]+)\/runs\/([^/]+)\/cancel$/);
       if (runCancel && method === 'POST') {
-        const result = await environmentService.cancel(decodeURIComponent(runCancel[2]));
-        res.writeHead(200);
-        res.end(JSON.stringify(result));
+        try {
+          const result = await environmentService.cancel(decodeURIComponent(runCancel[2]));
+          res.writeHead(200);
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          // Wrapped like every neighbouring run route: a terminate() that
+          // refuses is an answer about the request, and the outer catch turned
+          // it into a bare 500 with a stack in the operator's log. The run is
+          // finished either way (supervisor.cancel finishes it in a `finally`),
+          // so this only has to say the tree could not be confirmed dead.
+          runRequestError(error, 'run_cancel_failed', 'The run could not be cancelled');
+        }
         return;
       }
 
       const runApprove = pathname.match(/^\/v1\/environments\/([^/]+)\/runs\/([^/]+)\/approve$/);
       if (runApprove && method === 'POST') {
         const body = (await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES })) ?? {};
-        const result = await environmentService.approve(
-          decodeURIComponent(runApprove[2]),
-          body.approvalId,
-          body.decision,
-        );
-        res.writeHead(200);
-        res.end(JSON.stringify(result));
+        try {
+          const result = await environmentService.approve(
+            decodeURIComponent(runApprove[2]),
+            body.approvalId,
+            body.decision,
+          );
+          res.writeHead(200);
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          // An approval the Gate no longer holds is a 404 with a code, the same
+          // refusal the inbox RPC gives: this route used to echo decide()'s
+          // `{ decision: 'deny', reason: 'unknown approval' }` as a 200, which
+          // told the operator their decision landed on a run still parked.
+          runRequestError(error, 'approval_failed', 'The approval could not be decided');
+        }
         return;
       }
 
@@ -3417,9 +3498,16 @@ export async function createGate(config = {}) {
       const scopedModelMatch = pathname.match(/^\/p\/([^\/]+)\/v1\/models$/);
       if (scopedModelMatch && method === 'GET') {
         const providerId = decodeURIComponent(scopedModelMatch[1]);
-        const provider = state.providers.find((p) => p.id === providerId);
+        // Both sources, exactly as `dispatchChat` resolves them: a provider
+        // created through the Gate's own UI exists only in the v2 store
+        // (`migrateLegacyProviders` copies legacy files INTO it and never writes
+        // back), so a route reading the legacy registry alone 404'd a provider
+        // whose `POST /p/<id>/v1/chat/completions` is served. The v2 record wins,
+        // as it does there.
+        const record = await providerStore.get(providerId);
+        const legacy = state.providers.find((provider) => provider.id === providerId);
 
-        if (!provider) {
+        if (!record && !legacy) {
           res.writeHead(404);
           res.end(JSON.stringify({
             error: 'Not Found',
@@ -3428,10 +3516,12 @@ export async function createGate(config = {}) {
           return;
         }
 
-        const models = provider.config.models || [];
+        const models = record
+          ? (record.state?.catalog?.models ?? []).map((model) => model.id).filter(Boolean)
+          : legacy.config.models || [];
         const modelList = models.map((modelId) => ({
           id: modelId,
-          provider: provider.id,
+          provider: providerId,
           label: modelId,
           object: 'model',
         }));
@@ -3501,6 +3591,17 @@ export async function createGate(config = {}) {
           );
           try {
             const text = lastUserText(body.messages);
+            const images = lastUserImages(body.messages);
+            // Nothing to ask. Refused here rather than after `createSession`,
+            // because every refusal downstream of that leaves a real upstream
+            // session and a newest-row entry in the Gate's own session list for a
+            // turn that never said anything — the same 400 the sibling `/v1/runs`
+            // route answers for an empty prompt.
+            if (!text && !images) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: { message: 'This chat carries no message content.', code: 'invalid_request' } }));
+              return;
+            }
             const model = body.model ? parseQualifiedModel(body.model) : undefined;
             // The model is parsed BEFORE the session exists so a session this
             // turn has to open is born pinned to it. A Hermes session's model
@@ -3528,7 +3629,7 @@ export async function createGate(config = {}) {
             }
 
             if (body.stream === true) {
-              const streamed = await streamBackendTurn(backend, sessionId, { text, model }, res, {
+              const streamed = await streamBackendTurn(backend, sessionId, { text, model, images }, res, {
                 callerId,
                 turnId: namedTurnId,
                 backendId: environmentId ?? null,
@@ -3572,7 +3673,7 @@ export async function createGate(config = {}) {
               return;
             }
 
-            const result = await backend.sendMessage(sessionId, { text, model });
+            const result = await backend.sendMessage(sessionId, { text, model, images });
             // A turn that failed upstream arrives as a NORMAL completion whose
             // whole assistant text is the error (backendUpstreamRefusal).
             // Answering it 200 would render the error as the Bot's speech;
@@ -3880,6 +3981,10 @@ export async function createGate(config = {}) {
     get providers() {
       return state.providers;
     },
+    // The listener itself. Nothing outside this closure can reach the events a
+    // live server raises on its own (an accept-side EMFILE/ENFILE, say), so it
+    // is exposed rather than left to be taken on trust.
+    httpServer: server,
     port,
     async listen() {
       return new Promise((resolve, reject) => {
@@ -3888,7 +3993,21 @@ export async function createGate(config = {}) {
           gateObj.port = actualPort;
           resolve(actualPort);
         });
-        server.on('error', reject);
+        // The listener outlives the promise it was made for. Once the Gate is
+        // serving, `reject` is spent and a later 'error' (EMFILE/ENFILE from
+        // accept under handle pressure, a re-listen onto a taken port) would be
+        // swallowed: Node raises no uncaught exception once a listener exists,
+        // and the process guards watch only rejections and exceptions. So the
+        // Gate says so, rather than keeping running while refusing connections.
+        // `server.listening` is the honest question — this is no longer a
+        // promise about starting the listener.
+        server.on('error', (error) => {
+          if (server.listening) {
+            console.error('[gate] HTTP server error while listening:', error);
+            return;
+          }
+          reject(error);
+        });
       });
     },
     async close() {
@@ -3908,6 +4027,15 @@ export async function createGate(config = {}) {
       terminalSessions.closeAll();
       for (const stream of [...terminalStreams]) {
         terminalStreams.delete(stream);
+        try { stream.end(); } catch { /* already gone */ }
+      }
+      // The two run-event relays are the same shape: a run parked on an
+      // approval says nothing for minutes, so their responses are still in
+      // flight here, and ending them is what lets `server.close()` below ever
+      // call back. The loops behind them end on the close this causes, exactly
+      // as they do for a phone that walked away.
+      for (const stream of [...runEventStreams]) {
+        runEventStreams.delete(stream);
         try { stream.end(); } catch { /* already gone */ }
       }
       // A restart is a named end for every turn the Gate is still holding: the

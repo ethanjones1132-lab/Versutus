@@ -500,12 +500,22 @@ export function createHermesBackend({
      *
      * Returns the raw Response: the caller owns the framing.
      */
-    async sendMessageStreaming(sessionId, { text, model } = {}, signal) {
+    async sendMessageStreaming(sessionId, { text, model, images } = {}, signal) {
       const headers = {
         'Content-Type': 'application/json',
         'X-Hermes-Session-Id': sessionId,
       };
       if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+      // An attachment is half the question. This endpoint speaks the OpenAI
+      // content-parts shape (it is the one the app already sends, and the one
+      // this route relays verbatim), so a captioned picture travels as a part
+      // rather than being flattened into the caption — which had the model
+      // answering a picture it was never shown. Text-only turns keep the plain
+      // string every backend already handles.
+      const content = images?.length
+        ? [...(text ? [{ type: 'text', text }] : []), ...images]
+        : text;
 
       const response = await fetchImpl(`${root}/v1/chat/completions`, {
         method: 'POST',
@@ -514,7 +524,7 @@ export function createHermesBackend({
         body: JSON.stringify({
           model: model?.modelId ?? 'hermes-agent',
           ...(model?.providerId ? { provider: model.providerId } : {}),
-          messages: [{ role: 'user', content: text }],
+          messages: [{ role: 'user', content }],
           stream: true,
         }),
       });

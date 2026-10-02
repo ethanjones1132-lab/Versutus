@@ -696,7 +696,25 @@ export class CliEnvironmentService {
     });
   }
 
+  /**
+   * A ruling on one of this run's approvals.
+   *
+   * An id the Gate no longer holds — a second tap, a second device, or any tap
+   * after a restart, the table being in memory — is a refusal, never a ruling:
+   * `ApprovalService.decide` answers `{ decision: 'deny', reason: 'unknown
+   * approval' }` for it, which a route that echoed the result turned into a
+   * 200 reading `deny` whatever the operator tapped. Same refusal as the inbox
+   * RPC (approvals/rpc.mjs), and the run the caller named is checked too, so an
+   * approval id belonging to another run cannot be decided through this one.
+   */
   async approve(runId, approvalId, decision) {
+    const entry = this.approvals.get(approvalId);
+    if (!entry || (runId && entry.request?.runId && entry.request.runId !== runId)) {
+      const error = new Error(`Unknown approval "${approvalId ?? ''}"`);
+      error.status = 404;
+      error.code = 'unknown_approval';
+      throw error;
+    }
     return this.approvals.decide(approvalId, decision);
   }
 
@@ -710,8 +728,17 @@ export class CliEnvironmentService {
       // emits the (single) terminal event.
       this.approvals.decide(run.approvalId, 'deny');
     }
-    await run.job.terminate();
-    this.finish(run, 'run.cancelled', { reason: 'cancelled' });
+    // `finally`, not after the await: terminate() is the only fallible call here
+    // (a Windows job-object failure is the realistic one), and a throw left the
+    // run in `supervisor.runs` as running for the life of the process — the
+    // child that later exits cannot finish it either, because nativeCancel is
+    // already down. The environment then read as busy and listed a run nobody
+    // could stop. Same shape as stopTimedOutRun below.
+    try {
+      await run.job.terminate();
+    } finally {
+      this.finish(run, 'run.cancelled', { reason: 'cancelled' });
+    }
     return { cancelled: true };
   }
 

@@ -548,6 +548,108 @@ test('a content-part turn reaches a CLI backend as its text', async () => {
   }
 });
 
+test('an attachment reaches the backend as a content part, not as a caption alone', async () => {
+  // Reproduced 2026-10-02: the route reduced the OpenAI-shaped `messages` array
+  // to one flat string (`part?.text ?? ''`), so an `image_url` part contributed
+  // nothing and the backend was asked the caption with the picture nowhere in
+  // sight — a wrong answer, with no error anywhere. The provider path forwards
+  // `messages` verbatim, so the same attachment worked or vanished purely by
+  // thread scope.
+  const seen = [];
+  const registry = stubStreamingRegistry({
+    frames: [delta('a dog'), 'data: [DONE]\n\n'],
+    onCall: ({ input }) => seen.push(input),
+  });
+  const { gate } = await makeGate({ registry });
+  try {
+    const url = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB';
+    const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1', stream: true,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'what is this' },
+            { type: 'image_url', image_url: { url } },
+          ],
+        }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(seen.length, 1);
+    // The caption still travels as text — every backend needs it — and the
+    // picture now travels beside it instead of being dropped.
+    assert.equal(seen[0].text, 'what is this');
+    assert.deepEqual(seen[0].images, [{ type: 'image_url', image_url: { url } }]);
+
+    // And a picture with no caption is a turn too: the old flattening left the
+    // backend an empty question, which came back as "the model did not answer".
+    const uncaptioned = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1', stream: true,
+        messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url } }] }],
+      }),
+    });
+    assert.equal(uncaptioned.status, 200);
+    assert.doesNotMatch(await uncaptioned.text(), /empty_turn/, 'the picture alone is the question');
+    assert.equal(seen[1].text, '');
+    assert.deepEqual(seen[1].images, [{ type: 'image_url', image_url: { url } }]);
+
+    // The next question in the thread asks about nothing, so it carries nothing:
+    // the attachment belongs to the turn that sent it.
+    const later = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+      method: 'POST', headers: auth(gate),
+      body: JSON.stringify({
+        backendId: 'stub-local', sessionId: 'ses_1', stream: true,
+        messages: [
+          { role: 'user', content: [{ type: 'image_url', image_url: { url } }] },
+          { role: 'assistant', content: 'a dog' },
+          { role: 'user', content: 'and this one?' },
+        ],
+      }),
+    });
+    assert.equal(later.status, 200);
+    await later.text();
+    assert.equal(seen[2].text, 'and this one?');
+    assert.equal(seen[2].images, null, 'a later turn never inherits an earlier attachment');
+  } finally {
+    await gate.close();
+  }
+});
+
+test('a turn with no message content is refused before a session is opened', async () => {
+  // A body carrying nothing to ask (an image-only message before attachments
+  // were forwarded, or any client with an empty prompt) used to open a real
+  // session, write it into the Gate's own session list as the newest row, and
+  // spend an upstream turn before failing — leaving visible litter for a turn
+  // nobody wrote. The sibling `/v1/runs` route refuses the same request at 400.
+  const calls = [];
+  const { gate } = await makeGate({ calls });
+  try {
+    for (const messages of [[], [{ role: 'user', content: '' }]]) {
+      const response = await fetch(`http://127.0.0.1:${gate.port}/v1/chat/completions`, {
+        method: 'POST', headers: auth(gate),
+        body: JSON.stringify({ backendId: 'stub-local', messages }),
+      });
+      assert.equal(response.status, 400, `expected a refusal for ${JSON.stringify(messages)}`);
+      assert.equal((await response.json()).error.code, 'invalid_request');
+    }
+    assert.ok(!calls.includes('createSession'), 'a refused turn must not open a session upstream');
+    assert.ok(!calls.some((call) => call.startsWith('sendMessage')), 'nor spend a turn');
+    const list = await (await fetch(`http://127.0.0.1:${gate.port}/v1/sessions?backendId=stub-local`, {
+      headers: auth(gate),
+    })).json();
+    assert.ok(
+      !list.data.some((session) => session.id !== 'ses_1'),
+      `the Gate's own session copy gained a row for a refused turn: ${JSON.stringify(list.data)}`,
+    );
+  } finally {
+    await gate.close();
+  }
+});
+
 // ─── empty-turn detection ───────────────────────────────────────────
 // Reproduced live 2026-08-16: opencode-local's default model 404s upstream,
 // the turn "completes" with zero content, and the app rendered an empty

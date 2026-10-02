@@ -79,8 +79,24 @@ function runsBackend(state, calls = []) {
     async steerRun() {},
     async stopRun() { if (state.stopError) throw state.stopError; },
     async replyApproval() { if (state.approvalError) throw state.approvalError; },
-    async runEvents(runId) {
+    async runEvents(runId, { signal } = {}) {
       calls.push(`runEvents:${runId}`);
+      state.signal = signal;
+      if (state.mode === 'parked') {
+        // A run waiting on an approval: one frame, then nothing for as long as
+        // the run lives. `cancel` is what a released relay looks like to the
+        // upstream, and it is the only witness a backend that honours the abort
+        // signal does not leave behind.
+        state.cancel = null;
+        return {
+          ok: true,
+          status: 200,
+          body: new ReadableStream({
+            start(controller) { controller.enqueue(Buffer.from(FRAMES[0])); },
+            cancel() { state.cancel = true; },
+          }),
+        };
+      }
       if (state.mode === 'stream') {
         return { ok: true, status: 200, body: streamBody(FRAMES) };
       }
@@ -113,9 +129,9 @@ function registryFor(state, calls) {
     async probe() { return { state: 'ready', cliVersion: '1.0.0', protocol: 'acp' }; },
     createBackend: ({ record }) => state.scoped ? {
       ...backend,
-      async runEvents(runId) {
+      async runEvents(runId, options) {
         calls.push(`environment:${record.id}`);
-        return backend.runEvents(runId);
+        return backend.runEvents(runId, options);
       },
     } : backend,
   });
@@ -324,8 +340,11 @@ test('a live relay streams the frames and archives them for later replay', async
 });
 
 test('a finished run replays from disk after a Gate restart, with Hermes gone', async () => {
-  const { gate, gateHome } = await makeGate();
-  await fetch(`${base(gate)}/v1/runs/run_1/events`, { headers: auth(gate) });
+  const { gate, gateHome } = await makeGate({ mode: 'stream' });
+  // The body is drained: a shutdown now ends an open run-event relay rather
+  // than waiting for it (that wait was `server.close()` never calling back), so
+  // "this run was relayed whole" has to be observed before the Gate closes.
+  await (await fetch(`${base(gate)}/v1/runs/run_1/events`, { headers: auth(gate) })).text();
   await gate.close();
 
   // A fresh Gate over the same gateHome (the promise the runbook makes) with
@@ -590,7 +609,9 @@ test('a partial archive is served flagged, never silent, when the upstream refus
 
 test('a marked archive is the whole story: replay never touches the upstream again', async () => {
   const first = await makeGate();
-  await fetch(`${base(first.gate)}/v1/runs/run_1/events`, { headers: auth(first.gate) });
+  // Drained, for the same reason as above: the relay must have reached the end
+  // of the stream before this process shuts down.
+  await (await fetch(`${base(first.gate)}/v1/runs/run_1/events`, { headers: auth(first.gate) })).text();
   await first.gate.close();
 
   // The upstream is live again and would happily re-stream, but a marked
@@ -607,4 +628,76 @@ test('a marked archive is the whole story: replay never touches the upstream aga
   } finally {
     await second.gate.close();
   }
+});
+// ─── A viewer that goes away ─────────────────────────────────────────────
+// A run parked on an approval says nothing at all, so the relay is a stream
+// with no natural end. It used to have no other end either: nothing watched
+// for the client leaving, so the upstream fetch, its reader, the archive tee
+// and a synchronous append per frame all lived for as long as the run did —
+// and while the tee was held, every later replay of that run skipped its own
+// archive and re-streamed live.
+
+const until = async (predicate, ms = 3000) => {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return false;
+};
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test('a viewer that leaves releases the run stream and the archive tee', async () => {
+  const { gate, state, gateHome } = await makeGate({ mode: 'parked' });
+  const controller = new AbortController();
+  try {
+    const response = await fetch(`${base(gate)}/v1/runs/run_1/events`, {
+      headers: auth(gate), signal: controller.signal,
+    });
+    assert.equal(response.status, 200);
+    // The first frame proves the relay is really reading, so a release cannot
+    // be confused with a relay that never started.
+    const first = await response.body.getReader().read();
+    assert.equal(Buffer.from(first.value).toString(), FRAMES[0]);
+    assert.ok(state.signal, 'the upstream call must be handed a signal to release with');
+    assert.equal(state.signal.aborted, false);
+
+    controller.abort();
+    assert.ok(
+      await until(() => state.signal.aborted),
+      'a client that walked away must abort the upstream run-events fetch',
+    );
+    assert.ok(await until(() => state.cancel === true), 'and release the reader behind the parked read');
+
+    // The tee is released with it, so the archive stops growing towards its
+    // byte cap and a later replay is free to read (or heal) it. An unmarked
+    // partial heals on the next live relay rather than reading as a verdict.
+    const size = (await readFile(join(gateHome, 'run-streams', 'run_1.sse'))).length;
+    await sleep(120);
+    assert.equal((await readFile(join(gateHome, 'run-streams', 'run_1.sse'))).length, size);
+    assert.ok(
+      !(await readdir(join(gateHome, 'run-streams'))).includes('run_1.complete'),
+      'a relay the client abandoned is not a run that reached its end',
+    );
+  } finally {
+    await gate.close();
+  }
+});
+
+test('close() settles with a run-event stream still open', async () => {
+  // `server.close()` waits for in-flight requests, and this one only ends when
+  // its own handler does: nothing ended an open run-event response, so the
+  // returned promise never settled and the plain SIGINT handler — which awaits
+  // it with no timer — left Stop doing nothing.
+  const { gate } = await makeGate({ mode: 'parked' });
+  const response = await fetch(`${base(gate)}/v1/runs/run_1/events`, { headers: auth(gate) });
+  assert.equal(response.status, 200);
+  await response.body.getReader().read();
+
+  const closed = await Promise.race([
+    gate.close().then(() => 'closed', (error) => `failed: ${error.message}`),
+    sleep(5000).then(() => 'still open'),
+  ]);
+  assert.equal(closed, 'closed', 'a shutdown must not wait on a run parked on an approval');
 });
