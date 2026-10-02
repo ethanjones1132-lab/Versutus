@@ -13,7 +13,7 @@ import { getSecret } from './capabilities/secrets.mjs';
 import { buildManifest } from './manifest.mjs';
 import { tailnetIpv4FromInterfaces } from './reachability.mjs';
 import { createSerialReload, createDebouncedReload } from './serial-reload.mjs';
-import { createSessionIndex, sessionIndexKey } from './session-index.mjs';
+import { createSessionIndex, parseSessionIndexKey, sessionIndexKey } from './session-index.mjs';
 import { toGatewaySession } from './cli-environments/backends/hermes.mjs';
 import { ProviderStore } from './providers/store.mjs';
 import { migrateLegacyProviders } from './providers/migrate-v1.mjs';
@@ -108,6 +108,12 @@ const DEFAULT_OUTCOME_RELOAD_DELAY_MS = 1000;
 const DEFAULT_SESSION_READ_BOUND_MS = 30_000;
 const DEFAULT_SESSION_REFRESH_TIMEOUT_MS = 180_000;
 const DEFAULT_SESSION_INDEX_STALE_MS = 30_000;
+// How long one attached environment gets in the scope-less session-id sweep
+// before it counts as "not here". Generous next to the ~0.1 s a warm
+// `GET /api/sessions/{id}` takes and next to the 3-38 s a whole Hermes
+// catalogue costs, while still keeping a wedged environment from holding a
+// thread tap open. Injected so a test can watch it fire in milliseconds.
+const DEFAULT_SESSION_LOOKUP_BOUND_MS = 8_000;
 // How long a shutdown waits for the copy's coalesced write to land before it
 // stops caring. The write is a small JSON file, so this is only reached by a
 // filesystem that has stopped answering.
@@ -741,6 +747,10 @@ export async function createGate(config = {}) {
     sessionReadBoundMs = DEFAULT_SESSION_READ_BOUND_MS,
     sessionRefreshTimeoutMs = DEFAULT_SESSION_REFRESH_TIMEOUT_MS,
     sessionIndexStaleMs = DEFAULT_SESSION_INDEX_STALE_MS,
+    // The per-environment bound on the scope-less session-id sweep the RPC
+    // session reads fall back to. Injected with the three above for the same
+    // reason: a test cannot afford to wait eight seconds for a timeout.
+    sessionLookupBoundMs = DEFAULT_SESSION_LOOKUP_BOUND_MS,
     // The two catalogue-cache windows, injected so the tests can watch the
     // stale-while-refresh answer fire in milliseconds instead of waiting a
     // minute for the live one.
@@ -1026,6 +1036,100 @@ export async function createGate(config = {}) {
     prepareCallBackend: ({ thread }) => startVoiceBackendLease(backendManager, thread),
   });
 
+  /**
+   * A refusal that names itself.
+   *
+   * The RPC dispatcher puts `.code`/`.status` on the wire itself and the REST
+   * routes wrap these in their own response, so one refusal serves both and the
+   * two surfaces cannot drift on what an unknown Bot or an unroutable backend
+   * is called.
+   */
+  function namedRefusal(message, code, status) {
+    return Object.assign(new Error(message), { code, status });
+  }
+
+  /**
+   * Scope a backend to a Bot, or refuse by name.
+   *
+   * A Bot is a Hermes profile, so the rules are the backend's to answer and the
+   * Gate only relays them: no `forBot` is 501 (this backend has no Bots at all),
+   * a profile that does not exist is 404 `unknown_bot`, and one with no key of
+   * its own is 409 `bot_not_routable` — the three answers the REST routes have
+   * always given, now reachable from the RPC dispatcher too.
+   */
+  async function forBotOrThrow(backend, botId) {
+    if (typeof backend.forBot !== 'function') {
+      throw namedRefusal('This backend does not implement bots', 'backend_unsupported', 501);
+    }
+    try {
+      return await backend.forBot(botId);
+    } catch (error) {
+      const code = error?.code ?? 'backend_unsupported';
+      throw namedRefusal(
+        error?.message ?? `Could not route to bot "${botId}"`,
+        code,
+        code === 'unknown_bot' ? 404 : code === 'bot_not_routable' ? 409 : 501,
+      );
+    }
+  }
+
+  /**
+   * The first attached environment that owns Bots, or null.
+   *
+   * Shared by the resolver below and by the index key a Bot-scoped lookup
+   * retires its row under: a Bot names its own environment, so both places need
+   * the same answer to the same question and neither may answer it differently.
+   */
+  async function environmentWithBots() {
+    for (const entry of await backendManager.list()) {
+      if (!await backendCanServe(entry, 'forBot')) continue;
+      const candidate = await backendManager.get(entry.id).catch(() => null);
+      if (candidate && typeof candidate.forBot === 'function') return entry;
+    }
+    return null;
+  }
+
+  /**
+   * The one scope resolution behind every backend read, and it throws.
+   *
+   * The REST routes answer its refusals themselves; the RPC dispatcher puts
+   * them on the wire. Both resolve the same way, so `bot=` means the same thing
+   * to `GET /v1/sessions/{id}/messages` and to `session.restore` — the gap
+   * where REST carried Bot scope and RPC ignored it entirely is what made a
+   * session the operator could see read as "not found".
+   *
+   * Naming a Bot names the environment: a Bot is a Hermes profile, and Claude
+   * Code / Codex / OpenCode have no notion of one, so the fallback cannot be
+   * "whichever is attached first" (which sorts before Hermes on a typical Gate
+   * and answered every Bot read from Claude Code). An explicit `backendId` still
+   * wins over the Bot, so a deliberate pin is told the truth rather than
+   * silently overridden.
+   *
+   * The environment id comes back with the backend because the session index is
+   * keyed by it: a copy of "the sessions" only means something next to the
+   * environment and the Bot it was read from.
+   */
+  async function resolveConversationScopeOrThrow(backendId, botId) {
+    if (botId && !backendId) {
+      const owner = await environmentWithBots();
+      if (owner) {
+        return { backend: await forBotOrThrow(await backendManager.get(owner.id), botId), environmentId: owner.id };
+      }
+    }
+    const environmentId = backendId ?? (await backendManager.list())[0]?.id;
+    if (!environmentId) {
+      throw namedRefusal('No chat backend is attached to this Gate', 'no_backend', 404);
+    }
+    let backend;
+    try {
+      backend = await backendManager.get(environmentId);
+    } catch (error) {
+      throw namedRefusal(error?.message ?? `Unknown backend "${environmentId}"`, 'unknown_backend', 404);
+    }
+    if (!botId) return { backend, environmentId };
+    return { backend: await forBotOrThrow(backend, botId), environmentId };
+  }
+
   // The Hermes-dialect methods the app's command registry actually sends.
   // Resolution throws rather than writing a response: the RPC dispatcher below
   // owns the reply shape, unlike the REST routes' `resolveBackend`.
@@ -1037,11 +1141,39 @@ export async function createGate(config = {}) {
         if (revoked) await pushTokens.remove(deviceId);
         return revoked;
       },
-      async getBackend(backendId, method) {
-        if (backendId) return backendManager.get(backendId);
+      // The scopes whose Gate-held lists contain an id, and where a confirmed
+      // miss retires the row: this file owns the index, so the RPC path reads
+      // and writes it through the same key the REST routes use.
+      sessionScopes: async (sessionId) => (await sessionListIndex.keysWithSession(sessionId))
+        .map(parseSessionIndexKey),
+      allBackendScopes: async () => {
+        const scopes = [];
+        for (const entry of await backendManager.list()) {
+          if (await backendCanServe(entry, 'getSession') || await backendCanServe(entry, 'listSessions')) {
+            scopes.push({ backendId: entry.id });
+          }
+        }
+        return scopes;
+      },
+      forgetSession: async (backendId, botId, sessionId) => {
+        // The window the row was listed under is keyed by the environment the
+        // list resolved to, and a Bot-only lookup (which is what the app sends
+        // whenever a Bot is selected) names no environment at all. Keying on the
+        // raw params would look under `|default`, a window nothing was ever
+        // written to, and the stale row would survive the miss that retired it.
+        const environmentId = backendId ?? (botId ? (await environmentWithBots())?.id : undefined);
+        await sessionListIndex.remove(sessionIndexKey(environmentId, botId), sessionId);
+      },
+      sessionSearchBoundMs: sessionLookupBoundMs,
+      async getBackend(backendId, botId, method) {
+        // A named Bot or a named environment resolves through the shared scope
+        // rules, so `bot=` routes the same way here as it does for every REST
+        // route and an unroutable Bot fails by name instead of falling through
+        // to whichever environment sorts first.
+        if (backendId || botId) return (await resolveConversationScopeOrThrow(backendId, botId)).backend;
         const entries = await backendManager.list();
-        // Same rule as the REST routes: prefer a backend that can answer, rather
-        // than whichever happens to be attached first.
+        // No scope named: same rule as the REST routes, prefer a backend that
+        // can answer rather than whichever happens to be attached first.
         if (method) {
           for (const entry of entries) {
             if (!await backendCanServe(entry, method)) continue;
@@ -1050,7 +1182,7 @@ export async function createGate(config = {}) {
           }
         }
         const id = entries[0]?.id;
-        if (!id) throw new Error('No chat backend is attached to this Gate');
+        if (!id) throw namedRefusal('No chat backend is attached to this Gate', 'no_backend', 404);
         return backendManager.get(id);
       },
     }),
@@ -1556,32 +1688,18 @@ export async function createGate(config = {}) {
         return requestUrl.searchParams.get('bot') || body?.bot || undefined;
       }
 
+      /**
+       * The REST half of `resolveConversationScopeOrThrow`: same resolution,
+       * this one's refusals answered here because a route owns its response.
+       */
       async function resolveConversationScope(backendId, botId) {
-        // Naming a Bot names the environment: a Bot is a Hermes profile, and
-        // Claude Code / Codex / OpenCode have no notion of one. Falling back
-        // to the *first* attached environment — which sorts before Hermes on a
-        // typical Gate — answered every Bot conversation with 501 while the
-        // environment that owned the Bot sat right there. Same capability-first
-        // rule resolveBackendFor and resolveRunBackend already use; an explicit
-        // ?backendId= still wins, so a deliberate pin is still told the truth.
-        //
-        // The environment id comes back with the backend because the session
-        // index is keyed by it: a copy of "the sessions" only means something
-        // next to the environment and the Bot it was read from.
-        if (botId && !backendId) {
-          for (const entry of await backendManager.list()) {
-            if (!await backendCanServe(entry, 'forBot')) continue;
-            const candidate = await backendManager.get(entry.id).catch(() => null);
-            if (candidate && typeof candidate.forBot === 'function') {
-              return { backend: await resolveForBot(candidate, botId), environmentId: entry.id };
-            }
-          }
+        try {
+          return await resolveConversationScopeOrThrow(backendId, botId);
+        } catch (error) {
+          res.writeHead(error.status ?? 404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: error.message, code: error.code ?? 'unknown_backend' } }));
+          return null;
         }
-        const environmentId = backendId ?? (await backendManager.list())[0]?.id;
-        const backend = await resolveBackend(environmentId);
-        if (!backend) return null;
-        if (!botId) return { backend, environmentId };
-        return { backend: await resolveForBot(backend, botId), environmentId };
       }
 
       async function resolveConversationBackend(backendId, botId) {
@@ -1765,25 +1883,6 @@ export async function createGate(config = {}) {
             code: typeof error?.code === 'string' && error.code ? error.code : fallbackCode,
           },
         }));
-      }
-
-      async function resolveForBot(backend, botId) {
-        if (typeof backend.forBot !== 'function') {
-          res.writeHead(501, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            error: { message: 'This backend does not implement bots', code: 'backend_unsupported' },
-          }));
-          return null;
-        }
-        try {
-          return await backend.forBot(botId);
-        } catch (error) {
-          const code = error.code ?? 'backend_unsupported';
-          const status = code === 'unknown_bot' ? 404 : code === 'bot_not_routable' ? 409 : 501;
-          res.writeHead(status, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: { message: error.message, code } }));
-          return null;
-        }
       }
 
       async function resolveBackendFor(method) {

@@ -18,12 +18,21 @@ import {
  * use, so "advertised" and "dispatchable" cannot drift: one mechanism, not two.
  */
 
-/** Ask a backend for one method, failing with a message the app can show. */
+/** How long one backend gets in the scope-less sweep before it counts absent. */
+const DEFAULT_SESSION_SEARCH_BOUND_MS = 8000;
+
+/**
+ * Ask a backend for one method, failing with a message the app can show.
+ *
+ * Resolution takes the caller's whole scope: `params.backendId` names an
+ * environment, `params.bot` names a Bot and wins over it exactly as it does for
+ * the REST routes. The method name is passed as well so a caller that named
+ * neither still gets a backend that can serve it — a Gate with several
+ * environments attached must not answer skills.list from whichever one happens
+ * to be first.
+ */
 async function via(getBackend, params, name, call) {
-  // The method name is passed so the resolver can pick a backend that
-  // implements it — a Gate with several environments attached must not answer
-  // skills.list from whichever one happens to be first.
-  const backend = await getBackend(params?.backendId, name);
+  const backend = await getBackend(params?.backendId, params?.bot, name);
   if (typeof backend?.[name] !== 'function') {
     throw new Error(`This gateway's backend does not implement ${name}`);
   }
@@ -72,18 +81,133 @@ function requiredSessionId(params) {
 }
 
 /**
- * The one shared exact-id lookup behind `session.get`, `session.usage`
- * and `session.restore`. Matches `id` exactly — never a substring — and
- * throws a named failure for an absent id so the app can print it instead
- * of an empty read.
+ * The one refusal a session lookup makes, and the code that goes with it.
+ *
+ * `unknown_session` is what the app refuses a thread tap on, and it is only
+ * ever right for a definite miss: a timeout, a 5xx or a host that is down is
+ * propagated as itself, so the switch proceeds and the history read that
+ * follows names the real failure.
  */
-async function findSessionById(getBackend, params, sessionId) {
-  const sessions = await via(getBackend, params, 'listSessions', (b) => b.listSessions(200));
-  const match = (Array.isArray(sessions) ? sessions : []).find(
-    (session) => session != null && String(session.id) === sessionId,
-  );
-  if (!match) throw new Error(`Session not found: ${sessionId}`);
-  return match;
+function unknownSession(sessionId) {
+  return Object.assign(new Error(`Session not found: ${sessionId}`), { code: 'unknown_session' });
+}
+
+/**
+ * One exact-id read on one backend: `getSession` where the backend has it,
+ * otherwise the wide list scan every backend can serve. Returns the record or
+ * null for a definite miss; anything the backend throws is the backend's own
+ * failure and travels untouched.
+ */
+function readOneSession(backend, sessionId) {
+  if (typeof backend.getSession === 'function') return Promise.resolve(backend.getSession(sessionId));
+  if (typeof backend.listSessions !== 'function') {
+    return Promise.reject(new Error("This gateway's backend cannot read sessions"));
+  }
+  return Promise.resolve(backend.listSessions(200)).then((sessions) => (
+    (Array.isArray(sessions) ? sessions : []).find(
+      (session) => session != null && String(session.id) === sessionId,
+    ) ?? null
+  ));
+}
+
+/**
+ * The session behind one `{ backendId, botId }` scope, read and judged.
+ *
+ * A backend that refuses by name (`unknown_session`) is a definite miss — that
+ * is the same word the Gate uses — while a timeout or a 5xx throws, so a slow
+ * host can never retire a session the operator still has.
+ */
+async function readSessionInScope(deps, scope, sessionId) {
+  const backend = await deps.getBackend(scope?.backendId, scope?.botId, 'listSessions');
+  try {
+    return (await readOneSession(backend, sessionId)) ?? null;
+  } catch (error) {
+    if (error?.code === 'unknown_session') return null;
+    throw error;
+  }
+}
+
+/** Stop offering a session the Gate's own copy still lists but nothing has. */
+async function forgetSession(deps, scope, sessionId) {
+  await deps.forgetSession?.(scope?.backendId, scope?.botId, sessionId);
+}
+
+/**
+ * Ask every candidate scope at once and keep the first session that lands.
+ *
+ * Parallel because a scope-less read cannot afford a 3 s Hermes queued behind a
+ * 3 s Claude Code; bounded per candidate because one environment that hangs must
+ * not hold a tap hostage; first-hit-wins because a Gate with four environments
+ * must not wait for the slowest of them. A candidate that errors or runs out of
+ * time counts as "not here" — which is exactly what it is, for this lookup.
+ */
+function raceSessionReads(deps, scopes, sessionId) {
+  return new Promise((resolve) => {
+    let open = scopes.length;
+    let settled = false;
+    const finish = (found) => {
+      if (settled) return;
+      settled = true;
+      resolve(found);
+    };
+    if (open === 0) {
+      finish(null);
+      return;
+    }
+    for (const scope of scopes) {
+      const timer = setTimeout(() => miss(null), deps.sessionSearchBoundMs);
+      timer.unref?.();
+      readSessionInScope(deps, scope, sessionId).then(
+        (found) => { clearTimeout(timer); miss(found); },
+        () => { clearTimeout(timer); miss(null); },
+      );
+    }
+    function miss(found) {
+      open -= 1;
+      if (found) finish(found);
+      else if (open === 0) finish(null);
+    }
+  });
+}
+
+/**
+ * The one shared exact-id lookup behind `session.get`, `session.usage`
+ * and `session.restore`. Matches `id` exactly — never a substring.
+ *
+ * A scoped request is read from that scope and nowhere else, and a definite
+ * miss there retires the row in the Gate's own copy (the Gate's index keyed it
+ * to that environment and Bot, so a session upstream no longer has must stop
+ * being offered by the next list).
+ *
+ * A request with NO scope at all is an older app build, and the id alone says
+ * nothing about where it lives. Asking "the first backend that can list
+ * sessions" answered `Session not found` for a Hermes thread the operator was
+ * looking at, because Claude Code sorted first. So the Gate asks its own copy
+ * which environment and Bot last listed this id, and only sweeps every
+ * environment when nobody claims it.
+ */
+async function findSessionById(deps, params, sessionId) {
+  if (params?.backendId || params?.bot) {
+    const found = await readSessionInScope(deps, { backendId: params.backendId, botId: params.bot }, sessionId);
+    if (found) return found;
+    await forgetSession(deps, { backendId: params.backendId, botId: params.bot }, sessionId);
+    throw unknownSession(sessionId);
+  }
+  for (const scope of await deps.sessionScopes(sessionId)) {
+    let found = null;
+    try {
+      found = await readSessionInScope(deps, scope, sessionId);
+    } catch {
+      // A host that failed has NOT claimed the row is gone, so this scope
+      // retires nothing; the sweep below still gets its turn at the id.
+      continue;
+    }
+    if (found) return found;
+    await forgetSession(deps, scope, sessionId);
+  }
+  const swept = await raceSessionReads(deps, await deps.allBackendScopes(), sessionId);
+  if (swept) return swept;
+  throw unknownSession(sessionId);
 }
 
 /** The token/cost counters of one session record, in its own envelope. */
@@ -99,9 +223,18 @@ function usageOf(session) {
 
 /**
  * @param {object} deps
- * @param {(backendId?: string) => Promise<object>} deps.getBackend
- *   Resolves the backend or throws. Unlike the routes' `resolveBackend`, this
- *   must not write to a response — the RPC dispatcher owns the reply.
+ * @param {(backendId?: string, botId?: string, method?: string) => Promise<object>} deps.getBackend
+ *   Resolves the scope the caller's params name — a Bot wins over an
+ *   environment, exactly as for the REST routes — or throws a named refusal.
+ *   Unlike the routes' `resolveBackend`, this must not write to a response: the
+ *   RPC dispatcher owns the reply.
+ * @param {(sessionId: string) => Promise<Array<{ backendId?: string, botId?: string }>>} deps.sessionScopes
+ *   The scopes whose Gate-held session lists contain this id, most recent first.
+ * @param {() => Promise<Array<{ backendId?: string }>>} deps.allBackendScopes
+ *   Every attached environment, for the sweep a scope-less request falls back to.
+ * @param {(backendId?: string, botId?: string, sessionId: string) => Promise<void>} deps.forgetSession
+ *   Drops a confirmed miss from the Gate's own copy of that scope's list.
+ * @param {number} [deps.sessionSearchBoundMs] Per-backend bound on the sweep.
  * @param {() => Promise<object[]>} [deps.listDevices]
  *   Devices that hold a token on this Gate. The store's `token` field stays
  *   in the store — this method never puts it on the wire.
@@ -109,7 +242,23 @@ function usageOf(session) {
  *   Marks one device's token revoked. Returns true when an entry matched,
  *   false when no device is on file under that id.
  */
-export function createGatewayMethods({ getBackend, listDevices, revokeDevice }) {
+export function createGatewayMethods({
+  getBackend,
+  sessionScopes,
+  allBackendScopes,
+  forgetSession: forget,
+  sessionSearchBoundMs = DEFAULT_SESSION_SEARCH_BOUND_MS,
+  listDevices,
+  revokeDevice,
+}) {
+  const deps = {
+    getBackend,
+    forgetSession: forget,
+    sessionScopes: typeof sessionScopes === 'function' ? sessionScopes : async () => [],
+    allBackendScopes: typeof allBackendScopes === 'function' ? allBackendScopes : async () => [],
+    sessionSearchBoundMs,
+  };
+
   return {
     // The Gate answers for itself; no backend required.
     health: async () => ({ status: 'ok', timestamp: new Date().toISOString() }),
@@ -250,21 +399,19 @@ export function createGatewayMethods({ getBackend, listDevices, revokeDevice }) 
       }));
     },
 
-    // One shared exact-id lookup behind the session read RPCs. No backend
-    // offers a get-by-id call, so all three read the same wide catalogue
-    // page and match the id exactly. Wide on purpose: a small page would
-    // silently hide older sessions (the Hermes default-page note on
-    // listSessions above, and the cron.runs comment), and an absent id
-    // fails honestly instead of reading as empty.
+    // One shared exact-id lookup behind the session read RPCs. A backend that
+    // has getSession is asked for the id alone — the wide catalogue page is the
+    // fallback for the ones that do not, and stays wide on purpose (the Hermes
+    // default-page note on listSessions above, and the cron.runs comment).
     'session.get': async (params) =>
-      findSessionById(getBackend, params, requiredSessionId(params)),
+      findSessionById(deps, params, requiredSessionId(params)),
 
     // With an id this reports that session's token/cost counters; without
     // one it totals the whole catalogue, so the bare `/session usage`
     // answers instead of demanding an id.
     'session.usage': async (params) => {
       const raw = params?.sessionId ?? params?.id;
-      if (raw) return usageOf(await findSessionById(getBackend, params, String(raw)));
+      if (raw) return usageOf(await findSessionById(deps, params, String(raw)));
       const sessions = await via(getBackend, params, 'listSessions', (b) => b.listSessions(200));
       const list = Array.isArray(sessions) ? sessions : [];
       const totals = { sessions: list.length };
@@ -274,11 +421,13 @@ export function createGatewayMethods({ getBackend, listDevices, revokeDevice }) 
       return totals;
     },
 
-    // The lookup behind `/session restore <id>`. Returns the record; the
-    // app switches its open thread only after this resolves, so a missing
-    // id never moves local history.
+    // The lookup behind `/session restore <id>` and the thread-sheet tap.
+    // Returns the record; the app switches its open thread only after this
+    // resolves, so a missing id never moves local history — and so does the
+    // scope the app sent, which is the whole reason a session the operator
+    // could see no longer opened.
     'session.restore': async (params) =>
-      findSessionById(getBackend, params, requiredSessionId(params)),
+      findSessionById(deps, params, requiredSessionId(params)),
 
     // Backend models only, matching what `models.list` returns on Hermes. The
     // Gate's merged provider+backend catalog stays at GET /v1/models, which is

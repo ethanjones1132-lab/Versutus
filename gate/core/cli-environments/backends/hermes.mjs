@@ -224,6 +224,33 @@ export function createHermesBackend({
       return (body.data ?? []).map(toGatewaySession);
     },
 
+    /**
+     * One session by id — `GET /api/sessions/{id}`, which Hermes answers in
+     * ~0.1 s where the catalogue costs 3-38 s on a 6 GB `state.db`.
+     *
+     * The Gate's session RPC looks a session up by exact id, so this is the
+     * difference between a tap that opens a thread and one that lists 200
+     * sessions to find it (and calls the session missing when it is older than
+     * the newest page).
+     *
+     * A 404 is a definite miss and says so by name: the app refuses a tap on
+     * exactly that, while a timeout or a 5xx leaves the switch to proceed. Any
+     * other failure is passed through untouched rather than reported as absence.
+     */
+    async getSession(sessionId) {
+      try {
+        const body = await readCall(`/api/sessions/${encodeURIComponent(sessionId)}`, `read session ${sessionId}`);
+        const session = body?.session ?? body;
+        return session?.id ? toGatewaySession(session) : null;
+      } catch (error) {
+        if (error?.status !== 404) throw error;
+        const missing = new Error(`hermes: session ${sessionId} not found`);
+        missing.code = 'unknown_session';
+        missing.status = 404;
+        throw missing;
+      }
+    },
+
     async createSession({ title, model } = {}) {
       const payload = {};
       if (title) payload.title = title;

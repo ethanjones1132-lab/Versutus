@@ -39,6 +39,21 @@ export function sessionIndexKey(backendId, botId) {
 }
 
 /**
+ * The two halves of a key, back out again.
+ *
+ * The environment id is Gate-assigned and never contains the separator, so the
+ * FIRST `|` splits the pair; a Bot id that happened to contain one is still
+ * read whole rather than truncated, because a wrong Bot id resolves to
+ * `unknown_bot` — a loud refusal instead of a silent misroute.
+ */
+export function parseSessionIndexKey(key) {
+  const text = String(key ?? '');
+  const at = text.indexOf('|');
+  if (at === -1) return { backendId: text || undefined, botId: undefined };
+  return { backendId: text.slice(0, at) || undefined, botId: text.slice(at + 1) || undefined };
+}
+
+/**
  * A readable, collision-free file name for a key. Both halves are caller-supplied
  * ids that reach the Gate over HTTP, so they are sanitised rather than trusted;
  * the digest keeps two keys that sanitise alike apart.
@@ -223,6 +238,28 @@ export function createSessionIndex({
         fetchedLimit: entry.fetchedLimit,
         refreshedAt: entry.refreshedAt,
       };
+    },
+
+    /**
+     * The keys whose window holds `sessionId`, most recently refreshed first.
+     *
+     * Answers "which environment and Bot was this id last read from?", which is
+     * what a scope-less exact-id lookup needs: the id alone says nothing, and
+     * asking the first attached environment instead found nothing on a Gate
+     * where Hermes sorted second. Empty means nobody here has claimed the id,
+     * so the caller is left to sweep.
+     *
+     * Live windows only, and deliberately: a window this Gate has never read
+     * has never claimed to hold anything, and a key evicted from the memory
+     * bound is on disk but unparsed.
+     */
+    async keysWithSession(sessionId) {
+      if (typeof sessionId !== 'string' || !sessionId) return [];
+      const held = [];
+      for (const [key, entry] of entries) {
+        if (entry.sessions.some((row) => row.id === sessionId)) held.push({ key, refreshedAt: entry.refreshedAt });
+      }
+      return held.sort((a, b) => b.refreshedAt - a.refreshedAt).map((row) => row.key);
     },
 
     /**

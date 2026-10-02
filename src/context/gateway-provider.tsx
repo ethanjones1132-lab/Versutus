@@ -4979,15 +4979,34 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     const client = clientRef.current;
     // The slash path reads `session.restore` and switches only after it
     // resolves; the tap used to pin first and fail at the history read
-    // after. Validate through the same read ahead of the pin: a rejection
-    // names the failure and keeps the current thread. Where the method is
-    // not dispatched on this path (no client) the switch stays instant.
+    // after. Validate through the same read ahead of the pin: a DEFINITE
+    // miss names the failure and keeps the current thread, while anything
+    // the read could not be sure about proceeds and lets the history read
+    // report the real failure. Where the method is not dispatched on this
+    // path (no client) the switch stays instant.
+    //
+    // The read is scoped to the thread's own environment and Bot: unscoped,
+    // the Gate resolved it against whichever environment sorted first, which
+    // reported a healthy in-app session as `Session not found`.
     const validation = await validateThreadSwitch(
       client?.rpcRequest.bind(client),
       sessionId,
+      { backendId: selectedBackendIdRef.current, botId: selectedBotIdRef.current },
     );
     if (!validation.ok) {
       setLastError(threadSwitchFailureText(sessionId, validation.error));
+      if (validation.refreshList) {
+        // The gateway just said this session is gone, so the row the operator
+        // tapped is stale. Re-read the list once rather than leaving the sheet
+        // ready to offer it again.
+        void readSessionList(
+          () => client?.getSessions(sessionListLimitRef.current) ?? Promise.resolve([]),
+          () => clientRef.current === client,
+          (result) => {
+            if (result.ok) setSessionListState((previous) => applySessionListRead(previous, result));
+          },
+        );
+      }
       return;
     }
     // Pinning the client is not enough: connect copies stored onto live

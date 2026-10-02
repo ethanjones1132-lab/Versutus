@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createSessionIndex, sessionIndexKey } from '../core/session-index.mjs';
+import { createSessionIndex, parseSessionIndexKey, sessionIndexKey } from '../core/session-index.mjs';
 
 // The Gate's own copy of a session list (SPD-1/SPD-2). A Hermes list costs
 // 3-38 s against a 6.2 GB state.db, so this copy is what makes a warm list
@@ -35,6 +35,39 @@ async function onlyFile(dir) {
 test('the key is the environment and the Bot it was read from', () => {
   assert.equal(sessionIndexKey('hermes-local', undefined), 'hermes-local|');
   assert.equal(sessionIndexKey('hermes-local', 'atlas'), 'hermes-local|atlas');
+});
+
+test('a key reads back as the same environment and Bot', () => {
+  assert.deepEqual(parseSessionIndexKey('hermes-local|atlas'), { backendId: 'hermes-local', botId: 'atlas' });
+  assert.deepEqual(parseSessionIndexKey('hermes-local|'), { backendId: 'hermes-local', botId: undefined });
+  // A Bot id that happens to contain the separator is read whole, not cut.
+  assert.deepEqual(parseSessionIndexKey('hermes-local|a|b'), { backendId: 'hermes-local', botId: 'a|b' });
+});
+
+test('the copy can say which windows hold a session id', async () => {
+  // A scope-less exact-id lookup asks this first: the id alone says nothing
+  // about where it lives, and asking the first attached environment instead
+  // found nothing on a Gate where Claude Code sorted before Hermes.
+  const dir = await tempDir();
+  const index = createSessionIndex({ dir, now: () => 2000 });
+  await index.refresh('hermes-local|', async () => [row('api_1'), row('api_2')], { limit: 50 });
+  await index.refresh('hermes-local|atlas', async () => [row('api_9')], { limit: 50 });
+
+  assert.deepEqual(await index.keysWithSession('api_1'), ['hermes-local|']);
+  assert.deepEqual(await index.keysWithSession('api_9'), ['hermes-local|atlas']);
+  // Nobody claims it: the caller is left to sweep, which is the honest answer.
+  assert.deepEqual(await index.keysWithSession('api_404'), []);
+  assert.deepEqual(await index.keysWithSession(''), []);
+});
+
+test('a window whose id was retired stops claiming it', async () => {
+  const dir = await tempDir();
+  const index = createSessionIndex({ dir });
+  await index.refresh('hermes-local|', async () => [row('api_1'), row('api_2')], { limit: 50 });
+  await index.remove('hermes-local|', 'api_2');
+
+  assert.deepEqual(await index.keysWithSession('api_2'), []);
+  assert.deepEqual(await index.keysWithSession('api_1'), ['hermes-local|']);
 });
 
 test('a second refresh joins the read already running instead of starting another', async () => {

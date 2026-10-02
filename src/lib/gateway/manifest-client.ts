@@ -10,6 +10,7 @@ import { withGetSessionsRetry } from '@/lib/gateway/get-sessions-retry';
 import { errorCodeFromHttpBody, messageFromHttpErrorBody } from '@/lib/gateway/http-error-body';
 import { advertisedIpv4 } from '@/lib/gateway/host-lookup';
 import { HttpTransport, assertChatStreamComplete } from '@/lib/gateway/http-transport';
+import { GatewayRpcError, rpcParamsWithScope } from '@/lib/gateway/rpc-scope';
 import { ConnectionMonitor, hasRecentContact } from '@/lib/gateway/connection-monitor';
 import { streamingFetch } from '@/lib/net/streaming-fetch';
 import type { GatewayIdentity } from '@/lib/portal/identify';
@@ -1014,6 +1015,13 @@ export class ManifestClient implements PortalClient {
    * answer both its built-in `registry.*` methods and anything its capability
    * instances contribute (design spec §6/§8). A gate that doesn't advertise it
    * keeps the old named error rather than guessing at a path.
+   *
+   * The thread's scope rides along on the methods that read a backend, exactly
+   * as `withScope` puts it on the REST routes: without it the Gate resolved
+   * `session.restore` against whichever environment sorts first, which is how a
+   * Hermes session the operator could see in the sheet read as `Session not
+   * found`. Gate-global methods (device.*, voice.*, registry.*, …) are left
+   * exactly as the caller wrote them.
    */
   async rpcRequest<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     const path = this.endpoints.capabilitiesRpc;
@@ -1026,10 +1034,19 @@ export class ManifestClient implements PortalClient {
     const body = await this.rootTransport.request<{
       result?: T;
       error?: { message?: string; code?: string };
-    }>('POST', path, { method, params });
+    }>('POST', path, {
+      method,
+      params: rpcParamsWithScope(method, params, { backendId: this.backendId, botId: this.botId }),
+    });
 
     if (body?.error) {
-      throw new Error(body.error.message ?? `${method} failed on ${this.identity.kindLabel}.`);
+      // The gate's own code travels on the thrown Error: `unknown_session` is
+      // the one refusal a thread tap acts on, and it is indistinguishable from
+      // every other failure while the code is dropped here.
+      throw new GatewayRpcError(
+        body.error.message ?? `${method} failed on ${this.identity.kindLabel}.`,
+        body.error.code,
+      );
     }
     return body?.result as T;
   }

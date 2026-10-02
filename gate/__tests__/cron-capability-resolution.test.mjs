@@ -30,8 +30,13 @@ const cronCapable = {
   },
 };
 
-/** Mimics resolveBackendFor: hand back the first backend implementing `name`. */
-function getBackend(_backendId, name) {
+/**
+ * Mimics resolveBackendFor: hand back the first backend implementing `name`.
+ * Takes the whole scope the dispatcher resolves through — `(backendId, bot,
+ * method)` — because naming a Bot names its environment and this resolution
+ * must be able to see it.
+ */
+function getBackend(_backendId, _botId, name) {
   for (const backend of [plain, cronCapable]) {
     if (typeof backend[name] === 'function') return backend;
   }

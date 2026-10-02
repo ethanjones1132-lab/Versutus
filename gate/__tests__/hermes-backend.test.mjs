@@ -782,6 +782,50 @@ test('updateBot without an executable or home is an honest 501', async () => {
   );
 });
 
+test('one session is read by id, not found by listing the catalogue', async () => {
+  // The Gate's session RPC looks a session up by exact id. On a 6.2 GB
+  // state.db the catalogue costs 3-38 s and a session older than the newest
+  // page reads as absent, while GET /api/sessions/{id} answers in ~0.1 s.
+  const { calls, hermes } = backend((url) => Response.json({
+    session: { id: 'api_1790918481_9a2e6f57', title: 'In the app', started_at: 1, last_active: 2, message_count: 37 },
+  }));
+  const session = await hermes.getSession('api_1790918481_9a2e6f57');
+
+  assert.equal(calls[0].url, 'http://h:8642/api/sessions/api_1790918481_9a2e6f57');
+  assert.equal(session.id, 'api_1790918481_9a2e6f57');
+  assert.equal(session.message_count, 37);
+  // The same gateway shape the list path maps, or the app reads holes.
+  assert.equal(session.source, 'hermes');
+  assert.equal(session.started_at, 1000);
+  assert.equal(session.last_active, 2000);
+});
+
+test('a 404 from Hermes is a definite miss by name, not a read failure', async () => {
+  // The app refuses a thread tap on `unknown_session` alone and lets every other
+  // failure through, so this word has to mean absence and nothing else.
+  const { hermes } = backend(() => ({
+    ok: false,
+    status: 404,
+    text: async () => JSON.stringify({ detail: 'session not found' }),
+  }));
+  await assert.rejects(
+    () => hermes.getSession('api_1'),
+    (error) => error.code === 'unknown_session' && error.status === 404,
+  );
+});
+
+test('a read failure that is not a 404 is passed through, never as a missing session', async () => {
+  const { hermes } = backend(() => ({
+    ok: false,
+    status: 503,
+    text: async () => 'state database is locked',
+  }));
+  await assert.rejects(
+    () => hermes.getSession('api_1'),
+    (error) => error.code === undefined && error.status === 503,
+  );
+});
+
 test('a session limit travels to Hermes instead of being silently capped', async () => {
   const { calls, hermes } = backend();
   await hermes.listSessions(200);

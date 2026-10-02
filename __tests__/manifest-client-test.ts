@@ -647,6 +647,91 @@ describe('rpcRequest against a gate advertising capabilitiesRpc', () => {
 
     expect(String(fetchMock.mock.calls[0][0])).toBe('http://gate.test:8760/v1/capabilities/rpc');
   });
+
+  test('a session read carries the thread\'s environment, so the Gate stops guessing', async () => {
+    // Unscoped, `session.restore` reached whichever environment sorted first —
+    // Claude Code on a typical Gate — which answered `Session not found` for a
+    // Hermes session the operator was looking at in the thread sheet.
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ result: { id: 'api_1' } }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({ health: '/health', capabilitiesRpc: '/v1/capabilities/rpc' });
+    client.setBackendId('hermes-local');
+    await client.rpcRequest('session.restore', { sessionId: 'api_1' });
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      method: 'session.restore',
+      params: { sessionId: 'api_1', backendId: 'hermes-local' },
+    });
+  });
+
+  test('a selected Bot is sent instead of the environment, and never alongside it', async () => {
+    // A Bot IS a Hermes profile and names its own environment; sending the
+    // thread's environment too is a deliberate pin the Gate honours, and it
+    // answers 501 from Claude Code. Same choice as withScope for REST routes.
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ result: { id: 'api_1' } }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({ health: '/health', capabilitiesRpc: '/v1/capabilities/rpc' });
+    client.setBackendId('claude-local');
+    client.setBotId('default');
+    await client.rpcRequest('session.restore', { sessionId: 'api_1' });
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).params)
+      .toEqual({ sessionId: 'api_1', bot: 'default' });
+  });
+
+  test('a gate-global method is posted with no scope at all', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ result: { devices: [] } }),
+    });
+    (globalThis as { fetch: unknown }).fetch = fetchMock;
+
+    const client = clientWithEndpoints({ health: '/health', capabilitiesRpc: '/v1/capabilities/rpc' });
+    client.setBackendId('hermes-local');
+    await client.rpcRequest('device.list');
+    await client.rpcRequest('voice.session.start', { text: 'hi' });
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).params).toEqual({});
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).params).toEqual({ text: 'hi' });
+  });
+
+  test('the gate\'s refusal code reaches the caller on the thrown Error', async () => {
+    // `unknown_session` is the one refusal a thread tap acts on; the gate
+    // answers it in the envelope, and dropping the code made it
+    // indistinguishable from a timeout.
+    (globalThis as { fetch: unknown }).fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({ error: { message: 'Session not found: api_1', code: 'unknown_session' } }),
+    }) as any;
+
+    const client = clientWithEndpoints({ health: '/health', capabilitiesRpc: '/v1/capabilities/rpc' });
+    await expect(client.rpcRequest('session.restore', { sessionId: 'api_1' })).rejects.toMatchObject({
+      code: 'unknown_session',
+    });
+  });
+
+  test('a 200 refusal envelope keeps its code too', async () => {
+    (globalThis as { fetch: unknown }).fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ error: { message: 'unknown bot "ghost"', code: 'unknown_bot' } }),
+    }) as any;
+
+    const client = clientWithEndpoints({ health: '/health', capabilitiesRpc: '/v1/capabilities/rpc' });
+    await expect(client.rpcRequest('sessions.list')).rejects.toMatchObject({ code: 'unknown_bot' });
+  });
 });
 
 describe('ManifestClient sessions and runs when advertised', () => {
