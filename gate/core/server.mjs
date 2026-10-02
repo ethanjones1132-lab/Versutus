@@ -271,44 +271,39 @@ async function replayTurnStream(journal, callerId, turnId, res, {
 }
 
 /**
- * Relay a native-environment turn as OpenAI-shaped SSE, through the one turn
- * runner typed and spoken turns share. The runner reports deltas, tool calls
- * and the model that ran; this writer only shapes them onto the wire and adds
- * the empty-turn guarantee.
+ * Bind a named turn to the Gate rather than to this HTTP request.
  *
- * A turn that named itself belongs to the Gate, not to this request (design
- * section 2). So every frame is journalled as it happens, and closing the phone
- * is a subscriber going away rather than a cancel: the turn finishes here and
- * the answer reaches the phone as a push, or as a replay it asks for later. An
- * unnamed turn (every client before the turn-id header existed) keeps the old
- * meaning of a close, because a turn nobody can name is a turn nobody can find
- * again.
+ * Shared by the native-environment path and the Gate's own provider path so
+ * the detach policy exists once (design 3.4): closing the phone is a
+ * subscriber going away, Stop / a stall / the ceiling / a restart are the only
+ * things that end the turn, and every frame is journalled as it happens. An
+ * unnamed request (no turn id) keeps the old meaning of a close.
+ *
+ * Does not write the status line — the caller does, once it knows it is
+ * streaming. A request that loses the `turn_exists` race is answered as a
+ * replay and this returns `{ replayed: true }`.
  */
-async function streamBackendTurn(backend, sessionId, { text, model, images }, res, {
+async function bindDurableTurn(res, {
   callerId = 'anonymous',
   turnId = null,
+  sessionId = null,
   backendId = null,
   botId = null,
-  modelLabel = null,
+  model = null,
   inFlightTurns,
   journal = null,
   keepaliveIntervalMs,
   detachedTurnMaxMs = DEFAULT_DETACHED_TURN_MAX_MS,
   detachedStallMs = DEFAULT_DETACHED_STALL_MS,
   detachedTurnLimit = DEFAULT_DETACHED_TURN_LIMIT,
-  // How this turn's verdict reaches the model-health table, and under which
-  // qualifier (see createGate). Optional: a caller with no table to write
-  // passes neither and the turn is scored by nobody.
-  recordOutcome,
-  healthKey,
   onGateStopped = null,
 } = {}) {
   const key = turnId && inFlightTurns ? `${callerId}:${turnId}` : null;
 
   // A response that closes before we finish is a subscriber walking away (a
   // locked screen, a lost network, the app being killed) — not the turn
-  // failing. `res.end()` is only ever called from the bottom of this function,
-  // so any 'close' observed before that point is premature.
+  // failing. `res.end()` is only ever called from `finishStream`, so any
+  // 'close' observed before that point is premature.
   let clientDisconnected = false;
 
   // Every frame leaves through here: recorded first, then written to the phone
@@ -321,7 +316,7 @@ async function streamBackendTurn(backend, sessionId, { text, model, images }, re
   let journalTurn = null;
   if (journal && turnId) {
     try {
-      journalTurn = journal.begin({ callerId, turnId, sessionId, backendId, botId, model: modelLabel });
+      journalTurn = journal.begin({ callerId, turnId, sessionId, backendId, botId, model });
     } catch (error) {
       if (error?.code !== 'turn_exists') throw error;
       // Two requests both found this id unused and then both started one
@@ -332,18 +327,9 @@ async function streamBackendTurn(backend, sessionId, { text, model, images }, re
         keepaliveIntervalMs,
         headers: { 'X-Versutus-Turn-Resumed': '1' },
       });
-      return null;
+      return { replayed: true };
     }
   }
-
-  res.writeHead(200, sseHeaders({
-    // The streamed turn is the only chat answer that carries no body to read
-    // the session out of, so a phone with no session of its own would open a
-    // new one every turn and lose the thread.
-    ...(safeHeaderValue(sessionId) ? { 'X-Versutus-Session-Id': sessionId } : {}),
-  }));
-  const stopKeepalive = startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
-
 
   const emit = (data) => {
     try {
@@ -352,7 +338,9 @@ async function streamBackendTurn(backend, sessionId, { text, model, images }, re
       // The journal already swallows its own faults; this is the belt to that
       // braces, because a live reply is worth more than its record.
     }
-    if (!clientDisconnected) res.write(`data: ${data}\n\n`);
+    if (!clientDisconnected && !res.writableEnded && !res.destroyed) {
+      res.write(`data: ${data}\n\n`);
+    }
     // Every frame is a sign of life, so the stall watchdog is measured from the
     // last one rather than from the moment the phone left: a turn that keeps
     // streaming is working, however long it takes.
@@ -402,6 +390,31 @@ async function streamBackendTurn(backend, sessionId, { text, model, images }, re
     if (inFlightTurns.get(turn.key) === turn) inFlightTurns.delete(turn.key);
   }
 
+  const sessionHeaders = safeHeaderValue(sessionId) ? { 'X-Versutus-Session-Id': sessionId } : {};
+
+  /**
+   * End the phone's HTTP stream. A restart omits `[DONE]` so the half answer
+   * cannot look finished. Marks the subscriber gone so a later emit cannot
+   * write after `end` (and throw) while upstream abort is still unwinding.
+   */
+  function finishStream() {
+    if (clientDisconnected || res.destroyed || res.writableEnded) {
+      clientDisconnected = true;
+      return;
+    }
+    if (!res.headersSent) {
+      clientDisconnected = true;
+      return;
+    }
+    // A restart ends the stream with its error frame and NO terminator: the
+    // phone's stream parser reads `[DONE]` as "this reply is complete", and
+    // finalising a half answer — tool cards and all — as a finished one is
+    // exactly what a restart must not do.
+    if (turn?.endedBy !== 'gate_restart') res.write('data: [DONE]\n\n');
+    res.end();
+    clientDisconnected = true;
+  }
+
   /**
    * The Gate ending a turn itself: a stall, the safety ceiling, or a restart.
    *
@@ -416,10 +429,22 @@ async function streamBackendTurn(backend, sessionId, { text, model, images }, re
     // takes no more events, so a frame written after `endTurn` would reach the
     // attached phone only, and a follower or a later replay would end on `[DONE]`
     // with the half answer looking finished.
+    //
+    // Provider turns write SSE headers only once the vendor answers, so a
+    // restart before that would otherwise `res.write` under the JSON
+    // Content-Type the request handler set. Open the stream first.
+    if (!res.headersSent && !res.destroyed) {
+      res.writeHead(200, sseHeaders(sessionHeaders));
+    }
     if (reason === 'gate_restart') emit(GATE_RESTART_FRAME);
     else emit(JSON.stringify({ error: GATE_STOP_FRAMES[reason] }));
     endTurn('interrupted', { reason });
     onGateStopped?.({ reason, turnId, sessionId, botId });
+    // Release the phone before aborting upstream work. Otherwise `server.close()`
+    // waits on this request until the vendor notices the abort — a silent
+    // vendor would hold a restart open, and a slow one would hold it for the
+    // rest of the body.
+    finishStream();
     controller.abort();
   }
 
@@ -484,6 +509,80 @@ async function streamBackendTurn(backend, sessionId, { text, model, images }, re
     armCeiling();
   });
 
+  return {
+    replayed: false,
+    get clientDisconnected() { return clientDisconnected; },
+    turn,
+    controller,
+    journalTurn,
+    emit,
+    endTurn,
+    endByGate,
+    armStall,
+    sessionHeaders,
+    finishStream,
+  };
+}
+
+/**
+ * Relay a native-environment turn as OpenAI-shaped SSE, through the one turn
+ * runner typed and spoken turns share. The runner reports deltas, tool calls
+ * and the model that ran; this writer only shapes them onto the wire and adds
+ * the empty-turn guarantee.
+ *
+ * A turn that named itself belongs to the Gate, not to this request (design
+ * section 2). So every frame is journalled as it happens, and closing the phone
+ * is a subscriber going away rather than a cancel: the turn finishes here and
+ * the answer reaches the phone as a push, or as a replay it asks for later. An
+ * unnamed turn (every client before the turn-id header existed) keeps the old
+ * meaning of a close, because a turn nobody can name is a turn nobody can find
+ * again.
+ */
+async function streamBackendTurn(backend, sessionId, { text, model, images }, res, {
+  callerId = 'anonymous',
+  turnId = null,
+  backendId = null,
+  botId = null,
+  modelLabel = null,
+  inFlightTurns,
+  journal = null,
+  keepaliveIntervalMs,
+  detachedTurnMaxMs = DEFAULT_DETACHED_TURN_MAX_MS,
+  detachedStallMs = DEFAULT_DETACHED_STALL_MS,
+  detachedTurnLimit = DEFAULT_DETACHED_TURN_LIMIT,
+  // How this turn's verdict reaches the model-health table, and under which
+  // qualifier (see createGate). Optional: a caller with no table to write
+  // passes neither and the turn is scored by nobody.
+  recordOutcome,
+  healthKey,
+  onGateStopped = null,
+} = {}) {
+  const durable = await bindDurableTurn(res, {
+    callerId,
+    turnId,
+    sessionId,
+    backendId,
+    botId,
+    model: modelLabel,
+    inFlightTurns,
+    journal,
+    keepaliveIntervalMs,
+    detachedTurnMaxMs,
+    detachedStallMs,
+    detachedTurnLimit,
+    onGateStopped,
+  });
+  if (durable.replayed) return null;
+
+  res.writeHead(200, sseHeaders({
+    // The streamed turn is the only chat answer that carries no body to read
+    // the session out of, so a phone with no session of its own would open a
+    // new one every turn and lose the thread.
+    ...(safeHeaderValue(sessionId) ? { 'X-Versutus-Session-Id': sessionId } : {}),
+  }));
+  const stopKeepalive = startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
+  const { emit, controller, turn, journalTurn, endTurn, armStall } = durable;
+
   // The reply text so far (capped): what this turn's verdict is judged by. The
   // push carries the journal's own assembled text instead (design 3.6).
   let collected = '';
@@ -524,7 +623,7 @@ async function streamBackendTurn(backend, sessionId, { text, model, images }, re
     // own bound on an unseen turn are the caller's business, not evidence
     // about the model. A refusal or an empty turn is a failure; an answer
     // clears it.
-    if (!stopped && !clientDisconnected) recordOutcome?.(healthKey, { text: collected, hasContent });
+    if (!stopped && !durable.clientDisconnected) recordOutcome?.(healthKey, { text: collected, hasContent });
 
     // Same truth the non-streaming path reports: which model actually ran.
     if (report.model) emit(JSON.stringify({ ...report, choices: [] }));
@@ -548,7 +647,7 @@ async function streamBackendTurn(backend, sessionId, { text, model, images }, re
       // reaches the outcome recorded above and would otherwise never be scored.
       const code = typeof error?.code === 'string' && /^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$/.test(error.code)
         ? error.code : 'backend_error';
-      if (!clientDisconnected) {
+      if (!durable.clientDisconnected) {
         recordOutcome?.(healthKey, { reason: error?.message, error });
       }
       // The frame is journalled however the request ended: a phone that was away
@@ -566,14 +665,7 @@ async function streamBackendTurn(backend, sessionId, { text, model, images }, re
     // open here was stopped by the phone.
     if (turn && !turn.finished && (stopped || controller.signal.aborted)) endTurn('cancelled');
     stopKeepalive();
-    if (!clientDisconnected) {
-      // A restart ends the stream with its error frame and NO terminator: the
-      // phone's stream parser reads `[DONE]` as "this reply is complete", and
-      // finalising a half answer — tool cards and all — as a finished one is
-      // exactly what a restart must not do.
-      if (turn?.endedBy !== 'gate_restart') res.write('data: [DONE]\n\n');
-      res.end();
-    }
+    durable.finishStream();
   }
   // An aborted turn never earned a notice, however much text it had already
   // streamed: the phone asked it to stop. A detached turn that ran to its end
@@ -635,48 +727,51 @@ function parseQualifiedModel(model) {
 }
 
 /**
- * One upstream provider call, owned by the caller's socket and on a clock.
+ * One upstream provider call, on a clock, and owned by either the caller's
+ * socket (unnamed turns) or the turn's own controller (named durable turns).
  *
  * Without this the vendor keeps generating (and billing) a turn whose client
- * pressed Stop or lost the network, and a vendor that accepts the connection
- * and never answers holds the request for undici's default instead of being
- * told it timed out. The bound is on the RESPONSE HEADERS only —
- * `clearWatchdog()` runs the moment the response exists, so a long stream is
- * never cut off for being slow, while the client's own abort stays attached for
- * the whole call: a phone that leaves mid-stream is still the reason to stop
- * reading, and undici only tears the connection down if the signal says so.
+ * pressed Stop, and a vendor that accepts the connection and never answers
+ * holds the request for undici's default instead of being told it timed out.
+ * The bound is on the RESPONSE HEADERS only — `clearWatchdog()` runs the
+ * moment the response exists, so a long stream is never cut off for being
+ * slow. A named turn's abort is the turn's Stop / stall / restart, never the
+ * phone leaving: that is a subscriber going away (design 3.4). An unnamed
+ * turn still dies with the socket, because a turn nobody can name is a turn
+ * nobody can find again.
  */
-function providerUpstreamCall(res, { headersTimeoutMs = DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS } = {}) {
+function providerUpstreamCall(res, { headersTimeoutMs = DEFAULT_UPSTREAM_HEADERS_TIMEOUT_MS, abortSignal = null } = {}) {
   const client = new AbortController();
-  res.once('close', () => client.abort());
+  if (!abortSignal) res.once('close', () => client.abort());
   const watchdog = new AbortController();
   const timer = setTimeout(() => watchdog.abort(), headersTimeoutMs);
   timer.unref?.();
+  const sources = abortSignal ? [abortSignal, watchdog.signal] : [client.signal, watchdog.signal];
   return {
-    signal: AbortSignal.any([client.signal, watchdog.signal]),
-    get clientGone() { return client.signal.aborted; },
+    signal: AbortSignal.any(sources),
+    get clientGone() { return abortSignal ? abortSignal.aborted : client.signal.aborted; },
     get timedOut() { return watchdog.signal.aborted; },
     clearWatchdog() { clearTimeout(timer); },
   };
 }
 
-async function proxyChat(root, provider, requestBody, res, { headersTimeoutMs, keepaliveIntervalMs } = {}) {
+async function proxyChat(root, provider, requestBody, res, { headersTimeoutMs, keepaliveIntervalMs, durable } = {}) {
   const flavorModule = FLAVOR_MODULES[provider.config.flavor];
   if (!flavorModule) {
+    const error = { message: `Chat is not implemented for flavor "${provider.config.flavor}"`, code: 'flavor_not_implemented' };
+    failDurableBeforeStream(durable, error);
     res.writeHead(501, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      error: { message: `Chat is not implemented for flavor "${provider.config.flavor}"`, code: 'flavor_not_implemented' },
-    }));
-    return;
+    res.end(JSON.stringify({ error }));
+    return null;
   }
 
   const wantsStream = requestBody.stream === true;
   if (wantsStream && provider.config.streaming === false) {
+    const error = { message: `Provider "${provider.id}" does not support streaming`, code: 'streaming_unsupported' };
+    failDurableBeforeStream(durable, error);
     res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-      error: { message: `Provider "${provider.id}" does not support streaming`, code: 'streaming_unsupported' },
-    }));
-    return;
+    res.end(JSON.stringify({ error }));
+    return null;
   }
 
   const apiKey = (await getSecret(root, provider.config.apiKeyEnv)) ?? process.env[provider.config.apiKeyEnv] ?? '';
@@ -688,30 +783,38 @@ async function proxyChat(root, provider, requestBody, res, { headersTimeoutMs, k
       stream: wantsStream,
     });
   } catch (error) {
+    const body = { message: error.message, code: 'invalid_model' };
+    failDurableBeforeStream(durable, body);
     res.writeHead(400, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: { message: error.message, code: 'invalid_model' } }));
-    return;
+    res.end(JSON.stringify({ error: body }));
+    return null;
   }
 
-  const upstream = providerUpstreamCall(res, { headersTimeoutMs });
+  const upstream = providerUpstreamCall(res, { headersTimeoutMs, abortSignal: durable?.controller.signal });
   let upstreamResponse;
   try {
     upstreamResponse = await fetch(upstreamRequest.url, { ...upstreamRequest.init, signal: upstream.signal });
   } catch (error) {
-    if (upstream.clientGone) return;
-    if (upstream.timedOut) {
-      res.writeHead(504, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        error: {
-          message: 'The provider did not answer within the header timeout.',
-          code: 'upstream_timeout',
-        },
-      }));
-      return;
+    if (upstream.clientGone) {
+      if (durable && !durable.turn?.finished) durable.endTurn('cancelled');
+      durable?.finishStream();
+      return null;
     }
+    if (upstream.timedOut) {
+      const body = {
+        message: 'The provider did not answer within the header timeout.',
+        code: 'upstream_timeout',
+      };
+      failDurableBeforeStream(durable, body);
+      res.writeHead(504, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: body }));
+      return null;
+    }
+    const body = { message: `Upstream request failed: ${error.message}`, code: 'upstream_unreachable' };
+    failDurableBeforeStream(durable, body);
     res.writeHead(502, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: { message: `Upstream request failed: ${error.message}`, code: 'upstream_unreachable' } }));
-    return;
+    res.end(JSON.stringify({ error: body }));
+    return null;
   } finally {
     // Headers are in: the stream itself is allowed to take as long as it makes
     // progress, so the clock has done its job.
@@ -720,9 +823,11 @@ async function proxyChat(root, provider, requestBody, res, { headersTimeoutMs, k
 
   if (!upstreamResponse.ok) {
     const text = await upstreamResponse.text().catch(() => '');
+    const body = { message: text || 'Upstream rejected the request', code: 'upstream_error' };
+    failDurableBeforeStream(durable, body);
     res.writeHead(upstreamResponse.status, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: { message: text || 'Upstream rejected the request', code: 'upstream_error' } }));
-    return;
+    res.end(JSON.stringify({ error: body }));
+    return null;
   }
 
   if (!wantsStream) {
@@ -731,10 +836,10 @@ async function proxyChat(root, provider, requestBody, res, { headersTimeoutMs, k
       json = await upstreamResponse.json();
     } catch {
       // The client left, or the body tore: there is nobody left to answer.
-      if (upstream.clientGone) return;
+      if (upstream.clientGone) return null;
       res.writeHead(502, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: { message: 'Upstream returned an unreadable body', code: 'upstream_error' } }));
-      return;
+      return null;
     }
     const text = flavorModule.parseResponseText(json);
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -743,29 +848,40 @@ async function proxyChat(root, provider, requestBody, res, { headersTimeoutMs, k
       object: 'chat.completion',
       choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
     }));
-    return;
+    return null;
   }
 
-  await relayNormalizedSse(upstreamResponse, flavorModule, res, { upstream, keepaliveIntervalMs });
+  const outcome = await relayNormalizedSse(upstreamResponse, flavorModule, res, { upstream, keepaliveIntervalMs, durable });
+  if (durable) return concludeDurableProviderTurn(durable, outcome).reply;
+  return null;
 }
 
-function endProviderStreamWithError(res, error) {
-  if (res.destroyed || res.writableEnded) return;
+function endProviderStreamWithError(res, error, emit) {
   const message = typeof error?.message === 'string' && error.message.trim()
     ? error.message : 'Provider stream interrupted before completion';
   const code = typeof error?.code === 'string' && error.code
     ? error.code : 'upstream_error';
-  // A failed turn ends with its error, never a success-shaped [DONE] marker.
-  res.end(`data: ${JSON.stringify({ error: { message, code } })}\n\n`);
+  const payload = JSON.stringify({ error: { message, code } });
+  // A named turn journals the error and leaves the stream's terminator to
+  // `finishStream` (so a restart can still omit `[DONE]`). An unnamed turn
+  // ends here, never with a success-shaped [DONE] marker.
+  if (typeof emit === 'function') {
+    emit(payload);
+    return;
+  }
+  if (res.destroyed || res.writableEnded) return;
+  res.end(`data: ${payload}\n\n`);
 }
 
 /**
  * Read an upstream SSE body and re-emit it in the OpenAI delta shape the app's
  * clients parse, whatever dialect the vendor speaks.
  *
- * `upstream` is the caller's abort: when the phone stops or drops, the vendor's
- * stream is cancelled instead of being relayed into a socket nobody reads (and
- * billed to the end).
+ * `upstream` is the caller's abort. For an unnamed turn, that is the phone
+ * leaving: the vendor's stream is cancelled instead of being relayed into a
+ * socket nobody reads (and billed to the end). For a named durable turn it is
+ * the turn's own controller — Stop, a stall, a restart — and the phone leaving
+ * is ignored here; frames keep going into the journal.
  *
  * A reasoning model can be silent for a long time before its first token, which
  * is exactly the quiet stream a client would otherwise read as dead, so the
@@ -773,26 +889,47 @@ function endProviderStreamWithError(res, error) {
  *
  * Resolves with how the turn ENDED, not with the fact that headers were sent:
  * `{ ok: true }` for a stream that reached its end, `{ ok: false, error }` for
- * one that died, `{ abandoned: true }` for a client that walked away. A caller
+ * one that died, `{ abandoned: true }` for a turn that was cancelled. A caller
  * that records the turn has nothing to learn from a stream whose outcome is
  * still open, and the legacy twin ignores the answer entirely.
  */
-async function relayNormalizedSse(upstreamResponse, flavorModule, res, { upstream, keepaliveIntervalMs } = {}) {
-  res.writeHead(200, sseHeaders());
-  const stopKeepalive = startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
+async function relayNormalizedSse(upstreamResponse, flavorModule, res, { upstream, keepaliveIntervalMs, durable } = {}) {
+  if (!res.headersSent && !res.destroyed) {
+    res.writeHead(200, sseHeaders(durable?.sessionHeaders ?? {}));
+  }
+  const stopKeepalive = (res.destroyed || res.writableEnded)
+    ? () => {}
+    : startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
 
   const reader = upstreamResponse.body.getReader();
   const release = () => reader.cancel().catch(() => {});
-  res.once('close', release);
+  // A named turn keeps reading after the phone leaves, so cancelling the
+  // vendor's reader on socket close would undo the detach. Stop / a stall /
+  // a restart still have to cancel it, or `close()` waits for the vendor.
+  // An abort that already fired (close() racing the listener) must still
+  // cancel: addEventListener does not replay a past abort.
+  if (!durable) res.once('close', release);
+  else if (durable.controller) {
+    if (durable.controller.signal.aborted) void release();
+    else durable.controller.signal.addEventListener('abort', release, { once: true });
+  }
   // Read, not merely listened for: a phone can give up while the vendor is
   // still answering, so the close has already fired by the time we get here and
-  // the listener above will never fire.
-  const clientGone = () => res.destroyed || res.writableEnded || upstream?.clientGone === true;
+  // the listener above will never fire. A named turn ignores the socket: the
+  // abort that matters is the turn's.
+  const turnGone = () => (durable
+    ? Boolean(upstream?.clientGone || durable.turn?.finished)
+    : (res.destroyed || res.writableEnded || upstream?.clientGone === true));
   const decoder = new TextDecoder();
   let buffer = '';
   const MAX_BUFFER_BYTES = 1024 * 1024; // 1MB — a single SSE line has no legitimate reason to exceed this
+  const writeDelta = (text) => {
+    const payload = JSON.stringify({ choices: [{ delta: { content: text } }] });
+    if (durable) durable.emit(payload);
+    else res.write(`data: ${payload}\n\n`);
+  };
   try {
-    while (!clientGone()) {
+    while (!turnGone()) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -802,7 +939,7 @@ async function relayNormalizedSse(upstreamResponse, flavorModule, res, { upstrea
           new Error('Upstream sent an oversized line without a delimiter'),
           { code: 'upstream_error' },
         );
-        endProviderStreamWithError(res, error);
+        endProviderStreamWithError(res, error, durable?.emit);
         return { ok: false, error };
       }
       const lines = buffer.split('\n');
@@ -812,23 +949,33 @@ async function relayNormalizedSse(upstreamResponse, flavorModule, res, { upstrea
         const data = line.slice(5).trim();
         if (data === '[DONE]') continue;
         const text = flavorModule.parseDelta(data);
-        if (text) {
-          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
-        }
+        if (text) writeDelta(text);
       }
     }
   } catch (error) {
-    // A client that walked away is not a stream failure: there is nothing left
-    // to report it to, and the upstream is already being cancelled.
-    if (clientGone()) return { abandoned: true };
-    endProviderStreamWithError(res, error);
+    // A cancelled turn is not a stream failure: there is nothing left to
+    // report it to, and the upstream is already being cancelled.
+    if (turnGone()) return { abandoned: true };
+    endProviderStreamWithError(res, error, durable?.emit);
     return { ok: false, error };
   } finally {
     stopKeepalive();
-    res.off('close', release);
-    await release();
+    if (!durable) {
+      res.off('close', release);
+      await release();
+    } else {
+      durable.controller?.signal.removeEventListener('abort', release);
+      // The fetch is already aborted with the turn. Awaiting cancel() on a
+      // silent vendor can hang the HTTP handler, and `server.close()` waits
+      // on that handler even after the phone's stream has ended.
+      void release();
+    }
   }
-  if (clientGone()) return { abandoned: true };
+  if (durable) {
+    if (turnGone()) return { abandoned: true };
+    return { ok: true };
+  }
+  if (turnGone()) return { abandoned: true };
   res.write('data: [DONE]\n\n');
   res.end();
   return { ok: true };
@@ -840,31 +987,108 @@ async function relayNormalizedSse(upstreamResponse, flavorModule, res, { upstrea
  * cancel and leaving is read off the socket between events. Returns the same
  * three outcomes as `relayNormalizedSse`.
  */
-async function relayIteratorSse(events, res, { upstream, keepaliveIntervalMs } = {}) {
-  res.writeHead(200, sseHeaders());
+async function relayIteratorSse(events, res, { upstream, keepaliveIntervalMs, durable } = {}) {
+  if (!res.headersSent && !res.destroyed) {
+    res.writeHead(200, sseHeaders(durable?.sessionHeaders ?? {}));
+  }
   // The same silence a reasoning model produces before its first token, on the
   // path where the local interface hands over an iterator instead of a
   // response: the heartbeat the headers advertise has to be sent here too.
-  const stopKeepalive = startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
-  const clientGone = () => res.destroyed || res.writableEnded || upstream?.clientGone === true;
+  const stopKeepalive = (res.destroyed || res.writableEnded)
+    ? () => {}
+    : startSseKeepalive(res, { intervalMs: keepaliveIntervalMs });
+  const turnGone = () => (durable
+    ? Boolean(upstream?.clientGone || durable.turn?.finished)
+    : (res.destroyed || res.writableEnded || upstream?.clientGone === true));
   try {
     for await (const event of events) {
-      if (clientGone()) return { abandoned: true };
+      if (turnGone()) return { abandoned: true };
       const text = typeof event === 'string' ? event : event?.choices?.[0]?.delta?.content;
-      if (text) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
+      if (text) {
+        const payload = JSON.stringify({ choices: [{ delta: { content: text } }] });
+        if (durable) durable.emit(payload);
+        else res.write(`data: ${payload}\n\n`);
+      }
     }
   } catch (error) {
     // A cancelled turn is the caller's own doing, not a stream failure.
-    if (clientGone()) return { abandoned: true };
-    endProviderStreamWithError(res, error);
+    if (turnGone()) return { abandoned: true };
+    endProviderStreamWithError(res, error, durable?.emit);
     return { ok: false, error };
   } finally {
     stopKeepalive();
   }
-  if (clientGone()) return { abandoned: true };
+  if (durable) {
+    if (turnGone()) return { abandoned: true };
+    return { ok: true };
+  }
+  if (turnGone()) return { abandoned: true };
   res.write('data: [DONE]\n\n');
   res.end();
   return { ok: true };
+}
+
+/**
+ * A named turn that never reached the vendor stream still has to be
+ * journalled as a failure the phone can replay. The live request answers
+ * as JSON with the original status; writing that error as an SSE frame onto
+ * the same socket would mix the two. The frame is for the retry.
+ */
+function failDurableBeforeStream(durable, error) {
+  if (!durable) return;
+  try {
+    durable.journalTurn?.append(JSON.stringify({ error }));
+  } catch {
+    // Same belt as emit: a live reply is worth more than its record.
+  }
+  durable.endTurn('failed', { error });
+}
+
+/**
+ * Close a named provider turn with one honest status after the vendor stream
+ * has settled. Returns the reply the push should carry, or null when the turn
+ * was stopped, failed, or interrupted. Unnamed turns never call this.
+ */
+function concludeDurableProviderTurn(durable, outcome) {
+  if (!durable || durable.replayed) return { reply: null, record: null };
+  const { turn, controller, journalTurn, emit, endTurn } = durable;
+  const stopped = controller.signal.aborted && !turn?.endedBy;
+  // Snapshot before finishStream: ending an attached response also marks
+  // the subscriber gone, and that is not a phone that walked away.
+  const clientLeft = durable.clientDisconnected;
+  let refusal = null;
+  if (turn && !turn.finished) {
+    if (stopped) {
+      endTurn('cancelled');
+    } else if (outcome?.error) {
+      const message = typeof outcome.error?.message === 'string' && outcome.error.message.trim()
+        ? outcome.error.message : 'Provider stream interrupted before completion';
+      const code = typeof outcome.error?.code === 'string' && outcome.error.code
+        ? outcome.error.code : 'upstream_error';
+      endTurn('failed', { error: { message, code } });
+    } else {
+      refusal = backendUpstreamRefusal(journalTurn?.text);
+      if (refusal) {
+        emit(JSON.stringify({ error: { message: refusal, code: 'upstream_error' } }));
+        endTurn('failed', { error: { message: refusal, code: 'upstream_error' } });
+      } else {
+        endTurn('done');
+      }
+    }
+  }
+  durable.finishStream();
+  // Stop, a dropped phone, or the Gate ending the turn are the caller's
+  // business, not evidence about the provider. Same guard as streamBackendTurn.
+  const recordable = !stopped && !clientLeft && !turn?.endedBy;
+  if (controller.signal.aborted || refusal || outcome?.error) {
+    const record = !recordable
+      ? null
+      : (refusal
+        ? Object.assign(new Error(refusal), { code: 'upstream_error' })
+        : (outcome?.error ?? null));
+    return { reply: null, record };
+  }
+  return { reply: journalTurn?.text || null, record: recordable ? 'success' : null };
 }
 
 // ─── Voice turn start: resolve a backend truthfully, then run it ─────────
@@ -1348,6 +1572,34 @@ export async function createGate(config = {}) {
     turnSeqs.set(sessionId, seq);
     return `turn-${seq}`;
   }
+  function providerTurnOpts(callerId, turnId, sessionId) {
+    return {
+      callerId,
+      turnId,
+      sessionId: typeof sessionId === 'string' ? sessionId : null,
+      onGateStopped: ({ reason, turnId: stoppedTurn, sessionId: stoppedIn }) => {
+        if (typeof stoppedIn !== 'string' || !stoppedIn) return;
+        notifyPush({
+          trigger: 'final-response',
+          sessionId: stoppedIn,
+          turnId: stoppedTurn ?? nextTurnId(stoppedIn),
+          text: `stopped: ${reason}`,
+        });
+      },
+    };
+  }
+  async function finishProviderChat(providerId, body, res, callerId, turnId) {
+    const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : null;
+    const streamed = await dispatchChat(providerId, body ?? {}, res, providerTurnOpts(callerId, turnId, sessionId));
+    if (streamed && sessionId) {
+      notifyPush({
+        trigger: 'final-response',
+        sessionId,
+        turnId: turnId ?? nextTurnId(sessionId),
+        text: streamed,
+      });
+    }
+  }
   environmentService.onRunEvent = notifyPush;
   // One worker for the whole Gate, spawned only when something asks for it to
   // be warm. Sharing it is what makes a call start instantly: the models are
@@ -1654,14 +1906,14 @@ export async function createGate(config = {}) {
    * the stale bootstrap values. Routing a migrated provider through proxyChat
    * reaches the vendor unauthenticated and rejects every model discovered since.
    */
-  async function dispatchChat(providerId, body, res) {
+  async function dispatchChat(providerId, body, res, durableOpts = {}) {
     const record = await providerStore.get(providerId);
     const legacy = state.providers.find((item) => item.id === providerId);
 
     if (!record && !legacy) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: { message: `Unknown provider "${providerId}"`, code: 'unknown_provider' } }));
-      return;
+      return null;
     }
 
     // `streaming: false` is declared on the registry record and has no v2
@@ -1671,14 +1923,33 @@ export async function createGate(config = {}) {
       res.end(JSON.stringify({
         error: { message: `Provider "${providerId}" does not support streaming`, code: 'streaming_unsupported' },
       }));
-      return;
+      return null;
     }
 
-    if (record) {
-      await chatViaProviderService(providerId, record, body, res);
-      return;
+    let durable = null;
+    if (body.stream === true && durableOpts.turnId) {
+      durable = await bindDurableTurn(res, {
+        callerId: durableOpts.callerId ?? 'anonymous',
+        turnId: durableOpts.turnId,
+        sessionId: durableOpts.sessionId ?? null,
+        model: body.model ?? null,
+        inFlightTurns,
+        journal: turnJournal,
+        keepaliveIntervalMs,
+        detachedTurnMaxMs,
+        detachedStallMs,
+        detachedTurnLimit,
+        onGateStopped: durableOpts.onGateStopped ?? null,
+      });
+      if (durable.replayed) return null;
     }
-    await proxyChat(root, legacy, body, res, { headersTimeoutMs: upstreamHeadersTimeoutMs, keepaliveIntervalMs });
+
+    if (record) return await chatViaProviderService(providerId, record, body, res, durable);
+    return await proxyChat(root, legacy, body, res, {
+      headersTimeoutMs: upstreamHeadersTimeoutMs,
+      keepaliveIntervalMs,
+      durable,
+    });
   }
 
   /**
@@ -1695,14 +1966,17 @@ export async function createGate(config = {}) {
   }
 
   /** Chat through the v2 ProviderService, which resolves the vault credential. */
-  async function chatViaProviderService(providerId, record, body, res) {
+  async function chatViaProviderService(providerId, record, body, res, durable = null) {
     const wantsStream = body.stream === true;
     const flavorModule =
       record.config?.registration?.protocol === 'anthropic_messages' ? anthropicFlavor : openaiFlavor;
 
-    // The adapter threads this into its own fetch, so a Stop or a dropped
-    // connection ends the vendor's turn instead of leaving it to finish.
-    const upstream = providerUpstreamCall(res, { headersTimeoutMs: upstreamHeadersTimeoutMs });
+    // The adapter threads this into its own fetch. An unnamed turn still dies
+    // with the socket; a named one is aborted only by Stop, a stall, or a restart.
+    const upstream = providerUpstreamCall(res, {
+      headersTimeoutMs: upstreamHeadersTimeoutMs,
+      abortSignal: durable?.controller.signal,
+    });
     let result;
     try {
       result = await providerService.chat({
@@ -1712,28 +1986,35 @@ export async function createGate(config = {}) {
         stream: wantsStream,
       }, upstream.signal);
     } catch (error) {
-      if (upstream.clientGone) return;
+      if (upstream.clientGone) {
+        if (durable && !durable.turn?.finished) durable.endTurn('cancelled');
+        durable?.finishStream();
+        return null;
+      }
       if (upstream.timedOut) {
+        const bodyError = { message: 'The provider did not answer within the header timeout.', code: 'upstream_timeout' };
+        failDurableBeforeStream(durable, bodyError);
         res.writeHead(504, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          error: { message: 'The provider did not answer within the header timeout.', code: 'upstream_timeout' },
-        }));
-        return;
+        res.end(JSON.stringify({ error: bodyError }));
+        return null;
       }
       // A configuration state is not a verdict on the provider: nothing was
       // asked of it, so nothing it answered says whether it can complete a turn.
       const configured = CONFIGURATION_ERROR_CODES.has(error.code);
       // Readiness is only as good as its last real turn: a catalog probe passes
-      // on a provider whose account cannot pay for a completion.
-      if (!configured) await noteTurnOutcome(providerId, error);
+      // on a provider whose account cannot pay for a completion. A phone that
+      // already left is not that turn — same guard as streamBackendTurn.
+      if (!configured && !durable?.clientDisconnected) await noteTurnOutcome(providerId, error);
       const status = configured
         ? 409
         : Number.isInteger(error.status) && error.status >= 400 && error.status <= 599
           ? error.status
           : 502;
+      const bodyError = { message: error.message, code: error.code || 'upstream_error' };
+      failDurableBeforeStream(durable, bodyError);
       res.writeHead(status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: error.message, code: error.code || 'upstream_error' } }));
-      return;
+      res.end(JSON.stringify({ error: bodyError }));
+      return null;
     } finally {
       // Headers (or the whole answer) are in: a slow stream is not a timeout.
       upstream.clearWatchdog();
@@ -1756,18 +2037,28 @@ export async function createGate(config = {}) {
         }],
       }));
       await noteTurnOutcome(providerId, null);
-      return;
+      return null;
     }
 
     // Profile adapters hand back the raw upstream Response; the local-interface
     // adapter hands back an async iterator of already-parsed SSE events.
     const outcome = typeof result?.body?.getReader === 'function'
-      ? await relayNormalizedSse(result, flavorModule, res, { upstream, keepaliveIntervalMs })
-      : await relayIteratorSse(result, res, { upstream, keepaliveIntervalMs });
+      ? await relayNormalizedSse(result, flavorModule, res, { upstream, keepaliveIntervalMs, durable })
+      : await relayIteratorSse(result, res, { upstream, keepaliveIntervalMs, durable });
+    if (durable) {
+      const { reply, record } = concludeDurableProviderTurn(durable, outcome);
+      // Stop, a dropped phone, or the Gate ending the turn are the caller's
+      // business, not evidence about the provider. A real completion or a
+      // vendor error, watched through to the end, still is.
+      if (record === 'success') await noteTurnOutcome(providerId, null);
+      else if (record) await noteTurnOutcome(providerId, record);
+      return reply;
+    }
     // A turn the client stopped is not a failure and not a success: it says
     // nothing about the provider, so nothing is written for it.
     if (outcome?.ok) await noteTurnOutcome(providerId, null);
     else if (outcome?.error) await noteTurnOutcome(providerId, outcome.error);
+    return null;
   }
 
   // Initialize token store
@@ -3857,7 +4148,7 @@ export async function createGate(config = {}) {
             }));
             return;
           }
-          await dispatchChat(body.providerId, body, res);
+          await finishProviderChat(body.providerId, body, res, callerId, namedTurnId);
           return;
         }
         if (matches.length > 1) {
@@ -3872,7 +4163,7 @@ export async function createGate(config = {}) {
           res.end(JSON.stringify({ error: { message: `No provider declares model "${body?.model}"`, code: 'unknown_model' } }));
           return;
         }
-        await dispatchChat(providerId, body, res);
+        await finishProviderChat(providerId, body, res, callerId, namedTurnId);
         return;
       }
 
@@ -3947,7 +4238,16 @@ export async function createGate(config = {}) {
       const scopedChatMatch = pathname.match(/^\/p\/([^/]+)\/v1\/chat\/completions$/);
       if (scopedChatMatch && method === 'POST') {
         const body = await readJsonBody(req, { maxBytes: AUTH_MAX_BODY_BYTES });
-        await dispatchChat(decodeURIComponent(scopedChatMatch[1]), body ?? {}, res);
+        const scopedTurnId = readTurnId(req.headers['x-versutus-turn-id']);
+        if (body?.stream === true && scopedTurnId) {
+          const resumed = await replayTurnStream(turnJournal, callerId, scopedTurnId, res, {
+            after: 0,
+            keepaliveIntervalMs,
+            headers: { 'X-Versutus-Turn-Resumed': '1' },
+          });
+          if (resumed) return;
+        }
+        await finishProviderChat(decodeURIComponent(scopedChatMatch[1]), body ?? {}, res, callerId, scopedTurnId);
         return;
       }
 
