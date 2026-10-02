@@ -161,6 +161,12 @@ export interface PortalClient {
   sendGroupMessage?(
     groupId: string,
     input: { text: string; mentionedIds?: string[] },
+    /**
+     * How long to wait for the whole round. A send runs every member's turn
+     * server-side before it answers, so the transport's 30 s default is too
+     * short; an adapter that omits this uses its own round bound.
+     */
+    timeoutMs?: number,
   ): Promise<{ replies: GroupReply[]; errors?: GroupTurnError[]; roomDisbanded?: boolean }>;
   /** Stored room transcript; omitted when the gate has no rooms endpoint. */
   groupHistory?(groupId: string): Promise<GroupTranscriptEntry[]>;

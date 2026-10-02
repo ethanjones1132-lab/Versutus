@@ -248,6 +248,7 @@ function gatewayEnv(patch: Record<string, unknown> = {}): Record<string, unknown
     pendingRunApproval: undefined,
     resolveRunApproval: jest.fn(),
     recentCommands: [],
+    commandTranscripts: [],
     historyLoading: false,
     hasMoreHistory: false,
     loadingEarlierHistory: false,
@@ -279,7 +280,6 @@ function gatewayEnv(patch: Record<string, unknown> = {}): Record<string, unknown
     clearRequestedComposerFocus: jest.fn(),
     requestedComposeRequest: undefined,
     clearRequestedComposeRequest: jest.fn(),
-    commandTranscripts: [],
     ...patch,
   };
 }

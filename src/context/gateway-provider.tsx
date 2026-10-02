@@ -237,6 +237,8 @@ import {
   clearTranscriptsForGateway,
   flushTranscripts,
   loadTranscripts,
+  removeTranscript,
+  removeTranscriptsForSession,
   updateTranscript,
 } from '@/lib/gateway/transcript';
 import { clearSessionLabelsForGateway } from '@/lib/gateway/session-labels';
@@ -6809,6 +6811,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const clearBot = useCallback(() => {
+    const hadBot = selectedBotIdRef.current !== undefined;
     ++botOpenRequestRef.current;
     resetSessionSelector();
     selectedBotIdRef.current = undefined;
@@ -6817,6 +6820,18 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     // Leaving a Bot Chat is not leaving the gateway, so the scope still belongs
     // to this one — recorded here so a re-attach cannot read it as foreign.
     rememberScopeGateway(activeGatewayRef.current);
+    // The Bot Chat is the Bot's thread. Left pinned, the Bot-less configurable
+    // surface shows the Bot's transcript and the next send carries the Bot's
+    // session with no Bot. Release it and open a fresh gateway-level thread,
+    // the way selectBackend does; without a Bot to leave, the scope drop alone
+    // is the whole action (OPEN-1).
+    if (!hadBot) return;
+    const client = clientRef.current;
+    client?.setSessionId(undefined);
+    sessionIdRef.current = undefined;
+    setCurrentSessionId(undefined);
+    setMessages([]);
+    if (client?.createSession) void createNewSessionRef.current?.();
   }, [resetSessionSelector, rememberScopeGateway]);
 
   // A surface the chat screen must move to, asked for from outside it. The
@@ -7244,7 +7259,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 
   const createNewSession = useCallback(async (title?: string) => {
     const client = clientRef.current;
-    if (!client?.createSession) return;
+    if (!client?.createSession) {
+      // The selector is reachable in a flap with no client. A bare return left
+      // the sheet up with no new thread and no word said; close it and name
+      // the connection instead (OPEN-2).
+      closeSessionSelector();
+      setLastError('Not connected — a new session could not be opened.');
+      return;
+    }
     // The thread is being replaced under the ladder's feet; its windows reload
     // the thread that was just left.
     clearInterruptedRecovery();
@@ -7252,9 +7274,11 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       // Pin the operator's model as the session is opened. A Hermes session's
       // model cannot be changed afterwards, so a session created bare is
       // permanently stuck on the host default no matter what the picker shows.
+      // The Bot ref, not the state: a fresh thread opened from clearBot in the
+      // same tick must not be pinned to the Bot that was just left (OPEN-1).
       const created = await client.createSession(
         title,
-        effectiveModel(activeGateway, selectedBackendId, selectedBotId),
+        effectiveModel(activeGateway, selectedBackendId, selectedBotIdRef.current),
       );
       // Gate createSession does not assign currentSessionId. Without this
       // pin, disconnect still writes the previous session onto the profile
@@ -7288,7 +7312,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
     closeSessionSelector();
     // A thread that did open can already have a turn running on the Gate.
     resumeRunningTurnsRef.current('thread');
-  }, [activeGateway, clearInterruptedRecovery, closeSessionSelector, persistGateway, selectedBackendId, selectedBotId]);
+  }, [
+    activeGateway,
+    clearInterruptedRecovery,
+    closeSessionSelector,
+    persistGateway,
+    selectedBackendId,
+    selectedBotIdRef,
+  ]);
   useEffect(() => {
     createNewSessionRef.current = createNewSession;
   }, [createNewSession]);
@@ -7296,9 +7327,21 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
   const deleteSessionById = useCallback(
     async (sessionId: string) => {
       const client = clientRef.current;
-      if (!client?.deleteSession) return;
+      if (!client?.deleteSession) {
+        // Silent no-op before: the row stayed listed and nothing was said
+        // (OPEN-2).
+        setLastError('Not connected — the thread could not be deleted.');
+        return;
+      }
       try {
         await client.deleteSession(sessionId);
+        // The thread's device-local transcript would outlive its row and merge
+        // back into a later paint. Best-effort: the delete already landed on
+        // the Gate, so a storage refusal must not turn it into a failure.
+        if (activeGateway) {
+          const sessionKey = activeGateway.sessionKey ?? sessionId;
+          await removeTranscriptsForSession(activeGateway.id, sessionKey, sessionId).catch(() => undefined);
+        }
         setSessionListState((previous) => ({
           ...previous,
           sessions: previous.sessions.filter((session) => session.id !== sessionId),
@@ -7327,6 +7370,14 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
       const before = offlineQueueRef.current.length;
       offlineQueueRef.current = offlineQueueRef.current.filter((item) => item.id !== id);
       if (offlineQueueRef.current.length !== before) persistOfflineQueue();
+      // A command bubble's durable copy lives in the transcript store, which
+      // the next history reload merges back in. Drop it there too, or Delete
+      // only lasts until the next reload (TAIL-1).
+      const gateway = activeGatewayRef.current;
+      if (gateway) {
+        const sessionKey = gateway.sessionKey ?? sessionIdRef.current ?? 'default';
+        void removeTranscript(gateway.id, sessionKey, id).then((updated) => setTranscripts(updated));
+      }
     },
     [persistOfflineQueue],
   );

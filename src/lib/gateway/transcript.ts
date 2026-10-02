@@ -253,6 +253,48 @@ export async function updateTranscript(
 }
 
 /**
+ * Drop one stored entry. Deleting a command bubble from the thread has to
+ * remove the durable copy too: `paintThread` merges the transcript back into
+ * every history reload, so a bubble filtered from memory alone returns on the
+ * next pull-to-refresh (TAIL-1).
+ */
+export async function removeTranscript(
+  gatewayId: string,
+  sessionKey: string,
+  id: string,
+): Promise<CommandTranscriptEntry[]> {
+  return mutateEntries(gatewayId, sessionKey, (existing) => existing.filter((entry) => entry.id !== id));
+}
+
+/**
+ * Drop every stored entry belonging to one deleted session (V-1).
+ *
+ * The key a transcript was written under is `gateway.sessionKey ?? sessionId`
+ * (see `appendLocalMessage`). A gateway with no shared sessionKey keys each
+ * thread by its own id, so the whole key goes. A gateway with a shared key
+ * keeps several threads under one key, so only that session's entries — matched
+ * on the `sessionId` each entry carries — are removed and the rest survive.
+ */
+export async function removeTranscriptsForSession(
+  gatewayId: string,
+  sessionKey: string,
+  sessionId: string,
+): Promise<void> {
+  const key = transcriptKey(gatewayId, sessionKey);
+  if (sessionKey === sessionId) {
+    // Every entry under this key belongs to the deleted thread; drop the key
+    // whole, held copy, debounce and stored value alike.
+    cancelFlush(key);
+    entriesByKey.delete(key);
+    await enqueueTranscriptMutation(key, () => keyValueStorage.removeItem(key));
+    return;
+  }
+  await mutateEntries(gatewayId, sessionKey, (existing) =>
+    existing.filter((entry) => entry.sessionId !== sessionId),
+  );
+}
+
+/**
  * Drop every stored transcript belonging to a gateway. Called when its profile
  * is deleted — without this the keys outlive the gateway forever.
  */

@@ -50,6 +50,16 @@ function interpolatePath(path: string, vars: Record<string, string>): string {
 /** How long authorizedFetch waits for response headers before aborting. */
 const AUTHORIZED_FETCH_HEADER_TIMEOUT_MS = 60_000;
 
+/**
+ * How long the phone waits for one group round. A send runs the whole planned
+ * round-robin server-side and only answers with the slowest member (the Gate's
+ * own per-speaker ceiling is 90 s), so the transport's 30 s default aborted a
+ * perfectly healthy round the Gate was still running. The bound is deliberately
+ * past any round the Gate can complete; Council's own 120 s screen bound still
+ * settles the UI first.
+ */
+export const GROUP_SEND_TIMEOUT_MS = 600_000;
+
 /** How long the connect-time auth proof waits before it stops asking. */
 const AUTH_PROBE_TIMEOUT_MS = 10_000;
 
@@ -828,12 +838,14 @@ export class ManifestClient implements PortalClient {
   async sendGroupMessage(
     groupId: string,
     input: { text: string; mentionedIds?: string[] },
+    timeoutMs: number = GROUP_SEND_TIMEOUT_MS,
   ): Promise<{ replies: GroupReply[]; errors?: GroupTurnError[]; roomDisbanded?: boolean }> {
     const path = this.requireEndpoint('botGroups');
     return this.rootTransport.request(
       'POST',
       `${path.replace(/\/+$/, '')}/${encodeURIComponent(groupId)}/messages`,
       input,
+      timeoutMs,
     );
   }
 

@@ -83,13 +83,19 @@ export function DemoGatewayProvider({ children }: { children: React.ReactNode })
   const [sessionSelector, setSessionSelector] = useState({ visible: false });
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>('s-brief');
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The think beat, held apart from the interval: while it is pending there is
+  // no interval to clear, so Stop and unmount need their own handle (DEMO-1).
+  const beat = useRef<ReturnType<typeof setTimeout> | null>(null);
   const threadKey = selectedBotId ?? 'chat';
 
   useEffect(() => () => {
+    if (beat.current) clearTimeout(beat.current);
     if (timer.current) clearInterval(timer.current);
   }, []);
 
   const finishStream = useCallback(() => {
+    if (beat.current) clearTimeout(beat.current);
+    beat.current = null;
     if (timer.current) clearInterval(timer.current);
     timer.current = null;
     setStreamingId(null);
@@ -106,7 +112,10 @@ export function DemoGatewayProvider({ children }: { children: React.ReactNode })
     async (text) => {
       const trimmed = text.trim();
       if (!trimmed) return 'empty';
-      if (timer.current) return 'busy';
+      // The beat is as much "busy" as the interval: a second send that enters
+      // before the first interval exists would otherwise both append a reply
+      // and overwrite the single timer ref, leaking the first interval (DEMO-2).
+      if (timer.current || beat.current) return 'busy';
       const key = threadKey;
       const now = Date.now();
       const replyId = `showcase-reply-${now}`;
@@ -121,19 +130,23 @@ export function DemoGatewayProvider({ children }: { children: React.ReactNode })
       }));
       setStreamingId(replyId);
       let shown = 0;
-      // A short beat before the first word, like a model thinking.
-      await new Promise((resolve) => setTimeout(resolve, 650));
-      timer.current = setInterval(() => {
-        shown += 2;
-        const body = words.slice(0, shown).join('');
-        setTranscripts((all) => ({
-          ...all,
-          [key]: (all[key] ?? []).map((message) =>
-            message.id === replyId ? { ...message, text: body } : message,
-          ),
-        }));
-        if (shown >= words.length) finishStream();
-      }, 70);
+      // A short beat before the first word, like a model thinking. Held in a
+      // ref so Stop during the beat cancels it instead of letting a reply
+      // stream into a bubble the operator already settled (DEMO-1).
+      beat.current = setTimeout(() => {
+        beat.current = null;
+        timer.current = setInterval(() => {
+          shown += 2;
+          const body = words.slice(0, shown).join('');
+          setTranscripts((all) => ({
+            ...all,
+            [key]: (all[key] ?? []).map((message) =>
+              message.id === replyId ? { ...message, text: body } : message,
+            ),
+          }));
+          if (shown >= words.length) finishStream();
+        }, 70);
+      }, 650);
       return 'sent';
     },
     [finishStream, threadKey],
